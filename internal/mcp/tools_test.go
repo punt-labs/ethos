@@ -715,6 +715,28 @@ func TestResolveSessionID_NeverReturnsEmptySidWithNilErr(t *testing.T) {
 	assert.Empty(t, sid)
 }
 
+// TestResolveSessionID_ReportsRealCauseUnderClaudeCode pins mission 005
+// finding A at this site: before this fix, resolveSessionID's loud
+// branch was reachable in shape but untested, and the sibling
+// silent-path message ("no active session; run `ethos session start`
+// or pass session_id") is generic enough that a caller reading it for
+// a genuine resolution failure (session expected, pointer file
+// corrupt or missing under Claude Code) would have no way to tell that
+// apart from the ordinary "nothing is running" case.
+func TestResolveSessionID_ReportsRealCauseUnderClaudeCode(t *testing.T) {
+	h := testHandlerWithSession(t)
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
+	require.Error(t, err)
+	assert.Empty(t, sid)
+	assert.Contains(t, err.Error(), "cannot identify the calling session",
+		"a session that was expected but unresolvable must name the real cause, not the generic absent-session text")
+}
+
 // TestHandleIam_HonorsAgentID pins DES-061 R4: the MCP iam handler keys the
 // participant on ETHOS_AGENT_ID when set, matching the CLI, so the same
 // declaration records the same agent key on both surfaces.

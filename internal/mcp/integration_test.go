@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -40,6 +41,20 @@ func TestMain(m *testing.M) {
 	// the under-Claude-Code path sets one back with t.Setenv.
 	os.Unsetenv("CLAUDE_PID")
 	os.Unsetenv("CLAUDECODE")
+	// Stripping the env vars is not enough: a real claude process is
+	// unavoidably this test binary's own process-tree ancestor whenever
+	// this suite runs inside a live Claude Code session (as it normally
+	// does), so process.UnderClaudeCode's ancestor-walk check would still
+	// see it regardless. Force the "not under Claude Code" branch as this
+	// binary's test default; a test that wants the loud, under-Claude-Code
+	// path overrides this back locally with t.Cleanup. Missing this (a
+	// mission 005 finding, surfaced only once Finding A made the two
+	// resolve.SessionID sentinels produce visibly different messages)
+	// let TestHandleMission_CreateNoSessionInContextWarns pass for the
+	// wrong reason: it exercised the LOUD path the whole time in this
+	// dev sandbox, and only the pre-Finding-A code's collapsed message
+	// happened to match either way.
+	resolve.UnderClaudeCode = func() bool { return false }
 
 	dir, err := os.MkdirTemp("", "ethos-mcp-integration-*")
 	if err != nil {

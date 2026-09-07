@@ -14,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -320,6 +321,45 @@ func TestHandleMission_CreateNoSessionInContextWarns(t *testing.T) {
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "no session in context")
 	assert.Contains(t, warnings[0], "not updated")
+}
+
+// TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode pins mission
+// 005 finding A at this site: a session that WAS expected (running under
+// Claude Code) but could not be resolved — e.g. a corrupt pointer file —
+// must not be reported with the same generic "no session in context"
+// text as the ordinary case (not under Claude Code at all). The two
+// were collapsed before this fix, so a real problem read identically to
+// nothing being wrong.
+func TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+	h := testHandlerWithSessions(t)
+
+	warnings := h.bindDispatchedMission("m-test-001")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "resolving session")
+	assert.NotContains(t, warnings[0], "no session in context",
+		"a session that was expected but unresolvable must not read identically to the ordinary absent case")
+}
+
+// TestClearClosedMissionBindings_ReportsRealCauseUnderClaudeCode is
+// TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode's sibling for
+// clearClosedMissionBindings: before this fix, an unresolvable session
+// under Claude Code returned nil warnings — completely silent — so a
+// closed mission's sidecar could be left in place, still stamping
+// trailers, with no signal to the caller at all.
+func TestClearClosedMissionBindings_ReportsRealCauseUnderClaudeCode(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+	h := testHandlerWithSessions(t)
+
+	warnings := h.clearClosedMissionBindings("m-test-001")
+	require.Len(t, warnings, 1, "an unresolvable session must not silently skip with no signal")
+	assert.Contains(t, warnings[0], "resolving session")
 }
 
 // TestHandleMission_CreateRebindsWarnsOnDifferentMission mirrors the

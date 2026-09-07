@@ -470,6 +470,15 @@ func (h *Handler) sessionTool() mcplib.Tool {
 // resolveSessionID discovers the session ID: the session_id arg, then the
 // shared harness-neutral chain (ETHOS_SESSION, then the Claude PID walk) —
 // parity with the CLI (DES-061 R4).
+//
+// Mission 005 finding A: this used to collapse resolve.SessionID's two
+// failure sentinels into one generic message, so a corrupt pointer file
+// (a session WAS expected, per resolve.ErrNoSession) was reported
+// identically to the ordinary case of genuinely running with no Claude
+// Code session at all (resolve.ErrNotUnderClaudeCode) — indistinguishable
+// to the caller, and to whoever debugs the report. Now surfaces the real
+// cause for the former while keeping the plain, actionable message for
+// the latter, mirroring cmd/ethos/iam.go's split.
 func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	sessionID := stringArg(req, "session_id", "")
 	if sessionID != "" {
@@ -478,10 +487,14 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	if h.sessionStore == nil {
 		return "", fmt.Errorf("session store not configured")
 	}
-	if sid, _, err := resolve.SessionID(h.sessionStore); err == nil {
+	sid, _, err := resolve.SessionID(h.sessionStore)
+	if err == nil {
 		return sid, nil
 	}
-	return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")
+	if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
+		return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")
+	}
+	return "", fmt.Errorf("no active session: %w", err)
 }
 
 func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -210,9 +211,24 @@ func (h *Handler) bindDispatchedMission(missionID string) []string {
 	}
 	sessionID, _, err := resolve.SessionID(h.sessionStore)
 	if err != nil {
+		// Mission 005 finding A: distinguish the ordinary "no session was
+		// ever expected" case (resolve.ErrNotUnderClaudeCode) from a
+		// genuine resolution failure (resolve.ErrNoSession, e.g. a corrupt
+		// pointer file) -- collapsing both into "no session in context"
+		// mirrors the same problem this whole decision exists to close:
+		// a wrong-looking answer instead of a distinguishable one. MCP
+		// has no stderr channel (unlike the CLI's bindDispatchedMission,
+		// which this mirrors), so the real cause rides in the warning
+		// text instead of being silent.
+		if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
+			return []string{
+				"binding mission: no session in context -- active-mission sidecar not updated; " +
+					"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
+			}
+		}
 		return []string{
-			"binding mission: no session in context -- active-mission sidecar not updated; " +
-				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
+			fmt.Sprintf("binding mission: resolving session: %v -- active-mission sidecar not updated; "+
+				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID", err),
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -436,14 +452,22 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 // still be tagging commits.
 //
 // No session in context means no sidecars to clear, which is ordinary
-// and silent.
+// and silent. A session that WAS expected but could not be resolved
+// (mission 005 finding A) is a different case: silently returning nil
+// here left a closed mission's sidecar in place, still stamping trailers
+// on a mission that is no longer open, with no signal to the caller at
+// all -- collapsing both sentinels the same way bindDispatchedMission
+// used to.
 func (h *Handler) clearClosedMissionBindings(missionID string) []string {
 	if h.sessionStore == nil {
 		return nil
 	}
 	sessionID, _, err := resolve.SessionID(h.sessionStore)
 	if err != nil {
-		return nil
+		if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
+			return nil
+		}
+		return []string{fmt.Sprintf("clearing mission bindings: resolving session: %v", err)}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
