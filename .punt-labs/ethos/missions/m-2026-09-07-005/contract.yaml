@@ -1,0 +1,76 @@
+mission_id: m-2026-09-07-005
+status: closed
+type: implement
+created_at: "2026-09-07T20:46:34Z"
+updated_at: "2026-09-07T21:28:56Z"
+closed_at: "2026-09-07T21:28:56Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-07T20:46:34Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    files:
+        - DESIGN.md
+        - internal/mcp/mission_tools.go
+        - internal/mcp/tools.go
+        - internal/hook/subagent_start.go
+        - internal/hook/subagent_start_test.go
+        - internal/resolve/resolve.go
+        - internal/session/store.go
+        - cmd/ethos/iam.go
+        - cmd/ethos/mission.go
+write_set:
+    - internal/mcp/mission_tools.go
+    - internal/mcp/tools.go
+    - internal/mcp/*_test.go
+    - internal/hook/subagent_start.go
+    - internal/hook/subagent_start_test.go
+    - internal/resolve/resolve.go
+    - internal/resolve/resolve_test.go
+    - cmd/ethos/iam.go
+    - DESIGN.md
+    - CHANGELOG.md
+success_criteria:
+    - 'FINDING B FIRST — it is the only one that returns a wrong answer today. internal/hook/subagent_start.go resolveParentLine is a SINGLE loop testing both the preferred and legacy keys against each participant in roster order, so a legacy-keyed participant appearing earlier WINS over a preferred-keyed one. Two reviewers proved it independently by running the real function: ''resolved parent handle = wrong-legacy'' when right-preferred was present in the roster, using 518779 — the shared daemon PID this whole decision exists to stop trusting.'
+    - 'Fix B as a genuine two-pass, mirroring resolve.resolveFromSession and session.Store.JoinSelf which both already do it correctly: scan ALL participants for the preferred key to completion; only if that finds nothing, compute LegacyClaudePID() and scan again. The three sites must actually agree, because DES-074 already claims they do.'
+    - Fix B's TEST. TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary builds a roster with NO preferred-keyed participant, so it proves the fallback fires and is structurally incapable of catching the inversion. Add a case with a roster where the legacy record PRECEDES the preferred one, and confirm it fails against the current single-pass code before you fix it. session.Store has a _PrefersNewKeyWhenBothPresent test — the sibling function needs its equivalent.
+    - 'FINDING B-DOC: DES-074''s participant-keying amendment states all three read sites try preferred then legacy. That is currently FALSE for resolveParentLine. Correct the amendment text, or the record documents a rule the code does not implement — the exact failure that started this work.'
+    - 'FINDING A: round 2''s class fix stopped at the CLI boundary. Three internal/mcp sites still collapse both sentinels — mission_tools.go:444 clearClosedMissionBindings (returns nil for both, so closing a mission via MCP can leave the sidecar and keep trailers stamping on a CLOSED mission), mission_tools.go:211 bindDispatchedMission (hardcodes ''no session in context'' so a corrupt pointer is reported as an absent session), and tools.go:481 resolveSessionID. Mirror the CLI counterparts, which already state the hazard in their own comments.'
+    - 'The A class is FULLY ENUMERATED and these three are the last of it: cmd/ethos is closed, six indirect callers cannot observe the sentinel because resolveFromSession translates it, and nothing outside internal/mcp and cmd/ethos calls resolve.SessionID. Do not expand scope hunting for more — verify the enumeration holds, then close exactly these three.'
+    - 'FINDING C: cmd/ethos/iam.go:82-83''s contract comment survived the round-3 sentinel commit unedited and now states the INVERSE of the truth — it says a nil error means ''genuinely no session'' when nil now means RESOLVED. Rewrite it to name all three outcomes, matching resolve.go''s own doc. A reader trusting this comment reproduces the bug at the next call site.'
+    - 'FINDING D: the claim ''the invariant is now mechanical: err == nil if and only if id != empty'' (DESIGN.md and internal/resolve/resolve.go) is contingent, not mechanical. retryReadCurrentSession loops pointerRetryAttempts-1 times and lastErr is assigned only inside the loop, so at pointerRetryAttempts=1 it returns a nil error with an empty id and the three-outcome contract breaks silently. It holds today only because the constant is 10. Either make it structurally true regardless of the constant (preferred), or stop calling it mechanical and add a guard that fails loudly if the constant is ever set below 2.'
+    - 'GATE, non-negotiable, and this is what round 3 was rejected for the first time around: rm -rf .tmp/headcheck && mkdir -p .tmp/headcheck && git archive HEAD | tar -x -C .tmp/headcheck, then run the suite with setsid and every CLAUDE_* variable unset. PASTE THE OUTPUT in your result. Count the ''ok'' lines as well as the failures — a failure count of zero cannot distinguish ''nothing failed'' from ''nothing ran'', which bit the leader once already this work.'
+    - make check green as well — offered alongside the detached run, never instead of it.
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'CHANGELOG: extend the existing [Unreleased] entry only if user-visible behaviour changes. B changes behaviour (a subagent could be told it reports to a stale persona); A, C and D are latent or documentation.'
+    - Do NOT re-litigate anything already verified. The core fix is done, verified end to end, and the mission that produced it closed pass. Six fixes were independently confirmed real by second-pass review. This mission is exactly A, B, C, D and their tests.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: |
+    Successor to m-2026-09-07-004 (DES-074 session identity), which closed
+    pass after three rounds. That mission's core fix is verified and shipping:
+    the leader ran the detached CI gate independently (27 packages, 0 failures,
+    down from 6), falsified the cache test by restoring sync.Once and confirmed
+    it now catches it, and verified end to end twice hours apart — the patched
+    binary resolving punt-labs/ethos while the installed one drifted from
+    punt-labs/z-spec to punt-labs/agentsmesh as other sessions started.
+
+    These four findings came from three second-pass local reviewers and are NEW
+    SCOPE, not round-3 failures. The operator ruled on 2026-09-07 to close them
+    in one tightly-scoped mission BEFORE opening the PR, rather than shipping
+    with follow-up beads — on the grounds that a design record asserting a rule
+    one of its own sites does not implement is precisely the failure this whole
+    body of work began with.
+
+    Two of these are the same shape as the defect this work exists to remove: a
+    fix applied to the instance rather than the class. Round 2 fixed one of two
+    surfaces (A); the invariant was enforced in two of three functions (B).
+    Fix them as classes, and verify the enumeration rather than trusting it.
+
+    Branch is fix/session-pid-identity in the worktree
+    .claude/worktrees/session-pid-identity, HEAD 18d043f, working tree clean,
+    main unmoved at ace18cf so the merge path is clear.

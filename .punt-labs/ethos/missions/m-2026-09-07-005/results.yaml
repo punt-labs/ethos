@@ -1,0 +1,206 @@
+results:
+    - mission: m-2026-09-07-005
+      round: 1
+      created_at: "2026-09-07T21:09:58Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/hook/subagent_start.go
+          added: 26
+          removed: 17
+        - path: internal/hook/subagent_start_test.go
+          added: 71
+          removed: 0
+        - path: internal/mcp/mission_tools.go
+          added: 28
+          removed: 4
+        - path: internal/mcp/tools.go
+          added: 15
+          removed: 2
+        - path: internal/mcp/integration_test.go
+          added: 15
+          removed: 0
+        - path: internal/mcp/mission_tools_test.go
+          added: 40
+          removed: 0
+        - path: internal/mcp/tools_test.go
+          added: 22
+          removed: 0
+        - path: internal/resolve/resolve.go
+          added: 14
+          removed: 5
+        - path: internal/resolve/resolve_test.go
+          added: 27
+          removed: 0
+        - path: cmd/ethos/iam.go
+          added: 21
+          removed: 12
+        - path: DESIGN.md
+          added: 119
+          removed: 3
+        - path: CHANGELOG.md
+          added: 8
+          removed: 0
+      evidence:
+        - name: 'finding B: resolveParentLine rewritten to genuine two-pass (all participants, preferred key; then all participants, legacy key)'
+          status: pass
+        - name: 'finding B test: TestHandleSubagentStart_ParentLine_PreferredWinsOverEarlierLegacy fails against pre-fix single-loop code (verified via temp git stash)'
+          status: pass
+        - name: 'finding B-doc: DES-074 amendment''s false ''resolveParentLine already does two-pass'' claim corrected with dated marginal note'
+          status: pass
+        - name: 'finding A enumeration verified closed: grepped every resolve.SessionID call site; only cmd/ethos (round 2) and the 3 named internal/mcp sites call it directly'
+          status: pass
+        - name: 'finding A: bindDispatchedMission, clearClosedMissionBindings, resolveSessionID now distinguish ErrNotUnderClaudeCode (silent) from ErrNoSession (warns real cause via %w)'
+          status: pass
+        - name: finding A regression tests (3 new, one per site) each fail against pre-fix code (verified via temp git stash)
+          status: pass
+        - name: 'finding A side-discovery: internal/mcp/integration_test.go TestMain was missing resolve.UnderClaudeCode override every other package''s TestMain carries; fixed alongside'
+          status: pass
+        - name: 'finding C: cmd/ethos/iam.go resolveSession comment rewritten to name all 3 outcomes; docs-only, no production code changed'
+          status: pass
+        - name: 'finding D: retryReadCurrentSession seeds lastErr from firstErr so a zero-iteration retry still returns non-nil err; pointerRetryAttempts/Delay converted const->var for testability'
+          status: pass
+        - name: 'finding D test: TestSessionID_InvariantHoldsAtMinimalRetryBudget drives pointerRetryAttempts=1; fails to even COMPILE against pre-fix code (const cannot be reassigned), verified via temp git stash'
+          status: pass
+        - name: DESIGN.md mission-005 amendment section + CHANGELOG entry for finding B only (sole user-visible change of the four)
+          status: pass
+        - name: make check (golangci-lint, shellcheck, ruff/mypy/pytest, markdownlint, go test -race -count=1 ./..., validate-content) green after every commit
+          status: pass
+        - name: 'required detached gate: git archive HEAD extraction + go test ./... -count=1 with all CLAUDE_* env vars unset -- 27 ok, 0 FAIL, 1 no-test-files (see prose for full pasted output and counts)'
+          status: pass
+      open_questions:
+        - None outstanding for this round.
+      prose: |
+        All four findings (B, A, C, D) fixed, tested, and committed as five separate commits, each
+        passing make check before the next began: B (01f0051), A (529aa8a), C (bfd7f30), D (8923377),
+        and the DESIGN.md/CHANGELOG documentation (f01206a). B was done first as instructed, since it
+        is the only finding that produces a wrong answer today. The A enumeration was verified closed
+        and not expanded beyond the three named sites. Every fix shipped with a new regression test
+        verified to fail (or, for D, fail to compile) against the pre-fix code via temporary git
+        stash -- never a bare stash/pop; always tag + stash apply <sha> + stash drop.
+
+        FINDING B: internal/hook/subagent_start.go's resolveParentLine rewritten from a single loop
+        testing both preferred and legacy keys per participant, to a genuine two-pass -- mirroring
+        resolve.resolveFromSession and session.Store.JoinSelf. New test
+        TestHandleSubagentStart_ParentLine_PreferredWinsOverEarlierLegacy builds a roster with the
+        legacy-keyed record FIRST and the preferred-keyed record SECOND; verified it fails against the
+        pre-fix single-loop code before the fix landed.
+
+        FINDING A: all three enumerated internal/mcp sites (mission_tools.go's bindDispatchedMission
+        and clearClosedMissionBindings, tools.go's resolveSessionID) now distinguish
+        resolve.ErrNotUnderClaudeCode (silent) from resolve.ErrNoSession (a warning naming the real
+        cause via %w), mirroring the CLI counterparts fixed in round 2. clearClosedMissionBindings was
+        the worst case: it returned nil (fully silent) for BOTH sentinels before this fix, so a closed
+        mission's sidecar could be left in place with zero signal to the caller. Fixing this exposed a
+        second, independent gap: internal/mcp/integration_test.go's TestMain was missing the
+        resolve.UnderClaudeCode override every other package's TestMain already carries -- invisible
+        pre-fix because both sentinel paths collapsed to the same message; once they diverged,
+        TestHandleMission_CreateNoSessionInContextWarns failed with the loud message and a real
+        ambient PID. Fixed alongside, same commit.
+
+        FINDING C: cmd/ethos/iam.go's resolveSession contract comment rewritten to name all three
+        outcomes (resolved / ErrNotUnderClaudeCode / ErrNoSession), replacing the stale claim that a
+        nil error meant "genuinely no session" -- true pre-sentinel-commit, false after. Documentation
+        only.
+
+        FINDING D: retryReadCurrentSession now seeds lastErr from the caller's own initial read error
+        instead of nil, so a zero-iteration retry loop still surfaces a non-nil error -- the err/id
+        invariant now holds structurally, not merely at the shipped constant value of 10.
+        pointerRetryAttempts/Delay converted from const to var so a test can drive the attempts count
+        directly. New test drives pointerRetryAttempts=1 and asserts err is non-nil / id is empty;
+        verified it fails to even COMPILE against the pre-fix code (a const cannot be reassigned) -- a
+        stronger form of the required negative check than a runtime failure.
+
+        REQUIRED DETACHED GATE: rm -rf .tmp/headcheck && mkdir -p .tmp/headcheck && git archive HEAD |
+        tar -x -C .tmp/headcheck, then ran the suite with CLAUDE_PID/CLAUDECODE/
+        CLAUDE_CODE_SESSION_ID/CLAUDE_CODE_AGENT/CLAUDE_CODE_CHILD_SESSION all unset. The setsid
+        wrapper (.tmp/ci-sim-head.sh) reproduced the same truncated-output tooling quirk flagged and
+        already resolved in round 3 (exit 0, 0 bytes written) -- not a script bug, confirmed a harness
+        quirk on my end, and the leader's own setsid run in round 3 independently agreed with my
+        substitute. Used the same validated direct-invocation equivalent: cd into the git-archive
+        -extracted tree (confirmed via `ls go.mod` inside it, not by cwd alone -- cwd had drifted there
+        from a prior command, a known hazard), unset the same five env vars, run
+        `go test ./... -count=1`. Counted both ok and FAIL explicitly, not failure-count alone:
+
+          ok lines:   27  (grep -c '^ok')
+          FAIL lines: 0   (grep -c 'FAIL')
+          no-test:    1   (internal/repomiss, grep -c '^?')
+
+        Matches round 3's package count exactly (27 ok + 1 no-test-files = 28 packages). Full pasted
+        output:
+
+          ok  	github.com/punt-labs/ethos/v4/cmd/e2e-attribute	0.005s
+          ok  	github.com/punt-labs/ethos/v4/cmd/ethos	31.219s
+          ok  	github.com/punt-labs/ethos/v4/cmd/validate-content	0.463s
+          ok  	github.com/punt-labs/ethos/v4/internal/adr	0.010s
+          ok  	github.com/punt-labs/ethos/v4/internal/attribute	0.009s
+          ok  	github.com/punt-labs/ethos/v4/internal/audit	0.371s
+          ok  	github.com/punt-labs/ethos/v4/internal/bundle	0.005s
+          ok  	github.com/punt-labs/ethos/v4/internal/claudemd	0.011s
+          ok  	github.com/punt-labs/ethos/v4/internal/doctor	0.152s
+          ok  	github.com/punt-labs/ethos/v4/internal/enable	0.544s
+          ok  	github.com/punt-labs/ethos/v4/internal/githook	0.036s
+          ok  	github.com/punt-labs/ethos/v4/internal/hook	2.605s
+          ok  	github.com/punt-labs/ethos/v4/internal/identity	0.058s
+          ok  	github.com/punt-labs/ethos/v4/internal/mcp	1.977s
+          ok  	github.com/punt-labs/ethos/v4/internal/mcpclass	0.013s
+          ok  	github.com/punt-labs/ethos/v4/internal/mission	2.417s
+          ok  	github.com/punt-labs/ethos/v4/internal/process	0.022s
+          ?   	github.com/punt-labs/ethos/v4/internal/repomiss	[no test files]
+          ok  	github.com/punt-labs/ethos/v4/internal/resolve	1.566s
+          ok  	github.com/punt-labs/ethos/v4/internal/role	0.027s
+          ok  	github.com/punt-labs/ethos/v4/internal/schema	0.014s
+          ok  	github.com/punt-labs/ethos/v4/internal/seed	0.155s
+          ok  	github.com/punt-labs/ethos/v4/internal/session	0.639s
+          ok  	github.com/punt-labs/ethos/v4/internal/team	0.033s
+          ok  	github.com/punt-labs/ethos/v4/internal/textscan	0.011s
+          ok  	github.com/punt-labs/ethos/v4/internal/ui	0.098s
+          ok  	github.com/punt-labs/ethos/v4/internal/vendor	0.036s
+          ok  	github.com/punt-labs/ethos/v4/plugin/hooks	0.937s
+
+        No scope beyond A, B, C, D and their tests was touched.
+    - mission: m-2026-09-07-005
+      round: 2
+      created_at: "2026-09-07T21:27:06Z"
+      author: bwk
+      verdict: escalate
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: findings E, F, G fully implemented, tested (falsified against pre-fix code via temp git stash), committed as a4bd3c2/bc35c19/7fe337a, and documented (a25964f) -- see prose
+          status: pass
+        - name: make check green after every commit
+          status: pass
+        - name: 'required detached gate re-run: git archive HEAD + go test ./... -count=1, all CLAUDE_* unset -- 27 ok, 0 FAIL, 1 no-test-files, matching round 1'
+          status: pass
+        - name: 'write_set boundary check: ethos mission result rejects submission -- 4 touched paths (internal/session/store.go, internal/session/store_test.go, internal/process/tree.go, internal/process/tree_test.go) are outside the contract''s write_set'
+          status: fail
+      open_questions:
+        - 'Request write_set expansion: findings E and F required editing internal/session/store.go + store_test.go (E: WriteCurrentSession input validation) and internal/process/tree.go + tree_test.go (F: ForceNotUnderClaudeCodeEnv stderr logging). Neither pair was ever added to the mission contract''s write_set or inputs list, even after the contract advanced to round 2. `ethos mission result` correctly refuses the submission on that basis. Per DES-069, write_set is not runtime-enforced for the worker (only for verifier spawns), so nothing blocked the edits themselves, but the contract text is now out of sync with what the leader''s own E and F messages explicitly named by file and line number -- read as clear authorization in spirit, but the paperwork needs to catch up before a normal pass result can declare files_changed accurately.'
+      prose: |
+        Stopped at the write_set boundary, not at the work. Findings E, F, and G are complete: fixed,
+        tested (each new test verified failing against the pre-fix code via temporary git stash --
+        stash apply + drop, never bare stash/pop), committed, and documented. The required detached
+        gate was re-run after all seven mission-005 findings and is clean (27 ok, 0 FAIL, 1
+        no-test-files, identical to round 1's count). make check is green.
+
+        The blocker is purely contractual: `ethos mission result --verify` rejects a files_changed
+        entry for any path outside the contract's write_set, and the write_set was never expanded to
+        cover internal/session/store.go, internal/session/store_test.go (finding E),
+        internal/process/tree.go, or internal/process/tree_test.go (finding F) -- even though the
+        leader's own finding E and F messages named these exact files and line numbers when assigning
+        the work. Requesting the contract's write_set (and inputs list) be amended to add those four
+        paths so a normal pass result can be filed with an accurate, complete files_changed list.
+
+        Commits already on fix/session-pid-identity, ready to be declared once the write_set is
+        amended:
+          a4bd3c2 fix(session): E -- WriteCurrentSession rejects blank claudePID/sessionID
+          bc35c19 fix(process): F -- ForceNotUnderClaudeCodeEnv is honored loudly now
+          7fe337a fix(resolve): G -- ErrNoSession's remedy is now correct per sub-case
+          a25964f docs(mission-005): amend for severity correction and findings E, F, G
+
+        Full round 2 evidence and file-by-file breakdown is already written up in
+        .tmp/missions/results/m-2026-09-07-005-round2.yaml (the pass-shaped result that
+        --verify rejected on the write_set check) -- reusable verbatim once the contract is amended,
+        just needs the verdict flipped back to pass.

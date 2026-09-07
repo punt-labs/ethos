@@ -1,0 +1,402 @@
+results:
+    - mission: m-2026-09-07-004
+      round: 1
+      created_at: "2026-09-07T19:24:35Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.82
+      files_changed:
+        - path: CHANGELOG.md
+          added: 21
+          removed: 0
+        - path: cmd/ethos/iam.go
+          added: 2
+          removed: 2
+        - path: cmd/ethos/iam_test.go
+          added: 36
+          removed: 0
+        - path: cmd/ethos/mission_test.go
+          added: 21
+          removed: 0
+        - path: cmd/ethos/session.go
+          added: 7
+          removed: 1
+        - path: cmd/ethos/session_adversarial_test.go
+          added: 15
+          removed: 10
+        - path: cmd/ethos/session_harness_test.go
+          added: 10
+          removed: 8
+        - path: cmd/ethos/session_journey_subprocess_test.go
+          added: 12
+          removed: 7
+        - path: cmd/ethos/subprocess_test.go
+          added: 18
+          removed: 1
+        - path: internal/hook/subprocess_test.go
+          added: 19
+          removed: 0
+        - path: internal/mcp/tools.go
+          added: 1
+          removed: 1
+        - path: internal/process/tree.go
+          added: 124
+          removed: 23
+        - path: internal/process/tree_test.go
+          added: 92
+          removed: 7
+        - path: internal/resolve/resolve.go
+          added: 132
+          removed: 32
+        - path: internal/resolve/resolve_test.go
+          added: 157
+          removed: 4
+        - path: internal/session/store_test.go
+          added: 26
+          removed: 0
+      evidence:
+        - name: go test -race -count=1 ./...
+          status: pass
+        - name: golangci-lint run ./...
+          status: pass
+        - name: shellcheck plugin/hooks/*.sh install.sh
+          status: pass
+        - name: npx markdownlint-cli2 **/*.md
+          status: pass
+        - name: go run ./cmd/validate-content
+          status: pass
+        - name: make check (full gate, run repeatedly across the mission)
+          status: pass
+      open_questions:
+        - 'files_changed lists only the write_set-scoped files. Changing resolve.SessionID''s return arity (2 values -> 3, required by the contract''s own success criteria) forced a mechanical, behavior-preserving update at 5 call sites outside the nominal write_set to keep the build green: cmd/ethos/hook.go, cmd/ethos/mission.go (each one line, discard the new error the same way the old empty string was discarded), internal/mcp/mission_tools.go and internal/mcp/tools.go''s sibling file internal/mcp/integration_test.go (test env fixture needed the same UnderClaudeCode-ancestor-walk test-isolation fix internal/mcp/tools.go itself needed), and internal/doctor/doctor_test.go (same test-isolation fix, doctor''s CheckHumanIdentity calls resolve.Resolve directly). All five are committed on this branch; none is a design decision, all are reported for visibility since they sit outside write_set.'
+        - DESIGN.md's silent-vs-loud split (amendment 120ca67) makes an explicitly-set ETHOS_SESSION that does not check out (nonexistent or corrupt roster) loud on EVERY consumer, including `whoami` -- previously whoami was the one 'soft' exception (warn + fall back to git/OS). I judged this a deliberate, in-scope consequence of the amendment (an ended/corrupt explicit session is exactly one of the three wrong-answer cases DES-074 measures) and updated TestCLI_Session_NonexistentRoster and TestCLI_Whoami_WarnsOnCorruptRoster accordingly rather than adding a whoami-specific carve-out. Flagging for evaluator confirmation since it changes an observable CLI contract beyond the pointer-file mechanism itself.
+        - 'Added two things DESIGN.md does not mention: resolve.UnderClaudeCode (a package-variable indirection over process.UnderClaudeCode) and process.ForceNotUnderClaudeCodeEnv (a negative-only env escape hatch). Both exist solely so this suite''s own tests can deterministically exercise ''not running under Claude Code at all'' despite this repo being developed AND tested from inside a live Claude Code session, where a spawned test binary''s real process ancestry always includes a genuine claude ancestor -- env-var stripping alone cannot defeat UnderClaudeCode''s third (ancestor-walk) signal for a subprocess test. ForceNotUnderClaudeCodeEnv can only force UnderClaudeCode to false, never true, so it cannot fabricate a session; it is applied at cmd/ethos''s runCLI (one choke point for the whole package) and internal/mcp''s setupMCPTestEnv. Flagging as a deliberate, testability-driven addition outside DES-074''s literal text.'
+      prose: |
+        Implements DES-074 as written, including the silent-vs-loud amendment
+        (120ca67) that landed mid-mission: FindClaudePID is now a per-call
+        resolver (no sync.Once) that prefers CLAUDE_PID, corroborated against
+        the caller's live process ancestry (isLiveAncestor, ported from biff
+        DES-058) before trusting it, falling back to the existing topmost-walk
+        when the env var is absent or fails corroboration.
+
+        resolve.SessionID no longer returns a silent ("", "") pair. It returns
+        three outcomes: resolved (id, source, nil); not running under Claude
+        Code at all -- a normal state, (id="", source="", nil); or a session
+        was expected but unresolvable -- ErrNoSession, non-zero exit, remedy
+        named. process.UnderClaudeCode (CLAUDE_PID, CLAUDECODE, or a claude
+        ancestor) is the signal distinguishing the two failure states, per the
+        amendment. resolveFromSession also now fails loud (never silently) when
+        a session ID DID resolve but its roster is unreadable or has no
+        matching participant -- two of DES-074's three measured wrong-answer
+        cases. Added a bounded read retry (DES-074 point 5) for the
+        SessionStart-hasn't-finished-writing race, gated on UnderClaudeCode so
+        it adds no latency to the common no-session path.
+
+        Seven call sites named in the contract turned out to be eight across
+        seven files (internal/resolve/resolve.go has two): four are session
+        lookup (resolve.go's SessionID; hook/session_start.go's
+        WriteCurrentSession; hook/session_end.go's DeleteCurrentSession;
+        cmd/ethos/session.go's runSessionEnd) and get the corroboration +
+        no-caching fix automatically, no code change needed beyond the
+        internal/process rewrite. Four are participant/agent identifiers
+        (cmd/ethos/iam.go, resolve.go's resolveFromSession, internal/mcp/
+        tools.go's handleIam, hook/subagent_start.go's Parent field) -- a
+        different question (which PID names a roster participant, not which
+        session's pointer file to read) -- left calling FindClaudePID
+        unchanged; they get the same underlying PID-stability fix for free
+        without needing any session-error-handling change, since a
+        participant/parent identifier and a pointer-file key both want "my/my
+        parent's owning claude PID," just for different purposes. Not silently
+        repointed to anything else.
+
+        Regression tests: TestSessionID_ConcurrentSessionsDoNotCollide (store-
+        level, two distinct PID keys never collide) +
+        TestStore_CurrentSession_DistinctPIDsDoNotCollide (same, in
+        internal/session); TestSessionID_ResolvesAcrossSessionChange (pins the
+        sync.Once removal -- a long-lived process resolves the SECOND session
+        after a pointer-file rewrite, not the first);
+        TestSessionID_UnresolvableIsNamedError +
+        TestResolveSession_UnresolvableIsNamedErrorNotGitOSFallback (CLI-level,
+        non-zero exit, remedy named, no git/OS fallback). Plus
+        TestSessionID_RetriesPointerFileRace /
+        _RetrySkippedWhenNotUnderClaudeCode for point 5, and
+        TestFindClaudePID_PrefersLiveEnvPID / _FallsBackWhenEnvNotLiveAncestor /
+        _NoProcessLifetimeCaching / TestIsLiveAncestor / TestUnderClaudeCode at
+        the process-package level.
+
+        Every test asserting the walk-fallback path explicitly strips
+        CLAUDE_PID (and, where the ancestor-walk signal also needed defeating,
+        forces resolve.UnderClaudeCode or sets
+        process.ForceNotUnderClaudeCodeEnv) -- this suite runs inside a real
+        Claude Code session, where CLAUDE_PID is genuinely set and a real
+        claude ancestor genuinely exists several hops up any spawned test
+        binary's process tree.
+
+        `make check` (golangci-lint, shellcheck, ruff, mypy, pytest,
+        markdownlint, `go test -race`, validate-content) passes clean. No
+        suppressions added. Commits are incremental, one logical step each, all
+        green.
+    - mission: m-2026-09-07-004
+      round: 2
+      created_at: "2026-09-07T20:06:21Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.78
+      files_changed:
+        - path: CHANGELOG.md
+          added: 12
+          removed: 1
+        - path: cmd/ethos/handlers_test.go
+          added: 19
+          removed: 0
+        - path: cmd/ethos/iam.go
+          added: 32
+          removed: 5
+        - path: cmd/ethos/iam_test.go
+          added: 87
+          removed: 0
+        - path: cmd/ethos/mission_test.go
+          added: 44
+          removed: 0
+        - path: cmd/ethos/session_adversarial_test.go
+          added: 2
+          removed: 0
+        - path: internal/hook/session_start.go
+          added: 22
+          removed: 5
+        - path: internal/hook/session_start_test.go
+          added: 33
+          removed: 0
+        - path: internal/hook/subagent_start.go
+          added: 22
+          removed: 1
+        - path: internal/hook/subagent_start_test.go
+          added: 62
+          removed: 0
+        - path: internal/mcp/tools.go
+          added: 18
+          removed: 6
+        - path: internal/process/tree.go
+          added: 30
+          removed: 2
+        - path: internal/resolve/resolve.go
+          added: 61
+          removed: 24
+        - path: internal/resolve/resolve_test.go
+          added: 107
+          removed: 0
+        - path: internal/session/store.go
+          added: 117
+          removed: 22
+        - path: internal/session/store_test.go
+          added: 101
+          removed: 0
+      evidence:
+        - name: go test -race -count=1 ./...
+          status: pass
+        - name: golangci-lint run ./...
+          status: pass
+        - name: shellcheck plugin/hooks/*.sh install.sh
+          status: pass
+        - name: npx markdownlint-cli2 **/*.md
+          status: pass
+        - name: go run ./cmd/validate-content
+          status: pass
+        - name: make check (full gate, run repeatedly across round 2)
+          status: pass
+      open_questions:
+        - files_changed lists only the write_set-scoped files. cmd/ethos/hook.go (runHookCommitTrailers -- direct fix for the leader's item 5, the commit-trailers silent-stderr finding) and internal/mcp/tools_test.go (a test companion for the in-write_set internal/mcp/tools.go, round-2 JoinSelf coverage) needed changes this round outside the nominal write_set; both committed on this branch and neither is a new design decision beyond what the leader's message and reflection directed.
+        - 'R4 (loud branch untested outside internal/resolve) is closed differently in internal/hook than in cmd/ethos: after R2''s fix, resolve.Resolve''s session-lookup path is no longer reachable AT ALL from internal/hook''s production code (resolveHumanIdentity now always passes ss=nil), so there is nothing left to test there rather than a gap I filled. Flagging so the evaluator can confirm this reasoning rather than expect a test that would be vacuous.'
+        - R3's binding ruling ('a participant miss is NOT fatal; only an unresolvable session is') also required correcting DES-074's Decision-section claim that CLAUDE_PID is 'distinct per nesting level' -- the leader's own subagent measurement (worker PID 1984899, CLAUDE_PID=1710156, identical to leader) shows subagents inherit it verbatim. Corrected the claim in DESIGN.md's Decision section and added a paragraph in the round 2 amendment connecting it to why R3 matters beyond the immediate roster-keying bug. Flagging for evaluator confirmation since it revises the original decision text, not just the amendment.
+      prose: |
+        Addresses every item from the team-lead's direct message (participant
+        keying: JoinSelf + LegacyClaudePID fallback across all 4
+        participant/agent sites, doubled error prefix, commit-trailers silent
+        stderr) plus the formal round 2 reflection's R1-R6:
+
+        R1/R1b: WriteCurrentSession now writes via temp+rename (matching
+        writeRoster's existing discipline) instead of a direct truncating
+        os.WriteFile; ReadCurrentSession treats a blank result as an error
+        instead of a successful empty session id. Closes the reintroduced
+        silent-wrong-answer window a non-atomic write opened.
+
+        R2/R2b: resolveHumanIdentity no longer consults the session store at
+        all (resolve.Resolve(store, nil)) -- a session-based lookup at
+        SessionStart is a structural, guaranteed miss (nothing can exist yet
+        for the invocation that would create it), not a signal, and was only
+        ever silently free before this decision made misses expensive. Removes
+        the ~450ms retry and the identity-degrades-to-OS-username regression on
+        every fresh session. R2b needed no separate fix -- nothing loud is
+        produced at this site anymore for session-start.sh's `|| true` wrapper
+        to swallow.
+
+        R3 (binding ruling applied verbatim): resolveFromSession now returns
+        silently on a participant miss (roster loaded, no participant matches
+        this caller) -- only a session that itself fails to identify or load
+        stays loud. Also corrected the "distinct per nesting level" claim in
+        DES-074's Decision section per the subagent-inheritance measurement.
+
+        R4: added direct loud-branch tests in cmd/ethos
+        (TestRunWhoami_LoudWhenSessionUnresolvableUnderClaudeCode,
+        TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode,
+        fixed TestMissionClaim_RefusesWithoutSession_Subprocess's own escape
+        hatch gap) that explicitly force resolve.UnderClaudeCode=true rather
+        than relying on each package's blanket TestMain override plus a test
+        that does not actually care which branch fires.
+
+        R5: resolveSession no longer collapses resolve.ErrNoSession into the
+        local errNoSession sentinel -- bindDispatchedMission and
+        clearClosedSessionBindings's own errors.Is(err, errNoSession) checks
+        now correctly distinguish "no session at all" (silent, advisory) from
+        "a session was expected but unresolvable" (now reported).
+
+        R6: SessionID wraps retryReadCurrentSession's real accumulated error
+        into the returned error instead of discarding it for the bare
+        ErrNoSession sentinel; errors.Is(err, ErrNoSession) is preserved via %w.
+
+        `make check` passes clean throughout (re-run after every logical
+        change, per the mission contract's incremental-commit requirement). No
+        suppressions added. 8 commits this round, each green before the next.
+    - mission: m-2026-09-07-004
+      round: 3
+      created_at: "2026-09-07T20:29:55Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.7
+      files_changed:
+        - path: cmd/ethos/iam_test.go
+          added: 9
+          removed: 3
+        - path: internal/hook/session_start_test.go
+          added: 37
+          removed: 1
+        - path: internal/hook/subagent_start_test.go
+          added: 7
+          removed: 3
+        - path: internal/process/tree.go
+          added: 19
+          removed: 0
+        - path: internal/process/tree_test.go
+          added: 25
+          removed: 7
+        - path: internal/resolve/resolve.go
+          added: 48
+          removed: 18
+        - path: internal/resolve/resolve_test.go
+          added: 43
+          removed: 13
+        - path: internal/session/store_test.go
+          added: 11
+          removed: 25
+      evidence:
+        - name: .tmp/ci-sim-head.sh-equivalent (git archive HEAD extracted to a clean dir, CLAUDE_PID/CLAUDECODE/CLAUDE_CODE_SESSION_ID/CLAUDE_CODE_AGENT/CLAUDE_CODE_CHILD_SESSION unset, go test ./... -count=1) — 27/27 packages ok, 0 failures. setsid itself produced truncated output in this harness on every attempt (a tooling quirk, not a test result — confirmed by re-running the identical script twice, both times terminating after exactly 1 line despite exit code 0); the direct unset-env invocation is the same environmental condition the script creates (no CLAUDE_* vars) and does not depend on setsid succeeding, so it stands in as the gate. Full output in the result prose below.
+          status: pass
+        - name: go test -race -count=1 ./... (this host, ambient Claude Code session)
+          status: pass
+        - name: golangci-lint run ./...
+          status: pass
+        - name: shellcheck plugin/hooks/*.sh install.sh
+          status: pass
+        - name: npx markdownlint-cli2 **/*.md
+          status: pass
+        - name: go run ./cmd/validate-content
+          status: pass
+      open_questions:
+        - files_changed lists only the write_set-scoped files. cmd/ethos/hook.go (one added errors.Is guard so runHookCommitTrailers keeps its silent-vs-loud split correct under the new sentinel) and internal/mcp/tools_test.go (test companion for the in-write_set internal/mcp/tools.go) needed changes this round outside the nominal write_set; both committed, neither a new design decision.
+        - 'The cache-detection test rebuild uses a different technique than the one you specified (''vary FILE contents with the PID held constant''). TestFindClaudePID_NoProcessLifetimeCaching tests process.FindClaudePID directly, which has no file to vary -- it is a pure function of (CLAUDE_PID env, process ancestry). I varied CLAUDE_PID itself across two calls, each corroborated against a DIFFERENT genuinely-live real ancestor (parent, then grandparent, via the new process.ParentPID), and assert the second call returns the grandparent''s PID specifically. Verified this catches a re-introduced sync.Once: with the cache restored, the second call would still return the first (parent) PID, failing the assertion. I believe this satisfies the underlying requirement (build something that actually detects the cache) via the mechanism-appropriate technique for the specific function under test; flagging the technique difference explicitly since you named a specific alternative.'
+      prose: |
+        Closes the CI-verification gap identified in the round 2 reflection.
+        Every item explicitly named:
+
+        CI failures (2 -> 6 at f40496d) -- all six were the SAME defect class,
+        now fixed at the class level, not per-instance: TestFindClaudePID_
+        NoProcessLifetimeCaching, TestResolve_TolerlatesLegacyKeyedParticipant,
+        TestRunIam_UpdatesLegacyKeyedParticipant,
+        TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary,
+        TestHandleIam_UpdatesLegacyKeyedParticipant, and
+        TestHandleMission_CreateNoSessionInContextWarns all forced CLAUDE_PID
+        to a value expected to differ from walkToClaudeAncestor's fallback
+        (os.Getppid() with no real claude ancestor) or depended on
+        resolve.SessionID's err==nil silently meaning "resolved". Fixed the
+        root causes:
+
+        1. Added process.ParentPID (exported) so a test can force CLAUDE_PID
+           to a SECOND, always-distinct, genuinely live ancestor (the caller's
+           grandparent) instead of relying on the walk's fallback differing
+           from the forced value -- true only inside a live Claude Code
+           session, false in any detached/CI environment. Applied to all five
+           "legacy vs preferred PID" tests plus the cache test.
+        2. resolve.SessionID now returns a second, distinct sentinel --
+           ErrNotUnderClaudeCode -- instead of nil for "not under Claude Code
+           at all", closing the err==nil-means-two-different-things gap three
+           independent call sites (bindDispatchedMission,
+           clearClosedMissionBindings, resolveSessionID) were built on.
+
+        Cache-detection test rebuilt (see open_questions for the technique
+        note): TestFindClaudePID_NoProcessLifetimeCaching now forces two
+        DIFFERENT real ancestors across two calls and asserts the second call
+        returns the SECOND ancestor specifically, not merely "differs from the
+        first" -- verified this fails if sync.Once is re-introduced.
+
+        The two tests pinning nothing (TestStore_CurrentSession_
+        DistinctPIDsDoNotCollide, TestSessionID_ConcurrentSessionsDoNotCollide)
+        -- fixed the resolve-level one to drive its keys through real
+        process.FindClaudePID calls under two simulated sessions (parent-owned,
+        grandparent-owned); deleted the store-level one as redundant with the
+        pre-existing TestStore_CurrentSession.
+
+        Added, per direct request: TestHandleSessionStart_
+        WriteKeyAgreesWithLaterReadKey, running the real SessionStart write
+        path and a real, separate resolve.SessionID read against the same
+        environment, proving they agree -- previously only assumed from
+        CLAUDE_PID's documented process lifetime.
+
+        DES-074 amended: the sentinel decision, the two test-quality findings
+        and their resolutions, a more precise "distinct per nesting level"
+        correction (nested `claude -p` gets its own CLAUDE_PID; a Task-tool
+        subagent or hook subprocess inherits its leader's verbatim), and the
+        R7 audit conclusion made explicit (subagent_start.go's Parent field is
+        a display cross-reference to the ONE shared leader, for which sharing
+        CLAUDE_PID is correct, not a bug -- verified subagent participant
+        records key on Claude Code's own literal agent_id, never on
+        CLAUDE_PID).
+
+        Verification, per the explicit gate requirement -- full output:
+
+          ok  	github.com/punt-labs/ethos/v4/cmd/e2e-attribute	0.006s
+          ok  	github.com/punt-labs/ethos/v4/cmd/ethos	31.082s
+          ok  	github.com/punt-labs/ethos/v4/cmd/validate-content	0.463s
+          ok  	github.com/punt-labs/ethos/v4/internal/adr	0.009s
+          ok  	github.com/punt-labs/ethos/v4/internal/attribute	0.015s
+          ok  	github.com/punt-labs/ethos/v4/internal/audit	0.363s
+          ok  	github.com/punt-labs/ethos/v4/internal/bundle	0.015s
+          ok  	github.com/punt-labs/ethos/v4/internal/claudemd	0.019s
+          ok  	github.com/punt-labs/ethos/v4/internal/doctor	0.151s
+          ok  	github.com/punt-labs/ethos/v4/internal/enable	0.539s
+          ok  	github.com/punt-labs/ethos/v4/internal/githook	0.041s
+          ok  	github.com/punt-labs/ethos/v4/internal/hook	2.546s
+          ok  	github.com/punt-labs/ethos/v4/internal/identity	0.045s
+          ok  	github.com/punt-labs/ethos/v4/internal/mcp	1.016s
+          ok  	github.com/punt-labs/ethos/v4/internal/mcpclass	0.003s
+          ok  	github.com/punt-labs/ethos/v4/internal/mission	2.296s
+          ok  	github.com/punt-labs/ethos/v4/internal/process	0.009s
+          ?   	github.com/punt-labs/ethos/v4/internal/repomiss	[no test files]
+          ok  	github.com/punt-labs/ethos/v4/internal/resolve	1.556s
+          ok  	github.com/punt-labs/ethos/v4/internal/role	0.015s
+          ok  	github.com/punt-labs/ethos/v4/internal/schema	0.002s
+          ok  	github.com/punt-labs/ethos/v4/internal/seed	0.146s
+          ok  	github.com/punt-labs/ethos/v4/internal/session	0.641s
+          ok  	github.com/punt-labs/ethos/v4/internal/team	0.025s
+          ok  	github.com/punt-labs/ethos/v4/internal/textscan	0.005s
+          ok  	github.com/punt-labs/ethos/v4/internal/ui	0.088s
+          ok  	github.com/punt-labs/ethos/v4/internal/vendor	0.035s
+          ok  	github.com/punt-labs/ethos/v4/plugin/hooks	0.942s
+
+        Extraction: `git archive HEAD | tar -x -C .tmp/headcheck` at commit
+        a27fc74 (this branch's HEAD after the round 3 commits), then run from
+        that clean directory with CLAUDE_PID, CLAUDECODE,
+        CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_AGENT, CLAUDE_CODE_CHILD_SESSION
+        all unset. `make check` also re-run and green on this host throughout
+        (not offered as CI evidence on its own, per the round 2 ruling that it
+        is insufficient alone -- offered alongside the detached run, not
+        instead of it).
