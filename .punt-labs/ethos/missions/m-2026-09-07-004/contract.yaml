@@ -1,0 +1,85 @@
+mission_id: m-2026-09-07-004
+status: closed
+type: implement
+created_at: "2026-09-07T18:44:06Z"
+updated_at: "2026-09-07T20:45:53Z"
+closed_at: "2026-09-07T20:45:53Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-07T18:44:06Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    files:
+        - DESIGN.md
+        - internal/process/tree.go
+        - internal/process/tree_linux.go
+        - internal/process/tree_darwin.go
+        - internal/resolve/resolve.go
+        - internal/session/store.go
+        - internal/mcp/tools.go
+        - internal/hook/session_start.go
+        - internal/hook/session_end.go
+        - internal/hook/subagent_start.go
+        - cmd/ethos/iam.go
+        - cmd/ethos/session.go
+write_set:
+    - internal/process/**
+    - internal/resolve/**
+    - internal/session/store.go
+    - internal/session/store_test.go
+    - internal/mcp/tools.go
+    - internal/hook/session_start.go
+    - internal/hook/session_end.go
+    - internal/hook/subagent_start.go
+    - internal/hook/*_test.go
+    - cmd/ethos/iam.go
+    - cmd/ethos/session.go
+    - cmd/ethos/*_test.go
+    - CHANGELOG.md
+success_criteria:
+    - Implement DES-074 in DESIGN.md exactly as written. Read it first, end to end. It records measured evidence, four rejected alternatives, and the reasoning for each; do not re-litigate them and do not adopt a rejected alternative.
+    - FindClaudePID is replaced by a per-call resolver that prefers the CLAUDE_PID environment variable over the process-tree walk. The walk remains as fallback for when the variable is absent (headless, CI, SDK, Claude Code older than 2.1.234).
+    - The sync.Once caching in internal/process/tree.go:31 is REMOVED. Resolution happens per call. A long-lived process (ethos serve) outlives the session it first observed, so a cached PID is wrong by construction. Do not replace it with any other process-lifetime memoization.
+    - 'An env-sourced PID is corroborated before being trusted: verify it is present in the caller''s CURRENT live ancestry, re-derived at call time, and fall back to the walk if it is not. CLAUDE_PID is captured at spawn and never re-observed, so a dead-and-recycled PID would otherwise resolve to a real but wrong live process. Port the behaviour of biff''s is_live_ancestor (see /home/jfreeman/Coding/punt-labs/biff/DESIGN.md:6687).'
+    - 'resolve.SessionID no longer returns an empty string on failure. It returns a named error. Callers must NOT fall through to the git/OS identity when the session cannot be identified. The user-facing message states the remedy, e.g. ''ethos: cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`''. Exit status is non-zero.'
+    - Do NOT use CLAUDE_CODE_SESSION_ID as the session id. It is frozen at subprocess spawn and is stale after /clear in any long-lived process. This is a tested failure in biff (DESIGN.md:6722) and is a rejected alternative in DES-074.
+    - 'Regression test: two concurrent sessions in DIFFERENT repos sharing one daemon PID must resolve to their OWN session each. This is the bug; without this test the fix is unverified. A table test with injected PIDs and a temp store root is acceptable — do not require two real Claude Code sessions.'
+    - 'Regression test: a long-lived process resolving twice across a session change gets the second session, not the first. This pins the sync.Once removal.'
+    - 'Regression test: unresolvable session produces a non-zero exit and an error naming the remedy — not a git/OS identity fallback.'
+    - Tests must not depend on the ambient Claude Code session leaking in. Strip CLAUDE_PID and ETHOS_SESSION from the test process for walk-path tests that expect them absent (biff uses an autouse fixture for exactly this; see tests/conftest.py::_clear_claude_session_env).
+    - 'make check passes with zero violations. No suppressions: no //nolint, no build-tag dodges, no t.Skip. If a gate genuinely cannot pass, stop and report rather than suppress.'
+    - 'CHANGELOG.md gains an entry under ## [Unreleased] describing the user-visible change: session identity now resolves per call from the harness, and unidentifiable sessions error instead of silently using the git identity.'
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Report in your result: every call site of the old FindClaudePID and what each became. There are seven across six files; four are session lookup and three use the PID as a participant/agent identifier. The latter three are a DIFFERENT question — say explicitly what you did with them and why, do not silently repoint them.'
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 3
+context: |
+    Fixes ethos-vqwn (P1). Ethos resolves "which session is calling me" by
+    walking the process tree to the TOPMOST claude ancestor and using that PID
+    as the key into sessions/current/<pid>. Measured 2026-09-07 on okinos: the
+    topmost claude ancestor is `claude daemon run`, which every concurrent
+    Claude Code session on the host shares. Six rosters across four repos all
+    list PID 518779. Three pointer files serve all of them. Each SessionStart
+    overwrites the same file; last writer wins. A shell in punt-labs/ethos
+    resolved to a punt-labs/z-spec session. Consequence: a commit in one repo
+    can carry another repo's Mission:/Delegation: trailers — the DES-054 audit
+    chain can lie, not merely go missing.
+
+    This is a copied defect. A sweep of all 23 sibling DESIGN.md files found
+    the same walk in ethos, mcp-proxy and lux, propagated by citation rather
+    than re-derivation. biff already fixed it (DES-058, 2026-08-22) and the fix
+    never propagated. Read biff's DES-058 in full before starting:
+    /home/jfreeman/Coding/punt-labs/biff/DESIGN.md:6627-6783. It contains the
+    mechanism you are porting, the two alternatives that were tried and failed,
+    and the test names to model yours on.
+
+    Operator ruling 2026-09-07 governs the error handling: a mechanism is
+    reliable or it raises a clear error with a hint. Solutions that work 90% of
+    the time and misattribute the other 10% cause more churn than solutions
+    that stop. Agents here routinely work across worktrees and sibling repos —
+    exactly the condition under which a quiet fallback misfires. Every silent
+    fallback in this path becomes a named error.
