@@ -134,17 +134,35 @@ func TestFindClaudePID_IgnoresBlankOrMalformedEnv(t *testing.T) {
 func TestFindClaudePID_NoProcessLifetimeCaching(t *testing.T) {
 	// Pins the sync.Once removal (tree.go, formerly line 31): a long-lived
 	// process (ethos serve) must not keep answering with the FIRST PID it
-	// ever resolved. Two calls with two different corroborating inputs
+	// ever resolved. Two calls, each corroborating a DIFFERENT genuinely
+	// live ancestor (our parent, then our grandparent — both real,
+	// verified PIDs in our own process tree, not the walk's fallback),
 	// must each be re-derived, not served from a process-lifetime cache.
-	parent := strconv.Itoa(os.Getppid())
-	t.Setenv("CLAUDE_PID", parent)
-	first := FindClaudePID()
-	require.Equal(t, parent, first)
+	//
+	// Round 2 finding: the previous version of this test forced CLAUDE_PID
+	// to our parent, then to a bogus PID expecting the walk fallback to
+	// differ. In an environment with no real "claude" ancestor (CI, a
+	// detached process), the walk's own fallback is os.Getppid() — the
+	// SAME value the first call already used — so the two calls
+	// coincided by accident of environment, not because caching was
+	// absent, and a re-introduced sync.Once around FindClaudePID would
+	// have passed this test undetected. Using two REAL, always-distinct
+	// ancestors closes that gap in every environment.
+	parentPID := os.Getppid()
+	grandparentPID, err := ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	require.NotEqual(t, 0, grandparentPID)
+	require.NotEqual(t, parentPID, grandparentPID)
 
-	t.Setenv("CLAUDE_PID", "999999999") // no longer a live ancestor
+	t.Setenv("CLAUDE_PID", strconv.Itoa(parentPID))
+	first := FindClaudePID()
+	require.Equal(t, strconv.Itoa(parentPID), first)
+
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
 	second := FindClaudePID()
-	assert.NotEqual(t, first, second, "FindClaudePID must not cache across calls")
-	assert.Equal(t, walkToClaudeAncestor(os.Getpid()), second)
+	assert.Equal(t, strconv.Itoa(grandparentPID), second,
+		"a process-lifetime cache would still return the first PID")
+	assert.NotEqual(t, first, second)
 }
 
 func TestIsLiveAncestor(t *testing.T) {

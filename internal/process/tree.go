@@ -68,6 +68,25 @@ func LegacyClaudePID() string {
 	return walkToClaudeAncestor(os.Getpid())
 }
 
+// ParentPID returns the parent PID of pid, read fresh from the OS.
+// Exported so tests across consumer packages can obtain a second,
+// genuinely live ancestor distinct from os.Getppid() — e.g. the caller's
+// grandparent via ParentPID(os.Getppid()) — to exercise FindClaudePID's
+// env-corroboration path deterministically. Needed because a test cannot
+// otherwise force LegacyClaudePID/walkToClaudeAncestor to a chosen value:
+// in an environment with no real "claude" ancestor (CI, a detached
+// process — round 2 finding), its fallback is exactly os.Getppid(),
+// which coincides with whatever a test naively forces CLAUDE_PID to if
+// that is also the immediate parent, making the two indistinguishable by
+// accident of environment rather than by the mechanism under test.
+func ParentPID(pid int) (int, error) {
+	ppid, _, err := readProc(pid)
+	if err != nil {
+		return 0, err
+	}
+	return ppid, nil
+}
+
 // claudePIDFromEnv parses CLAUDE_PID, returning ok=false when the variable
 // is absent, blank, or not a positive integer.
 func claudePIDFromEnv() (pid int, ok bool) {
