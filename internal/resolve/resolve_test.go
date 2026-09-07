@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -150,15 +151,36 @@ func TestSessionID(t *testing.T) {
 		assert.Equal(t, "walk", source)
 	})
 
-	t.Run("neither resolves", func(t *testing.T) {
-		// DES-074: a caller-unresolvable session is a named error, never a
-		// silent ("", "") pair.
+	t.Run("neither resolves, under Claude Code", func(t *testing.T) {
+		// DES-074: a session that WAS expected (running under Claude Code)
+		// but cannot be identified is a named error, never a silent ("",
+		// "") pair. Force the branch deterministically -- this suite's
+		// ambient CLAUDE_PID happens to make it true today, but a real CI
+		// run (no claude ancestor at all) would make it false and this
+		// assertion would silently stop testing what it claims to.
 		t.Setenv("ETHOS_SESSION", "")
+		old := UnderClaudeCode
+		UnderClaudeCode = func() bool { return true }
+		t.Cleanup(func() { UnderClaudeCode = old })
 		empty := session.NewStore(t.TempDir())
 		sid, source, err := SessionID(empty)
 		assert.Empty(t, sid)
 		assert.Empty(t, source)
 		assert.ErrorIs(t, err, ErrNoSession)
+	})
+
+	t.Run("neither resolves, not under Claude Code", func(t *testing.T) {
+		// The other DES-074 branch: no session was ever expected here, so
+		// SessionID returns silently -- err is nil, not ErrNoSession.
+		t.Setenv("ETHOS_SESSION", "")
+		old := UnderClaudeCode
+		UnderClaudeCode = func() bool { return false }
+		t.Cleanup(func() { UnderClaudeCode = old })
+		empty := session.NewStore(t.TempDir())
+		sid, source, err := SessionID(empty)
+		assert.Empty(t, sid)
+		assert.Empty(t, source)
+		assert.NoError(t, err)
 	})
 }
 
@@ -212,9 +234,15 @@ func TestSessionID_ResolvesAcrossSessionChange(t *testing.T) {
 // contract directly: with no ETHOS_SESSION and no pointer file for this
 // process's Claude PID, SessionID must return ErrNoSession — a caller that
 // requires a session (iam, mission claim/release) then refuses with a
-// non-zero exit rather than silently trying some other identity.
+// non-zero exit rather than silently trying some other identity. This is
+// the "session was expected" branch, forced deterministically since this
+// suite's ambient CLAUDE_PID cannot be relied on to make it true in every
+// environment (a real CI run has no claude ancestor at all).
 func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
 	ss := session.NewStore(t.TempDir())
 
 	sid, source, err := SessionID(ss)
@@ -223,6 +251,58 @@ func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
 	assert.Empty(t, sid)
 	assert.Empty(t, source)
 	assert.Contains(t, err.Error(), "ethos session start", "the error must name the remedy")
+}
+
+// TestSessionID_RetriesPointerFileRace pins DES-074 point 5: a consumer
+// can start before SessionStart finishes writing the pointer file. The
+// race is simulated by writing it from a goroutine partway through the
+// retry window; a resolver with no retry would see the first read miss
+// and return ErrNoSession instead of the session that landed a few
+// milliseconds later.
+func TestSessionID_RetriesPointerFileRace(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true } // the retry only fires under Claude Code
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+
+	go func() {
+		time.Sleep(pointerRetryDelay / 2)
+		_ = ss.WriteCurrentSession(pid, "raced-session")
+	}()
+
+	sid, source, err := SessionID(ss)
+	require.NoError(t, err)
+	assert.Equal(t, "raced-session", sid)
+	assert.Equal(t, "walk", source)
+}
+
+// TestSessionID_RetrySkippedWhenNotUnderClaudeCode pins the other half of
+// point 5: the retry must not fire when no session was ever expected --
+// only the "session was expected but unresolvable" branch pays the retry
+// latency. A missing goroutine writer here means a passing retry would
+// have to be spurious; this test relies on the immediate ErrNoSession-free
+// return alone; timing is asserted structurally, not by wall-clock bound,
+// to avoid a flaky CI threshold.
+func TestSessionID_RetrySkippedWhenNotUnderClaudeCode(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return false }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	ss := session.NewStore(t.TempDir())
+	start := time.Now()
+	sid, source, err := SessionID(ss)
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
+	assert.Less(t, elapsed, pointerRetryDelay,
+		"not-under-Claude-Code must return immediately, not pay the under-Claude-Code retry latency")
 }
 
 func TestResolve_GitNameMatchesGitHub(t *testing.T) {
