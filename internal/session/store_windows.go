@@ -3,6 +3,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -46,10 +47,22 @@ func (s *Store) withLock(sessionID string, fn func() error) error {
 }
 
 // isProcessAlive checks whether a process with the given PID is running.
-// Unlike Unix, os.FindProcess on Windows opens a real handle via
-// OpenProcess and returns an error immediately when the PID does not name
-// a live process — so, unlike the Unix implementation, no separate
-// liveness probe (signal 0) is needed or possible here.
+// Calls OpenProcess directly — rather than os.FindProcess, which wraps the
+// same call but obscures the errno — so ERROR_ACCESS_DENIED (a live
+// process this caller lacks permission to open, e.g. one owned by another
+// user) can be told apart from ERROR_INVALID_PARAMETER (what OpenProcess
+// returns for a PID that does not exist at all).
+//
+// This distinction is not cosmetic: isProcessAlive gates PurgeCurrent's
+// removal of a session pointer file, the guard against purging a LIVE
+// session's pointer out from under it. Treating access-denied as "dead"
+// would open that guard for a process that is very much alive — ethos-
+// vqwn's failure class (a session silently loses its identity) arriving
+// through a new door on a new platform. The two wrong answers are not
+// symmetric in cost: a false "dead" purges a live pointer with no
+// recovery; a false "alive" only leaves a stale pointer that self-heals
+// at the next SessionStart. Fail closed on that asymmetry — every error
+// OTHER than the confirmed-not-found signal is treated as alive.
 //
 // Limitations: a PID whose process has just exited can briefly still open
 // successfully if another handle to it is still held elsewhere (the
@@ -57,10 +70,10 @@ func (s *Store) withLock(sessionID string, fn func() error) error {
 // closes) — the same "recently dead but still answers" caveat the Unix
 // zombie case carries, just via a different mechanism.
 func isProcessAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err == nil {
+		_ = windows.CloseHandle(h)
+		return true
 	}
-	defer p.Release()
-	return true
+	return !errors.Is(err, windows.ERROR_INVALID_PARAMETER)
 }
