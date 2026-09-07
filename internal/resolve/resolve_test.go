@@ -118,6 +118,36 @@ func TestResolve_TolerlatesLegacyKeyedParticipant(t *testing.T) {
 	assert.Equal(t, "mal", handle, "must tolerate a participant keyed on the legacy walk-derived PID")
 }
 
+// TestResolve_ParticipantMissFallsThroughToGitOS pins the round 2, R3
+// binding ruling: "a participant miss is NOT fatal; only an unresolvable
+// session is." A session that resolves and loads fine, but has no
+// participant matching this caller (under either the preferred or the
+// legacy PID) is the ordinary state for any process that has not run
+// `iam` yet — Resolve must fall through to git/OS, not error.
+func TestResolve_ParticipantMissFallsThroughToGitOS(t *testing.T) {
+	setGitConfig(t, "someone", "someone@example.com")
+	t.Setenv("ETHOS_SESSION", "")
+
+	s := testStoreWithIdentity(t, &identity.Identity{
+		Name: "Someone", Handle: "someone", Kind: "human", GitHub: "someone",
+	})
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+	sessionID := "no-participant-session"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: "someone-else-entirely", Persona: "not-me", Parent: "root"},
+		"", "",
+	))
+	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
+
+	handle, err := Resolve(s, ss)
+	require.NoError(t, err, "a participant miss must not be a fatal error")
+	assert.Equal(t, "someone", handle, "must fall through to the git identity")
+}
+
 func TestResolve_SessionFromEnv(t *testing.T) {
 	// No current-pointer is written; discovery is via ETHOS_SESSION alone
 	// (the Codex / plain-terminal path). whoami must still reflect the
@@ -297,6 +327,37 @@ func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
 	assert.Empty(t, sid)
 	assert.Empty(t, source)
 	assert.Contains(t, err.Error(), "ethos session start", "the error must name the remedy")
+}
+
+// TestSessionID_SurfacesRealReadCauseNotJustGenericRemedy pins round 2,
+// R6: retryReadCurrentSession's accumulated error must not be discarded
+// in favor of the bare ErrNoSession sentinel. "set ETHOS_SESSION" is the
+// right remedy for the common case (no pointer file at all), but a
+// determinable, different cause — here, the pointer "file" is actually a
+// directory — is not fixed by that remedy and must be visible in the
+// message. errors.Is(err, ErrNoSession) must still hold, since callers
+// pattern-match on it.
+func TestSessionID_SurfacesRealReadCauseNotJustGenericRemedy(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+	// Force a real, determinable read failure distinct from "not found":
+	// the pointer "file" is a directory.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions", "current", pid), 0o700))
+
+	_, _, err := SessionID(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.NotEmpty(t, err.Error())
+	// The real cause (a directory where a file was expected) must be
+	// visible somewhere in the chain, not swallowed by the generic remedy
+	// text alone.
+	assert.Contains(t, err.Error(), pid, "the failing path/PID should be traceable in the message")
 }
 
 // TestSessionID_RetriesPointerFileRace pins DES-074 point 5: a consumer

@@ -225,10 +225,14 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 		if !underClaude {
 			return "", "", nil
 		}
-		// Corroboration failure and a transient process-table read error
-		// are indistinguishable from here, so the message asserts neither
-		// cause (DES-074 point 6) — it only names the remedy.
-		return "", "", ErrNoSession
+		// Wrap rerr rather than returning the bare ErrNoSession sentinel:
+		// "set ETHOS_SESSION" is the right remedy for the common case (no
+		// pointer file — the retry above just confirmed it, there is no
+		// session), but a permission error or a corrupt file is a
+		// DIFFERENT, determinable cause that remedy would not fix (round
+		// 2, R6). errors.Is(err, ErrNoSession) still holds for every
+		// caller that checks it, since %w preserves the chain.
+		return "", "", fmt.Errorf("%w (%v)", ErrNoSession, rerr)
 	}
 	return sid, "walk", nil
 }
@@ -255,17 +259,25 @@ func retryReadCurrentSession(ss *session.Store, pid string) (string, error) {
 // ETHOS_AGENT_ID when set — matching how iam records it on both the CLI
 // and MCP surfaces — else on the Claude PID.
 //
-// Returns (sessionPersona{}, nil) when no session was ever expected (not
-// running under Claude Code at all) — the legitimate "try the next
-// identity source" case. Returns a non-nil error — always ErrNoSession or
-// wrapping it — for every other failure to check out: an unidentifiable
-// session, an unreadable roster, or no matching participant. These are
-// the three ways DES-074 measured this mechanism producing "a plausible
-// wrong answer with exit status 0" (a misspelled persona is a fourth,
-// already surfaced downstream when the caller loads the returned handle,
-// not a resolveFromSession concern). Returns found=true with empty handle
-// if the participant exists but has no persona configured — the caller
-// must not fall through to git/OS for that case either.
+// Returns (sessionPersona{}, nil) — silently try the next identity
+// source — in two cases: no session was ever expected (not running
+// under Claude Code at all), or a session resolved and its roster
+// loaded, but this caller is not a declared participant in it. The
+// latter is the ordinary state for any process that has not run `iam`
+// yet, not a wrong-answer risk (round 2, R3 — binding ruling: "a
+// participant miss is NOT fatal; only an unresolvable session is").
+// Returns a non-nil error — always ErrNoSession or wrapping it — only
+// when the SESSION itself does not check out: unidentifiable, or a
+// roster that fails to load (deleted, unreadable). These are two of the
+// three ways DES-074 measured this mechanism producing "a plausible
+// wrong answer with exit status 0" — "an ended session" and, before
+// CLAUDE_PID keying, "the wrong repo" (a misspelled persona is the
+// third, already surfaced downstream when the caller loads the returned
+// handle, not a resolveFromSession concern). Returns found=true with
+// empty handle if the participant exists but has no persona configured
+// — the caller must not fall through to git/OS for that case either,
+// since a declared-but-personaless participant is an explicit "no
+// identity," not an absence.
 func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 	sessionID, _, err := SessionID(ss)
 	if err != nil {
@@ -300,7 +312,14 @@ func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 		}
 	}
 	if p == nil {
-		return sessionPersona{}, fmt.Errorf("session %q has no participant matching %q: %w", sessionID, agentID, ErrNoSession)
+		// RULING (round 2, R3, binding): a participant miss is NOT fatal;
+		// only an unresolvable SESSION is. The session itself resolved
+		// fine (a real roster loaded) — this caller simply is not a
+		// declared participant in it, which is the ordinary state for
+		// any process that has not run `iam` yet, not a wrong-answer
+		// risk. Silently try the next identity source, exactly like "not
+		// running under Claude Code at all."
+		return sessionPersona{}, nil
 	}
 	// Participant found. If persona is empty, that's an explicit
 	// "no persona configured" — not "try git/OS instead."
