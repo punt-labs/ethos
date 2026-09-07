@@ -5,10 +5,10 @@ package process
 import (
 	"os"
 	"strconv"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsClaudeComm(t *testing.T) {
@@ -78,9 +78,6 @@ func TestReadProc_Nonexistent(t *testing.T) {
 }
 
 func TestWalkToClaudeAncestor_ReturnsValidPID(t *testing.T) {
-	claudePIDOnce = syncOnceZero()
-	defer func() { claudePIDOnce = syncOnceZero() }()
-
 	result := walkToClaudeAncestor(os.Getpid())
 	// Must return a valid PID string — either a claude ancestor
 	// (when running inside Claude Code) or os.Getppid() (fallback).
@@ -89,7 +86,68 @@ func TestWalkToClaudeAncestor_ReturnsValidPID(t *testing.T) {
 	assert.Greater(t, pid, 0)
 }
 
-// syncOnceZero returns a zero-value sync.Once for test isolation.
-func syncOnceZero() syncOnce { return syncOnce{} }
+// --- DES-074 regression tests ---
+//
+// These strip the real CLAUDE_PID from the test process (this suite itself
+// usually runs inside a Claude Code session, so the ambient value is real
+// and live — exactly the ambient leak DES-074 warns test authors about)
+// before asserting on env-absent behavior, and set a controlled value
+// before asserting on env-present behavior.
 
-type syncOnce = sync.Once
+func TestFindClaudePID_PrefersLiveEnvPID(t *testing.T) {
+	// os.Getppid() is a genuinely live ancestor of this test process,
+	// standing in for the owning claude process CLAUDE_PID would name in
+	// production — corroboration cares only about live ancestry, not the
+	// command name (biff DES-058's is_live_ancestor does the same).
+	parent := strconv.Itoa(os.Getppid())
+	t.Setenv("CLAUDE_PID", parent)
+
+	assert.Equal(t, parent, FindClaudePID())
+}
+
+func TestFindClaudePID_FallsBackWhenEnvNotLiveAncestor(t *testing.T) {
+	// A PID that cannot be our ancestor (max walk depth is 10 short hops;
+	// this value is astronomically unlikely to exist at all). Trusting an
+	// env-sourced PID without corroboration is exactly the gap DES-074
+	// closes — a dead ancestor's PID could otherwise be recycled by an
+	// unrelated but legitimate claude session and resolve to a real, live,
+	// WRONG process.
+	t.Setenv("CLAUDE_PID", "999999999")
+
+	got := FindClaudePID()
+	want := walkToClaudeAncestor(os.Getpid())
+	assert.Equal(t, want, got, "corroboration failure must fall back to the walk")
+	assert.NotEqual(t, "999999999", got)
+}
+
+func TestFindClaudePID_IgnoresBlankOrMalformedEnv(t *testing.T) {
+	for _, v := range []string{"", "   ", "not-a-pid", "-7", "0"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CLAUDE_PID", v)
+			got := FindClaudePID()
+			want := walkToClaudeAncestor(os.Getpid())
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestFindClaudePID_NoProcessLifetimeCaching(t *testing.T) {
+	// Pins the sync.Once removal (tree.go, formerly line 31): a long-lived
+	// process (ethos serve) must not keep answering with the FIRST PID it
+	// ever resolved. Two calls with two different corroborating inputs
+	// must each be re-derived, not served from a process-lifetime cache.
+	parent := strconv.Itoa(os.Getppid())
+	t.Setenv("CLAUDE_PID", parent)
+	first := FindClaudePID()
+	require.Equal(t, parent, first)
+
+	t.Setenv("CLAUDE_PID", "999999999") // no longer a live ancestor
+	second := FindClaudePID()
+	assert.NotEqual(t, first, second, "FindClaudePID must not cache across calls")
+	assert.Equal(t, walkToClaudeAncestor(os.Getpid()), second)
+}
+
+func TestIsLiveAncestor(t *testing.T) {
+	assert.True(t, isLiveAncestor(os.Getppid()), "our real parent must corroborate")
+	assert.False(t, isLiveAncestor(999999999), "a PID with no ancestry relation must not corroborate")
+}
