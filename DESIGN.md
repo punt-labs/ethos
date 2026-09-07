@@ -7977,13 +7977,18 @@ never inferred from the process tree and never cached.
 1. **Key the pointer file on `CLAUDE_PID`**, the owning `claude` process's own
    PID, which Claude Code sets on every spawned subprocess. Unlike the topmost
    walk it is distinct per session — the collision this decision closes.
-   *(Corrected 2026-09-07, round 2 measurement: a Task-tool subagent
-   inherits its leader's `CLAUDE_PID` verbatim, not a value of its own —
-   "distinct per nesting level" was wrong. `CLAUDE_PID` distinguishes
-   concurrent SESSIONS, not nesting depth within one; a subagent and its
-   leader share a session and correctly share the key. See the round 2
-   amendment.)* Fall back to the existing walk only when the variable is
-   absent (headless, CI, SDK, or a Claude Code older than 2.1.234).
+   *(Corrected 2026-09-07, round 2 measurement: a Task-tool subagent's own
+   environment shows it inherits its leader's `CLAUDE_PID` VERBATIM, not a
+   value of its own — same for a hook subprocess (measured live inside a
+   real git commit-msg hook). "Distinct per nesting level" was wrong for
+   both. It is right only for a NESTED `claude` PROCESS — `claude -p`
+   spawning another top-level `claude` — which gets its own PID and its
+   own `CLAUDE_PID`. `CLAUDE_PID` distinguishes concurrent SESSIONS, not
+   nesting depth within one; a Task-tool subagent or hook subprocess
+   shares its leader's session and correctly shares the key. See the
+   round 2 amendment.)* Fall back to the existing walk only when the
+   variable is absent (headless, CI, SDK, or a Claude Code older than
+   2.1.234).
 2. **Corroborate before trusting it.** `CLAUDE_PID` is captured once at spawn
    and never re-observed, so a long-lived process whose ancestor died — with the
    PID since recycled by an unrelated but legitimate `claude` session — would
@@ -8299,7 +8304,13 @@ This also corrects the "distinct per nesting level" claim in the
 Decision section above: a Task-tool subagent's own environment shows it
 inherits its leader's `CLAUDE_PID` **verbatim**, not a value of its own
 (measured: worker subprocess PID 1984899 carried `CLAUDE_PID=1710156`,
-identical to its leader). `CLAUDE_PID` distinguishes concurrent
+identical to its leader; the leader separately measured the same
+inheritance live inside a real git commit-msg hook subprocess).
+"Distinct per nesting level" is true only for a NESTED `claude` process
+(`claude -p` spawning another top-level `claude`, which Claude Code gives
+its own PID and its own `CLAUDE_PID`) — it is false for a Task-tool
+subagent or a hook subprocess, both of which inherit their parent
+session's value unchanged. `CLAUDE_PID` distinguishes concurrent
 *sessions*, not nesting depth within one session — a subagent and its
 leader belong to the same session and correctly share the same key. This
 is why R3's ruling matters beyond the immediate bug: a subagent is
@@ -8308,7 +8319,23 @@ while genuinely not yet being a named roster participant under it (it
 joins the roster separately, keyed on its own Claude-assigned
 `agent_id` — see `internal/hook/subagent_start.go`), so treating a
 participant miss as fatal would have made routine subagent spawns loud
-failures, not just pre-upgrade rosters.
+failures, not just pre-upgrade rosters. One consequence follows directly:
+`CLAUDE_PID` cannot distinguish a subagent from its leader, so nothing in
+the participant/agent-identifier path may rely on it for per-agent
+distinctness — verified: `subagent_start.go`'s subagent participant record
+is keyed on Claude Code's own literal `agent_id` from the hook payload,
+never on `CLAUDE_PID`; only its `Parent` field (a display cross-reference,
+not a lookup key) uses `CLAUDE_PID`, and that field's whole job is to name
+the ONE shared leader, for which sharing the value is correct, not a bug.
+
+`TestSessionID_ConcurrentSessionsDoNotCollide` and
+`TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey` pin the two
+halves of this together: the former proves two DIFFERENT sessions
+(distinct owning processes) get distinct `FindClaudePID` keys; the
+latter proves that within ONE session, a SessionStart write and a later
+tool-call read agree on the same key — the property the whole pointer
+mechanism depends on, previously only assumed from `CLAUDE_PID`'s
+documented process-lifetime, never demonstrated end to end.
 
 **R4 — the loud branch had no direct test coverage in `cmd/ethos` or
 `internal/hook`.** Both packages force `resolve.UnderClaudeCode` false
@@ -8362,3 +8389,107 @@ Full detail and regression tests: see the round 2 commits on
 `ReadCurrentSession`; `internal/hook/session_start.go`'s
 `resolveHumanIdentity`; `internal/resolve/resolve.go`'s
 `resolveFromSession`/`SessionID`; `cmd/ethos/iam.go`'s `resolveSession`).
+
+### Amendment 2026-09-07: the third outcome needed its own sentinel
+
+Two independent local review agents, confirmed by the leader, found that
+`SessionID`'s three-outcome contract collapsed to two in practice: `id ==
+"", err == nil` (not under Claude Code) and `id != "", err == nil`
+(resolved) share the same `err == nil` signal, so a caller checking only
+`err == nil` to mean "resolved" silently accepted an empty id for the
+first case. Three call sites did exactly this —
+`internal/mcp/mission_tools.go`'s `bindDispatchedMission` and
+`clearClosedMissionBindings`, and `internal/mcp/tools.go`'s
+`resolveSessionID` — each treating a nil error as success and passing the
+resulting empty session id on to code that required a non-empty one.
+Measured failure: `TestHandleMission_CreateNoSessionInContextWarns`,
+extracted via `git archive` and run in a detached process with no
+Claude Code ancestor and no `CLAUDE_PID`/`CLAUDECODE` (a CI-representative
+environment; the same test passes inside a live Claude Code session,
+where `resolve.UnderClaudeCode`'s `TestMain` override was masking the
+gap), failed with `"globalRoot and sessionID are required"` instead of
+producing the intended "no session in context" warning.
+
+**Decision.** `SessionID` now returns a second, distinct, named sentinel
+— `ErrNotUnderClaudeCode` — for the "no session was ever expected" case,
+instead of `nil`. The invariant is now mechanical: `err == nil` if and
+only if `id != ""`. A caller may trust `err == nil` alone to mean
+"resolved," full stop; every other outcome, including the previously
+free case, is a distinct non-nil error requiring `errors.Is`.
+`resolveFromSession` translates `ErrNotUnderClaudeCode` back to its own
+established `(sessionPersona{}, nil)` "try the next identity source"
+contract, so `Resolve`'s callers are unaffected. Every caller that
+already checked `err != nil` to mean "not resolved" (the three sites
+above; also `cmd/ethos/hook.go`'s `runHookCommitTrailers`, which
+separately needed a `errors.Is(err, ErrNotUnderClaudeCode)` guard to
+keep its silent-vs-loud stderr split correct — see the round 2, item 5
+amendment above) now works correctly with no further change, because the
+gap they had — treating a nil error as success — is closed at the
+source.
+
+**Rejected: keep two outcomes sharing `nil` and audit every caller
+instead.** Considered and abandoned once the count reached three
+call sites across two files with the identical mistake, independently:
+a shared failure mode this consistent across independent call sites is
+a contract defect, not three unrelated bugs to patch individually. A
+fourth site written the same way before this fix would have repeated
+it.
+
+### Amendment 2026-09-07: two test-quality findings, both confirmed by direct measurement
+
+The leader extracted the committed tree at a round 2 commit via `git
+archive` into a clean directory and ran the suite detached (`setsid`,
+`CLAUDE_PID`/`CLAUDECODE`/`CLAUDE_CODE_SESSION_ID` unset) — a
+CI-representative environment this repo's own test suite cannot
+otherwise reach, since it is developed and normally tested from inside a
+live Claude Code session. Two findings from that run:
+
+**A cache-detection test measured input-insensitivity, not caching.**
+`TestFindClaudePID_NoProcessLifetimeCaching` forced `CLAUDE_PID` to the
+caller's own parent PID, then to a bogus PID, and asserted the two
+`FindClaudePID()` results differed. The invariant reviewer falsified the
+test experimentally: re-introducing a `sync.Once` around `FindClaudePID`
+and re-running the suite, every assertion still passed, because the test
+varies its INPUT between calls while the cache was on the RETURN VALUE —
+within one test process the two never diverge regardless of whether a
+cache exists. Separately, in a detached/no-claude-ancestor environment,
+`walkToClaudeAncestor`'s own fallback is exactly `os.Getppid()` — the
+SAME value the forced first call already used — so the test's `NotEqual`
+assertion depended on the ambient environment providing a distinguishable
+real "claude" ancestor, which a detached process does not have. Fixed by
+using two ALWAYS-distinct, genuinely live ancestors (the caller's parent
+and grandparent, via the new `process.ParentPID`) instead of a bogus PID
+and the walk's fallback, and asserting the SECOND call returns the
+SECOND ancestor's PID specifically (not merely "differs from the
+first") — a re-introduced cache would return the first PID again and
+this assertion would catch it, in every environment.
+
+**Two tests asserted a property of maps, not of the fix.**
+`TestStore_CurrentSession_DistinctPIDsDoNotCollide` and (before this
+amendment) `TestSessionID_ConcurrentSessionsDoNotCollide` wrote two
+literal string keys ("11111"/"22222") and read them back — true of any
+key-value store, and true before this fix too. ethos-vqwn was never "the
+store collides on distinct keys"; it was "`FindClaudePID` returns the
+SAME key for different sessions" (the pre-fix topmost-ancestor walk
+collapsing every concurrent session onto the shared "claude daemon run"
+PID). The store-level test added nothing beyond the pre-existing
+`TestStore_CurrentSession` and is removed.
+`TestSessionID_ConcurrentSessionsDoNotCollide` is rewritten to drive the
+keys through the real mechanism: two simulated sessions, each resolving
+its own `CLAUDE_PID` (the caller's parent and grandparent, again via
+`process.ParentPID`), proving `FindClaudePID` itself gives each session
+a distinct key before proving the store keeps them separate.
+
+Also added, per the leader's explicit request: a test proving the
+SessionStart WRITE key and a later tool-call READ key agree
+(`TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey`) — previously
+only assumed from `CLAUDE_PID`'s documented process lifetime, never
+demonstrated by running the real write path and a real, separate read
+path against the same environment.
+
+Going forward, this repo's own suite is insufficient evidence alone for
+any claim about behavior with no Claude Code ancestor present — `make
+check` passing inside this development environment does not exercise
+that state. `.tmp/ci-sim-head.sh` (extract committed `HEAD` via `git
+archive`, run detached with the Claude Code env vars unset) is the
+gate for any future claim about CI or headless behavior on this branch.
