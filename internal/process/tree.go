@@ -186,8 +186,29 @@ func findClaudeAncestor(startPID int) (pid string, found bool) {
 // binary's real ancestry cannot be un-set with an env var, so without this
 // escape hatch that scenario is untestable in exactly the environment this
 // repo is developed in.
+//
+// "Negative-only, so it cannot fabricate a session context" is true and
+// also beside the point (mission 005 finding F): SUPPRESSING the loud
+// branch IS a wrong-answer-at-exit-0 risk in its own right. Set in a real
+// environment, this makes SessionID return ErrNotUnderClaudeCode instead
+// of the loud ErrNoSession its own broken pointer file would otherwise
+// produce, and resolveFromSession silently translates that to "try the
+// next identity source" — restorable by one environment variable, with
+// zero logging, before this fix. The stderr line below is the minimum
+// closure: it can no longer be silent. A stronger guard — refusing to
+// honor the variable at all outside a test binary (e.g. gating on
+// testing.Testing()) — was considered and rejected: this repo's own
+// subprocess-based CLI tests (cmd/ethos/mission_test.go,
+// cmd/ethos/subprocess_test.go's withForcedNotUnderClaudeCode) set this
+// variable on a REAL, separately-exec'd `ethos` binary, not the test
+// binary itself, so testing.Testing() would read false inside the very
+// process the variable is meant to affect and break every one of them.
 func UnderClaudeCode() bool {
 	if os.Getenv(ForceNotUnderClaudeCodeEnv) != "" {
+		fmt.Fprintf(os.Stderr,
+			"ethos: %s is set; UnderClaudeCode() forced to false, suppressing the loud-failure branch "+
+				"for a broken session pointer -- unset it outside a test harness\n",
+			ForceNotUnderClaudeCodeEnv)
 		return false
 	}
 	if _, ok := claudePIDFromEnv(); ok {

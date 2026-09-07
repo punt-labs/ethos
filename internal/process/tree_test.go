@@ -3,6 +3,7 @@
 package process
 
 import (
+	"bytes"
 	"os"
 	"strconv"
 	"testing"
@@ -10,6 +11,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// captureStderr runs fn with os.Stderr redirected to a pipe and returns
+// what fn wrote there.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	w.Close()
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(r)
+	require.NoError(t, err)
+	return buf.String()
+}
 
 func TestIsClaudeComm(t *testing.T) {
 	tests := []struct {
@@ -195,4 +213,20 @@ func TestUnderClaudeCode(t *testing.T) {
 		_, foundAncestor := findClaudeAncestor(os.Getpid())
 		assert.Equal(t, foundAncestor, UnderClaudeCode())
 	})
+}
+
+// TestUnderClaudeCode_ForceHatchLogsToStderr pins mission 005 finding F:
+// ForceNotUnderClaudeCodeEnv suppresses the loud-failure branch this
+// whole decision exists to make loud, so honoring it must never be
+// silent. Before this fix, setting the variable in a real environment
+// produced ErrNotUnderClaudeCode -- and the git/OS fallback that follows
+// it -- with zero logging anywhere.
+func TestUnderClaudeCode_ForceHatchLogsToStderr(t *testing.T) {
+	t.Setenv(ForceNotUnderClaudeCodeEnv, "1")
+
+	var result bool
+	stderr := captureStderr(t, func() { result = UnderClaudeCode() })
+
+	assert.False(t, result, "the hatch is negative-only: it must still force false")
+	assert.Contains(t, stderr, ForceNotUnderClaudeCodeEnv, "honoring the hatch must never be silent")
 }
