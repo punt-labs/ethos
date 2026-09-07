@@ -135,9 +135,22 @@ func TestCLI_CodexJourney(t *testing.T) {
 	assert.NotContains(t, stderr, "no active session",
 		"the session resolved; failure must be at mission lookup, not resolution")
 
-	// Step 7 — session end deletes the roster.
-	stdout, _, code = runCLI(t, sh, "session", "end")
+	// Step 7 — session end deletes the roster, and — since ETHOS_SESSION is
+	// exported in sh's env — hints that the operator's shell still carries
+	// the now-stale export (ethos-4pvt: asymmetric with start, which prints
+	// the export line but left end silent about invalidating it).
+	stdout, stderr, code = runCLI(t, sh, "session", "end")
 	require.Equal(t, 0, code)
 	assert.Contains(t, stdout, "ended session "+sessionID)
+	assert.Contains(t, stderr, "unset ETHOS_SESSION",
+		"end should hint clearing the now-stale export, symmetric with start's export line")
 	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "sessions", sessionID+".yaml"))
+
+	// Step 8 — DES-074 already made a stale ETHOS_SESSION fail loud rather
+	// than silently degrading to the git/OS identity (ethos-4pvt's filed
+	// symptom, corrected during triage): whoami with the now-invalid export
+	// still set must error, not answer with the "tester" git/OS identity.
+	stdout, _, code = runCLI(t, sh, "whoami")
+	assert.NotEqual(t, 0, code, "whoami with a stale ETHOS_SESSION must fail, not silently fall through")
+	assert.NotContains(t, stdout, "tester", "must not silently answer with the git/OS identity")
 }

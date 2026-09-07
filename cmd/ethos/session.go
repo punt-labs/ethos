@@ -632,6 +632,16 @@ func runSessionEnd(cmd *cobra.Command) error {
 		return writeJSON(cmd.OutOrStdout(), map[string]string{"ended": sid})
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "ended session %s\n", sid)
+	// Symmetric with session start, which prints `export ETHOS_SESSION=...`
+	// on stdout: end tears the roster down but leaves any exported
+	// ETHOS_SESSION in the shell, now pointing at nothing. Since DES-074,
+	// a stale export fails loud (whoami, etc. return ErrNoSession) rather
+	// than silently falling through to the git/OS identity — but "fails
+	// loud" is still friction the operator can avoid, so hint the fix
+	// whenever the variable that end just invalidated is actually set.
+	if os.Getenv("ETHOS_SESSION") != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), "ethos: run `unset ETHOS_SESSION` to clear the stale export from your shell")
+	}
 	return nil
 }
 

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ethos session end` now hints `unset ETHOS_SESSION`** when the variable
+  is set, symmetric with `session start`, which prints `export
+  ETHOS_SESSION=...`. Previously the command that invalidates the variable
+  gave no hint, while the command that sets it did (ethos-4pvt).
+
 ## [4.17.0] - 2026-09-07
 
 ### Fixed
