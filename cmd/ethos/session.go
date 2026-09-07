@@ -13,6 +13,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -413,12 +414,29 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    identity; `whoami` inside that session then silently falls back
 	//    to the git/OS identity (the same silent-degrade shape as
 	//    ethos-vqwn) instead of ever surfacing the typo.
+	//
+	//    Resolution means LOADING the record and validating it, not
+	//    Exists() (an os.Stat — invariant-completeness/Bugbot finding): a
+	//    stat only proves a file is present at the path, not that it
+	//    parses or names a legal identity. Malformed YAML, a layered-load
+	//    error, or a kind that is neither "human" nor "agent" would all
+	//    pass Exists() and still reach the roster write, deferring exactly
+	//    the failure this fix exists to catch to a later `whoami`.
+	//    Reference(true) skips attribute-content resolution (personality/
+	//    writing-style/talents .md lookups) — irrelevant to whether the
+	//    identity itself is well-formed, and their absence is a warning,
+	//    not a Load error, so skipping them changes nothing about what
+	//    this check catches.
 	if sessionStartPersona != "" {
 		if err := attribute.ValidateSlug(sessionStartPersona); err != nil {
 			return fmt.Errorf("session start: --persona %q must be a valid handle (lowercase alphanumeric with hyphens)", sessionStartPersona)
 		}
-		if !identityStore().Exists(sessionStartPersona) {
-			return fmt.Errorf("session start: --persona %q does not name a known identity", sessionStartPersona)
+		id, err := identityStore().Load(sessionStartPersona, identity.Reference(true))
+		if err != nil {
+			return fmt.Errorf("session start: --persona %q does not name a known identity: %w", sessionStartPersona, err)
+		}
+		if err := id.Validate(); err != nil {
+			return fmt.Errorf("session start: --persona %q resolves to an invalid identity: %w", sessionStartPersona, err)
 		}
 	}
 
@@ -648,9 +666,16 @@ func runSessionEnd(cmd *cobra.Command) error {
 	// ETHOS_SESSION in the shell, now pointing at nothing. Since DES-074,
 	// a stale export fails loud (whoami, etc. return ErrNoSession) rather
 	// than silently falling through to the git/OS identity — but "fails
-	// loud" is still friction the operator can avoid, so hint the fix
-	// whenever the variable that end just invalidated is actually set.
-	if os.Getenv("ETHOS_SESSION") != "" {
+	// loud" is still friction the operator can avoid, so hint the fix.
+	//
+	// Only when ETHOS_SESSION names the session THIS CALL just ended —
+	// not merely "is set". `session end --session A` while ETHOS_SESSION
+	// names a different, still-live session B must not tell the operator
+	// to unset it: outside Claude Code that export is B's only remaining
+	// discovery channel, and following the hint would sever it. Mirrors
+	// the current-pointer guard just above, which already refuses to
+	// touch a pointer unless it names sid.
+	if os.Getenv("ETHOS_SESSION") == sid {
 		fmt.Fprintln(cmd.ErrOrStderr(), "ethos: run `unset ETHOS_SESSION` to clear the stale export from your shell")
 	}
 	return nil
