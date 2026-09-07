@@ -543,23 +543,75 @@ func (s *Store) PurgeCurrent() ([]string, error) {
 
 // WriteCurrentSession writes the session ID to a PID-keyed file so
 // descendant processes can discover the session.
+//
+// Written via a temp file + rename, not a direct os.WriteFile: a plain
+// truncate-then-write leaves a window where a concurrent
+// ReadCurrentSession sees a zero-byte (or partially written) file — not
+// an error, since the read succeeds, but not the session id either. The
+// old fallback code tolerated that silently; DES-074's fail-loud
+// contract cannot, because a blank-but-successful read is
+// indistinguishable from "no session" and would take the silent branch
+// under Claude Code, reintroducing the exact wrong-answer-with-exit-0
+// shape this decision closes, through a narrower door (round 2, R1/R1b).
+// Rename is atomic on the same filesystem, so a reader never observes a
+// partial write — only the old content or the new content, never
+// neither.
 func (s *Store) WriteCurrentSession(claudePID, sessionID string) error {
 	dir := s.currentDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating current directory: %w", err)
 	}
-	path := filepath.Join(dir, filepath.Base(claudePID))
-	return os.WriteFile(path, []byte(sessionID+"\n"), 0o600)
+	dest := filepath.Join(dir, filepath.Base(claudePID))
+	tmp, err := os.CreateTemp(dir, "current-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp current-session file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(sessionID + "\n"); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("writing temp current-session file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp current-session file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("syncing temp current-session file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("closing temp current-session file %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("renaming temp current-session file %s -> %s: %w", tmpPath, dest, err)
+	}
+	return nil
 }
 
-// ReadCurrentSession reads the session ID from a PID-keyed file.
+// ReadCurrentSession reads the session ID from a PID-keyed file. A blank
+// (empty or whitespace-only) result is treated the same as a missing
+// file — an error, not a successful empty read — so a caller's own
+// "not found" handling covers it uniformly. Without this, a zero-byte
+// file (a crash or a non-atomic writer mid-write, round 2 R1) reads as
+// ("", nil): a silent, successful-looking absence indistinguishable
+// from "no session," which is precisely the wrong-answer-with-exit-0
+// shape DES-074 exists to close.
 func (s *Store) ReadCurrentSession(claudePID string) (string, error) {
 	path := filepath.Join(s.currentDir(), filepath.Base(claudePID))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("no current session for PID %s: %w", claudePID, err)
 	}
-	return strings.TrimSpace(string(data)), nil
+	sid := strings.TrimSpace(string(data))
+	if sid == "" {
+		return "", fmt.Errorf("no current session for PID %s: current-session file %s is blank", claudePID, path)
+	}
+	return sid, nil
 }
 
 // DeleteCurrentSession removes the PID-keyed session file.

@@ -308,6 +308,44 @@ func TestStore_CurrentSession(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestStore_ReadCurrentSession_BlankFileIsError pins round 2, R1: a
+// zero-byte (or whitespace-only) pointer file must read as an ERROR, not
+// a successful empty session id. Before this fix, ("", nil) was
+// indistinguishable from "no session" and took DES-074's silent branch
+// even under Claude Code, reintroducing the exact wrong-answer-with-
+// exit-0 shape this decision exists to close — through a narrower door
+// (a crash or a non-atomic writer leaving a truncated file, rather than
+// a PID collision).
+func TestStore_ReadCurrentSession_BlankFileIsError(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "sessions", "current"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(s.root, "sessions", "current", "99999"), []byte(""), 0o600))
+
+	_, err := s.ReadCurrentSession("99999")
+	require.Error(t, err, "a blank pointer file must not read as a successful empty session id")
+}
+
+// TestStore_WriteCurrentSession_AtomicNoStrayTempFiles pins round 2, R1b:
+// WriteCurrentSession must write via temp+rename (matching writeRoster's
+// existing pattern for the roster file), not a direct truncate-in-place
+// os.WriteFile, which leaves a window where a concurrent
+// ReadCurrentSession can observe a zero-byte or partially written file.
+// A successful write leaves no stray "current-*.tmp" file behind.
+func TestStore_WriteCurrentSession_AtomicNoStrayTempFiles(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.WriteCurrentSession("12345", "sess-atomic"))
+
+	id, err := s.ReadCurrentSession("12345")
+	require.NoError(t, err)
+	assert.Equal(t, "sess-atomic", id)
+
+	entries, err := os.ReadDir(filepath.Join(s.root, "sessions", "current"))
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".tmp", "no stray temp file should remain after a successful write")
+	}
+}
+
 // TestStore_CurrentSession_DistinctPIDsDoNotCollide pins the ethos-vqwn
 // bug's store-level guarantee: the pre-DES-074 walk to the topmost
 // "claude" ancestor gave every concurrent Claude Code session on a host
