@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -172,6 +173,42 @@ func TestSessionEnd_WarnsOnUnverifiablePointer(t *testing.T) {
 	info, statErr := os.Stat(pointer)
 	require.NoError(t, statErr, "the pointer must be left in place")
 	assert.True(t, info.IsDir())
+}
+
+// TestSessionEnd_ResolveErrNoSessionIsNoOp pins the PR #502 Bugbot MEDIUM
+// finding: `runSessionEnd` checked errors.Is(err, errNoSession) — the
+// iam.go-LOCAL sentinel for "no session was ever expected" — but not
+// resolve.ErrNoSession, the DES-074 round 2 R5 sentinel for "a session WAS
+// expected (running under Claude Code) but could not be identified." Since
+// resolveSession propagates resolve.ErrNoSession as-is rather than
+// collapsing it into the local sentinel, that second case fell through to
+// `return err` and `session end` hard-failed, where teardown of a session
+// that cannot be identified is documented as an idempotent no-op — there is
+// nothing to remove. Forces UnderClaudeCode true and CLAUDE_PID
+// uncorroborated (not a live ancestor of this process) so
+// resolve.SessionID's ErrNoSession branch fires deterministically,
+// independent of whatever real Claude ancestry this test binary happens to
+// run under. PID 1 (init) is trivially a live ancestor of every process in
+// its own PID namespace, so it corroborates; the pointer file this test
+// deliberately never writes is what actually produces ErrNoSession here
+// (the restartPointerRemedy sub-case, not uncorroboratedPIDRemedy) — either
+// sub-case is resolve.ErrNoSession, which is all this test needs.
+func TestSessionEnd_ResolveErrNoSessionIsNoOp(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setInProcessEnv(t, se)
+	sessionEndSession = ""
+	t.Cleanup(func() { sessionEndSession = "" })
+
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", "1") // corroborates trivially (init); no pointer file exists for it
+
+	stdout, stderr, err := execHandler(t, "session", "end")
+	require.NoError(t, err, "session end must stay idempotent when the session cannot be identified; stdout=%s stderr=%s", stdout, stderr)
+	assert.Contains(t, stderr, "nothing to end", "must report the same no-op outcome as the genuinely-no-session case")
 }
 
 // TestCLI_SessionStart_IdempotentPersonaJoins pins the gate defect: a

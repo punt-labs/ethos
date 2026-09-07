@@ -584,6 +584,21 @@ func runSessionEnd(cmd *cobra.Command) error {
 			fmt.Fprintln(cmd.ErrOrStderr(), "ethos: no active session; nothing to end")
 			return nil
 		}
+		// resolve.ErrNoSession is the OTHER DES-074 sentinel: a session WAS
+		// expected (running under Claude Code) but could not be identified
+		// (broken pointer, uncorroborated CLAUDE_PID, dead roster).
+		// resolveSession propagates it as-is rather than collapsing it into
+		// errNoSession above (round 2, R5 — collapsing it here would have
+		// made `mission dispatch`'s own rebind silently skip a real
+		// resolution failure). But teardown of a session that cannot be
+		// identified is a no-op by definition — there is nothing to remove
+		// — so `session end` stays idempotent here too (Bugbot/PR #502
+		// MEDIUM: this case previously fell through to the hard failure
+		// below). The real cause is still surfaced, not swallowed.
+		if errors.Is(err, resolve.ErrNoSession) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session could not be identified; nothing to end (%v)\n", err)
+			return nil
+		}
 		return err
 	}
 	if _, lerr := ss.Load(sid); lerr != nil {
