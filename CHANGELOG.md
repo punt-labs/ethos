@@ -19,11 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prefers `CLAUDE_PID` (the env var Claude Code sets on every spawned
   subprocess, distinct per session), corroborated against the caller's live
   process ancestry before being trusted, and is no longer cached for the
-  lifetime of a long-lived process such as `ethos serve`. A session that
-  cannot be identified now raises a named error with a remedy (`ethos:
-  cannot identify the calling session — set ETHOS_SESSION=<id>, or run
-  \`ethos session start\``) and a non-zero exit, instead of silently
-  resolving to the caller's git or OS identity.
+  lifetime of a long-lived process such as `ethos serve`.
+  A session that was genuinely expected — running under Claude Code, or an
+  explicitly-set `ETHOS_SESSION` — but cannot be identified now raises a
+  named error naming the remedy (set `ETHOS_SESSION`, or run
+  `ethos session start`) and a non-zero exit, instead of silently resolving
+  to the caller's git or OS identity. This includes `whoami`, previously the
+  one command that warned on a broken or nonexistent `ETHOS_SESSION` and
+  still silently substituted the git/OS identity. Running with no Claude
+  Code context at all (a headless, CI, or plain-terminal invocation) is
+  unaffected and still resolves via git config or the OS user with no
+  session in play.
 - Post-release restore commits no longer carry `[skip ci]`.
   `scripts/restore-dev-plugin.sh` tagged its commit with `[skip ci]`, which
   suppressed all workflows on the head of the post-release PR — while the
