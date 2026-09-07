@@ -7987,10 +7987,33 @@ never inferred from the process tree and never cached.
    not. Ported from biff DES-058's `is_live_ancestor`.
 3. **Remove the `sync.Once`.** Resolve per call. A long-lived server outlives
    the session it first saw.
-4. **Fail loudly.** When no key corroborates, return a named error and exit
-   non-zero. No fall-through to the git/OS identity. The message must state the
-   remedy, e.g. `ethos: cannot identify the calling session — set
-   ETHOS_SESSION=<id>, or run 'ethos session start'`.
+4. **Fail loudly — but only when a session was expected.** Two cases, and
+   conflating them is itself a defect:
+   - **Not under Claude Code at all** (headless, CI, SDK, a plain terminal):
+     a normal state. Return "no session" *silently* — no warning, no error.
+     Ethos runs in CI, and warning here makes every run noisy. Biff returns
+     `None` without warning for exactly this reason
+     (`src/biff/session_id.py:160-180`).
+   - **Under Claude Code but unresolvable** (env var present but uncorroborated,
+     pointer file missing, roster absent): a named error, non-zero exit, message
+     stating the remedy — e.g. `ethos: cannot identify the calling session — set
+     ETHOS_SESSION=<id>, or run 'ethos session start'`.
+
+   The signal distinguishing them is whether any Claude Code indicator is
+   present at all (`CLAUDE_PID`, `CLAUDECODE`, or a `claude` ancestor). What
+   must not survive either case is the silent fall-through to the git/OS
+   identity when a session *was* expected — "no session" and "this git user"
+   are different answers and must not be returned interchangeably.
+
+5. **Bounded read retry on the pointer.** A consumer can start before
+   SessionStart finishes writing. Biff carries a short bounded retry for this
+   race (`session_id.py:157-158`); ethos has the same exposure.
+
+6. **Neutral text on corroboration failure.** Failure has two indistinguishable
+   causes — a stale env value whose PID was recycled, or a transient failure
+   reading the process table. Falling back to the walk is correct either way, so
+   the message must not assert a cause it cannot determine
+   (`session_id.py:162-175`).
 
 The file's contents, writers, and validation are unchanged. Only *what selects
 the file* changes, plus the removal of caching and of silent fallback.
@@ -8032,12 +8055,52 @@ most of the time and misattributes the rest causes more churn than one that
 stops. Agents here routinely work across worktrees and sibling repos, which is
 exactly the condition under which a quiet fallback misfires.
 
+**Considered: remove the pointer file from the trust path entirely.** lux
+DES-037 closed a structurally similar defect and its finding is blunt — *"PID
+files lie; sockets don't."* A PID file can name a recycled PID (false-alive), be
+missing while its owner lives (false-dead), or be deleted; lux moved liveness
+and identity onto the kernel's socket peer credential (`SO_PEERCRED` /
+`LOCAL_PEERPID`) because a file cannot prove ownership. It took **16 review
+rounds** — 13 on one bead, 3 on a follow-up — each fixing another interleaving
+(recycled-PID false-alive, a live socket unlinked mid-handshake, a zombie read
+as alive, a two-winner bind race) before the *class* was named rather than the
+instances. lux explicitly rejected "keep hardening empirically (round 17+)."
+
+The objection applies to us: ethos's pointer is a PID file, and DES-037's
+lesson is that fixing the *walk* while keeping the *file* leaves you inside the
+defect class. We are nonetheless keeping the file, for two reasons. First, the
+peer-credential remedy is unavailable here — lux has a live socket between
+client and server whose credentials the kernel vouches for; ethos's consumers
+are git hooks and one-shot CLI invocations with no connection to the session.
+Second, requirement 2 above closes the specific hole DES-037 names: a recycled
+PID belonging to an unrelated session is *not* in the caller's live ancestry, so
+corroboration rejects it. That is the same ownership proof, obtained from
+process ancestry instead of a socket. If corroboration proves insufficient in
+review, the escalation is not another round of hardening — it is moving identity
+onto a channel that can vouch for it, and DES-037 is the precedent for making
+that call early rather than at round 17.
+
+**Follow-up: the pointer file has no TTL.** A dead session's mapping persists
+until something overwrites it. lux DES-057 rejected "permanent registrations
+(ghost menu entries from dead daemons)" on this ground and pairs its leases with
+`on_connect` re-establishment so expiry is safe. Not in scope here — re-keying
+removes the collision that makes stale entries dangerous — but tracked, because
+a stale mapping is still a wrong answer waiting for a corroboration miss.
+
 **Cross-repo consequence.** lux carries this defect unknowingly and is filed
 separately; biff already fixed it (DES-058) and that fix did not propagate,
-because nothing connects these implementations. mcp-proxy uses the same broken
-walk and survives for an architectural reason worth naming: it is spawned
-**per session**, computes the key in that short-lived process, and transmits it
-on the wire — its long-lived daemon never walks a tree, it receives an identity.
+because nothing connects these implementations. mcp-proxy is a **co-victim, not a
+safe reference**: it gets the transmission architecture right — spawned per
+session, computes the key in that short-lived process, and ships it on the wire,
+so its long-lived daemon receives an identity rather than inferring one — but
+the *value* it transmits is the same falsified derivation. Two proxies spawned
+by two sessions resolve the **same** `session_key`, so every daemon keying
+per-session state on it (quarry, vox, biff) silently merges those sessions. It
+presents as collision rather than mis-routing, which is why it has gone
+unnoticed. Worse, the assumption is reaffirmed in five places across its docs
+and encoded as a machine-checked invariant in its Z specification — a false
+premise with a proof on top of it. Filed separately; the transmission pattern is
+still the right one, and combining it with a correct key is the durable answer.
 lux reached the same principle from the opposite direction after two failed
 attempts and states it plainly (DES-057, rejected alternatives): *"the caller
 knows who it is; the Hub does not."* Ethos is on the wrong side of that line and
