@@ -8158,9 +8158,15 @@ pre-fix `FindClaudePID()` always returned:
    `internal/hook/subagent_start.go`'s `resolveParentLine` each try
    `process.FindClaudePID()` first; on a miss, they retry with
    `process.LegacyClaudePID()` before concluding no participant matches.
-   An explicit `ETHOS_AGENT_ID` override is exact by the caller's own
-   declaration and is never subject to this fallback — only the
-   self-resolved PID path tolerates ambiguity.
+   *(Corrected 2026-09-07, mission 005 finding B: this was true for
+   `resolveFromSession` and false for `resolveParentLine`, which ran a
+   SINGLE loop testing both keys against each participant in roster
+   order — a legacy-keyed participant appearing earlier in the roster
+   won over a correct, preferred-keyed one appearing later. Fixed to
+   the genuine two-pass this text describes; see the mission 005
+   amendment.)* An explicit `ETHOS_AGENT_ID` override is exact by the
+   caller's own declaration and is never subject to this fallback — only
+   the self-resolved PID path tolerates ambiguity.
 2. **Writes update the existing record under whichever key already
    matches, rather than filing a duplicate.** `internal/session.Store`
    gains `JoinSelf(sessionID, preferredID, legacyID, p)`: it checks, under
@@ -8493,3 +8499,113 @@ check` passing inside this development environment does not exercise
 that state. `.tmp/ci-sim-head.sh` (extract committed `HEAD` via `git
 archive`, run detached with the Claude Code env vars unset) is the
 gate for any future claim about CI or headless behavior on this branch.
+
+### Amendment 2026-09-07: mission 005 — four findings from a second local review pass
+
+Three local review agents ran against the round-3 diff after mission
+004 closed pass. The operator ruled all four findings be closed in a
+tightly-scoped follow-up mission (m-2026-09-07-005) before the PR
+opened, rather than shipped as follow-up beads. One finding was a
+genuine wrong-answer risk; the other three were latent or
+documentation-only.
+
+**Finding B — `resolveParentLine` was single-pass, not two-pass, despite the
+decision text above claiming otherwise.** The prior amendment's item 1
+("Reads try the preferred key, then the legacy key") was written to
+describe both `resolve.resolveFromSession` and
+`internal/hook/subagent_start.go`'s `resolveParentLine` as doing a
+genuine two-pass lookup. `resolveFromSession` did; `resolveParentLine`
+did not — it ran a SINGLE loop testing both the preferred and legacy
+keys against each roster participant in iteration order, so a
+legacy-keyed participant appearing EARLIER in the roster incorrectly
+won over a correct, preferred-keyed participant appearing LATER. A
+subagent could be told it reports to a stale or wrong persona whenever
+roster ordering happened to put a legacy record first — the only
+finding of the four that produces a wrong answer today, not merely a
+latent or documentation gap.
+
+Fixed to a genuine two-pass — try every participant for the preferred
+key first; only on a full miss, retry every participant for the legacy
+key — mirroring `resolveFromSession` and `session.Store.JoinSelf`.
+New test `TestHandleSubagentStart_ParentLine_PreferredWinsOverEarlierLegacy`
+builds a roster with the legacy-keyed record FIRST and the
+preferred-keyed record SECOND and asserts the preferred one wins;
+verified failing against the pre-fix single-loop code before the fix
+landed. The false claim in the decision text above is corrected
+in-place with a dated marginal note pointing at this amendment.
+
+**Finding A — round 2's sentinel-distinguishing fix stopped at the CLI
+boundary; three `internal/mcp` sites still collapsed both sentinels.**
+`mission_tools.go`'s `bindDispatchedMission` and
+`clearClosedMissionBindings`, and `tools.go`'s `resolveSessionID`, all
+still folded `resolve.SessionID`'s two error sentinels
+(`ErrNotUnderClaudeCode` vs `ErrNoSession`) into one generic message —
+exactly the collapse round 2 fixed at the CLI's equivalent call sites
+(`cmd/ethos/mission.go`'s `bindDispatchedMission`,
+`cmd/ethos/iam.go`'s `runHookCommitTrailers`) but never carried over to
+the MCP surface. `clearClosedMissionBindings` was the worst of the
+three: it returned `nil` (fully silent, no warning at all) for BOTH
+cases, so an unresolvable session under Claude Code could leave a
+closed mission's sidecar in place — still stamping trailers under a
+closed mission ID — with no signal to the caller whatsoever.
+
+All three now mirror their CLI counterparts: silent for
+`ErrNotUnderClaudeCode` (the ordinary, no-session-expected case), and a
+warning naming the real cause for `ErrNoSession` (wrapped via `%w` so
+`errors.Is` still holds through the chain). Fixing this exposed a
+second, independent gap: `internal/mcp/integration_test.go`'s
+`TestMain` was missing the `resolve.UnderClaudeCode = func() bool {
+return false }` override every other package's `TestMain` already
+carries. Its absence was invisible before this fix, because the pre-fix
+code collapsed both sentinel paths to the same message regardless of
+which one actually fired; once the two diverged,
+`TestHandleMission_CreateNoSessionInContextWarns` started failing with
+the LOUD message and a real ambient PID, because the ancestor walk was
+still finding this repo's own live Claude Code ancestor despite the
+env vars being stripped. Fixed alongside. New regression tests at each
+of the three sites force `resolve.UnderClaudeCode = true` and assert
+the message names the real cause, not the generic absent-session text;
+verified each fails against the pre-fix code via temporary `git
+stash`.
+
+**Finding C — a contract comment stated the inverse of the truth.**
+`cmd/ethos/iam.go`'s `resolveSession` carried a comment (predating the
+`ErrNotUnderClaudeCode` sentinel) claiming `resolve.SessionID`
+distinguishes "genuinely no session" via a NIL error. True before the
+sentinel commit; false after — nil now means resolved, and
+"genuinely no session" is `ErrNotUnderClaudeCode`, a non-nil sentinel
+that falls through the function's switch (matching neither case) and
+is converted to `iam.go`'s own local `errNoSession` by the final
+`if sessionID == "" { … }` check. Documentation only, no production
+code changed; rewritten to name all three outcomes (resolved /
+`ErrNotUnderClaudeCode` / `ErrNoSession`) against the actual control
+flow.
+
+**Finding D — the `err == nil iff id != ""` invariant was contingent on
+a constant, not structural.** `SessionID`'s own doc comment states this
+as a mechanical invariant every caller may rely on, but
+`retryReadCurrentSession`'s loop runs `pointerRetryAttempts - 1` times;
+at the shipped value of 10 that is 9 iterations and the invariant
+holds, but at 1 (or less) the loop body never executes, and `lastErr` —
+seeded to `nil` — was returned unchanged, so `SessionID` would silently
+return `("", "walk", nil)`: a resolved-looking empty ID alongside a nil
+error, breaking the exact invariant every caller pattern-matches on.
+Nothing exercises this today (the constant is fixed at 10), but a
+guarantee that is only true at one specific value of an internal
+constant is not the mechanical invariant the doc comment claims —
+"structural" was the operator's explicit preference over an added
+guard. Fixed by seeding `lastErr` from the caller's own initial read
+error (`firstErr`) instead of `nil`, so a zero-iteration retry still
+surfaces a non-nil error regardless of the constant's value.
+`pointerRetryAttempts` (and `pointerRetryDelay`, kept alongside it) is
+converted from `const` to `var` so a test can drive the attempts count
+to 1 directly and prove the invariant structurally rather than only at
+10. New test `TestSessionID_InvariantHoldsAtMinimalRetryBudget`;
+verified it fails to even compile against the pre-fix code (a `const`
+cannot be reassigned) — a stronger form of the required negative check
+than a runtime failure would have been.
+
+CHANGELOG.md gains an entry for finding B only — the only one of the
+four with user-visible behavior change (a subagent could previously be
+told it reports to a stale or wrong persona). Findings A, C, and D are
+latent or documentation-only and are not user-visible today.

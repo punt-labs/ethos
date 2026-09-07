@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session, and the session-current pointer file is now written
   atomically, closing a window where a concurrent reader could see a
   blank file and silently misattribute identity.
+- A subagent's `SubagentStart` announcement could report the wrong
+  parent persona when the parent's session roster held both a
+  legacy-keyed and a preferred-keyed record for the same process and
+  the legacy record happened to appear earlier in the roster —
+  `resolveParentLine` ran a single lookup pass testing both keys per
+  participant instead of trying every participant for the preferred
+  key before falling back to the legacy key. Fixed to a genuine
+  two-pass lookup, matching the fallback semantics documented above.
 - Post-release restore commits no longer carry `[skip ci]`.
   `scripts/restore-dev-plugin.sh` tagged its commit with `[skip ci]`, which
   suppressed all workflows on the head of the post-release PR — while the
