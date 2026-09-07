@@ -5,6 +5,7 @@
 package process
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -34,8 +35,20 @@ const maxWalkDepth = 10
 //
 // Uses native OS interfaces: /proc on Linux, sysctl on macOS.
 func FindClaudePID() string {
-	if pid, ok := claudePIDFromEnv(); ok && isLiveAncestor(pid) {
-		return strconv.Itoa(pid)
+	if pid, ok := claudePIDFromEnv(); ok {
+		if isLiveAncestor(pid) {
+			return strconv.Itoa(pid)
+		}
+		// Two distinct causes collapse to the same "not corroborated" here:
+		// a stale env value (the real ancestor died, its PID recycled by an
+		// unrelated but legitimate claude session) or a transient failure
+		// reading the process table (isLiveAncestor's own error path). The
+		// message stays neutral rather than asserting the former — falling
+		// back to the walk is the correct response either way (DES-074
+		// point 6, ported from biff session_id.py's resolve_routing_id).
+		fmt.Fprintf(os.Stderr,
+			"ethos: CLAUDE_PID=%d could not be corroborated as a live ancestor of this process; falling back to the process-tree walk\n",
+			pid)
 	}
 	return walkToClaudeAncestor(os.Getpid())
 }

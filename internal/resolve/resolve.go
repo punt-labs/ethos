@@ -180,13 +180,15 @@ var UnderClaudeCode = process.UnderClaudeCode
 // pointerRetryAttempts and pointerRetryDelay bound the retry SessionID
 // applies to a missing pointer file when running under Claude Code: a
 // consumer can start before SessionStart finishes writing it (DES-074
-// point 5, ported from biff's bounded retry). The retry never fires when
-// not under Claude Code at all — there SessionStart never ran and never
-// will, so retrying would only add latency to the common no-session case
-// (CI, scripts) for no benefit.
+// point 5, ported from biff session_id.py's _RESOLVE_ATTEMPTS /
+// _RESOLVE_DELAY_S — SessionStart fires before an MCP client connects;
+// the retry is a safety net for that race, not the common case). The
+// retry never fires when not under Claude Code at all — there
+// SessionStart never ran and never will, so retrying would only add
+// latency to the common no-session case (CI, scripts) for no benefit.
 const (
-	pointerRetryAttempts = 3
-	pointerRetryDelay    = 20 * time.Millisecond
+	pointerRetryAttempts = 10
+	pointerRetryDelay    = 50 * time.Millisecond
 )
 
 // SessionID resolves the active session ID using the harness-neutral chain:
