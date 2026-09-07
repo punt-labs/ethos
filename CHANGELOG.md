@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is set, symmetric with `session start`, which prints `export
   ETHOS_SESSION=...`. Previously the command that invalidates the variable
   gave no hint, while the command that sets it did (ethos-4pvt).
+- **`GOOS=windows GOARCH=amd64 go build ./...` now succeeds.** Windows is
+  still not a supported/shipped target (no release binary, no CI job), but
+  the whole module now cross-compiles: `internal/process` gained a
+  Windows process-tree walker (`CreateToolhelp32Snapshot`), and
+  `internal/session` and `internal/mission` gained Windows file-locking
+  (`LockFileEx`) alongside their existing Unix `flock` implementations,
+  replacing build tags that previously excluded Windows entirely
+  (ethos-cm2r, ethos-qtp2).
 
 ## [4.17.0] - 2026-09-07
 

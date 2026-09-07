@@ -1,5 +1,3 @@
-//go:build !windows
-
 package mission
 
 import (
@@ -8,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -102,10 +99,10 @@ func allocateCounter(counterPath, lockPath string) (int, error) {
 	}
 	defer lockFile.Close()
 
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(lockFile, lockExclusive); err != nil {
 		return 0, fmt.Errorf("acquiring counter lock: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = funlock(lockFile) }()
 
 	current, err := readCounter(counterPath)
 	if err != nil {
@@ -187,11 +184,11 @@ func newReleaseFunc(counterPath, lockPath string, allocated int) func(commit boo
 			return
 		}
 		defer lockFile.Close()
-		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		if err := flock(lockFile, lockExclusive); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: id release: acquiring lock %q: %v\n", lockPath, err)
 			return
 		}
-		defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+		defer func() { _ = funlock(lockFile) }()
 
 		current, err := readCounter(counterPath)
 		if err != nil {

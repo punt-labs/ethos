@@ -1,12 +1,9 @@
-//go:build !windows
-
 package mission
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // TraceSummary is one JSONL line appended to <repoRoot>/.punt-labs/ethos/missions.jsonl
@@ -102,10 +99,10 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(f, lockExclusive); err != nil {
 		return err
 	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = funlock(f) }()
 
 	_, writeErr := f.Write(data)
 	return writeErr

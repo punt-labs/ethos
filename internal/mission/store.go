@@ -1,5 +1,3 @@
-//go:build !windows
-
 package mission
 
 import (
@@ -13,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -1851,10 +1848,10 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 	}
 	defer f.Close()
 
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(f, lockExclusive); err != nil {
 		return fmt.Errorf("acquiring lock: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = funlock(f) }()
 
 	return fn()
 }
@@ -1888,10 +1885,10 @@ func (s *Store) withCreateLock(fn func() error) error {
 	}
 	defer f.Close()
 
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(f, lockExclusive); err != nil {
 		return fmt.Errorf("acquiring create lock: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = funlock(f) }()
 
 	// DES-054 v5 rolling-upgrade fence — when a repoRoot is in scope,
 	// also acquire the per-repo create lock as a nested flock so two
@@ -1937,10 +1934,10 @@ func (s *Store) withCreateLock(fn func() error) error {
 		}
 		defer rf.Close()
 
-		if rerr := syscall.Flock(int(rf.Fd()), syscall.LOCK_EX); rerr != nil {
+		if rerr := flock(rf, lockExclusive); rerr != nil {
 			return fmt.Errorf("acquiring repo create lock: %w", rerr)
 		}
-		defer func() { _ = syscall.Flock(int(rf.Fd()), syscall.LOCK_UN) }()
+		defer func() { _ = funlock(rf) }()
 	}
 
 	return fn()

@@ -1,5 +1,3 @@
-//go:build !windows
-
 package mission
 
 import (
@@ -10,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -212,7 +209,7 @@ func AcquireDelegationLock(globalRoot, delegationID string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening delegation lock %s: %w", lockPath, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(f, lockExclusive); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("acquiring exclusive delegation lock %s: %w", lockPath, err)
 	}
@@ -222,7 +219,7 @@ func AcquireDelegationLock(globalRoot, delegationID string) (func(), error) {
 			return
 		}
 		released = true
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = funlock(f)
 		_ = f.Close()
 	}
 	return release, nil
@@ -432,7 +429,7 @@ func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 // On flock error the file descriptor is closed before return — no
 // leaked fd on the error path.
 func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
-	return acquireMissionLock(repoRoot, missionID, syscall.LOCK_SH, "shared")
+	return acquireMissionLock(repoRoot, missionID, lockShared, "shared")
 }
 
 // AcquireMissionLockExclusive opens the same per-mission lock file as
@@ -450,7 +447,7 @@ func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
 // sweep enumerates delegations/ (docs/design-delegation-lifecycle.md
 // facet 1).
 func AcquireMissionLockExclusive(repoRoot, missionID string) (func(), error) {
-	return acquireMissionLock(repoRoot, missionID, syscall.LOCK_EX, "exclusive")
+	return acquireMissionLock(repoRoot, missionID, lockExclusive, "exclusive")
 }
 
 // acquireMissionLock is the shared implementation behind
@@ -475,7 +472,7 @@ func acquireMissionLock(repoRoot, missionID string, mode int, label string) (fun
 	if err != nil {
 		return nil, fmt.Errorf("opening mission lock %s: %w", lockPath, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), mode); err != nil {
+	if err := flock(f, mode); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("acquiring %s mission lock %s: %w", label, lockPath, err)
 	}
@@ -490,7 +487,7 @@ func acquireMissionLock(repoRoot, missionID string, mode int, label string) (fun
 		// AcquireMissionLock/AcquireMissionLockExclusive on this
 		// mission until the process restarts. Log rather than swallow
 		// so an operator can correlate a hang with its cause.
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+		if err := funlock(f); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: releasing %s mission lock %s: %v\n", label, lockPath, err)
 		}
 		if err := f.Close(); err != nil {
