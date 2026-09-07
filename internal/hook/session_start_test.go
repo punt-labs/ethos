@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -197,6 +199,37 @@ func TestHandleSessionStart_NoPersonality_FallsBack(t *testing.T) {
 	// Should fall back to one-line format.
 	assert.Contains(t, ctx, "Active identity: Bob (bob)")
 	assert.NotContains(t, ctx, "## Personality")
+}
+
+// TestHandleSessionStart_ResolvesIdentityWithoutRetryLatency pins round
+// 2, R2: at SessionStart, no session (pointer file or roster) can exist
+// yet for this exact invocation — it is what would create one.
+// resolveHumanIdentity must resolve the human's git/OS identity directly
+// (bypassing the session-lookup step, which is a structural, guaranteed
+// miss here, not a signal), not pay DES-074's bounded retry for a
+// pointer file that provably cannot exist and then degrade to the bare
+// OS username. Forces resolve.UnderClaudeCode true — the real condition
+// at SessionStart — and bounds the whole call well under one retry
+// attempt's delay.
+func TestHandleSessionStart_ResolvesIdentityWithoutRetryLatency(t *testing.T) {
+	id := &identity.Identity{Name: "Bob", Handle: "bob", Kind: "human"}
+	s, ss := setupIdentityWithAttributes(t, id, "", "")
+	isolateGitConfig(t, "bob")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	start := time.Now()
+	out := captureSessionStartOutput(t, `{"session_id": "s-r2-timing"}`, SessionStartDeps{Store: s, Sessions: ss})
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 25*time.Millisecond,
+		"must not pay the pointer-file retry latency resolving identity at SessionStart")
+
+	var result SessionStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Contains(t, result.HookSpecificOutput.AdditionalContext, "Active identity: Bob (bob)",
+		"must resolve via git/OS, not degrade to a fallback that lost the real identity")
 }
 
 func TestHandleSessionStart_NoIdentity_NoOutput(t *testing.T) {

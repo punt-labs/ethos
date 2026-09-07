@@ -50,7 +50,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 
 	sessionID, _ := input["session_id"].(string)
-	resolvedID := resolveHumanIdentity(store, ss)
+	resolvedID := resolveHumanIdentity(store)
 	purgeStale(ss)
 
 	// Resolve agent persona from repo config. A non-nil error means
@@ -118,10 +118,27 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	return emitAgentContext(agentID, agentPersona, store, deps)
 }
 
-// resolveHumanIdentity loads the human caller's identity. Returns nil
-// on any resolution or load failure (warnings are logged to stderr).
-func resolveHumanIdentity(store identity.IdentityStore, ss *session.Store) *identity.Identity {
-	handle, err := resolve.Resolve(store, ss)
+// resolveHumanIdentity loads the human caller's identity from git config
+// or the OS user. Returns nil on any resolution or load failure (warnings
+// are logged to stderr).
+//
+// Deliberately does not consult the session store (resolve.Resolve's step
+// 1, an iam declaration): at SessionStart, this invocation is what WOULD
+// create the session's pointer file and roster, so neither can exist yet
+// for this exact call — a session-based lookup here is a structural,
+// guaranteed miss, not a signal about the human's identity. Before
+// DES-074 that miss was silent and free, so this call site always fell
+// through to git/OS regardless; DES-074's fail-loud contract for
+// "session was expected" made that miss cost a bounded retry (since we
+// genuinely are running under Claude Code) and then propagate an error
+// that this function caught and logged, without ever reaching git/OS —
+// degrading every fresh session's greeting to the bare OS username
+// instead of the git-configured identity (round 2, R2). Passing ss=nil
+// to Resolve skips step 1 entirely and restores the pre-DES-074
+// observable behavior (git/OS, immediately, no retry) without weakening
+// DES-074 anywhere a session COULD exist.
+func resolveHumanIdentity(store identity.IdentityStore) *identity.Identity {
+	handle, err := resolve.Resolve(store, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: identity resolution failed: %v (using OS username)\n", err)
 		return nil
