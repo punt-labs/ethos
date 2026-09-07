@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Session identity now resolves per call from the harness, never from a
+  cached process-tree walk.** Ethos identified "which Claude Code session is
+  calling me" by walking to the topmost `claude` ancestor, which every
+  concurrent Claude Code session on a host shares (the `claude daemon run`
+  process). Every session's `SessionStart` overwrote the same PID-keyed
+  pointer file, so a commit in one repo could carry another repo's
+  `Mission:`/`Delegation:` trailers (ethos-vqwn). Session resolution now
+  prefers `CLAUDE_PID` (the env var Claude Code sets on every spawned
+  subprocess, distinct per session), corroborated against the caller's live
+  process ancestry before being trusted, and is no longer cached for the
+  lifetime of a long-lived process such as `ethos serve`. A session that
+  cannot be identified now raises a named error with a remedy (`ethos:
+  cannot identify the calling session — set ETHOS_SESSION=<id>, or run
+  \`ethos session start\``) and a non-zero exit, instead of silently
+  resolving to the caller's git or OS identity.
 - Post-release restore commits no longer carry `[skip ci]`.
   `scripts/restore-dev-plugin.sh` tagged its commit with `[skip ci]`, which
   suppressed all workflows on the head of the post-release PR — while the

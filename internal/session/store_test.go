@@ -245,6 +245,32 @@ func TestStore_CurrentSession(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestStore_CurrentSession_DistinctPIDsDoNotCollide pins the ethos-vqwn
+// bug's store-level guarantee: the pre-DES-074 walk to the topmost
+// "claude" ancestor gave every concurrent Claude Code session on a host
+// the SAME PID (the shared "claude daemon run" process — six rosters
+// across four repos measured to PID 518779 on 2026-09-07), so each
+// SessionStart clobbered the previous session's pointer file, last writer
+// wins. The DES-074 fix keys each session on its OWN owning process's PID
+// (CLAUDE_PID) instead, which differs per session by construction. This
+// test asserts the store-level half of that guarantee directly: two
+// DISTINCT PID keys resolve to two DISTINCT sessions, and writing one
+// never disturbs the other.
+func TestStore_CurrentSession_DistinctPIDsDoNotCollide(t *testing.T) {
+	s := testStore(t)
+
+	require.NoError(t, s.WriteCurrentSession("11111", "session-repo-a"))
+	require.NoError(t, s.WriteCurrentSession("22222", "session-repo-b"))
+
+	idA, err := s.ReadCurrentSession("11111")
+	require.NoError(t, err)
+	assert.Equal(t, "session-repo-a", idA)
+
+	idB, err := s.ReadCurrentSession("22222")
+	require.NoError(t, err)
+	assert.Equal(t, "session-repo-b", idB)
+}
+
 func TestStore_PurgeCurrentFiles(t *testing.T) {
 	s := testStore(t)
 
