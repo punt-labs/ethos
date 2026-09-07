@@ -346,6 +346,30 @@ func TestStore_WriteCurrentSession_AtomicNoStrayTempFiles(t *testing.T) {
 	}
 }
 
+// TestStore_WriteCurrentSession_RejectsBlankArgs pins mission 005 finding
+// E: neither argument was validated. A blank sessionID produced a
+// permanently blank pointer file at exit 0 -- ReadCurrentSession already
+// treats blank as an error, but nothing stopped WriteCurrentSession from
+// creating that state. A blank claudePID is worse: filepath.Base("")
+// returns ".", so the rename destination would resolve to the
+// current-session directory itself rather than a file inside it.
+func TestStore_WriteCurrentSession_RejectsBlankArgs(t *testing.T) {
+	s := testStore(t)
+
+	err := s.WriteCurrentSession("4242", "")
+	require.Error(t, err, "a blank sessionID must be refused, not silently written")
+
+	err = s.WriteCurrentSession("", "some-session")
+	require.Error(t, err, "a blank claudePID must be refused, not silently written")
+
+	err = s.WriteCurrentSession("4242", "   ")
+	require.Error(t, err, "a whitespace-only sessionID is not a session id either")
+
+	// No pointer file exists for either rejected write.
+	_, err = s.ReadCurrentSession("4242")
+	require.Error(t, err, "a rejected write must leave no pointer file behind")
+}
+
 // Round 2 finding: a TestStore_CurrentSession_DistinctPIDsDoNotCollide
 // used to live here, asserting that two literal string keys
 // ("11111"/"22222") resolve to two distinct sessions. That is true of

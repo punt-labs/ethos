@@ -557,6 +557,19 @@ func (s *Store) PurgeCurrent() ([]string, error) {
 // partial write — only the old content or the new content, never
 // neither.
 func (s *Store) WriteCurrentSession(claudePID, sessionID string) error {
+	// Mission 005 finding E: neither argument was validated. A blank
+	// sessionID produced a permanently blank pointer file at exit 0 (the
+	// reader already treats blank as an error, per ReadCurrentSession's own
+	// doc comment, but nothing stopped the writer from creating that state
+	// in the first place). A blank claudePID is worse: filepath.Base("")
+	// returns ".", so dest would resolve to the current-session directory
+	// itself rather than a file inside it.
+	if strings.TrimSpace(claudePID) == "" {
+		return fmt.Errorf("writing current-session pointer: claudePID must not be blank")
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("writing current-session pointer: sessionID must not be blank")
+	}
 	dir := s.currentDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating current directory: %w", err)
