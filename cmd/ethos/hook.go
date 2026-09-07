@@ -234,10 +234,9 @@ func runHookPreToolUse() error {
 func runHookCommitTrailers(out io.Writer) error {
 	sessionID, _, err := resolve.SessionID(sessionStore())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: commit-trailers: %v; no trailer added\n", err)
-		return nil
-	}
-	if sessionID == "" {
+		if !errors.Is(err, resolve.ErrNotUnderClaudeCode) {
+			fmt.Fprintf(os.Stderr, "ethos: commit-trailers: %v; no trailer added\n", err)
+		}
 		return nil
 	}
 	home, err := os.UserHomeDir()

@@ -157,17 +157,39 @@ const SessionSourceEnv = "env"
 //
 // It is deliberately NOT returned for the other, unremarkable failure
 // state: not running under Claude Code at all (headless, CI, SDK, a plain
-// terminal). That is a normal condition — no session was ever expected —
-// and SessionID reports it as (id="", source="", err=nil) instead.
-// Conflating the two was itself a defect DES-074 names explicitly: "no
-// session" and "this git user" are different answers and must not be
-// returned interchangeably, but neither may a CI run's total absence of a
-// Claude Code session be treated as an alarming, loud failure.
+// terminal) — SessionID returns ErrNotUnderClaudeCode for that instead, a
+// second, distinct sentinel (round 2: two independent reviewers found
+// callers pattern-matching on `err == nil` alone to mean "resolved,"
+// which silently accepted an empty id whenever the first sentinel-less
+// design returned (id="", err=nil) — the third outcome was reconstructible
+// only from a nil error PLUS an empty string, and at least three callers
+// missed the second half of that check). Conflating "no session at all"
+// with "a session was expected but broken" was itself a defect DES-074
+// names explicitly: "no session" and "this git user" are different
+// answers and must not be returned interchangeably, but neither may a CI
+// run's total absence of a Claude Code session be treated as an alarming,
+// loud failure.
 // The message carries no "ethos: " prefix — cmd/ethos's top-level error
 // printer adds that once; prefixing it here doubled it to "ethos: ethos:
 // ..." (Bugbot/team-lead HIGH, round 2).
 var ErrNoSession = errors.New(
 	"cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`")
+
+// ErrNotUnderClaudeCode is returned by SessionID when no session was ever
+// expected: not running under Claude Code at all (headless, CI, SDK, a
+// plain terminal). This is the normal, unremarkable counterpart to
+// ErrNoSession — a caller for which a declared session is merely one of
+// several optional identity sources (resolve.Resolve's step 1 of 4)
+// treats this as "try the next source," never as a failure to report.
+//
+// Making this a distinct, named error rather than a silent (id="",
+// err=nil) pair closes a class of bug the round 2 review found three
+// instances of: a caller checking only `err == nil` to mean "resolved"
+// silently accepted an empty id for this case, because nil was ALSO what
+// success looked like. With this sentinel, `err == nil` means resolved,
+// full stop; every other outcome — this one included — is a distinct,
+// named, non-nil error a caller must consciously unwrap with errors.Is.
+var ErrNotUnderClaudeCode = errors.New("not running under Claude Code")
 
 // UnderClaudeCode indirects process.UnderClaudeCode — the DES-074 "was a
 // session expected" signal — behind a package variable rather than a
@@ -197,15 +219,20 @@ const (
 // SessionID resolves the active session ID using the harness-neutral chain:
 // ETHOS_SESSION, then the Claude process-tree current-pointer.
 //
-// Three outcomes (DES-074):
+// Three outcomes (DES-074), and err == nil if and only if id != "" — a
+// caller may trust `err == nil` alone to mean "resolved, id is valid,"
+// full stop (round 2: two of the three outcomes used to share err == nil,
+// and at least three callers pattern-matched on the error alone, silently
+// accepting an empty id for the "no session" case):
 //   - id != "", err == nil: resolved. source names SessionSourceEnv or "walk".
-//   - id == "", err == nil: not running under Claude Code at all (headless,
-//     CI, SDK, a plain terminal) — a normal state. No session was ever
-//     expected; callers may silently try another identity source.
-//   - id == "", err == ErrNoSession: a session WAS expected (running under
-//     Claude Code, per process.UnderClaudeCode) but could not be
-//     identified. Callers must fail loud with a non-zero exit and must NOT
-//     substitute another identity source.
+//   - id == "", err == ErrNotUnderClaudeCode: not running under Claude Code
+//     at all (headless, CI, SDK, a plain terminal) — a normal state. No
+//     session was ever expected; callers may silently try another
+//     identity source.
+//   - id == "", errors.Is(err, ErrNoSession): a session WAS expected
+//     (running under Claude Code, per process.UnderClaudeCode) but could
+//     not be identified. Callers must fail loud with a non-zero exit and
+//     must NOT substitute another identity source.
 //
 // Callers that accept an explicit session (a --session flag or an MCP
 // session_id arg) check that first and bypass this (DES-061).
@@ -223,7 +250,7 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 	}
 	if rerr != nil {
 		if !underClaude {
-			return "", "", nil
+			return "", "", ErrNotUnderClaudeCode
 		}
 		// Wrap rerr rather than returning the bare ErrNoSession sentinel:
 		// "set ETHOS_SESSION" is the right remedy for the common case (no
@@ -281,10 +308,13 @@ func retryReadCurrentSession(ss *session.Store, pid string) (string, error) {
 func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 	sessionID, _, err := SessionID(ss)
 	if err != nil {
+		if errors.Is(err, ErrNotUnderClaudeCode) {
+			// A legitimate absence, not a wrong-answer risk: translate to
+			// this function's own "try the next identity source" contract
+			// rather than propagating SessionID's sentinel outward.
+			return sessionPersona{}, nil
+		}
 		return sessionPersona{}, err
-	}
-	if sessionID == "" {
-		return sessionPersona{}, nil
 	}
 	roster, lErr := ss.Load(sessionID)
 	if lErr != nil {

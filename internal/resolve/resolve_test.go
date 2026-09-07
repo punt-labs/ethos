@@ -86,12 +86,17 @@ func TestResolve_TolerlatesLegacyKeyedParticipant(t *testing.T) {
 	setGitConfig(t, "unknown", "")
 	t.Setenv("USER", "nobody")
 	t.Setenv("ETHOS_SESSION", "")
-	// Force a live, corroborating CLAUDE_PID distinct from the walk result
-	// so this test does not depend on the ambient environment happening
-	// to have one already (ambient CLAUDE_PID is real inside a live
-	// Claude Code session, but ONLY if it differs from the walk's answer
-	// does this test actually exercise the two-key scenario).
-	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	// Force a live, corroborating CLAUDE_PID distinct from LegacyClaudePID's
+	// walk result. Using our GRANDPARENT rather than our immediate parent:
+	// in an environment with no real "claude" ancestor (CI, a detached
+	// process — round 2 finding), the walk's own fallback is exactly
+	// os.Getppid(), so forcing CLAUDE_PID to the parent would make the two
+	// coincide by accident of environment rather than exercise the
+	// two-key scenario this test is about.
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
 
 	s := testStoreWithIdentity(t, &identity.Identity{
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
@@ -247,7 +252,9 @@ func TestSessionID(t *testing.T) {
 
 	t.Run("neither resolves, not under Claude Code", func(t *testing.T) {
 		// The other DES-074 branch: no session was ever expected here, so
-		// SessionID returns silently -- err is nil, not ErrNoSession.
+		// SessionID returns the distinct, named ErrNotUnderClaudeCode --
+		// never nil (round 2: a nil error here was indistinguishable from
+		// "resolved" to a caller checking only `err == nil`).
 		t.Setenv("ETHOS_SESSION", "")
 		old := UnderClaudeCode
 		UnderClaudeCode = func() bool { return false }
@@ -256,7 +263,7 @@ func TestSessionID(t *testing.T) {
 		sid, source, err := SessionID(empty)
 		assert.Empty(t, sid)
 		assert.Empty(t, source)
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNotUnderClaudeCode)
 	})
 }
 
@@ -268,18 +275,41 @@ func TestSessionID(t *testing.T) {
 // table test with injected PIDs and a temp store root stands in for two
 // real Claude Code processes, per the mission's own guidance.
 func TestSessionID_ConcurrentSessionsDoNotCollide(t *testing.T) {
+	// Round 2 finding: a version of this test using literal string keys
+	// ("11111"/"22222") proves the STORE does not collide on distinct
+	// keys — true of any key-value store, and true before this fix too.
+	// ethos-vqwn was never "the store collides on distinct keys"; it was
+	// "FindClaudePID returns the SAME key for different sessions" (the
+	// pre-fix topmost-ancestor walk collapsing every concurrent session
+	// onto the shared "claude daemon run" PID). This version drives the
+	// keys through the actual mechanism: two simulated sessions, each
+	// resolving its OWN CLAUDE_PID (our real parent and grandparent —
+	// both genuinely live, always-distinct ancestors), proving
+	// FindClaudePID itself gives each session a distinct key AND that the
+	// store keeps them separate once it does.
 	t.Setenv("ETHOS_SESSION", "")
 	root := t.TempDir()
 	ss := session.NewStore(root)
 
-	require.NoError(t, ss.WriteCurrentSession("11111", "session-repo-a"))
-	require.NoError(t, ss.WriteCurrentSession("22222", "session-repo-b"))
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
 
-	idA, err := ss.ReadCurrentSession("11111")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(parentPID))
+	sessionAPID := process.FindClaudePID()
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+	sessionBPID := process.FindClaudePID()
+	require.NotEqual(t, sessionAPID, sessionBPID,
+		"two sessions with distinct owning processes must resolve distinct FindClaudePID keys")
+
+	require.NoError(t, ss.WriteCurrentSession(sessionAPID, "session-repo-a"))
+	require.NoError(t, ss.WriteCurrentSession(sessionBPID, "session-repo-b"))
+
+	idA, err := ss.ReadCurrentSession(sessionAPID)
 	require.NoError(t, err)
 	assert.Equal(t, "session-repo-a", idA, "session A's pointer must not be clobbered by session B's write")
 
-	idB, err := ss.ReadCurrentSession("22222")
+	idB, err := ss.ReadCurrentSession(sessionBPID)
 	require.NoError(t, err)
 	assert.Equal(t, "session-repo-b", idB)
 }
@@ -405,7 +435,7 @@ func TestSessionID_RetrySkippedWhenNotUnderClaudeCode(t *testing.T) {
 	sid, source, err := SessionID(ss)
 	elapsed := time.Since(start)
 
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrNotUnderClaudeCode)
 	assert.Empty(t, sid)
 	assert.Empty(t, source)
 	assert.Less(t, elapsed, pointerRetryDelay,
