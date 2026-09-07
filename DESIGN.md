@@ -7889,3 +7889,159 @@ PR #480, which introduced this ADR). `Identity.Skills`,
 bundle-skill deploy, and the gstack bundle's six skills all landed
 together; see `internal/hook/generate_agents.go`'s `mergeSkills` and
 `internal/seed/seed.go`'s `seedBundleSkills` for the mechanics.
+
+---
+
+## DES-074: Session identity comes from the harness, not from the process tree (ACCEPTED)
+
+**Context.** Ethos answers "which Claude Code session is calling me?" by
+walking the process tree to the **topmost** `claude` ancestor
+(`internal/process.FindClaudePID`, `tree.go:40`) and using that PID as the key
+into a single-valued pointer file, `~/.punt-labs/ethos/sessions/current/<pid>`,
+whose contents are the session id (`internal/session/store.go:513`
+`ReadCurrentSession`; `internal/resolve/resolve.go:144` `SessionID`).
+
+That mechanism is broken, and the failure is a silent wrong answer rather than
+a silent absence.
+
+**Measured, 2026-09-07, host okinos, at HEAD ace18cf (v4.16.1).** The topmost
+`claude` ancestor is not a per-session process. It is `claude daemon run`,
+which every concurrent Claude Code session on the host shares:
+
+```text
+    pid=1728890  bash
+  * pid=1710156  claude (bg-spare)
+  * pid=1710144  claude (bg-pty-host)
+  * pid=518779   claude (daemon run)     <- topmost; what FindClaudePID returns
+    pid=1        systemd
+```
+
+Six distinct session rosters list participant `518779`, spanning four repos.
+Three pointer files serve all of them. Each SessionStart overwrites the same
+file; last writer wins. From a shell in `punt-labs/ethos`:
+
+```console
+$ cat ~/.punt-labs/ethos/sessions/current/518779
+741ab38b-f8a5-463d-94ff-9e641df3e197
+$ ethos session
+Session: 741ab38b-...   Repo: punt-labs/z-spec
+```
+
+A commit in one repo can therefore be stamped with another repo's
+`Mission:`/`Delegation:` trailers. DES-054's audit chain does not merely go
+missing — it can lie. This supersedes the mechanism ethos-2f2q was closed
+against: that bug's mtime-globbing fallback is gone, but its guarantee (a commit
+carries its own session's mission, never a concurrent session's) breaks again
+one layer down.
+
+Two aggravating factors, both in ethos:
+
+1. **`sync.Once`.** `FindClaudePID` caches its result for the process lifetime
+   (`tree.go:31`), justified by the comment "PIDs are stable within a session."
+   `ethos serve` is a long-lived MCP server (`internal/mcp/tools.go:210`), so it
+   resolves one PID at startup and holds it for every session it will ever
+   serve.
+2. **Silent fallback.** `SessionID` returns `""` on failure and callers fall
+   through to the git/OS identity. Measured three ways — a misspelled persona,
+   an ended session, and the wrong repo — each produces a plausible wrong answer
+   with exit status 0.
+
+**This is a copied defect, not a local one.** A cross-repo sweep of all 23
+sibling `DESIGN.md` files found the same algorithm in four products, propagated
+by citation rather than re-derivation:
+
+- **ethos DES-007** introduced both the walk and the pointer file as "the same
+  `ps -eo pid=,ppid=,comm=` approach proven in Biff" and "the same pattern Biff
+  uses for unread count files." The same ADR lists, as a requirement, *"Must
+  handle concurrent sessions on the same machine"* — stated once and never
+  checked against the mechanism directly above it. It records no rejected
+  alternatives.
+- **ethos DES-011** describes a *different, more robust* algorithm than the code
+  implements: `whoami` "walks the process tree upward, **checking for a
+  `current/<PID>` file at each ancestor**." Nearest-hit-wins would have survived
+  the shared daemon. The shipped code computes one topmost PID and reads exactly
+  one file. Design and code diverged and were never reconciled.
+- **ethos DES-017** sounds like it settles topmost-vs-nearest. It settles
+  immediate-parent-vs-ancestor-walk, motivated by making hooks and the MCP
+  server agree on a key — not by whether the key is correct. Topmost was never
+  argued anywhere in this repo.
+- **mcp-proxy DES-002** states the falsified assumption verbatim: *"The main
+  claude PID is stable for the session lifetime."* Its process model has no
+  concept of a shared daemon above the per-session process.
+- **lux** independently ships the same `ps -o ppid=` walk and does not know the
+  harness variables exist.
+
+**Decision.** Session identity is **declared by the harness and read per call**,
+never inferred from the process tree and never cached.
+
+1. **Key the pointer file on `CLAUDE_PID`**, the owning `claude` process's own
+   PID, which Claude Code sets on every spawned subprocess. Unlike the topmost
+   walk it is distinct per session and per nesting level. Fall back to the
+   existing walk only when the variable is absent (headless, CI, SDK, or a
+   Claude Code older than 2.1.234).
+2. **Corroborate before trusting it.** `CLAUDE_PID` is captured once at spawn
+   and never re-observed, so a long-lived process whose ancestor died — with the
+   PID since recycled by an unrelated but legitimate `claude` session — would
+   resolve to a real, live, wrong PID. Verify the env-sourced PID is still in the
+   caller's *current* live ancestry before use; fall back to the walk if it is
+   not. Ported from biff DES-058's `is_live_ancestor`.
+3. **Remove the `sync.Once`.** Resolve per call. A long-lived server outlives
+   the session it first saw.
+4. **Fail loudly.** When no key corroborates, return a named error and exit
+   non-zero. No fall-through to the git/OS identity. The message must state the
+   remedy, e.g. `ethos: cannot identify the calling session — set
+   ETHOS_SESSION=<id>, or run 'ethos session start'`.
+
+The file's contents, writers, and validation are unchanged. Only *what selects
+the file* changes, plus the removal of caching and of silent fallback.
+
+**Rejected: read `CLAUDE_CODE_SESSION_ID` and use it directly as the session
+id.** This was this design's first form and is the obvious fix — the variable
+is present in every subprocess and equals the roster filename exactly. It was
+rejected on biff's tested evidence (biff DESIGN.md:6722): Claude Code freezes
+each subprocess's copy at spawn time, and `/clear` updates the variable only in
+its own process, so a long-lived server pins a stale session id forever. Biff
+keeps a standalone regression reproducing the failure specifically to stop this
+being re-proposed. The distinction is process lifetime — safe in a git hook or
+one-shot CLI call, unsafe in `ethos serve`. Reading a *file* keyed by
+`CLAUDE_PID` avoids it: SessionStart rewrites that file on every start,
+including a `/clear`-sourced one, so the value stays live for the process's
+whole lifetime. Note that ethos's existing `ETHOS_SESSION` escape hatch has this
+same frozen-variable shape and must not be promoted into the primary path.
+
+**Rejected: fix the walk to stop at the nearest `claude` ancestor.** Considered
+in biff DES-058 before `CLAUDE_PID` was known to exist, and superseded there.
+It separates the write side but leaves a read-side gap — a walk cannot tell a
+long-lived process which of several nearby files is its own without a live
+session id to compare against. It also remains a tree walk, and tree walks are
+entry-point-dependent (below).
+
+**Rejected: any process-tree walk as the primary mechanism.** Beyond the shared
+daemon, the tree differs per entry point. lux DES-063 §4 shipped a session
+binding on `$PPID` inside a hook that **never bound on any session for 28 days**
+(2026-08-01 to the 2026-08-29 amendment), because Claude Code invokes hooks
+through a short-lived `sh` wrapper — `$PPID` is the wrapper, which exits within
+seconds. The failure was found when a menu entry was noticed missing, not by
+tests or review; the same ADR carries ship-time latency measurements taken
+against a binding that had never once worked. Environment variables are
+inherited straight through wrapper processes; ancestor walks are not.
+
+**Rejected: leaving the fallback silent.** Per operator ruling 2026-09-07: a
+mechanism is reliable or it raises a clear error with a hint. A path that works
+most of the time and misattributes the rest causes more churn than one that
+stops. Agents here routinely work across worktrees and sibling repos, which is
+exactly the condition under which a quiet fallback misfires.
+
+**Cross-repo consequence.** lux carries this defect unknowingly and is filed
+separately; biff already fixed it (DES-058) and that fix did not propagate,
+because nothing connects these implementations. mcp-proxy uses the same broken
+walk and survives for an architectural reason worth naming: it is spawned
+**per session**, computes the key in that short-lived process, and transmits it
+on the wire — its long-lived daemon never walks a tree, it receives an identity.
+lux reached the same principle from the opposite direction after two failed
+attempts and states it plainly (DES-057, rejected alternatives): *"the caller
+knows who it is; the Hub does not."* Ethos is on the wrong side of that line and
+this decision moves it across. Extracting the rule into shared code is deferred
+until this implementation has survived review — three hand-copies is how this
+defect spread, and a fourth written before one correct version exists would not
+be an improvement.
