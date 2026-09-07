@@ -48,7 +48,12 @@ func setGitConfig(t *testing.T, name, email string) {
 func TestResolve_IamDeclaration(t *testing.T) {
 	setGitConfig(t, "unknown", "")
 	t.Setenv("USER", "nobody")
-	t.Setenv("ETHOS_SESSION", "") // exercise the PID walk, not an ambient env
+	t.Setenv("ETHOS_SESSION", "") // exercise the PID pointer, not an ambient env
+	// A corroborated CLAUDE_PID so this resolves in a detached/CI
+	// environment too, not only inside a live Claude Code ancestry
+	// (review finding, PR #502: SessionID no longer resolves at all
+	// without one).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 
 	s := testStoreWithIdentity(t, &identity.Identity{
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
@@ -132,6 +137,11 @@ func TestResolve_ToleratesLegacyKeyedParticipant(t *testing.T) {
 func TestResolve_ParticipantMissFallsThroughToGitOS(t *testing.T) {
 	setGitConfig(t, "someone", "someone@example.com")
 	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so the session genuinely resolves (and the
+	// participant miss, not "not under Claude Code," is what drives the
+	// fall-through this test is named for) in a detached/CI environment
+	// too (review finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 
 	s := testStoreWithIdentity(t, &identity.Identity{
 		Name: "Someone", Handle: "someone", Kind: "human", GitHub: "someone",
@@ -410,6 +420,9 @@ func TestSessionID_ConcurrentSessionsDoNotCollide(t *testing.T) {
 // owning process — not keep answering with the first session it ever saw.
 func TestSessionID_ResolvesAcrossSessionChange(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so SessionID resolves at all in a
+	// detached/CI environment (review finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 	root := t.TempDir()
 	ss := session.NewStore(root)
 	pid := process.FindClaudePID()
@@ -432,9 +445,14 @@ func TestSessionID_ResolvesAcrossSessionChange(t *testing.T) {
 // non-zero exit rather than silently trying some other identity. This is
 // the "session was expected" branch, forced deterministically since this
 // suite's ambient CLAUDE_PID cannot be relied on to make it true in every
-// environment (a real CI run has no claude ancestor at all).
+// environment (a real CI run has no claude ancestor at all). A
+// corroborated CLAUDE_PID is set explicitly so this exercises the
+// missing-pointer-file path this test is named for, not the
+// uncorroborated-PID path a detached/CI environment would otherwise hit
+// first (review finding, PR #502).
 func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 	old := UnderClaudeCode
 	UnderClaudeCode = func() bool { return true }
 	t.Cleanup(func() { UnderClaudeCode = old })
@@ -460,6 +478,11 @@ func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
 // pattern-match on it.
 func TestSessionID_SurfacesRealReadCauseNotJustGenericRemedy(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so this reaches the pointer-read failure
+	// this test is named for, rather than the uncorroborated-PID path a
+	// detached/CI environment would otherwise hit first (review finding,
+	// PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 	old := UnderClaudeCode
 	UnderClaudeCode = func() bool { return true }
 	t.Cleanup(func() { UnderClaudeCode = old })
@@ -489,6 +512,10 @@ func TestSessionID_SurfacesRealReadCauseNotJustGenericRemedy(t *testing.T) {
 // milliseconds later.
 func TestSessionID_RetriesPointerFileRace(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so this reaches the retry-on-missing-file
+	// path the race is about, in a detached/CI environment too (review
+	// finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 	old := UnderClaudeCode
 	UnderClaudeCode = func() bool { return true } // the retry only fires under Claude Code
 	t.Cleanup(func() { UnderClaudeCode = old })
@@ -555,6 +582,11 @@ func TestSessionID_RetrySkippedWhenNotUnderClaudeCode(t *testing.T) {
 // var to 1 here proves the fix holds structurally, not merely at 10.
 func TestSessionID_InvariantHoldsAtMinimalRetryBudget(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so this reaches retryReadCurrentSession's
+	// own invariant, the thing under test, rather than the
+	// uncorroborated-PID path a detached/CI environment would otherwise
+	// hit first (review finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 	old := UnderClaudeCode
 	UnderClaudeCode = func() bool { return true }
 	t.Cleanup(func() { UnderClaudeCode = old })
