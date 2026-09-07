@@ -600,6 +600,58 @@ func TestSessionID_RetriesPointerFileRace(t *testing.T) {
 	assert.Equal(t, SessionSourcePID, source)
 }
 
+// TestSessionID_DoesNotRetryDeterministicPointerError pins the Copilot
+// finding on PR #502: the retry exists ONLY for the startup race where
+// SessionStart has not finished writing the pointer file yet (a missing
+// file, os.ErrNotExist). Retrying any other failure -- permission denied,
+// "is a directory," a blank-file read -- just re-derives the identical,
+// deterministic cause a few hundred milliseconds later. This is a
+// stronger claim post mission 005 finding E specifically: WriteCurrentSession's
+// atomic temp+rename write means a blank pointer file can no longer be
+// observed mid-write, so the blank case moved from "worth retrying" to
+// "pointless to retry" the same day the race it covered was closed by a
+// different fix. A directory in place of the pointer file (EISDIR)
+// stands in for any deterministic read error here, matching the fixture
+// TestSessionEnd_WarnsOnUnverifiablePointer already uses for the same
+// class of failure (uid-independent, unlike chmod-based EACCES).
+//
+// pointerRetryDelay is inflated (Copilot, PR #502, same pattern as
+// TestSessionID_RetrySkippedWhenNotUnderClaudeCode): a single retry firing
+// blows the multi-second bound by orders of magnitude, so the wall-clock
+// assertion proves the retry loop never ran, without depending on a tight
+// absolute threshold that scheduling noise could also satisfy.
+func TestSessionID_DoesNotRetryDeterministicPointerError(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	oldDelay := pointerRetryDelay
+	pointerRetryDelay = 5 * time.Second
+	t.Cleanup(func() { pointerRetryDelay = oldDelay })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+
+	// A directory where the pointer file belongs forces EISDIR on read --
+	// a deterministic error, never resolved by waiting.
+	pointerPath := filepath.Join(root, "sessions", "current", pid)
+	require.NoError(t, os.MkdirAll(pointerPath, 0o755))
+
+	start := time.Now()
+	sid, source, err := SessionID(ss)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
+	assert.Less(t, elapsed, pointerRetryDelay,
+		"a deterministic read error must return immediately, not pay the missing-pointer retry latency")
+}
+
 // TestSessionID_RetrySkippedWhenNotUnderClaudeCode pins the other half of
 // point 5: the retry must not fire when no session was ever expected --
 // only the "session was expected but unresolvable" branch pays the retry

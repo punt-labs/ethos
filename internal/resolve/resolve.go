@@ -331,7 +331,16 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 	}
 
 	sid, rerr := ss.ReadCurrentSession(pid)
-	if rerr != nil {
+	if rerr != nil && errors.Is(rerr, os.ErrNotExist) {
+		// Retry ONLY the startup race the retry exists for: a consumer
+		// running before SessionStart finishes writing the pointer file
+		// (DES-074 point 5). Every other failure -- permission denied, "is
+		// a directory," a blank-file read -- is deterministic, not a race:
+		// WriteCurrentSession's atomic temp+rename discipline (mission 005
+		// finding E) means a blank pointer can no longer be observed
+		// mid-write, so retrying it (or any other non-ErrNotExist cause)
+		// just spends ~450ms re-deriving the identical failure before
+		// reporting it (Copilot finding, PR #502).
 		sid, rerr = retryReadCurrentSession(ss, pid, rerr)
 	}
 	if rerr != nil {
@@ -352,9 +361,14 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 
 // retryReadCurrentSession re-reads the PID-keyed pointer file a few times
 // with a short delay, covering the startup race where a consumer runs
-// before SessionStart finishes writing it. firstErr is the error from the
-// read that triggered the retry; it seeds lastErr so that a zero-iteration
-// loop (pointerRetryAttempts <= 1) still returns a non-nil error instead of
+// before SessionStart finishes writing it. The caller gates entry on
+// errors.Is(firstErr, os.ErrNotExist) — this function does not re-check
+// that itself, since it exists only to cover that one race, not to decide
+// whether retrying is warranted (Copilot finding, PR #502: retrying a
+// deterministic error like EACCES or a blank-file read just re-derives the
+// identical cause ~450ms later). firstErr is the error from the read that
+// triggered the retry; it seeds lastErr so that a zero-iteration loop
+// (pointerRetryAttempts <= 1) still returns a non-nil error instead of
 // silently reporting ("", nil) — SessionID's err/id invariant must hold
 // regardless of how many retries the constant configures, not merely at
 // its current value of 10 (mission 005 finding D).
