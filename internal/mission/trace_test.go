@@ -157,6 +157,94 @@ func TestAppendTraceSummary(t *testing.T) {
 	}
 }
 
+// TestAppendTraceSummary_LocksSiblingFileNotDataFile pins the Bugbot
+// finding on the Windows locking work: appendTraceSummary must lock a
+// dedicated missions.jsonl.lock file, not the append-only missions.jsonl
+// handle itself. On Windows, O_APPEND|O_WRONLY produces a handle with only
+// FILE_APPEND_DATA access (Go's syscall.Open clears GENERIC_WRITE for
+// O_APPEND) -- neither GENERIC_READ nor GENERIC_WRITE, which is what
+// LockFileEx requires -- so locking that handle directly would fail
+// there. This repo's CI is Linux-only, so the Windows failure mode itself
+// cannot be exercised here; this test instead pins the structural
+// invariant that IS verifiable everywhere: the lock file exists
+// afterward, sibling to the data file it protects, matching this
+// package's own convention (id.go, store.go, delegation.go all lock a
+// separate ".lock" file rather than the data file itself).
+func TestAppendTraceSummary_LocksSiblingFileNotDataFile(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{repoRoot: dir}
+	c := &Contract{MissionID: "m-2026-01-01-001", Leader: "alice", Worker: "bob", Evaluator: Evaluator{Handle: "carol"}}
+	r := &Result{Verdict: VerdictPass}
+
+	if err := s.appendTraceSummary(c, r); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	ethosDir := filepath.Join(dir, ".punt-labs", "ethos")
+	if _, err := os.Stat(filepath.Join(ethosDir, "missions.jsonl.lock")); err != nil {
+		t.Fatalf("missions.jsonl.lock must exist alongside missions.jsonl: %v", err)
+	}
+}
+
+// TestAppendTraceSummary_ConcurrentWritesSerialize exercises the actual
+// locking path this repo's CI CAN verify: N goroutines appending
+// concurrently must all serialize through the sibling lock file rather
+// than interleaving, so every line is valid, complete JSON and no
+// mission ID is lost. Regression guard for the trace.go refactor that
+// introduced the separate lock file — the file this test can't reach
+// (the Windows access-rights bug) is a different concern from whether
+// the lock still actually serializes writers, which this test covers on
+// every platform this repo builds and tests on.
+func TestAppendTraceSummary_ConcurrentWritesSerialize(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{repoRoot: dir}
+	r := &Result{Verdict: VerdictPass}
+
+	const n = 20
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			c := &Contract{
+				MissionID: "m-2026-01-01-" + string(rune('a'+i)),
+				Leader:    "alice", Worker: "bob", Evaluator: Evaluator{Handle: "carol"},
+			}
+			errCh <- s.appendTraceSummary(c, r)
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("concurrent append %d: %v", i, err)
+		}
+	}
+
+	path := filepath.Join(dir, ".punt-labs", "ethos", "missions.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	seen := make(map[string]bool)
+	var lines int
+	for scanner.Scan() {
+		var ts TraceSummary
+		if err := json.Unmarshal(scanner.Bytes(), &ts); err != nil {
+			t.Fatalf("interleaved/corrupt JSON line %q: %v", scanner.Text(), err)
+		}
+		seen[ts.ID] = true
+		lines++
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if lines != n {
+		t.Fatalf("got %d lines, want %d — a lost or merged write means the lock did not serialize", lines, n)
+	}
+	if len(seen) != n {
+		t.Fatalf("got %d distinct mission IDs, want %d", len(seen), n)
+	}
+}
+
 func TestAppendTraceSummary_NoRepoRoot(t *testing.T) {
 	s := &Store{repoRoot: ""}
 	c := &Contract{MissionID: "m-2026-01-01-001"}
