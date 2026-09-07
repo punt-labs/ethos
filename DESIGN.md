@@ -8716,3 +8716,78 @@ original DES-074 entry's own remedy claim (finding G — the original
 text repeated the same inert `ethos session start` advice this
 amendment corrects). Findings A, C, D, and F are latent, diagnostic, or
 documentation-only and are not independently user-visible today.
+
+### Amendment 2026-09-07: PR #502 review — the fallback recreated the original collision
+
+A code-review pass on the PR opened for this decision found that
+`resolve.SessionID` (`internal/resolve/resolve.go`) still keyed the
+SESSION-POINTER lookup on `process.FindClaudePID()`, which falls back to
+`walkToClaudeAncestor` — the topmost-claude-ancestor walk — whenever
+CLAUDE_PID is absent or fails corroboration (`internal/process/tree.go`).
+That walk returns the shared "claude daemon run" PID on every concurrent
+Claude Code session on a host — the exact measurement that opens this
+decision's Context section. A caller under Claude Code with no usable
+CLAUDE_PID (an older harness predating 2.1.234, a transient
+process-table read failure, or ancestry deeper than the walk's own
+10-level cap) therefore fell through to the walk-derived key and could
+resolve a plausible but UNRELATED session — reconstructing the
+wrong-answer-at-exit-0 shape this whole decision exists to close, through
+the one fallback path the original Decision and Amendment text left
+unexamined.
+
+**The distinction that matters.** The walk remains legitimate for two
+narrower uses this decision already relies on: `LegacyClaudePID`'s
+participant-lookup tolerance (a roster fallback, non-fatal on a miss —
+round 2 R3) and `UnderClaudeCode`'s own ancestor-presence check (a
+boolean signal, not a lookup key). Neither carries the SESSION-POINTER's
+risk, because neither trusts the walk's PID value as an identity to read
+someone else's state by. It is NOT legitimate as the pointer's lookup
+key, because the value it returns may name a session that belongs to a
+different, unrelated caller entirely.
+
+**Decision.** `resolve.SessionID` no longer calls `process.FindClaudePID`
+at all. It calls a new, narrower function,
+`process.ClaudePIDFromEnvCorroborated`, which performs the same
+CLAUDE_PID-plus-live-ancestry corroboration `FindClaudePID` already did,
+but returns `ok=false` — with NO walk fallback — when CLAUDE_PID is
+absent or uncorroborated. When `SessionID` gets `ok=false` while running
+under Claude Code (`process.UnderClaudeCode` true), the session is
+UNRESOLVABLE: it returns `ErrNoSession` with a new remedy
+(`uncorroboratedPIDRemedy` — upgrade to Claude Code 2.1.234+, or set
+`ETHOS_SESSION=<id>` directly) rather than falling back to a walk-derived
+key it cannot vouch for. `FindClaudePID` itself is unchanged for its
+OTHER callers (pointer/roster writes, participant self-keying), where a
+stale walk-derived key is either self-healing (the next `SessionStart`
+rewrites it) or non-fatal (a participant miss, round 2 R3) — those
+callers keep the fallback; only the session LOOKUP loses it, since a
+lookup has no equivalent safety net.
+
+The source string `SessionID` returns alongside a resolved ID is renamed
+from `"walk"` to `SessionSourcePID`, since no walk remains in this
+function's own resolution path — the pre-fix name described a mechanism
+this fix removes.
+
+**Rejected: fix the walk to stop at the nearest `claude` ancestor,
+reconsidered.** Same objection this decision's own Rejected section
+already raises against that approach in general: it does not eliminate
+the wrong-answer risk, it only narrows how often the walk's result
+happens to coincide with the caller's own session, which is exactly the
+kind of probabilistic, "usually correct" mechanism DES-074's operator
+ruling (§ "Rejected: leaving the fallback silent") already rejected in
+favor of failing loud.
+
+Regression test:
+`TestSessionID_UncorroboratedPIDDoesNotFallBackToSharedWalkKey`
+(`internal/resolve/resolve_test.go`) constructs the precise failure
+state — under Claude Code, CLAUDE_PID absent, a pointer file already
+present under the walk-derived key and naming an unrelated session — and
+asserts `SessionID` returns `ErrNoSession` rather than that session's ID;
+verified failing against the pre-fix code (it silently resolved the
+unrelated session). `TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey`
+and `TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey`'s sibling
+tests in `internal/resolve` (the "corroborated CLAUDE_PID resolves via
+the pointer file" subtest of `TestSessionID`, and
+`TestResolveFromSession_DeadRosterRemedy_WalkSourced`) were updated to
+supply a corroborated CLAUDE_PID rather than relying on the now-removed
+walk fallback, since that is the only path left through which a non-env
+session resolves.
