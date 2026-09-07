@@ -580,10 +580,20 @@ func (s *Store) WriteCurrentSession(claudePID, sessionID string) error {
 		return fmt.Errorf("creating temp current-session file in %s: %w", dir, err)
 	}
 	tmpPath := tmp.Name()
-	if _, err := tmp.WriteString(sessionID + "\n"); err != nil {
+	payload := sessionID + "\n"
+	// os.File.Write already guarantees io.ErrShortWrite on a short write,
+	// so the err check above is sufficient on its own — but writeRoster
+	// below carries an explicit n < len(data) check, and the asymmetry
+	// invites the question a reviewer already asked once. Belt-and-braces
+	// over os.File's own guarantee, matching writeRoster's shape exactly.
+	if n, err := tmp.WriteString(payload); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("writing temp current-session file %s: %w", tmpPath, err)
+	} else if n < len(payload) {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("short write to temp current-session file %s: %d of %d bytes", tmpPath, n, len(payload))
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
