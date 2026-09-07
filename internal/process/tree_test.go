@@ -151,3 +151,30 @@ func TestIsLiveAncestor(t *testing.T) {
 	assert.True(t, isLiveAncestor(os.Getppid()), "our real parent must corroborate")
 	assert.False(t, isLiveAncestor(999999999), "a PID with no ancestry relation must not corroborate")
 }
+
+func TestUnderClaudeCode(t *testing.T) {
+	t.Run("CLAUDE_PID present is sufficient", func(t *testing.T) {
+		t.Setenv("CLAUDE_PID", "1")
+		t.Setenv("CLAUDECODE", "")
+		assert.True(t, UnderClaudeCode())
+	})
+
+	t.Run("CLAUDECODE present is sufficient", func(t *testing.T) {
+		t.Setenv("CLAUDE_PID", "")
+		t.Setenv("CLAUDECODE", "1")
+		assert.True(t, UnderClaudeCode())
+	})
+
+	t.Run("neither env var, no claude ancestor", func(t *testing.T) {
+		// This suite normally runs inside a real Claude Code process, so a
+		// genuine "not under Claude Code at all" state can only be
+		// asserted once both indicator env vars are stripped; whether a
+		// claude ancestor is found depends on this suite's real process
+		// tree, which we do not control, so this only exercises the
+		// env-absent path deterministically.
+		t.Setenv("CLAUDE_PID", "")
+		t.Setenv("CLAUDECODE", "")
+		_, foundAncestor := findClaudeAncestor(os.Getpid())
+		assert.Equal(t, foundAncestor, UnderClaudeCode())
+	})
+}

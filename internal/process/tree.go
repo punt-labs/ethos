@@ -85,25 +85,58 @@ func isLiveAncestor(pid int) bool {
 // returning the PID string of the topmost "claude" ancestor.
 // Falls back to os.Getppid() if no claude ancestor is found.
 func walkToClaudeAncestor(startPID int) string {
+	if pid, found := findClaudeAncestor(startPID); found {
+		return pid
+	}
+	return strconv.Itoa(os.Getppid())
+}
+
+// findClaudeAncestor walks from startPID upward via readProc(), returning
+// the PID string of the topmost ancestor whose command name is "claude"
+// and whether one was found at all. Factored out of walkToClaudeAncestor
+// so UnderClaudeCode can ask "is there a claude ancestor" without also
+// inheriting walkToClaudeAncestor's os.Getppid() last-resort guess, which
+// is a fallback identifier, not a Claude Code indicator.
+func findClaudeAncestor(startPID int) (pid string, found bool) {
 	bestClaude := ""
-	pid := startPID
+	p := startPID
 	for i := 0; i < maxWalkDepth; i++ {
-		ppid, comm, err := readProc(pid)
+		ppid, comm, err := readProc(p)
 		if err != nil {
 			break
 		}
 		if isClaudeComm(comm) {
-			bestClaude = strconv.Itoa(pid)
+			bestClaude = strconv.Itoa(p)
 		}
-		if ppid == 0 || ppid == pid {
+		if ppid == 0 || ppid == p {
 			break
 		}
-		pid = ppid
+		p = ppid
 	}
-	if bestClaude != "" {
-		return bestClaude
+	return bestClaude, bestClaude != ""
+}
+
+// UnderClaudeCode reports whether any Claude Code indicator is present at
+// all for this call — CLAUDE_PID, CLAUDECODE, or a "claude" ancestor found
+// by the walk. DES-074 uses this to distinguish two failure states that
+// must not be conflated: "not running under Claude Code at all" (headless,
+// CI, SDK, a plain terminal — a normal state, no session was ever
+// expected) from "running under Claude Code but the session is
+// unresolvable" (a session WAS expected; failing loud is correct).
+//
+// CLAUDECODE is a simple presence flag Claude Code sets alongside
+// CLAUDE_PID; checking it directly (rather than only the walk) covers a
+// nested or headless invocation where CLAUDE_PID might be stripped by an
+// intermediary but CLAUDECODE survives, or vice versa.
+func UnderClaudeCode() bool {
+	if _, ok := claudePIDFromEnv(); ok {
+		return true
 	}
-	return strconv.Itoa(os.Getppid())
+	if os.Getenv("CLAUDECODE") != "" {
+		return true
+	}
+	_, found := findClaudeAncestor(os.Getpid())
+	return found
 }
 
 // isClaudeComm checks if a process command name refers to Claude.
