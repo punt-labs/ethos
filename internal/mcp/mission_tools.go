@@ -208,8 +208,8 @@ func (h *Handler) bindDispatchedMission(missionID string) []string {
 				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
 		}
 	}
-	sessionID, _ := resolve.SessionID(h.sessionStore)
-	if sessionID == "" {
+	sessionID, _, err := resolve.SessionID(h.sessionStore)
+	if err != nil {
 		return []string{
 			"binding mission: no session in context -- active-mission sidecar not updated; " +
 				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
@@ -441,8 +441,8 @@ func (h *Handler) clearClosedMissionBindings(missionID string) []string {
 	if h.sessionStore == nil {
 		return nil
 	}
-	sessionID, _ := resolve.SessionID(h.sessionStore)
-	if sessionID == "" {
+	sessionID, _, err := resolve.SessionID(h.sessionStore)
+	if err != nil {
 		return nil
 	}
 	home, err := os.UserHomeDir()

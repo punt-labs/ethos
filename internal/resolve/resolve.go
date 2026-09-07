@@ -134,22 +134,43 @@ type sessionPersona struct {
 // as opposed to the Claude process-tree walk.
 const SessionSourceEnv = "env"
 
+// ErrNoSession is returned by SessionID when neither an explicit
+// ETHOS_SESSION nor the Claude-process pointer file identifies an active
+// session for this call. It names the remedy so a caller that requires a
+// session (iam, mission claim/release) can fail loud with a non-zero exit
+// instead of silently defaulting to some other identity (operator ruling
+// 2026-09-07, DES-074): a mechanism is reliable or it raises a clear error
+// with a hint.
+//
+// SessionID is also consulted by the general identity-resolution chain
+// (Resolve, step 1 of 4), where "no session declared" is one of several
+// legitimate, non-error identity sources — a plain-terminal `ethos whoami`
+// outside any Claude Code process is not "unresolvable," it simply has no
+// session to declare a persona in. Resolve treats ErrNoSession from this
+// step as "try the next source" for exactly that reason; it does not
+// silently substitute a session that was found but did not check out (a
+// participant with no persona, an unreadable roster) — those paths already
+// return an explicit error rather than falling through.
+var ErrNoSession = errors.New(
+	"ethos: cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`")
+
 // SessionID resolves the active session ID using the harness-neutral chain:
 // ETHOS_SESSION, then the Claude process-tree current-pointer. It returns
-// ("", "") when neither yields one, otherwise the ID and its source
-// (SessionSourceEnv or "walk"). The source lets a caller apply the
-// verification an explicit env anchor warrants without re-reading the
-// environment. Callers that accept an explicit session (a --session flag or
-// an MCP session_id arg) check that first and bypass this (DES-061).
-func SessionID(ss *session.Store) (id, source string) {
+// the ID and its source (SessionSourceEnv or "walk") on success, or
+// ErrNoSession when neither yields one — never a silently empty ID+source
+// pair (DES-074). The source lets a caller apply the verification an
+// explicit env anchor warrants without re-reading the environment. Callers
+// that accept an explicit session (a --session flag or an MCP session_id
+// arg) check that first and bypass this (DES-061).
+func SessionID(ss *session.Store) (id, source string, err error) {
 	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
-		return sid, SessionSourceEnv
+		return sid, SessionSourceEnv, nil
 	}
-	sid, err := ss.ReadCurrentSession(process.FindClaudePID())
-	if err != nil {
-		return "", ""
+	sid, rerr := ss.ReadCurrentSession(process.FindClaudePID())
+	if rerr != nil {
+		return "", "", ErrNoSession
 	}
-	return sid, "walk"
+	return sid, "walk", nil
 }
 
 // resolveFromSession resolves the session via the harness-neutral chain
@@ -161,8 +182,12 @@ func SessionID(ss *session.Store) (id, source string) {
 // if the participant exists but has no persona configured — callers must
 // not fall through to git/OS.
 func resolveFromSession(ss *session.Store) sessionPersona {
-	sessionID, source := SessionID(ss)
-	if sessionID == "" {
+	sessionID, source, err := SessionID(ss)
+	if err != nil {
+		// ErrNoSession is "no session declared" — a legitimate identity
+		// source among four, not a wrong-answer risk (DES-074's fix is
+		// about a session pointer that resolved to the WRONG session, not
+		// about there being no session at all). Step through to git/OS.
 		return sessionPersona{}
 	}
 	roster, err := ss.Load(sessionID)

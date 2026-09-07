@@ -466,7 +466,7 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	if h.sessionStore == nil {
 		return "", fmt.Errorf("session store not configured")
 	}
-	if sid, _ := resolve.SessionID(h.sessionStore); sid != "" {
+	if sid, _, err := resolve.SessionID(h.sessionStore); err == nil {
 		return sid, nil
 	}
 	return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")

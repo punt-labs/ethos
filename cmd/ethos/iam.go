@@ -79,8 +79,8 @@ func resolveSession(explicit string, verifyEnv bool) (sessionID, agentID string,
 	}
 
 	if sessionID == "" {
-		sid, source := resolve.SessionID(ss)
-		if sid != "" {
+		sid, source, serr := resolve.SessionID(ss)
+		if serr == nil {
 			if verifyEnv && source == resolve.SessionSourceEnv {
 				if _, lerr := ss.Load(sid); lerr != nil {
 					return "", "", fmt.Errorf("ETHOS_SESSION %q: %w", sid, lerr)

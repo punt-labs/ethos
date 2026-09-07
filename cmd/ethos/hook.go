@@ -227,8 +227,8 @@ func runHookPreToolUse() error {
 // plain terminal, from a non-Claude harness, or from a session with
 // no active mission is untouched.
 func runHookCommitTrailers(out io.Writer) error {
-	sessionID, _ := resolve.SessionID(sessionStore())
-	if sessionID == "" {
+	sessionID, _, err := resolve.SessionID(sessionStore())
+	if err != nil {
 		return nil
 	}
 	home, err := os.UserHomeDir()

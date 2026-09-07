@@ -129,27 +129,100 @@ func TestSessionID(t *testing.T) {
 
 	t.Run("env wins over walk", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "env-session")
-		sid, source := SessionID(ss)
+		sid, source, err := SessionID(ss)
+		require.NoError(t, err)
 		assert.Equal(t, "env-session", sid)
 		assert.Equal(t, SessionSourceEnv, source)
 	})
 
 	t.Run("walk fallback", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "")
+		// This suite usually runs inside a real Claude Code session, where
+		// CLAUDE_PID is itself set — strip it so this genuinely exercises
+		// the walk this subtest is named for, not the env+corroboration
+		// path "env wins over walk" already covers.
+		t.Setenv("CLAUDE_PID", "")
 		pid := process.FindClaudePID()
 		require.NoError(t, ss.WriteCurrentSession(pid, "walk-session"))
-		sid, source := SessionID(ss)
+		sid, source, err := SessionID(ss)
+		require.NoError(t, err)
 		assert.Equal(t, "walk-session", sid)
 		assert.Equal(t, "walk", source)
 	})
 
 	t.Run("neither resolves", func(t *testing.T) {
+		// DES-074: a caller-unresolvable session is a named error, never a
+		// silent ("", "") pair.
 		t.Setenv("ETHOS_SESSION", "")
 		empty := session.NewStore(t.TempDir())
-		sid, source := SessionID(empty)
+		sid, source, err := SessionID(empty)
 		assert.Empty(t, sid)
 		assert.Empty(t, source)
+		assert.ErrorIs(t, err, ErrNoSession)
 	})
+}
+
+// TestSessionID_ConcurrentSessionsDoNotCollide pins the ethos-vqwn fix: two
+// concurrent Claude Code sessions that shared a topmost-ancestor PID under
+// the pre-DES-074 walk (six rosters across four repos measured to PID
+// 518779 on 2026-09-07) must resolve to their OWN session each once every
+// session keys its pointer file on its own Claude process's PID instead. A
+// table test with injected PIDs and a temp store root stands in for two
+// real Claude Code processes, per the mission's own guidance.
+func TestSessionID_ConcurrentSessionsDoNotCollide(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	root := t.TempDir()
+	ss := session.NewStore(root)
+
+	require.NoError(t, ss.WriteCurrentSession("11111", "session-repo-a"))
+	require.NoError(t, ss.WriteCurrentSession("22222", "session-repo-b"))
+
+	idA, err := ss.ReadCurrentSession("11111")
+	require.NoError(t, err)
+	assert.Equal(t, "session-repo-a", idA, "session A's pointer must not be clobbered by session B's write")
+
+	idB, err := ss.ReadCurrentSession("22222")
+	require.NoError(t, err)
+	assert.Equal(t, "session-repo-b", idB)
+}
+
+// TestSessionID_ResolvesAcrossSessionChange pins the sync.Once removal
+// (tree.go, formerly line 31): a long-lived process (ethos serve) must
+// resolve the SECOND session after a session change at a stable PID — e.g.
+// surviving a Claude Code /clear that starts a fresh session under the same
+// owning process — not keep answering with the first session it ever saw.
+func TestSessionID_ResolvesAcrossSessionChange(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+
+	require.NoError(t, ss.WriteCurrentSession(pid, "session-before-clear"))
+	first, _, err := SessionID(ss)
+	require.NoError(t, err)
+	assert.Equal(t, "session-before-clear", first)
+
+	require.NoError(t, ss.WriteCurrentSession(pid, "session-after-clear"))
+	second, _, err := SessionID(ss)
+	require.NoError(t, err)
+	assert.Equal(t, "session-after-clear", second, "a cached resolver would still return the first session")
+}
+
+// TestSessionID_UnresolvableIsNamedError pins the DES-074 fail-loud
+// contract directly: with no ETHOS_SESSION and no pointer file for this
+// process's Claude PID, SessionID must return ErrNoSession — a caller that
+// requires a session (iam, mission claim/release) then refuses with a
+// non-zero exit rather than silently trying some other identity.
+func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	ss := session.NewStore(t.TempDir())
+
+	sid, source, err := SessionID(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
+	assert.Contains(t, err.Error(), "ethos session start", "the error must name the remedy")
 }
 
 func TestResolve_GitNameMatchesGitHub(t *testing.T) {
