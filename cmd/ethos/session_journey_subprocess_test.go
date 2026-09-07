@@ -22,13 +22,18 @@ import (
 // test binary genuinely HAS a `claude` ancestor when run locally under
 // Claude Code (verified: the go-test → ethos child chain reaches a
 // `claude` process). The lead's "no claude ancestor" assumption does not
-// hold for local runs. The walk is defeated a different, stronger way:
-// every test uses a scratch HOME, and no current-pointer file is ever
-// written there, so `ReadCurrentSession(FindClaudePID())` finds nothing
-// regardless of ancestry — behaviorally identical to a detached ppid=1
-// process. TestCLI_CodexJourney asserts this directly (step 0) and pins
-// that `session start` mints a fresh 32-hex id rather than resurrecting a
-// walked session.
+// hold for local runs. Before DES-074, an empty scratch HOME (no
+// current-pointer file ever written there) was enough: `ReadCurrentSession
+// (FindClaudePID())` found nothing regardless of ancestry, behaviorally
+// identical to a detached ppid=1 process. DES-074 changed that: a real
+// claude ancestor now makes process.UnderClaudeCode true, so a missing
+// pointer file is "a session was expected but unresolvable" (loud) rather
+// than silent absence. process.ForceNotUnderClaudeCodeEnv restores the
+// original simulation — a negative-only override, documented on
+// UnderClaudeCode, that cannot fabricate a session, only suppress the
+// loud branch. TestCLI_CodexJourney asserts session discovery directly
+// (step 0) and pins that `session start` mints a fresh 32-hex id rather
+// than resurrecting a walked session.
 
 var (
 	// The export values are POSIX single-quoted; the captures skip the quotes.

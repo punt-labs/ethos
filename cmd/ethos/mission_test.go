@@ -15,6 +15,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +33,27 @@ var ethosBinary string
 // runtime os.Exit error paths in `runMissionCreate` (the in-process
 // captureStdout pattern would crash on os.Exit).
 func TestMain(m *testing.M) {
+	// This suite normally runs inside a real Claude Code session, where
+	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
+	// presence the signal for "a session was expected, fail loud if
+	// unresolvable" — so leaving them ambient would make every fixture
+	// that wants the ordinary "no session here" state (most of this
+	// package's whoami/doctor/setup tests) instead exercise the loud
+	// path. Strip them for the whole binary; a test that wants the
+	// under-Claude-Code path sets one back with t.Setenv. Subprocess
+	// tests inherit this via os.Environ(), which reads the live,
+	// already-stripped process environment.
+	os.Unsetenv("CLAUDE_PID")
+	os.Unsetenv("CLAUDECODE")
+	// Stripping the env vars is not enough: a real claude process is
+	// unavoidably this test binary's own process-tree ancestor whenever
+	// this suite runs inside a live Claude Code session (as it normally
+	// does), so process.UnderClaudeCode's ancestor-walk check would still
+	// see it regardless. Force the "not under Claude Code" branch as this
+	// binary's test default; a test that wants the loud, under-Claude-Code
+	// path overrides this back locally with t.Cleanup.
+	resolve.UnderClaudeCode = func() bool { return false }
+
 	dir, err := os.MkdirTemp("", "ethos-cmd-test-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "creating temp dir for binary: %v\n", err)
@@ -4547,6 +4569,42 @@ func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 		"the leader must be told the rebind stops their trailers")
 }
 
+// TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode pins
+// round 2, R5: a session that was expected (running under Claude Code)
+// but could not be identified is a REAL resolution failure, not the
+// ordinary "no session at all" case bindDispatchedMission otherwise
+// treats as advisory and silent. Before this fix, resolveSession
+// collapsed both DES-074 branches into the same local errNoSession
+// sentinel, so bindDispatchedMission's own errors.Is(err, errNoSession)
+// check could never tell them apart and always skipped silently —
+// `mission dispatch` reported success while the next Agent() spawn still
+// attributed under the PREVIOUS mission id.
+func TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch(), "dispatch itself must still succeed")
+		})
+		return nil
+	})
+	assert.Contains(t, warning, "resolving session",
+		"an unresolvable session under Claude Code must be reported, not silently skipped")
+	assert.NotContains(t, warning, "ethos: ethos:")
+}
+
 // TestMissionDispatch_BindProducesNoCommitTrailers pins the ethos-7vo3
 // ruling: a dispatch binds the session for DELEGATION FILING only. The
 // leader keeps working in the same session, and stamping their later
@@ -4711,10 +4769,17 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	cmd := exec.Command(ethosBinary, "mission", "claim", "m-2026-05-23-001")
 	// Scrub the env: HOME, PATH, and a TMPDIR for go runtime, nothing
 	// else. ETHOS_SESSION absent + no claude ancestor → refusal.
+	// process.ForceNotUnderClaudeCodeEnv covers what env-scrubbing alone
+	// cannot: this test binary's own process ancestry genuinely includes
+	// a real claude ancestor whenever this suite runs inside a live
+	// Claude Code session (as it normally does) — the negative-only
+	// escape hatch simulates the plain, non-Claude-Code process tree
+	// this test's own comment above describes wanting.
 	cmd.Env = []string{
 		"HOME=" + home,
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + t.TempDir(),
+		process.ForceNotUnderClaudeCodeEnv + "=1",
 	}
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf

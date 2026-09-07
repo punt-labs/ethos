@@ -122,6 +122,69 @@ func TestStore_JoinIdempotent(t *testing.T) {
 	assert.Equal(t, "updated-reviewer", roster.FindParticipant("sub-1").Persona)
 }
 
+// TestStore_JoinSelf_UpdatesLegacyKeyedParticipant pins the round 2
+// finding: a session created before DES-074 keys its primary participant
+// on the walk-derived PID (legacyID). A caller that has since resolved a
+// DIFFERENT preferred key (CLAUDE_PID) must update that existing record,
+// not file a second, duplicate participant for the same physical process.
+func TestStore_JoinSelf_UpdatesLegacyKeyedParticipant(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "518779", Persona: "claude", Parent: "user1"}
+	require.NoError(t, s.Create("sess-legacy", root, primary, "", ""))
+
+	update := Participant{AgentID: "1710156", Persona: "claude-updated"}
+	require.NoError(t, s.JoinSelf("sess-legacy", "1710156", "518779", update))
+
+	roster, err := s.Load("sess-legacy")
+	require.NoError(t, err)
+	require.Len(t, roster.Participants, 2, "must update the existing legacy-keyed record, not append a duplicate")
+	assert.Equal(t, "518779", roster.Participants[1].AgentID, "the on-disk key is left as-is; only the fields update")
+	assert.Equal(t, "claude-updated", roster.Participants[1].Persona)
+}
+
+// TestStore_JoinSelf_PrefersNewKeyWhenBothAbsent pins the ordinary case: a
+// session created after DES-074 (or one with no self participant yet at
+// all) has no legacy-keyed record to tolerate, so JoinSelf files the new
+// participant under preferredID exactly like Join would.
+func TestStore_JoinSelf_PrefersNewKeyWhenBothAbsent(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "user1", Persona: "user1"}
+	require.NoError(t, s.Create("sess-fresh", root, primary, "", ""))
+
+	p := Participant{Persona: "claude"}
+	require.NoError(t, s.JoinSelf("sess-fresh", "1710156", "518779", p))
+
+	roster, err := s.Load("sess-fresh")
+	require.NoError(t, err)
+	found := roster.FindParticipant("1710156")
+	require.NotNil(t, found)
+	assert.Equal(t, "claude", found.Persona)
+	assert.Nil(t, roster.FindParticipant("518779"))
+}
+
+// TestStore_JoinSelf_PrefersNewKeyWhenBothPresent pins the case DES-074's
+// corroboration is designed to make impossible in steady state (a caller
+// resolving the SAME live process would never get two different answers
+// from FindClaudePID across two calls) but which JoinSelf still resolves
+// deterministically if it ever occurs: preferredID wins.
+func TestStore_JoinSelf_PrefersNewKeyWhenBothPresent(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "1710156", Persona: "already-new"}
+	require.NoError(t, s.Create("sess-both", root, primary, "", ""))
+	require.NoError(t, s.Join("sess-both", Participant{AgentID: "518779", Persona: "also-legacy"}))
+
+	update := Participant{AgentID: "1710156", Persona: "updated"}
+	require.NoError(t, s.JoinSelf("sess-both", "1710156", "518779", update))
+
+	roster, err := s.Load("sess-both")
+	require.NoError(t, err)
+	assert.Equal(t, "updated", roster.FindParticipant("1710156").Persona)
+	assert.Equal(t, "also-legacy", roster.FindParticipant("518779").Persona, "the unrelated legacy record is untouched")
+}
+
 func TestStore_Leave(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
@@ -244,6 +307,80 @@ func TestStore_CurrentSession(t *testing.T) {
 	_, err = s.ReadCurrentSession("12345")
 	require.Error(t, err)
 }
+
+// TestStore_ReadCurrentSession_BlankFileIsError pins round 2, R1: a
+// zero-byte (or whitespace-only) pointer file must read as an ERROR, not
+// a successful empty session id. Before this fix, ("", nil) was
+// indistinguishable from "no session" and took DES-074's silent branch
+// even under Claude Code, reintroducing the exact wrong-answer-with-
+// exit-0 shape this decision exists to close — through a narrower door
+// (a crash or a non-atomic writer leaving a truncated file, rather than
+// a PID collision).
+func TestStore_ReadCurrentSession_BlankFileIsError(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "sessions", "current"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(s.root, "sessions", "current", "99999"), []byte(""), 0o600))
+
+	_, err := s.ReadCurrentSession("99999")
+	require.Error(t, err, "a blank pointer file must not read as a successful empty session id")
+}
+
+// TestStore_WriteCurrentSession_AtomicNoStrayTempFiles pins round 2, R1b:
+// WriteCurrentSession must write via temp+rename (matching writeRoster's
+// existing pattern for the roster file), not a direct truncate-in-place
+// os.WriteFile, which leaves a window where a concurrent
+// ReadCurrentSession can observe a zero-byte or partially written file.
+// A successful write leaves no stray "current-*.tmp" file behind.
+func TestStore_WriteCurrentSession_AtomicNoStrayTempFiles(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.WriteCurrentSession("12345", "sess-atomic"))
+
+	id, err := s.ReadCurrentSession("12345")
+	require.NoError(t, err)
+	assert.Equal(t, "sess-atomic", id)
+
+	entries, err := os.ReadDir(filepath.Join(s.root, "sessions", "current"))
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".tmp", "no stray temp file should remain after a successful write")
+	}
+}
+
+// TestStore_WriteCurrentSession_RejectsBlankArgs pins mission 005 finding
+// E: neither argument was validated. A blank sessionID produced a
+// permanently blank pointer file at exit 0 -- ReadCurrentSession already
+// treats blank as an error, but nothing stopped WriteCurrentSession from
+// creating that state. A blank claudePID is worse: filepath.Base("")
+// returns ".", so the rename destination would resolve to the
+// current-session directory itself rather than a file inside it.
+func TestStore_WriteCurrentSession_RejectsBlankArgs(t *testing.T) {
+	s := testStore(t)
+
+	err := s.WriteCurrentSession("4242", "")
+	require.Error(t, err, "a blank sessionID must be refused, not silently written")
+
+	err = s.WriteCurrentSession("", "some-session")
+	require.Error(t, err, "a blank claudePID must be refused, not silently written")
+
+	err = s.WriteCurrentSession("4242", "   ")
+	require.Error(t, err, "a whitespace-only sessionID is not a session id either")
+
+	// No pointer file exists for either rejected write.
+	_, err = s.ReadCurrentSession("4242")
+	require.Error(t, err, "a rejected write must leave no pointer file behind")
+}
+
+// Round 2 finding: a TestStore_CurrentSession_DistinctPIDsDoNotCollide
+// used to live here, asserting that two literal string keys
+// ("11111"/"22222") resolve to two distinct sessions. That is true of
+// any key-value store and was true before this fix too — ethos-vqwn was
+// never "the store collides on distinct keys," it was "FindClaudePID
+// returns the SAME key for different sessions." Removed as redundant
+// with TestStore_CurrentSession (a literal-key roundtrip already covers
+// the store's own correctness) in favor of
+// resolve.TestSessionID_ConcurrentSessionsDoNotCollide, which drives the
+// keys through the actual mechanism (process.FindClaudePID under two
+// simulated sessions) rather than asserting a property of maps.
 
 func TestStore_PurgeCurrentFiles(t *testing.T) {
 	s := testStore(t)

@@ -5,59 +5,259 @@
 package process
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 // maxWalkDepth caps the number of levels walked to avoid infinite loops
 // in malformed process trees.
 const maxWalkDepth = 10
 
-var (
-	claudePIDOnce sync.Once
-	claudePID     string
-)
-
-// FindClaudePID walks the process tree from the current PID upward,
-// returning the PID of the topmost ancestor whose command name is "claude".
-// The result is cached for the lifetime of the process (PIDs are stable
-// within a session). Falls back to os.Getppid() if no claude ancestor
-// is found or the process tree cannot be read.
+// FindClaudePID identifies the PID of the owning Claude Code process for
+// this call, resolved fresh on every call — never cached. A long-lived
+// process (ethos serve) outlives any single session it has observed; a
+// process-lifetime cache (the sync.Once this replaced) would keep
+// answering with the first session's PID forever (DES-074).
+//
+// Prefers CLAUDE_PID, the env var Claude Code sets on every spawned
+// subprocess (2.1.234+): distinct per concurrent SESSION, unlike the
+// topmost-ancestor walk below, which every concurrent Claude Code session on
+// a host shares via the "claude daemon run" process — the root cause of
+// ethos-vqwn. (It is NOT distinct per nesting level: a Task-tool subagent
+// or hook subprocess inherits its leader's CLAUDE_PID verbatim, and
+// correctly so, since it belongs to the same session — see
+// ClaudePIDFromEnvCorroborated and DES-074's round-2 amendment.) Falls back
+// to walkToClaudeAncestor when the env var is absent (headless, CI, SDK, or
+// a Claude Code version predating it) or fails corroboration.
+//
+// This fallback is safe for FindClaudePID's own callers — writes (a stale
+// key self-heals on the next SessionStart) and participant self-keying (a
+// miss is non-fatal, round 2 R3) — but is NOT safe as a SESSION-POINTER
+// lookup key, which has no equivalent safety net: resolve.SessionID uses
+// ClaudePIDFromEnvCorroborated directly instead, with no walk fallback, so
+// an uncorroborated CLAUDE_PID makes a session unresolvable rather than
+// resolvable via the shared walk-derived key (review finding, PR #502).
 //
 // Uses native OS interfaces: /proc on Linux, sysctl on macOS.
 func FindClaudePID() string {
-	claudePIDOnce.Do(func() {
-		claudePID = walkToClaudeAncestor(os.Getpid())
-	})
-	return claudePID
+	if pid, ok := ClaudePIDFromEnvCorroborated(); ok {
+		return pid
+	}
+	return walkToClaudeAncestor(os.Getpid())
+}
+
+// ClaudePIDFromEnvCorroborated returns CLAUDE_PID, verified as a live
+// ancestor of this process, or ok=false when the variable is absent, blank,
+// malformed, or fails corroboration. CLAUDE_PID is captured once at this
+// process's own spawn time and never re-observed, so it is corroborated —
+// not trusted outright — against the caller's CURRENT live ancestry: a dead
+// ancestor's PID, later recycled by an unrelated but legitimate claude
+// session, would otherwise resolve to a real, live, WRONG process.
+//
+// Exported so resolve.SessionID can key the SESSION-POINTER lookup on this
+// value ALONE, with no walk fallback: unlike FindClaudePID's other callers,
+// a session lookup has no self-healing or non-fatal path if the key is
+// wrong — the walk's shared "claude daemon run" PID is exactly the
+// collision this decision closes, and letting the pointer lookup fall back
+// to it silently recreates ethos-vqwn for any caller whose CLAUDE_PID is
+// absent or unresolvable (older harnesses, transient process-table
+// failures, ancestry deeper than maxWalkDepth) (review finding, PR #502).
+func ClaudePIDFromEnvCorroborated() (string, bool) {
+	pid, ok := claudePIDFromEnv()
+	if !ok {
+		return "", false
+	}
+	if !isLiveAncestor(pid) {
+		// Two distinct causes collapse to the same "not corroborated" here:
+		// a stale env value (the real ancestor died, its PID recycled by an
+		// unrelated but legitimate claude session) or a transient failure
+		// reading the process table (isLiveAncestor's own error path). The
+		// message stays neutral rather than asserting the former (DES-074
+		// point 6, ported from biff session_id.py's resolve_routing_id).
+		fmt.Fprintf(os.Stderr,
+			"ethos: CLAUDE_PID=%d could not be corroborated as a live ancestor of this process\n",
+			pid)
+		return "", false
+	}
+	return strconv.Itoa(pid), true
+}
+
+// LegacyClaudePID returns the topmost-claude-ancestor PID via the
+// process-tree walk alone, ignoring CLAUDE_PID entirely — the value the
+// pre-DES-074 FindClaudePID always returned, and the value a session
+// roster's primary participant is keyed on if it was written before this
+// fix deployed. A participant lookup keyed only on the new, preferred
+// FindClaudePID would otherwise silently stop matching an in-flight
+// session's own participant record the moment the binary upgrades, and
+// stay broken until that session ends (round 2 finding, ethos-vqwn). This
+// is purely the participant-roster fallback — it has no session-lookup
+// use: the pointer file for an in-flight session heals itself onto the
+// new key the moment SessionStart next re-fires.
+func LegacyClaudePID() string {
+	return walkToClaudeAncestor(os.Getpid())
+}
+
+// ParentPID returns the parent PID of pid, read fresh from the OS.
+// Exported so tests across consumer packages can obtain a second,
+// genuinely live ancestor distinct from os.Getppid() — e.g. the caller's
+// grandparent via ParentPID(os.Getppid()) — to exercise FindClaudePID's
+// env-corroboration path deterministically. Needed because a test cannot
+// otherwise force LegacyClaudePID/walkToClaudeAncestor to a chosen value:
+// in an environment with no real "claude" ancestor (CI, a detached
+// process — round 2 finding), its fallback is exactly os.Getppid(),
+// which coincides with whatever a test naively forces CLAUDE_PID to if
+// that is also the immediate parent, making the two indistinguishable by
+// accident of environment rather than by the mechanism under test.
+func ParentPID(pid int) (int, error) {
+	ppid, _, err := readProc(pid)
+	if err != nil {
+		return 0, err
+	}
+	return ppid, nil
+}
+
+// claudePIDFromEnv parses CLAUDE_PID, returning ok=false when the variable
+// is absent, blank, or not a positive integer.
+func claudePIDFromEnv() (pid int, ok bool) {
+	v := strings.TrimSpace(os.Getenv("CLAUDE_PID"))
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// isLiveAncestor reports whether pid is currently an ancestor of the
+// calling process, re-derived from the OS on every call — the
+// corroboration DES-074 requires, ported from biff DES-058's
+// is_live_ancestor. CLAUDE_PID is captured once at spawn and never
+// re-observed, so without this check a long-lived process whose real
+// ancestor died, with that PID since recycled by an unrelated but
+// legitimate claude session, would resolve to a real, live, WRONG process
+// merely because /proc/<pid> (or its macOS equivalent) still resolves to
+// something.
+func isLiveAncestor(pid int) bool {
+	cur := os.Getpid()
+	for i := 0; i < maxWalkDepth; i++ {
+		ppid, _, err := readProc(cur)
+		if err != nil {
+			return false
+		}
+		if ppid == pid {
+			return true
+		}
+		if ppid == 0 || ppid == cur {
+			return false
+		}
+		cur = ppid
+	}
+	return false
 }
 
 // walkToClaudeAncestor walks from startPID upward via readProc(),
 // returning the PID string of the topmost "claude" ancestor.
 // Falls back to os.Getppid() if no claude ancestor is found.
 func walkToClaudeAncestor(startPID int) string {
+	if pid, found := findClaudeAncestor(startPID); found {
+		return pid
+	}
+	return strconv.Itoa(os.Getppid())
+}
+
+// findClaudeAncestor walks from startPID upward via readProc(), returning
+// the PID string of the topmost ancestor whose command name is "claude"
+// and whether one was found at all. Factored out of walkToClaudeAncestor
+// so UnderClaudeCode can ask "is there a claude ancestor" without also
+// inheriting walkToClaudeAncestor's os.Getppid() last-resort guess, which
+// is a fallback identifier, not a Claude Code indicator.
+func findClaudeAncestor(startPID int) (pid string, found bool) {
 	bestClaude := ""
-	pid := startPID
+	p := startPID
 	for i := 0; i < maxWalkDepth; i++ {
-		ppid, comm, err := readProc(pid)
+		ppid, comm, err := readProc(p)
 		if err != nil {
 			break
 		}
 		if isClaudeComm(comm) {
-			bestClaude = strconv.Itoa(pid)
+			bestClaude = strconv.Itoa(p)
 		}
-		if ppid == 0 || ppid == pid {
+		if ppid == 0 || ppid == p {
 			break
 		}
-		pid = ppid
+		p = ppid
 	}
-	if bestClaude != "" {
-		return bestClaude
-	}
-	return strconv.Itoa(os.Getppid())
+	return bestClaude, bestClaude != ""
 }
+
+// UnderClaudeCode reports whether any Claude Code indicator is present at
+// all for this call — CLAUDE_PID, CLAUDECODE, or a "claude" ancestor found
+// by the walk. DES-074 uses this to distinguish two failure states that
+// must not be conflated: "not running under Claude Code at all" (headless,
+// CI, SDK, a plain terminal — a normal state, no session was ever
+// expected) from "running under Claude Code but the session is
+// unresolvable" (a session WAS expected; failing loud is correct).
+//
+// CLAUDECODE is a simple presence flag Claude Code sets alongside
+// CLAUDE_PID; checking it directly (rather than only the walk) covers a
+// nested or headless invocation where CLAUDE_PID might be stripped by an
+// intermediary but CLAUDECODE survives, or vice versa.
+//
+// forceNotUnderClaudeCodeEnv is a negative-only escape hatch: it can only
+// make this return false, never true, so it cannot be used to fabricate a
+// session context — only to suppress the loud-failure branch. It exists
+// for subprocess test harnesses simulating "genuinely no Claude Code in
+// play" (one of the two states this function distinguishes, and a real,
+// legitimate production case — headless/CI/SDK) from INSIDE a live Claude
+// Code development session: unlike CLAUDE_PID/CLAUDECODE, a spawned test
+// binary's real ancestry cannot be un-set with an env var, so without this
+// escape hatch that scenario is untestable in exactly the environment this
+// repo is developed in.
+//
+// "Negative-only, so it cannot fabricate a session context" is true and
+// also beside the point (mission 005 finding F): SUPPRESSING the loud
+// branch IS a wrong-answer-at-exit-0 risk in its own right. Set in a real
+// environment, this makes SessionID return ErrNotUnderClaudeCode instead
+// of the loud ErrNoSession its own broken pointer file would otherwise
+// produce, and resolveFromSession silently translates that to "try the
+// next identity source" — restorable by one environment variable, with
+// zero logging, before this fix. The stderr line below is the minimum
+// closure: it can no longer be silent. A stronger guard — refusing to
+// honor the variable at all outside a test binary (e.g. gating on
+// testing.Testing()) — was considered and rejected: this repo's own
+// subprocess-based CLI tests (cmd/ethos/mission_test.go,
+// cmd/ethos/subprocess_test.go's withForcedNotUnderClaudeCode) set this
+// variable on a REAL, separately-exec'd `ethos` binary, not the test
+// binary itself, so testing.Testing() would read false inside the very
+// process the variable is meant to affect and break every one of them.
+func UnderClaudeCode() bool {
+	if os.Getenv(ForceNotUnderClaudeCodeEnv) != "" {
+		fmt.Fprintf(os.Stderr,
+			"ethos: %s is set; UnderClaudeCode() forced to false, suppressing the loud-failure branch "+
+				"for a broken session pointer -- unset it outside a test harness\n",
+			ForceNotUnderClaudeCodeEnv)
+		return false
+	}
+	if _, ok := claudePIDFromEnv(); ok {
+		return true
+	}
+	if os.Getenv("CLAUDECODE") != "" {
+		return true
+	}
+	_, found := findClaudeAncestor(os.Getpid())
+	return found
+}
+
+// ForceNotUnderClaudeCodeEnv is the escape-hatch variable name for
+// UnderClaudeCode, documented there. Exported so subprocess test harnesses
+// across every consumer package can reference it by name (rather than
+// duplicating the literal string) when constructing a child process's
+// environment.
+const ForceNotUnderClaudeCodeEnv = "ETHOS_TEST_NOT_UNDER_CLAUDE_CODE"
 
 // isClaudeComm checks if a process command name refers to Claude.
 // Matches "claude" exactly or paths ending in "/claude".

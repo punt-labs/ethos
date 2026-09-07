@@ -312,7 +312,13 @@ func init() {
 
 func runSessionShow(cmd *cobra.Command) error {
 	ss := sessionStore()
-	sessionID, _ := resolve.SessionID(ss)
+	// `session show` is a benign inspector, not a state-writing consumer:
+	// it reports "no active session" the same way whether none was ever
+	// expected or one was expected but could not be identified (checking
+	// the ID's emptiness, not the error, keeps both cases on this one
+	// path) — unlike iam/mission claim, this command attributes nothing,
+	// so there is no wrong-answer risk to fail loud over.
+	sessionID, _, _ := resolve.SessionID(ss)
 	if sessionID == "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "No active session.")
 		return nil
@@ -576,6 +582,21 @@ func runSessionEnd(cmd *cobra.Command) error {
 		// board (the sole teardown exception; state-writers still hard-fail).
 		if errors.Is(err, errNoSession) {
 			fmt.Fprintln(cmd.ErrOrStderr(), "ethos: no active session; nothing to end")
+			return nil
+		}
+		// resolve.ErrNoSession is the OTHER DES-074 sentinel: a session WAS
+		// expected (running under Claude Code) but could not be identified
+		// (broken pointer, uncorroborated CLAUDE_PID, dead roster).
+		// resolveSession propagates it as-is rather than collapsing it into
+		// errNoSession above (round 2, R5 — collapsing it here would have
+		// made `mission dispatch`'s own rebind silently skip a real
+		// resolution failure). But teardown of a session that cannot be
+		// identified is a no-op by definition — there is nothing to remove
+		// — so `session end` stays idempotent here too (Bugbot/PR #502
+		// MEDIUM: this case previously fell through to the hard failure
+		// below). The real cause is still surfaced, not swallowed.
+		if errors.Is(err, resolve.ErrNoSession) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session could not be identified; nothing to end (%v)\n", err)
 			return nil
 		}
 		return err

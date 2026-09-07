@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -46,7 +48,12 @@ func setGitConfig(t *testing.T, name, email string) {
 func TestResolve_IamDeclaration(t *testing.T) {
 	setGitConfig(t, "unknown", "")
 	t.Setenv("USER", "nobody")
-	t.Setenv("ETHOS_SESSION", "") // exercise the PID walk, not an ambient env
+	t.Setenv("ETHOS_SESSION", "") // exercise the PID pointer, not an ambient env
+	// A corroborated CLAUDE_PID so this resolves in a detached/CI
+	// environment too, not only inside a live Claude Code ancestry
+	// (review finding, PR #502: SessionID no longer resolves at all
+	// without one).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
 
 	s := testStoreWithIdentity(t, &identity.Identity{
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
@@ -69,6 +76,132 @@ func TestResolve_IamDeclaration(t *testing.T) {
 	handle, err := Resolve(s, ss)
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
+}
+
+// TestResolve_ToleratesLegacyKeyedParticipant pins the round 2 finding: a
+// session whose primary participant was written before DES-074 keys it on
+// process.LegacyClaudePID (the pre-fix walk-derived PID), not the new
+// preferred process.FindClaudePID (CLAUDE_PID, corroborated). A caller
+// resolving "myself" via the new key alone would find no participant
+// match and hard-fail (measured: `ethos whoami` on a real in-flight
+// session went from resolving cleanly to `session ... has no participant
+// matching "<new pid>"`) until that session ends and a fresh SessionStart
+// rekeys it. resolveFromSession must fall back to the legacy key.
+func TestResolve_ToleratesLegacyKeyedParticipant(t *testing.T) {
+	setGitConfig(t, "unknown", "")
+	t.Setenv("USER", "nobody")
+	t.Setenv("ETHOS_SESSION", "")
+	// Force a live, corroborating CLAUDE_PID distinct from LegacyClaudePID's
+	// walk result. Using our GRANDPARENT rather than our immediate parent:
+	// in an environment with no real "claude" ancestor (CI, a detached
+	// process — round 2 finding), the walk's own fallback is exactly
+	// os.Getppid(), so forcing CLAUDE_PID to the parent would make the two
+	// coincide by accident of environment rather than exercise the
+	// two-key scenario this test is about.
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+
+	s := testStoreWithIdentity(t, &identity.Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
+	})
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+
+	legacyPID := process.LegacyClaudePID()
+	preferredPID := process.FindClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	sessionID := "legacy-keyed-session"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: legacyPID, Persona: "mal", Parent: "root"},
+		"", "",
+	))
+	require.NoError(t, ss.WriteCurrentSession(preferredPID, sessionID))
+
+	handle, err := Resolve(s, ss)
+	require.NoError(t, err)
+	assert.Equal(t, "mal", handle, "must tolerate a participant keyed on the legacy walk-derived PID")
+}
+
+// TestResolve_ParticipantMissFallsThroughToGitOS pins the round 2, R3
+// binding ruling: "a participant miss is NOT fatal; only an unresolvable
+// session is." A session that resolves and loads fine, but has no
+// participant matching this caller (under either the preferred or the
+// legacy PID) is the ordinary state for any process that has not run
+// `iam` yet — Resolve must fall through to git/OS, not error.
+func TestResolve_ParticipantMissFallsThroughToGitOS(t *testing.T) {
+	setGitConfig(t, "someone", "someone@example.com")
+	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so the session genuinely resolves (and the
+	// participant miss, not "not under Claude Code," is what drives the
+	// fall-through this test is named for) in a detached/CI environment
+	// too (review finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+
+	s := testStoreWithIdentity(t, &identity.Identity{
+		Name: "Someone", Handle: "someone", Kind: "human", GitHub: "someone",
+	})
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+	sessionID := "no-participant-session"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: "someone-else-entirely", Persona: "not-me", Parent: "root"},
+		"", "",
+	))
+	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
+
+	handle, err := Resolve(s, ss)
+	require.NoError(t, err, "a participant miss must not be a fatal error")
+	assert.Equal(t, "someone", handle, "must fall through to the git identity")
+}
+
+// TestResolveFromSession_DeadRosterRemedy_EnvSourced pins mission 005
+// finding G: an explicit ETHOS_SESSION naming a roster that no longer
+// exists on disk gets the deadRosterRemedy advice (eval a fresh session),
+// not restartPointerRemedy -- there is no Claude Code hook to re-fire for
+// an ID the caller supplied directly, unlike a broken pointer file.
+func TestResolveFromSession_DeadRosterRemedy_EnvSourced(t *testing.T) {
+	ss := session.NewStore(t.TempDir())
+	t.Setenv("ETHOS_SESSION", "session-that-does-not-exist")
+
+	_, err := resolveFromSession(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Contains(t, err.Error(), "eval", "an env-named dead roster must be told to mint a fresh session, not to restart Claude Code")
+	assert.NotContains(t, err.Error(), "restart the Claude Code session")
+}
+
+// TestResolveFromSession_DeadRosterRemedy_WalkSourced pins mission 005
+// finding G's other half: a resolved pointer (not an explicit
+// ETHOS_SESSION) naming a deleted roster gets restartPointerRemedy --
+// the same fix as a broken pointer file, since a fresh SessionStart
+// writes both a new pointer and a new roster together.
+func TestResolveFromSession_DeadRosterRemedy_WalkSourced(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID, not ETHOS_SESSION -- exercises the
+	// SessionSourcePID path, not the SessionSourceEnv one this test's
+	// sibling covers. A genuinely live ancestor stands in for the owning
+	// claude process (review finding, PR #502: an absent/uncorroborated
+	// CLAUDE_PID is no longer a walk fallback here -- it is ErrNoSession).
+	parent := strconv.Itoa(os.Getppid())
+	t.Setenv("CLAUDE_PID", parent)
+	ss := session.NewStore(t.TempDir())
+	require.NoError(t, ss.WriteCurrentSession(parent, "session-that-does-not-exist"))
+
+	_, err := resolveFromSession(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Contains(t, err.Error(), "restart the Claude Code session",
+		"a resolved pointer naming a deleted roster must be told to restart, matching a broken pointer's own remedy")
+	assert.NotContains(t, err.Error(), "eval")
 }
 
 func TestResolve_SessionFromEnv(t *testing.T) {
@@ -129,27 +262,462 @@ func TestSessionID(t *testing.T) {
 
 	t.Run("env wins over walk", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "env-session")
-		sid, source := SessionID(ss)
+		sid, source, err := SessionID(ss)
+		require.NoError(t, err)
 		assert.Equal(t, "env-session", sid)
 		assert.Equal(t, SessionSourceEnv, source)
 	})
 
-	t.Run("walk fallback", func(t *testing.T) {
+	t.Run("corroborated CLAUDE_PID resolves via the pointer file", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "")
-		pid := process.FindClaudePID()
-		require.NoError(t, ss.WriteCurrentSession(pid, "walk-session"))
-		sid, source := SessionID(ss)
-		assert.Equal(t, "walk-session", sid)
-		assert.Equal(t, "walk", source)
+		// os.Getppid() is a genuinely live ancestor of this test process,
+		// standing in for the owning claude process CLAUDE_PID would name
+		// in production — corroboration cares only about live ancestry,
+		// not the command name.
+		parent := strconv.Itoa(os.Getppid())
+		t.Setenv("CLAUDE_PID", parent)
+		require.NoError(t, ss.WriteCurrentSession(parent, "pid-session"))
+		sid, source, err := SessionID(ss)
+		require.NoError(t, err)
+		assert.Equal(t, "pid-session", sid)
+		assert.Equal(t, SessionSourcePID, source)
 	})
 
-	t.Run("neither resolves", func(t *testing.T) {
+	t.Run("neither resolves, under Claude Code", func(t *testing.T) {
+		// DES-074: a session that WAS expected (running under Claude Code)
+		// but cannot be identified is a named error, never a silent ("",
+		// "") pair. Force the branch deterministically -- this suite's
+		// ambient CLAUDE_PID happens to make it true today, but a real CI
+		// run (no claude ancestor at all) would make it false and this
+		// assertion would silently stop testing what it claims to.
 		t.Setenv("ETHOS_SESSION", "")
+		old := UnderClaudeCode
+		UnderClaudeCode = func() bool { return true }
+		t.Cleanup(func() { UnderClaudeCode = old })
 		empty := session.NewStore(t.TempDir())
-		sid, source := SessionID(empty)
+		sid, source, err := SessionID(empty)
 		assert.Empty(t, sid)
 		assert.Empty(t, source)
+		assert.ErrorIs(t, err, ErrNoSession)
 	})
+
+	t.Run("neither resolves, not under Claude Code", func(t *testing.T) {
+		// The other DES-074 branch: no session was ever expected here, so
+		// SessionID returns the distinct, named ErrNotUnderClaudeCode --
+		// never nil (round 2: a nil error here was indistinguishable from
+		// "resolved" to a caller checking only `err == nil`).
+		t.Setenv("ETHOS_SESSION", "")
+		old := UnderClaudeCode
+		UnderClaudeCode = func() bool { return false }
+		t.Cleanup(func() { UnderClaudeCode = old })
+		empty := session.NewStore(t.TempDir())
+		sid, source, err := SessionID(empty)
+		assert.Empty(t, sid)
+		assert.Empty(t, source)
+		assert.ErrorIs(t, err, ErrNotUnderClaudeCode)
+	})
+
+	t.Run("whitespace-only ETHOS_SESSION is not a session id", func(t *testing.T) {
+		// Mission 005 finding E's sibling: the pre-fix `sid != ""` check
+		// accepted "   " as a valid session id, handing a caller a
+		// whitespace string to look up instead of falling through to the
+		// walk (or the loud/silent DES-074 outcomes). TrimSpace closes it.
+		t.Setenv("ETHOS_SESSION", "   ")
+		old := UnderClaudeCode
+		UnderClaudeCode = func() bool { return false }
+		t.Cleanup(func() { UnderClaudeCode = old })
+		empty := session.NewStore(t.TempDir())
+		sid, source, err := SessionID(empty)
+		assert.Empty(t, sid)
+		assert.Empty(t, source)
+		assert.ErrorIs(t, err, ErrNotUnderClaudeCode,
+			"whitespace-only ETHOS_SESSION must fall through to the DES-074 outcomes, not resolve as a literal id")
+	})
+}
+
+// TestSessionID_UncorroboratedPIDDoesNotFallBackToSharedWalkKey pins the
+// review finding that a fallback to the topmost-ancestor walk for the
+// SESSION-POINTER key recreates the exact collision DES-074 exists to
+// close. Constructs the precise failure state: running under Claude Code,
+// CLAUDE_PID absent (the older-harness sub-case) or uncorroborated, and a
+// pointer file already present under the walk-derived key -- written by an
+// UNRELATED session sharing this host's "claude daemon run" process, per
+// the measured six-rosters-one-PID scenario in the DES-074 context. A
+// pre-fix SessionID would silently resolve that unrelated session's ID;
+// this asserts it must not, and must instead report ErrNoSession.
+func TestSessionID_UncorroboratedPIDDoesNotFallBackToSharedWalkKey(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", "") // absent: the older-harness sub-case
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true } // a session WAS expected
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	// The walk-derived key a pre-fix caller would have resolved through --
+	// standing in for the shared "claude daemon run" PID every concurrent
+	// session on a host collides on.
+	sharedKey := process.LegacyClaudePID()
+	require.NoError(t, ss.WriteCurrentSession(sharedKey, "unrelated-session-from-another-repo"))
+
+	sid, source, err := SessionID(ss)
+	assert.Empty(t, sid, "must not silently resolve an unrelated concurrent session's ID via the shared walk key")
+	assert.Empty(t, source)
+	assert.ErrorIs(t, err, ErrNoSession)
+}
+
+// TestSessionID_InFlightSessionPointerFailsLoudUntilSessionStartRefires
+// pins the operator's ruling on the PR #502 Bugbot finding: an in-flight
+// session whose pointer file was written under the pre-fix walk-derived
+// key (process.LegacyClaudePID) is NOT found by SessionID even when
+// CLAUDE_PID genuinely corroborates for this caller's own live process --
+// there is no legacy-key fallback for the SESSION-POINTER lookup, only for
+// the roster PARTICIPANT lookup (resolveFromSession,
+// TestResolve_ToleratesLegacyKeyedParticipant). A fallback here would
+// reopen exactly the cross-session collision the PR #502 fix closes: two
+// concurrent sessions in the SAME repo share the same LegacyClaudePID
+// value (the topmost "claude daemon run" ancestor both walk to), so a
+// repo-scoped check on the resolved roster cannot disambiguate them
+// either -- whichever pointer got written there first or last wins
+// arbitrarily, which is the wrong-answer-at-exit-0 shape DES-074 exists to
+// close, not a narrower version of it. Ruling: the loud failure here is
+// safe and self-healing -- restarting the Claude Code session (or
+// /clear) makes SessionStart re-fire and rewrite the pointer under the
+// corroborated key -- so this stays ErrNoSession rather than growing a
+// fallback. See CHANGELOG.md and DESIGN.md's DES-074 for the corrected
+// upgrade-behavior claim this test pins.
+func TestSessionID_InFlightSessionPointerFailsLoudUntilSessionStartRefires(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	// A live, corroborating CLAUDE_PID distinct from LegacyClaudePID's walk
+	// result -- the grandparent trick, same as
+	// TestResolve_ToleratesLegacyKeyedParticipant -- so this test exercises
+	// the two-key scenario rather than the two keys coinciding by accident
+	// of environment.
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+
+	preferredPID := process.FindClaudePID()
+	legacyPID := process.LegacyClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	sessionID := "in-flight-session-predates-the-fix"
+	// The roster's own participant tolerance would find this fine -- see
+	// TestResolve_ToleratesLegacyKeyedParticipant -- if SessionID ever got
+	// that far. It never does: the pointer file itself only exists under
+	// the legacy key, exactly as an in-flight session's on-disk state is
+	// left by an upgrade with no SessionStart re-fire in between.
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: legacyPID, Persona: "mal", Parent: "root"},
+		"", "",
+	))
+	require.NoError(t, ss.WriteCurrentSession(legacyPID, sessionID))
+
+	id, source, err := SessionID(ss)
+	assert.Empty(t, id, "must not resolve via the legacy-keyed pointer even though the roster it names would tolerate this caller")
+	assert.Empty(t, source)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Contains(t, err.Error(), "restart the Claude Code session",
+		"the failure must be loud, safe, and self-healing, not silent")
+}
+
+// TestSessionID_ConcurrentSessionsDoNotCollide pins the ethos-vqwn fix: two
+// concurrent Claude Code sessions that shared a topmost-ancestor PID under
+// the pre-DES-074 walk (six rosters across four repos measured to PID
+// 518779 on 2026-09-07) must resolve to their OWN session each once every
+// session keys its pointer file on its own Claude process's PID instead. A
+// table test with injected PIDs and a temp store root stands in for two
+// real Claude Code processes, per the mission's own guidance.
+func TestSessionID_ConcurrentSessionsDoNotCollide(t *testing.T) {
+	// Round 2 finding: a version of this test using literal string keys
+	// ("11111"/"22222") proves the STORE does not collide on distinct
+	// keys — true of any key-value store, and true before this fix too.
+	// ethos-vqwn was never "the store collides on distinct keys"; it was
+	// "FindClaudePID returns the SAME key for different sessions" (the
+	// pre-fix topmost-ancestor walk collapsing every concurrent session
+	// onto the shared "claude daemon run" PID). This version drives the
+	// keys through the actual mechanism: two simulated sessions, each
+	// resolving its OWN CLAUDE_PID (our real parent and grandparent —
+	// both genuinely live, always-distinct ancestors), proving
+	// FindClaudePID itself gives each session a distinct key AND that the
+	// store keeps them separate once it does.
+	t.Setenv("ETHOS_SESSION", "")
+	root := t.TempDir()
+	ss := session.NewStore(root)
+
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+
+	t.Setenv("CLAUDE_PID", strconv.Itoa(parentPID))
+	sessionAPID := process.FindClaudePID()
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+	sessionBPID := process.FindClaudePID()
+	require.NotEqual(t, sessionAPID, sessionBPID,
+		"two sessions with distinct owning processes must resolve distinct FindClaudePID keys")
+
+	require.NoError(t, ss.WriteCurrentSession(sessionAPID, "session-repo-a"))
+	require.NoError(t, ss.WriteCurrentSession(sessionBPID, "session-repo-b"))
+
+	idA, err := ss.ReadCurrentSession(sessionAPID)
+	require.NoError(t, err)
+	assert.Equal(t, "session-repo-a", idA, "session A's pointer must not be clobbered by session B's write")
+
+	idB, err := ss.ReadCurrentSession(sessionBPID)
+	require.NoError(t, err)
+	assert.Equal(t, "session-repo-b", idB)
+}
+
+// TestSessionID_ResolvesAcrossSessionChange pins the sync.Once removal
+// (tree.go, formerly line 31): a long-lived process (ethos serve) must
+// resolve the SECOND session after a session change at a stable PID — e.g.
+// surviving a Claude Code /clear that starts a fresh session under the same
+// owning process — not keep answering with the first session it ever saw.
+func TestSessionID_ResolvesAcrossSessionChange(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so SessionID resolves at all in a
+	// detached/CI environment (review finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+
+	require.NoError(t, ss.WriteCurrentSession(pid, "session-before-clear"))
+	first, _, err := SessionID(ss)
+	require.NoError(t, err)
+	assert.Equal(t, "session-before-clear", first)
+
+	require.NoError(t, ss.WriteCurrentSession(pid, "session-after-clear"))
+	second, _, err := SessionID(ss)
+	require.NoError(t, err)
+	assert.Equal(t, "session-after-clear", second, "a cached resolver would still return the first session")
+}
+
+// TestSessionID_UnresolvableIsNamedError pins the DES-074 fail-loud
+// contract directly: with no ETHOS_SESSION and no pointer file for this
+// process's Claude PID, SessionID must return ErrNoSession — a caller that
+// requires a session (iam, mission claim/release) then refuses with a
+// non-zero exit rather than silently trying some other identity. This is
+// the "session was expected" branch, forced deterministically since this
+// suite's ambient CLAUDE_PID cannot be relied on to make it true in every
+// environment (a real CI run has no claude ancestor at all). A
+// corroborated CLAUDE_PID is set explicitly so this exercises the
+// missing-pointer-file path this test is named for, not the
+// uncorroborated-PID path a detached/CI environment would otherwise hit
+// first (review finding, PR #502).
+func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+	ss := session.NewStore(t.TempDir())
+
+	sid, source, err := SessionID(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
+	assert.Contains(t, err.Error(), "restart the Claude Code session", "the error must name a remedy that actually fixes a broken pointer file")
+	assert.NotContains(t, err.Error(), "ethos session start",
+		"mission 005 finding G: this remedy is inert against a broken pointer file -- ethos session start never writes one")
+}
+
+// TestSessionID_SurfacesRealReadCauseNotJustGenericRemedy pins round 2,
+// R6: retryReadCurrentSession's accumulated error must not be discarded
+// in favor of the bare ErrNoSession sentinel. restartPointerRemedy is the
+// right remedy for the common case (no pointer file at all), but a
+// determinable, different cause — here, the pointer "file" is actually a
+// directory — is not fixed by that remedy and must be visible in the
+// message. errors.Is(err, ErrNoSession) must still hold, since callers
+// pattern-match on it.
+func TestSessionID_SurfacesRealReadCauseNotJustGenericRemedy(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so this reaches the pointer-read failure
+	// this test is named for, rather than the uncorroborated-PID path a
+	// detached/CI environment would otherwise hit first (review finding,
+	// PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+	// Force a real, determinable read failure distinct from "not found":
+	// the pointer "file" is a directory.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions", "current", pid), 0o700))
+
+	_, _, err := SessionID(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.NotEmpty(t, err.Error())
+	// The real cause (a directory where a file was expected) must be
+	// visible somewhere in the chain, not swallowed by the generic remedy
+	// text alone.
+	assert.Contains(t, err.Error(), pid, "the failing path/PID should be traceable in the message")
+}
+
+// TestSessionID_RetriesPointerFileRace pins DES-074 point 5: a consumer
+// can start before SessionStart finishes writing the pointer file. The
+// race is simulated by writing it from a goroutine partway through the
+// retry window; a resolver with no retry would see the first read miss
+// and return ErrNoSession instead of the session that landed a few
+// milliseconds later.
+func TestSessionID_RetriesPointerFileRace(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so this reaches the retry-on-missing-file
+	// path the race is about, in a detached/CI environment too (review
+	// finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true } // the retry only fires under Claude Code
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+
+	go func() {
+		time.Sleep(pointerRetryDelay / 2)
+		_ = ss.WriteCurrentSession(pid, "raced-session")
+	}()
+
+	sid, source, err := SessionID(ss)
+	require.NoError(t, err)
+	assert.Equal(t, "raced-session", sid)
+	assert.Equal(t, SessionSourcePID, source)
+}
+
+// TestSessionID_DoesNotRetryDeterministicPointerError pins the Copilot
+// finding on PR #502: the retry exists ONLY for the startup race where
+// SessionStart has not finished writing the pointer file yet (a missing
+// file, os.ErrNotExist). Retrying any other failure -- permission denied,
+// "is a directory," a blank-file read -- just re-derives the identical,
+// deterministic cause a few hundred milliseconds later. This is a
+// stronger claim post mission 005 finding E specifically: WriteCurrentSession's
+// atomic temp+rename write means a blank pointer file can no longer be
+// observed mid-write, so the blank case moved from "worth retrying" to
+// "pointless to retry" the same day the race it covered was closed by a
+// different fix. A directory in place of the pointer file (EISDIR)
+// stands in for any deterministic read error here, matching the fixture
+// TestSessionEnd_WarnsOnUnverifiablePointer already uses for the same
+// class of failure (uid-independent, unlike chmod-based EACCES).
+//
+// pointerRetryDelay is inflated (Copilot, PR #502, same pattern as
+// TestSessionID_RetrySkippedWhenNotUnderClaudeCode): a single retry firing
+// blows the multi-second bound by orders of magnitude, so the wall-clock
+// assertion proves the retry loop never ran, without depending on a tight
+// absolute threshold that scheduling noise could also satisfy.
+func TestSessionID_DoesNotRetryDeterministicPointerError(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	oldDelay := pointerRetryDelay
+	pointerRetryDelay = 5 * time.Second
+	t.Cleanup(func() { pointerRetryDelay = oldDelay })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+
+	// A directory where the pointer file belongs forces EISDIR on read --
+	// a deterministic error, never resolved by waiting.
+	pointerPath := filepath.Join(root, "sessions", "current", pid)
+	require.NoError(t, os.MkdirAll(pointerPath, 0o755))
+
+	start := time.Now()
+	sid, source, err := SessionID(ss)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
+	assert.Less(t, elapsed, pointerRetryDelay,
+		"a deterministic read error must return immediately, not pay the missing-pointer retry latency")
+}
+
+// TestSessionID_RetrySkippedWhenNotUnderClaudeCode pins the other half of
+// point 5: the retry must not fire when no session was ever expected --
+// only the "session was expected but unresolvable" branch pays the retry
+// latency. A missing goroutine writer here means a passing retry would
+// have to be spurious.
+//
+// pointerRetryDelay is inflated for the duration of this test (Copilot,
+// PR #502): the shipped value (50ms) is tight enough that a non-sleeping
+// call can still exceed it on a loaded CI runner from scheduling noise
+// alone, flaking the test with no retry ever having fired. At a
+// multi-second delay, a single retry firing would blow the bound by
+// orders of magnitude, so the wall-clock assertion still proves the
+// retry path was skipped, without depending on a tight absolute
+// threshold.
+func TestSessionID_RetrySkippedWhenNotUnderClaudeCode(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return false }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	oldDelay := pointerRetryDelay
+	pointerRetryDelay = 5 * time.Second
+	t.Cleanup(func() { pointerRetryDelay = oldDelay })
+
+	ss := session.NewStore(t.TempDir())
+	start := time.Now()
+	sid, source, err := SessionID(ss)
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, ErrNotUnderClaudeCode)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
+	assert.Less(t, elapsed, pointerRetryDelay,
+		"not-under-Claude-Code must return immediately, not pay the under-Claude-Code retry latency")
+}
+
+// TestSessionID_InvariantHoldsAtMinimalRetryBudget pins mission 005
+// finding D: SessionID's own doc comment claims "err == nil if and only
+// if id != ”" as a mechanical invariant, but before this fix that was
+// only true at the shipped pointerRetryAttempts value of 10.
+// retryReadCurrentSession's loop runs pointerRetryAttempts-1 times, so at
+// 1 (or less) the loop body never executes and lastErr, seeded to nil,
+// was returned unchanged -- silently reporting a resolved id=="" alongside
+// err==nil, breaking the invariant the whole design leans on. Driving the
+// var to 1 here proves the fix holds structurally, not merely at 10.
+func TestSessionID_InvariantHoldsAtMinimalRetryBudget(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	// A corroborated CLAUDE_PID so this reaches retryReadCurrentSession's
+	// own invariant, the thing under test, rather than the
+	// uncorroborated-PID path a detached/CI environment would otherwise
+	// hit first (review finding, PR #502).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+	oldAttempts := pointerRetryAttempts
+	pointerRetryAttempts = 1
+	t.Cleanup(func() { pointerRetryAttempts = oldAttempts })
+
+	ss := session.NewStore(t.TempDir())
+	sid, source, err := SessionID(ss)
+
+	require.Error(t, err, "err must be non-nil whenever id is empty, regardless of the retry budget")
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
 }
 
 func TestResolve_GitNameMatchesGitHub(t *testing.T) {

@@ -115,27 +115,70 @@ func (s *Store) Join(sessionID string, p Participant) error {
 		if err != nil {
 			return err
 		}
-		if existing := roster.FindParticipant(p.AgentID); existing != nil {
-			if p.Persona != "" {
-				existing.Persona = p.Persona
-			}
-			if p.AgentType != "" {
-				existing.AgentType = p.AgentType
-			}
-			if p.Parent != "" {
-				existing.Parent = p.Parent
-			}
-			if p.Ext != nil {
-				existing.Ext = p.Ext
-			}
-		} else {
-			if p.Joined == "" {
-				p.Joined = time.Now().UTC().Format(time.RFC3339)
-			}
-			roster.Participants = append(roster.Participants, p)
-		}
+		joinParticipant(roster, p.AgentID, p)
 		return s.writeRoster(sessionID, roster)
 	})
+}
+
+// JoinSelf is Join for a caller declaring information about its OWN
+// participant record, keyed preferentially on preferredID (the
+// corroborated CLAUDE_PID, DES-074) but tolerating legacyID (the
+// pre-DES-074 walk-derived PID) when an in-flight session's primary
+// participant was written before this fix and has not yet been rekeyed
+// by a fresh SessionStart. A session created after this fix already
+// keys its primary on preferredID; legacyID is consulted only as a
+// fallback, and only when preferredID matches nothing already on the
+// roster — never preferred over an existing preferredID match.
+//
+// Without this, a caller resolving "myself" via the new preferredID
+// would find no existing record for an in-flight legacy-keyed session
+// and file a SECOND participant for the same physical process rather
+// than updating the one already there (round 2 finding: iam/whoami
+// against an in-flight pre-upgrade session either hard-failed to find a
+// participant, in read paths, or silently duplicated one, in this write
+// path). The check and the write happen under the same lock Join uses,
+// so "which key already exists" and the update are atomic.
+func (s *Store) JoinSelf(sessionID, preferredID, legacyID string, p Participant) error {
+	return s.withLock(sessionID, func() error {
+		roster, err := s.Load(sessionID)
+		if err != nil {
+			return err
+		}
+		key := preferredID
+		if legacyID != "" && legacyID != preferredID &&
+			roster.FindParticipant(preferredID) == nil &&
+			roster.FindParticipant(legacyID) != nil {
+			key = legacyID
+		}
+		joinParticipant(roster, key, p)
+		return s.writeRoster(sessionID, roster)
+	})
+}
+
+// joinParticipant updates the roster's existing participant at key, or
+// appends p (keyed on key) when none exists. Shared by Join and JoinSelf,
+// which differ only in how key is chosen.
+func joinParticipant(roster *Roster, key string, p Participant) {
+	if existing := roster.FindParticipant(key); existing != nil {
+		if p.Persona != "" {
+			existing.Persona = p.Persona
+		}
+		if p.AgentType != "" {
+			existing.AgentType = p.AgentType
+		}
+		if p.Parent != "" {
+			existing.Parent = p.Parent
+		}
+		if p.Ext != nil {
+			existing.Ext = p.Ext
+		}
+		return
+	}
+	p.AgentID = key
+	if p.Joined == "" {
+		p.Joined = time.Now().UTC().Format(time.RFC3339)
+	}
+	roster.Participants = append(roster.Participants, p)
 }
 
 // Leave removes a participant from a session roster.
@@ -500,23 +543,98 @@ func (s *Store) PurgeCurrent() ([]string, error) {
 
 // WriteCurrentSession writes the session ID to a PID-keyed file so
 // descendant processes can discover the session.
+//
+// Written via a temp file + rename, not a direct os.WriteFile: a plain
+// truncate-then-write leaves a window where a concurrent
+// ReadCurrentSession sees a zero-byte (or partially written) file — not
+// an error, since the read succeeds, but not the session id either. The
+// old fallback code tolerated that silently; DES-074's fail-loud
+// contract cannot, because a blank-but-successful read is
+// indistinguishable from "no session" and would take the silent branch
+// under Claude Code, reintroducing the exact wrong-answer-with-exit-0
+// shape this decision closes, through a narrower door (round 2, R1/R1b).
+// Rename is atomic on the same filesystem, so a reader never observes a
+// partial write — only the old content or the new content, never
+// neither.
 func (s *Store) WriteCurrentSession(claudePID, sessionID string) error {
+	// Mission 005 finding E: neither argument was validated. A blank
+	// sessionID produced a permanently blank pointer file at exit 0 (the
+	// reader already treats blank as an error, per ReadCurrentSession's own
+	// doc comment, but nothing stopped the writer from creating that state
+	// in the first place). A blank claudePID is worse: filepath.Base("")
+	// returns ".", so dest would resolve to the current-session directory
+	// itself rather than a file inside it.
+	if strings.TrimSpace(claudePID) == "" {
+		return fmt.Errorf("writing current-session pointer: claudePID must not be blank")
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("writing current-session pointer: sessionID must not be blank")
+	}
 	dir := s.currentDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating current directory: %w", err)
 	}
-	path := filepath.Join(dir, filepath.Base(claudePID))
-	return os.WriteFile(path, []byte(sessionID+"\n"), 0o600)
+	dest := filepath.Join(dir, filepath.Base(claudePID))
+	tmp, err := os.CreateTemp(dir, "current-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp current-session file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	payload := sessionID + "\n"
+	// os.File.Write already guarantees io.ErrShortWrite on a short write,
+	// so the err check above is sufficient on its own — but writeRoster
+	// below carries an explicit n < len(data) check, and the asymmetry
+	// invites the question a reviewer already asked once. Belt-and-braces
+	// over os.File's own guarantee, matching writeRoster's shape exactly.
+	if n, err := tmp.WriteString(payload); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("writing temp current-session file %s: %w", tmpPath, err)
+	} else if n < len(payload) {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("short write to temp current-session file %s: %d of %d bytes", tmpPath, n, len(payload))
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp current-session file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("syncing temp current-session file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("closing temp current-session file %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("renaming temp current-session file %s -> %s: %w", tmpPath, dest, err)
+	}
+	return nil
 }
 
-// ReadCurrentSession reads the session ID from a PID-keyed file.
+// ReadCurrentSession reads the session ID from a PID-keyed file. A blank
+// (empty or whitespace-only) result is treated the same as a missing
+// file — an error, not a successful empty read — so a caller's own
+// "not found" handling covers it uniformly. Without this, a zero-byte
+// file (a crash or a non-atomic writer mid-write, round 2 R1) reads as
+// ("", nil): a silent, successful-looking absence indistinguishable
+// from "no session," which is precisely the wrong-answer-with-exit-0
+// shape DES-074 exists to close.
 func (s *Store) ReadCurrentSession(claudePID string) (string, error) {
 	path := filepath.Join(s.currentDir(), filepath.Base(claudePID))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("no current session for PID %s: %w", claudePID, err)
 	}
-	return strings.TrimSpace(string(data)), nil
+	sid := strings.TrimSpace(string(data))
+	if sid == "" {
+		return "", fmt.Errorf("no current session for PID %s: current-session file %s is blank", claudePID, path)
+	}
+	return sid, nil
 }
 
 // DeleteCurrentSession removes the PID-keyed session file.

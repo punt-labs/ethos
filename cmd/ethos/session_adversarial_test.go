@@ -15,10 +15,14 @@ import (
 )
 
 // TestCLI_Session_NonexistentRoster pins behavior when ETHOS_SESSION names
-// a well-formed but nonexistent session. The hard-chain consumers (iam,
-// session show) fail visibly; whoami — the soft standalone path — falls
-// back to the git/OS identity rather than crashing or resolving a wrong
-// global persona.
+// a well-formed but nonexistent session. Every consumer — iam, session
+// show, and whoami alike — fails visibly. Before DES-074, whoami was the
+// one "soft" exception: it silently fell back to the git/OS identity here,
+// exactly the wrong-answer-with-exit-0 shape DES-074 was written to close
+// ("an ended session" is one of its three measured cases) — an explicit
+// ETHOS_SESSION is "a session was expected" regardless of which command
+// asked, so a session that does not check out is now loud everywhere, not
+// just on the hard chain.
 func TestCLI_Session_NonexistentRoster(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -41,12 +45,15 @@ func TestCLI_Session_NonexistentRoster(t *testing.T) {
 		filepath.Join(se.home, ".punt-labs", "ethos", "sessions", "deadbeefdeadbeefdeadbeefdeadbeef.yaml"),
 		"a failed iam must not create the roster")
 
-	// whoami is soft: a bogus session is treated as "no resolvable
-	// session", falling to the USER identity — exit 0, not a crash, not a
-	// wrong global persona.
-	stdout, _, code := runCLI(t, sh, "whoami")
-	require.Equal(t, 0, code, "whoami must not fail on a bogus session")
-	assert.Contains(t, stdout, "tester", "whoami falls back to the git/OS identity")
+	// whoami: an explicitly-declared but bogus session is a wrong-answer
+	// risk, not an absence (DES-074) — it fails the same way iam and
+	// session show do, not a crash and not a silently substituted global
+	// persona.
+	_, stderr, code = runCLI(t, sh, "whoami")
+	require.NotEqual(t, 0, code, "whoami must fail on a bogus explicit session")
+	assert.Contains(t, stderr, "not found")
+	assert.NotContains(t, stderr, "ethos: ethos:",
+		"the top-level error printer adds the \"ethos: \" prefix once; resolve.ErrNoSession must not add its own copy (round 2 finding)")
 }
 
 // TestCLI_Session_MalformedID_NoTraversal proves the roster path is built

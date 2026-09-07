@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,142 @@ func TestHandleSubagentStart_PersonaBlock(t *testing.T) {
 	assert.Contains(t, ctx, "go-specialist")
 	assert.Contains(t, ctx, "You report to Claude Agento (claude).")
 	assert.Equal(t, "SubagentStart", result.HookSpecificOutput.HookEventName)
+}
+
+// TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary pins the
+// round 2 finding: a session created before DES-074 keys its primary
+// participant on process.LegacyClaudePID (the walk-derived PID). A NEW
+// subagent spawned against that in-flight session after the fix deploys
+// sets its own Parent field from the current process.FindClaudePID
+// (CLAUDE_PID, corroborated) — a DIFFERENT value — so resolveParentLine
+// must also try the legacy key before giving up on "You report to ...".
+func TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+
+	// BuildPersonaBlock (and so the "You report to ..." line it carries)
+	// only fires when the identity has personality or writing-style
+	// content — give bwk a minimal personality so this test reaches the
+	// parent-line resolution it's actually about.
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n\n- Simplicity first",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Brian K", Handle: "bwk", Kind: "agent", Personality: "kernighan",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Claude Agento", Handle: "claude", Kind: "agent",
+	}))
+
+	// Force a live, corroborating CLAUDE_PID distinct from the walk
+	// result: our GRANDPARENT, not our immediate parent, since in an
+	// environment with no real "claude" ancestor (CI, a detached process)
+	// the walk's own fallback is exactly os.Getppid() (see resolve.
+	// TestResolve_ToleratesLegacyKeyedParticipant for the same trick).
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+	legacyPID := process.LegacyClaudePID()
+	preferredPID := process.FindClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	// The primary participant is keyed on the LEGACY PID, as a
+	// pre-DES-074 SessionStart would have written it.
+	require.NoError(t, ss.Create("sub-test-legacy",
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: legacyPID, Persona: "claude"},
+		"", "",
+	))
+
+	payload := `{
+		"agent_id": "sub-1",
+		"agent_type": "bwk",
+		"session_id": "sub-test-legacy"
+	}`
+
+	out := captureSubagentStartOutput(t, payload, s, ss)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "You report to Claude Agento (claude).",
+		"must resolve the parent line via the legacy-keyed primary participant")
+}
+
+// TestHandleSubagentStart_ParentLine_PreferredWinsOverEarlierLegacy pins
+// the mission 005 finding B: resolveParentLine must scan ALL participants
+// for the preferred key BEFORE ever falling back to the legacy key — a
+// single loop testing both keys per participant, in roster order, would
+// let a legacy-keyed participant appearing EARLIER in the roster win over
+// a correct, preferred-keyed one appearing later. The predecessor test
+// (ToleratesLegacyKeyedPrimary, above) builds a roster with NO
+// preferred-keyed participant at all, so it cannot catch this: the
+// fallback firing and the fallback WINNING when it should not both look
+// identical to that test. This one puts a stale legacy-keyed record
+// first and the correct, current, preferred-keyed record second, and
+// requires the SECOND (correct) one to win.
+func TestHandleSubagentStart_ParentLine_PreferredWinsOverEarlierLegacy(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n\n- Simplicity first",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Brian K", Handle: "bwk", Kind: "agent", Personality: "kernighan",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Claude Agento", Handle: "claude", Kind: "agent",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Stale Ghost", Handle: "stale-ghost", Kind: "agent",
+	}))
+
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+	legacyPID := process.LegacyClaudePID()
+	preferredPID := process.FindClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	// The STALE legacy-keyed record comes FIRST in participant order; the
+	// CORRECT, current, preferred-keyed record comes second. A single-pass
+	// loop testing both keys per participant would return "stale-ghost"
+	// here, since it is encountered first and matches on its own pass.
+	require.NoError(t, ss.Create("sub-test-order",
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: legacyPID, Persona: "stale-ghost"},
+		"", "",
+	))
+	require.NoError(t, ss.Join("sub-test-order", session.Participant{
+		AgentID: preferredPID, Persona: "claude",
+	}))
+
+	payload := `{
+		"agent_id": "sub-1",
+		"agent_type": "bwk",
+		"session_id": "sub-test-order"
+	}`
+
+	out := captureSubagentStartOutput(t, payload, s, ss)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "You report to Claude Agento (claude).",
+		"the correct, preferred-keyed participant must win regardless of roster order")
+	assert.NotContains(t, ctx, "Stale Ghost",
+		"a stale legacy-keyed participant appearing earlier must never beat the correct preferred-keyed one")
 }
 
 func TestHandleSubagentStart_WithExtensions(t *testing.T) {

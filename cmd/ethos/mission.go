@@ -123,8 +123,8 @@ func warnIfGlobalFallback(repoRoot string) {
 // (ad-hoc CLI, tests).
 func currentSessionIDBestEffort() string {
 	ss := sessionStore()
-	sid, source := resolve.SessionID(ss)
-	if sid == "" {
+	sid, source, err := resolve.SessionID(ss)
+	if err != nil {
 		return ""
 	}
 	// A non-empty ETHOS_SESSION that names no loadable roster would

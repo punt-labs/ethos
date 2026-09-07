@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -60,7 +61,16 @@ type RepoConfig struct {
 func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 	// Step 1: check for iam declaration via process tree.
 	if ss != nil {
-		sp := resolveFromSession(ss)
+		sp, err := resolveFromSession(ss)
+		if err != nil {
+			// A session WAS expected here — running under Claude Code, or
+			// an explicit ETHOS_SESSION/pointer file resolved an ID — but
+			// something about it did not check out (unidentifiable,
+			// unreadable roster, no matching participant). DES-074: this
+			// is the wrong-answer risk, not an absence, so it must not
+			// fall through to git/OS.
+			return "", err
+		}
 		if sp.found {
 			if sp.handle != "" {
 				return sp.handle, nil
@@ -131,65 +141,337 @@ type sessionPersona struct {
 
 // SessionSourceEnv is the source SessionID reports when the ID came from
 // ETHOS_SESSION (an explicit, caller-supplied anchor that consumers verify),
-// as opposed to the Claude process-tree walk.
+// as opposed to the corroborated CLAUDE_PID pointer file (SessionSourcePID).
 const SessionSourceEnv = "env"
 
+// SessionSourcePID is the source SessionID reports when the ID came from
+// the pointer file keyed on a corroborated CLAUDE_PID. Named for the
+// mechanism that actually resolves it — no fallback to the topmost-ancestor
+// walk remains in this path (review finding, PR #502) — rather than the
+// pre-fix "walk", which described a mechanism this function no longer uses.
+const SessionSourcePID = "pid"
+
+// ErrNoSession is returned by SessionID and resolveFromSession when a
+// session WAS expected — running under Claude Code (see
+// process.UnderClaudeCode), or an explicit ETHOS_SESSION was set — but
+// could not be identified: the env value is present but uncorroborated,
+// the pointer file is missing, or the named roster is unreadable or has no
+// matching participant. It names the remedy so a caller that requires a
+// session (iam, mission claim/release) can fail loud with a non-zero exit
+// instead of silently defaulting to some other identity (operator ruling
+// 2026-09-07, DES-074): a mechanism is reliable or it raises a clear error
+// with a hint.
+//
+// It is deliberately NOT returned for the other, unremarkable failure
+// state: not running under Claude Code at all (headless, CI, SDK, a plain
+// terminal) — SessionID returns ErrNotUnderClaudeCode for that instead, a
+// second, distinct sentinel (round 2: two independent reviewers found
+// callers pattern-matching on `err == nil` alone to mean "resolved,"
+// which silently accepted an empty id whenever the first sentinel-less
+// design returned (id="", err=nil) — the third outcome was reconstructible
+// only from a nil error PLUS an empty string, and at least three callers
+// missed the second half of that check). Conflating "no session at all"
+// with "a session was expected but broken" was itself a defect DES-074
+// names explicitly: "no session" and "this git user" are different
+// answers and must not be returned interchangeably, but neither may a CI
+// run's total absence of a Claude Code session be treated as an alarming,
+// loud failure.
+// The message carries no "ethos: " prefix — cmd/ethos's top-level error
+// printer adds that once; prefixing it here doubled it to "ethos: ethos:
+// ..." (Bugbot/team-lead HIGH, round 2).
+//
+// The base message names only the failure, not a remedy (mission 005
+// finding G): "set ETHOS_SESSION=<id>, or run `ethos session start`" was
+// verified inert against this specific error's two sub-cases.
+// `ethos session start` (cmd/ethos/session.go's runSessionStart) creates a
+// roster and prints an `export ETHOS_SESSION=...` line to stdout — it
+// never calls session.Store.WriteCurrentSession, so it cannot repair a
+// broken pointer file, and its own output reaches nothing unless the
+// caller evaluates it (`eval "$(ethos session start)"`), which fixes only
+// that one shell's environment, never a process Claude Code spawned
+// (which inherits Claude Code's environment, not the terminal's). Naming
+// a remedy that does not remedy costs the reader a retry cycle before
+// they learn to distrust the message, so each call site below composes
+// its own sub-case-specific advice instead — see restartPointerRemedy and
+// deadRosterRemedy.
+var ErrNoSession = errors.New("cannot identify the calling session")
+
+// restartPointerRemedy is ErrNoSession's remedy for its dominant sub-case:
+// the session-current pointer file is missing, blank, or otherwise
+// unreadable (SessionID's own failure path). Restarting the Claude Code
+// session (or running /clear) makes SessionStart fire again, which is the
+// only thing that calls session.Store.WriteCurrentSession — `ethos
+// session start` alone does not.
+const restartPointerRemedy = "restart the Claude Code session (or run /clear) so SessionStart re-establishes the session pointer; " +
+	"the direct, non-interactive equivalent is `ethos session write-current --pid <pid> --session <id>`"
+
+// uncorroboratedPIDRemedy is ErrNoSession's remedy for the sub-case where
+// CLAUDE_PID itself is absent or fails corroboration: there is no key to
+// look a session pointer up by at all, so restartPointerRemedy's advice
+// (re-run SessionStart) does not apply until the underlying cause — an
+// older Claude Code harness (pre-2.1.234) or a genuinely broken ancestry —
+// is fixed. Falling back to the topmost-ancestor walk here would key the
+// lookup on the shared "claude daemon run" PID every concurrent session on
+// the host collides on — precisely the collision DES-074 exists to close
+// (review finding, PR #502) — so this case is reported as unresolvable
+// rather than resolved via that shared key.
+const uncorroboratedPIDRemedy = "CLAUDE_PID is absent or could not be corroborated as a live ancestor of this process; " +
+	"upgrade to Claude Code 2.1.234+ if this is an older harness, or set ETHOS_SESSION=<id> directly"
+
+// deadRosterRemedy is ErrNoSession's remedy for its other sub-case: an
+// explicit ETHOS_SESSION (or a resolved pointer) names a session ID whose
+// roster no longer exists on disk. Unlike restartPointerRemedy, there is
+// no Claude Code hook to re-fire here — the caller supplied (or the
+// pointer named) an ID that is simply gone. `eval "$(ethos session
+// start)"` mints a fresh one and sets it in the CALLING shell, but the
+// eval is mandatory: the bare command only prints the export, and even
+// with eval this fixes only that shell's own environment, never a process
+// Claude Code spawned.
+const deadRosterRemedy = "run `eval \"$(ethos session start)\"` in your shell to mint a fresh session " +
+	"(the eval is required; this does not help a process Claude Code spawned, which inherits Claude Code's own environment, not the shell's)"
+
+// ErrNotUnderClaudeCode is returned by SessionID when no session was ever
+// expected: not running under Claude Code at all (headless, CI, SDK, a
+// plain terminal). This is the normal, unremarkable counterpart to
+// ErrNoSession — a caller for which a declared session is merely one of
+// several optional identity sources (resolve.Resolve's step 1 of 4)
+// treats this as "try the next source," never as a failure to report.
+//
+// Making this a distinct, named error rather than a silent (id="",
+// err=nil) pair closes a class of bug the round 2 review found three
+// instances of: a caller checking only `err == nil` to mean "resolved"
+// silently accepted an empty id for this case, because nil was ALSO what
+// success looked like. With this sentinel, `err == nil` means resolved,
+// full stop; every other outcome — this one included — is a distinct,
+// named, non-nil error a caller must consciously unwrap with errors.Is.
+var ErrNotUnderClaudeCode = errors.New("not running under Claude Code")
+
+// UnderClaudeCode indirects process.UnderClaudeCode — the DES-074 "was a
+// session expected" signal — behind a package variable rather than a
+// direct call, so tests across every consumer package can override it
+// deterministically. Unlike CLAUDE_PID/CLAUDECODE, a real claude ancestor
+// process cannot be un-set with t.Setenv: this whole suite (and its
+// consumers' test suites) normally runs INSIDE a live Claude Code session,
+// where process.UnderClaudeCode's ancestor-walk check is unavoidably true
+// regardless of which env vars a test strips. A test that wants the
+// "genuinely no session expected" branch overrides this var instead.
+var UnderClaudeCode = process.UnderClaudeCode
+
+// pointerRetryAttempts and pointerRetryDelay bound the retry SessionID
+// applies to a missing pointer file when running under Claude Code: a
+// consumer can start before SessionStart finishes writing it (DES-074
+// point 5, ported from biff session_id.py's _RESOLVE_ATTEMPTS /
+// _RESOLVE_DELAY_S — SessionStart fires before an MCP client connects;
+// the retry is a safety net for that race, not the common case). The
+// retry never fires when not under Claude Code at all — there
+// SessionStart never ran and never will, so retrying would only add
+// latency to the common no-session case (CI, scripts) for no benefit.
+// pointerRetryAttempts is a var, not a const, so a test can drive it to 1
+// (or 0) and prove retryReadCurrentSession's err/id invariant holds
+// structurally rather than merely at the shipped value of 10 (mission
+// 005 finding D).
+var (
+	pointerRetryAttempts = 10
+	pointerRetryDelay    = 50 * time.Millisecond
+)
+
 // SessionID resolves the active session ID using the harness-neutral chain:
-// ETHOS_SESSION, then the Claude process-tree current-pointer. It returns
-// ("", "") when neither yields one, otherwise the ID and its source
-// (SessionSourceEnv or "walk"). The source lets a caller apply the
-// verification an explicit env anchor warrants without re-reading the
-// environment. Callers that accept an explicit session (a --session flag or
-// an MCP session_id arg) check that first and bypass this (DES-061).
-func SessionID(ss *session.Store) (id, source string) {
-	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
-		return sid, SessionSourceEnv
+// ETHOS_SESSION, then the pointer file keyed on a corroborated CLAUDE_PID.
+//
+// Three outcomes (DES-074), and err == nil if and only if id != "" — a
+// caller may trust `err == nil` alone to mean "resolved, id is valid,"
+// full stop (round 2: two of the three outcomes used to share err == nil,
+// and at least three callers pattern-matched on the error alone, silently
+// accepting an empty id for the "no session" case):
+//   - id != "", err == nil: resolved. source names SessionSourceEnv or
+//     SessionSourcePID.
+//   - id == "", err == ErrNotUnderClaudeCode: not running under Claude Code
+//     at all (headless, CI, SDK, a plain terminal) — a normal state. No
+//     session was ever expected; callers may silently try another
+//     identity source.
+//   - id == "", errors.Is(err, ErrNoSession): a session WAS expected
+//     (running under Claude Code, per process.UnderClaudeCode) but could
+//     not be identified. Callers must fail loud with a non-zero exit and
+//     must NOT substitute another identity source.
+//
+// Deliberately does NOT fall back to the topmost-ancestor walk
+// (process.FindClaudePID's own fallback) when CLAUDE_PID is absent or fails
+// corroboration: that walk returns the shared "claude daemon run" PID every
+// concurrent Claude Code session on a host collides on, which would key
+// this lookup on an unrelated session's pointer and resolve a plausible but
+// WRONG session — precisely the collision this decision exists to close,
+// reachable through an older harness, a transient process-table failure, or
+// ancestry deeper than the walk's own depth cap (review finding, PR #502).
+// process.LegacyClaudePID's walk remains legitimate for participant-roster
+// tolerance (resolveFromSession below) and for process.UnderClaudeCode's own
+// presence check, neither of which shares this function's wrong-answer risk.
+//
+// Callers that accept an explicit session (a --session flag or an MCP
+// session_id arg) check that first and bypass this (DES-061).
+func SessionID(ss *session.Store) (id, source string, err error) {
+	// TrimSpace, not a bare non-empty check (mission 005 finding E): an
+	// env value of all whitespace is not a session ID any more than an
+	// empty string is, but `sid != ""` alone would have accepted it and
+	// handed a caller a garbage ID to look up.
+	if sid := strings.TrimSpace(os.Getenv("ETHOS_SESSION")); sid != "" {
+		return sid, SessionSourceEnv, nil
 	}
-	sid, err := ss.ReadCurrentSession(process.FindClaudePID())
-	if err != nil {
-		return "", ""
+
+	if !UnderClaudeCode() {
+		return "", "", ErrNotUnderClaudeCode
 	}
-	return sid, "walk"
+
+	pid, ok := process.ClaudePIDFromEnvCorroborated()
+	if !ok {
+		// A session WAS expected (UnderClaudeCode is true) but there is no
+		// key this call can trust to look a pointer file up by. See the
+		// function doc: falling back to the walk here would re-key on the
+		// shared daemon PID, not report a wrong-answer risk as unresolvable.
+		return "", "", fmt.Errorf("%w: %s", ErrNoSession, uncorroboratedPIDRemedy)
+	}
+
+	sid, rerr := ss.ReadCurrentSession(pid)
+	if rerr != nil && errors.Is(rerr, os.ErrNotExist) {
+		// Retry ONLY the startup race the retry exists for: a consumer
+		// running before SessionStart finishes writing the pointer file
+		// (DES-074 point 5). Every other failure -- permission denied, "is
+		// a directory," a blank-file read -- is deterministic, not a race:
+		// WriteCurrentSession's atomic temp+rename discipline (mission 005
+		// finding E) means a blank pointer can no longer be observed
+		// mid-write, so retrying it (or any other non-ErrNotExist cause)
+		// just spends ~450ms re-deriving the identical failure before
+		// reporting it (Copilot finding, PR #502).
+		sid, rerr = retryReadCurrentSession(ss, pid, rerr)
+	}
+	if rerr != nil {
+		// Wrap rerr and append restartPointerRemedy rather than returning
+		// the bare ErrNoSession sentinel: the real cause (a permission
+		// error or a corrupt file is DIFFERENT from an ordinary missing
+		// pointer, and the retry above already confirmed there is no
+		// pointer to find) must stay visible (round 2, R6), and the
+		// remedy must actually be the one that fixes THIS sub-case — a
+		// broken or absent pointer file, repaired only by a fresh
+		// SessionStart (mission 005 finding G). errors.Is(err, ErrNoSession)
+		// still holds for every caller that checks it, since %w preserves
+		// the chain.
+		return "", "", fmt.Errorf("%w: %s (%v)", ErrNoSession, restartPointerRemedy, rerr)
+	}
+	return sid, SessionSourcePID, nil
+}
+
+// retryReadCurrentSession re-reads the PID-keyed pointer file a few times
+// with a short delay, covering the startup race where a consumer runs
+// before SessionStart finishes writing it. The caller gates entry on
+// errors.Is(firstErr, os.ErrNotExist) — this function does not re-check
+// that itself, since it exists only to cover that one race, not to decide
+// whether retrying is warranted (Copilot finding, PR #502: retrying a
+// deterministic error like EACCES or a blank-file read just re-derives the
+// identical cause ~450ms later). firstErr is the error from the read that
+// triggered the retry; it seeds lastErr so that a zero-iteration loop
+// (pointerRetryAttempts <= 1) still returns a non-nil error instead of
+// silently reporting ("", nil) — SessionID's err/id invariant must hold
+// regardless of how many retries the constant configures, not merely at
+// its current value of 10 (mission 005 finding D).
+func retryReadCurrentSession(ss *session.Store, pid string, firstErr error) (string, error) {
+	lastErr := firstErr
+	for i := 0; i < pointerRetryAttempts-1; i++ {
+		time.Sleep(pointerRetryDelay)
+		sid, err := ss.ReadCurrentSession(pid)
+		if err == nil {
+			return sid, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
 }
 
 // resolveFromSession resolves the session via the harness-neutral chain
-// (ETHOS_SESSION, then the Claude PID walk), then returns the caller's
-// persona from the roster. The caller's participant is keyed on
+// (ETHOS_SESSION, then the corroborated-CLAUDE_PID pointer), then returns
+// the caller's persona from the roster. The caller's participant is keyed on
 // ETHOS_AGENT_ID when set — matching how iam records it on both the CLI
-// and MCP surfaces — else on the Claude PID. Returns found=false if no
-// session or no matching participant. Returns found=true with empty handle
-// if the participant exists but has no persona configured — callers must
-// not fall through to git/OS.
-func resolveFromSession(ss *session.Store) sessionPersona {
-	sessionID, source := SessionID(ss)
-	if sessionID == "" {
-		return sessionPersona{}
-	}
-	roster, err := ss.Load(sessionID)
+// and MCP surfaces — else on the Claude PID.
+//
+// Returns (sessionPersona{}, nil) — silently try the next identity
+// source — in two cases: no session was ever expected (not running
+// under Claude Code at all), or a session resolved and its roster
+// loaded, but this caller is not a declared participant in it. The
+// latter is the ordinary state for any process that has not run `iam`
+// yet, not a wrong-answer risk (round 2, R3 — binding ruling: "a
+// participant miss is NOT fatal; only an unresolvable session is").
+// Returns a non-nil error — always ErrNoSession or wrapping it — only
+// when the SESSION itself does not check out: unidentifiable, or a
+// roster that fails to load (deleted, unreadable). These are two of the
+// three ways DES-074 measured this mechanism producing "a plausible
+// wrong answer with exit status 0" — "an ended session" and, before
+// CLAUDE_PID keying, "the wrong repo" (a misspelled persona is the
+// third, already surfaced downstream when the caller loads the returned
+// handle, not a resolveFromSession concern). Returns found=true with
+// empty handle if the participant exists but has no persona configured
+// — the caller must not fall through to git/OS for that case either,
+// since a declared-but-personaless participant is an explicit "no
+// identity," not an absence.
+func resolveFromSession(ss *session.Store) (sessionPersona, error) {
+	sessionID, source, err := SessionID(ss)
 	if err != nil {
-		// A roster named explicitly by ETHOS_SESSION that exists but fails
-		// to parse is a real error — warn rather than silently answering
-		// with the git/OS identity. A not-found session is the soft
-		// no-session contract and stays silent.
-		if source == SessionSourceEnv && !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "ethos: warning: ETHOS_SESSION %q names an unreadable roster: %v\n", sessionID, err)
+		if errors.Is(err, ErrNotUnderClaudeCode) {
+			// A legitimate absence, not a wrong-answer risk: translate to
+			// this function's own "try the next identity source" contract
+			// rather than propagating SessionID's sentinel outward.
+			return sessionPersona{}, nil
 		}
-		return sessionPersona{}
+		return sessionPersona{}, err
+	}
+	roster, lErr := ss.Load(sessionID)
+	if lErr != nil {
+		// The session ID itself resolved, but no roster exists for it — a
+		// dead reference, not a broken pointer, so the remedy differs
+		// (mission 005 finding G): an explicit ETHOS_SESSION named an ID
+		// that is simply gone (deadRosterRemedy); a resolved pointer
+		// naming a deleted roster is repaired the same way a broken
+		// pointer is, by a fresh SessionStart (restartPointerRemedy).
+		remedy := restartPointerRemedy
+		if source == SessionSourceEnv {
+			remedy = deadRosterRemedy
+		}
+		if errors.Is(lErr, os.ErrNotExist) {
+			return sessionPersona{}, fmt.Errorf("session %q not found: %w: %s", sessionID, ErrNoSession, remedy)
+		}
+		return sessionPersona{}, fmt.Errorf("session %q has an unreadable roster (%v): %w: %s", sessionID, lErr, ErrNoSession, remedy)
 	}
 	agentID := os.Getenv("ETHOS_AGENT_ID")
-	if agentID == "" {
+	selfKeyed := agentID == ""
+	if selfKeyed {
 		agentID = process.FindClaudePID()
 	}
 	p := roster.FindParticipant(agentID)
+	if p == nil && selfKeyed {
+		// A session's primary participant written before DES-074 is keyed
+		// on the walk-derived PID, not the corroborated CLAUDE_PID this
+		// caller just resolved — an in-flight session at upgrade time
+		// would otherwise show "no participant matching" until it ends
+		// (round 2 finding). Tolerate the legacy key as a fallback; an
+		// explicit ETHOS_AGENT_ID is never subject to this — that value is
+		// exact by the caller's own declaration, not a guess to widen.
+		if legacy := process.LegacyClaudePID(); legacy != agentID {
+			p = roster.FindParticipant(legacy)
+		}
+	}
 	if p == nil {
-		return sessionPersona{}
+		// RULING (round 2, R3, binding): a participant miss is NOT fatal;
+		// only an unresolvable SESSION is. The session itself resolved
+		// fine (a real roster loaded) — this caller simply is not a
+		// declared participant in it, which is the ordinary state for
+		// any process that has not run `iam` yet, not a wrong-answer
+		// risk. Silently try the next identity source, exactly like "not
+		// running under Claude Code at all."
+		return sessionPersona{}, nil
 	}
 	// Participant found. If persona is empty, that's an explicit
 	// "no persona configured" — not "try git/OS instead."
 	if p.Persona == "" {
-		return sessionPersona{found: true}
+		return sessionPersona{found: true}, nil
 	}
-	return sessionPersona{handle: p.Persona, found: true}
+	return sessionPersona{handle: p.Persona, found: true}, nil
 }
 
 // FindRepoEthosRoot returns the path to .punt-labs/ethos/ for the repo the

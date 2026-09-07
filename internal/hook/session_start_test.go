@@ -6,11 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -197,6 +200,84 @@ func TestHandleSessionStart_NoPersonality_FallsBack(t *testing.T) {
 	// Should fall back to one-line format.
 	assert.Contains(t, ctx, "Active identity: Bob (bob)")
 	assert.NotContains(t, ctx, "## Personality")
+}
+
+// TestHandleSessionStart_ResolvesIdentityWithoutRetryLatency pins round
+// 2, R2: at SessionStart, no session (pointer file or roster) can exist
+// yet for this exact invocation — it is what would create one.
+// resolveHumanIdentity must resolve the human's git/OS identity directly
+// (bypassing the session-lookup step, which is a structural, guaranteed
+// miss here, not a signal), not pay DES-074's bounded retry for a
+// pointer file that provably cannot exist and then degrade to the bare
+// OS username. Forces resolve.UnderClaudeCode true — the real condition
+// at SessionStart — and bounds the whole call well under one retry
+// attempt's delay.
+func TestHandleSessionStart_ResolvesIdentityWithoutRetryLatency(t *testing.T) {
+	id := &identity.Identity{Name: "Bob", Handle: "bob", Kind: "human"}
+	s, ss := setupIdentityWithAttributes(t, id, "", "")
+	isolateGitConfig(t, "bob")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	start := time.Now()
+	out := captureSessionStartOutput(t, `{"session_id": "s-r2-timing"}`, SessionStartDeps{Store: s, Sessions: ss})
+	elapsed := time.Since(start)
+
+	// The bound is generous (a single retry attempt alone costs
+	// pointerRetryDelay=50ms; a full suite run under -race/parallel load
+	// can add tens of ms of scheduling noise on its own) but still tight
+	// enough that ANY retry firing at all would trip it several times
+	// over, which is all this assertion needs to prove.
+	assert.Less(t, elapsed, 200*time.Millisecond,
+		"must not pay the pointer-file retry latency resolving identity at SessionStart")
+
+	var result SessionStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Contains(t, result.HookSpecificOutput.AdditionalContext, "Active identity: Bob (bob)",
+		"must resolve via git/OS, not degrade to a fallback that lost the real identity")
+}
+
+// TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey pins the
+// invariant the whole pointer-file mechanism depends on: SessionStart's
+// WRITE key (process.FindClaudePID() at the moment it calls
+// WriteCurrentSession) and a LATER call's READ key (a subsequent tool
+// call resolving resolve.SessionID against the same store) must agree,
+// or nothing ever resolves. This was previously only assumed from
+// observing CLAUDE_PID's documented lifetime (set once by Claude Code at
+// process spawn, inherited by every subprocess of that session), never
+// demonstrated by a test running the real write path and a real,
+// separate read path against the same environment.
+func TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey(t *testing.T) {
+	id := &identity.Identity{Name: "Bob", Handle: "bob", Kind: "human"}
+	s, ss := setupIdentityWithAttributes(t, id, "", "")
+	isolateGitConfig(t, "bob")
+	t.Setenv("ETHOS_SESSION", "") // force the pointer-file path, not an ambient env
+	// This package's TestMain strips CLAUDE_PID and forces
+	// resolve.UnderClaudeCode false process-wide so its many other
+	// fixtures can simulate "genuinely no Claude Code in play". Both must
+	// be restored locally for this test: a corroborated CLAUDE_PID (a
+	// genuinely live ancestor) so SessionStart's write and SessionID's
+	// later read key on the same value, per the review finding that
+	// SessionID no longer trusts an uncorroborated walk-derived key.
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	sessionID := "s-key-agreement"
+	out := captureSessionStartOutput(t, `{"session_id": "`+sessionID+`"}`, SessionStartDeps{Store: s, Sessions: ss})
+	require.NotEmpty(t, out)
+
+	// A later, independent call -- standing in for a subsequent tool call
+	// or hook invocation in the same Claude Code session -- must resolve
+	// the SAME session SessionStart just wrote, via the harness-neutral
+	// chain every other consumer uses.
+	readID, source, err := resolve.SessionID(ss)
+	require.NoError(t, err)
+	assert.Equal(t, sessionID, readID,
+		"a later call's read key must resolve the session SessionStart's write key just created")
+	assert.Equal(t, resolve.SessionSourcePID, source)
 }
 
 func TestHandleSessionStart_NoIdentity_NoOutput(t *testing.T) {

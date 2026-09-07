@@ -206,15 +206,27 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 	// with the CLI so the same declaration records the same agent key on
 	// both surfaces (DES-061 R4).
 	agentID := os.Getenv("ETHOS_AGENT_ID")
-	if agentID == "" {
+	selfKeyed := agentID == ""
+	if selfKeyed {
 		agentID = process.FindClaudePID()
 	}
 
-	if err := h.sessionStore.Join(sessionID, session.Participant{
-		AgentID: agentID,
-		Persona: persona,
-	}); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
+	p := session.Participant{AgentID: agentID, Persona: persona}
+	var joinErr error
+	if selfKeyed {
+		// Tolerate a session that started before this fix and keyed its
+		// primary participant on the walk-derived PID instead of the new
+		// preferred CLAUDE_PID — a plain Join would find no match and
+		// file a duplicate participant for the same physical process
+		// rather than updating the one already there (round 2 finding).
+		// An explicit ETHOS_AGENT_ID is exact by the caller's own
+		// declaration and is never subject to this fallback.
+		joinErr = h.sessionStore.JoinSelf(sessionID, agentID, process.LegacyClaudePID(), p)
+	} else {
+		joinErr = h.sessionStore.Join(sessionID, p)
+	}
+	if joinErr != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", joinErr)), nil
 	}
 	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
 }
@@ -458,6 +470,15 @@ func (h *Handler) sessionTool() mcplib.Tool {
 // resolveSessionID discovers the session ID: the session_id arg, then the
 // shared harness-neutral chain (ETHOS_SESSION, then the Claude PID walk) —
 // parity with the CLI (DES-061 R4).
+//
+// Mission 005 finding A: this used to collapse resolve.SessionID's two
+// failure sentinels into one generic message, so a corrupt pointer file
+// (a session WAS expected, per resolve.ErrNoSession) was reported
+// identically to the ordinary case of genuinely running with no Claude
+// Code session at all (resolve.ErrNotUnderClaudeCode) — indistinguishable
+// to the caller, and to whoever debugs the report. Now surfaces the real
+// cause for the former while keeping the plain, actionable message for
+// the latter, mirroring cmd/ethos/iam.go's split.
 func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	sessionID := stringArg(req, "session_id", "")
 	if sessionID != "" {
@@ -466,10 +487,14 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	if h.sessionStore == nil {
 		return "", fmt.Errorf("session store not configured")
 	}
-	if sid, _ := resolve.SessionID(h.sessionStore); sid != "" {
+	sid, _, err := resolve.SessionID(h.sessionStore)
+	if err == nil {
 		return sid, nil
 	}
-	return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")
+	if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
+		return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")
+	}
+	return "", fmt.Errorf("no active session: %w", err)
 }
 
 func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {

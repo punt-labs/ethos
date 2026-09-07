@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 
@@ -636,6 +639,51 @@ func TestHandleSession_Iam(t *testing.T) {
 	assert.True(t, found, "expected participant with persona 'new-persona' in roster")
 }
 
+// TestHandleIam_UpdatesLegacyKeyedParticipant pins the round 2 finding at
+// the MCP wiring level: `iam` against a session created before DES-074
+// (primary participant keyed on process.LegacyClaudePID, the walk-derived
+// PID) must update that existing record, not file a second, duplicate
+// participant under the new preferred process.FindClaudePID key.
+func TestHandleIam_UpdatesLegacyKeyedParticipant(t *testing.T) {
+	h := testHandlerWithSession(t)
+	t.Setenv("ETHOS_AGENT_ID", "")
+	// Force a live, corroborating CLAUDE_PID distinct from the walk
+	// result: our GRANDPARENT, not our immediate parent, since in an
+	// environment with no real "claude" ancestor (CI, a detached process)
+	// the walk's own fallback is exactly os.Getppid() (see
+	// resolve.TestResolve_ToleratesLegacyKeyedParticipant for the same
+	// trick and why it is needed).
+	parentPID := os.Getppid()
+	grandparentPID, gpErr := process.ParentPID(parentPID)
+	require.NoError(t, gpErr, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+	legacyPID := process.LegacyClaudePID()
+	preferredPID := process.FindClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	require.NoError(t, h.sessionStore.Create("legacy-mcp-iam",
+		session.Participant{AgentID: "user1", Persona: "user1"},
+		session.Participant{AgentID: legacyPID, Persona: "old-persona"},
+		"", "",
+	))
+
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "iam",
+		"session_id": "legacy-mcp-iam",
+		"persona":    "new-persona",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	roster, err := h.sessionStore.Load("legacy-mcp-iam")
+	require.NoError(t, err)
+	require.Len(t, roster.Participants, 2, "must update the existing legacy-keyed record, not append a duplicate")
+	found := roster.FindParticipant(legacyPID)
+	require.NotNil(t, found, "the on-disk key is left as-is; only the fields update")
+	assert.Equal(t, "new-persona", found.Persona)
+}
+
 // TestResolveSessionID_HonorsEnv pins DES-061 R4: with no session_id arg,
 // the MCP surface resolves ETHOS_SESSION, matching the CLI.
 func TestResolveSessionID_HonorsEnv(t *testing.T) {
@@ -645,6 +693,48 @@ func TestResolveSessionID_HonorsEnv(t *testing.T) {
 	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
 	require.NoError(t, err)
 	assert.Equal(t, "env-mcp-session", sid, "resolveSessionID must honor ETHOS_SESSION")
+}
+
+// TestResolveSessionID_NeverReturnsEmptySidWithNilErr pins the round 2,
+// three-outcome-collapse finding: resolveSessionID's `if sid, _, err :=
+// resolve.SessionID(...); err == nil { return sid, nil }` used to be
+// reachable with sid=="" whenever SessionID's "not under Claude Code"
+// case shared err==nil with its "resolved" case. resolve.ErrNotUnderClaudeCode
+// closes that at the source, but this pins the observable contract
+// directly: with no session_id arg and no session in context,
+// resolveSessionID must return a non-nil error, never ("", nil).
+func TestResolveSessionID_NeverReturnsEmptySidWithNilErr(t *testing.T) {
+	h := testHandlerWithSession(t)
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return false }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
+	require.Error(t, err)
+	assert.Empty(t, sid)
+}
+
+// TestResolveSessionID_ReportsRealCauseUnderClaudeCode pins mission 005
+// finding A at this site: before this fix, resolveSessionID's loud
+// branch was reachable in shape but untested, and the sibling
+// silent-path message ("no active session; run `ethos session start`
+// or pass session_id") is generic enough that a caller reading it for
+// a genuine resolution failure (session expected, pointer file
+// corrupt or missing under Claude Code) would have no way to tell that
+// apart from the ordinary "nothing is running" case.
+func TestResolveSessionID_ReportsRealCauseUnderClaudeCode(t *testing.T) {
+	h := testHandlerWithSession(t)
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
+	require.Error(t, err)
+	assert.Empty(t, sid)
+	assert.Contains(t, err.Error(), "cannot identify the calling session",
+		"a session that was expected but unresolvable must name the real cause, not the generic absent-session text")
 }
 
 // TestHandleIam_HonorsAgentID pins DES-061 R4: the MCP iam handler keys the

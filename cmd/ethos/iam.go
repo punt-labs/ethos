@@ -21,10 +21,21 @@ func runIam(persona string) error {
 		return err
 	}
 	ss := sessionStore()
-	if err := ss.Join(sessionID, session.Participant{
-		AgentID: agentID,
-		Persona: persona,
-	}); err != nil {
+	p := session.Participant{AgentID: agentID, Persona: persona}
+	if os.Getenv("ETHOS_AGENT_ID") == "" {
+		// agentID is self-keyed on process.FindClaudePID(). Tolerate a
+		// session that started before this fix and keyed its primary
+		// participant on the walk-derived PID instead: a plain Join would
+		// find no match under the new key and file a second, duplicate
+		// participant for the same physical process rather than updating
+		// the one already there (round 2 finding). An explicit
+		// ETHOS_AGENT_ID (the else branch, via plain Join) is exact by the
+		// caller's own declaration and is never subject to this fallback.
+		err = ss.JoinSelf(sessionID, agentID, process.LegacyClaudePID(), p)
+	} else {
+		err = ss.Join(sessionID, p)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -66,6 +77,28 @@ func resolveHardSession(explicit string) (sessionID, agentID string, err error) 
 // gone" is success there, handled by the caller.
 //
 // agentID keys the participant: ETHOS_AGENT_ID if set, else the Claude PID.
+//
+// resolve.SessionID (step 3) returns one of three outcomes, and this
+// function's switch handles all three differently — mission 005 finding
+// C: nil error does NOT mean "genuinely no session"; it means resolved.
+// The three outcomes are:
+//   - nil error: resolved. sessionID is set from sid (case serr == nil).
+//   - resolve.ErrNotUnderClaudeCode: genuinely no session was ever
+//     expected (headless, CI, plain terminal). Neither switch case
+//     matches this sentinel, so it falls through with sessionID still
+//     "", and the `if sessionID == "" { return "", "", errNoSession }`
+//     below converts it to iam.go's own local, non-actionable
+//     errNoSession — this is the ordinary, silent-skip case.
+//   - resolve.ErrNoSession: a session WAS expected but could not be
+//     identified (DES-074) — returned here AS-IS, not swapped for the
+//     local errNoSession sentinel. Advisory callers (bindDispatchedMission,
+//     clearClosedSessionBindings) check errors.Is(err, errNoSession)
+//     specifically to treat "no session at all" as their ordinary,
+//     silent-skip case; collapsing resolve.ErrNoSession into that same
+//     sentinel would make those callers treat a genuine resolution failure
+//     as nothing-to-do and skip a real rebind silently — `mission dispatch`
+//     reporting success while the next Agent() spawn still attributes under
+//     the PREVIOUS mission id (round 2, R5).
 func resolveSession(explicit string, verifyEnv bool) (sessionID, agentID string, err error) {
 	agentID = os.Getenv("ETHOS_AGENT_ID")
 	ss := sessionStore()
@@ -79,14 +112,17 @@ func resolveSession(explicit string, verifyEnv bool) (sessionID, agentID string,
 	}
 
 	if sessionID == "" {
-		sid, source := resolve.SessionID(ss)
-		if sid != "" {
+		sid, source, serr := resolve.SessionID(ss)
+		switch {
+		case serr == nil:
 			if verifyEnv && source == resolve.SessionSourceEnv {
 				if _, lerr := ss.Load(sid); lerr != nil {
 					return "", "", fmt.Errorf("ETHOS_SESSION %q: %w", sid, lerr)
 				}
 			}
 			sessionID = sid
+		case errors.Is(serr, resolve.ErrNoSession):
+			return "", "", serr
 		}
 	}
 
