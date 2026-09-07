@@ -22,9 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lifetime of a long-lived process such as `ethos serve`.
   A session that was genuinely expected — running under Claude Code, or an
   explicitly-set `ETHOS_SESSION` — but cannot be identified now raises a
-  named error naming the remedy (set `ETHOS_SESSION`, or run
-  `ethos session start`) and a non-zero exit, instead of silently resolving
-  to the caller's git or OS identity. This includes `whoami`, previously the
+  named error and a non-zero exit, instead of silently resolving to the
+  caller's git or OS identity. The remedy it names is specific to the actual
+  cause: a broken or missing session pointer file is told to restart the
+  Claude Code session (or run `/clear`) so `SessionStart` re-writes it; an
+  `ETHOS_SESSION` naming a session that no longer exists is told to run
+  `eval "$(ethos session start)"` to mint a fresh one — `ethos session
+  start` alone only prints an `export` line to stdout and repairs neither
+  case. This includes `whoami`, previously the
   one command that warned on a broken or nonexistent `ETHOS_SESSION` and
   still silently substituted the git/OS identity. Running with no Claude
   Code context at all (a headless, CI, or plain-terminal invocation) is
@@ -49,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   participant instead of trying every participant for the preferred
   key before falling back to the legacy key. Fixed to a genuine
   two-pass lookup, matching the fallback semantics documented above.
+- The hidden `ethos session write-current` command could write a
+  permanently blank session pointer file at exit 0 given a blank
+  session ID, or corrupt the current-session directory itself given a
+  blank PID (`filepath.Base("")` resolves to `.`). Both arguments are
+  now rejected with an error instead of silently accepted.
 - Post-release restore commits no longer carry `[skip ci]`.
   `scripts/restore-dev-plugin.sh` tagged its commit with `[skip ci]`, which
   suppressed all workflows on the head of the post-release PR — while the

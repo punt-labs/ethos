@@ -8500,14 +8500,36 @@ that state. `.tmp/ci-sim-head.sh` (extract committed `HEAD` via `git
 archive`, run detached with the Claude Code env vars unset) is the
 gate for any future claim about CI or headless behavior on this branch.
 
-### Amendment 2026-09-07: mission 005 — four findings from a second local review pass
+### Amendment 2026-09-07: mission 005 — seven findings from a second local review pass
 
 Three local review agents ran against the round-3 diff after mission
-004 closed pass. The operator ruled all four findings be closed in a
-tightly-scoped follow-up mission (m-2026-09-07-005) before the PR
-opened, rather than shipped as follow-up beads. One finding was a
-genuine wrong-answer risk; the other three were latent or
-documentation-only.
+004 closed pass. The operator ruled all seven findings (grown from an
+initial four — see the severity correction below, and the E/F/G
+additions after it) be closed in a tightly-scoped follow-up mission
+(m-2026-09-07-005) before the PR opened, rather than shipped as
+follow-up beads.
+
+**Severity correction on B.** The silent-failure reviewer initially
+described B as "the only one that returns a wrong answer today." Asked
+to trace reachability, it downgraded its own finding: B is a proven
+divergence with no naturally reachable trigger, MEDIUM rather than
+HIGH. For the inversion to fire, a roster needs a legacy-keyed
+participant EARLIER than a preferred-keyed one, and every writer that
+can append a participant was traced and found not to produce that
+shape on any path a real user passes through — `Store.Create`/
+`CreateInCheckout` replace the roster wholesale (cannot append);
+`JoinSelf`'s own guard finds the legacy match and reuses that key
+(cannot create the duplicate); `Join` with an explicit
+`ETHOS_AGENT_ID` uses a handle, never a numeric PID; `SubagentStart`'s
+`Join` keys on Claude Code's subagent UUID, never a PID. The only path
+that produces the ordering was an INTERMEDIATE BUILD OF THIS BRANCH —
+after CLAUDE_PID preference landed but before `JoinSelf` did — a
+window that only ever existed on developer machines running mid-branch
+builds, not one real users pass through. The fix ships anyway — small,
+surgical, no migration or compatibility shim — because DES-074
+currently documents a rule one of its three read sites does not
+implement, and shipping a false design record is the failure this
+whole body of work started with.
 
 **Finding B — `resolveParentLine` was single-pass, not two-pass, despite the
 decision text above claiming otherwise.** The prior amendment's item 1
@@ -8518,11 +8540,9 @@ genuine two-pass lookup. `resolveFromSession` did; `resolveParentLine`
 did not — it ran a SINGLE loop testing both the preferred and legacy
 keys against each roster participant in iteration order, so a
 legacy-keyed participant appearing EARLIER in the roster incorrectly
-won over a correct, preferred-keyed participant appearing LATER. A
-subagent could be told it reports to a stale or wrong persona whenever
-roster ordering happened to put a legacy record first — the only
-finding of the four that produces a wrong answer today, not merely a
-latent or documentation gap.
+won over a correct, preferred-keyed participant appearing LATER —
+divergence from the documented invariant, per the severity correction
+above, not a live wrong answer.
 
 Fixed to a genuine two-pass — try every participant for the preferred
 key first; only on a full miss, retry every participant for the legacy
@@ -8536,6 +8556,14 @@ in-place with a dated marginal note pointing at this amendment.
 
 **Finding A — round 2's sentinel-distinguishing fix stopped at the CLI
 boundary; three `internal/mcp` sites still collapsed both sentinels.**
+Also confirmed latent, for the same shape of reason as B: in a healthy
+MCP session, `resolve.SessionID` resolves and the collapsed branch is
+never entered. Its two reaching arms are a pointer file already broken
+(a fault that has already failed `iam` and `mission dispatch` loudly on
+the CLI side) and a non-Claude MCP client, where the SILENT branch
+(`ErrNotUnderClaudeCode`) firing is CORRECT by design — no session, no
+sidecars to clear. The defect is "the one state where the warning is
+most needed prints nothing," worth closing on principle, not urgent.
 `mission_tools.go`'s `bindDispatchedMission` and
 `clearClosedMissionBindings`, and `tools.go`'s `resolveSessionID`, all
 still folded `resolve.SessionID`'s two error sentinels
@@ -8605,7 +8633,86 @@ verified it fails to even compile against the pre-fix code (a `const`
 cannot be reassigned) — a stronger form of the required negative check
 than a runtime failure would have been.
 
-CHANGELOG.md gains an entry for finding B only — the only one of the
-four with user-visible behavior change (a subagent could previously be
-told it reports to a stale or wrong persona). Findings A, C, and D are
-latent or documentation-only and are not user-visible today.
+**Finding E — `WriteCurrentSession` never validated its input.** The
+atomic-write path (`CreateTemp`, `WriteString`, `Chmod`, `Sync`,
+`Close`, `Rename`, with `os.Remove` on every error path, sync before
+close, rename last) was verified complete step by step — that half of
+the earlier "blank pointer file" open question is genuinely closed, and
+`ReadCurrentSession` is confirmed the file's only reader. The gap was
+the OTHER side: the function never inspected `sessionID` or
+`claudePID` at all. A blank `sessionID` produced a permanently blank
+pointer file at exit 0. A blank `claudePID` is worse:
+`filepath.Base("")` returns `.`, so the rename destination would
+resolve to the current-session directory itself. Reachable only
+through `ethos session write-current`, a hidden debug command with no
+callers anywhere in the tree — operator error, not a live path. Fixed
+with a guard on both arguments (`TrimSpace`, not a bare non-empty
+check, so whitespace-only counts as blank too). Same class, unfixed
+sibling: `resolve.go`'s `SessionID` gated `ETHOS_SESSION` on `sid !=
+""` without trimming, so `ETHOS_SESSION="  "` was accepted as a
+literal session id; fixed alongside as part of finding G, below, since
+both landed in the same file. New test
+`TestStore_WriteCurrentSession_RejectsBlankArgs`; verified it fails
+against the pre-fix code via temporary `git stash`.
+
+**Finding F — `ETHOS_TEST_NOT_UNDER_CLAUDE_CODE` silently disabled the
+loud branch in production.** The escape hatch's own doc comment argued
+it was safe because it is negative-only — it can force
+`UnderClaudeCode()` to false but never fabricate a true, so it "cannot
+be used to fabricate a session context." True, and beside the point:
+SUPPRESSING the loud branch is itself the wrong-answer-at-exit-0 shape
+this whole decision exists to close. Set in a real environment, it
+makes `SessionID` return `ErrNotUnderClaudeCode`, `resolveFromSession`
+translates that to a clean, silent empty result, and the caller falls
+through to the git/OS identity — restorable by one environment
+variable, with zero logging. Minimum fix: an unconditional stderr line
+whenever the hatch is honored, so it can never be silent again. A
+stronger guard — refusing to honor the variable at all outside a test
+binary, e.g. via `testing.Testing()` — was considered and rejected:
+this repo's own subprocess-based CLI tests
+(`cmd/ethos/mission_test.go`, `subprocess_test.go`'s
+`withForcedNotUnderClaudeCode`) set this variable on a REAL, separately
+exec'd `ethos` binary, not the test binary itself, so `testing.Testing()`
+would read false inside the very process the variable is meant to
+affect and break every one of them. New test
+`TestUnderClaudeCode_ForceHatchLogsToStderr`; verified it fails against
+the pre-fix code via temporary `git stash`.
+
+**Finding G — the remedy string named a command that does not fix the
+problem, and in fact cannot fix it for most callers.** `ErrNoSession`'s
+message read "set `ETHOS_SESSION=<id>`, or run `ethos session start`."
+`runSessionStart` (`cmd/ethos/session.go`) creates a roster and prints
+an `export ETHOS_SESSION=...` line to stdout; it never calls
+`session.Store.WriteCurrentSession` — only the `SessionStart` hook and
+the hidden `write-current` command do. A user who hit `ErrNoSession`,
+ran the suggested command, and retried got: `ETHOS_SESSION` still
+unset (the export went to stdout, unevaluated; a sibling process
+cannot mutate its caller's env), the pointer file still broken, another
+`pointerRetryAttempts`-worth of retry latency, and the IDENTICAL error.
+The only lasting effect was an orphan roster nothing points at.
+Sharper still: `SessionID` returns `ErrNoSession` only when
+`underClaude` is true, so the sole audience for this string was
+"under Claude Code, pointer broken" — precisely the population `ethos
+session start` cannot help. What actually remedies it, by sub-case:
+missing/blank pointer (the dominant case, `SessionID`'s own path) →
+restart the Claude Code session (or `/clear`) so `SessionStart`
+re-fires; `ETHOS_SESSION` naming a dead roster → `eval "$(ethos session
+start)"` — the `eval` is mandatory, the bare command is inert, and even
+with `eval` this fixes only that shell's own environment, never a
+process Claude Code spawned (which inherits Claude Code's environment,
+not the terminal's). `ErrNoSession`'s base message no longer bakes in
+any remedy; `restartPointerRemedy` and `deadRosterRemedy` are composed
+per call site, using `SessionID`'s own `source` return value
+(`SessionSourceEnv` vs `"walk"`) to pick the right one for
+`resolveFromSession`'s dead-roster branches. New tests:
+`TestResolveFromSession_DeadRosterRemedy_EnvSourced`, `_WalkSourced`;
+verified both fail against the pre-fix code via temporary `git stash`.
+
+CHANGELOG.md gains entries for finding B (a subagent could previously
+be told it reports to a stale or wrong persona), finding E (the hidden
+`write-current` command could corrupt the current-session directory or
+write a permanently blank pointer file), and a correction to the
+original DES-074 entry's own remedy claim (finding G — the original
+text repeated the same inert `ethos session start` advice this
+amendment corrects). Findings A, C, D, and F are latent, diagnostic, or
+documentation-only and are not independently user-visible today.
