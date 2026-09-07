@@ -442,6 +442,33 @@ func TestSessionID_RetrySkippedWhenNotUnderClaudeCode(t *testing.T) {
 		"not-under-Claude-Code must return immediately, not pay the under-Claude-Code retry latency")
 }
 
+// TestSessionID_InvariantHoldsAtMinimalRetryBudget pins mission 005
+// finding D: SessionID's own doc comment claims "err == nil if and only
+// if id != ”" as a mechanical invariant, but before this fix that was
+// only true at the shipped pointerRetryAttempts value of 10.
+// retryReadCurrentSession's loop runs pointerRetryAttempts-1 times, so at
+// 1 (or less) the loop body never executes and lastErr, seeded to nil,
+// was returned unchanged -- silently reporting a resolved id=="" alongside
+// err==nil, breaking the invariant the whole design leans on. Driving the
+// var to 1 here proves the fix holds structurally, not merely at 10.
+func TestSessionID_InvariantHoldsAtMinimalRetryBudget(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+	oldAttempts := pointerRetryAttempts
+	pointerRetryAttempts = 1
+	t.Cleanup(func() { pointerRetryAttempts = oldAttempts })
+
+	ss := session.NewStore(t.TempDir())
+	sid, source, err := SessionID(ss)
+
+	require.Error(t, err, "err must be non-nil whenever id is empty, regardless of the retry budget")
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Empty(t, sid)
+	assert.Empty(t, source)
+}
+
 func TestResolve_GitNameMatchesGitHub(t *testing.T) {
 	setGitConfig(t, "mal-github", "")
 	t.Setenv("USER", "nobody")

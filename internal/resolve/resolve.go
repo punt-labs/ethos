@@ -211,7 +211,11 @@ var UnderClaudeCode = process.UnderClaudeCode
 // retry never fires when not under Claude Code at all — there
 // SessionStart never ran and never will, so retrying would only add
 // latency to the common no-session case (CI, scripts) for no benefit.
-const (
+// pointerRetryAttempts is a var, not a const, so a test can drive it to 1
+// (or 0) and prove retryReadCurrentSession's err/id invariant holds
+// structurally rather than merely at the shipped value of 10 (mission
+// 005 finding D).
+var (
 	pointerRetryAttempts = 10
 	pointerRetryDelay    = 50 * time.Millisecond
 )
@@ -246,7 +250,7 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 
 	sid, rerr := ss.ReadCurrentSession(pid)
 	if rerr != nil && underClaude {
-		sid, rerr = retryReadCurrentSession(ss, pid)
+		sid, rerr = retryReadCurrentSession(ss, pid, rerr)
 	}
 	if rerr != nil {
 		if !underClaude {
@@ -266,9 +270,14 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 
 // retryReadCurrentSession re-reads the PID-keyed pointer file a few times
 // with a short delay, covering the startup race where a consumer runs
-// before SessionStart finishes writing it.
-func retryReadCurrentSession(ss *session.Store, pid string) (string, error) {
-	var lastErr error
+// before SessionStart finishes writing it. firstErr is the error from the
+// read that triggered the retry; it seeds lastErr so that a zero-iteration
+// loop (pointerRetryAttempts <= 1) still returns a non-nil error instead of
+// silently reporting ("", nil) — SessionID's err/id invariant must hold
+// regardless of how many retries the constant configures, not merely at
+// its current value of 10 (mission 005 finding D).
+func retryReadCurrentSession(ss *session.Store, pid string, firstErr error) (string, error) {
+	lastErr := firstErr
 	for i := 0; i < pointerRetryAttempts-1; i++ {
 		time.Sleep(pointerRetryDelay)
 		sid, err := ss.ReadCurrentSession(pid)
