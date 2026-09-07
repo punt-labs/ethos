@@ -346,31 +346,17 @@ func TestStore_WriteCurrentSession_AtomicNoStrayTempFiles(t *testing.T) {
 	}
 }
 
-// TestStore_CurrentSession_DistinctPIDsDoNotCollide pins the ethos-vqwn
-// bug's store-level guarantee: the pre-DES-074 walk to the topmost
-// "claude" ancestor gave every concurrent Claude Code session on a host
-// the SAME PID (the shared "claude daemon run" process — six rosters
-// across four repos measured to PID 518779 on 2026-09-07), so each
-// SessionStart clobbered the previous session's pointer file, last writer
-// wins. The DES-074 fix keys each session on its OWN owning process's PID
-// (CLAUDE_PID) instead, which differs per session by construction. This
-// test asserts the store-level half of that guarantee directly: two
-// DISTINCT PID keys resolve to two DISTINCT sessions, and writing one
-// never disturbs the other.
-func TestStore_CurrentSession_DistinctPIDsDoNotCollide(t *testing.T) {
-	s := testStore(t)
-
-	require.NoError(t, s.WriteCurrentSession("11111", "session-repo-a"))
-	require.NoError(t, s.WriteCurrentSession("22222", "session-repo-b"))
-
-	idA, err := s.ReadCurrentSession("11111")
-	require.NoError(t, err)
-	assert.Equal(t, "session-repo-a", idA)
-
-	idB, err := s.ReadCurrentSession("22222")
-	require.NoError(t, err)
-	assert.Equal(t, "session-repo-b", idB)
-}
+// Round 2 finding: a TestStore_CurrentSession_DistinctPIDsDoNotCollide
+// used to live here, asserting that two literal string keys
+// ("11111"/"22222") resolve to two distinct sessions. That is true of
+// any key-value store and was true before this fix too — ethos-vqwn was
+// never "the store collides on distinct keys," it was "FindClaudePID
+// returns the SAME key for different sessions." Removed as redundant
+// with TestStore_CurrentSession (a literal-key roundtrip already covers
+// the store's own correctness) in favor of
+// resolve.TestSessionID_ConcurrentSessionsDoNotCollide, which drives the
+// keys through the actual mechanism (process.FindClaudePID under two
+// simulated sessions) rather than asserting a property of maps.
 
 func TestStore_PurgeCurrentFiles(t *testing.T) {
 	s := testStore(t)

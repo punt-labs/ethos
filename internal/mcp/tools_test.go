@@ -10,6 +10,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 
@@ -647,9 +648,15 @@ func TestHandleIam_UpdatesLegacyKeyedParticipant(t *testing.T) {
 	h := testHandlerWithSession(t)
 	t.Setenv("ETHOS_AGENT_ID", "")
 	// Force a live, corroborating CLAUDE_PID distinct from the walk
-	// result (see resolve.TestResolve_TolerlatesLegacyKeyedParticipant for
-	// the same trick and why it is needed).
-	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	// result: our GRANDPARENT, not our immediate parent, since in an
+	// environment with no real "claude" ancestor (CI, a detached process)
+	// the walk's own fallback is exactly os.Getppid() (see
+	// resolve.TestResolve_TolerlatesLegacyKeyedParticipant for the same
+	// trick and why it is needed).
+	parentPID := os.Getppid()
+	grandparentPID, gpErr := process.ParentPID(parentPID)
+	require.NoError(t, gpErr, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
 	legacyPID := process.LegacyClaudePID()
 	preferredPID := process.FindClaudePID()
 	require.NotEqual(t, legacyPID, preferredPID,
@@ -686,6 +693,26 @@ func TestResolveSessionID_HonorsEnv(t *testing.T) {
 	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
 	require.NoError(t, err)
 	assert.Equal(t, "env-mcp-session", sid, "resolveSessionID must honor ETHOS_SESSION")
+}
+
+// TestResolveSessionID_NeverReturnsEmptySidWithNilErr pins the round 2,
+// three-outcome-collapse finding: resolveSessionID's `if sid, _, err :=
+// resolve.SessionID(...); err == nil { return sid, nil }` used to be
+// reachable with sid=="" whenever SessionID's "not under Claude Code"
+// case shared err==nil with its "resolved" case. resolve.ErrNotUnderClaudeCode
+// closes that at the source, but this pins the observable contract
+// directly: with no session_id arg and no session in context,
+// resolveSessionID must return a non-nil error, never ("", nil).
+func TestResolveSessionID_NeverReturnsEmptySidWithNilErr(t *testing.T) {
+	h := testHandlerWithSession(t)
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return false }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
+	require.Error(t, err)
+	assert.Empty(t, sid)
 }
 
 // TestHandleIam_HonorsAgentID pins DES-061 R4: the MCP iam handler keys the

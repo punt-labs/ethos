@@ -148,10 +148,14 @@ func TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary(t *testing.T
 	}))
 
 	// Force a live, corroborating CLAUDE_PID distinct from the walk
-	// result, so this test does not depend on the ambient environment
-	// happening to have one that differs (see resolve.
+	// result: our GRANDPARENT, not our immediate parent, since in an
+	// environment with no real "claude" ancestor (CI, a detached process)
+	// the walk's own fallback is exactly os.Getppid() (see resolve.
 	// TestResolve_TolerlatesLegacyKeyedParticipant for the same trick).
-	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
 	legacyPID := process.LegacyClaudePID()
 	preferredPID := process.FindClaudePID()
 	require.NotEqual(t, legacyPID, preferredPID,
