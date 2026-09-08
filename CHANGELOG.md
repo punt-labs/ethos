@@ -280,6 +280,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending clear substep, and `ethos mission claim` now takes that same
   lock before writing — closing the gap on both the teardown side and
   the write side.
+- **A resumed session's `ethos mission claim` or `mission dispatch` no
+  longer recreates a sidecar for a session `session.Store.Delete` has
+  already torn down.** The previous fix (above) made `deleteFiles` hold
+  the dispatch-pending lock across its whole clear-through-roster-removal
+  span, which closed the race where a concurrent write landed IN that
+  span — but it did not stop a writer that was already blocked waiting on
+  the lock from resuming the instant AFTER `deleteFiles` released it,
+  which happens only after the roster is already gone. Serializing the
+  two operations reordered the hazard instead of eliminating it: a claim
+  or dispatch write that woke up post-release still recreated the exact
+  undiscoverable-binding shape the lock-hold exists to prevent, one step
+  later than the race it closed (Bugbot, PR #509). `runMissionClaim` and
+  `bindDispatchedMission` (both the CLI and MCP copies) now check, inside
+  the same locked critical section as the write itself, that the
+  session's roster still exists before writing — a session with no
+  roster refuses with an actionable message instead of silently binding.
+  A legitimate new session reusing the same ID is unaffected: its roster
+  is always created before any mission command can run against it.
 - **A mission event-log append that fails because `fsync` failed AFTER
   a fully successful write no longer leaves the line on disk.** Every
   caller of the append primitive (`Store.DisclaimDelegation` among
@@ -297,6 +315,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the write case (the file-based single-tree log already truncated
   on a write failure; it never needed the sync case because it never
   calls `fsync` at all).
+- **`ethos mission abandon`'s formatted output no longer prints an empty
+  "Disclaimed: " line, or silently drops a malformed disclaimed-ID entry
+  with no signal.** `formatMissionAbandon` now matches
+  `writeMissionWarnings`'s own established convention for a malformed
+  array entry: skip it from the rendered line, but report it loudly on
+  stderr naming the cause, and only emit the `Disclaimed:` line at all
+  when at least one entry actually decoded.
 - **`GOOS=windows GOARCH=amd64 go build ./...` now succeeds.** Windows is
   still not a supported/shipped target (no release binary, no CI job), but
   the whole module now cross-compiles: `internal/process` gained a

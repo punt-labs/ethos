@@ -10883,3 +10883,101 @@ revisiting on its own, narrowly scoped terms (with its own reviewed
 restore-path design and its own answer to the `.claimed-*` GC question)
 if the persistent-failure residual is ever observed in practice rather
 than reasoned about in the abstract.
+
+### Amendment 2026-09-08: serializing `deleteFiles` against a sidecar writer reordered the hazard instead of closing it
+
+Bugbot on PR #509's tail round found that the immediately preceding
+amendment ("`session.Store` teardown races a resumed session's own claim
+or dispatch write") did not do what its own title claimed. That amendment
+made `deleteFiles` hold `mission.AcquireDispatchPendingLock` across its
+whole clear-through-roster-removal span, and made `runMissionClaim` take
+the same lock before writing — reasoning that serializing the two
+operations closes the gap a writer could land in.
+
+**The gap it actually left.** `deleteFiles` removes the roster (a plain
+`os.Remove`) and THEN returns, and its lock release is a deferred call
+that fires once the function returns — so the roster is already gone by
+the time the lock is released. A writer (`runMissionClaim` or
+`bindDispatchedMission`, staging a fresh claim or pending-dispatch entry)
+that was blocked waiting on that same lock resumes the INSTANT the lock
+frees, which is the instant AFTER the roster disappeared, not before.
+Holding the lock genuinely prevents a write from landing DURING
+`deleteFiles`'s clear-then-remove span; it does nothing to stop a write
+from landing the moment AFTER that span ends. The writer proceeds,
+recreates the sidecar under `sessions/<id>/`, and the session has no
+roster for `List()`/`Purge()` to ever find it through again — the exact
+undiscoverable-binding shape the lock-hold exists to prevent, reached
+deterministically (any writer queued behind the lock hits it, not a
+narrow timing window) rather than by the original race.
+
+**Decision — a liveness check inside the same critical section, not more
+serialization.** Locking alone cannot close this: no amount of holding a
+lock stops a queued waiter from resuming into a world that has already
+changed underneath it. What the writer needs is to look, under the same
+lock, at whether the thing it is about to bind still exists. `internal/hook/pretooluse_dispatch.go`
+gains `RefuseIfSessionGone(ss *session.Store, sessionID string) error`,
+which loads the session's roster and returns an actionable error if it
+cannot. Every sidecar-writing call site — `cmd/ethos/mission.go`'s
+`runMissionClaim` and `bindDispatchedMission`, and
+`internal/mcp/mission_tools.go`'s `bindDispatchedMission` — now calls
+this FIRST, as the first statement inside the same
+`mission.WithDispatchPendingLock` closure that performs the write. Because
+`deleteFiles` holds the identical per-session lock across its own
+clear-through-roster-removal span, there is no window between this check
+succeeding and the write that follows it in which `deleteFiles` could
+remove the roster — the check and the write are atomic with respect to
+teardown, which locking alone was not sufficient to guarantee.
+
+**Why this cannot be bypassed by a future caller.** The check lives
+inside the SAME closure as the write, not as a separate pre-flight step a
+future caller could accidentally skip by calling the write function
+directly — anyone adding a fourth sidecar-writing call site through
+`mission.WithDispatchPendingLock` sees the existing three as the pattern
+to copy, and the check's own doc comment states explicitly that it must
+run first, inside the lock, not before acquiring it.
+
+**Why a legitimate new session reusing the same ID is not blocked.** The
+SessionStart hook always creates a session's roster before any `ethos
+mission claim`/`dispatch`/`create` command can run against that session —
+there is no ordering in which a real, live session reaches this check
+before its own roster exists. Refusal fires only for a session that has
+genuinely ended: `RefuseIfSessionGone`'s failure mode is "no roster
+anywhere on disk for this ID," which a session's own SessionStart already
+prevents for the case that matters.
+
+**On the MCP surface specifically, this is the ONLY existence gate.**
+Unlike the CLI's `resolveSessionContext` (`cmd/ethos/iam.go`'s
+`resolveHardSession`), which re-verifies an `ETHOS_SESSION`-sourced ID
+against the session store before the caller ever reaches the lock, the
+MCP surface's `resolve.SessionID` is a bare `os.Getenv("ETHOS_SESSION")`
+read with no store lookup at all. So on the CLI, reproducing the finding
+requires the exact interleaving (a writer already past its own up-front
+check, blocked on the lock, resuming after teardown); on MCP, a session ID
+naming no roster at all reaches `RefuseIfSessionGone` directly — no
+timing required. Both are covered:
+`TestMissionClaim_RefusesWhenSessionRosterGone` and
+`TestMissionDispatch_RefusesWhenSessionRosterGone`
+(`cmd/ethos/mission_test.go`) hold the dispatch-pending lock manually (a
+`deleteFiles` stand-in), confirm the CLI call is genuinely blocked
+entering `Flock`, remove the roster while still holding the lock, then
+release — reproducing the exact timeline Bugbot's finding names.
+`TestHandleMission_CreateRefusesSessionRosterGone`
+(`internal/mcp/mission_tools_test.go`) needs no such choreography. All
+three confirmed failing against the pre-fix code: the CLI tests logged
+`claimed ... for session ...` / `dispatched: ...` and left a live sidecar
+behind for a session with no roster; the MCP test's warning read the
+ordinary "will attribute worker's next matching spawn" text instead of a
+refusal, and left a pending-dispatch entry on disk.
+
+**Test-fixture correction, exposed by this fix.** `internal/mcp/mission_tools_test.go`'s
+`testHandlerWithSessions` rooted its `session.Store` at an unrelated
+`t.TempDir()`, never at the same `$HOME/.punt-labs/ethos` the test's own
+`globalRoot` used — invisible before this fix only because nothing on
+the create path ever consulted the session store's own roster, the exact
+"papering over the mismatch" shape review finding J5 (above) already
+named once for the sibling `internal/hook` test fixture. Fixed to root at
+`os.UserHomeDir()`, matching `cmd/ethos/serve.go`'s real production
+wiring (`mcp.WithSessionStore(sessionStore())`); the eight existing tests
+that exercise the create-then-bind path now seed a roster via a new
+`seedSessionRoster` helper before calling create, mirroring
+`cmd/ethos/mission_test.go`'s own `seedRosterForSession`.
