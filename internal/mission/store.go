@@ -1232,28 +1232,40 @@ func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
 }
 
 // Abandon retires a mission that was created but never actually
-// dispatched to a worker — zero delegation records under
-// delegations/, zero result artifacts for any round — into the
-// StatusAbandoned terminal state. It is a distinct, more narrowly
-// gated operation from Close, not a bypass of it.
+// dispatched to a worker — zero BLOCKING delegation records under
+// delegations/ (see countBlockingDelegations), zero result artifacts
+// for any round — into the StatusAbandoned terminal state. It is a
+// distinct, more narrowly gated operation from Close, not a bypass of
+// it.
 //
 // Close's result gate (checkResultGateLocked, see the comment above
 // Close) is intentionally unconditional: a mission cannot close
 // without a result artifact for the current round, because a
 // terminal verdict must be backed by structured worker output. That
 // invariant is correct and stays correct — Abandon does not weaken
-// it or add an override flag to Close.
+// it or add an override flag to Close's result gate.
 //
 // Abandon answers a different question: was there ever any work to
-// lose? A mission whose delegations/ directory is empty and whose
-// results file is empty never had a worker spawned against it — the
-// "create" event is the only entry in its event log. Retiring such a
-// mission cannot discard anything, so it does not need Close's
-// verdict gate. Any sign that work started — a delegation record
-// (even a still-open skeleton), or a result for any round, not only
-// the current one — refuses the transition and points the caller at
-// Close instead. There is no override flag here either, for the same
-// reason Close has none: the gate is the whole point.
+// lose? A mission whose delegations/ directory holds no BLOCKING entry
+// and whose results file is empty never had real work done against
+// it. Two things make a delegation record non-blocking, both narrow
+// and mechanically checked, neither weakening Close's own result gate
+// (DES-076, DESIGN.md):
+//   - `verdict: aborted` is excluded unconditionally and automatically
+//     — a delegation refused before its worker ever ran (the
+//     max_delegation_depth or content-hash-gate refusal) never
+//     represents real work, independent of BoundVia or any disclaim.
+//   - An operator-disclaimed delegation is excluded — `--disclaim
+//     <delegation-id>` (CLI) / `disclaim` (MCP), gated by
+//     DisclaimDelegation on provenance (must be a proven dispatch-
+//     sidecar capture) and closed status, never a blanket bypass.
+//
+// Any OTHER sign that work started — a still-open skeleton, a
+// non-aborted, non-disclaimed closed delegation, or a result for any
+// round, not only the current one — refuses the transition and points
+// the caller at Close instead. The result gate has no override at all,
+// for the same reason Close has none: it is the whole point, and
+// disclaiming every delegation does not touch it.
 //
 // The distinct StatusAbandoned value (rather than reusing
 // StatusClosed) matters for the same reason Close's terminal states
@@ -1332,15 +1344,20 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 				missionID, c.Status,
 			)
 		}
-		// Gate 1: zero BLOCKING delegation records. Any entry under
-		// delegations/ — open, closed, any verdict — means a worker
-		// was actually spawned against this contract, and blocks
-		// Abandon UNLESS an operator has explicitly disclaimed it via
+		// Gate 1: zero BLOCKING delegation records
+		// (countBlockingDelegations). Any entry under delegations/ —
+		// open, closed, any verdict — means a worker was actually
+		// spawned against this contract, and blocks Abandon UNLESS
+		// either of two narrow, mechanical exceptions applies: the
+		// delegation's verdict is `aborted` (excluded unconditionally
+		// and automatically — refused before its worker ever ran, so
+		// no disclaim is needed or appropriate; DES-076 round 3, review
+		// finding C7), or an operator has explicitly disclaimed it via
 		// DisclaimDelegation (DES-076 round 2: a mechanically-gated,
 		// per-delegation, evidence-checked exception for a delegation
 		// proven to be a dispatch-sidecar capture — never a blanket
-		// bypass; see DESIGN.md). Every non-disclaimed delegation is
-		// still real work; Close's result gate, not Abandon, is the
+		// bypass; see DESIGN.md). Every delegation excluded by neither
+		// is still real work; Close's result gate, not Abandon, is the
 		// correct arbiter of whether IT may retire.
 		//
 		// A missing repoRoot must REFUSE, not skip: an empty
