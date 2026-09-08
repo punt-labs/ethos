@@ -10784,3 +10784,102 @@ unit tests above pin the primitive directly, and the existing
 integration test already pins the caller's rollback behavior given a
 failure, which together cover the fix without growing `audit`'s public
 surface for a single test.
+
+### Amendment 2026-09-08: evaluated, and declined, a reservation/claim redesign of pending-dispatch consumption
+
+Residual-risk item 3 above (`consumeDispatchBinding`'s post-admission
+`os.Remove` failing persistently, capturing every later matching-worker
+spawn) prompted a specific proposal during the leader's own review: key
+the pending entry with a reservation state instead of consume-on-success
+— rename it under the lock BEFORE admission (removing it from
+`ReadDispatchPending`'s matchable set immediately, not just after a
+successful response), finalize by deleting the renamed file once
+admission fully succeeds, and restore it (rename back) on any admission
+failure so a refused spawn's entry is still matchable by a later retry,
+exactly as today.
+
+**The question asked directly: can a rename succeed where an unlink
+fails often enough to matter, for the two failure modes this residual
+already names (EACCES, a full disk)?** No, for both:
+
+- **EACCES.** Both `os.Rename` and `os.Remove` on a file within the same
+  directory are governed by the SAME check — write+execute permission on
+  the containing directory, not on the file itself. A directory-level
+  permission problem (the realistic shape of a "persistent" failure
+  here, since a single stray file losing write permission independent
+  of its directory is a much narrower and less "persistent-feeling"
+  fault) fails a rename identically to an unlink. There is no
+  permission-only case where one succeeds and the other does not.
+- **A full disk (ENOSPC).** `os.Remove` is, in the common case, a pure
+  metadata operation that FREES space rather than consuming it. `os.Rename`
+  to a new name in the same directory can need to grow the directory's
+  own entry table to accommodate the new filename — on a genuinely full
+  filesystem, this makes rename NO MORE reliable than unlink, and on
+  some filesystems (particularly journaled ones, which must log the
+  rename as a transaction) arguably less reliable, since unlink can
+  sometimes proceed by freeing the exact space its own journal entry
+  needs.
+
+**Where reservation genuinely would help, and the new cost it
+introduces in exchange.** Moving the state transition BEFORE admission
+does change one thing for the better: a reservation failure is caught
+at match time, before any delegation skeleton is written under the
+wrong (or any) attribution, so the matcher could cleanly fall through to
+Tier A/inheritance for that spawn instead of committing to a Tier-B
+delegation whose cleanup is already known to be broken. And a FINALIZE
+failure after a successful admission — today's actual C9/F4 shape — would
+leave the renamed entry under a name `ReadDispatchPending`'s existing
+dotfile-prefix exclusion (the same one that protects `.lock`) already
+treats as invisible, so it could no longer misattribute a later spawn
+at all; the tradeoff shifts from "wrong attribution forever" to "an
+orphaned file forever," strictly better for THIS mission's own audit
+correctness.
+
+But the same redesign opens a NEW failure mode on a route this residual
+never touched: the RESTORE step, on an admission REFUSAL. Depth-gate
+refusals are not rare — `enforceDelegationDepth` refuses routinely, by
+design, whenever a spawn would exceed the configured ceiling — and every
+one of `dispatchTierB`'s several refusal branches (initial Load failure,
+the TOCTOU status re-check, the depth gate, a response-encode failure)
+would need its OWN restore call threaded through. If a restore-rename
+itself fails on any of these ORDINARY, COMMON refusal paths, the pending
+dispatch is now silently un-matchable by any FUTURE spawn — a
+legitimate dispatch that simply hit a routine depth-gate refusal loses
+its binding permanently, with no equivalent to today's behavior (a
+refused admission leaves the original entry untouched, so a later retry
+of the same `Agent()` call still finds it). That is a worse, MORE
+frequently reachable failure mode than the persistent-fs-failure
+residual the redesign sets out to shrink.
+
+There is also a genuinely new bookkeeping cost even along the success
+path: a `.claimed-*`-style renamed file that never gets cleaned up (a
+finalize failure, or a process crash between rename and finalize) has
+NO GC path today — `ClearDispatchPending`/`ConsumeDispatchPending` both
+deliberately skip every dotfile-prefixed entry to protect `.lock`
+(review finding J6's own accepted-residual note on exactly this
+class of coupling). Making that skip smarter (distinguishing `.lock`
+from a `.claimed-*` orphan) is precisely the kind of change J6 already
+declined to make for a much smaller cosmetic fix (a per-entry warning
+cooldown marker), for the same reason: it touches a shared,
+heavily-relied-on function for every existing sidecar type.
+
+**Decision: keep the documented residual as-is, do not implement the
+reservation/claim redesign.** The redesign trades a low-probability,
+already-bounded residual (an operator can `mission abandon --disclaim`
+a genuinely captured delegation after the fact; the failure requires a
+PERSISTENT, not transient, filesystem condition; and a directory-level
+permission or disk-full fault of this kind would almost certainly also
+be breaking other `ethos` operations loudly enough for an operator to
+notice through a different channel first) for a materially larger
+change — a new restore-contract threaded through every one of
+`dispatchTierB`'s refusal branches — that introduces a NEW, more
+frequently reachable regression (silently losing a legitimate pending
+dispatch on an ordinary depth-gate refusal whose restore also fails) in
+exchange for narrowing a residual whose own two named failure modes
+(EACCES, ENOSPC) the rename does not reliably help with in the first
+place. This is not a reflexive "no" — the reservation idea is sound for
+the finalize-failure sub-case specifically, and would be worth
+revisiting on its own, narrowly scoped terms (with its own reviewed
+restore-path design and its own answer to the `.claimed-*` GC question)
+if the persistent-failure residual is ever observed in practice rather
+than reasoned about in the abstract.
