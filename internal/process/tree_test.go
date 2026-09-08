@@ -22,10 +22,11 @@ func captureStderr(t *testing.T, fn func()) string {
 	os.Stderr = w
 	defer func() { os.Stderr = old }()
 	fn()
-	w.Close()
+	require.NoError(t, w.Close())
 	var buf bytes.Buffer
 	_, err = buf.ReadFrom(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 	return buf.String()
 }
 

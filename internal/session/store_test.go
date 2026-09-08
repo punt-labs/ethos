@@ -475,6 +475,7 @@ func TestStore_Purge_SidecarClearFailureIsReportedAndRefused(t *testing.T) {
 	os.Stderr = oldStderr
 	stderrBytes, err := io.ReadAll(pr)
 	require.NoError(t, err)
+	require.NoError(t, pr.Close())
 	stderrText := string(stderrBytes)
 
 	require.NoError(t, purgeErr)

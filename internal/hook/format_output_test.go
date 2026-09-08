@@ -789,6 +789,7 @@ func TestWriteMissionWarnings_DropsNonStringEntry(t *testing.T) {
 	var captured bytes.Buffer
 	_, err = captured.ReadFrom(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 
 	assert.Contains(t, ctx.String(), "\n  - a real warning")
 	assert.NotContains(t, ctx.String(), "42")
@@ -824,6 +825,7 @@ func TestFormatOutput_Mission_Abandon_DropsNonStringDisclaimedEntry(t *testing.T
 	var captured bytes.Buffer
 	_, err = captured.ReadFrom(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 
 	res := parseFormatResult(t, out)
 	ctx := res.HookSpecificOutput.AdditionalContext
@@ -858,6 +860,7 @@ func TestFormatOutput_Mission_Abandon_AllMalformedDisclaimedOmitsEmptyLine(t *te
 	var captured bytes.Buffer
 	_, err = captured.ReadFrom(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 
 	res := parseFormatResult(t, out)
 	assert.NotContains(t, res.HookSpecificOutput.AdditionalContext, "Disclaimed:",

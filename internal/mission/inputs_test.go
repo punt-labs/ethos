@@ -29,7 +29,9 @@ func captureStderr(t *testing.T, fn func()) string {
 	}()
 	fn()
 	_ = w.Close()
-	return string(<-done)
+	out := string(<-done)
+	_ = r.Close()
+	return out
 }
 
 func TestInputs_YAML_Ticket(t *testing.T) {

@@ -833,6 +833,7 @@ func TestHandlePreToolUse_TierAAdvice(t *testing.T) {
 
 			stderrBytes, readErr := io.ReadAll(r)
 			require.NoError(t, readErr)
+			require.NoError(t, r.Close())
 			stderrText := string(stderrBytes)
 
 			var result PreToolUseResult
@@ -1359,6 +1360,7 @@ func TestCloseDelegationAborted_NotExistDistinctMessage(t *testing.T) {
 
 	stderrBytes, err := io.ReadAll(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 	stderrText := string(stderrBytes)
 
 	assert.Contains(t, stderrText, "order-of-operations bug",
@@ -1555,6 +1557,7 @@ func TestHandlePreToolUse_TierADispatch(t *testing.T) {
 
 	stderrBytes, err := io.ReadAll(pr)
 	require.NoError(t, err)
+	require.NoError(t, pr.Close())
 	stderrText := string(stderrBytes)
 
 	var r PreToolUseResult
@@ -1842,6 +1845,7 @@ func TestDispatchAgent_InheritanceMalformedRegex(t *testing.T) {
 
 	stderrBytes, err := io.ReadAll(pr)
 	require.NoError(t, err)
+	require.NoError(t, pr.Close())
 	stderrText := string(stderrBytes)
 
 	var r PreToolUseResult
@@ -1914,6 +1918,7 @@ func TestDispatchAgent_InheritanceChainTooDeep(t *testing.T) {
 
 	stderrBytes, err := io.ReadAll(pr)
 	require.NoError(t, err)
+	require.NoError(t, pr.Close())
 	stderrText := string(stderrBytes)
 
 	var r PreToolUseResult
@@ -2338,6 +2343,7 @@ func captureHookStderr(t *testing.T, fn func()) string {
 	var buf bytes.Buffer
 	_, err = buf.ReadFrom(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 	return buf.String()
 }
 

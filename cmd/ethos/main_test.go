@@ -61,10 +61,11 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	fn()
 
-	w.Close()
+	require.NoError(t, w.Close())
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 	return buf.String()
 }
 
@@ -81,10 +82,11 @@ func captureStdoutE(t *testing.T, fn func() error) string {
 
 	require.NoError(t, fn())
 
-	w.Close()
+	require.NoError(t, w.Close())
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 	return buf.String()
 }
 

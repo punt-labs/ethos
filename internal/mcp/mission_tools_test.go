@@ -39,7 +39,9 @@ func captureStderr(t *testing.T, fn func()) string {
 	}()
 	fn()
 	_ = w.Close()
-	return string(<-done)
+	out := string(<-done)
+	_ = r.Close()
+	return out
 }
 
 // validContractYAML is a minimal valid contract body the MCP create
