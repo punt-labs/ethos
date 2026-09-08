@@ -328,6 +328,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the write case (the file-based single-tree log already truncated
   on a write failure; it never needed the sync case because it never
   calls `fsync` at all).
+- **That truncate-back rollback is now itself fsynced.** `Truncate`
+  alone shortens the file's in-memory length but does not force it to
+  disk, so a crash between the truncate and the filesystem's own flush
+  could leave the pre-truncate length on disk after restart — the same
+  line the append primitive had just reported as never persisted,
+  readable again once the process comes back up. The append primitive
+  now `fsync`s a second time after a successful rollback truncate,
+  best-effort; the original error remains the primary cause reported to
+  the caller, but a second `fsync` failure is now surfaced distinctly
+  in the error text rather than silently discarded, since it means the
+  rollback itself may not survive a crash.
 - **`ethos mission abandon`'s formatted output no longer prints an empty
   "Disclaimed: " line, or silently drops a malformed disclaimed-ID entry
   with no signal.** `formatMissionAbandon` now matches

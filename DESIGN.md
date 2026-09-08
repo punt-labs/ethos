@@ -10785,6 +10785,59 @@ integration test already pins the caller's rollback behavior given a
 failure, which together cover the fix without growing `audit`'s public
 surface for a single test.
 
+### Amendment 2026-09-08: the sync-failure rollback above was itself not durable
+
+The leader's review of the amendment above (round 2 of the same PR)
+found a gap one layer deeper: `f.Truncate(end)` shortens the file's
+in-memory length, but `Truncate` is not `fsync` — nothing forces the
+truncated length to disk. A crash between the `Truncate` call
+returning and the filesystem's own background flush can leave the
+pre-truncate (post-write, post-failed-sync) length on disk after
+restart: exactly the line `AppendMonotonic` had just reported as never
+persisted, readable again once the process comes back up. The
+guarantee the amendment above set out to provide — a reported failure
+means nothing new is on disk — held for the in-memory/open-fd view
+tested by `TestAppendMonotonic_SyncFailureTruncatesBack`, but not
+across a crash.
+
+**Fix.** `AppendMonotonic` now calls `fsyncFile` a second time, after a
+successful rollback `Truncate`, best-effort. The original `Sync` error
+remains the primary cause returned to the caller — it is still why the
+append failed and still why the caller (e.g. `DisclaimDelegation`)
+must roll back its own contingent mutation — but if this second
+`fsync` also fails, the returned error says so explicitly
+(`"rollback not guaranteed durable across a crash"`) rather than
+returning the same message a single-fsync failure would produce. There
+is no retry loop: two consecutive `fsync` failures on the same file
+handle are not treated as a transient condition worth waiting out.
+
+**What the fix does not claim.** It does not make the rollback durable
+— a second `fsync` can fail too, and even a successful `fsync` only
+guarantees durability to the extent the underlying device honors the
+flush (a lying disk cache is outside what any userspace call can
+detect). What it adds is: try to make the rollback durable, and be
+honest in the error when that second attempt also fails, instead of
+silently reporting only the original cause and leaving the caller with
+no signal that the rollback itself is unconfirmed.
+
+**Tests.** There is no portable way to force a real crash between
+`Truncate` and the filesystem's flush and then inspect the file
+post-crash — the same limitation the amendment above already accepted
+for the first `fsync`, and the reason `fsyncFile` is a package var
+rather than something a test drives through an actual disk fault.
+`TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported` therefore checks
+what IS directly observable: with `fsyncFile` overridden to fail
+unconditionally, (a) the content-level rollback still happens — the
+live file is empty after the second simulated failure, same as after
+the first — and (b) the second `fsync` is actually attempted and its
+distinct failure surfaces in the error text. Confirmed failing against
+the pre-fix `AppendMonotonic` (single `fsyncFile` call, no second
+attempt): the returned error was the same single-failure message
+`TestAppendMonotonic_SyncFailureTruncatesBack` already asserts, so the
+new test's message check failed while the file-emptiness check still
+passed — pinning specifically the missing second call, not the
+already-fixed first one.
+
 ### Amendment 2026-09-08: evaluated, and declined, a reservation/claim redesign of pending-dispatch consumption
 
 Residual-risk item 3 above (`consumeDispatchBinding`'s post-admission

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -370,6 +371,56 @@ func TestAppendMonotonic_SyncFailureThenSuccessAppendsExactlyOnce(t *testing.T) 
 	lines := SplitLines(data)
 	if len(lines) != 1 {
 		t.Errorf("expected exactly 1 line after retry, got %d: %q", len(lines), data)
+	}
+}
+
+// TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported pins the leader's
+// PR #509 finding I1: the truncate-back on a sync failure must itself be
+// fsynced, and if that second fsync also fails, the caller must be told
+// the rollback is not guaranteed durable rather than getting the same
+// message as an ordinary single sync failure.
+//
+// What this test can and cannot prove: there is no portable way to force
+// a real crash between Truncate and the filesystem's own flush and then
+// inspect the file post-crash — the same limitation
+// TestAppendMonotonic_SyncFailureTruncatesBack's doc comment already
+// notes for the first fsync. What IS directly checkable, and what this
+// test checks, is (a) the content-level rollback still happens — the
+// file is empty after two simulated fsync failures, exactly as it is
+// after one — and (b) the second fsync is actually attempted and its
+// failure is surfaced distinctly in the returned error, rather than
+// silently discarded as the pre-fix code did (pre-fix, this function
+// called fsyncFile exactly once, so a fake that always errors produces
+// the same single-failure message tested by
+// TestAppendMonotonic_SyncFailureTruncatesBack; this test's message
+// assertion is what fails against that pre-fix code).
+func TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	orig := fsyncFile
+	t.Cleanup(func() { fsyncFile = orig })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+
+	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	})
+	if err == nil {
+		t.Fatal("expected an error from the simulated sync failure")
+	}
+	if !strings.Contains(err.Error(), "rollback not guaranteed durable across a crash") {
+		t.Errorf("error must say the rollback's own fsync also failed and durability is not guaranteed, got: %v", err)
+	}
+
+	data, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(data) != 0 {
+		t.Errorf("the content-level rollback must still truncate the line even when its own fsync fails, got %q", data)
 	}
 }
 

@@ -47,6 +47,14 @@ var fsyncFile = func(f *os.File) error { return f.Sync() }
 // this mirrors that discipline here, plus extends it to cover a
 // write-succeeded-but-sync-failed outcome, which the legacy path did
 // not need to handle because it never calls Sync at all.
+//
+// Leader review of PR #509 (I1, second tail round): the truncate-back
+// on a sync failure was itself not durable — Truncate alone does not
+// flush to disk, so a crash between the truncate and the filesystem's
+// own flush could leave the pre-truncate (post-write) length on disk,
+// which is exactly the line the caller was told never persisted. The
+// rollback now fsyncs again after the truncate, best-effort, and says
+// so in the returned error if that second fsync also fails.
 func AppendMonotonic(livePath string, watermark int64, now time.Time, line func(ts int64) ([]byte, error)) (int64, error) {
 	if err := os.MkdirAll(filepath.Dir(livePath), 0o700); err != nil {
 		return 0, fmt.Errorf("creating live dir: %w", err)
@@ -114,6 +122,23 @@ func AppendMonotonic(livePath string, watermark int64, now time.Time, line func(
 	if err := fsyncFile(f); err != nil {
 		if tErr := f.Truncate(end); tErr != nil {
 			return 0, fmt.Errorf("syncing %s: %w; truncating unsynced line failed: %v", livePath, err, tErr)
+		}
+		// The Truncate call above only shortens the file's in-memory
+		// length back to `end`. That alone says nothing about
+		// durability: without an fsync of the truncated file, a crash
+		// before the filesystem flushes the truncate can leave the
+		// old, longer length on disk — the very line this function
+		// is about to report as never persisted. Sync again,
+		// best-effort. The original sync error stays the primary
+		// cause reported to the caller (it is why the append failed
+		// and why the caller must roll back its own contingent
+		// mutation), but a second failure here means the rollback
+		// itself may not survive a crash, which the caller cannot
+		// know unless we say so. We do not retry: a device that just
+		// failed two syncs in a row is not a transient condition
+		// this call can wait out.
+		if sErr := fsyncFile(f); sErr != nil {
+			return 0, fmt.Errorf("syncing %s: %w; rollback truncate to %d succeeded but its own fsync failed: %v (rollback not guaranteed durable across a crash)", livePath, err, end, sErr)
 		}
 		return 0, fmt.Errorf("syncing %s: %w", livePath, err)
 	}
