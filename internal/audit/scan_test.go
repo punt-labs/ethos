@@ -428,6 +428,26 @@ func TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported(t *testing.T) {
 	}
 }
 
+// shortRealWriteThenError is a writeFile stub for the write-failure tests
+// below. It writes a real prefix of b to the file before reporting the
+// simulated failure, so the file is genuinely non-empty ahead of
+// AppendMonotonic's rollback -- unlike a stub that reports failure
+// without writing anything, whose target file is empty before AND after
+// the call whether or not rollbackTruncate ever runs. That earlier shape
+// (leader's PR #509 review, finding J1) made
+// TestAppendMonotonic_WriteFailureTruncatesBack and
+// TestAppendMonotonic_WriteFailureThenSuccessAppendsExactlyOnce pass
+// identically with rollbackTruncate deleted from the write-failure branch
+// entirely -- confirmed by deleting it and rerunning both, which is the
+// falsification this stub is designed to catch instead.
+func shortRealWriteThenError(f *os.File, b []byte) (int, error) {
+	half := len(b) / 2
+	if _, err := f.Write(b[:half]); err != nil {
+		return 0, err
+	}
+	return half, errSimulatedWrite
+}
+
 // TestAppendMonotonic_WriteFailureTruncatesBack pins the leader's PR #509
 // second tail-round finding: the write-failure rollback path (a failing or
 // short Write) truncates back to the pre-write length exactly like the
@@ -443,9 +463,7 @@ func TestAppendMonotonic_WriteFailureTruncatesBack(t *testing.T) {
 
 	orig := writeFile
 	t.Cleanup(func() { writeFile = orig })
-	writeFile = func(f *os.File, b []byte) (int, error) {
-		return 0, errSimulatedWrite
-	}
+	writeFile = shortRealWriteThenError
 
 	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
 		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
@@ -476,11 +494,26 @@ func TestAppendMonotonic_WriteFailureThenSuccessAppendsExactlyOnce(t *testing.T)
 
 	orig := writeFile
 	t.Cleanup(func() { writeFile = orig })
-	writeFile = func(f *os.File, b []byte) (int, error) {
-		return 0, errSimulatedWrite
-	}
+	writeFile = shortRealWriteThenError
 	if _, err := AppendMonotonic(live, 0, now, mk); err == nil {
 		t.Fatal("expected the first (simulated-failing) append to error")
+	}
+
+	// The rollback must already have truncated the file back to empty
+	// before the retry runs. Checking this here, rather than only the
+	// end-to-end line count below, matters because AppendMonotonic's own
+	// torn-tail recovery (truncateTornTailAndRecover) would independently
+	// clean up a bare short write with no trailing newline on the retry's
+	// reopen -- converging to the same "exactly 1 line" result even with
+	// rollbackTruncate deleted entirely from the write-failure branch. An
+	// end-to-end-only assertion would therefore still pass against that
+	// falsification; this intermediate check is what actually catches it.
+	mid, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(mid) != 0 {
+		t.Fatalf("rollback must truncate the file before the retry runs, got %q", mid)
 	}
 
 	writeFile = orig
@@ -517,9 +550,7 @@ func TestAppendMonotonic_WriteFailureRollbackFsyncAlsoFailsIsReported(t *testing
 
 	origWrite := writeFile
 	t.Cleanup(func() { writeFile = origWrite })
-	writeFile = func(f *os.File, b []byte) (int, error) {
-		return 0, errSimulatedWrite
-	}
+	writeFile = shortRealWriteThenError
 	origSync := fsyncFile
 	t.Cleanup(func() { fsyncFile = origSync })
 	fsyncFile = func(f *os.File) error {
