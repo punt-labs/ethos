@@ -1,0 +1,85 @@
+mission_id: m-2026-09-08-004
+status: closed
+type: implement
+created_at: "2026-09-08T04:41:03Z"
+updated_at: "2026-09-08T08:21:46Z"
+closed_at: "2026-09-08T08:21:46Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-08T04:41:03Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    files:
+        - internal/mission/store.go
+        - internal/mission/delegation.go
+        - internal/hook/pretooluse_dispatch.go
+        - internal/mcp/mission_tools.go
+        - DESIGN.md
+write_set:
+    - internal/mission/store.go
+    - internal/mission/store_test.go
+    - internal/mission/delegation.go
+    - internal/mission/delegation_test.go
+    - internal/hook/**
+    - internal/mcp/mission_tools.go
+    - internal/mcp/mission_tools_test.go
+    - internal/mcp/format_output.go
+    - cmd/ethos/mission.go
+    - cmd/ethos/mission_test.go
+    - DESIGN.md
+    - CHANGELOG.md
+success_criteria:
+    - READ DES-076 IN DESIGN.md FIRST, specifically its 'Non-goal' section. You wrote it. It contains the design for this mission — the bind-provenance field and the narrowly-gated per-delegation disclaim — and the reasoning for why a blanket bypass flag is forbidden. This contract funds exactly the follow-up DES-076 recommends. Do not redesign it from scratch; do challenge it if implementation reveals the recommendation was wrong, and say so explicitly rather than silently diverging.
+    - 'REQUIREMENT: `ethos mission abandon` must be able to retire a mission whose ONLY delegation is one wrongly attributed to it by a dispatch-sidecar capture, WITHOUT weakening Store.Abandon''s existing all-delegations-block gate or its result gate. Abandon''s own doc comment rejects a bypass flag because ''the gate is the whole point'' — honor that. The disclaim must be operator-named, per-delegation, and checked MECHANICALLY against recorded provenance, never inferred by heuristic and never a blanket flag.'
+    - 'PART 1 — record the fact that does not exist today. Tier alone cannot distinguish how a delegation was bound: explicit MISSION_ID env, inheritance from a parent, and dispatch-sidecar consumption all produce Tier B. Add a bind-provenance field to DelegationSkeleton (written by dispatchTierB) and Delegation. Enumerate the origins as a closed set with an explicit zero value for records written before this change — a pre-existing delegation must NOT be silently treated as disclaimable just because its provenance is unknown. State in your result what the unknown case does and why that direction is the safe one.'
+    - 'PART 2 — the retirement path. A new narrowly-gated method (or an explicit parameter on Abandon) that accepts an operator-named delegation ID, verifies mechanically that its recorded provenance is dispatch-sidecar capture, and only then permits the retirement. A delegation whose provenance is explicit-env or inherited must be refused with an actionable error naming why. Surface it on the CLI and, for parity, the MCP surface (DES-020: every MCP tool needs a formatter in format_output.go before shipping — check whether this change requires one).'
+    - BACKWARD COMPATIBILITY is a first-class requirement, not a footnote. Delegation records already exist on disk in this repo and in every consumer. Adding a field must not break reading them, and must not change how an existing record is treated. Verify by reading real on-disk delegation records from .punt-labs/ethos/missions/ BEFORE and AFTER your change and confirming identical interpretation. Paste the evidence.
+    - 'Every behavioural change needs a regression test verified FAILING against pre-fix code before the fix lands. At minimum: (a) a captured delegation CAN be disclaimed and the mission then abandoned; (b) a genuine explicit-env delegation CANNOT be disclaimed and abandon still refuses; (c) a pre-existing record with unknown provenance CANNOT be disclaimed; (d) disclaim does not bypass the result gate. State which you confirmed red first and the pre-fix failure output.'
+    - 'SECURITY REVIEW YOUR OWN CHANGE before reporting. You are adding an operator-facing path that relaxes a deliberate guard. Ask explicitly: can this be used to retire a mission that genuinely had a worker do work? Can a malformed or hand-edited provenance field on disk unlock the path? Does the disclaim leave an audit record of who disclaimed what and why? Report your answers; ''I checked and found nothing'' is only credible if you say what you checked for.'
+    - 'make check green before EVERY commit. No suppressions. Note that make check does NOT catch every class — it missed Go doc-comment misattachment on PR #508 — so if you change a class it does not cover, say which verification you used instead and paste its output.'
+    - GOOS=windows GOARCH=amd64 go build ./... must exit 0.
+    - The leader cannot run the setsid-detached test gate in this sandboxed session (the guard blocks setsid and env wrappers), so CI is the authoritative no-Claude-ancestor check. Do not assume a local pass means a CI pass — flag anything you believe is environment-sensitive so the leader watches for it specifically.
+    - Amend DES-076 with the outcome — it is currently marked PARTIAL precisely because this half was blocked. When this lands, its Non-goal section is no longer accurate. Update the heading and the section rather than appending a contradicting paragraph; an ADR that says two different things is worse than one that says nothing.
+    - 'CHANGELOG under [Unreleased]. User-visible: a mission wrongly captured by a dispatch sidecar can now be retired.'
+    - Commit incrementally — one commit per logical step. Each commit passes make check. Do not accumulate more than 30 minutes of uncommitted changes.
+    - Do NOT push. Report and the leader pushes.
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 2
+context: |
+    Second half of ethos-7tqd, and the last open item in the ethos
+    cluster-2 bug triage. Continue on branch fix/spawn-binding in the
+    session-pid-identity worktree, on top of commit 3cf6bf4.
+
+    Mission m-2026-09-08-003 delivered the first half — the dispatch
+    sidecar is now single-use and scoped to the contract's declared
+    Worker, so the general "any next spawn gets captured" class is gone.
+    It was closed as ESCALATED because its write-set covered internal/hook
+    but the second requirement necessarily lives in internal/mission. That
+    was the leader's scoping error, not a worker shortfall; the escalate
+    verdict was the correct response and this contract is the correction.
+
+    Why this half is still worth funding rather than deferring: DES-076
+    honestly names the residual case it does not close — a spawn whose
+    agent type EQUALS the dispatched Worker but whose task is unrelated.
+    In this repo that is not an exotic edge case. The leader dispatches to
+    bwk repeatedly, so same-type unrelated spawns are the common shape,
+    and when one captures, the affected mission becomes unretireable. The
+    cleanup path is what makes the residual survivable.
+
+    Two lessons from PR #508's ten review rounds, both directly relevant:
+
+    1. A comment describing what the code USED to do is a defect. Four
+       rounds went to stale comments there, and one stale claim was
+       hiding a real correctness bug — writing down WHY forced a claim
+       precise enough to falsify. DES-076's PARTIAL marking and Non-goal
+       section become stale the moment this lands; updating them is part
+       of the work, not cleanup after it.
+
+    2. Validate a detector before trusting a clean result. If you sweep
+       for other call sites or other bypass paths, first confirm your
+       method fires on the known-bad case. "I searched and found nothing"
+       is worthless if the search could not have found anything.

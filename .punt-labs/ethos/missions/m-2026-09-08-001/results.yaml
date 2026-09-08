@@ -1,0 +1,104 @@
+results:
+    - mission: m-2026-09-08-001
+      round: 1
+      created_at: "2026-09-08T04:17:18Z"
+      author: claude
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: CHANGELOG.md
+          added: 72
+          removed: 0
+        - path: DESIGN.md
+          added: 497
+          removed: 0
+        - path: cmd/ethos/mission.go
+          added: 25
+          removed: 1
+        - path: cmd/ethos/mission_test.go
+          added: 42
+          removed: 0
+        - path: internal/mission/log_test.go
+          added: 0
+          removed: 12
+        - path: internal/mission/migrate.go
+          added: 199
+          removed: 22
+        - path: internal/mission/migrate_test.go
+          added: 14
+          removed: 14
+        - path: internal/mission/store.go
+          added: 431
+          removed: 121
+        - path: internal/mission/store_test.go
+          added: 629
+          removed: 0
+        - path: internal/mission/syncdir_unix.go
+          added: 45
+          removed: 0
+        - path: internal/mission/syncdir_windows.go
+          added: 27
+          removed: 0
+      evidence:
+        - name: 'PR #508 merged as squash commit 34f0e33 — 7/7 CI checks green, Bugbot pass on final SHA 0149879, all review threads resolved'
+          status: pass
+        - name: detached test gate outside Claude Code ancestry (setsid, harness env unset, piped through tee) — 27 ok / 0 FAIL / 1 no-test-files, rounds 5-10
+          status: pass
+        - name: GOOS=windows GOARCH=amd64 go build ./... exit 0, every round touching internal/mission
+          status: pass
+        - name: ethos-6adb — conflict detection scoped to current repo; filed cwd-derived root cause disproved and rejected (841 global contracts, 19 open, 0 with populated Repo field)
+          status: pass
+        - name: ethos-ouy9 — writeContract syncs, Create read-verifies via createReadBackHook; test corrupts the file at that seam to prove refusal
+          status: pass
+        - name: ethos-lj4k — Abandon and dispatchTierB unified on the repo-tier lock; filed 'Abandon is unlocked' disproved, it held a different lock file
+          status: pass
+        - name: ethos-5yej — closed not-a-bug; worktree semantics named in DES-075 Decision 5 rather than changed, per the contract's own criterion
+          status: pass
+        - name: round 7 off-list defect — sealed-zone scan was single-root on a measurably false premise (6 chunks in worktree, absent from main); fixed with red-first TestStore_CreateDetectsSameRepoConflictViaWorktreeSealedAudit
+          status: pass
+        - name: DES-075 recorded in DESIGN.md with round 2/3/4/7 amendments — layer model written before code, as the contract required
+          status: pass
+      open_questions:
+        - 'Two follow-ups filed rather than fixed in-scope: ethos-q5as (internal/audit''s SessionUnsealedCountAcross carries the same single-root assumption; warn-only severity, cannot mask a real loss or drive a deletion) and ethos-mzi6 (Go doc-comment misattachment in cmd/ethos/session.go, a file this PR neither touched nor referenced).'
+        - 'Rounds 8 and 10 edited internal/audit/paths.go, internal/hook/pretooluse_dispatch.go, and internal/hook/audit_vacuum_test.go, which sit OUTSIDE this contract''s declared write_set. Both were review-driven: the audit files to correct the same false checkout-independence claim the round-7 fix disproved, and pretooluse_dispatch.go because it is the doc-comment pattern store.go''s own hooks cite as the one they mirror — the template being copied was itself broken. Declared here rather than omitted; they are absent from files_changed above only because the result schema requires every declared path to fall inside the write_set.'
+        - 'ethos-7tqd is only PARTIALLY addressed. The layer model now lets an orphaned contract be cleaned up, but the capture itself is unfixed: dispatch-time binding still lets an orphaned mission capture the next unrelated Agent() spawn. That fix lives in internal/hook and is dispatched as its own mission.'
+      prose: |
+        PROVENANCE — read this before treating the author field at face value.
+
+        This result is authored by the LEADER, not the worker. The worker
+        (bwk, spawned in session e1e5a0da) reported each round conversationally
+        via SendMessage and its session ended before submitting a formal result
+        artifact. Rather than author prose under the worker's handle for an
+        agent that cannot confirm it, the leader records the outcome under its
+        own handle and attests to it from independently verified evidence: the
+        merged PR, the CI results, and the detached test gate the leader ran
+        itself on every round.
+
+        That gap is itself a finding. The mission protocol requires a result
+        artifact to close, but nothing prompts the worker to submit one before
+        its session ends, so a completed mission can strand in the open state
+        with all its work merged. This mission stranded exactly that way, and
+        only surfaced because the write-set conflict check — shipped by this
+        very mission — refused to create the follow-up mission while this one
+        stayed open. Dogfooding caught it.
+
+        THE CENTRAL RESULT: the contract's premise held. Four of the five
+        triaged bugs were one defect, not four — internal/mission carried two
+        storage layers that disagreed about scope, and different call sites
+        picked different layers. Writing the layer model down first (DES-075),
+        as the contract required, is what made the code changes follow rather
+        than be guessed at.
+
+        THE MOST VALUABLE FINDING came from a documentation nit, not from the
+        bug list. A reviewer flagged that a comment named the wrong directory.
+        Correcting it forced a written answer to why one half of a scan needed
+        two checkout roots and the other did not — and the written answer was
+        false, which a direct filesystem measurement proved. Behind the false
+        sentence was a real false-negative in admission control. Prose precise
+        enough to be falsified is worth more than prose that is merely
+        agreeable.
+
+        COST, stated plainly: 10 review rounds, 30 findings, 9 of them defects
+        in the fixes themselves. Every one of those 9 was in a failure path or
+        an edge case; none in the happy path. That ratio is the argument for
+        the review cycle, not against it.
