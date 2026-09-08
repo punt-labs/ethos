@@ -5991,7 +5991,12 @@ func TestStore_DisclaimDelegation_ThenAbandonSucceeds(t *testing.T) {
 		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
 	})
 	require.NoError(t, err)
-	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictAborted,
+	// Pass, not aborted: ethos-7tqd's real reproduction was an unrelated
+	// agent that ran to normal completion, not one refused before it
+	// started. verdict=aborted is excluded from the blocking gate
+	// unconditionally (DES-076 round 3, C7) and would make this test's
+	// "before disclaiming" assertion below fail for the wrong reason.
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
 		time.Now().UTC().Format(time.RFC3339)))
 
 	// Before disclaiming: Abandon refuses exactly as it always has.
@@ -6118,7 +6123,11 @@ func TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure(t *testing.T) {
 		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
 	})
 	require.NoError(t, err)
-	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictAborted,
+	// Pass, not aborted -- verdict=aborted is excluded from the
+	// blocking gate unconditionally (DES-076 round 3, C7), which would
+	// make this test's post-rollback "must still block" assertion pass
+	// for the wrong reason regardless of whether the rollback worked.
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
 		time.Now().UTC().Format(time.RFC3339)))
 
 	recordPath := filepath.Join(DelegationDir(repoRoot, c.MissionID, delegationID), "record.yaml")
@@ -6167,8 +6176,12 @@ func TestCountBlockingDelegations_ExcludesOnlyDisclaimed(t *testing.T) {
 		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
 	})
 	require.NoError(t, err)
+	// Pass, not aborted -- this delegation is disclaimed below to prove
+	// the disclaim-exclusion half of the gate; verdict=aborted would
+	// already be excluded unconditionally (DES-076 round 3, C7) and
+	// would not exercise the disclaim path this test targets.
 	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-020",
-		DelegationVerdictAborted, time.Now().UTC().Format(time.RFC3339)))
+		DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
 
 	_, err = WriteDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-021", DelegationSkeleton{
 		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaMissionIDEnv,
@@ -6196,4 +6209,70 @@ func TestCountBlockingDelegations_ExcludesOnlyDisclaimed(t *testing.T) {
 	total, err := countDelegations(repoRoot, missionID)
 	require.NoError(t, err)
 	assert.Equal(t, 2, total, "countDelegations must stay unfiltered — it backs an informational snapshot, not a gate")
+}
+
+// TestCountBlockingDelegations_ExcludesAbortedUnconditionally is
+// review finding C7 (m-2026-09-08-004 round 2): a delegation refused
+// before its worker ever ran (verdict=aborted, written by the
+// max_delegation_depth or content-hash-gate refusal paths) never
+// represents real work, independent of BoundVia or any disclaim.
+// BoundViaSidecarDispatch is deliberately used here — the SAME
+// provenance a genuine capture carries — to prove the exclusion is
+// keyed on Verdict, not on provenance: an aborted delegation must be
+// excluded even though its provenance alone would also satisfy
+// DisclaimDelegationRecord's eligibility check.
+func TestCountBlockingDelegations_ExcludesAbortedUnconditionally(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-816"
+
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-030", DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-030",
+		DelegationVerdictAborted, time.Now().UTC().Format(time.RFC3339)))
+
+	n, err := countBlockingDelegations(repoRoot, missionID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "an aborted (never-ran) delegation must never block Abandon, disclaimed or not")
+
+	// No disclaim was ever recorded -- the exclusion is unconditional,
+	// not routed through the disclaim mechanism.
+	d, err := LoadDelegation(filepath.Join(DelegationDir(repoRoot, missionID, "d-2026-09-08-030"), "record.yaml"))
+	require.NoError(t, err)
+	assert.Empty(t, d.DisclaimedAt, "the aborted delegation must be excluded without ever being disclaimed")
+}
+
+// TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim is the
+// end-to-end proof for C7: a mission whose only delegation was refused
+// by the REAL max_delegation_depth gate (not a hand-constructed aborted
+// record) can be abandoned directly -- no --disclaim needed, because
+// the delegation never represented real work in the first place. Before
+// this fix, such a mission was permanently un-abandonable: Abandon's
+// gate blocked on the aborted record's mere existence, and disclaiming
+// it would have mislabeled a genuine depth-refused dispatch as a
+// dispatch-sidecar "capture," which it was not.
+func TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-817")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-031"
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// Simulate exactly what enforceDelegationDepth's refusal path does
+	// (internal/hook/pretooluse_dispatch.go's closeDelegationAborted):
+	// close the just-written skeleton as aborted BEFORE any worker ever
+	// ran. The spawn itself was refused; this delegation record is the
+	// only trace it left.
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictAborted, closedAt))
+
+	abandoned, err := s.Abandon(c.MissionID, "the only delegation was refused before it ever ran")
+	require.NoError(t, err, "a mission whose only delegation never ran must be abandonable with no disclaim")
+	assert.Equal(t, StatusAbandoned, abandoned.Status)
 }

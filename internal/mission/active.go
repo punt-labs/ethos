@@ -6,7 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 // Active-mission sidecar.
@@ -357,6 +359,182 @@ func ClearActiveMission(globalRoot, sessionID string) error {
 	return removeSidecarFile(ActiveMissionOriginPath(globalRoot, sessionID))
 }
 
+// Pending dispatch bindings (DES-076 round 3, review finding C1 on
+// m-2026-09-08-004 round 2).
+//
+// The single active-mission slot could hold only ONE dispatch binding
+// at a time. `ethos mission dispatch --worker bwk` for mission A wrote
+// it; a second `dispatch --worker bwk` for mission B before A's worker
+// ever spawned overwrote it, silently discarding A's binding — and
+// this repo pins ONE handle per specialty domain (bwk for every Go
+// internals mission), so back-to-back same-worker dispatch is the
+// NORMAL workflow, not a corner case. The declared-Worker discriminator
+// had zero discriminating power in exactly the situation this repo
+// generates most: two pending dispatches sharing a worker guaranteed a
+// misattribution the moment either spawned.
+//
+// The fix keys the binding by MISSION instead of holding one
+// overwritable slot: each pending dispatch gets its own file, named by
+// mission ID, under <globalRoot>/sessions/<id>/dispatch-pending/. N
+// pending dispatches to the same Worker now coexist without collision.
+// A spawn matching a given Worker consumes the OLDEST pending entry for
+// that Worker (file mtime order) — the natural interpretation of
+// CLAUDE.md's own two-step dispatch-then-spawn protocol: a leader
+// dispatches, then immediately spawns, in that order, and did so for
+// A before B in this repo's own back-to-back-dispatch pattern.
+//
+// This also closes two related bugs the single-slot design could not
+// avoid:
+//   - C2: the single active-mission/active-mission-origin pair encoded
+//     both claim and dispatch bindings in one two-file structure, and a
+//     partial failure clearing one file but not the other converged to
+//     an ambiguous state ReadActiveMissionBinding had to guess at.
+//     Dispatch bindings no longer touch that pair at all — claim stays
+//     exactly as it was (a single sticky slot, its own two-file
+//     structure, unaffected), and each dispatch-pending entry is ONE
+//     file with no paired-file consistency question to get wrong.
+//   - C3: matching a claimant against the single slot required Loading
+//     the mission's contract to discover its Worker, so a Load failure
+//     during matching was genuinely ambiguous (was this a mismatch, or
+//     an unresolvable match?) and had to fall through silently. The
+//     Worker handle is now recorded directly in the pending-dispatch
+//     file at dispatch time, so matching needs no Load at all — a
+//     contract that fails to load for an already-matched pending
+//     dispatch is handled by dispatchTierB's own existing Load-and-block
+//     path, identically to an explicit MISSION_ID naming an unloadable
+//     contract.
+func dispatchPendingRoot(globalRoot, sessionID string) string {
+	if globalRoot == "" || sessionID == "" {
+		return ""
+	}
+	return filepath.Join(globalRoot, "sessions", filepath.Base(sessionID), "dispatch-pending")
+}
+
+// DispatchPendingPath returns the path to the pending-dispatch file for
+// one mission. Returns "" when any argument is empty.
+func DispatchPendingPath(globalRoot, sessionID, missionID string) string {
+	dir := dispatchPendingRoot(globalRoot, sessionID)
+	if dir == "" || missionID == "" {
+		return ""
+	}
+	return filepath.Join(dir, filepath.Base(missionID))
+}
+
+// WriteDispatchPending records that missionID has been dispatched and
+// is awaiting its ONE matching Worker spawn. worker is the contract's
+// declared Worker handle — recorded here so a later scan never needs
+// to re-Load the contract to discover it (see the C3 note above).
+func WriteDispatchPending(globalRoot, sessionID, missionID, worker string) error {
+	path := DispatchPendingPath(globalRoot, sessionID, missionID)
+	if path == "" {
+		return fmt.Errorf("writing dispatch-pending: globalRoot, sessionID, and missionID are required")
+	}
+	if strings.TrimSpace(worker) == "" {
+		return fmt.Errorf("writing dispatch-pending: worker is required")
+	}
+	return writeSidecarFile(path, worker+"\n")
+}
+
+// DispatchPendingEntry is one pending dispatch binding, as reported by
+// ReadDispatchPending.
+type DispatchPendingEntry struct {
+	MissionID string
+	Worker    string
+	CreatedAt time.Time // the pending file's mtime; used for FIFO ordering.
+}
+
+// ReadDispatchPending lists every pending dispatch binding for
+// sessionID, oldest first. A corrupt or unreadable individual entry is
+// reported as a warning string rather than failing the whole scan — one
+// bad file must not blind the reader to every other still-good pending
+// dispatch, the same non-blocking discipline every sidecar reader in
+// this file follows.
+func ReadDispatchPending(globalRoot, sessionID string) ([]DispatchPendingEntry, []string, error) {
+	dir := dispatchPendingRoot(globalRoot, sessionID)
+	if dir == "" {
+		return nil, nil, nil
+	}
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("reading dispatch-pending dir %q: %w", dir, err)
+	}
+	var out []DispatchPendingEntry
+	var warnings []string
+	for _, de := range dirEntries {
+		if de.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, de.Name())
+		info, statErr := de.Info()
+		if statErr != nil {
+			warnings = append(warnings, fmt.Sprintf("stat %q: %v", path, statErr))
+			continue
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			warnings = append(warnings, fmt.Sprintf("reading %q: %v", path, readErr))
+			continue
+		}
+		worker := strings.TrimSpace(string(data))
+		if worker == "" {
+			warnings = append(warnings, fmt.Sprintf("%q: empty worker", path))
+			continue
+		}
+		out = append(out, DispatchPendingEntry{
+			MissionID: de.Name(),
+			Worker:    worker,
+			CreatedAt: info.ModTime(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, warnings, nil
+}
+
+// ConsumeDispatchPending removes ONE pending dispatch entry — called
+// once its matching spawn has been fully admitted (DES-076: after the
+// JSON response has been encoded, never on a refusal). Missing is not
+// an error — already consumed, or never existed.
+//
+// Unlike ClearActiveMission's two-file pair, this is a single-file
+// removal: there is no paired-file consistency question a partial
+// failure could leave in an ambiguous state (C2's exact class). A
+// failure here is reported to the caller, which is responsible for
+// telling the operator the remedy (`ethos mission release`) — see
+// consumeDispatchBinding in internal/hook/pretooluse_dispatch.go.
+func ConsumeDispatchPending(globalRoot, sessionID, missionID string) error {
+	return removeSidecarFile(DispatchPendingPath(globalRoot, sessionID, missionID))
+}
+
+// ClearDispatchPending removes every pending dispatch entry for
+// sessionID — `ethos mission release`'s dispatch-side counterpart to
+// ClearActiveMission. Missing is not an error.
+func ClearDispatchPending(globalRoot, sessionID string) error {
+	dir := dispatchPendingRoot(globalRoot, sessionID)
+	if dir == "" {
+		return nil
+	}
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("reading dispatch-pending dir %q: %w", dir, err)
+	}
+	var errs []error
+	for _, de := range dirEntries {
+		if de.IsDir() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, de.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // ClearMissionBindings removes sessionID's active-mission and
 // delegation-binding sidecars when they name missionID. Every surface
 // that takes a mission out of the open set calls it: the commit-msg
@@ -400,6 +578,19 @@ func ClearMissionBindings(globalRoot, sessionID, missionID string) error {
 		if err := ClearDelegationBinding(globalRoot, sessionID); err != nil {
 			errs = append(errs, fmt.Errorf("clearing delegation binding: %w", err))
 		}
+	}
+
+	// Dispatch-pending entries are keyed by mission ID (DES-076 round
+	// 3), so a mission taking itself out of the open set can remove
+	// its OWN pending entry precisely — unlike the old single ambiguous
+	// slot, there is no risk of clearing a DIFFERENT mission's binding
+	// by mistake. This is the one remedy `ethos mission close`/`abandon`
+	// actually restores for a stuck pending dispatch on THIS mission;
+	// a stuck entry for a DIFFERENT mission is unaffected and still
+	// needs `ethos mission release` (review finding C9's follow-up,
+	// m-2026-09-08-004 round 2).
+	if err := ConsumeDispatchPending(globalRoot, sessionID, missionID); err != nil {
+		errs = append(errs, fmt.Errorf("clearing dispatch-pending: %w", err))
 	}
 	return errors.Join(errs...)
 }

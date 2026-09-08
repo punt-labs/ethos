@@ -2349,9 +2349,7 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCap
 
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	sessionID := "sess-dispatch-mismatch"
-	require.NoError(t, mission.WriteActiveMissionOrigin(
-		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
-	))
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionID, "bwk"))
 
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 	t.Setenv("MISSION_ID", "")
@@ -2379,23 +2377,21 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCap
 		assert.True(t, os.IsNotExist(err), "delegations dir should not exist at all: %v", err)
 	}
 
-	still, err := mission.ReadActiveMission(globalRoot, sessionID)
+	// Review finding C1 (m-2026-09-08-004 round 2): the pending entry
+	// itself, not just a mission-ID string, must survive so the real
+	// worker's later spawn can still consume it. Checking the entry
+	// directly (rather than a bare mission-ID read) closes the same
+	// class of gap review finding F6 (round 1) flagged: it is not
+	// possible for this entry to silently degrade into an unrelated
+	// binding shape the way the old shared active-mission/origin pair
+	// could, because a pending-dispatch entry has no second file to
+	// drift out of sync with.
+	entriesList, warnings, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, missionID, still,
-		"the dispatch binding must survive an unrelated spawn so the real worker can still consume it")
-
-	// Review finding F6 (m-2026-09-08-003): asserting ReadActiveMission
-	// alone cannot tell a live dispatch binding apart from a dispatch
-	// binding whose origin file was dropped (e.g. by a partial
-	// ClearActiveMission failure) — both read the same missionID.
-	// ReadActiveMissionBinding's Origin is what actually decides
-	// whether the NEXT session activity treats this as still
-	// worker-scoped-and-single-use (dispatch) or as a sticky claim that
-	// stamps commit trailers regardless of agent type.
-	stillBinding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
-	require.NoError(t, err)
-	assert.Equal(t, mission.BindOriginDispatch, stillBinding.Origin,
-		"the surviving binding must still be dispatch origin, not silently degraded to a sticky claim")
+	require.Empty(t, warnings)
+	require.Len(t, entriesList, 1, "the dispatch binding must survive an unrelated spawn so the real worker can still consume it")
+	assert.Equal(t, missionID, entriesList[0].MissionID)
+	assert.Equal(t, "bwk", entriesList[0].Worker)
 }
 
 // TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumesBinding
@@ -2413,9 +2409,7 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumes
 
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	sessionID := "sess-dispatch-match"
-	require.NoError(t, mission.WriteActiveMissionOrigin(
-		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
-	))
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionID, "bwk"))
 
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 	t.Setenv("MISSION_ID", "")
@@ -2433,9 +2427,9 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumes
 	assert.Equal(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"the matching worker's spawn must be bound Tier B")
 
-	after, err := mission.ReadActiveMission(globalRoot, sessionID)
+	entriesList, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
-	assert.Empty(t, after,
+	assert.Empty(t, entriesList,
 		"a dispatch binding is single-use — it must be cleared once its matching spawn consumes it")
 
 	// A second spawn in the same session, even of the same agent type,
@@ -2446,6 +2440,73 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumes
 	require.NoError(t, json.Unmarshal(out2.Bytes(), &r2))
 	assert.Empty(t, r2.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"a consumed dispatch binding must not resurrect itself for a later spawn")
+}
+
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_TwoPendingSameWorkerCoexist
+// is the direct regression test for review finding C1 (m-2026-09-08-004
+// round 2), reproducing the leader's own repro sequence: two missions
+// dispatched to the SAME Worker handle back to back, before either
+// spawn happens. Before this fix, the second `dispatch --worker bwk`
+// silently discarded the first mission's binding (single overwritable
+// slot); the first mission's eventual worker spawn would then be
+// misattributed to the second mission, and the second mission's own
+// worker spawn would go completely unattributed (Tier A). This repo
+// pins ONE handle per specialty domain, so this exact sequence — not a
+// corner case — is the normal two-mission dispatch workflow.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_TwoPendingSameWorkerCoexist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionA := "m-2026-09-08-704"
+	missionB := "m-2026-09-08-705"
+	stageContract(t, home, missionA)                                  // Worker: "bwk"
+	stageContractCustomWriteSet(t, home, missionB, []string{"docs/"}) // Worker: "bwk", disjoint write_set
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-dispatch-two-pending"
+	// Dispatch A, then B, before either spawn — the exact sequence C1
+	// reported. Sleep a tick between writes so mtime ordering (the FIFO
+	// discriminator) is unambiguous on filesystems with coarse mtime
+	// resolution.
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionA, "bwk"))
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionB, "bwk"))
+
+	entriesList, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	require.Len(t, entriesList, 2, "both pending dispatches must coexist -- neither overwrites the other")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+
+	// First bwk spawn: FIFO resolves to the OLDER pending dispatch, A —
+	// exactly the leader's own dispatch-then-spawn ordering.
+	var out1 bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out1))
+	var r1 PreToolUseResult
+	require.NoError(t, json.Unmarshal(out1.Bytes(), &r1))
+	assert.Equal(t, missionA, r1.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"the first matching spawn must resolve to the OLDER pending dispatch")
+
+	// Second bwk spawn: A's entry is consumed, so this one resolves to
+	// B — no misattribution, no unattributed Tier A fallback.
+	var out2 bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out2))
+	var r2 PreToolUseResult
+	require.NoError(t, json.Unmarshal(out2.Bytes(), &r2))
+	assert.Equal(t, missionB, r2.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"the second matching spawn must resolve to the remaining pending dispatch, not fall through to Tier A")
+
+	remaining, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "both pending dispatches must be consumed after their matching spawns")
 }
 
 // TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume is
@@ -2488,31 +2549,42 @@ func TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume(t *test
 		"a claim binding must stay sticky after use — only dispatch bindings are single-use")
 }
 
-// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableContractDoesNotBlock
-// is review finding F5 (m-2026-09-08-003): the only existing malformed-
-// sidecar test (TestDispatchAgent_ActiveMissionSidecarMalformedRefuses)
-// uses a CLAIM-origin sidecar and asserts a BLOCK — the opposite branch
-// from DES-076's stated dispatch-origin doctrine, which treats an
-// unresolvable contract identically to a Worker mismatch (never a
-// block, since the sidecar is an ambient bridge behind every later
-// spawn, not the operator naming this exact spawn's mission). Without
-// this test, a regression that made the dispatch path block on an
-// unresolvable contract — resurrecting the doctrine the ADR explicitly
-// argues against — would pass the entire suite.
-func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableContractDoesNotBlock(t *testing.T) {
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchedButUnresolvableContractBlocks
+// is review findings C3/C8 (m-2026-09-08-004 round 2), and a deliberate
+// DOCTRINE REVISION from DES-076 round 1: round 1's matching path
+// needed a contract Load to even discover a pending mission's Worker,
+// so a Load failure during matching was genuinely ambiguous (mismatch,
+// or unresolvable match?) and had to fall through non-blocking. Round
+// 3 records the Worker directly in the pending-dispatch file at
+// dispatch time (see active.go's dispatch-pending doc comment), so
+// matching a spawn against a pending entry needs no Load at all — a
+// match is certain BEFORE any Load is attempted. A contract that then
+// fails to load for an ALREADY-MATCHED pending dispatch is therefore
+// structurally identical to an explicit MISSION_ID naming an unloadable
+// contract (case 1): a genuine, actionable problem for THIS spawn, not
+// ambient noise sitting behind every spawn in the session. dispatchTierB
+// already blocks on that case; this test pins that the same
+// (Load-failure -> block) path is now reached for a matched pending
+// dispatch too, so the dispatched worker's absence from the audit trail
+// is a loud refusal, never a silent, unaudited Tier A fallback (the
+// exact defect review finding C3 reported against round 1's code,
+// which discarded the Load error and printed a misleading `worker ""`
+// mismatch message for what was actually the correctly dispatched
+// worker).
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchedButUnresolvableContractBlocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stageRepoRoot(t)
-	// Deliberately no stageContract call: the sidecar names a mission
-	// the store cannot Load, matching TestDispatchAgent_ActiveMissionSidecarMalformedRefuses's
-	// setup, but with BindOriginDispatch instead of a claim.
+	// Deliberately no stageContract call: the pending entry names a
+	// mission the store cannot Load, but the Worker is already known
+	// from the pending file itself (dispatch time recorded it), so the
+	// match succeeds before dispatchTierB's own Load ever runs and
+	// fails.
 
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	sessionID := "sess-dispatch-unresolvable"
 	missionID := "m-2026-09-08-703"
-	require.NoError(t, mission.WriteActiveMissionOrigin(
-		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
-	))
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionID, "bwk"))
 
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 	t.Setenv("MISSION_ID", "")
@@ -2527,13 +2599,14 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableContractDo
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
-		"an unresolvable dispatch-origin contract must never block the spawn (contrast with claim/MISSION_ID)")
-	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
-		"a contract that cannot be loaded must not be treated as a match")
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
+		"a matched pending dispatch whose contract cannot load must block, exactly like an unloadable explicit MISSION_ID")
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, missionID)
 
-	still, err := mission.ReadActiveMission(globalRoot, sessionID)
+	// The pending entry is left in place -- the spawn was refused
+	// outright (never admitted), so there is nothing to have consumed.
+	entriesList, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, missionID, still,
-		"the unresolvable binding must be left in place, not cleared, since it was never consumed")
+	require.Len(t, entriesList, 1)
+	assert.Equal(t, missionID, entriesList[0].MissionID)
 }

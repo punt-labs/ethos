@@ -255,15 +255,21 @@ func TestHandleMission_CreateBindsActiveMission(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &c))
 	require.NotEmpty(t, c.MissionID)
 
-	got, err := mission.ReadActiveMission(globalRoot, sess)
+	// DES-076 round 3: create writes a per-mission pending-dispatch
+	// entry, not the shared active-mission slot -- the create-time
+	// binding must never turn on commit trailers (unaffected by round
+	// 3: a pending dispatch was never eligible for trailers even before
+	// this change), and must not collide with a DIFFERENT mission's own
+	// pending dispatch.
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
 	require.NoError(t, err)
-	assert.Equal(t, c.MissionID, got,
-		"handleCreateMission must write the active-mission sidecar just like the CLI does")
+	require.Len(t, pending, 1, "handleCreateMission must write a pending-dispatch entry just like the CLI does")
+	assert.Equal(t, c.MissionID, pending[0].MissionID)
+	assert.Equal(t, c.Worker, pending[0].Worker)
 
-	binding, err := mission.ReadActiveMissionBinding(globalRoot, sess)
+	claimed, err := mission.ReadActiveMission(globalRoot, sess)
 	require.NoError(t, err)
-	assert.Equal(t, mission.BindOriginDispatch, binding.Origin,
-		"the create-time binding must be dispatch origin, not claim — create must not turn on commit trailers")
+	assert.Empty(t, claimed, "create must never touch the claim slot")
 }
 
 // TestHandleMission_CreateFreshBindNamesWorker is review finding F1 on
@@ -325,7 +331,7 @@ func TestHandleMission_CreateNoSessionWarns(t *testing.T) {
 	require.True(t, ok, "no session store wired must still warn; got %#v", payload["warnings"])
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "no session store wired")
-	assert.Contains(t, warnings[0], "not updated")
+	assert.Contains(t, warnings[0], "not written")
 }
 
 // TestHandleMission_CreateNoSessionInContextWarns is the sibling of
@@ -354,7 +360,7 @@ func TestHandleMission_CreateNoSessionInContextWarns(t *testing.T) {
 	require.True(t, ok, "no session in context must still warn; got %#v", payload["warnings"])
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "no session in context")
-	assert.Contains(t, warnings[0], "not updated")
+	assert.Contains(t, warnings[0], "not written")
 }
 
 // TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode pins mission
@@ -396,16 +402,15 @@ func TestClearClosedMissionBindings_ReportsRealCauseUnderClaudeCode(t *testing.T
 	assert.Contains(t, warnings[0], "resolving session")
 }
 
-// TestHandleMission_CreateRebindsWarnsOnDifferentMission mirrors the
-// CLI's bindDispatchedMission rebind warning (mission.go:2061): a
-// session already bound to a different, still-open mission gets
-// rebound on disk to the freshly created mission, and the response
-// carries a warning naming the old mission, the new mission, and the
-// remedy (`ethos mission claim`) — MCP has no stderr channel to print
-// the CLI's line to, so it rides in the payload's warnings array, the
-// same convention handleCloseMission already uses.
-func TestHandleMission_CreateRebindsWarnsOnDifferentMission(t *testing.T) {
-	const sess = "sess-mcp-create-rebind"
+// TestHandleMission_CreateCoexistsWithExistingClaim is the MCP-surface
+// sibling of the CLI's TestMissionDispatch_CoexistsWithExistingClaim.
+// DES-076 round 3 (review finding C1, m-2026-09-08-004 round 2)
+// replaced the old single-slot "rebind" with a per-mission
+// pending-dispatch store: creating a mission while the session already
+// holds an unrelated claim no longer disturbs that claim at all -- the
+// two coexist on independent storage.
+func TestHandleMission_CreateCoexistsWithExistingClaim(t *testing.T) {
+	const sess = "sess-mcp-create-coexist"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ETHOS_SESSION", sess)
@@ -413,8 +418,8 @@ func TestHandleMission_CreateRebindsWarnsOnDifferentMission(t *testing.T) {
 	h := testHandlerWithSessions(t)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	const previous = "m-2026-07-30-501"
-	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, previous))
+	const claimed = "m-2026-07-30-501"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, claimed))
 
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":   "create",
@@ -430,19 +435,18 @@ func TestHandleMission_CreateRebindsWarnsOnDifferentMission(t *testing.T) {
 
 	warnings, ok := payload["warnings"].([]any)
 	require.True(t, ok, "warnings must be a top-level array; got %#v", payload["warnings"])
-	// Two entries: the unconditional fresh-bind confirmation (F1 —
-	// parity with the CLI's own unconditional stderr line, naming the
-	// worker the binding is scoped to) plus the rebind-specific message.
-	require.Len(t, warnings, 2)
+	require.Len(t, warnings, 1, "there is no rebind case anymore -- dispatching never displaces a different mission's own pending entry")
 	assert.Contains(t, warnings[0], missionID)
 	assert.Contains(t, warnings[0], "bwk", "the fresh-bind line must name the worker the binding is scoped to")
-	assert.Contains(t, warnings[1], previous)
-	assert.Contains(t, warnings[1], missionID)
-	assert.Contains(t, warnings[1], "ethos mission claim")
 
-	got, err := mission.ReadActiveMission(globalRoot, sess)
+	stillClaimed, err := mission.ReadActiveMission(globalRoot, sess)
 	require.NoError(t, err)
-	assert.Equal(t, missionID, got, "rebind must still move the sidecar to the new mission")
+	assert.Equal(t, claimed, stillClaimed, "an existing claim must survive an unrelated create")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, missionID, pending[0].MissionID)
 }
 
 func TestHandleMission_CreateMissingContract(t *testing.T) {
@@ -1131,8 +1135,12 @@ func TestHandleMission_AbandonDisclaim(t *testing.T) {
 		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
 	})
 	require.NoError(t, err)
+	// Pass, not aborted: verdict=aborted is excluded from Abandon's
+	// blocking gate unconditionally (DES-076 round 3, C7), which would
+	// let the "still refuses pre-disclaim" call below succeed outright
+	// instead of exercising the disclaim path this test targets.
 	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, delegationID,
-		mission.DelegationVerdictAborted, time.Now().UTC().Format(time.RFC3339)))
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
 
 	// Before disclaiming: abandon still refuses.
 	preResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{

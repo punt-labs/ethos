@@ -1077,8 +1077,13 @@ func TestMissionAbandon_DisclaimHappyPath(t *testing.T) {
 		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
 	})
 	require.NoError(t, err)
+	// Pass, not aborted: verdict=aborted is excluded from Abandon's
+	// blocking gate unconditionally (DES-076 round 3, C7), which would
+	// let the "still refuses pre-disclaim" assertion below fail for the
+	// wrong reason (abandon succeeding outright, with nothing left to
+	// disclaim).
 	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, delegationID,
-		mission.DelegationVerdictAborted, time.Now().UTC().Format(time.RFC3339)))
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
 
 	// Before disclaiming: abandon still refuses, exactly as before this round.
 	err = runMissionAbandon(missionID, "should still refuse pre-disclaim", nil)
@@ -4594,18 +4599,28 @@ func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 // mission named at dispatch owns the session binding, so the worker's
 // next matching Agent() spawn files its delegation under it (DES-076
 // scopes that binding to the one spawn matching the contract's
-// declared Worker; the fields this test checks — the sidecar contents
-// and the rebind warning — are unaffected by that later change). Before
-// the ethos-7vo3 fix the sidecar stayed on whatever `mission claim`
-// last wrote, and a leader who dispatched a second mission without
-// releasing the first filed the new delegation under the old mission.
-func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
+// declared Worker). Before the ethos-7vo3 fix the sidecar stayed on
+// whatever `mission claim` last wrote, and a leader who dispatched a
+// second mission without releasing the first filed the new delegation
+// under the old mission.
+//
+// DES-076 round 3 (review finding C1, m-2026-09-08-004 round 2)
+// replaced the old single-slot "rebind" with a per-mission
+// pending-dispatch store: dispatching no longer overwrites or
+// disturbs an existing claim at all — the two now coexist on
+// independent storage, and readActiveMissionForDispatch checks the
+// pending dispatch first (matching the OLD precedence: dispatch always
+// took priority over a standing claim, just via separate storage
+// instead of an overwrite). This test's name and assertions reflect
+// that: claim survives untouched, and a new pending-dispatch entry
+// appears for the freshly dispatched mission.
+func TestMissionDispatch_CoexistsWithExistingClaim(t *testing.T) {
 	home := missionTestEnv(t)
-	stale := seedMissionForClaim(t)
+	claimed := seedMissionForClaim(t)
 
-	t.Setenv("ETHOS_SESSION", "sess-rebind")
-	seedRosterForSession(t, "sess-rebind")
-	require.NoError(t, runMissionClaim(stale))
+	t.Setenv("ETHOS_SESSION", "sess-coexist")
+	seedRosterForSession(t, "sess-coexist")
+	require.NoError(t, runMissionClaim(claimed))
 
 	dispatchWorker = "bwk"
 	dispatchEvaluator = "djb"
@@ -4627,28 +4642,27 @@ func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 2, "the seeded mission and the dispatched one")
 	dispatched := ids[0]
-	if dispatched == stale {
+	if dispatched == claimed {
 		dispatched = ids[1]
 	}
 
-	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
-		"sess-rebind", "active-mission")
-	data, err := os.ReadFile(sidecar)
+	// The claim must survive completely untouched -- dispatching a
+	// DIFFERENT mission is no longer destructive to it.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	stillClaimed, err := mission.ReadActiveMission(globalRoot, "sess-coexist")
 	require.NoError(t, err)
-	assert.Equal(t, dispatched+"\n", string(data),
-		"dispatch must bind the session to the mission it just created")
-	// The origin rides in its own file so active-mission stays readable
-	// by older binaries (rsc on PR #415).
-	origin, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "sessions",
-		"sess-rebind", "active-mission-origin"))
-	require.NoError(t, err, "a dispatch must record its origin")
-	assert.Equal(t, mission.BindOriginDispatch+"\n"+dispatched+"\n", string(origin),
-		"the origin file names its own mission so a stale one is ignored")
+	assert.Equal(t, claimed, stillClaimed, "an existing claim must survive an unrelated dispatch")
 
-	assert.Contains(t, warning, stale, "the warning must name the stale binding")
+	// The dispatch lands in its own per-mission pending entry, not the
+	// claim's slot.
+	pending, _, err := mission.ReadDispatchPending(globalRoot, "sess-coexist")
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, dispatched, pending[0].MissionID)
+	assert.Equal(t, "bwk", pending[0].Worker)
+
 	assert.Contains(t, warning, dispatched, "the warning must name the new binding")
-	assert.Contains(t, warning, "commit trailers are off",
-		"the leader must be told the rebind stops their trailers")
+	assert.Contains(t, warning, "bwk", "the warning must name the worker the binding is scoped to")
 }
 
 // TestMissionDispatch_PrintsBindingOnFreshBind is the regression gate
@@ -4690,8 +4704,9 @@ func TestMissionDispatch_PrintsBindingOnFreshBind(t *testing.T) {
 	require.Len(t, ids, 1)
 	dispatched := ids[0]
 
-	assert.Contains(t, warning, "bound to "+dispatched,
+	assert.Contains(t, warning, dispatched,
 		"a fresh bind must print the mission it just bound to, not only a rebind")
+	assert.Contains(t, warning, "bwk", "the message must name the worker the binding is scoped to")
 	assert.Contains(t, warning, "mission release",
 		"the message must name the escape hatch for a leader who does not want the capture")
 }

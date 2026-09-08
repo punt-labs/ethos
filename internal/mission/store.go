@@ -1827,17 +1827,55 @@ func countDelegations(repoRoot, missionID string) (int, error) {
 
 // countBlockingDelegations returns the number of delegation records
 // under the mission's delegations/ directory that still block
-// Abandon's gate 1 — every entry EXCEPT one an operator has explicitly
-// disclaimed via DisclaimDelegation (DES-076 round 2). Unlike
-// countDelegations, this walk must open and parse each record.yaml to
-// read its DisclaimedAt marker, because "how many entries" and "how
-// many still block" are no longer the same question once a disclaim
-// exists.
+// Abandon's gate 1 — every entry EXCEPT (a) one an operator has
+// explicitly disclaimed via DisclaimDelegation (DES-076 round 2), and
+// (b) one with Verdict == DelegationVerdictAborted (DES-076 round 3,
+// review finding C7, m-2026-09-08-004 round 2). Unlike countDelegations,
+// this walk must open and parse each record.yaml to read its
+// DisclaimedAt and Verdict fields, because "how many entries" and "how
+// many still block" are no longer the same question once either
+// exclusion applies.
+//
+// The aborted exclusion is mechanical, not a heuristic, and does NOT
+// depend on BoundVia or a disclaim: verdict=aborted is written by
+// exactly two call sites in this codebase, both of which fire BEFORE
+// the worker process ever starts — the max_delegation_depth refusal
+// (pretooluse_dispatch.go's closeDelegationAborted) and the
+// content-hash-gate refusal (subagent_start.go's hash-refusal cleanup).
+// Neither can run against a delegation whose worker did any real work,
+// because both refuse the spawn before it happens. The THIRD place this
+// codebase writes DelegationVerdictAborted — Store.Close's
+// closeDelegationSkeletons sweep, for a mission result reporting
+// VerdictEscalate — cannot appear on a delegation this function ever
+// sees: that sweep only runs as part of Close, which requires the
+// mission to already be non-open, and countBlockingDelegations is only
+// ever called from Abandon's gate 1, which itself refuses before
+// reaching this call unless the mission is StatusOpen. So for every
+// delegation this function actually reads, verdict=aborted can only
+// mean "refused pre-run" — genuinely zero work, independent of who
+// dispatched it or why.
+//
+// Rejected alternative: a distinct BoundVia value for "dispatched then
+// depth/hash-refused." Provenance describes HOW a delegation was
+// bound, not whether its worker ran — the field that already means
+// "did it run" is Verdict, and it already has the right value. Minting
+// a new provenance value to duplicate information the verdict enum
+// already carries would proliferate BoundVia values for every future
+// refusal reason instead of using the field built for exactly this
+// question.
+//
+// Rejected alternative: narrowing DisclaimDelegationRecord's own gate
+// to require Verdict == aborted specifically, rather than merely
+// != open. That would defeat the disclaim mechanism's PRIMARY use
+// case: a genuinely captured delegation is one whose spawn ran to
+// normal completion (verdict pass/fail/error) under the wrong
+// mission — ethos-7tqd's own reproduction was an unrelated PR-fix
+// agent that ran and finished, not one that was refused before it
+// started. Disclaim's `!= open` check stays exactly as broad as it
+// already is; the aborted exclusion here is independent of it.
 //
 // A delegation directory whose record cannot be read or parsed is NOT
-// treated as disclaimed by that fact — DisclaimDelegationRecord itself
-// would refuse to disclaim a record it cannot load, so an unreadable
-// record can never legitimately carry a disclaim marker. It counts as
+// treated as disclaimed or aborted by that fact — it counts as
 // blocking, fail-closed, matching Gate 1's overall "any sign of work
 // blocks" philosophy: an error here must never silently narrow the
 // count.
@@ -1864,6 +1902,9 @@ func countBlockingDelegations(repoRoot, missionID string) (int, error) {
 			return 0, fmt.Errorf("loading delegation %s: %w", e.Name(), lErr)
 		}
 		if d.DisclaimedAt != "" {
+			continue
+		}
+		if d.Verdict == DelegationVerdictAborted {
 			continue
 		}
 		n++
