@@ -84,10 +84,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on every bind, now naming the worker it is scoped to; the message no
   longer claims the binding captures "the next spawn... even if
   unrelated," since it no longer does (ethos-7tqd; see DES-076 in
-  DESIGN.md for the full binding-lifetime decision, including the
-  narrower residual case — a same-type spawn for unrelated work — that
-  remains and the abandon-side cleanup for it that is still blocked on a
-  write-set outside this fix's scope).
+  DESIGN.md for the full binding-lifetime decision). A narrower residual
+  case remains — a same-type spawn for unrelated work — and its
+  abandon-side cleanup is the next entry.
+- **`ethos mission abandon` can now retire a mission whose only
+  delegation was wrongly attributed to it by the dispatch-sidecar
+  capture above**, via a new `--disclaim <delegation-id>` flag (CLI) and
+  a matching `disclaim` array parameter (MCP `mission` tool, method
+  `abandon`) — repeatable for a mission with more than one captured
+  delegation. This is NOT a bypass flag: each named delegation is
+  mechanically checked against a new provenance field
+  (`Delegation.BoundVia`, recorded at spawn time) and must have been
+  bound via the exact sidecar-capture path and already be closed; an
+  explicit-`MISSION_ID`-env or inherited delegation is refused by name,
+  as is a delegation still in flight or already disclaimed. Every
+  disclaim is permanently recorded on the delegation's own record and
+  on the mission's append-only event log. `Abandon`'s result-artifact
+  gate is completely untouched — a mission with a submitted result
+  still refuses regardless of any disclaim (ethos-7tqd; see DES-076
+  round 2 in DESIGN.md for the full decision and security review).
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`
