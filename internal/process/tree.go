@@ -40,7 +40,8 @@ const maxWalkDepth = 10
 // an uncorroborated CLAUDE_PID makes a session unresolvable rather than
 // resolvable via the shared walk-derived key (review finding, PR #502).
 //
-// Uses native OS interfaces: /proc on Linux, sysctl on macOS.
+// Uses native OS interfaces: /proc on Linux, sysctl on macOS,
+// CreateToolhelp32Snapshot on Windows (proc_windows.go).
 func FindClaudePID() string {
 	if pid, ok := ClaudePIDFromEnvCorroborated(); ok {
 		return pid

@@ -692,22 +692,24 @@ func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	return nil
 }
 
-// WithSessionLock executes fn while holding an exclusive flock on the
-// session's lock file. The lock covers both the session roster YAML and
-// the session audit log (DES-054 v5 unification): one flock per session
-// serializes every per-session write, eliminating the two-lock
-// acquisition order the v4 design carried. Audit log appends and roster
-// mutations therefore use the same lock; a writer must not acquire two
-// locks for one logical operation.
+// WithSessionLock executes fn while holding an exclusive lock on the
+// session's lock file (flock on Unix, LockFileEx on Windows — see
+// store_unix.go/store_windows.go's withLock). The lock covers both the
+// session roster YAML and the session audit log (DES-054 v5
+// unification): one lock per session serializes every per-session
+// write, eliminating the two-lock acquisition order the v4 design
+// carried. Audit log appends and roster mutations therefore use the
+// same lock; a writer must not acquire two locks for one logical
+// operation.
 //
 // Concurrency ordering when this lock is nested inside others (DES-054
 // phase 2): global mission create lock → repo mission create lock →
-// per-mission flock (shared) → per-delegation flock (exclusive) →
-// per-session flock. Release is reverse via defer LIFO.
+// per-mission lock (shared) → per-delegation lock (exclusive) →
+// per-session lock. Release is reverse via defer LIFO.
 //
 // Exported so the audit-log entry point in cmd/ethos/hook.go can wrap
 // its write in the unified lock without re-implementing the
-// open/flock/close dance.
+// open/lock/close dance.
 func (s *Store) WithSessionLock(sessionID string, fn func() error) error {
 	return s.withLock(sessionID, fn)
 }

@@ -168,8 +168,9 @@ func (s *Store) DelegationLockPath(delegationID string) string {
 
 // AcquireDelegationLock opens (and creates if needed) the per-
 // delegation lock file at `<globalRoot>/delegations/<id>.lock` and
-// acquires an exclusive flock on it. The returned release closure
-// runs LOCK_UN + Close exactly once; subsequent calls are no-ops.
+// acquires an exclusive lock on it (flock on Unix, LockFileEx on
+// Windows — see flock_unix.go/flock_windows.go). The returned release
+// closure unlocks and closes exactly once; subsequent calls are no-ops.
 //
 // globalRoot is `~/.punt-labs/ethos` — locks must live in the global
 // tree per DES-054 v5 §"Storage Layout" so two checkouts of the same
@@ -185,7 +186,7 @@ func (s *Store) DelegationLockPath(delegationID string) string {
 //
 // Acquisition failures surface with both the lock path and the
 // underlying syscall so an operator can locate the contended file.
-// On flock error the file descriptor is closed before return — no
+// On a lock error the file descriptor is closed before return — no
 // leaked fd on the error path.
 //
 // Concurrency: blocks until the lock is available. Callers that
@@ -407,16 +408,16 @@ func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 
 // AcquireMissionLock opens (and creates if needed) the per-mission
 // lock file at <repoRoot>/.punt-labs/ethos/missions/<missionID>/.lock and
-// acquires a SHARED flock on it. The returned release closure runs
-// LOCK_UN + Close exactly once; subsequent calls are no-ops.
+// acquires a SHARED lock on it. The returned release closure unlocks
+// and closes exactly once; subsequent calls are no-ops.
 //
 // The shared lock complements AcquireDelegationLock (exclusive) so
 // two Tier B spawns under one mission can both hold the mission lock
 // concurrently while their per-delegation exclusive locks do not
 // contend. A separate writer that needs the mission tree quiescent —
 // for example a hypothetical mission close that wants no in-flight
-// skeletons — can take LOCK_EX on the same file and will wait for
-// every shared holder to release.
+// skeletons — can take an exclusive lock on the same file and will
+// wait for every shared holder to release.
 //
 // Acquisition order when nested with other locks:
 //
@@ -426,19 +427,19 @@ func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 //
 // Acquisition failures surface with both the lock path and the
 // underlying syscall so an operator can locate the contended file.
-// On flock error the file descriptor is closed before return — no
+// On a lock error the file descriptor is closed before return — no
 // leaked fd on the error path.
 func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
 	return acquireMissionLock(repoRoot, missionID, lockShared, "shared")
 }
 
 // AcquireMissionLockExclusive opens the same per-mission lock file as
-// AcquireMissionLock but acquires it exclusively (LOCK_EX). This is
-// the caller AcquireMissionLock's own doc comment anticipated: "a
-// separate writer that needs the mission tree quiescent — for
-// example a hypothetical mission close that wants no in-flight
-// skeletons — can take LOCK_EX on the same file and will wait for
-// every shared holder to release."
+// AcquireMissionLock but acquires it exclusively. This is the caller
+// AcquireMissionLock's own doc comment anticipated: "a separate writer
+// that needs the mission tree quiescent — for example a hypothetical
+// mission close that wants no in-flight skeletons — can take an
+// exclusive lock on the same file and will wait for every shared
+// holder to release."
 //
 // Store.Close uses this around closeDelegationSkeletons so a
 // concurrent dispatchTierB (a shared AcquireMissionLock holder)
@@ -452,7 +453,7 @@ func AcquireMissionLockExclusive(repoRoot, missionID string) (func(), error) {
 
 // acquireMissionLock is the shared implementation behind
 // AcquireMissionLock and AcquireMissionLockExclusive: same lock file,
-// same directory creation, same idempotent release — only the flock
+// same directory creation, same idempotent release — only the lock
 // mode differs. label names the mode in error messages so a failure
 // reads "acquiring shared mission lock" or "acquiring exclusive
 // mission lock" rather than an ambiguous generic message.

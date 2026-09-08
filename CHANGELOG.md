@@ -15,9 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously exited 0 and silently degraded `whoami` to the git/OS identity
   rather than ever surfacing the mistake (ethos-gu3p).
 - **`ethos session end` now hints `unset ETHOS_SESSION`** when the variable
-  is set, symmetric with `session start`, which prints `export
-  ETHOS_SESSION=...`. Previously the command that invalidates the variable
-  gave no hint, while the command that sets it did (ethos-4pvt).
+  names the session that was just ended, symmetric with `session start`,
+  which prints `export ETHOS_SESSION=...`. Previously the command that
+  invalidates the variable gave no hint, while the command that sets it
+  did (ethos-4pvt). The hint checks that the variable names THIS session,
+  not merely that it is set — `session end --session A` while
+  `ETHOS_SESSION` names a different, still-live session B must not tell
+  the operator to clear B's only remaining discovery channel outside
+  Claude Code.
 - **`GOOS=windows GOARCH=amd64 go build ./...` now succeeds.** Windows is
   still not a supported/shipped target (no release binary, no CI job), but
   the whole module now cross-compiles: `internal/process` gained a

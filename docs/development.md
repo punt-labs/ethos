@@ -175,7 +175,7 @@ and are inert there; Claude Code ignores files it does not recognize.
 | `internal/identity/` | Core identity model, validation, CRUD, attribute resolution |
 | `internal/attribute/` | Generic CRUD for named markdown files (talents, personalities, writing styles) |
 | `internal/process/` | Process tree walker: find topmost Claude ancestor PID |
-| `internal/session/` | Session roster model, store with flock-based concurrency |
+| `internal/session/` | Session roster model, store with lock-based concurrency (flock on Unix, LockFileEx on Windows) |
 | `internal/resolve/` | Identity resolution chain: repo-local → global → error |
 | `internal/hook/` | Hook handlers (SessionStart, PreCompact, SubagentStart/Stop, SessionEnd, PreToolUse, PostToolUse), agent generation, format output |
 | `internal/doctor/` | Installation health checks |
