@@ -1155,38 +1155,39 @@ func missingRepoTreeDir(statErr error) bool {
 // releasing the global lock, a subset of the same order, not a
 // reversal — so this nesting introduces no new deadlock risk.
 //
-// Skips the lock (runs fn directly) when the repo-tree per-mission
-// directory does not exist: that is a mission living entirely in the
-// legacy global tree, where no dispatchTierB can be racing under this
-// repoRoot (its own first act is the same directory's MkdirAll), and
-// creating an empty repo-tree footprint as a side effect of locking
-// would be an unwanted regression — mirrors Close's identical guard
-// (missingRepoTreeDir) one section up.
+// ALWAYS acquires the lock, unconditionally — round 2 of ethos-lj4k
+// (PR #508 review): the first version skipped acquisition (a) when
+// the repo-tree per-mission directory did not yet exist, and (b) when
+// AcquireMissionLockExclusive itself failed, falling through to an
+// unlocked fn() call in both cases. (a) was a TOCTOU: a Tier B dispatch
+// starting AFTER that stat check has AcquireMissionLock create the
+// very directory the check found absent, take the shared lock, and
+// write a delegation — after Abandon's unlocked countDelegations had
+// already returned 0. (b) reopened the exact race ethos-lj4k exists to
+// close, on its own error path — a lock you proceed without on failure
+// is not a lock. Both are now fail-closed: acquisition always runs (its
+// own MkdirAll creating a repo-tree directory for a legacy-global-only
+// mission is a harmless side effect — resolveLayer keys off
+// contract.yaml's presence, never the directory's, so this does not
+// change which layer the mission is read from or written to), and a
+// failure returns an actionable error instead of an unlocked fn() call
+// — the same reasoning already applied to the repoRoot=="" guard above
+// (djb's probe: "silently trusting the absence of evidence as evidence
+// of absence").
 //
-// A lock-acquisition failure is reported to stderr and falls through
-// to an unlocked fn call rather than refusing the abandon outright,
-// matching Close's fallback for the same failure: an operator-visible
-// warning plus a narrower TOCTOU window is judged better than blocking
-// every abandon on a single flock error.
+// abandonAfterZeroCountHook is a test-only synchronization seam
+// invoked from inside fn (Abandon's own closure) — see its
+// declaration for what it exercises.
+var abandonAfterZeroCountHook = func() {}
+
 func (s *Store) withAbandonDelegationLock(missionID string, fn func() error) error {
-	missionDir := RepoStatePath(s.repoRoot, "missions", filepath.Base(missionID))
-	_, statErr := os.Stat(missionDir)
-	if missingRepoTreeDir(statErr) {
-		return fn()
-	}
-	if statErr != nil {
-		fmt.Fprintf(os.Stderr,
-			"ethos: mission %s: stat %s failed, treating directory as present: %v\n",
-			missionID, missionDir, statErr)
-	}
-	release, lockErr := AcquireMissionLockExclusive(s.repoRoot, missionID)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr,
-			"ethos: mission %s: acquiring exclusive lock for abandon delegation check: %v — "+
-				"falling back to an unlocked check — a concurrent dispatchTierB may still "+
-				"race a delegation write past this abandon\n",
-			missionID, lockErr)
-		return fn()
+	release, err := AcquireMissionLockExclusive(s.repoRoot, missionID)
+	if err != nil {
+		return fmt.Errorf(
+			"abandon: acquiring exclusive lock for %q: %w; refusing to abandon without it "+
+				"(a concurrent dispatchTierB could otherwise write a delegation record past this check)",
+			missionID, err,
+		)
 	}
 	defer release()
 	return fn()
@@ -1372,6 +1373,19 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 					missionID, n, missionID,
 				)
 			}
+			// Test-only seam: invoked after countDelegations has returned
+			// zero and before Gate 2 / the terminal commit. The zero value
+			// is a no-op; the ethos-lj4k round-2 regression test overrides
+			// it to attempt a concurrent delegation write at exactly this
+			// point, proving withAbandonDelegationLock's exclusive lock
+			// (held across this entire closure) blocks that write rather
+			// than letting it land in the gap between the count and the
+			// commit — the round-2 finding (F3): an absent repo-tree
+			// directory at check time is not proof of absence at commit
+			// time. Mirrors createReadBackHook's and
+			// dispatchTierBConfirmedOpen's pattern for the same class of
+			// ordering-sensitive test.
+			abandonAfterZeroCountHook()
 			// Gate 2: zero result artifacts, for any round — not only the
 			// mission's current round. A result recorded for an earlier
 			// round (e.g. the mission advanced past a round that still
@@ -1828,21 +1842,41 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 }
 
 // conflictScanIDs returns the mission IDs checkWriteSetConflicts
-// compares a new contract against. See ADR DES-075 (DESIGN.md) for
-// the full layer-model decision this implements.
+// compares a new contract against. See ADR DES-075 (DESIGN.md,
+// Decision 1, amended round 2) for the full layer-model decision this
+// implements.
 //
-// In two-tree storage mode (repoRoot set), this is the REPO TREE
-// ONLY — every new create in this mode lands in the repo tree
-// (writeLayer), so the current repo's own open missions live there
-// exclusively. The legacy global tree is deliberately excluded from
-// this scan even though Load/List still fall back to it for reads:
-// the global tree is a flat namespace shared by every repo on the
-// machine with no per-entry way to tell which repo an existing
-// contract belongs to (measured 2026-09-07: zero of 841 global-tree
-// contracts carry a populated Repo field), so including it compared
-// this repo's new mission against unrelated repos' open missions and
-// produced false conflicts (ethos-6adb) — not because of cwd
-// resolution, but because the enumeration itself was unscoped.
+// In two-tree storage mode (repoRoot set), this is the repo tree PLUS
+// any open global-tree mission this repo's OWN audit trail references.
+// Ownership is decided by repoMissionIDs — the identical mechanism
+// `ethos mission migrate` already uses: it scans
+// <repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl for contract_id
+// references, which is a reliable per-repo signal even though
+// Contract.Repo itself is not (measured 2026-09-07: zero of 841
+// global-tree contracts carry a populated Repo field). Mission IDs are
+// allocated from one shared, global, strictly-increasing daily
+// counter, so an ID a foreign repo's audit trail never mentions cannot
+// collide with one this repo's trail does — the two sets cannot be
+// confused.
+//
+// The global tree as a WHOLE stays excluded from the scan (not merely
+// filtered): most of its entries genuinely belong to other repos or
+// predate any audit trail at all, and comparing against those produced
+// the false conflicts ethos-6adb reported. Only entries this repo's
+// OWN history claims are pulled in. This closes a gap the round-1 fix
+// left (PR #508 round 2, finding F4): a same-repo mission created
+// before this repo adopted two-tree storage, still open, and never
+// migrated, was invisible to admission control under the round-1
+// repo-tree-only scan — a new mission could claim an overlapping
+// write_set against it with nothing to stop it.
+//
+// Cost: repoMissionIDs reads every audit.jsonl line under every
+// session this repo has ever recorded, once per Create. This mirrors
+// the cost `mission migrate` already accepts for the identical scan;
+// unlike migrate, Create pays it on every call, not just an operator-
+// invoked one-off — acceptable for now (creates are infrequent, not a
+// per-tool-call hot path), but a real cost worth remembering if this
+// repo's session history grows large enough to make it visible.
 //
 // Legacy single-tree mode (repoRoot == "") keeps scanning the full
 // global tree — it is the ONLY tree in that mode, so every entry
@@ -1852,7 +1886,30 @@ func (s *Store) conflictScanIDs() ([]string, error) {
 	if !s.twoTreeStorage || s.repoRoot == "" {
 		return s.List()
 	}
-	return s.listRepoTree(make(map[string]struct{}))
+	seen := make(map[string]struct{})
+	ids, err := s.listRepoTree(seen)
+	if err != nil {
+		return nil, err
+	}
+	owned, err := repoMissionIDs(s.repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("scanning repo sessions for mission ownership: %w", err)
+	}
+	for id := range owned {
+		if _, dup := seen[id]; dup {
+			// Already migrated into the repo tree (or, defensively, a
+			// duplicate within listRepoTree's own result) — counted once.
+			continue
+		}
+		// owned may also name a closed mission, or a stale audit
+		// reference to one since deleted by hand. Neither needs
+		// filtering here: checkWriteSetConflicts' own Load-per-ID loop
+		// already tolerates and skips an unloadable ID (stderr warning)
+		// and filters to Status == StatusOpen before comparing.
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // isContractFile reports whether a missions-directory entry name is a
@@ -1992,6 +2049,17 @@ func writeContractFile(dest string, data []byte) error {
 	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("renaming temp contract %s -> %s: %w", tmp, dest, err)
+	}
+	// F2 (PR #508 round 2): the FILE's contents were durable the moment
+	// f.Sync() above returned, but the RENAME is a change to the
+	// containing directory's own metadata (which name points at which
+	// inode), and that change is only durable once the directory itself
+	// is synced. Skipping this left a real gap: a crash between the
+	// rename returning and the directory entry reaching stable storage
+	// could still lose the "created: m-..." contract on recovery — the
+	// exact ethos-ouy9 symptom the file-level Sync alone did not close.
+	if err := syncDir(filepath.Dir(dest)); err != nil {
+		return fmt.Errorf("syncing directory %s after renaming contract: %w", filepath.Dir(dest), err)
 	}
 	return nil
 }

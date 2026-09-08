@@ -8891,7 +8891,7 @@ directly above, and exists so a future, well-intentioned fallback
 cannot reintroduce the collision this ruling explicitly rejected without
 first deleting or rewriting this test.
 
-## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (ACCEPTED)
+## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08)
 
 **Context.** `internal/mission` (DES-054 phase 1) stores a mission in one
 of two trees and locks it through one of two lock files, and different call
@@ -8928,9 +8928,12 @@ repo adopted the two-tree layout (or created with no repo in scope) is
 still loadable.
 
 **Decision 3 — which tree is authoritative for the write-set conflict
-SCAN (`Create`'s admission control).** The repo tree ONLY, once a repo is
-in scope — never the global tree. This is new; it is the fix for
-**ethos-6adb**.
+SCAN (`Create`'s admission control).** The repo tree, once a repo is in
+scope, PLUS any open global-tree mission this repo's own audit trail
+references — never the global tree unconditionally. This is the fix for
+**ethos-6adb**; see the round-2 amendment below for why "never the global
+tree" (this ADR's original wording) needed correcting to the version
+above.
 
 The global tree cannot be scoped by repo: it is flat, and measured
 2026-09-07 showed 841 contracts on the local host, 19 open, ZERO carrying a
@@ -8955,7 +8958,9 @@ access.** The REPO-TIER per-mission lock —
 (`<repoRoot>/.punt-labs/ethos/missions/<id>/.lock`, `delegation.go:467`) —
 not the GLOBAL per-mission lock (`Store.withLock`/`Store.lockPath`,
 `<globalRoot>/missions/<id>.lock`, `store.go:424`). This is the fix for
-**ethos-lj4k**.
+**ethos-lj4k**; the round-2 amendment below tightens HOW that lock is
+acquired (unconditionally, never skipped, never bypassed on error) after
+review found two ways the round-1 version could still skip it.
 
 Both locks exist and both stay: the global lock still serializes every
 Store method that mutates a contract file (`Create`, `Update`, `Close`,
@@ -9039,3 +9044,142 @@ is outside this mission's write-set (`internal/mission/**`,
 `internal/resolve/resolve.go`, `cmd/ethos/mission.go`, `DESIGN.md`,
 `CHANGELOG.md`). Flagged for a follow-up mission scoped to
 `internal/hook/**`.
+
+### Amendment 2026-09-08: PR #508 review round 2 (findings F1–F6)
+
+Six findings on the round-1 implementation of this ADR's decisions —
+Qodo's inline review plus Copilot, requested explicitly rather than
+trusting a transient CLEAN/zero-threads state the PR briefly showed. Four
+were High; two of those were defects in the fixes themselves, one was a
+consequence of a Decision this ADR had already accepted, one was a genuine
+correctness gap in the same fix. All six are closed in this amendment;
+nothing here reverses round 1's decisions, but Decision 1/3's "exclude the
+global tree" needed correcting to "exclude the global tree except what
+this repo's own history claims," below.
+
+**F1 (High) — `withAbandonDelegationLock` fell back to an UNLOCKED `fn()`
+call when `AcquireMissionLockExclusive` itself failed to acquire.** That
+reopened the exact race Decision 4 exists to close, on the fix's own error
+path: a lock you proceed without on failure is not a lock. Fixed by
+removing the fallback entirely — a lock-acquisition failure now returns an
+error from `Abandon` and mutates nothing, the same fail-closed shape
+already applied to the `repoRoot == ""` guard earlier in the same
+function ("silently trusting the absence of evidence as evidence of
+absence" — djb's probe, cited in that guard's own comment).
+
+**F3 (High) — the SAME function also skipped acquisition outright when the
+repo-tree per-mission directory did not yet exist** (`missingRepoTreeDir`),
+reasoning that no `dispatchTierB` could be racing under a directory that
+does not exist. That reasoning is a TOCTOU: a `dispatchTierB` starting
+after the stat check runs `AcquireMissionLock`, whose own `MkdirAll`
+creates the very directory the check found absent, takes the shared lock,
+and writes a delegation — after `Abandon`'s unlocked `countDelegations` had
+already returned zero. Fixed together with F1: `withAbandonDelegationLock`
+now acquires `AcquireMissionLockExclusive` unconditionally, every time,
+with no directory-existence shortcut. Its own `MkdirAll` creating a
+repo-tree directory for a mission that lives entirely in the legacy global
+tree is a harmless side effect — `resolveLayer` decides a mission's layer
+by whether `contract.yaml` is present, never by whether the directory
+itself exists, so this does not change which layer any mission reads from
+or writes to. `TestStore_TwoRoot_CloseStaysInItsLayer`'s sibling assertion
+for `Abandon` was updated to check for the absence of `contract.yaml`
+specifically, not the absence of any repo-tree footprint at all.
+
+Both F1 and F3 are covered by
+`TestStore_Abandon_ExcludesConcurrentDelegationWrite` (directory
+pre-existing), its `_NoPriorRepoTreeDir` sibling (F3's exact starting
+condition), and `TestStore_Abandon_ZeroCountToCommitWindowIsAtomic` (pins
+F3's literal phrase — "the window between `countDelegations` returning
+zero and `writeContract` committing" — via a new test-only seam,
+`abandonAfterZeroCountHook`, invoked from inside `Abandon`'s own closure
+between the zero count and the terminal commit). All three were confirmed
+failing against the round-1 code before this amendment: the concurrency
+tests reproduced the writer succeeding with no blocking at all, and the
+targeted hook-based test reproduced `Abandon` committing `StatusAbandoned`
+with a nil error while a delegation landed unblocked during its (unlocked)
+execution.
+
+**F2 (High) — `writeContractFile` (the ethos-ouy9 fix) synced the temp
+file's contents before `Rename` but never synced the CONTAINING DIRECTORY
+after it.** A file's contents being durable is not the same guarantee as
+the directory entry that names it being durable — POSIX `rename(2)` is a
+metadata change to the directory, and that change needs its own `fsync` to
+survive a crash. Without it, ethos-ouy9's exact symptom (`mission create`
+reports success; the contract is absent on recovery) remained reachable
+through a narrower window than before, but still open. Fixed by adding
+`syncDir`, called on `filepath.Dir(dest)` after every successful rename in
+`writeContractFile` (and therefore in `restoreContract`, which shares the
+same helper). Split by build tag: the POSIX implementation
+(`syncdir_unix.go`) opens the directory and calls `Sync()`, the standard
+mechanism; the Windows implementation (`syncdir_windows.go`) is a
+documented no-op, because NTFS does not expose an `os`-package-reachable
+equivalent to fsync-on-a-directory-handle the way POSIX does, and Windows
+is not a supported/shipped target for this module (no release binary, no
+CI job — GOOS=windows GOARCH=amd64 must still compile, which it does).
+`syncDir` is a package-level `var`, not a plain `func`, specifically so
+`TestWriteContractFile_SyncDirFailurePropagates` can inject a failure
+deterministically — a real directory-fsync failure is not something a
+portable test can otherwise engineer.
+
+**F4 (High) — the round-1 fix for Decision 3 excluded the global tree
+from the conflict scan UNCONDITIONALLY, and that traded one correctness
+bug for another.** `conflictScanIDs` scanning the repo tree only means an
+open mission genuinely belonging to THIS repo — created before the repo
+adopted two-tree storage, still open, never migrated — became invisible to
+admission control: a new mission could claim an overlapping `write_set`
+against it and nothing would stop it. This is the leader's own call to
+make (not the worker's), and the leader's read, on reflection: neither
+"scan the global tree in full" (reopens ethos-6adb) nor "refuse every
+Create anywhere on the machine while any open global-only mission
+exists that could belong to any repo" (an operationally disproportionate
+response — 19 open legacy contracts existing SOMEWHERE would halt every
+repo's mission system, not just the one with un-migrated debt) is the
+right shape. The actual fix uses a signal that already exists and is
+already reliable: `repoMissionIDs` (`migrate.go`), the exact mechanism
+`ethos mission migrate` uses to decide which legacy missions belong to
+this repo — it scans
+`<repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl` for `contract_id`
+references, which is a real per-repo ownership signal even though
+`Contract.Repo` is not (per Decision 3's original measurement: 0 of 841).
+Mission IDs are allocated from one shared, global, strictly-increasing
+daily counter, so an ID one repo's audit trail references can never
+collide with an ID a different repo's own trail references — the
+ownership sets cannot be confused across repos. `conflictScanIDs` now
+scans the repo tree PLUS every open global-tree mission this repo's own
+audit trail names; a global mission absent from that trail stays excluded,
+preserving ethos-6adb's fix exactly.
+
+Cost note carried into the ADR proper: this scan reads every
+`audit.jsonl` line under every session this repo has ever recorded, on
+every `Create` — the same cost `mission migrate` already accepts for an
+operator-invoked one-off, now paid on a much more frequent path. Accepted
+for now (creates are infrequent relative to tool calls); worth revisiting
+if a repo's session history grows large enough to make the latency
+visible.
+
+`TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict` covers F4
+directly (an un-migrated same-repo mission blocks an overlapping create)
+and re-asserts ethos-6adb's original property in the same test (an
+un-referenced foreign mission does not). Confirmed failing against the
+round-1 `conflictScanIDs` (no audit-trail scan) before this amendment.
+
+**F5 (Copilot) — a goroutine in the lj4k concurrency test called
+`require.NoError`,** which invokes `t.FailNow()` on failure; `t.FailNow`
+must run on the goroutine executing the test function itself, not one the
+test spawned, or the test can hang instead of failing cleanly. Fixed by
+routing every goroutine's error back over a channel and asserting on it
+from the main test goroutine only — the pattern every concurrency test
+added in this amendment (and round 1) now follows uniformly.
+
+**F6 (Copilot) — a test forced an open-temp-file failure via
+`os.Chmod(dir, 0o500)` on the containing directory.** `os.Chmod` on
+Windows only toggles the `FILE_ATTRIBUTE_READONLY` bit and does not block
+new-file creation inside a directory, and the same technique is
+unreliable under a root-running test process on POSIX (root bypasses DAC
+permission checks entirely) — both are real ways this test could go
+flaky, the latter more likely in practice (containerized CI often runs as
+root) than the former (this package's tests are `!windows`-tagged, so the
+Windows case was already inert, but the root case was not). Fixed by
+forcing the failure through a NONEXISTENT containing directory instead — a
+bare path-resolution `ENOENT`, which fails identically regardless of
+platform or privilege level.

@@ -11,30 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`ethos mission create`/`dispatch`'s write-set conflict check no
   longer compares against missions in the shared, cross-repo global
-  mission tree.** A two-tree Store (any invocation run inside a repo
-  checkout) now scopes the scan to the repo's own mission tree only —
-  the global tree cannot be attributed to a repo (measured: zero of 841
-  on-disk contracts carry a repo field) and including it produced false
-  conflicts against unrelated repos' open missions (ethos-6adb). See
-  DES-075 in DESIGN.md for the full storage-layer decision.
+  mission tree, but still detects an un-migrated mission genuinely
+  belonging to the current repo.** A two-tree Store (any invocation run
+  inside a repo checkout) scopes the scan to the repo's own mission tree
+  plus any open global-tree mission the repo's own session audit trail
+  references (the same ownership signal `ethos mission migrate` already
+  uses) — the global tree cannot be attributed to a repo by its `repo:`
+  field (measured: zero of 841 on-disk contracts carry one), so
+  unconditionally scanning it produced false conflicts against unrelated
+  repos' open missions (ethos-6adb), while unconditionally excluding it
+  made a same-repo, pre-migration mission invisible to admission control
+  (round 2 finding). See DES-075 in DESIGN.md for the full storage-layer
+  decision.
 - **`ethos mission create`/`dispatch` no longer reports success for a
   contract that was not durably persisted.** The contract writer now
-  syncs before rename and removes its temp file on every error path
-  (matching `session.Store.writeRoster`'s existing discipline), and
-  `Create` reads the just-written contract back before returning —
-  closing the gap where a torn write or crash between rename and disk
-  flush could leave `mission create` printing `created: m-...` for an ID
-  no later `mission show`/`result submit` could find (ethos-ouy9).
-- **`ethos mission abandon` no longer races a concurrent worker spawn.**
-  Its delegation-count check previously ran under a different lock file
-  than the one `dispatchTierB` (the PreToolUse-on-Agent dispatch path)
-  takes before writing a delegation record, so a worker spawn could land
-  a delegation in the window between the count returning zero and the
-  mission committing `abandoned` — attaching recoverable work to a
-  mission the abandon gate exists specifically to refuse for. Abandon now
-  holds the same repo-tier per-mission lock `dispatchTierB` and
-  `mission close`'s delegation sweep already use, for the whole
-  check-and-commit sequence (ethos-lj4k).
+  syncs the file before rename AND syncs the containing directory after
+  it (a rename is a directory-metadata change with its own durability
+  requirement, distinct from the file's own contents), removes its temp
+  file on every error path (matching `session.Store.writeRoster`'s
+  existing discipline), and `Create` reads the just-written contract
+  back before returning — closing the gap where a torn write or crash
+  around the rename could leave `mission create` printing
+  `created: m-...` for an ID no later `mission show`/`result submit`
+  could find (ethos-ouy9).
+- **`ethos mission abandon` no longer races a concurrent worker spawn,
+  including in its own error and directory-absent fallback paths.** Its
+  delegation-count-and-commit sequence now unconditionally holds the same
+  repo-tier per-mission lock `dispatchTierB` and `mission close`'s
+  delegation sweep already use — round 1 of this fix still skipped that
+  lock when the repo-tree directory did not yet exist, or fell back to an
+  unlocked check on a lock-acquisition failure, both of which reopened
+  the race (ethos-lj4k).
 - **`ethos mission create`/`dispatch` now print the session binding
   they take, on every bind — not only when it overwrites a different
   mission's binding.** The binding stays in effect until an explicit
