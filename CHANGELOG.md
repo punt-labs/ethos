@@ -197,6 +197,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dispatch from before the death. This closes the gap for the next
   `ethos session purge` run, not automatically on every resume — purge
   is still an explicit, operator- or tooling-invoked step.
+- **The `mission dispatch`/`mission create` advisory naming a fresh
+  dispatch's queue position (CLI and MCP) no longer disagrees with the
+  matcher it describes.** It used a bare Worker-equality filter, while
+  the matcher additionally skips stale and unresolvable entries; an
+  unresolvable entry ahead of a fresh dispatch was reported as "ahead
+  of it and will be matched first" when the matcher would actually skip
+  it and match the fresh dispatch immediately — the opposite of what
+  would happen. Both surfaces now share one classification function
+  with the matcher, so the reported position and the actual match
+  cannot diverge, and the ~30 duplicated lines between the CLI and MCP
+  copies collapse into one implementation.
+- **A single mission-sidecar-clear failure at session end (or during
+  `ethos session purge`) no longer permanently orphans that sidecar.**
+  The clear now runs before the roster is removed, and a failure keeps
+  the roster in place instead of silently discarding it — the roster's
+  presence is the retry token a later purge needs to find and retry the
+  orphaned sidecar; before this, the roster was removed regardless of
+  whether the clear succeeded, and once the roster was gone no later
+  purge could ever find the session again.
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`
