@@ -15,15 +15,35 @@ import (
 // (full-branch review, m-2026-09-08-004 round 3): countBlockingDelegations's
 // unconditional aborted-verdict exclusion (see that function's doc
 // comment, and this test's own cross-reference from it) is safe only
-// because DelegationVerdictAborted is written by exactly three call
-// sites, all of which fire BEFORE a worker process starts. Nothing in
-// the type system enforces that count — a fourth writer (a "cancel a
-// running worker" command is the obvious future candidate) would
-// silently let a delegation whose worker did real work stop blocking
-// Abandon, with no event, no attestation, no error. This test
-// enumerates every WRITE-position occurrence of DelegationVerdictAborted
-// across every non-test .go file under internal/ and cmd/, and fails if
-// the set of enclosing sites ever changes from the known three.
+// because every DelegationVerdictAborted writer is UNREACHABLE FROM
+// THE GATE while its mission is still open — never because a writer
+// happens to fire "before a worker starts" (review finding A,
+// full-branch review, m-2026-09-08-004 round 3, correcting this
+// comment's own prior wording, which contradicted its own wantSites
+// list three lines below: store.go's Close sweep is one of the three
+// known sites, and it can stamp aborted on a delegation whose worker
+// DID run). The actual invariant, verified in countBlockingDelegations's
+// own doc comment (store.go): two of the three sites
+// (pretooluse_dispatch.go's closeDelegationAborted,
+// subagent_start.go's hash-refusal cleanup) genuinely refuse before the
+// worker starts; the third (store.go's Close sweep) can fire against a
+// delegation whose worker ran, but ONLY as part of Close, which
+// requires the mission to already be non-open — and
+// countBlockingDelegations is only ever reached from Abandon's gate 1,
+// which itself refuses unless the mission is StatusOpen. So no writer
+// this function ever actually sees can have stamped aborted on a
+// delegation whose mission was open at the time. Nothing in the type
+// system enforces that reachability argument — a fourth writer (a
+// "cancel a running worker" command is the obvious future candidate)
+// that stamped aborted on an OPEN mission's delegation would silently
+// let a delegation whose worker did real work stop blocking Abandon,
+// with no event, no attestation, no error. This test enumerates every
+// WRITE-position occurrence of DelegationVerdictAborted across every
+// non-test .go file under internal/ and cmd/, and fails if the set of
+// enclosing sites ever changes from the known three — a new site means
+// the reachability argument above needs re-proving from scratch, not
+// silently inheriting an exclusion built for a different set of
+// callers.
 //
 // "Write position" means: the identifier appears as the right-hand
 // side of an assignment, an argument to a function call, the value
@@ -159,9 +179,19 @@ func (v *abortedWriteVisitor) Visit(n ast.Node) ast.Visitor {
 // isWritePosition reports whether n's immediate parent (the second-to-last
 // stack entry, since n itself is the last) uses n as a write position:
 // an assignment RHS, a call argument, the value half of a composite-literal
-// key:value pair, or a var/const spec's initializer. A switch-case label
-// (*ast.CaseClause) and a binary comparison (*ast.BinaryExpr) are NOT
-// write positions and fall through to the false default.
+// key:value pair, a var/const spec's initializer, or a return value. A
+// switch-case label (*ast.CaseClause) and a binary comparison
+// (*ast.BinaryExpr) are NOT write positions and fall through to the
+// false default.
+//
+// *ast.ReturnStmt (review finding F, full-branch review,
+// m-2026-09-08-004 round 3) closes a gap the walker otherwise missed
+// silently: a helper like `func abortVerdict() string { return
+// DelegationVerdictAborted }` returns the identifier directly, one
+// indirection away from being a write itself, and its own callers would
+// register only as an ordinary *ast.CallExpr naming the helper — never
+// as a DelegationVerdictAborted occurrence at all, since the identifier
+// itself does not appear at the call site.
 func (v *abortedWriteVisitor) isWritePosition(n ast.Node) bool {
 	if len(v.stack) < 2 {
 		return false
@@ -184,6 +214,12 @@ func (v *abortedWriteVisitor) isWritePosition(n ast.Node) bool {
 	case *ast.ValueSpec:
 		for _, val := range p.Values {
 			if val == n {
+				return true
+			}
+		}
+	case *ast.ReturnStmt:
+		for _, result := range p.Results {
+			if result == n {
 				return true
 			}
 		}
