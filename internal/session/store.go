@@ -207,13 +207,50 @@ func (s *Store) Delete(sessionID string) error {
 	return nil
 }
 
-// deleteFiles removes the roster file only (no lock file cleanup).
-// Used inside withLock where the lock file must remain.
+// deleteFiles removes the roster file (no lock file cleanup — used
+// inside withLock where the lock file must remain) and clears the
+// session's mission sidecars: the active-mission claim, the
+// delegation-binding sidecar, and every pending dispatch.
+//
+// This is the ONE low-level primitive Delete, Purge, and
+// PurgeTombstoned all funnel through, so putting the sidecar clear here
+// closes it for every deletion path at once, not just the clean
+// HandleSessionEnd one. Review finding K3 (full-branch review,
+// m-2026-09-08-004 round 3): before this, only the clean SessionEnd
+// path (internal/hook's clearSessionMissionBindings, which still runs
+// and is now a harmless no-op double-clear) cleared these sidecars —
+// abnormal session death (SIGKILL, a closed terminal, a crash) left
+// them in place indefinitely, with no GC, no purge, no tombstone path.
+// `claude --resume` reusing the same session ID then had the first
+// matching spawn silently captured by a claim or pending dispatch from
+// before the death. Purge and PurgeTombstoned are exactly the crash-
+// recovery paths that needed this and did not have it.
+//
+// Advisory: a sidecar-clear failure is reported to stderr and does not
+// block the roster deletion, matching every other Clear* call site's
+// discipline in this codebase (internal/hook/session_end.go,
+// cmd/ethos/mission.go's runMissionRelease).
 func (s *Store) deleteFiles(sessionID string) error {
 	if err := os.Remove(s.rosterPath(sessionID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting session %q: %w", sessionID, err)
 	}
+	s.clearMissionSidecars(sessionID)
 	return nil
+}
+
+// clearMissionSidecars clears sessionID's mission sidecars under s.root
+// (the same globalRoot mission.SessionBoundMissions already reads
+// above) — see deleteFiles's doc comment for why this lives here.
+func (s *Store) clearMissionSidecars(sessionID string) {
+	if err := mission.ClearActiveMission(s.root, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session: clearing active mission for %q: %v\n", sessionID, err)
+	}
+	if err := mission.ClearDelegationBinding(s.root, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session: clearing delegation binding for %q: %v\n", sessionID, err)
+	}
+	if err := mission.ClearDispatchPending(s.root, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session: clearing dispatch-pending for %q: %v\n", sessionID, err)
+	}
 }
 
 // List returns all session IDs.

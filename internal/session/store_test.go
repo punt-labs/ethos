@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -228,6 +229,38 @@ func TestStore_DeleteNonexistent(t *testing.T) {
 	require.NoError(t, s.Delete("nonexistent"))
 }
 
+// TestStore_Delete_ClearsMissionSidecars pins review finding K3
+// (full-branch review, m-2026-09-08-004 round 3): Delete is the shared
+// low-level primitive Purge and PurgeTombstoned also funnel through
+// (via deleteFiles), so clearing mission sidecars here closes the gap
+// for every deletion path, not only the clean HandleSessionEnd one.
+func TestStore_Delete_ClearsMissionSidecars(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-del-sidecars", root, primary, "", ""))
+
+	require.NoError(t, mission.WriteActiveMission(s.root, "sess-del-sidecars", "m-2026-09-08-720"))
+	require.NoError(t, mission.WriteDispatchPending(s.root, "sess-del-sidecars", "m-2026-09-08-721", "bwk"))
+	require.NoError(t, mission.WriteDelegationBinding(s.root, "sess-del-sidecars", mission.DelegationBinding{
+		MissionID:    "m-2026-09-08-721",
+		DelegationID: "d-2026-09-08-001",
+	}))
+
+	require.NoError(t, s.Delete("sess-del-sidecars"))
+
+	claimed, err := mission.ReadActiveMission(s.root, "sess-del-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, claimed)
+
+	pending, _, err := mission.ReadDispatchPending(s.root, "sess-del-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+
+	_, err = os.Stat(mission.DelegationBindingPath(s.root, "sess-del-sidecars"))
+	assert.True(t, os.IsNotExist(err))
+}
+
 func TestStore_List(t *testing.T) {
 	s := testStore(t)
 
@@ -270,6 +303,35 @@ func TestStore_Purge(t *testing.T) {
 	ids, err := s.List()
 	require.NoError(t, err)
 	assert.Empty(t, ids)
+}
+
+// TestStore_Purge_ClearsMissionSidecars pins review finding K3's actual
+// scenario: a session that ended abnormally (SIGKILL, closed terminal,
+// crash -- simulated here by a dead PID, exactly what isStale detects)
+// left its mission sidecars behind indefinitely before this fix, with
+// no GC path. `claude --resume` reusing the same session ID would then
+// have its first matching spawn captured by a stale claim or pending
+// dispatch from before the death.
+func TestStore_Purge_ClearsMissionSidecars(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "9999999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-stale-sidecars", root, primary, "", ""))
+
+	require.NoError(t, mission.WriteActiveMission(s.root, "sess-stale-sidecars", "m-2026-09-08-722"))
+	require.NoError(t, mission.WriteDispatchPending(s.root, "sess-stale-sidecars", "m-2026-09-08-723", "bwk"))
+
+	purged, err := s.Purge()
+	require.NoError(t, err)
+	require.Contains(t, purged, "sess-stale-sidecars")
+
+	claimed, err := mission.ReadActiveMission(s.root, "sess-stale-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, claimed, "a dead session's claim must not survive to capture a resumed session's spawn")
+
+	pending, _, err := mission.ReadDispatchPending(s.root, "sess-stale-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a dead session's pending dispatch must not survive to capture a resumed session's spawn")
 }
 
 func TestStore_PurgeKeepsLive(t *testing.T) {
