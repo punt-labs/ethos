@@ -1849,18 +1849,34 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 // In two-tree storage mode (repoRoot set), this is the repo tree PLUS
 // any open global-tree mission this repo's OWN audit trail references.
 // Ownership is decided by repoMissionIDs — the identical mechanism
-// `ethos mission migrate` already uses: it scans sealed audit chunks,
-// the frozen legacy audit.jsonl, and the live not-yet-sealed tail
-// under <repoRoot>/.punt-labs/ethos/sessions/ (plus, when this repo is
-// a linked worktree, the checkout's own live tail — see repoMissionIDs'
-// doc comment in migrate.go for the full three-source breakdown) for
-// contract_id references, which is a reliable per-repo signal even though
-// Contract.Repo itself is not (measured 2026-09-07: zero of 841
-// global-tree contracts carry a populated Repo field). Mission IDs are
-// allocated from one shared, global, strictly-increasing daily
-// counter, so an ID a foreign repo's audit trail never mentions cannot
-// collide with one this repo's trail does — the two sets cannot be
-// confused.
+// `ethos mission migrate` already uses. Its scan spans the DES-058
+// two-zone split (internal/audit/paths.go), and the split matters
+// here because the two zones are NOT interchangeable paths under one
+// root:
+//
+//   - SEALED zone — sealed audit chunks plus the frozen legacy
+//     audit.jsonl — lives at <repoRoot>/.punt-labs/ethos/sessions/
+//     and is git-tracked, so every checkout of this repo sees the
+//     same sealed history regardless of which one produced it.
+//   - LIVE zone — the not-yet-sealed tail of a session that has not
+//     committed yet — lives at a DIFFERENT root,
+//     <root>/.punt-labs/local/ethos/sessions/, and is gitignored:
+//     machine-local to whichever checkout wrote it.
+//
+// That is exactly why the live half of the scan takes a SECOND root
+// (auditRoot(), below) while the sealed half does not: a linked
+// worktree's live tail sits under the worktree's own gitignored zone,
+// never under the main tree's, so scanning repoRoot alone would miss
+// it — but repoRoot alone is correct and sufficient for the sealed
+// zone, which is git-tracked and therefore identical from either
+// checkout. See repoMissionIDs' doc comment in migrate.go for the
+// full three-source breakdown of contract_id references, which is a
+// reliable per-repo signal even though Contract.Repo itself is not
+// (measured 2026-09-07: zero of 841 global-tree contracts carry a
+// populated Repo field). Mission IDs are allocated from one shared,
+// global, strictly-increasing daily counter, so an ID a foreign
+// repo's audit trail never mentions cannot collide with one this
+// repo's trail does — the two sets cannot be confused.
 //
 // The global tree as a WHOLE stays excluded from the scan (not merely
 // filtered): most of its entries genuinely belong to other repos or
@@ -1873,15 +1889,17 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 // repo-tree-only scan — a new mission could claim an overlapping
 // write_set against it with nothing to stop it.
 //
-// Cost: repoMissionIDs reads every sealed audit chunk and the frozen
-// legacy audit.jsonl (where one still exists) under every session this
-// repo has ever recorded, plus the live tail under both repoRoot and
-// auditRoot()'s checkoutRoot, once per Create. This mirrors the cost
-// `mission migrate` already accepts for the identical scan; unlike
-// migrate, Create pays it on every call, not just an operator-invoked
-// one-off — acceptable for now (creates are infrequent, not a
-// per-tool-call hot path), but a real cost worth remembering if this
-// repo's session history grows large enough to make it visible.
+// Cost: repoMissionIDs reads, once per Create, every SEALED chunk and
+// the frozen legacy audit.jsonl under every session this repo has
+// ever recorded, plus the LIVE zone's not-yet-sealed tail under two
+// separate roots — repoRoot's own live zone and, when different,
+// auditRoot()'s checkoutRoot live zone (see the two-zone breakdown
+// above). This mirrors the cost `mission migrate` already accepts for
+// the identical scan; unlike migrate, Create pays it on every call,
+// not just an operator-invoked one-off — acceptable for now (creates
+// are infrequent, not a per-tool-call hot path), but a real cost
+// worth remembering if this repo's session history grows large enough
+// to make it visible.
 //
 // Legacy single-tree mode (repoRoot == "") keeps scanning the full
 // global tree — it is the ONLY tree in that mode, so every entry
