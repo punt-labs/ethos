@@ -2101,6 +2101,20 @@ func bindDispatchedMission(op, missionID string) {
 			op, sessionID, missionID, err)
 		return
 	}
+	// Print the binding unconditionally, not only on a rebind
+	// (ethos-7tqd, triage suggestion #3): the binding is stickier than
+	// its useful window — it stays until an explicit `mission claim` or
+	// `mission release` — so the NEXT Agent() spawn in this session,
+	// however unrelated, files its delegation under missionID until
+	// then. Making that visible at the moment it happens is cheap;
+	// discovering it later via a misattributed commit or a delegation
+	// record that blocks `mission abandon` is not (reproduced live
+	// 2026-09-07, see ethos-7tqd's triage note).
+	fmt.Fprintf(os.Stderr,
+		"ethos: mission %s: session %s bound to %s — the next Agent() spawn in this "+
+			"session files its delegation here, even if unrelated; run `ethos mission "+
+			"release` first if that is not what you want\n",
+		op, sessionID, missionID)
 	// create and dispatch always mint a fresh mission ID, so a rebind
 	// onto the SAME mission cannot arise from either caller; only the
 	// changed-mission case is reachable and reported.

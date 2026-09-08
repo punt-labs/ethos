@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds the same repo-tier per-mission lock `dispatchTierB` and
   `mission close`'s delegation sweep already use, for the whole
   check-and-commit sequence (ethos-lj4k).
+- **`ethos mission create`/`dispatch` now print the session binding
+  they take, on every bind — not only when it overwrites a different
+  mission's binding.** The binding stays in effect until an explicit
+  `mission claim` or `mission release`, so the next `Agent()` spawn in
+  the session files its delegation under it even if unrelated; a
+  throwaway probe mission previously captured an unrelated agent's
+  delegation record with no visible signal at the moment it happened
+  (ethos-7tqd, partial — the deeper fix, binding at worker-spawn time
+  instead of dispatch time, needs `internal/hook` and is tracked as a
+  follow-up).
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`
