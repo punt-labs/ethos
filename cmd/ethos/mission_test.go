@@ -4569,6 +4569,48 @@ func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 		"the leader must be told the rebind stops their trailers")
 }
 
+// TestMissionDispatch_PrintsBindingOnFreshBind is the regression gate
+// for ethos-7tqd's triage suggestion #3: a FRESH bind (no prior
+// mission bound) must be visible too, not only a rebind. Before this
+// fix, bindDispatchedMission was silent unless it overwrote a
+// DIFFERENT mission's binding — a leader who dispatches from a clean
+// session gets no signal that the next Agent() spawn, however
+// unrelated, will file its delegation under the mission just
+// dispatched. That silent sidecar is what let a throwaway probe
+// mission capture an unrelated PR-fix agent's delegation record
+// (reproduced live 2026-09-07, see the bead's triage note).
+func TestMissionDispatch_PrintsBindingOnFreshBind(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-fresh-bind")
+	seedRosterForSession(t, "sess-fresh-bind")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	dispatched := ids[0]
+
+	assert.Contains(t, warning, "bound to "+dispatched,
+		"a fresh bind must print the mission it just bound to, not only a rebind")
+	assert.Contains(t, warning, "mission release",
+		"the message must name the escape hatch for a leader who does not want the capture")
+}
+
 // TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode pins
 // round 2, R5: a session that was expected (running under Claude Code)
 // but could not be identified is a REAL resolution failure, not the

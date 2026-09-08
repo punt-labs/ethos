@@ -576,6 +576,16 @@ func (s *Store) ensureMissionDir(missionID string) error {
 	return nil
 }
 
+// createReadBackHook is a test-only synchronization seam, invoked with
+// the contract's on-disk path right after writeContract succeeds and
+// right before Create reads it back to verify it. Its zero value is a
+// no-op with negligible production cost; the ethos-ouy9 regression test
+// overrides it to corrupt the file at that exact point, proving the
+// read-back actually refuses rather than trusting the write. Mirrors
+// dispatchTierBConfirmedOpen's pattern (internal/hook) for the same
+// class of ordering-sensitive test.
+var createReadBackHook = func(contractPath string) {}
+
 // Create persists a new mission contract. The caller must supply a
 // fully-populated Contract (the server-controlled fields — MissionID,
 // Status, CreatedAt, UpdatedAt, ClosedAt, Evaluator.PinnedAt — can be
@@ -597,11 +607,9 @@ func (s *Store) Create(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
-	// Work on a shallow copy so a validation failure never mutates
-	// the caller's struct. The UpdatedAt default-fill and Validate
-	// both touch only the copy. On success we reflect the new
-	// UpdatedAt back to the caller — the one field Create is
-	// contracted to set.
+	// staged is the shallow copy the doc comment above promises: the
+	// UpdatedAt default-fill below and Validate() both touch only this
+	// copy, never c.
 	staged := *c
 	if staged.UpdatedAt == "" {
 		staged.UpdatedAt = staged.CreatedAt
@@ -703,6 +711,28 @@ func (s *Store) Create(c *Contract) error {
 			}
 			if err := s.writeContract(&staged); err != nil {
 				return err
+			}
+			// Test-only seam (ethos-ouy9): invoked between the write above
+			// and the read-back below, matching the existing
+			// dispatchTierBConfirmedOpen pattern (internal/hook) for
+			// exercising an ordering-sensitive path deterministically. The
+			// zero value is a no-op; the regression test overrides it to
+			// corrupt the just-written file, proving the read-back below
+			// actually refuses rather than trusting the write.
+			createReadBackHook(dest)
+			// Read-back verification (ethos-ouy9): confirm the contract
+			// just written actually loads before the "create" event is
+			// recorded and before Create returns success.
+			// writeContractFile's Sync closes the crash-durability gap; this
+			// closes the complementary gap where the write itself silently
+			// produced something unreadable (a corrupt encode, or a
+			// filesystem that accepted the write but not the bytes) —
+			// "reports success" is only a lie if nothing checked.
+			if _, err := s.Load(staged.MissionID); err != nil {
+				if rbErr := os.Remove(dest); rbErr != nil && !os.IsNotExist(rbErr) {
+					return fmt.Errorf("create: read-back verification failed: %w; rollback failed: %v", err, rbErr)
+				}
+				return fmt.Errorf("create: read-back verification failed, contract removed: %w", err)
 			}
 			if err := s.appendEventLocked(staged.MissionID, Event{
 				TS:    time.Now().UTC().Format(time.RFC3339),
@@ -1095,6 +1125,71 @@ func missingRepoTreeDir(statErr error) bool {
 	return statErr != nil && os.IsNotExist(statErr)
 }
 
+// abandonAfterZeroCountHook is a test-only synchronization seam
+// invoked from inside fn (Abandon's own closure) — see its
+// declaration for what it exercises.
+var abandonAfterZeroCountHook = func() {}
+
+// withAbandonDelegationLock runs fn while holding the repo-tier
+// exclusive per-mission lock (AcquireMissionLockExclusive) — the same
+// lock file a concurrent dispatchTierB acquires SHARED before it
+// writes a delegation skeleton (delegation.go). Store.Abandon calls
+// this around its whole read-then-write sequence — countDelegations,
+// the results check, and the writeContract commit — so the sequence is
+// atomic with respect to any dispatchTierB in flight (ethos-lj4k, ADR
+// DES-075 Decision 4 — "which lock is authoritative for
+// delegation-directory access" — amended round 2, in DESIGN.md).
+//
+// Before this, Abandon's countDelegations ran only under s.withLock,
+// the GLOBAL per-mission lock — a different file from the repo-tier
+// lock dispatchTierB and Store.Close's delegation sweep already use.
+// A dispatchTierB holding the repo-tier lock could write a delegation
+// record in the window between countDelegations returning 0 and
+// writeContract committing StatusAbandoned, since neither lock
+// excluded the other.
+//
+// Nests INSIDE the caller's s.withLock (global, already held) rather
+// than replacing it: this matches the acquisition order
+// AcquireMissionLockExclusive's own doc comment already prescribes
+// (global → repo → per-mission(shared) → per-delegation(exclusive)),
+// which no call site had exercised until now. No other call site
+// acquires the repo-tier lock and then tries to acquire the global
+// one — Store.Close's own repo-tier acquisition runs strictly AFTER
+// releasing the global lock, a subset of the same order, not a
+// reversal — so this nesting introduces no new deadlock risk.
+//
+// ALWAYS acquires the lock, unconditionally — round 2 of ethos-lj4k
+// (PR #508 review): the first version skipped acquisition (a) when
+// the repo-tree per-mission directory did not yet exist, and (b) when
+// AcquireMissionLockExclusive itself failed, falling through to an
+// unlocked fn() call in both cases. (a) was a TOCTOU: a Tier B dispatch
+// starting AFTER that stat check has AcquireMissionLock create the
+// very directory the check found absent, take the shared lock, and
+// write a delegation — after Abandon's unlocked countDelegations had
+// already returned 0. (b) reopened the exact race ethos-lj4k exists to
+// close, on its own error path — a lock you proceed without on failure
+// is not a lock. Both are now fail-closed: acquisition always runs (its
+// own MkdirAll creating a repo-tree directory for a legacy-global-only
+// mission is a harmless side effect — resolveLayer keys off
+// contract.yaml's presence, never the directory's, so this does not
+// change which layer the mission is read from or written to), and a
+// failure returns an actionable error instead of an unlocked fn() call
+// — the same reasoning already applied to the repoRoot=="" guard above
+// (djb's probe: "silently trusting the absence of evidence as evidence
+// of absence").
+func (s *Store) withAbandonDelegationLock(missionID string, fn func() error) error {
+	release, err := AcquireMissionLockExclusive(s.repoRoot, missionID)
+	if err != nil {
+		return fmt.Errorf(
+			"abandon: acquiring exclusive lock for %q: %w; refusing to abandon without it "+
+				"(a concurrent dispatchTierB could otherwise write a delegation record past this check)",
+			missionID, err,
+		)
+	}
+	defer release()
+	return fn()
+}
+
 // closeDelegationSkeletons walks delegations/ under the per-mission
 // directory and closes any skeleton whose verdict is still "open".
 func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
@@ -1252,67 +1347,93 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 				missionID,
 			)
 		}
-		n, dErr := countDelegations(s.repoRoot, missionID)
-		if dErr != nil {
-			return fmt.Errorf("abandon: checking delegations for %q: %w", missionID, dErr)
-		}
-		if n > 0 {
-			return fmt.Errorf(
-				"mission %q cannot be abandoned: %d delegation record(s) exist under delegations/; "+
-					"a worker was spawned, so this mission may have recoverable work — "+
-					"submit a result and run `ethos mission close %s` instead",
-				missionID, n, missionID,
-			)
-		}
-		// Gate 2: zero result artifacts, for any round — not only the
-		// mission's current round. A result recorded for an earlier
-		// round (e.g. the mission advanced past a round that still
-		// produced output) is exactly the recoverable-work case this
-		// gate exists to catch.
-		results, rErr := s.loadResultsLocked(missionID)
-		if rErr != nil {
-			return fmt.Errorf("abandon: loading results for %q: %w", missionID, rErr)
-		}
-		if len(results) > 0 {
-			rounds := make([]string, len(results))
-			for i, r := range results {
-				rounds[i] = fmt.Sprintf("%d", r.Round)
+		// Gate 1 (delegation count), Gate 2 (results), and the terminal
+		// commit all run under the repo-tier per-mission lock
+		// (withAbandonDelegationLock), NOT just the global lock this
+		// closure is already inside. See that method's doc comment and
+		// ADR DES-075 Decision 4 (DESIGN.md, amended round 2) for why:
+		// dispatchTierB writes a
+		// delegation record under a DIFFERENT lock file than the one
+		// this method's outer s.withLock takes, so without this nested
+		// acquisition a delegation could land in the window between
+		// countDelegations returning 0 and writeContract committing
+		// StatusAbandoned (ethos-lj4k).
+		return s.withAbandonDelegationLock(missionID, func() error {
+			n, dErr := countDelegations(s.repoRoot, missionID)
+			if dErr != nil {
+				return fmt.Errorf("abandon: checking delegations for %q: %w", missionID, dErr)
 			}
-			return fmt.Errorf(
-				"mission %q cannot be abandoned: result artifact(s) exist for round(s) %s; "+
-					"a result means the worker produced output — run `ethos mission close %s` instead",
-				missionID, strings.Join(rounds, ", "), missionID,
-			)
-		}
+			if n > 0 {
+				return fmt.Errorf(
+					"mission %q cannot be abandoned: %d delegation record(s) exist under delegations/; "+
+						"a worker was spawned, so this mission may have recoverable work — "+
+						"submit a result and run `ethos mission close %s` instead",
+					missionID, n, missionID,
+				)
+			}
+			// Test-only seam: invoked after countDelegations has returned
+			// zero and before Gate 2 / the terminal commit. The zero value
+			// is a no-op; the ethos-lj4k round-2 regression test overrides
+			// it to attempt a concurrent delegation write at exactly this
+			// point, proving withAbandonDelegationLock's exclusive lock
+			// (held across this entire closure) blocks that write rather
+			// than letting it land in the gap between the count and the
+			// commit — the round-2 finding (F3): an absent repo-tree
+			// directory at check time is not proof of absence at commit
+			// time. Mirrors createReadBackHook's and
+			// dispatchTierBConfirmedOpen's pattern for the same class of
+			// ordering-sensitive test.
+			abandonAfterZeroCountHook()
+			// Gate 2: zero result artifacts, for any round — not only the
+			// mission's current round. A result recorded for an earlier
+			// round (e.g. the mission advanced past a round that still
+			// produced output) is exactly the recoverable-work case this
+			// gate exists to catch.
+			results, rErr := s.loadResultsLocked(missionID)
+			if rErr != nil {
+				return fmt.Errorf("abandon: loading results for %q: %w", missionID, rErr)
+			}
+			if len(results) > 0 {
+				rounds := make([]string, len(results))
+				for i, r := range results {
+					rounds[i] = fmt.Sprintf("%d", r.Round)
+				}
+				return fmt.Errorf(
+					"mission %q cannot be abandoned: result artifact(s) exist for round(s) %s; "+
+						"a result means the worker produced output — run `ethos mission close %s` instead",
+					missionID, strings.Join(rounds, ", "), missionID,
+				)
+			}
 
-		now := time.Now().UTC().Format(time.RFC3339)
-		c.Status = StatusAbandoned
-		c.ClosedAt = now
-		c.UpdatedAt = now
-		if err := s.validateContract(c); err != nil {
-			return fmt.Errorf("invalid contract after abandon: %w", err)
-		}
-		if err := s.writeContract(c); err != nil {
-			return err
-		}
-		// redact was built before the lock (see the comment at the top
-		// of Abandon) so its construction cannot fail here, after
-		// writeContract has already stamped the terminal state.
-		if err := s.appendEventLocked(missionID, Event{
-			TS:    now,
-			Event: "abandon",
-			Actor: c.Leader,
-			Details: redact.Map(map[string]any{
-				"reason": reason,
-			}),
-		}); err != nil {
-			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
-				return fmt.Errorf("abandon: event append failed: %w; rollback failed: %v", err, rbErr)
+			now := time.Now().UTC().Format(time.RFC3339)
+			c.Status = StatusAbandoned
+			c.ClosedAt = now
+			c.UpdatedAt = now
+			if err := s.validateContract(c); err != nil {
+				return fmt.Errorf("invalid contract after abandon: %w", err)
 			}
-			return fmt.Errorf("abandon: event append failed, contract rolled back: %w", err)
-		}
-		abandoned = c
-		return nil
+			if err := s.writeContract(c); err != nil {
+				return err
+			}
+			// redact was built before the lock (see the comment at the top
+			// of Abandon) so its construction cannot fail here, after
+			// writeContract has already stamped the terminal state.
+			if err := s.appendEventLocked(missionID, Event{
+				TS:    now,
+				Event: "abandon",
+				Actor: c.Leader,
+				Details: redact.Map(map[string]any{
+					"reason": reason,
+				}),
+			}); err != nil {
+				if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+					return fmt.Errorf("abandon: event append failed: %w; rollback failed: %v", err, rbErr)
+				}
+				return fmt.Errorf("abandon: event append failed, contract rolled back: %w", err)
+			}
+			abandoned = c
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -1644,39 +1765,9 @@ func DecodeContractStrict(data []byte, label string) (*Contract, error) {
 // Both shapes are normalized to a bare mission ID before merging.
 func (s *Store) List() ([]string, error) {
 	seen := make(map[string]struct{})
-	var ids []string
-
-	// Repo tree (when active). A per-mission subdirectory holding
-	// contract.yaml counts as one mission. Empty subdirectories or
-	// directories without a contract.yaml are skipped — they may be
-	// in-flight Creates or stale state, not first-class entries.
-	if s.twoTreeStorage && s.repoRoot != "" {
-		repoEntries, err := os.ReadDir(s.repoMissionsDir())
-		switch {
-		case err == nil:
-			for _, entry := range repoEntries {
-				if !entry.IsDir() {
-					continue
-				}
-				name := entry.Name()
-				if strings.HasPrefix(name, ".") {
-					continue
-				}
-				contractFile := filepath.Join(s.repoMissionsDir(), name, "contract.yaml")
-				if _, statErr := os.Stat(contractFile); statErr != nil {
-					continue
-				}
-				if _, dup := seen[name]; dup {
-					continue
-				}
-				seen[name] = struct{}{}
-				ids = append(ids, name)
-			}
-		case os.IsNotExist(err):
-			// First-run repo with no missions yet — fall through.
-		default:
-			return nil, fmt.Errorf("reading repo missions directory: %w", err)
-		}
+	ids, err := s.listRepoTree(seen)
+	if err != nil {
+		return nil, err
 	}
 
 	// Global tree. Flat-shape files; sibling artifacts are filtered
@@ -1703,6 +1794,159 @@ func (s *Store) List() ([]string, error) {
 		seen[id] = struct{}{}
 		ids = append(ids, id)
 	}
+	return ids, nil
+}
+
+// listRepoTree returns the mission IDs under the repo tree (empty
+// when two-tree storage is inactive). A per-mission subdirectory
+// holding contract.yaml counts as one mission. Empty subdirectories or
+// directories without a contract.yaml are skipped — they may be
+// in-flight Creates or stale state, not first-class entries. seen is
+// the caller's dedup set; every ID returned is also recorded in it so
+// a caller merging in a second source does not double-count.
+func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
+	if !s.twoTreeStorage || s.repoRoot == "" {
+		return nil, nil
+	}
+	var ids []string
+	repoEntries, err := os.ReadDir(s.repoMissionsDir())
+	switch {
+	case err == nil:
+	case os.IsNotExist(err):
+		// First-run repo with no missions yet.
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("reading repo missions directory: %w", err)
+	}
+	for _, entry := range repoEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		contractFile := filepath.Join(s.repoMissionsDir(), name, "contract.yaml")
+		if _, statErr := os.Stat(contractFile); statErr != nil {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		ids = append(ids, name)
+	}
+	return ids, nil
+}
+
+// conflictScanIDs returns the mission IDs checkWriteSetConflicts
+// compares a new contract against. See ADR DES-075 (DESIGN.md,
+// Decision 3 — "which tree is authoritative for the write-set conflict
+// SCAN" — amended rounds 2, 3, 4, and 7) for the full layer-model
+// decision this implements.
+//
+// In two-tree storage mode (repoRoot set), this is the repo tree PLUS
+// any open global-tree mission this repo's OWN audit trail references.
+// Ownership is decided by repoMissionIDs — the identical mechanism
+// `ethos mission migrate` already uses. Its scan spans the DES-058
+// two-zone split (internal/audit/paths.go), and the split matters
+// here because the two zones are NOT interchangeable paths under one
+// root:
+//
+//   - SEALED zone — sealed audit chunks plus the frozen legacy
+//     audit.jsonl — lives at <root>/.punt-labs/ethos/sessions/ and is
+//     git-tracked.
+//   - LIVE zone — the not-yet-sealed tail of a session that has not
+//     committed yet — lives at a DIFFERENT root,
+//     <root>/.punt-labs/local/ethos/sessions/, and is gitignored:
+//     machine-local to whichever checkout wrote it.
+//
+// "Git-tracked" does not mean "identical across every checkout" — it
+// means identical AT THE SAME COMMIT. A linked worktree on an
+// unmerged branch has sealed chunks committed to that branch which
+// the main tree's own working copy of the sealed zone does not carry
+// (PR #508 round 7, finding J1 — measured directly: six sealed chunks
+// existed in a worktree checkout and not in the main tree's). So BOTH
+// zones take a SECOND root (auditRoot(), below) when this repo is a
+// linked worktree, not just the live one: a mission whose only
+// ownership evidence sealed onto an unmerged branch would otherwise be
+// invisible to admission control, reopening the F4 false-negative
+// class one layer down from where round 4 (H1) closed it for the live
+// zone alone. See repoMissionIDs' doc comment in migrate.go for the
+// full three-source breakdown of contract_id references, which is a
+// reliable per-repo signal even though Contract.Repo itself is not
+// (measured 2026-09-07: zero of 841 global-tree contracts carry a
+// populated Repo field). Mission IDs are allocated from one shared,
+// global, strictly-increasing daily counter, so an ID a foreign
+// repo's audit trail never mentions cannot collide with one this
+// repo's trail does — the two sets cannot be confused.
+//
+// The global tree as a WHOLE stays excluded from the scan (not merely
+// filtered): most of its entries genuinely belong to other repos or
+// predate any audit trail at all, and comparing against those produced
+// the false conflicts ethos-6adb reported. Only entries this repo's
+// OWN history claims are pulled in. This closes a gap the round-1 fix
+// left (PR #508 round 2, finding F4): a same-repo mission created
+// before this repo adopted two-tree storage, still open, and never
+// migrated, was invisible to admission control under the round-1
+// repo-tree-only scan — a new mission could claim an overlapping
+// write_set against it with nothing to stop it.
+//
+// Cost: repoMissionIDs reads, once per Create, every SEALED chunk and
+// the frozen legacy audit.jsonl under every session this repo has
+// ever recorded, PLUS the LIVE zone's not-yet-sealed tail — both under
+// repoRoot and, when different, auditRoot()'s checkoutRoot (see the
+// two-zone breakdown above; both zones take both roots as of round
+// 7). This mirrors the cost `mission migrate` already accepts for the
+// identical scan; unlike migrate, Create pays it on every call, not
+// just an operator-invoked one-off — acceptable for now (creates are
+// infrequent, not a per-tool-call hot path), but a real cost worth
+// remembering if this repo's session history grows large enough to
+// make it visible.
+//
+// Legacy single-tree mode (repoRoot == "") keeps scanning the full
+// global tree — it is the ONLY tree in that mode, so every entry
+// genuinely shares one undifferentiated namespace and the previous
+// behavior (List()) is unchanged.
+func (s *Store) conflictScanIDs() ([]string, error) {
+	if !s.twoTreeStorage || s.repoRoot == "" {
+		return s.List()
+	}
+	seen := make(map[string]struct{})
+	ids, err := s.listRepoTree(seen)
+	if err != nil {
+		return nil, err
+	}
+	// auditRoot() (checkoutRoot when set, else repoRoot) covers the
+	// live-tail half of the ownership scan for a linked worktree (PR
+	// #508 round 4, finding H1) — see repoMissionIDs' doc comment.
+	owned, err := repoMissionIDs(s.repoRoot, s.auditRoot())
+	if err != nil {
+		return nil, fmt.Errorf("scanning repo sessions for mission ownership: %w", err)
+	}
+	// owned is a map, so Go randomizes its iteration order. Collect the
+	// unseen IDs first and sort that tail before appending — the
+	// conflict list this feeds (checkWriteSetConflicts ->
+	// formatConflictError) reports conflicts in slice order, and an
+	// operator seeing the same conflicts reordered run to run reads as
+	// a bug even though the conflict set itself hasn't changed.
+	var tail []string
+	for id := range owned {
+		if _, dup := seen[id]; dup {
+			// Already migrated into the repo tree (or, defensively, a
+			// duplicate within listRepoTree's own result) — counted once.
+			continue
+		}
+		// owned may also name a closed mission, or a stale audit
+		// reference to one since deleted by hand. Neither needs
+		// filtering here: checkWriteSetConflicts' own Load-per-ID loop
+		// already tolerates and skips an unloadable ID (stderr warning)
+		// and filters to Status == StatusOpen before comparing.
+		seen[id] = struct{}{}
+		tail = append(tail, id)
+	}
+	sort.Strings(tail)
+	ids = append(ids, tail...)
 	return ids, nil
 }
 
@@ -1770,6 +2014,19 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 // directory under <repoRoot>/.punt-labs/ethos/missions/<id>/ before the temp
 // file is opened; the legacy single-root layout has no per-mission
 // directory and skips the mkdir.
+//
+// Matches session.Store.writeRoster's durability discipline (ethos-ouy9):
+// Sync before Close, the temp file removed on every error path, and a
+// failed fsync propagated rather than ignored. Before this fix,
+// writeContract renamed straight after WriteFile with no Sync — a crash,
+// power loss, or container kill between the rename and the kernel
+// flushing the data could land the directory entry while the contents
+// did not, leaving Create returning nil and printing "created: m-..."
+// for a contract a later Load could not read. A fixed (non-random)
+// temp-file name is safe here, unlike writeAtomicFile's per-delegation
+// siblings: writeContract always runs under s.withLock, which already
+// serializes every writer for this missionID, so there is no concurrent
+// second writer to trample the shared name.
 func (s *Store) writeContract(c *Contract) error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
@@ -1782,6 +2039,16 @@ func (s *Store) writeContract(c *Contract) error {
 	if err != nil {
 		return err
 	}
+	return writeContractFile(dest, data)
+}
+
+// writeContractFile writes data to dest atomically via a fixed-name
+// temp file plus rename, with the same fsync-before-rename and
+// remove-temp-on-every-error-path discipline as
+// session.Store.writeRoster. Shared by writeContract and
+// restoreContract so the two on-disk writers of a mission contract
+// cannot drift apart on durability.
+func writeContractFile(dest string, data []byte) error {
 	tmp := dest + ".tmp"
 	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
 	// at the temp path. os.WriteFile would follow a symlink at tmp,
@@ -1795,34 +2062,77 @@ func (s *Store) writeContract(c *Contract) error {
 	if err := rejectSymlink(tmp); err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp contract: %w", err)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening temp contract %s: %w", tmp, err)
 	}
-	return os.Rename(tmp, dest)
+	if n, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("writing temp contract %s: %w", tmp, err)
+	} else if n < len(data) {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("short write to temp contract %s: %d of %d bytes", tmp, n, len(data))
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("syncing temp contract %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("closing temp contract %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("renaming temp contract %s -> %s: %w", tmp, dest, err)
+	}
+	// F2 (PR #508 round 2): the FILE's contents were durable the moment
+	// f.Sync() above returned, but the RENAME is a change to the
+	// containing directory's own metadata (which name points at which
+	// inode), and that change is only durable once the directory itself
+	// is synced. Skipping this left a real gap: a crash between the
+	// rename returning and the directory entry reaching stable storage
+	// could still lose the "created: m-..." contract on recovery — the
+	// exact ethos-ouy9 symptom the file-level Sync alone did not close.
+	//
+	// The rename above is the commit point (PR #508 round 3, G2/G3):
+	// dest now holds the correct, complete contract no matter what
+	// happens next. A syncDir failure here means the rename's
+	// directory-entry update is not CONFIRMED durable against a crash —
+	// it does not mean the write failed, and dest is not "maybe wrong,"
+	// it is right, now, on disk. Returning an error from this point and
+	// having the caller clean up dest would remove a contract that is
+	// currently completely valid, in exchange for a clean-looking
+	// failure — trading a proven-good state for a guaranteed-bad one to
+	// make an unconfirmed durability signal read like an ordinary
+	// error. ethos-ouy9's whole complaint was "reports success for an
+	// absent contract"; turning this into a hard error would produce
+	// its exact inverse, "reports failure for a present one," which is
+	// no better — a retry after either shape hits "already exists" with
+	// no clean path back. Warned, not returned: the same treatment
+	// Store.Close already gives its own post-commit, non-essential
+	// failures (the trace-summary write).
+	if err := syncDir(filepath.Dir(dest)); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission: syncing directory %s after renaming contract %s: %v — "+
+				"the contract itself is written and correct; only its durability against "+
+				"a crash before the next filesystem sync is unconfirmed\n",
+			filepath.Dir(dest), dest, err)
+	}
+	return nil
 }
 
 // restoreContract writes oldData back to dest atomically via temp+rename.
 // Used by Update and Close to roll back a contract write when the
 // follow-on event-log append fails, keeping the caller's view of
 // on-disk state consistent with the operation's success/failure.
+// Shares writeContractFile's durability discipline with writeContract
+// (ethos-ouy9) — a rollback that itself lands half-written is exactly
+// as unacceptable as the forward write it is undoing.
 func (s *Store) restoreContract(dest string, oldData []byte) error {
-	tmp := dest + ".tmp"
-	// Uniform symlink policy (paths.go): the rollback path runs after
-	// a failed event-log append, when an attacker may have raced to
-	// plant a symlink at the temp path. Refuse before WriteFile.
-	if err := rejectSymlink(dest); err != nil {
-		return fmt.Errorf("writing rollback temp: %w", err)
-	}
-	if err := rejectSymlink(tmp); err != nil {
-		return fmt.Errorf("writing rollback temp: %w", err)
-	}
-	if err := os.WriteFile(tmp, oldData, 0o600); err != nil {
-		return fmt.Errorf("writing rollback temp: %w", err)
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		return fmt.Errorf("renaming rollback temp: %w", err)
-	}
-	return nil
+	return writeContractFile(dest, oldData)
 }
 
 // withLock executes fn while holding an exclusive lock (flock on Unix,
@@ -2501,10 +2811,10 @@ func canonicalRoleSlug(name string) string {
 	return name
 }
 
-// checkWriteSetConflicts loads every existing mission, filters to
-// open ones, and asks findWriteSetConflicts whether the new contract's
-// write_set overlaps any of them. Returns a non-nil error iff there
-// is at least one conflict.
+// checkWriteSetConflicts loads every existing mission IN SCOPE for
+// this repo, filters to open ones, and asks findWriteSetConflicts
+// whether the new contract's write_set overlaps any of them. Returns
+// a non-nil error iff there is at least one conflict.
 //
 // The caller must hold the directory-level create lock so that the
 // scan-then-write transition is atomic with respect to other Creates.
@@ -2513,7 +2823,7 @@ func canonicalRoleSlug(name string) string {
 // Unloadable missions cannot conflict — the safe default is skip,
 // not block all future creates.
 func (s *Store) checkWriteSetConflicts(c *Contract) error {
-	ids, err := s.List()
+	ids, err := s.conflictScanIDs()
 	if err != nil {
 		return fmt.Errorf("create: listing existing missions: %w", err)
 	}

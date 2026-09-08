@@ -8890,3 +8890,500 @@ passes against the code as it already stands after the amendment
 directly above, and exists so a future, well-intentioned fallback
 cannot reintroduce the collision this ruling explicitly rejected without
 first deleting or rewriting this test.
+
+## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08)
+
+**Context.** `internal/mission` (DES-054 phase 1) stores a mission in one
+of two trees and locks it through one of two lock files, and different call
+sites picked between them inconsistently. Cluster-2 triage on 2026-09-07
+(ethos-6adb, ethos-ouy9, ethos-lj4k, ethos-5yej, ethos-7tqd) found the same
+ambiguity underneath four of the five bugs filed against this package. This
+ADR names what each layer and each lock is for, so the fix for each bead
+follows from one decision instead of four separate patches.
+
+**The two trees.**
+
+- **Repo tree** — `<repoRoot>/.punt-labs/ethos/missions/<id>/contract.yaml`
+  (`repoMissionsDir`, `paths.go:120`). Git-tracked. Active when a Store is
+  built with `NewStoreWithRoots(repoRoot, ...)` and `repoRoot != ""` — the
+  case for every CLI/MCP invocation run from inside a repo checkout
+  (`missionStore`, `cmd/ethos/mission.go:56`).
+- **Global tree** — `<globalRoot>/missions/<id>.yaml`
+  (`globalMissionsDir`, `paths.go:131`), `globalRoot` always
+  `~/.punt-labs/ethos`. Flat, one namespace shared by every repo on the
+  machine. Not git-tracked.
+
+**Decision 1 — which tree is authoritative for NEW writes.** The repo
+tree, whenever one is in scope (`writeLayer`, `paths.go:198`). The global
+tree is written only when no repo is in scope at all (`ethos mission
+create` run outside any git checkout) — a rare, already loudly-warned path
+(`warnIfGlobalFallback`, `cmd/ethos/mission.go:103`). This was already the
+code's behavior; this ADR just names it as the standing decision so the
+next change doesn't have to re-derive it.
+
+**Decision 2 — which tree is authoritative for READS of an existing
+mission.** Repo-first, global-fallback (`resolveLayer`, `paths.go:172`).
+Unchanged by this round. The fallback exists so a mission created before a
+repo adopted the two-tree layout (or created with no repo in scope) is
+still loadable.
+
+**Decision 3 — which tree is authoritative for the write-set conflict
+SCAN (`Create`'s admission control).** The repo tree, once a repo is in
+scope, PLUS any open global-tree mission this repo's own audit trail
+references — never the global tree unconditionally. This is the fix for
+**ethos-6adb**; see the round-2 amendment below for why "never the global
+tree" (this ADR's original wording) needed correcting to the version
+above.
+
+The global tree cannot be scoped by repo: it is flat, and measured
+2026-09-07 showed 841 contracts on the local host, 19 open, ZERO carrying a
+populated `repo:` field. A per-entry repo filter is therefore not available
+today, and back-filling it retroactively does nothing for the 841 already
+on disk. Since Decision 1 means a repo's own new missions never land in the
+global tree once a repo is in scope, the global tree's remaining open
+entries are guaranteed to be either pre-two-tree-adoption leftovers or
+another repo's missions entirely — comparing a new mission's write_set
+against them can only produce false conflicts, never a real one. Excluding
+the global tree from the scan (not filtering it) is therefore not a loss of
+coverage, only a removal of noise. `conflictScanIDs` (`store.go`)
+implements this: it calls the repo-tree listing directly and skips the
+union with the global tree that `List()` still performs for the general
+"show me every mission" case (CLI `mission list`, `MatchByPrefix`), which
+is unaffected — a stale cross-repo prefix match was never this cluster's
+complaint and stays out of scope here.
+
+**Decision 4 — which lock is authoritative for delegation-directory
+access.** The REPO-TIER per-mission lock —
+`AcquireMissionLock`/`AcquireMissionLockExclusive`
+(`<repoRoot>/.punt-labs/ethos/missions/<id>/.lock`, `delegation.go:467`) —
+not the GLOBAL per-mission lock (`Store.withLock`/`Store.lockPath`,
+`<globalRoot>/missions/<id>.lock`, `store.go:424`). This is the fix for
+**ethos-lj4k**; the round-2 amendment below tightens HOW that lock is
+acquired (unconditionally, never skipped, never bypassed on error) after
+review found two ways the round-1 version could still skip it.
+
+Both locks exist and both stay: the global lock still serializes every
+Store method that mutates a contract file (`Create`, `Update`, `Close`,
+`Abandon`, `AdvanceRound`, ...) exactly as before — this decision does not
+touch that. The repo-tier lock is the one thing every actor that reads or
+writes `delegations/` under a mission already used — `dispatchTierB`
+(shared, `internal/hook/pretooluse_dispatch.go:273`) and `Store.Close`'s
+delegation sweep (exclusive, `store.go:1063`) — except `Store.Abandon`,
+whose `countDelegations` check ran under the GLOBAL lock only. Two
+different lock files gave two independent critical sections over the SAME
+directory: `dispatchTierB` could write a delegation record in the window
+between `Abandon`'s read and its commit, with neither side excluding the
+other. The fix nests `AcquireMissionLockExclusive` INSIDE the existing
+`s.withLock` for the delegation-count-and-commit sequence
+(`withAbandonDelegationLock`, `store.go`) — global lock outer, repo-tier
+lock inner, matching the acquisition order `delegation.go`'s own doc
+comment already prescribed (`global → repo → per-mission(shared) →
+per-delegation(exclusive)`) but that no call site had actually exercised
+until now. No existing call site acquires the repo-tier lock and then
+tries to acquire the global lock, so this ordering introduces no reversal
+and no new deadlock risk; `Store.Close`'s existing repo-tier acquisition
+runs strictly AFTER releasing the global lock (sequential, not nested),
+which is a subset of the same order, not a conflicting one. Rejected: just
+adding `AcquireMissionLockExclusive` to `Abandon` as a second, independent
+acquisition alongside the existing global lock with no defined order
+between the two — safe today only by accident of which call sites exist,
+and the first future call site that reversed the order would deadlock
+silently. Naming one fixed order removes that trap.
+
+**Decision 5 — what a linked worktree's own `.punt-labs/ethos/` means.**
+Inert. `FindRepoEthosRoot` and `StoreRepoRoot` (`internal/resolve`) both
+resolve through the git common-dir to the MAIN work tree, so a linked
+worktree's own `.punt-labs/ethos/` — even one `ethos enable` deposited
+directly into that checkout — is never read or written by the mission
+store, the identity/team/role layered stores, or session resolution. This
+is deliberate (ethos-yofr) and is what lets a worktree see its parent
+session's missions and rosters without any special-casing. It is also
+undocumented as a NAMED state today: a worktree's own store directory
+silently means nothing rather than erroring or being explicitly labeled
+inert. This ADR is that naming; per the mission triage
+(ethos-5yej), no behavior changes — the bead closes once this section
+lands.
+
+**Non-goal for this round.** Populating `Contract.Repo` at create time
+(so a future repo filter on the global tree becomes possible) is
+deliberately deferred. `Contract.Repo` is set from two entry points — the
+CLI (`cmd/ethos/mission.go`, in scope for this round) and the MCP server
+(`internal/mcp/mission_tools.go`, NOT in scope for this round) — and
+`ApplyServerFields`'s whole contract with its callers (see its own doc
+comment) is that CLI and MCP stay in lockstep for every server-controlled
+field. Setting `Repo` from only one of the two entry points would make the
+field's presence depend on which surface created the mission, a new and
+worse inconsistency than the one being fixed. A follow-up that widens the
+write-set to include the MCP path can do this properly.
+
+**Consequence for ethos-ouy9.** Independent of the layer model above,
+`writeContract` (`store.go`) — the function that persists every mission
+contract, in whichever layer `Decision 1` selects — had no `Sync()` before
+its `Rename`, unlike its sibling `session.writeRoster`
+(`internal/session/store.go:653`), which does. `writeContract` now matches
+`writeRoster`'s discipline (`Sync` before `Close`, temp removed on every
+error path, a failed fsync propagated). `Store.Create` additionally reads
+the just-written contract back before returning success. Neither of the
+two other candidate causes the ethos-ouy9 triage note raised (a
+create/read layer mismatch; a create landing in a different repo's tree)
+is ruled out by this ADR's decisions — Decision 1/2 already prevent both
+for any repo-scoped invocation — but the missing fsync is a real,
+independently-reproducible durability gap on its own, fixed regardless of
+which candidate explains the original 2026-08-15 vox incident.
+
+**Consequence for ethos-7tqd.** Out of scope for the layer model itself —
+this is an active-mission-sidecar attribution bug (`internal/mission/active.go`),
+not a storage-layer ambiguity — but it was reproduced and triaged in the
+same pass. `ethos mission dispatch`/`create` now print the binding they
+take (`cmd/ethos/mission.go`) so a leader sees "session bound to mission
+X" rather than discovering it later via a misattributed commit or a
+blocked abandon. The deeper fix — bind at worker-spawn time instead of at
+dispatch time, per the triage note's stated preference — requires changing
+`internal/hook/pretooluse_dispatch.go`'s dispatch/attribution logic, which
+is outside this mission's write-set (`internal/mission/**`,
+`internal/resolve/resolve.go`, `cmd/ethos/mission.go`, `DESIGN.md`,
+`CHANGELOG.md`). Flagged for a follow-up mission scoped to
+`internal/hook/**`.
+
+### Amendment 2026-09-08: PR #508 review round 2 (findings F1–F6)
+
+Six findings on the round-1 implementation of this ADR's decisions —
+Qodo's inline review plus Copilot, requested explicitly rather than
+trusting a transient CLEAN/zero-threads state the PR briefly showed. Four
+were High; two of those were defects in the fixes themselves, one was a
+consequence of a Decision this ADR had already accepted, one was a genuine
+correctness gap in the same fix. All six are closed in this amendment;
+nothing here reverses round 1's decisions, but Decision 1/3's "exclude the
+global tree" needed correcting to "exclude the global tree except what
+this repo's own history claims," below.
+
+**F1 (High) — `withAbandonDelegationLock` fell back to an UNLOCKED `fn()`
+call when `AcquireMissionLockExclusive` itself failed to acquire.** That
+reopened the exact race Decision 4 exists to close, on the fix's own error
+path: a lock you proceed without on failure is not a lock. Fixed by
+removing the fallback entirely — a lock-acquisition failure now returns an
+error from `Abandon` and mutates nothing, the same fail-closed shape
+already applied to the `repoRoot == ""` guard earlier in the same
+function ("silently trusting the absence of evidence as evidence of
+absence" — djb's probe, cited in that guard's own comment).
+
+**F3 (High) — the SAME function also skipped acquisition outright when the
+repo-tree per-mission directory did not yet exist** (`missingRepoTreeDir`),
+reasoning that no `dispatchTierB` could be racing under a directory that
+does not exist. That reasoning is a TOCTOU: a `dispatchTierB` starting
+after the stat check runs `AcquireMissionLock`, whose own `MkdirAll`
+creates the very directory the check found absent, takes the shared lock,
+and writes a delegation — after `Abandon`'s unlocked `countDelegations` had
+already returned zero. Fixed together with F1: `withAbandonDelegationLock`
+now acquires `AcquireMissionLockExclusive` unconditionally, every time,
+with no directory-existence shortcut. Its own `MkdirAll` creating a
+repo-tree directory for a mission that lives entirely in the legacy global
+tree is a harmless side effect — `resolveLayer` decides a mission's layer
+by whether `contract.yaml` is present, never by whether the directory
+itself exists, so this does not change which layer any mission reads from
+or writes to. `TestStore_TwoRoot_CloseStaysInItsLayer`'s sibling assertion
+for `Abandon` was updated to check for the absence of `contract.yaml`
+specifically, not the absence of any repo-tree footprint at all.
+
+Both F1 and F3 are covered by
+`TestStore_Abandon_ExcludesConcurrentDelegationWrite` (directory
+pre-existing), its `_NoPriorRepoTreeDir` sibling (F3's exact starting
+condition), and `TestStore_Abandon_ZeroCountToCommitWindowIsAtomic` (pins
+F3's literal phrase — "the window between `countDelegations` returning
+zero and `writeContract` committing" — via a new test-only seam,
+`abandonAfterZeroCountHook`, invoked from inside `Abandon`'s own closure
+between the zero count and the terminal commit). All three were confirmed
+failing against the round-1 code before this amendment: the concurrency
+tests reproduced the writer succeeding with no blocking at all, and the
+targeted hook-based test reproduced `Abandon` committing `StatusAbandoned`
+with a nil error while a delegation landed unblocked during its (unlocked)
+execution.
+
+**F2 (High) — `writeContractFile` (the ethos-ouy9 fix) synced the temp
+file's contents before `Rename` but never synced the CONTAINING DIRECTORY
+after it.** A file's contents being durable is not the same guarantee as
+the directory entry that names it being durable — POSIX `rename(2)` is a
+metadata change to the directory, and that change needs its own `fsync` to
+survive a crash. Without it, ethos-ouy9's exact symptom (`mission create`
+reports success; the contract is absent on recovery) remained reachable
+through a narrower window than before, but still open. Fixed by adding
+`syncDir`, called on `filepath.Dir(dest)` after every successful rename in
+`writeContractFile` (and therefore in `restoreContract`, which shares the
+same helper). Split by build tag: the POSIX implementation
+(`syncdir_unix.go`) opens the directory and calls `Sync()`, the standard
+mechanism; the Windows implementation (`syncdir_windows.go`) is a
+documented no-op, because NTFS does not expose an `os`-package-reachable
+equivalent to fsync-on-a-directory-handle the way POSIX does, and Windows
+is not a supported/shipped target for this module (no release binary, no
+CI job — GOOS=windows GOARCH=amd64 must still compile, which it does).
+`syncDir` is a package-level `var`, not a plain `func`, specifically so
+`TestWriteContractFile_SyncDirFailurePropagates` can inject a failure
+deterministically — a real directory-fsync failure is not something a
+portable test can otherwise engineer.
+
+**F4 (High) — the round-1 fix for Decision 3 excluded the global tree
+from the conflict scan UNCONDITIONALLY, and that traded one correctness
+bug for another.** `conflictScanIDs` scanning the repo tree only means an
+open mission genuinely belonging to THIS repo — created before the repo
+adopted two-tree storage, still open, never migrated — became invisible to
+admission control: a new mission could claim an overlapping `write_set`
+against it and nothing would stop it. This is the leader's own call to
+make (not the worker's), and the leader's read, on reflection: neither
+"scan the global tree in full" (reopens ethos-6adb) nor "refuse every
+Create anywhere on the machine while any open global-only mission
+exists that could belong to any repo" (an operationally disproportionate
+response — 19 open legacy contracts existing SOMEWHERE would halt every
+repo's mission system, not just the one with un-migrated debt) is the
+right shape. The actual fix uses a signal that already exists and is
+already reliable: `repoMissionIDs` (`migrate.go`), the exact mechanism
+`ethos mission migrate` uses to decide which legacy missions belong to
+this repo — it scans
+`<repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl` for `contract_id`
+references, which is a real per-repo ownership signal even though
+`Contract.Repo` is not (per Decision 3's original measurement: 0 of 841).
+Mission IDs are allocated from one shared, global, strictly-increasing
+daily counter, so an ID one repo's audit trail references can never
+collide with an ID a different repo's own trail references — the
+ownership sets cannot be confused across repos. `conflictScanIDs` now
+scans the repo tree PLUS every open global-tree mission this repo's own
+audit trail names; a global mission absent from that trail stays excluded,
+preserving ethos-6adb's fix exactly.
+
+Cost note carried into the ADR proper: this scan reads every
+`audit.jsonl` line under every session this repo has ever recorded, on
+every `Create` — the same cost `mission migrate` already accepts for an
+operator-invoked one-off, now paid on a much more frequent path. Accepted
+for now (creates are infrequent relative to tool calls); worth revisiting
+if a repo's session history grows large enough to make the latency
+visible.
+
+`TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict` covers F4
+directly (an un-migrated same-repo mission blocks an overlapping create)
+and re-asserts ethos-6adb's original property in the same test (an
+un-referenced foreign mission does not). Confirmed failing against the
+round-1 `conflictScanIDs` (no audit-trail scan) before this amendment.
+
+**F5 (Copilot) — a goroutine in the lj4k concurrency test called
+`require.NoError`,** which invokes `t.FailNow()` on failure; `t.FailNow`
+must run on the goroutine executing the test function itself, not one the
+test spawned, or the test can hang instead of failing cleanly. Fixed by
+routing every goroutine's error back over a channel and asserting on it
+from the main test goroutine only — the pattern every concurrency test
+added in this amendment (and round 1) now follows uniformly.
+
+**F6 (Copilot) — a test forced an open-temp-file failure via
+`os.Chmod(dir, 0o500)` on the containing directory.** `os.Chmod` on
+Windows only toggles the `FILE_ATTRIBUTE_READONLY` bit and does not block
+new-file creation inside a directory, and the same technique is
+unreliable under a root-running test process on POSIX (root bypasses DAC
+permission checks entirely) — both are real ways this test could go
+flaky, the latter more likely in practice (containerized CI often runs as
+root) than the former (this package's tests are `!windows`-tagged, so the
+Windows case was already inert, but the root case was not). Fixed by
+forcing the failure through a NONEXISTENT containing directory instead — a
+bare path-resolution `ENOENT`, which fails identically regardless of
+platform or privilege level.
+
+### Amendment 2026-09-08: PR #508 review round 3 — G1 undercuts F4's foundation, G2/G3 correct the syncDir contract
+
+**G1 (High) — `repoMissionIDs` (the ownership signal round 2's F4 fix
+depends on) read only the frozen pre-DES-058 legacy file, never a sealed
+chunk.** This is worse than "misses some audits": `ethos audit seal` runs at
+every pre-commit in an ethos-enabled repo (the sealed chunks travel in the
+same commit as the work), moving session audit content OUT of a flat
+`audit.jsonl` and into dated `audit-<first>-<last>.jsonl` chunks
+(`internal/audit/names.go`) on essentially every commit. `repoMissionIDs`
+looked for a file literally named `audit.jsonl` inside
+`<repoRoot>/.punt-labs/ethos/sessions/<dir>/` — the SEALED zone — but that
+exact name is the pre-DES-058 legacy shape (see
+`internal/hook/audit_monotonic.go`'s `sessionLegacyPath`), not what a
+sealed chunk is ever named. For any repo whose sessions have ever sealed —
+the normal state of an actively-committed repo, not an edge case —
+`repoMissionIDs` returned an empty (or near-empty) set, silently
+reopening F4's gap for the exact same-repo un-migrated missions it was
+written to catch. `mission migrate` shares the identical blind spot,
+since it uses the same function; this was not only round 2's problem.
+
+Fixed by having `repoMissionIDs` read all three sources a session's audit
+trail can live in: sealed chunks (`audit.ScanSealedDir` +
+`collectContractIDs` per chunk file), the frozen legacy file (unchanged),
+and the live tail of a session that has not sealed yet
+(`audit.LiveSessionsDir`/`audit.LiveAuditPath`, the gitignored local
+zone) — reusing `internal/audit`'s existing exported primitives rather
+than reimplementing chunk-name parsing. Deliberately does NOT reuse
+`internal/audit.Watermark`/dedup-by-identity machinery
+(`internal/hook/audit_read.go`'s `sessionUnionLines`, the canonical full
+audit reconstruction): that logic exists to produce an exactly-once,
+time-ordered reconstruction for display, which this function does not
+need — it only accumulates a SET of `contract_id` strings, so a mission ID
+appearing in more than one source (a sealed chunk and an overlapping live
+tail, say) collapses for free via the map. This keeps the fix a fraction
+of the size the full union-read pattern would have been.
+
+The scan is deliberately best-effort at different granularities for
+different sources: a corrupt or unclassifiable sealed session directory
+is warned to stderr and skipped, since this function's result now feeds
+`Store.Create`'s admission control on every call and a single damaged
+HISTORICAL chunk (`ethos audit quarantine`'s job to fix, asynchronously)
+must not block every future mission create in the repo; the frozen legacy
+file and the live tail keep the pre-existing, stricter contract (a
+genuine read error still propagates), since each is a single,
+currently-relevant file rather than an unbounded pool of history.
+
+`TestStore_CreateDetectsSameRepoConflictViaSealedAuditChunk` covers G1
+directly — writes a real sealed-chunk-shaped file (via
+`audit.SessionChunkFile`) rather than the flat legacy name — and was
+confirmed failing against the round-2 code before this fix.
+
+**G2 + G3 (the same finding, two reviewers) — a `syncDir` failure (F2,
+round 2) made `writeContractFile` fail AFTER the rename had already
+committed a correct contract to disk.** `Create` then reported failure for
+a mission that existed, and a retry hit "already exists" with no clean
+path forward — the exact inverse of ethos-ouy9 (which reported SUCCESS for
+an ABSENT contract), and no better: both leave the caller's belief about
+durable state wrong, just in opposite directions.
+
+**Decision: the rename is the commit point.** Once `os.Rename` returns
+nil, `dest` holds the correct, complete contract — full stop, regardless
+of what any subsequent step reports. A `syncDir` failure past that point
+means the rename's directory-entry update is not CONFIRMED durable
+against a crash; it does not mean the write failed, and `dest` is not
+"maybe wrong" — it is right, right now, on disk. Returning an error from
+that point and having the caller clean up `dest` would delete a contract
+that is, in that instant, completely valid, purely to make an unconfirmed
+durability signal look like an ordinary clean failure — trading a
+proven-good state for a guaranteed-bad one for the sake of a tidy error
+return. `writeContractFile` now warns to stderr on a `syncDir` failure
+(naming the path and stating explicitly that the contract itself is
+correct) and returns `nil`, matching the treatment `Store.Close` already
+gives its own post-commit, non-essential failure (the trace-summary
+write: "the mission is already closed; a trace failure must not roll back
+the close").
+
+Rejected: keep it an error and have `Create` clean up the just-written
+contract so a retry is possible. This was round 2's actual behavior and
+is what G2/G3 report as broken — "clean up so a retry works" sounds
+attractive but requires discarding real, correct data to manufacture that
+retriability, and the retry it enables still can't distinguish "the
+original write never landed" from "the write landed and we deleted it to
+tidy up," which is a worse epistemic position than either extreme alone.
+
+`TestWriteContractFile_SyncDirFailureIsWarnedNotErrored` (renamed from
+round 2's `..._SyncDirFailurePropagates`, which asserted the now-rejected
+contract) covers this: confirmed failing against the round-2 code (an
+error was returned) before this fix, passing after (a warning on stderr,
+`nil` returned, contract intact and readable).
+
+### Amendment 2026-09-08: PR #508 review round 4 — H1 is the third instance of the same worktree question, H2 is a misleading warning prefix
+
+**H1 (Medium) — `repoMissionIDs`'s live-tail scan resolved live audit
+files against `repoRoot` (the store root — the main work tree), but a
+session running inside a LINKED WORKTREE writes its live, not-yet-sealed
+audit file under that worktree's own gitignored local zone
+(`<worktree>/.punt-labs/local/ethos/sessions/`), never under the main
+tree.** Sealed chunks are unaffected — they are git-tracked and land in
+the main tree's `.punt-labs/ethos/sessions/` regardless of which checkout
+committed them — so G1's fix is correct for the sealed half. It is only
+the live tail that is per-checkout, and the round-3 fix resolved it
+against `repoRoot` alone. The leader's own report made the practical
+weight of this concrete: every mission that produced this PR ran from a
+linked worktree, so the round-3 fix was blind to precisely the most
+recent, most likely-to-be-open sessions — not a hypothetical edge case.
+
+This is the THIRD distinct bug this repo has had on the exact question of
+where live, per-checkout state lives relative to the shared store root:
+ethos-yofr/ethos-5yej for identity/team/role resolution (Decision 5,
+above); PR #370's Bugbot finding for the DES-058 audit-zone split
+(`Store.checkoutRoot`/`auditRoot()` in `store.go` exist because of it);
+and now this. The pattern recurring a third time is itself the finding —
+every new piece of per-repo state this codebase adds needs to ask "does
+this live in the checkout or the shared store" as a first-class design
+question, not something a reviewer catches after the fact per feature.
+
+Fixed by threading a second root through the live-tail half of the scan:
+`repoMissionIDs(repoRoot, checkoutRoot string)` now scans the live zone
+under BOTH roots (skipping the second when empty or equal to the first,
+so nothing changes for a caller with no separate checkout). `Store`
+already carries exactly this distinction — `s.auditRoot()` returns
+`checkoutRoot` when set, else `repoRoot` — so `conflictScanIDs` passes
+`s.repoRoot, s.auditRoot()`. `MigrateMission`'s exported signature gained
+the same second parameter (`globalRoot, repoRoot, checkoutRoot,
+missionID, dryRun, out`), and `runMissionMigrate` (`cmd/ethos/mission.go`)
+now resolves it via the same `missionCheckoutRoot` helper
+`missionStore()`/`missionStoreForCreate()` already use — one helper, three
+call sites, instead of a fourth place inventing its own answer to "which
+root."
+
+`TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit` covers this
+directly: a mission referenced only from a live audit file under a
+SEPARATE directory standing in for a linked worktree (via
+`Store.WithCheckoutRoot`, the same mechanism the DES-058 audit path
+already uses — no real `git worktree` needed to exercise the code path).
+Confirmed failing against the round-3 code before this fix.
+
+**H2 (cosmetic) — `repoMissionIDs`/`collectContractIDs`'s stderr warnings
+were prefixed `"ethos: mission migrate:"`, but both functions are now
+called from `Store.conflictScanIDs` during ordinary `mission
+create`/`dispatch` admission control, not only from `mission migrate`.**
+An operator running `create` who sees a "mission migrate" warning could
+reasonably conclude a migration is running when none is. Same class of
+defect as `ethos-lldo` (the first bug in this whole cluster's original
+triage): a message describing something other than what is actually
+happening steers a reader away from the real cause. Fixed by neutralizing
+the prefix to `"ethos: mission:"` in the two functions genuinely shared
+between callers; `MigrateMission`'s own per-mission failure messages
+(which really are migrate-specific) keep their `"ethos: mission migrate:"`
+prefix unchanged.
+
+### Amendment 2026-09-08: PR #508 review round 7 — J1 corrects a false assumption the round-4 fix rested on
+
+**J1 (High) — `repoMissionIDs`'s SEALED-zone scan read `repoRoot` only,
+on the assumption that "git-tracked" means "identical across every
+checkout."** It does not: git-tracked means identical AT THE SAME
+COMMIT. A linked worktree on an unmerged branch has sealed audit
+chunks committed to that branch which the main tree's own working
+copy of `.punt-labs/ethos/sessions/` does not carry — measured
+directly in the worktree that produced this PR: `diff -rq` between the
+worktree's sealed-sessions tree and the main tree's found six sealed
+chunks present in one and absent from the other.
+
+This is the same worktree-state question H1 (round 4) closed for the
+LIVE zone, reopened one layer down: H1's own fix widened
+`collectLiveContractIDs` to cover both `repoRoot` and `checkoutRoot`,
+but the sealed-chunk scan next to it kept reading `repoRoot` alone,
+reasoning (stated explicitly in the round-4 comment this amendment
+removes) that the sealed zone's git-tracked status made a second root
+unnecessary. That reasoning was never tested against an actual
+divergent worktree and turned out to be false. The practical
+consequence is the exact F4 false-negative class this whole ADR
+exists to close, at one further remove: a mission whose ownership
+evidence sealed onto an unmerged branch had, by the time it sealed,
+already left the live zone (round 4's fix covers a session still
+writing) and had not reached the main tree's sealed zone (unmerged) —
+invisible to admission control in the gap between the two.
+
+**Fix.** `repoMissionIDs` now scans the sealed zone under both roots,
+symmetric with the live zone: `collectSealedContractIDs` (extracted
+from the loop the round-1/G1 versions inlined directly into
+`repoMissionIDs`, no behavior change beyond the extraction) is called
+once for `repoRoot` and, when `checkoutRoot` differs, once more for
+`checkoutRoot` — the identical pattern `collectLiveContractIDs`
+already used. The frozen legacy `audit.jsonl` path lives inside the
+same per-session sealed directory the sealed-chunk scan walks, so it
+is covered by the same extraction and the same two-root call; a
+separate check confirmed no other single-root read exists anywhere
+else in `repoMissionIDs` — the function now composes exactly two
+per-zone scans, both root-symmetric, and nothing else touches a root.
+
+`TestStore_CreateDetectsSameRepoConflictViaWorktreeSealedAudit` covers
+this directly — the sealed-zone sibling of round 4's
+`..._ViaWorktreeLiveAudit` test, differing only in which zone (sealed
+vs. live) carries the referencing session. Confirmed failing against
+the round-6 code (the un-migrated same-repo mission was NOT detected,
+`Create` returned no error) before this fix, passing after.
+
+User-visible: a write-set conflict against a same-repo mission whose
+ownership evidence lives only in a linked worktree's sealed audit
+history — not merged to the main tree — is now caught by
+`create`/`dispatch`'s admission control; it previously was not. See
+`CHANGELOG.md` under `[Unreleased]`.

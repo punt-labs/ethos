@@ -91,7 +91,10 @@ func MissionResiduePath(repoRoot, missionID string) string {
 
 // MissionLegacyLogPath returns a mission's frozen pre-DES-058 tracked event
 // log — the record a mission closed before the live/sealed split carries
-// instead of chunks. It is git-tracked, so it reaches every checkout.
+// instead of chunks. It is git-tracked, so any checkout at the same commit
+// sees the same file (not necessarily every checkout — see the note above
+// SessionUnsealedCountAcross on what git-tracked does and does not
+// guarantee across checkouts, PR #508 round 7/8).
 func MissionLegacyLogPath(repoRoot, missionID string) string {
 	return filepath.Join(SealedMissionDir(repoRoot, missionID), "log.jsonl")
 }
@@ -152,11 +155,25 @@ func SessionDirMatches(name, sessionID string) bool {
 }
 
 // The two zones of DES-058 sit in two different roots whenever one checkout
-// probes a session that another one wrote. Sealed chunks are git-tracked and
-// reach every checkout, so they are read from trackedRoot — the checkout doing
-// the probing. The live file is machine-local and reaches none of them, so it
-// is read from liveRoot — the checkout that recorded itself as the writer. The
-// two roots are the same directory in the ordinary case, and a probe that
+// probes a session that another one wrote. Sealed chunks are read from
+// trackedRoot — the checkout doing the probing — because that is the only
+// vantage point available to it, NOT because git-tracked guarantees every
+// checkout sees the same sealed content: git-tracked means identical AT THE
+// SAME COMMIT, and a checkout on an unmerged branch can hold sealed chunks
+// trackedRoot's own working copy does not (PR #508 round 7/8 measured this
+// directly for the mission-tree analog of this same read — internal/mission's
+// repoMissionIDs). A probe from trackedRoot can therefore under-report a
+// session's sealed state when the sealing commit sits on a branch trackedRoot
+// has not merged; every caller here only WARNS on that outcome (VacuumCrossCheck
+// never blocks, exits 0 regardless), so the known gap can produce a spurious
+// "possibly lost" message but cannot mask a real loss or drive a deletion —
+// bounded the same direction as ethos-6adb's false positives, not ethos-q6e2's
+// false negatives. Not yet fixed here: threading a second root through this
+// path the way repoMissionIDs now does is future work, tracked separately from
+// the round 7/8 fix that covered the mission-tree case. The live file is
+// machine-local and reaches none of the OTHER checkouts under any commit, so
+// it is read from liveRoot — the checkout that recorded itself as the writer.
+// The two roots are the same directory in the ordinary case, and a probe that
 // conflates them is the ethos-q6e2 defect.
 
 // SessionUnsealedCountAcross returns how many live audit lines a session holds
@@ -296,9 +313,13 @@ type MissionLive struct {
 //
 // Absence alone is not loss. The live zone is per-checkout by design
 // (DES-058), so the live file is absent in every checkout but the one that
-// wrote it — while a sealed chunk is git-tracked and travels to all of them.
-// Reading absence as loss reported every mission a long-lived session had
-// touched, in every other checkout (ethos-q6e2).
+// wrote it — while a sealed chunk, once trackedRoot's own working copy has
+// it, travels with that checkout regardless of which one wrote the file
+// originally (this is NOT the same claim as "every checkout has it": see
+// the note above SessionUnsealedCountAcross on the unmerged-branch case
+// where trackedRoot's copy does not have it yet). Reading absence as loss
+// reported every mission a long-lived session had touched, in every other
+// checkout (ethos-q6e2).
 //
 // But a chunk only proves the lines UP TO its watermark survived. The tail
 // written after the last seal lives solely in the live file, so a chunk cannot

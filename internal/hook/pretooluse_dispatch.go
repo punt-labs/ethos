@@ -197,6 +197,16 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 	return nil
 }
 
+// dispatchTierBConfirmedOpen is a test-only synchronization hook,
+// invoked immediately after dispatchTierB's status check confirms the
+// mission is open, right before the call that blocks acquiring the
+// shared mission lock. Its zero value is a no-op with negligible
+// production cost; tests that need to race a concurrent Close against
+// this exact moment override it to signal a channel, replacing a
+// blind time.Sleep guess with a real synchronization point (round-2
+// re-review finding #6 on the delegation-lifecycle TOCTOU test).
+var dispatchTierBConfirmedOpen = func() {}
+
 // dispatchTierB resolves the MISSION_ID into a contract, allocates a
 // delegation_id, writes the on-disk record skeleton, and emits the
 // env block with DELEGATION_ID, MISSION_ID, PARENT_SESSION_ID, and
@@ -217,17 +227,6 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 // repoRoot resolution uses resolve.FindRepoRoot — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
-//
-// dispatchTierBConfirmedOpen is a test-only synchronization hook,
-// invoked immediately after the status check above confirms the
-// mission is open, right before the call that blocks acquiring the
-// shared mission lock. Its zero value is a no-op with negligible
-// production cost; tests that need to race a concurrent Close against
-// this exact moment override it to signal a channel, replacing a
-// blind time.Sleep guess with a real synchronization point (round-2
-// re-review finding #6 on the delegation-lifecycle TOCTOU test).
-var dispatchTierBConfirmedOpen = func() {}
-
 func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any) error {
 	store, err := tierBMissionStore()
 	if err != nil {

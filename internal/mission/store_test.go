@@ -152,6 +152,106 @@ current_round: 1
 	assert.NotContains(t, out, "deprecation", "conflict scan of a legacy bead mission must stay silent")
 }
 
+// TestStore_Create_ReadBackVerificationCatchesUnreadableWrite is the
+// regression gate for ethos-ouy9: Create must not report success for a
+// contract that cannot be read back. createReadBackHook fires at the
+// exact point between writeContract's return and Create's read-back
+// Load — the test uses it to corrupt the just-written file on disk,
+// reproducing the shape a torn write or a lying filesystem produces (a
+// directory entry with unreadable contents), which no fsync alone can
+// catch. Without the read-back check, Create returns nil here and the
+// mission has no contract a later Load, Show, or worker result submit
+// can find — exactly the 2026-08-15 vox incident.
+func TestStore_Create_ReadBackVerificationCatchesUnreadableWrite(t *testing.T) {
+	s := testStore(t)
+	c := withWriteSet("m-2026-04-08-950", "internal/foo/")
+
+	orig := createReadBackHook
+	t.Cleanup(func() { createReadBackHook = orig })
+	createReadBackHook = func(contractPath string) {
+		require.NoError(t, os.WriteFile(contractPath, []byte("not valid yaml: [["), 0o600))
+	}
+
+	err := s.Create(c)
+	require.Error(t, err, "Create must refuse when the just-written contract cannot be read back")
+	assert.Contains(t, err.Error(), "read-back verification failed")
+
+	_, statErr := os.Stat(mustContractPath(t, s, c.MissionID))
+	assert.True(t, os.IsNotExist(statErr),
+		"a failed read-back must roll back the contract file, not leave a corrupt one on disk")
+}
+
+// TestWriteContractFile_OpenFailureLeavesNoPartialArtifact covers
+// writeContractFile's earliest error path directly: when the temp
+// file cannot even be opened, no destination file is created and the
+// error names the failure. General robustness coverage for the
+// ethos-ouy9 rewrite, not itself a regression gate — the pre-fix
+// os.WriteFile call failed identically.
+//
+// The failure is forced via a NONEXISTENT containing directory (a bare
+// path-resolution ENOENT), not chmod'ing an existing one to
+// read-only: Copilot flagged the chmod approach in PR #508 round 2
+// (F6) as unreliable on Windows (Go's os.Chmod there only toggles the
+// FILE_ATTRIBUTE_READONLY bit and does not block new-file creation
+// inside a directory) — and it is equally unreliable under a
+// root-running test process on POSIX, since root bypasses DAC
+// permission checks entirely. A missing directory fails path
+// resolution regardless of platform or privilege level.
+func TestWriteContractFile_OpenFailureLeavesNoPartialArtifact(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+
+	dest := filepath.Join(dir, "m-2026-04-08-951.yaml")
+	err := writeContractFile(dest, []byte("mission_id: m-2026-04-08-951\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "opening temp contract")
+
+	_, statErr := os.Stat(dest)
+	assert.True(t, os.IsNotExist(statErr), "a failed write must leave no destination file")
+	_, statErr = os.Stat(dest + ".tmp")
+	assert.True(t, os.IsNotExist(statErr), "a failed write must leave no temp file")
+}
+
+// TestWriteContractFile_SyncDirFailureIsWarnedNotErrored is the
+// regression gate for PR #508 round 3 findings G2/G3: writeContractFile
+// must fsync the containing directory after the rename (F2, round 2),
+// but the rename is the commit point — dest already holds the
+// correct, complete contract at that instant regardless of what
+// happens next. A failed directory sync must be a WARNING, not an
+// error: round 2's version returned an error here while dest already
+// existed, so Create reported failure for a contract that was, in
+// fact, present and correct — the exact inverse of ethos-ouy9 (which
+// reported success for an ABSENT contract), and just as broken: a
+// retry after either shape hits "already exists" with no clean path
+// forward. A real directory-fsync failure is not something a portable
+// test can engineer, so syncDir is overridden (it is a package var
+// for exactly this reason).
+func TestWriteContractFile_SyncDirFailureIsWarnedNotErrored(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "m-2026-04-08-952.yaml")
+
+	orig := syncDir
+	t.Cleanup(func() { syncDir = orig })
+	syncDir = func(d string) error {
+		return fmt.Errorf("simulated directory fsync failure for %s", d)
+	}
+
+	var err error
+	warning := captureStderr(t, func() {
+		err = writeContractFile(dest, []byte("mission_id: m-2026-04-08-952\n"))
+	})
+	require.NoError(t, err, "a syncDir failure must not fail writeContractFile — "+
+		"the rename already committed a correct contract")
+	assert.Contains(t, warning, "syncing directory",
+		"the durability gap must still be visible on stderr, not silently swallowed")
+
+	// The rename completed before the (simulated) directory-sync
+	// failure — the file is real and readable, exactly as
+	// writeContractFile reported.
+	data, readErr := os.ReadFile(dest)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(data), "m-2026-04-08-952")
+}
+
 func TestStore_RoundTrip(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-001")
@@ -1567,6 +1667,282 @@ func TestStore_CreateAllowsDisjointWriteSets(t *testing.T) {
 	ids, err := s.List()
 	require.NoError(t, err)
 	assert.Len(t, ids, 2)
+}
+
+// TestStore_CreateIgnoresGlobalTreeConflictsInTwoTreeMode is the
+// regression gate for ethos-6adb: a two-tree Store (repoRoot set)
+// must not compare a new mission's write_set against an open mission
+// that lives ONLY in the shared global tree. The global tree is a
+// flat namespace shared by every repo on the machine (measured
+// 2026-09-07: 841 contracts, 19 open, zero carrying a Repo field), so
+// an entry there cannot be proven to belong to this repo — treating
+// it as a conflict source produced exactly the cross-repo false
+// conflict the bead reported (a vox mission blocking a lux write_set).
+//
+// The "foreign" mission is created via a bare legacy Store
+// (NewStore, repoRoot=="") pointed at the SAME globalRoot, landing
+// it in the flat global tree exactly the way a pre-DES-054 mission,
+// or a mission created outside any repo, would. The repo Store under
+// test then creates a mission with an overlapping write_set and must
+// succeed.
+func TestStore_CreateIgnoresGlobalTreeConflictsInTwoTreeMode(t *testing.T) {
+	globalRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	foreign := withWriteSet("m-2026-04-08-900", "internal/shared/")
+	require.NoError(t, legacy.Create(foreign))
+
+	repoRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	mine := withWriteSet("m-2026-04-08-901", "internal/shared/thing.go")
+	require.NoError(t, s.Create(mine),
+		"an open mission that lives only in the shared global tree must not "+
+			"block a two-tree repo's create — it cannot be proven to belong to this repo")
+
+	// The two-tree Store's own repo-tree missions still conflict-check
+	// normally against each other — this fix narrows the SCAN, it does
+	// not disable admission control.
+	overlap := withWriteSet("m-2026-04-08-902", "internal/shared/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "two missions in the SAME repo tree must still conflict")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
+}
+
+// writeAuditContractIDLine appends a minimal audit.jsonl line
+// referencing contractID under repoRoot's sessions tree, the exact
+// shape repoMissionIDs (migrate.go) scans for. Test helper for the
+// F4 conflictScanIDs ownership path.
+func writeAuditContractIDLine(t *testing.T, repoRoot, sessionID, contractID string) {
+	t.Helper()
+	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", sessionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	line := fmt.Sprintf(`{"contract_id":%q}`+"\n", contractID)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "audit.jsonl"), []byte(line), 0o600))
+}
+
+// TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict is the
+// regression gate for PR #508 round 2 finding F4: excluding the WHOLE
+// global tree from the conflict scan (the round-1 ethos-6adb fix)
+// went too far — an open mission that genuinely belongs to THIS repo,
+// created before it adopted two-tree storage and never migrated,
+// became invisible to admission control, so a new mission could claim
+// an overlapping write_set against it undetected.
+//
+// The "genuinely belongs to this repo" signal is repoMissionIDs — the
+// same audit-trail scan `ethos mission migrate` already uses — not
+// Contract.Repo (which the 6adb fix's own measurement showed is never
+// populated). Writing one audit.jsonl line naming the legacy mission's
+// contract_id under this repoRoot's sessions tree is what "this repo's
+// own history references it" means on disk.
+func TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	mine := withWriteSet("m-2026-04-08-910", "internal/shared/")
+	require.NoError(t, legacy.Create(mine))
+	writeAuditContractIDLine(t, repoRoot, "sess-2026-04-08", mine.MissionID)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	overlap := withWriteSet("m-2026-04-08-911", "internal/shared/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "an un-migrated same-repo global mission must still block an overlapping create")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
+
+	// Confirm ethos-6adb's fix still holds alongside F4's: a global
+	// mission this repo's audit trail does NOT reference stays excluded.
+	disjointRepoRoot := t.TempDir()
+	s2 := NewStoreWithRoots(disjointRepoRoot, globalRoot)
+	unrelated := withWriteSet("m-2026-04-08-912", "internal/other/thing.go")
+	require.NoError(t, s2.Create(unrelated),
+		"a global mission absent from THIS repo's audit trail must not block its create")
+}
+
+// TestStore_ConflictScanIDsAuditOwnedTailIsSorted is the regression
+// gate for the PR #508 round 5 Copilot finding: conflictScanIDs
+// appended the audit-owned tail (repoMissionIDs' map[string]struct{}
+// result) by ranging over it directly, and Go randomizes map
+// iteration order on every range. checkWriteSetConflicts feeds this
+// slice's order straight into formatConflictError, which joins one
+// line per conflict in slice order — so an operator hitting two or
+// more audit-owned conflicts saw the SAME conflicts reported in a
+// DIFFERENT order run to run, purely from map randomization, with no
+// underlying change to the conflict set.
+//
+// Five audit-owned IDs (not the theoretical minimum of two) gives
+// 5! = 120 possible orderings, making a false-pass from randomization
+// happening to pick the same order 50 times running vanishingly
+// unlikely — this is what makes the test reliably red pre-fix rather
+// than flaky-red.
+func TestStore_ConflictScanIDsAuditOwnedTailIsSorted(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	var owned []string
+	for i := 0; i < 5; i++ {
+		m := withWriteSet(fmt.Sprintf("m-2026-04-08-%03d", 940+i), fmt.Sprintf("internal/tail%d/", i))
+		require.NoError(t, legacy.Create(m))
+		writeAuditContractIDLine(t, repoRoot, fmt.Sprintf("sess-tail-%d", i), m.MissionID)
+		owned = append(owned, m.MissionID)
+	}
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	first, err := s.conflictScanIDs()
+	require.NoError(t, err)
+	for _, id := range owned {
+		assert.Contains(t, first, id)
+	}
+
+	for i := 0; i < 50; i++ {
+		got, err := s.conflictScanIDs()
+		require.NoError(t, err)
+		assert.Equal(t, first, got,
+			"conflictScanIDs must return the audit-owned tail in the same order every call")
+	}
+}
+
+// writeSealedAuditContractIDLine writes a SEALED session audit chunk
+// (audit-<first>-<last>.jsonl, the real on-disk shape `ethos audit
+// seal` produces — see internal/audit/names.go) referencing
+// contractID, as opposed to writeAuditContractIDLine's flat
+// pre-DES-058 legacy audit.jsonl. Test helper for the G1 regression
+// (PR #508 round 3): repoMissionIDs originally read only the legacy
+// shape and went blind the moment a session's audit trail was sealed.
+func writeSealedAuditContractIDLine(t *testing.T, repoRoot, sessionDir, contractID string) {
+	t.Helper()
+	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", sessionDir)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	chunkFile := audit.SessionChunkFile(1000, 2000)
+	line := fmt.Sprintf(`{"ts":"2026-04-08T00:00:00Z","contract_id":%q}`+"\n", contractID)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, chunkFile), []byte(line), 0o600))
+}
+
+// TestStore_CreateDetectsSameRepoConflictViaSealedAuditChunk is the
+// regression gate for PR #508 round 3 finding G1: repoMissionIDs (the
+// signal both `mission migrate` and TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict's
+// F4 fix depend on) must see a mission referenced from a SEALED audit
+// chunk, not only the flat pre-DES-058 legacy audit.jsonl file. `ethos
+// audit seal` runs at every pre-commit in an ethos-enabled repo, so a
+// sealed chunk is the NORMAL shape for any actively-committed repo's
+// audit history, not an edge case — missing it reopens F4's gap for
+// essentially every repo that has ever committed.
+func TestStore_CreateDetectsSameRepoConflictViaSealedAuditChunk(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	mine := withWriteSet("m-2026-04-08-920", "internal/sealed/")
+	require.NoError(t, legacy.Create(mine))
+	writeSealedAuditContractIDLine(t, repoRoot, "2026-04-08-sess-sealed", mine.MissionID)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	overlap := withWriteSet("m-2026-04-08-921", "internal/sealed/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "an un-migrated same-repo global mission referenced only from a "+
+		"SEALED audit chunk must still block an overlapping create")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
+}
+
+// writeLiveAuditContractIDLine writes a LIVE (not-yet-sealed) session
+// audit file referencing contractID under root's gitignored local
+// zone (audit.LiveAuditPath) — the shape a running session's own
+// audit writer produces before its next pre-commit seal. Test helper
+// for the H1 regression (PR #508 round 4): a linked worktree's live
+// audit lives under the WORKTREE's own local zone, not the main
+// tree's, even though sealed chunks (git-tracked) always land in the
+// main tree regardless of which checkout committed them.
+func writeLiveAuditContractIDLine(t *testing.T, root, sessionID, contractID string) {
+	t.Helper()
+	path := audit.LiveAuditPath(root, sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	line := fmt.Sprintf(`{"ts":"2026-04-08T00:00:00Z","contract_id":%q}`+"\n", contractID)
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
+}
+
+// TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit is the
+// regression gate for PR #508 round 4 finding H1: a session running
+// inside a LINKED WORKTREE writes its live (not-yet-sealed) audit
+// file under that worktree's own gitignored local zone, never under
+// the main tree conflictScanIDs' repoRoot points at (StoreRepoRoot
+// always resolves to the main tree — DES-075 Decision 5). A
+// repoRoot-only live scan is therefore blind to exactly the most
+// recent sessions when the caller itself is running from a worktree —
+// which, per measured operator usage, is the common case, not an
+// edge one.
+//
+// Modeled with two separate temp dirs standing in for the main tree
+// (repoRoot) and a linked worktree (checkoutRoot) — this test does not
+// need a real git worktree, only the same directory split
+// Store.WithCheckoutRoot already threads through the DES-058 audit
+// path for exactly this reason.
+func TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()     // stands in for the main work tree
+	worktreeRoot := t.TempDir() // stands in for a linked worktree
+
+	legacy := NewStore(globalRoot)
+	mine := withWriteSet("m-2026-04-08-930", "internal/worktree/")
+	require.NoError(t, legacy.Create(mine))
+	// The referencing session's live audit lives under the WORKTREE's
+	// own local zone, not the main tree's.
+	writeLiveAuditContractIDLine(t, worktreeRoot, "sess-in-worktree", mine.MissionID)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot).WithCheckoutRoot(worktreeRoot)
+	overlap := withWriteSet("m-2026-04-08-931", "internal/worktree/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "an un-migrated same-repo global mission referenced only from a "+
+		"WORKTREE's live audit file must still block an overlapping create")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
+}
+
+// TestStore_CreateDetectsSameRepoConflictViaWorktreeSealedAudit is the
+// regression gate for PR #508 round 7 finding J1: git-tracked does
+// not mean "identical across every checkout" — it means identical AT
+// THE SAME COMMIT. A linked worktree on an unmerged branch has sealed
+// chunks committed to that branch which the main tree's own working
+// copy of .punt-labs/ethos/sessions/ does not carry (measured
+// directly by the leader: six sealed chunks present in a worktree
+// checkout, absent from main's). The round-4 fix (H1) widened the
+// LIVE scan to cover both repoRoot and checkoutRoot but left the
+// SEALED scan reading repoRoot only — so a mission whose sole
+// ownership evidence sealed onto an unmerged branch was invisible to
+// admission control: it had left the live tail (it sealed) and never
+// reached the main tree's sealed history (unmerged), reopening the F4
+// false-negative class one layer down from where H1 closed it for the
+// live zone.
+//
+// Modeled the same way TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit
+// is: two separate temp dirs standing in for the main tree (repoRoot)
+// and a linked worktree (checkoutRoot) — no real git worktree needed,
+// only the same directory split Store.WithCheckoutRoot already
+// threads through. The only difference from that test is which zone
+// (sealed vs. live) carries the referencing session.
+func TestStore_CreateDetectsSameRepoConflictViaWorktreeSealedAudit(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()     // stands in for the main work tree
+	worktreeRoot := t.TempDir() // stands in for a linked worktree
+
+	legacy := NewStore(globalRoot)
+	mine := withWriteSet("m-2026-04-08-932", "internal/worktreesealed/")
+	require.NoError(t, legacy.Create(mine))
+	// The referencing session's SEALED chunk lives under the
+	// WORKTREE's own sessions tree, not the main tree's — repoRoot's
+	// sealed zone has no knowledge of this session at all.
+	writeSealedAuditContractIDLine(t, worktreeRoot, "2026-04-08-sess-worktree-sealed", mine.MissionID)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot).WithCheckoutRoot(worktreeRoot)
+	overlap := withWriteSet("m-2026-04-08-933", "internal/worktreesealed/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "an un-migrated same-repo global mission referenced only from a "+
+		"WORKTREE's SEALED audit chunk must still block an overlapping create")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
 }
 
 // TestStore_CreateMultiConflictReportsAllBlockers asserts that a new
@@ -4612,6 +4988,259 @@ func TestStore_TwoRoot_CloseStaysInItsLayer(t *testing.T) {
 	_, err = os.Stat(repoMissionDir)
 	assert.True(t, os.IsNotExist(err),
 		"Close must not create a repo-tree per-mission dir for a global mission")
+}
+
+// TestStore_TwoRoot_AbandonStaysInItsLayer is Abandon's sibling to
+// TestStore_TwoRoot_CloseStaysInItsLayer: a mission living entirely in
+// the legacy global tree stays there after Abandon. Round 2 of
+// ethos-lj4k (PR #508 review, F3) made withAbandonDelegationLock
+// acquire AcquireMissionLockExclusive unconditionally rather than
+// skipping it when the repo-tree directory did not exist — so a
+// `.lock` file DOES now appear under the repo tree (a harmless
+// acquisition side effect), but the CONTRACT itself must not move: no
+// contract.yaml, results.yaml, or log.jsonl land there.
+func TestStore_TwoRoot_AbandonStaysInItsLayer(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	c := newContract("m-2026-05-22-022")
+	require.NoError(t, legacy.Create(c))
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	_, err := s.Abandon("m-2026-05-22-022", "dead mission, never dispatched")
+	require.NoError(t, err)
+
+	reloaded, err := s.Load("m-2026-05-22-022")
+	require.NoError(t, err)
+	assert.Equal(t, StatusAbandoned, reloaded.Status)
+
+	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
+		"m-2026-05-22-022")
+	_, err = os.Stat(filepath.Join(repoMissionDir, "contract.yaml"))
+	assert.True(t, os.IsNotExist(err),
+		"Abandon must not move a global mission's contract into the repo tree")
+}
+
+// abandonRace runs the shared concurrency scaffold both
+// TestStore_Abandon_ExcludesConcurrentDelegationWrite and
+// TestStore_Abandon_ExcludesConcurrentDelegationWrite_NoPriorRepoTreeDir
+// use: a writer goroutine holds AcquireMissionLock (shared) on
+// missionID, signals it holds it, waits to be told to proceed, writes
+// a delegation skeleton, then releases. Concurrently, Abandon runs in
+// its own goroutine. The test asserts Abandon does not resolve before
+// the writer releases, then resolves with a "delegation record" error
+// once it does.
+//
+// Every error from the writer goroutine crosses back over a channel
+// rather than calling testify's require/assert there directly (Copilot
+// finding, PR #508 round 2: t.FailNow — which require.NoError calls on
+// failure — must run on the goroutine executing the test function, not
+// one the test spawned; calling it elsewhere can hang the test instead
+// of failing it cleanly).
+func abandonRace(t *testing.T, s *Store, repoRoot, missionID string) {
+	t.Helper()
+
+	lockHeld := make(chan struct{})
+	proceedWrite := make(chan struct{})
+	writerErrCh := make(chan error, 1)
+	go func() {
+		release, err := AcquireMissionLock(repoRoot, missionID)
+		if err != nil {
+			writerErrCh <- fmt.Errorf("acquiring shared mission lock: %w", err)
+			return
+		}
+		close(lockHeld)
+		<-proceedWrite
+		_, err = WriteDelegationSkeleton(repoRoot, missionID, "d-2026-05-22-001", DelegationSkeleton{
+			Tier:      "b",
+			AgentType: "bwk",
+		})
+		release()
+		writerErrCh <- err
+	}()
+	<-lockHeld
+
+	type abandonResult struct {
+		err error
+	}
+	abandonResultCh := make(chan abandonResult, 1)
+	go func() {
+		_, err := s.Abandon(missionID, "racing the delegation writer")
+		abandonResultCh <- abandonResult{err: err}
+	}()
+
+	select {
+	case <-abandonResultCh:
+		t.Fatal("Abandon must not resolve while a dispatchTierB-shaped writer holds the repo-tier lock")
+	case <-time.After(200 * time.Millisecond):
+		// Still blocked, as required — let the writer proceed.
+	}
+
+	close(proceedWrite)
+	require.NoError(t, <-writerErrCh, "the delegation writer goroutine must not fail")
+
+	select {
+	case res := <-abandonResultCh:
+		require.Error(t, res.err, "Abandon must refuse once it sees the delegation the writer landed")
+		assert.Contains(t, res.err.Error(), "delegation record")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Abandon never resolved after the writer released its lock")
+	}
+
+	loaded, err := s.Load(missionID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusOpen, loaded.Status, "a refused abandon must not mutate the mission")
+}
+
+// TestStore_Abandon_ExcludesConcurrentDelegationWrite is the
+// regression gate for ethos-lj4k round 1: a dispatchTierB-shaped
+// writer holding the repo-tier per-mission lock (AcquireMissionLock,
+// shared) must block Abandon's delegation-count-and-commit sequence
+// until it releases — proving the two are no longer independently
+// lockable. The mission is created via the two-tree Store, so its
+// repo-tree directory already exists before the race starts (see the
+// _NoPriorRepoTreeDir sibling below for the case where it does not).
+//
+// Without the fix, Abandon's countDelegations runs under the GLOBAL
+// lock only, which the writer never touches, so Abandon proceeds
+// immediately regardless of the writer holding the repo-tier lock.
+// With the fix, Abandon blocks on AcquireMissionLockExclusive (the
+// SAME file the writer holds shared) until the writer releases.
+func TestStore_Abandon_ExcludesConcurrentDelegationWrite(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-05-22-023")
+	require.NoError(t, s.Create(c))
+
+	abandonRace(t, s, repoRoot, "m-2026-05-22-023")
+}
+
+// TestStore_Abandon_ExcludesConcurrentDelegationWrite_NoPriorRepoTreeDir
+// is the regression gate for ethos-lj4k round 2, finding F3: the
+// mission is created via the LEGACY global store, so its repo-tree
+// per-mission directory does not exist when the race starts. The
+// pre-round-2 withAbandonDelegationLock treated an absent directory as
+// proof no dispatchTierB could be racing and ran the delegation check
+// unlocked — but a dispatchTierB starting after that stat check has
+// AcquireMissionLock create the directory itself and take the shared
+// lock, which is exactly the writer this race spawns. Absence at check
+// time is not absence at commit time; the fixed version acquires the
+// lock unconditionally, so this must block identically to the
+// directory-already-exists case above.
+func TestStore_Abandon_ExcludesConcurrentDelegationWrite_NoPriorRepoTreeDir(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	c := newContract("m-2026-05-22-024")
+	require.NoError(t, legacy.Create(c))
+
+	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", "m-2026-05-22-024")
+	_, statErr := os.Stat(repoMissionDir)
+	require.True(t, os.IsNotExist(statErr), "test setup: the repo-tree directory must not exist yet")
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	abandonRace(t, s, repoRoot, "m-2026-05-22-024")
+}
+
+// TestStore_Abandon_ZeroCountToCommitWindowIsAtomic is the direct
+// regression gate for ethos-lj4k round 2 finding F3, pinned via
+// abandonAfterZeroCountHook rather than lock-acquisition timing (the
+// two sibling tests above prove the same property through the lock;
+// this one targets F3's exact phrase — "the window between
+// countDelegations returning zero and writeContract committing" — by
+// pausing precisely there).
+//
+// Setup starts from a mission with NO repo-tree directory — the case
+// the pre-round-2 withAbandonDelegationLock treated as "nothing to
+// lock" and skipped acquisition for. The hook fires after
+// countDelegations has already returned zero, inside the SAME
+// exclusive-locked closure. A concurrent writer attempting
+// AcquireMissionLock (shared) at that exact moment must block until
+// Abandon's closure finishes.
+//
+// Once unblocked, Abandon correctly SUCCEEDS — its own count was
+// accurate at commit time, so there is nothing to refuse. The writer,
+// once it in turn acquires the now-released lock, writes a delegation
+// onto the now-abandoned mission; declining that write is
+// dispatchTierB's own TOCTOU status re-check (internal/hook), a
+// different package and out of this test's scope — this test's job
+// ends at proving the writer could not get in DURING Abandon's window,
+// only after it closed.
+//
+// Verified failing (pre-round-2, mechanism reproduced directly): with
+// withAbandonDelegationLock's original missingRepoTreeDir skip, the
+// writer's AcquireMissionLock succeeded IMMEDIATELY while the hook
+// held Abandon paused (no blocking at all), and its
+// WriteDelegationSkeleton landed before Abandon's commit — the
+// delegation attached to an abandoned mission with no error raised
+// anywhere, and no blocking to observe.
+func TestStore_Abandon_ZeroCountToCommitWindowIsAtomic(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	c := newContract("m-2026-05-22-025")
+	require.NoError(t, legacy.Create(c))
+
+	reachedHook := make(chan struct{})
+	proceed := make(chan struct{})
+	orig := abandonAfterZeroCountHook
+	t.Cleanup(func() { abandonAfterZeroCountHook = orig })
+	abandonAfterZeroCountHook = func() {
+		close(reachedHook)
+		<-proceed
+	}
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	abandonErrCh := make(chan error, 1)
+	go func() {
+		_, err := s.Abandon("m-2026-05-22-025", "racing the zero-count window")
+		abandonErrCh <- err
+	}()
+	<-reachedHook // countDelegations has returned zero; Abandon is paused before the commit.
+
+	writerDone := make(chan error, 1)
+	go func() {
+		release, err := AcquireMissionLock(repoRoot, "m-2026-05-22-025")
+		if err != nil {
+			writerDone <- err
+			return
+		}
+		_, err = WriteDelegationSkeleton(repoRoot, "m-2026-05-22-025", "d-2026-05-22-002", DelegationSkeleton{
+			Tier:      "b",
+			AgentType: "bwk",
+		})
+		release()
+		writerDone <- err
+	}()
+
+	select {
+	case <-writerDone:
+		t.Fatal("the writer must not be able to acquire the shared lock while Abandon's " +
+			"count-to-commit window is paused — Abandon is supposed to be holding the " +
+			"exclusive lock across this entire closure")
+	case <-time.After(200 * time.Millisecond):
+		// Correctly blocked — let Abandon finish, which releases the
+		// exclusive lock and unblocks the writer.
+	}
+
+	close(proceed)
+
+	abandonErr := <-abandonErrCh
+	require.NoError(t, abandonErr, "Abandon's own count was accurate at commit time and must succeed")
+
+	loaded, err := s.Load("m-2026-05-22-025")
+	require.NoError(t, err)
+	assert.Equal(t, StatusAbandoned, loaded.Status)
+
+	// Now unblocked, the writer proceeds and writes onto the already-
+	// abandoned mission — accepted, out-of-scope residual behavior (see
+	// doc comment above); this assertion only confirms the writer
+	// itself did not error.
+	require.NoError(t, <-writerDone)
 }
 
 // TestStore_TwoRoot_ResultsAndReflectionsInRepoTree asserts that

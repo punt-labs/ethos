@@ -44,7 +44,7 @@ func TestMigrateMission_NothingToMigrate(t *testing.T) {
 	repoRoot := t.TempDir()
 
 	var out bytes.Buffer
-	err := MigrateMission(globalRoot, repoRoot, "", false, &out)
+	err := MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out)
 	require.NoError(t, err)
 	assert.Equal(t, "nothing to migrate\n", out.String())
 }
@@ -54,7 +54,7 @@ func TestMigrateMission_NoLegacyMissionsDir(t *testing.T) {
 	repoRoot := t.TempDir()
 
 	var out bytes.Buffer
-	err := MigrateMission(globalRoot, repoRoot, "", false, &out)
+	err := MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out)
 	require.NoError(t, err)
 	assert.Equal(t, "nothing to migrate\n", out.String())
 }
@@ -73,7 +73,7 @@ func TestMigrateMission_CopiesAllArtifacts(t *testing.T) {
 	repoAuditWithMission(t, repoRoot, "sess-1", id)
 
 	var out bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", false, &out))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out))
 
 	// Repo tree has all four files.
 	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id)
@@ -107,7 +107,7 @@ func TestMigrateMission_OptionalSiblingsAbsent(t *testing.T) {
 	repoAuditWithMission(t, repoRoot, "sess-2", id)
 
 	var out bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", false, &out))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out))
 
 	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id)
 	_, err := os.Stat(filepath.Join(repoMissionDir, "contract.yaml"))
@@ -129,7 +129,7 @@ func TestMigrateMission_IdempotentReRun(t *testing.T) {
 	repoAuditWithMission(t, repoRoot, "sess-3", id)
 
 	var out1 bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", false, &out1))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out1))
 	assert.Contains(t, out1.String(), "migrate "+id)
 
 	// Stage the legacy contract again to simulate a second invocation
@@ -140,7 +140,7 @@ func TestMigrateMission_IdempotentReRun(t *testing.T) {
 	})
 
 	var out2 bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", false, &out2))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out2))
 	assert.Contains(t, out2.String(), "noop "+id)
 
 	// Legacy file untouched by the noop.
@@ -161,7 +161,7 @@ func TestMigrateMission_CrossRepoMissionLeftAlone(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", false, &out))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out))
 
 	_, err := os.Stat(legacyContract)
 	require.NoError(t, err, "cross-repo mission must survive migrate")
@@ -182,7 +182,7 @@ func TestMigrateMission_DryRunLeavesBothSidesIntact(t *testing.T) {
 	repoAuditWithMission(t, repoRoot, "sess-5", id)
 
 	var out bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", true, &out))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", true, &out))
 
 	// Legacy still present.
 	_, err := os.Stat(legacyContract)
@@ -203,7 +203,7 @@ func TestMigrateMission_ExplicitMissionIDMissing(t *testing.T) {
 	repoRoot := t.TempDir()
 
 	var out bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, "m-2026-05-22-999", false, &out))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "m-2026-05-22-999", false, &out))
 	assert.Contains(t, out.String(), "skip m-2026-05-22-999")
 	assert.Contains(t, out.String(), "legacy contract missing")
 }
@@ -226,7 +226,7 @@ func TestMigrateMission_ExplicitMissionIDIgnoresSiblings(t *testing.T) {
 	repoAuditWithMission(t, repoRoot, "sess-7", other)
 
 	var out bytes.Buffer
-	require.NoError(t, MigrateMission(globalRoot, repoRoot, want, false, &out))
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, want, false, &out))
 
 	// Named mission migrated.
 	_, err := os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", want, "contract.yaml"))
@@ -243,14 +243,14 @@ func TestMigrateMission_ExplicitMissionIDIgnoresSiblings(t *testing.T) {
 
 func TestMigrateMission_EmptyRepoRoot(t *testing.T) {
 	var out bytes.Buffer
-	err := MigrateMission(t.TempDir(), "", "", false, &out)
+	err := MigrateMission(t.TempDir(), "", "", "", false, &out)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "repoRoot"))
 }
 
 func TestMigrateMission_EmptyGlobalRoot(t *testing.T) {
 	var out bytes.Buffer
-	err := MigrateMission("", t.TempDir(), "", false, &out)
+	err := MigrateMission("", t.TempDir(), "", "", false, &out)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "globalRoot"))
 }
@@ -289,7 +289,7 @@ func TestRepoMissionIDs_SkipsMalformedLines(t *testing.T) {
 	// with a missionID that forces enumerateMigrateCandidates to a
 	// single ID. The function exercises collectContractIDs by
 	// invoking repoMissionIDs internally.
-	got, err := repoMissionIDs(repoRoot)
+	got, err := repoMissionIDs(repoRoot, "")
 	require.NoError(t, err, "malformed lines must not surface as an error")
 
 	_, hasOK := got["m-OK"]
@@ -319,7 +319,7 @@ func TestMigrateMission_PartialFailureLeavesLegacyIntact(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(missionsDir, 0o700) })
 
 	var out bytes.Buffer
-	err := MigrateMission(globalRoot, repoRoot, "", false, &out)
+	err := MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out)
 	require.Error(t, err)
 
 	// Legacy still present.
