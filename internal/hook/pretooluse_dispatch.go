@@ -243,19 +243,39 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 // can never legitimately take a new delegation, so clearing its stale
 // entry here is not a heuristic guess — it is the same
 // nonOpenReason check dispatchTierB itself would apply, just run
-// before committing to a doomed match instead of after. A Load
-// FAILURE (as opposed to a successful Load reporting non-open status)
-// is NOT proof of anything and is NOT skipped — matching C3's
-// doctrine exactly, that case is handed to dispatchTierB's own
-// Load-and-block gate unchanged, by returning it as the match.
+// before committing to a doomed match instead of after.
 //
-// When two or more LIVE (non-stale) entries match agentType, the oldest
-// wins by FIFO, but that is a silent, unresolvable ambiguity for the
-// operator unless it is named: two missions can legitimately share one
-// Worker handle (this repo's own team assigns one specialist to every
-// mission in its domain), and the spawn now landing on THIS one instead
-// of THAT one is exactly the misattribution class DES-076 exists to
-// prevent. genuineAmbiguityWarning emits that signal — only for a
+// A matching entry whose mission FAILS TO LOAD is a DIFFERENT case,
+// handled differently (review finding K1, full-branch review of
+// m-2026-09-08-004 round 3): a Load failure proves nothing — the
+// contract is git-tracked, so `mission dispatch` followed by `git
+// checkout` to a branch without it is a reachable, non-exotic way to
+// make one disappear and later reappear — so C3's doctrine still
+// forbids deleting it on unproven evidence. But round 3's original
+// behavior (fold it into `candidates` and return it as the match
+// whenever no OTHER open entry outranks it) meant an unloadable entry
+// at the head of the queue denied every subsequent same-worker spawn
+// FOREVER, since it is always the oldest and FIFO always re-selects the
+// oldest: a newer, perfectly valid pending dispatch for the same worker
+// was unreachable behind it. The entry is now SKIPPED (excluded from
+// `candidates`, loop continues to the next entry) but never cleared —
+// it can still resolve on its own (a later branch switch, a retried
+// write) and can always be cleared explicitly via `ethos mission
+// release`, which needs no Load at all (ClearDispatchPending is a pure
+// filesystem removal). A skip-only entry that is the LAST word — no
+// other entry matches — still yields no match here, so the spawn falls
+// through to Tier A/B; dispatchTierB is never reached for it and never
+// gets a chance to name the failure, so this function names it
+// directly instead.
+//
+// When two or more LIVE (non-stale, resolvable) entries match
+// agentType, the oldest wins by FIFO, but that is a silent,
+// unresolvable ambiguity for the operator unless it is named: two
+// missions can legitimately share one Worker handle (this repo's own
+// team assigns one specialist to every mission in its domain), and the
+// spawn now landing on THIS one instead of THAT one is exactly the
+// misattribution class DES-076 exists to prevent.
+// warnDispatchPendingAmbiguity emits that signal — only for a
 // two-or-more-match tie, never for a lone match, and never merely
 // because OTHER pending entries exist for a different Worker (a
 // session dispatching both `bwk` and `rmh` work is not ambiguous for a
@@ -276,7 +296,9 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 		if entry.Worker != agentType {
 			continue
 		}
-		if reason := nonOpenPendingReason(entry.MissionID); reason != "" {
+		status, reason := classifyPendingEntry(entry.MissionID)
+		switch status {
+		case pendingEntryStale:
 			fmt.Fprintf(os.Stderr,
 				"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch to %s is "+
 					"stale (%s); clearing it so it cannot block a newer pending dispatch\n",
@@ -287,8 +309,17 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 					entry.MissionID, clearErr)
 			}
 			continue
+		case pendingEntryUnresolvable:
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch to %s could "+
+					"not be resolved (%s); skipping it (not clearing it — the failure is not proof "+
+					"the mission is gone for good) so it cannot block a newer pending dispatch for "+
+					"worker %q; run `ethos mission release` if it is stuck for good\n",
+				sessionID, entry.MissionID, reason, agentType)
+			continue
+		default: // pendingEntryOpen
+			candidates = append(candidates, entry.MissionID)
 		}
-		candidates = append(candidates, entry.MissionID)
 	}
 	if len(candidates) == 0 {
 		return ""
@@ -315,23 +346,46 @@ func warnDispatchPendingAmbiguity(agentType string, candidates []string) {
 		len(candidates), agentType, strings.Join(candidates, ", "), candidates[0])
 }
 
-// nonOpenPendingReason reports why a pending dispatch's mission can
-// never be matched, or "" when it can (status is open) OR when its
-// status cannot be determined at all. A Load failure returns "" — NOT
-// treated as proof of staleness, matching staleBindingReason's own
-// documented rule for the claim path: a store or contract that will
-// not resolve belongs to dispatchTierB's own Load-and-block gate, never
-// silently discarded here.
-func nonOpenPendingReason(missionID string) string {
+// pendingEntryStatus classifies a pending-dispatch entry's mission for
+// matchDispatchPending's loop — see classifyPendingEntry.
+type pendingEntryStatus int
+
+const (
+	// pendingEntryOpen: Load succeeded and the mission's status is
+	// "open" — a live, matchable candidate.
+	pendingEntryOpen pendingEntryStatus = iota
+	// pendingEntryStale: Load succeeded but the mission's status is
+	// something other than "open" — provably dead, safe to clear.
+	pendingEntryStale
+	// pendingEntryUnresolvable: Load itself failed. Proves nothing
+	// (review finding K1, full-branch review of m-2026-09-08-004 round
+	// 3, sharpening C3's original doctrine) — must be skipped so it
+	// cannot permanently head-of-line-block a newer entry, but never
+	// cleared, since the failure may be transient (a branch switch that
+	// temporarily removed the git-tracked contract file, a lock
+	// contention blip) and the entry may resolve on its own.
+	pendingEntryUnresolvable
+)
+
+// classifyPendingEntry reports whether a pending dispatch's mission is
+// open, provably non-open, or unresolvable (Load failed), plus a
+// human-readable reason for the non-open cases. Mirrors
+// staleBindingReason's documented rule for the claim path: a store or
+// contract that will not resolve is not evidence of anything, so it
+// gets its own status distinct from "provably dead."
+func classifyPendingEntry(missionID string) (pendingEntryStatus, string) {
 	store, err := tierBMissionStore()
 	if err != nil {
-		return ""
+		return pendingEntryUnresolvable, err.Error()
 	}
 	c, err := store.Load(missionID)
 	if err != nil {
-		return ""
+		return pendingEntryUnresolvable, err.Error()
 	}
-	return nonOpenReason(c.Status)
+	if reason := nonOpenReason(c.Status); reason != "" {
+		return pendingEntryStale, reason
+	}
+	return pendingEntryOpen, ""
 }
 
 // consumeDispatchBinding removes missionID's pending-dispatch entry

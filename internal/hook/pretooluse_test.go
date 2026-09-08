@@ -2729,27 +2729,35 @@ func TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers(t *testing.T)
 // failure always produced `resolving MISSION_ID %q: %v`, regardless of
 // whether missionID came from the MISSION_ID env var or a pending
 // dispatch sidecar.
+// This exercises dispatchTierB directly rather than through the full
+// HandlePreToolUse pipeline: K1 (full-branch review, m-2026-09-08-004
+// round 3) changed matchDispatchPending so a pending entry that is the
+// SOLE candidate and cannot Load is skipped, not matched — it falls
+// through to Tier A/B rather than reaching dispatchTierB at all (see
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableEntrySkipsNotBlocks).
+// dispatchTierB's own boundVia-aware messaging (H1) is still reachable
+// for a dispatch-bound missionID via the narrower TOCTOU race the
+// function's own doc comment describes (matched-open at classify time,
+// gone by dispatchTierB's own Load) — calling it directly pins that
+// messaging without needing to fabricate that race.
 func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNamesRemedy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stageRepoRoot(t)
 
 	missionID := "m-2026-09-08-711"
-	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	sessionID := "sess-unloadable-dispatch"
-	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionID, "bwk"))
 	// Deliberately never staged: store.Load(missionID) must fail.
 
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 	t.Setenv("MISSION_ID", "")
 	t.Setenv("PARENT_DELEGATION_ID", "")
-	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
 	t.Setenv("ETHOS_QUIET_ADVICE", "")
 	t.Setenv("PARENT_SESSION_ID", "")
 
-	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
 	var out bytes.Buffer
-	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+	toolInput := map[string]any{"subagent_type": "bwk"}
+	require.NoError(t, dispatchTierB(&out, sessionID, missionID, toolInput, mission.BoundViaSidecarDispatch, nil))
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
@@ -2868,15 +2876,27 @@ func TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume(t *test
 // which discarded the Load error and printed a misleading `worker ""`
 // mismatch message for what was actually the correctly dispatched
 // worker).
-func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchedButUnresolvableContractBlocks(t *testing.T) {
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableEntrySkipsNotBlocks
+// pins review finding K1 (full-branch review, m-2026-09-08-004 round 3),
+// which reversed this test's prior assertion. round 3 originally folded
+// an unresolvable pending entry (Load fails) into the match and let
+// dispatchTierB deny the spawn -- but since a Load failure is NOT
+// deletable evidence (C3's doctrine) and FIFO always re-selects the
+// SAME oldest entry, an unloadable entry at the head of the queue
+// denied EVERY subsequent same-worker spawn forever: reachable without
+// exotic faults, since mission contracts are git-tracked and
+// `mission dispatch` followed by `git checkout` to a branch without the
+// contract file reproduces it directly. The entry is now SKIPPED (not
+// matched, not cleared) when it is the only candidate, so the spawn
+// falls through to Tier A/B instead of being denied permanently.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableEntrySkipsNotBlocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	stageRepoRoot(t)
 	// Deliberately no stageContract call: the pending entry names a
 	// mission the store cannot Load, but the Worker is already known
 	// from the pending file itself (dispatch time recorded it), so the
-	// match succeeds before dispatchTierB's own Load ever runs and
-	// fails.
+	// match attempt happens before any Load.
 
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	sessionID := "sess-dispatch-unresolvable"
@@ -2892,18 +2912,68 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchedButUnresolvable
 
 	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
 	var out bytes.Buffer
-	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+	stderrText := captureStderr(t, func() {
+		require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+	})
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
-		"a matched pending dispatch whose contract cannot load must block, exactly like an unloadable explicit MISSION_ID")
-	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, missionID)
+	assert.NotEqual(t, "deny", r.HookSpecificOutput.PermissionDecision,
+		"an unresolvable pending dispatch must not deny the spawn forever -- it falls through to Tier A/B")
+	assert.NotEqual(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"the unresolvable mission must never be bound as the spawn's MISSION_ID")
 
-	// The pending entry is left in place -- the spawn was refused
-	// outright (never admitted), so there is nothing to have consumed.
+	assert.Contains(t, stderrText, missionID)
+	assert.Contains(t, stderrText, "ethos mission release")
+
+	// The pending entry is left in place -- unproven, not deleted (C3's
+	// doctrine): the failure may be transient and the contract may come
+	// back on a later branch switch or retry.
 	entriesList, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
 	require.Len(t, entriesList, 1)
 	assert.Equal(t, missionID, entriesList[0].MissionID)
+}
+
+// TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry is
+// K1's other half: an unresolvable entry at the head of the queue must
+// not block a newer, resolvable entry for the same worker from being
+// matched. Before this fix, the unresolvable entry was always picked
+// (oldest wins FIFO) and returned as the sole candidate, so a
+// perfectly valid newer entry was unreachable behind it for the rest of
+// the session's life.
+func TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	unresolvable := "m-2026-09-08-716"
+	resolvable := "m-2026-09-08-717"
+	stageContract(t, home, resolvable) // Worker: "bwk"
+	// unresolvable is deliberately never staged.
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-unresolvable-then-resolvable"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, unresolvable, "bwk"))
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, resolvable, "bwk"))
+
+	var matched string
+	stderrText := captureStderr(t, func() {
+		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+	})
+
+	assert.Equal(t, resolvable, matched,
+		"the unresolvable head entry must not block a newer, resolvable entry for the same worker")
+	assert.Contains(t, stderrText, unresolvable)
+	assert.Contains(t, stderrText, "ethos mission release")
+	assert.NotContains(t, stderrText, "2 pending dispatches match",
+		"the unresolvable entry is skipped, not a live candidate -- there is no genuine ambiguity here")
+
+	// The skipped entry is never cleared -- only the matched one is
+	// consumed by the caller (ConsumeDispatchPending is not called by
+	// matchDispatchPending itself for a live match either).
+	entriesList, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	require.Len(t, entriesList, 2)
 }
