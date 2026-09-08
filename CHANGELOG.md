@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos mission abandon --disclaim <delegation-id>`** (CLI) and the
+  matching `disclaim` array parameter on the MCP `mission` tool's
+  `abandon` method — retires a mission whose only delegation was
+  wrongly attributed to it by the dispatch-binding capture. Repeatable.
+  Not a bypass flag: each named delegation is checked mechanically
+  against the new `Delegation.BoundVia` provenance field and must have
+  been bound via the capture path and already be closed. The result
+  gate is untouched. Full behaviour, gates, and rejected alternatives
+  in the Fixed entry below and in DES-076.
+- **Windows cross-compilation.** `GOOS=windows GOARCH=amd64 go build
+  ./...` now succeeds for the whole module — `internal/process` gained
+  a Windows process-tree walker (`CreateToolhelp32Snapshot`), and
+  `internal/session` and `internal/mission` gained `LockFileEx` file
+  locking alongside their Unix `flock` implementations. Windows remains
+  **not a supported or shipped target**: no release binary, no CI job,
+  and the cross-build is verified per review rather than by automation.
+  See the Fixed entry below for what that does and does not guarantee.
+
 ### Fixed
 
 - **`ethos mission create`/`dispatch`'s write-set conflict check no
