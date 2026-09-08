@@ -10043,6 +10043,12 @@ per-mission redesign introduces in exchange for closing C1. All four
 are now named in the same document that claims the fix, rather than
 requiring a future reviewer to discover them independently.
 
+**This is no longer the complete residual list.** A second full-branch
+review pass (m-2026-09-08-004 round 3, "Amendment 2026-09-08: J1-J6"
+below) found four more residuals this list did not name, plus one that
+this document had itself introduced without naming honestly (K1's
+skip-not-clear fix). See that amendment for all five.
+
 ### Amendment 2026-09-08: C2 hardened further, plus two findings from a local review probe (F2, F3)
 
 A later review pass on the round-3 code above (still m-2026-09-08-004
@@ -10253,3 +10259,206 @@ through `os.ReadFile`, which follows symlinks. Added the same
 scenario, for the reason above) and
 `TestReadDispatchPending_RefusesSymlink` (git-stash falsification) both
 confirmed failing against pre-fix code.
+
+### Amendment 2026-09-08: J1-J6, an invariant review of the K round, and a habit worth naming
+
+An invariant-review pass of the K1-K11 amendment above (still
+m-2026-09-08-004 round 3) found that two of its own fixes did not do
+what they claimed — both proven by probe rather than by reading, the
+same discipline this whole document has been asking of itself since
+round 2's "reproduced, not just theorized" standard. One finding (K3)
+was confirmed sound; three code fixes and two documentation gaps
+follow. All were closed in the same review cycle.
+
+**J1 (HIGHEST PRIORITY) — the CLI/MCP dispatch-time queue-position
+advisory (K8's own fix) computed its answer by a DIFFERENT rule than
+the matcher it was describing.** K8 fixed `bindDispatchedMission`'s
+message to name a fresh dispatch's actual position in the queue instead
+of assuming it was first — but it did so with a bare Worker-equality
+filter, while `matchDispatchPending` (K1's own fix, landed in the SAME
+round) additionally skips-and-clears stale entries and skips
+unresolvable ones. The two could disagree, and did: with an
+unresolvable `m-800` ahead of a fresh `m-801` dispatch, K8's message
+read "1 pending dispatch(es) for bwk are ahead of it and will be
+matched first (m-800)" — but at spawn time `matchDispatchPending` would
+skip `m-800` and match `m-801` immediately. **The message told the
+operator the exact opposite of what would happen.** Both of K8's own
+pinning tests staged two resolvable, open missions — the one case where
+a naive filter and the real matcher happen to agree, so neither test
+could have caught this.
+
+Fixed by extracting the classification itself, not just consulting it
+twice: `mission.ClassifyPendingDispatches` (new,
+`internal/mission/active.go`) is now the single function both
+`matchDispatchPending` and the new exported `hook.DispatchBoundMessage`
+call. `hook.DispatchBoundMessage` also replaces the CLI's
+`dispatchBoundMessage` and the MCP surface's inline equivalent — the
+~30 duplicated lines between them (K8 fixed the SAME bug in both places
+independently, which is itself a symptom J5 below names directly) are
+now one implementation. `TestMissionDispatch_UnresolvableAheadEntryNotReportedAsBlocking`
+reproduces the reviewer's exact captured scenario and is confirmed
+failing against a targeted mutation reproducing the pre-J1 bare-filter
+behavior.
+
+**J2 — the K4 drift guard did not guard.** It claimed to enumerate
+"every WRITE-position occurrence across the two packages" but parsed a
+HARDCODED three-file list and recognized only `*ast.AssignStmt`/
+`*ast.CallExpr` as write positions. Falsified empirically, twice: a
+fourth writer in a NEW file calling `mission.CloseDelegation(...,
+DelegationVerdictAborted, ...)` — precisely the "cancel a running
+worker" command the guard's own doc comment names as the likely future
+addition — passed undetected, because the file list could never see a
+new file; and a `Delegation{Verdict: DelegationVerdictAborted}`
+composite literal in a WATCHED file also passed undetected, because its
+parent node is `*ast.KeyValueExpr`, outside the narrower write-position
+set. A positive control correctly failed, so the guard was not a
+no-op — its actual scope was just far narrower than its wording
+claimed.
+
+Fixed by replacing the file list with `filepath.WalkDir` over
+`internal/` and `cmd/` (skipping `_test.go`), and adding
+`*ast.KeyValueExpr`/`*ast.ValueSpec` to the write-position set. All four
+of the reviewer's falsifying scenarios (new-file writer,
+composite-literal writer, an unscanned `cmd/`-tree writer, a
+package-level var alias) were reproduced via temporary probe
+files/edits, confirmed caught, then removed before landing. Also
+cross-referenced the guard from `countBlockingDelegations`'s own doc
+comment (`store.go`) — the "exactly three call sites" claim had no
+mention that anything enforces it, so a reader had no way to discover
+the guard's existence, only its claim.
+
+**J3 — `deleteFiles` reopened the exact gap K3 closed, through its own
+failure path.** K3 moved the mission-sidecar clear into `deleteFiles`,
+the one primitive `Delete`/`Purge`/`PurgeTombstoned` all funnel through
+— correct, and verified STRUCTURALLY this round (`os.Remove(rosterPath)`
+appears exactly once; every deletion path routes through it). But the
+sidecar clear itself stayed advisory: failures went to stderr, and the
+roster was removed regardless. Once the roster is gone the session is
+absent from `List()`, so `Purge`/`PurgeTombstoned` never revisit it — a
+SINGLE sidecar-clear failure orphaned those sidecars permanently, with
+no GC path at all. That is the "no GC" gap K3's own commit message
+names as the problem, reopened by the fix meant to close it.
+
+The general principle this sharpens: advisory-and-continue is correct
+ONLY when something else will eventually retry. Every other `Clear*`
+call site in this codebase (`internal/hook/session_end.go`'s pre-J5
+duplicate, `cmd/ethos/mission.go`'s `runMissionRelease`) is a leaf
+action nothing downstream depends on, so logging and moving on is the
+right discipline there. `deleteFiles` is different: it is the LAST
+step before the one retry mechanism (a later purge pass) stops being
+able to find the orphan at all. Fixed by reordering (sidecars cleared
+BEFORE the roster is removed) and propagating the sidecar-clear failure
+as an error instead of swallowing it — the roster's continued presence
+in `List()` on failure is exactly the retry token a later purge needs.
+Regression test locks the sidecar's own directory (a sibling of the
+roster file, not an ancestor, so roster removal would otherwise still
+succeed) and confirms both that `Delete` returns an error and that the
+roster survives; confirmed failing against pre-fix code.
+
+**J4 (this amendment) — the K round shipped without a residual-risk
+update of its own**, despite fixing K1 (a scoped hazard trade, not an
+elimination — see J6 below), landing J1-J3 above (three genuine gaps,
+one of which — J3 — reopened a gap the SAME round had just closed), and
+leaving the CHANGELOG honest about the abnormal-session-death residual
+("closes the gap for the next `ethos session purge` run, not
+automatically on every resume") while DESIGN.md stayed silent about it.
+This document commits itself, in its own words, to "naming what a
+redesign trades away, not just what it fixes" — the residual list above
+now points here for the full account, and the account is: K3's own fix
+is NOT automatic (`ethos session purge` is an explicit, operator- or
+tooling-invoked step — nothing calls it on `claude --resume`, so a
+crashed session's sidecars persist until someone or something runs a
+purge), K1's skip-not-clear can oscillate back into a real
+misattribution (J6, next), the aborted-writer count is enforced by a
+parse whose exact coverage is now verified but still bounded to
+`internal/` and `cmd/` (a writer introduced through code generation or
+reflection would still be invisible to an AST walk), and the
+queue-position message and the matcher can now only agree because they
+share one function — a THIRD independent implementation of either would
+reopen J1's exact class.
+
+**J5 — two hand-maintained copies of the same three-clear list drifted
+by construction, not by accident.** `internal/hook/session_end.go`'s
+`clearSessionMissionBindings` and `internal/session/store.go`'s
+`clearMissionSidecars` (K3's own new code) each called
+`mission.ClearActiveMission`/`ClearDelegationBinding`/`ClearDispatchPending`
+independently. A fourth sidecar type added to one and not the other
+would drift silently — the exact shape J1 already found once this
+round, between the CLI and MCP copies of the same queue-position logic.
+Fixed by deleting the hook-local copy entirely: `HandleSessionEnd` now
+relies solely on `ss.Delete`, which (per J3, above) already clears the
+same three sidecars before removing the roster and propagates a
+failure instead of swallowing it — there was nothing left for a
+hook-local duplicate to do once `session.Store` did both jobs
+correctly. Fixing this exposed a real, previously-invisible test-fixture
+bug: `internal/hook`'s shared `testStores(t)` helper constructed its
+`session.Store` at an arbitrary temp directory, never at
+`$HOME/.punt-labs/ethos` the way `cmd/ethos/identity.go`'s production
+`sessionStore()` always does — invisible before this fix only because
+the OLD hook-local duplicate resolved its own root via
+`os.UserHomeDir()` independently of `ss`, papering over the mismatch.
+`TestHandleSessionEnd_ClearsMissionBindings` now constructs its own
+`session.Store` rooted at the same `$HOME`-derived path its
+`mission.Write*` setup calls use, matching production wiring.
+
+**J6 — K1's "it can still resolve on its own" was framed purely as a
+benefit; it is also a hazard, and the fix's own noise has no ceiling.**
+Two parts:
+
+1. *Oscillation.* Skip-not-clear trades K1's bug (permanent denial) for
+   a narrower but real one: dispatch `m-A` on branch X, `git checkout
+   main` (the contract disappears, the entry becomes unresolvable, the
+   next spawn falls through unbound), `git checkout X` again (the
+   contract reappears, the entry is resolvable again) — the NEXT `bwk`
+   spawn now matches `m-A`, even though the operator has moved on and
+   the spawn has nothing to do with it. This is DES-076's own
+   misattribution class re-entering through the door K1 opened, not a
+   new class — but the doc comment describing K1's fix framed
+   self-healing as pure upside without naming the other direction the
+   same property cuts. `matchDispatchPending`'s doc comment now names
+   this directly: `ethos mission release` is still the only positive
+   remedy, and it must run BEFORE switching back to a branch that could
+   resurrect a stale entry, not after.
+2. *Unbounded warning frequency.* Each Agent() spawn attempt is a fresh
+   OS process (an `ethos` CLI invocation), so an in-memory rate limiter
+   cannot exist; a persistently unresolvable entry re-emits its
+   identical stderr line on every single subsequent spawn attempt,
+   forever. Considered and rejected: a per-entry cooldown marker file
+   colocated in the dispatch-pending directory. Rejected because its
+   cleanup coordination is worse than the noise it removes —
+   `ClearDispatchPending` and `ConsumeDispatchPending` both currently
+   skip EVERY dotfile-prefixed entry to protect the `.lock` control
+   file specifically; a new `.warned-*` marker would need one of those
+   functions to start distinguishing dotfile PURPOSES rather than just
+   dotfile PRESENCE, a change to a shared, heavily-relied-on function
+   for a cosmetic noise fix. A stateless alternative (throttling by wall
+   clock modulo, no new files) was also considered and rejected for
+   being a surprising, non-obvious mechanism for a reader to trust
+   without a comment doing more explaining than the code. This is left
+   as an accepted, named residual, not a silent gap: the warning is
+   noisy but never wrong (K1 already ensures it never denies), and the
+   cost of fixing it correctly is a new persistent-state class this ADR
+   is not prepared to introduce for a "minor" finding. A future fix
+   should either accept the FIFO ambiguity signal's own precedent
+   (in-process only, no persistence, because that signal fires once per
+   dispatch, not once per spawn) or design the marker's cleanup
+   coordination as its own reviewed change, not a rider on this one.
+
+**A habit worth naming, since the reviewer asked for it directly.**
+Every fixture-shaped test this branch has produced (K8's own pinning
+tests, this amendment's J1 finding against them) shares one root cause:
+a regression test written to prove a FIX exists, using the SIMPLEST
+input that exercises the changed code path, rather than a test written
+to prove the INVARIANT the fix claims to establish, using the input
+that would most differentiate correct from almost-correct. K8's tests
+proved "the message names a position" using two resolvable missions —
+sufficient to prove the message CHANGED, insufficient to prove it
+changed to the RIGHT thing in every case the matcher itself handles.
+The general antidote, and the one this amendment's own J1/J2 tests try
+to model: after writing a regression test, ask "what is the LEAST
+convenient input this code has to handle correctly, per its own doc
+comment's list of cases?" and test that one, not only the one that
+happens to be easiest to set up. K1, K3, and K4's own doc comments each
+already enumerated the harder cases (unresolvable vs. stale vs. open;
+crash-mid-write; three specific writers) — the fixture-shaped tests in
+K8 simply did not consult them before writing the fixture.

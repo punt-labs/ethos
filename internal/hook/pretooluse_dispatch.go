@@ -268,6 +268,22 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 // gets a chance to name the failure, so this function names it
 // directly instead.
 //
+// "It can still resolve on its own" is not purely a benefit (review
+// finding J6, full-branch review of m-2026-09-08-004 round 3): the same
+// property that lets a transient failure heal itself also lets a
+// TRULY stale entry re-enter the misattribution class DES-076 exists to
+// prevent, via oscillation rather than a single bad match. Sequence:
+// dispatch `m-A` on branch X, `git checkout main` (the contract is gone
+// — the entry is unresolvable, this spawn falls through unbound), `git
+// checkout X` again (the contract is back — the entry is resolvable
+// again) — the NEXT `bwk` spawn now matches `m-A`, even though it has
+// nothing to do with `m-A` and the operator has moved on. Skip-not-clear
+// trades "permanent denial" (K1's bug) for "eventual, silent,
+// re-triggerable misattribution" rather than eliminating the hazard
+// outright; `ethos mission release` is still the only positive remedy,
+// and it must be run BEFORE switching back to a branch that resurrects
+// a stale entry, not after.
+//
 // When two or more LIVE (non-stale, resolvable) entries match
 // agentType, the oldest wins by FIFO, but that is a silent,
 // unresolvable ambiguity for the operator unless it is named: two

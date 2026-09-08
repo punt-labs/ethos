@@ -94,10 +94,20 @@ func TestHandleSessionEnd_NoSessionID(t *testing.T) {
 // an entirely unrelated later spawn or commit. Session end is now
 // treated the same as an explicit `ethos mission release`.
 func TestHandleSessionEnd_ClearsMissionBindings(t *testing.T) {
-	_, ss := testStores(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	// J5 (full-branch review, m-2026-09-08-004 round 3): HandleSessionEnd
+	// now clears mission sidecars solely through ss.Delete (session.Store),
+	// which resolves sidecars under ss's OWN root -- production always
+	// constructs this store at $HOME/.punt-labs/ethos
+	// (cmd/ethos/identity.go's sessionStore()), so the fixture must match
+	// that, not testStores(t)'s independently-rooted temp dir (which
+	// this test's mission.Write* calls below never wrote sidecars under,
+	// a mismatch invisible before this fix only because the pre-J5
+	// hook-local clearSessionMissionBindings resolved its own root via
+	// os.UserHomeDir() independently of ss).
+	ss := session.NewStore(globalRoot)
 
 	sessionID := "sess-end-clears"
 	require.NoError(t, ss.Create(sessionID,
