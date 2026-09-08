@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ethos session start --persona <handle>` now validates the handle
+  resolves to a known identity before writing the roster**, instead of
+  minting a session keyed on a dangling reference. A typo'd `--persona`
+  previously exited 0 and silently degraded `whoami` to the git/OS identity
+  rather than ever surfacing the mistake (ethos-gu3p).
+- **`ethos session end` now hints `unset ETHOS_SESSION`** when the variable
+  names the session that was just ended, symmetric with `session start`,
+  which prints `export ETHOS_SESSION=...`. Previously the command that
+  invalidates the variable gave no hint, while the command that sets it
+  did (ethos-4pvt). The hint checks that the variable names THIS session,
+  not merely that it is set — `session end --session A` while
+  `ETHOS_SESSION` names a different, still-live session B must not tell
+  the operator to clear B's only remaining discovery channel outside
+  Claude Code.
+- **`GOOS=windows GOARCH=amd64 go build ./...` now succeeds.** Windows is
+  still not a supported/shipped target (no release binary, no CI job), but
+  the whole module now cross-compiles: `internal/process` gained a
+  Windows process-tree walker (`CreateToolhelp32Snapshot`), and
+  `internal/session` and `internal/mission` gained Windows file-locking
+  (`LockFileEx`) alongside their existing Unix `flock` implementations,
+  replacing build tags that previously excluded Windows entirely
+  (ethos-cm2r, ethos-qtp2).
+
 ## [4.17.0] - 2026-09-07
 
 ### Fixed

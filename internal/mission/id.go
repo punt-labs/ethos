@@ -1,5 +1,3 @@
-//go:build !windows
-
 package mission
 
 import (
@@ -8,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -42,8 +39,9 @@ func defaultCounterRoot() string {
 //
 // The counter file lives at
 // <defaultCounterRoot>/counters/<namespace>-YYYY-MM-DD as a single
-// integer, flock-guarded. New namespaces add sibling files; existing
-// files never change shape (DES-054 I9-counter).
+// integer, lock-guarded (flock on Unix, LockFileEx on Windows — see
+// flock_unix.go/flock_windows.go). New namespaces add sibling files;
+// existing files never change shape (DES-054 I9-counter).
 //
 // The returned release function is the rollback API. The caller MUST
 // invoke it exactly once — typically `defer release(committed)`. A
@@ -55,10 +53,10 @@ func defaultCounterRoot() string {
 // and d-YYYY-MM-DD-NNN for delegations. Other namespaces use the
 // generic <namespace>-YYYY-MM-DD-NNN shape.
 //
-// Concurrency: the read-modify-write is serialized through a flock
+// Concurrency: the read-modify-write is serialized through a lock
 // on a separate stable lock file (<root>/counters/<namespace>-DATE.lock).
 // Locking the counter file itself would race the temp+rename pattern
-// since the post-rename file lives on a different inode.
+// since the post-rename file is a different underlying file on disk.
 func NewID(namespace string, now time.Time) (string, func(commit bool), error) {
 	return NewIDAt(defaultCounterRoot(), namespace, now)
 }
@@ -102,10 +100,10 @@ func allocateCounter(counterPath, lockPath string) (int, error) {
 	}
 	defer lockFile.Close()
 
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(lockFile, lockExclusive); err != nil {
 		return 0, fmt.Errorf("acquiring counter lock: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = funlock(lockFile) }()
 
 	current, err := readCounter(counterPath)
 	if err != nil {
@@ -187,11 +185,11 @@ func newReleaseFunc(counterPath, lockPath string, allocated int) func(commit boo
 			return
 		}
 		defer lockFile.Close()
-		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		if err := flock(lockFile, lockExclusive); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: id release: acquiring lock %q: %v\n", lockPath, err)
 			return
 		}
-		defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+		defer func() { _ = funlock(lockFile) }()
 
 		current, err := readCounter(counterPath)
 		if err != nil {

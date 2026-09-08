@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || windows
 
 package process
 
@@ -41,6 +41,12 @@ func TestIsClaudeComm(t *testing.T) {
 		{"bash", false},
 		{"", false},
 		{"2.1.86", false}, // version string alone is not claude (normalization is in readProc)
+		// Windows' ProcessEntry32.ExeFile: backslash-separated, ".exe"
+		// suffix (ethos-cm2r).
+		{"claude.exe", true},
+		{`C:\Users\x\claude.exe`, true},
+		{"CLAUDE.EXE", true},
+		{"node.exe", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.comm, func(t *testing.T) {

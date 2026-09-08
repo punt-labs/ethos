@@ -1,5 +1,3 @@
-//go:build !windows
-
 package session
 
 import (
@@ -8,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -695,55 +692,37 @@ func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	return nil
 }
 
-// WithSessionLock executes fn while holding an exclusive flock on the
-// session's lock file. The lock covers both the session roster YAML and
-// the session audit log (DES-054 v5 unification): one flock per session
-// serializes every per-session write, eliminating the two-lock
-// acquisition order the v4 design carried. Audit log appends and roster
-// mutations therefore use the same lock; a writer must not acquire two
-// locks for one logical operation.
+// WithSessionLock executes fn while holding an exclusive lock on the
+// session's lock file (flock on Unix, LockFileEx on Windows — see
+// store_unix.go/store_windows.go's withLock). The lock covers both the
+// session roster YAML and the session audit log (DES-054 v5
+// unification): one lock per session serializes every per-session
+// write, eliminating the two-lock acquisition order the v4 design
+// carried. Audit log appends and roster mutations therefore use the
+// same lock; a writer must not acquire two locks for one logical
+// operation.
 //
 // Concurrency ordering when this lock is nested inside others (DES-054
 // phase 2): global mission create lock → repo mission create lock →
-// per-mission flock (shared) → per-delegation flock (exclusive) →
-// per-session flock. Release is reverse via defer LIFO.
+// per-mission lock (shared) → per-delegation lock (exclusive) →
+// per-session lock. Release is reverse via defer LIFO.
 //
 // Exported so the audit-log entry point in cmd/ethos/hook.go can wrap
 // its write in the unified lock without re-implementing the
-// open/flock/close dance.
+// open/lock/close dance.
 func (s *Store) WithSessionLock(sessionID string, fn func() error) error {
 	return s.withLock(sessionID, fn)
 }
 
-// withLock executes fn while holding an exclusive flock on the
-// session's lock file. The public WithSessionLock wraps this helper
-// and shares no fd state with it.
-//
-// withLock is NOT re-entrant. Each call opens a fresh file descriptor
-// on the per-session lock path and acquires LOCK_EX on it; a nested
-// call from within fn (or from any path WithSessionLock already
-// holds) opens a second fd against the same inode and blocks waiting
-// for the first holder to release. The same goroutine then deadlocks
-// against itself. Callers must structure their work so the lock is
-// acquired exactly once at the top of any session-write path.
-func (s *Store) withLock(sessionID string, fn func() error) error {
-	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
-		return fmt.Errorf("creating sessions directory: %w", err)
-	}
-	lockFile := s.lockPath(sessionID)
-	f, err := os.OpenFile(lockFile, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("opening lock file: %w", err)
-	}
-	defer f.Close()
-
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("acquiring lock: %w", err)
-	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-
-	return fn()
-}
+// withLock and isProcessAlive are platform-specific (store_unix.go,
+// store_windows.go): flock/signal-0 on Unix, LockFileEx/OpenProcess on
+// Windows. Both are NOT re-entrant. Each withLock call opens a fresh
+// handle on the per-session lock path and acquires an exclusive lock on
+// it; a nested call from within fn (or from any path WithSessionLock
+// already holds) opens a second handle against the same file and blocks
+// waiting for the first holder to release. The same goroutine then
+// deadlocks against itself. Callers must structure their work so the
+// lock is acquired exactly once at the top of any session-write path.
 
 // staleTTL is the maximum age of a session with an uncheckable primary PID.
 const staleTTL = 24 * time.Hour
@@ -779,27 +758,4 @@ func isOlderThan(roster *Roster, ttl time.Duration) bool {
 		return true // Unparseable timestamp — treat as stale.
 	}
 	return time.Since(started) > ttl
-}
-
-// isProcessAlive checks whether a process with the given PID is running.
-//
-// Limitations:
-//   - Zombie processes (exited but not yet waited on) still respond to
-//     signal 0, so this function returns true for zombies.
-//   - PID reuse is not addressed. If the original process exits and the OS
-//     assigns the same PID to an unrelated process, this returns a false
-//     positive. On modern Linux/macOS the PID space is large enough that
-//     reuse within a single session lifetime is unlikely but not impossible.
-func isProcessAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// On Unix, FindProcess always succeeds. Send signal 0 to check.
-	err = p.Signal(syscall.Signal(0))
-	if err == nil {
-		return true
-	}
-	// EPERM means the process exists but we can't signal it.
-	return err == syscall.EPERM
 }

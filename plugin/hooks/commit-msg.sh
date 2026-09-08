@@ -1,8 +1,19 @@
 #!/bin/sh
-# hooks/commit-msg.sh — Append Mission:/Delegation: git trailers when env is set.
+# hooks/commit-msg.sh — Append Mission:/Delegation: git trailers when env is
+# set, or resolved from the committing session when it is not.
 # DES-054 phase 3: connects git history to the audited delegation chain so
-# `git log --grep Mission:` becomes a forensic search tool. Passthrough when
-# neither env var is set — safe for every commit on every repo.
+# `git log --grep Mission:` becomes a forensic search tool. MISSION_ID/
+# DELEGATION_ID are the uncommon case (subagent commits don't inherit
+# additional_env), so the common path below shells to `ethos hook
+# commit-trailers`, which resolves the committing session itself
+# (ETHOS_SESSION, else the Claude process-tree walk) and reads its
+# active-mission and delegation-binding sidecars. Per DES-074, that
+# resolution returns a named, printed error when running under Claude Code
+# and the session cannot be identified, and stays silent only outside Claude
+# Code, where no session was ever expected. The lookup is skipped only when
+# at least one of MISSION_ID/DELEGATION_ID is already in env; a commit gets
+# no trailer, and no lookup, only when the env vars are unset AND the
+# session lookup finds nothing to add.
 #
 # Idempotency: re-running on a message already carrying the trailer leaves
 # it unchanged. Uses git-interpret-trailers when available; falls back to

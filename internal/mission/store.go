@@ -1,5 +1,3 @@
-//go:build !windows
-
 package mission
 
 import (
@@ -13,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -1828,8 +1825,9 @@ func (s *Store) restoreContract(dest string, oldData []byte) error {
 	return nil
 }
 
-// withLock executes fn while holding an exclusive flock on the mission's
-// lock file. Mirrors session.Store.withLock.
+// withLock executes fn while holding an exclusive lock (flock on Unix,
+// LockFileEx on Windows — see flock_unix.go/flock_windows.go) on the
+// mission's lock file. Mirrors session.Store.withLock.
 func (s *Store) withLock(missionID string, fn func() error) error {
 	if strings.TrimSpace(missionID) == "" {
 		return fmt.Errorf("missionID is required")
@@ -1839,7 +1837,7 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 	}
 	lockFile := s.lockPath(missionID)
 	// Uniform symlink policy (paths.go): a symlink at the lock path
-	// would redirect the flock onto an unrelated inode, defeating the
+	// would redirect the lock onto an unrelated file, defeating the
 	// per-mission serialization invariant. Reject before OpenFile,
 	// which would otherwise create-and-follow the link.
 	if err := rejectSymlink(lockFile); err != nil {
@@ -1851,19 +1849,20 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 	}
 	defer f.Close()
 
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(f, lockExclusive); err != nil {
 		return fmt.Errorf("acquiring lock: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = funlock(f) }()
 
 	return fn()
 }
 
-// withCreateLock executes fn while holding an exclusive flock on the
-// missions directory's create lock file. Used by Store.Create to
-// serialize Create attempts across cooperating processes so that the
-// cross-mission write_set conflict scan and the new mission's write
-// happen atomically with respect to other concurrent Creates.
+// withCreateLock executes fn while holding an exclusive lock (flock on
+// Unix, LockFileEx on Windows) on the missions directory's create lock
+// file. Used by Store.Create to serialize Create attempts across
+// cooperating processes so that the cross-mission write_set conflict
+// scan and the new mission's write happen atomically with respect to
+// other concurrent Creates.
 //
 // Update and Close do NOT acquire this lock — they mutate an existing
 // mission's status, which is unrelated to Create-vs-Create
@@ -1877,7 +1876,7 @@ func (s *Store) withCreateLock(fn func() error) error {
 	createLock := s.createLockPath()
 	// Uniform symlink policy (paths.go): a symlink at the directory-
 	// level create lock would let an attacker redirect every Create's
-	// flock onto an attacker-chosen inode, collapsing the cross-
+	// lock onto an attacker-chosen file, collapsing the cross-
 	// mission write_set conflict scan's atomicity.
 	if err := rejectSymlink(createLock); err != nil {
 		return err
@@ -1888,13 +1887,13 @@ func (s *Store) withCreateLock(fn func() error) error {
 	}
 	defer f.Close()
 
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock(f, lockExclusive); err != nil {
 		return fmt.Errorf("acquiring create lock: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = funlock(f) }()
 
 	// DES-054 v5 rolling-upgrade fence — when a repoRoot is in scope,
-	// also acquire the per-repo create lock as a nested flock so two
+	// also acquire the per-repo create lock as a nested lock so two
 	// processes that share the same repo but different global roots
 	// (e.g., separate ~/.punt-labs/ trees in containers) still
 	// serialize on Create. Acquisition order is global → repo;
@@ -1937,10 +1936,10 @@ func (s *Store) withCreateLock(fn func() error) error {
 		}
 		defer rf.Close()
 
-		if rerr := syscall.Flock(int(rf.Fd()), syscall.LOCK_EX); rerr != nil {
+		if rerr := flock(rf, lockExclusive); rerr != nil {
 			return fmt.Errorf("acquiring repo create lock: %w", rerr)
 		}
-		defer func() { _ = syscall.Flock(int(rf.Fd()), syscall.LOCK_UN) }()
+		defer func() { _ = funlock(rf) }()
 	}
 
 	return fn()

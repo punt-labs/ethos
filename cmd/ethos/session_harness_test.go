@@ -143,6 +143,42 @@ func TestSessionEnd_KeepsForeignPointer(t *testing.T) {
 	assert.Equal(t, "s1live", cur)
 }
 
+// TestSessionEnd_HintOnlyWhenEnvNamesEndedSession pins the Bugbot/
+// invariant-completeness finding on the 4pvt fix: the `unset ETHOS_SESSION`
+// hint must fire only when the env var names the session THIS CALL just
+// ended, not merely "is set". `session end --session s2end` while
+// ETHOS_SESSION=s1live names a different, still-live session must not tell
+// the operator to unset it — outside Claude Code that export is s1live's
+// only remaining discovery channel, and following bad advice would sever
+// it. This is the same shape TestSessionEnd_KeepsForeignPointer already
+// pins for the current-pointer file; this test pins it for the ETHOS_SESSION
+// hint specifically.
+func TestSessionEnd_HintOnlyWhenEnvNamesEndedSession(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setInProcessEnv(t, se)
+	sessionEndSession = ""
+	t.Cleanup(func() { sessionEndSession = "" })
+
+	ss := sessionStore()
+	root := session.Participant{AgentID: "jim", Persona: "jim"}
+	require.NoError(t, ss.Create("s1live", root, session.Participant{AgentID: "a", Persona: "a", Parent: "jim"}, "", ""))
+	require.NoError(t, ss.Create("s2end", root, session.Participant{AgentID: "b", Persona: "b", Parent: "jim"}, "", ""))
+	t.Setenv("ETHOS_SESSION", "s1live")
+
+	_, stderr, err := execHandler(t, "session", "end", "--session", "s2end")
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "unset ETHOS_SESSION",
+		"ETHOS_SESSION names a different, still-live session; must not be told to unset it")
+
+	// Control: ending the session ETHOS_SESSION actually names DOES hint.
+	sessionEndSession = ""
+	t.Setenv("ETHOS_SESSION", "s1live")
+	_, stderr, err = execHandler(t, "session", "end", "--session", "s1live")
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "unset ETHOS_SESSION",
+		"ETHOS_SESSION names the session that was just ended; the hint must fire")
+}
+
 // TestSessionEnd_WarnsOnUnverifiablePointer pins finding 8: when the
 // current-pointer cannot be read (a non-not-found error), end leaves it in
 // place — never delete on an unverifiable read — but surfaces the reason
@@ -263,6 +299,9 @@ func TestCLI_SessionStart_IdempotentPersonaParentIsRoot(t *testing.T) {
 		t.Skip("ethos binary not built")
 	}
 	se := setupCLISubprocessEnv(t)
+	idsDir := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+	require.NoError(t, os.WriteFile(filepath.Join(idsDir, "bwk.yaml"),
+		[]byte("name: Brian K\nhandle: bwk\nkind: agent\n"), 0o644))
 	id := startedSessionID(t, se) // fresh, no persona; root == test-agent
 
 	// Two re-runs with the persona AND ETHOS_AGENT_ID exported — the second
@@ -392,6 +431,83 @@ func TestCLI_SessionStart_RejectsUnsafePersona(t *testing.T) {
 		assert.Contains(t, stderr, "valid handle", "the rejection must be actionable")
 		assert.NotContains(t, stdout, "export ETHOS_AGENT_ID", "an unsafe persona must never reach stdout")
 	}
+}
+
+// TestCLI_SessionStart_RejectsUnknownPersona pins ethos-gu3p: a --persona
+// naming no identity must be rejected BEFORE the roster is written, not
+// discovered later at whoami (where it previously degraded silently to the
+// git/OS identity — DES-060's fail-hard-on-dangling-refs precedent applies
+// here the same way it does to setup).
+func TestCLI_SessionStart_RejectsUnknownPersona(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	before, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+
+	stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", "definitely-not-a-real-persona")
+	require.NotEqual(t, 0, code, "unknown persona must be rejected; stdout=%q", stdout)
+	assert.Contains(t, stderr, "does not name a known identity")
+	assert.NotContains(t, stdout, "export ETHOS_SESSION", "a rejected persona must never mint a session")
+
+	after, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+	assert.Equal(t, len(before), len(after), "no roster file may be written when the persona is rejected")
+}
+
+// TestCLI_SessionStart_RejectsMalformedPersonaFile pins the invariant-
+// completeness/Bugbot finding on the gu3p fix: Exists() is only an
+// os.Stat, so a persona whose identity file is PRESENT but does not parse
+// passed the original check and still reached the roster write. Validate
+// by loading the record, not by stat.
+func TestCLI_SessionStart_RejectsMalformedPersonaFile(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	idsDir := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+	require.NoError(t, os.WriteFile(filepath.Join(idsDir, "broken.yaml"),
+		[]byte("this: [is, not: valid yaml"), 0o644))
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	before, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+
+	stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", "broken")
+	require.NotEqual(t, 0, code, "a malformed identity file must be rejected; stdout=%q", stdout)
+	assert.Contains(t, stderr, "does not name a known identity")
+	assert.NotContains(t, stdout, "export ETHOS_SESSION")
+
+	after, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+	assert.Equal(t, len(before), len(after), "no roster file may be written when the persona file is malformed")
+}
+
+// TestCLI_SessionStart_RejectsInvalidKindPersona pins the same finding for
+// a persona file that parses but fails identity.Validate() — here a kind
+// that is neither "human" nor "agent". Exists() cannot see this; loading
+// and validating the record can.
+func TestCLI_SessionStart_RejectsInvalidKindPersona(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	idsDir := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+	require.NoError(t, os.WriteFile(filepath.Join(idsDir, "badkind.yaml"),
+		[]byte("name: Bad Kind\nhandle: badkind\nkind: robot\n"), 0o644))
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	before, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+
+	stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", "badkind")
+	require.NotEqual(t, 0, code, "an invalid kind must be rejected; stdout=%q", stdout)
+	assert.Contains(t, stderr, "resolves to an invalid identity")
+	assert.NotContains(t, stdout, "export ETHOS_SESSION")
+
+	after, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+	assert.Equal(t, len(before), len(after), "no roster file may be written when the persona has an invalid kind")
 }
 
 // TestCLI_SessionStart_ReattachAcceptsOpaqueID pins the corrected hardening:

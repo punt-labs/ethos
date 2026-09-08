@@ -1,12 +1,9 @@
-//go:build !windows
-
 package mission
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // TraceSummary is one JSONL line appended to <repoRoot>/.punt-labs/ethos/missions.jsonl
@@ -92,7 +89,30 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 	}
 	data = append(data, '\n')
 
-	// Flock missions.jsonl itself to serialize concurrent trace writes.
+	// Lock a dedicated sibling lock file, not missions.jsonl itself
+	// (Bugbot finding on the Windows locking work): the append-only
+	// handle needed to write missions.jsonl (O_APPEND|O_WRONLY) is opened
+	// on Windows with FILE_APPEND_DATA access only — Go's syscall.Open
+	// clears GENERIC_WRITE when O_APPEND is set — never GENERIC_READ or
+	// GENERIC_WRITE, which is exactly what LockFileEx requires of its
+	// handle. Locking that handle directly fails there. missions.jsonl.lock,
+	// opened O_RDWR, sidesteps the requirement entirely and matches this
+	// package's own convention elsewhere (id.go, store.go, delegation.go
+	// all lock a sibling ".lock" file rather than the data file it
+	// protects) — also preserves the data file's O_APPEND atomicity, which
+	// switching it to O_RDWR to satisfy LockFileEx would have cost on
+	// every platform, not just Windows.
+	lockPath := filepath.Join(dir, "missions.jsonl.lock")
+	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	if err := flock(lf, lockExclusive); err != nil {
+		return err
+	}
+	defer func() { _ = funlock(lf) }()
+
 	f, err := os.OpenFile(
 		filepath.Join(dir, "missions.jsonl"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
@@ -102,10 +122,6 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
 	_, writeErr := f.Write(data)
 	return writeErr
