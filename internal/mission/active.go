@@ -501,6 +501,25 @@ func dispatchPendingRoot(globalRoot, sessionID string) string {
 // whole call, so the eventual `ConsumeDispatchPending` (or the decision
 // not to call it, on a fallback) happens under the same critical
 // section the match did.
+//
+// Despite the name, this same per-session lock now also guards two
+// callers that are not `dispatchAgent`'s own match decision at all
+// (leader review of PR #509, m-2026-09-08-004 tail round): a fresh
+// `ethos mission claim` write (cmd/ethos/mission.go's runMissionClaim,
+// via WithDispatchPendingLock) and a full session teardown
+// (internal/session/store.go's deleteFiles, which now holds this lock
+// across its whole clear-through-roster-removal span, not only the
+// dispatch-pending clear substep). Reusing this ONE lock rather than
+// minting a second per-session lock class was a deliberate choice: it
+// keeps the "always outermost, never nested inside a mission or
+// delegation lock" invariant scoped to a single acquisition point
+// instead of two that would each need the same reasoning re-applied,
+// and every one of these three consumer sets does a single,
+// self-contained filesystem mutation with no nested mission or
+// delegation lock acquisition of its own, so the invariant holds
+// trivially for all three. The name stays scoped to its original,
+// still-primary purpose; see WithDispatchPendingLock's own doc comment
+// for the full participant list and why each one needs it.
 func AcquireDispatchPendingLock(globalRoot, sessionID string) (func(), error) {
 	dir := dispatchPendingRoot(globalRoot, sessionID)
 	if dir == "" {
@@ -569,6 +588,28 @@ func AcquireDispatchPendingLock(globalRoot, sessionID string) (func(), error) {
 // delegation skeleton is written, or a write can land after a
 // concurrent cleanup scan has already decided the directory is empty,
 // leaving a released or purged session bound again.
+//
+// Two more callers reuse this SAME per-session lock even though neither
+// touches the pending-dispatch store directly (leader review of PR
+// #509, m-2026-09-08-004 tail round): `ethos mission claim`
+// (cmd/ethos/mission.go's runMissionClaim, wrapping
+// mission.WriteActiveMission) and `session.Store`'s own teardown
+// primitive (internal/session/store.go's deleteFiles, which acquires
+// this lock ONCE and holds it across clearing every sidecar AND
+// removing the roster). Neither is a "dispatch-pending mutation" by
+// name, but both need mutual exclusion against the exact same set of
+// participants this lock already serializes: a resumed session reusing
+// sessionID that writes a fresh claim (or a fresh pending dispatch)
+// while `Store.Delete`/`Purge`/`PurgeTombstoned` are mid-teardown for
+// that same session ID would otherwise have its new binding written,
+// then silently orphaned the instant the roster disappears — deleteFiles
+// is the ONE primitive every deletion path funnels through, and
+// List()/Purge() discover sessions to revisit only by their roster
+// file, so a sidecar with no roster has no GC path at all. Reusing this
+// lock rather than minting a fourth lock class keeps the whole
+// mission-sidecar surface (claim, dispatch-pending, delegation-binding,
+// and the roster-driven teardown that clears all three) serialized
+// through one acquisition point.
 //
 // Lock-order note: this is the same lock AcquireDispatchPendingLock's
 // own doc comment requires to stay OUTERMOST relative to any mission or

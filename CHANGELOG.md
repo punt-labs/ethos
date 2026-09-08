@@ -265,6 +265,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   acquisition) do not self-deadlock against a real `flock`, which locks
   an open file description, not a process, and has no re-entrant
   exemption for a second acquisition from the same process.
+- **A resumed session's `ethos mission claim` or `mission dispatch` no
+  longer races `session.Store.Delete` (and `Purge`/`PurgeTombstoned`,
+  which funnel through it) and gets orphaned outside purge discovery.**
+  Session teardown cleared a session's mission sidecars, then removed
+  its roster, both under the roster's own flock — a lock no sidecar
+  WRITER ever took. A resumed session reusing the same session ID could
+  write a fresh claim or pending dispatch in the narrow gap between the
+  sidecar clear and the roster's actual removal; once the roster was
+  gone, `List()`/`Purge()` could never find that session again, so the
+  fresh binding had no GC path at all. `session.Store.deleteFiles` now
+  holds the same per-session lock `dispatchAgent` uses across its whole
+  clear-through-roster-removal span, not only around the dispatch-
+  pending clear substep, and `ethos mission claim` now takes that same
+  lock before writing — closing the gap on both the teardown side and
+  the write side.
 - **`GOOS=windows GOARCH=amd64 go build ./...` now succeeds.** Windows is
   still not a supported/shipped target (no release binary, no CI job), but
   the whole module now cross-compiles: `internal/process` gained a

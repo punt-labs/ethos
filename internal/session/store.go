@@ -250,33 +250,90 @@ func (s *Store) Delete(sessionID string) error {
 // entirely once HandleSessionEnd could rely solely on Store.Delete for
 // the same effect, so a fourth sidecar type added here can no longer
 // drift silently out of sync with a second copy elsewhere.
+//
+// Leader review of PR #509 (m-2026-09-08-004, tail round): clearing the
+// sidecars and removing the roster happen under Store.withLock's own
+// roster flock, but that flock is never taken by a sidecar WRITER — a
+// resumed session reusing sessionID that writes a fresh claim or
+// dispatch-pending entry has no reason to wait for this function at
+// all. Before this fix, the dispatch-pending clear (below, inside
+// clearMissionSidecars) took mission's own dispatch-pending lock only
+// for the duration of the clear substep, then released it before the
+// roster removal ran — a resumed session's `mission dispatch` write
+// (which also takes that lock, per WithDispatchPendingLock's own doc
+// comment) could land in the gap between the clear releasing and the
+// roster actually being removed, orphaning the fresh entry outside
+// roster-based purge discovery entirely (deleteFiles is the ONLY
+// primitive Delete/Purge/PurgeTombstoned funnel through, and
+// List()/Purge() only ever look at ROSTER files). Fixed by acquiring
+// the dispatch-pending lock ONCE here, for the FULL clear-through-
+// roster-removal span, rather than around the clear substep alone —
+// see clearMissionSidecarsLocked's own doc comment for why that
+// function's dispatch-pending clear must NOT re-acquire the lock this
+// caller already holds. The other write-side half of this same fix is
+// cmd/ethos/mission.go's runMissionClaim, which now takes this SAME
+// lock before writing a fresh claim — without that, a claim write
+// would still not be excluded from this window, only a dispatch write
+// would.
 func (s *Store) deleteFiles(sessionID string) error {
-	if err := s.clearMissionSidecars(sessionID); err != nil {
+	release, err := mission.AcquireDispatchPendingLock(s.root, sessionID)
+	if err != nil {
+		return fmt.Errorf("acquiring dispatch-pending lock for %q: %w", sessionID, err)
+	}
+	defer release()
+
+	if err := s.clearMissionSidecarsLocked(sessionID); err != nil {
 		return fmt.Errorf("clearing mission sidecars for %q: %w", sessionID, err)
 	}
+	// Test-only synchronization point: fires while the dispatch-pending
+	// lock acquired above is STILL held, immediately before the roster
+	// is removed. Overridden by tests that need to prove a sibling
+	// acquire of the same lock blocks here rather than succeeding in the
+	// gap this function used to leave open — mirrors
+	// internal/hook/pretooluse_dispatch.go's dispatchTierBConfirmedOpen
+	// pattern for the same reason: a real synchronization point beats a
+	// blind time.Sleep guess at the race window.
+	deleteFilesLockStillHeld()
 	if err := os.Remove(s.rosterPath(sessionID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting session %q: %w", sessionID, err)
 	}
 	return nil
 }
 
-// clearMissionSidecars clears sessionID's mission sidecars under s.root
-// (the same globalRoot mission.SessionBoundMissions already reads
-// above) — see deleteFiles's doc comment for why this lives here and
-// why its failure now propagates instead of only logging.
+// deleteFilesLockStillHeld is deleteFiles's test-only synchronization
+// hook (see deleteFiles's own doc comment). Its zero value is a no-op
+// with negligible production cost.
+var deleteFilesLockStillHeld = func() {}
+
+// clearMissionSidecarsLocked clears sessionID's mission sidecars under
+// s.root (the same globalRoot mission.SessionBoundMissions already
+// reads above) — see deleteFiles's doc comment for why this lives here
+// and why its failure now propagates instead of only logging.
 //
-// The dispatch-pending clear runs under mission.WithDispatchPendingLock
-// rather than calling mission.ClearDispatchPending unlocked: this
-// function runs from inside Store.withLock's own session roster flock
-// (via Delete/Purge/PurgeTombstoned), a THIRD lock class distinct from
-// both the dispatch-pending lock and any mission/delegation lock. No
-// code path acquires the dispatch-pending lock and then tries to
-// acquire this session's roster lock — internal/hook/pretooluse_dispatch.go's
-// dispatchAgent, the dispatch-pending lock's only other holder, never
-// touches session.Store — so nesting the dispatch-pending lock inside
-// the roster lock here introduces no reversal of any existing pairing,
+// REQUIRES the caller to already hold mission.AcquireDispatchPendingLock
+// for sessionID — deleteFiles, this function's only caller, acquires it
+// once for its whole body (see that function's doc comment for why).
+// The dispatch-pending clear below therefore calls the RAW, unlocked
+// mission.ClearDispatchPending directly rather than going through
+// mission.WithDispatchPendingLock: a real flock locks an open file
+// description, not a process, so a second acquire from the SAME
+// already-holding process would block on itself — the identical
+// self-deadlock hazard WithDispatchPendingLock's own doc comment warns
+// every OTHER caller about, reachable here specifically because this
+// one caller already holds the lock deleteFiles acquired.
+//
+// This function runs from inside Store.withLock's own session roster
+// flock (via Delete/Purge/PurgeTombstoned) as well as the
+// dispatch-pending lock deleteFiles now holds around it — a THIRD lock
+// class distinct from both the dispatch-pending lock and any
+// mission/delegation lock. No code path acquires the dispatch-pending
+// lock and then tries to acquire this session's roster lock —
+// internal/hook/pretooluse_dispatch.go's dispatchAgent, the
+// dispatch-pending lock's other steady-state holder, never touches
+// session.Store — so nesting the dispatch-pending lock inside the
+// roster lock here introduces no reversal of any existing pairing,
 // only a new one used in this single direction.
-func (s *Store) clearMissionSidecars(sessionID string) error {
+func (s *Store) clearMissionSidecarsLocked(sessionID string) error {
 	var errs []error
 	if err := mission.ClearActiveMission(s.root, sessionID); err != nil {
 		errs = append(errs, fmt.Errorf("clearing active mission: %w", err))
@@ -284,9 +341,7 @@ func (s *Store) clearMissionSidecars(sessionID string) error {
 	if err := mission.ClearDelegationBinding(s.root, sessionID); err != nil {
 		errs = append(errs, fmt.Errorf("clearing delegation binding: %w", err))
 	}
-	if err := mission.WithDispatchPendingLock(s.root, sessionID, func() error {
-		return mission.ClearDispatchPending(s.root, sessionID)
-	}); err != nil {
+	if err := mission.ClearDispatchPending(s.root, sessionID); err != nil {
 		errs = append(errs, fmt.Errorf("clearing dispatch-pending: %w", err))
 	}
 	return errors.Join(errs...)

@@ -10621,3 +10621,83 @@ instead of waiting. `TestWithDispatchPendingLock_BlocksUntilRelease`
 pins the fix: a mutation run through the new wrapper blocks for as long
 as a sibling holds the lock, observes no effect until release, and
 completes with the mutation applied once the sibling releases.
+
+### Amendment 2026-09-08: `session.Store` teardown races a resumed session's own claim or dispatch write
+
+The same leader review pass named a second, related HIGH-priority gap:
+`session.Store.Delete` (and `Purge`/`PurgeTombstoned`, which funnel
+through it via `deleteFiles`) cleared a session's mission sidecars and
+then removed its roster file, both under `Store.withLock`'s own
+per-session roster flock — a lock no sidecar WRITER ever took. A
+resumed session reusing the same session ID (`claude --resume`, the
+scenario the K3/J3 amendments above already established as routine, not
+exotic) could write a fresh claim (`ethos mission claim`) or a fresh
+pending dispatch (`ethos mission dispatch`) at any point during
+`deleteFiles`'s run, including — after this document's own PREVIOUS
+amendment tightened the dispatch-pending clear to run under
+`AcquireDispatchPendingLock` — in the narrow gap between that clear
+releasing the lock and the roster's actual removal a few lines later.
+Once the roster is gone, `List()` (and therefore `Purge`/
+`PurgeTombstoned`) can never find that session again, so a binding
+written into that gap has no GC path at all — the exact "no GC" failure
+mode K3/J3 already fixed for a FAILED clear, reopened here for a
+SUCCESSFUL one that merely lost a race.
+
+**Decision — extend the dispatch-pending lock to span the whole
+teardown, and make the claim write take it too.** Rather than mint a
+new lock class, `deleteFiles` now calls
+`mission.AcquireDispatchPendingLock` ONCE at the top of its own body and
+holds it — via a plain `defer release()`, not the previous
+amendment's `WithDispatchPendingLock` wrapper — across clearing every
+sidecar AND removing the roster. The renamed `clearMissionSidecarsLocked`
+(previously `clearMissionSidecars`) documents that it REQUIRES the
+caller to already hold this lock, and calls the raw, unlocked
+`mission.ClearDispatchPending` directly rather than
+`WithDispatchPendingLock`: since `deleteFiles` already holds the lock
+by the time it calls this function, a second acquire from the SAME
+process would be the exact self-deadlock hazard the previous amendment
+introduced `WithDispatchPendingLock` specifically to avoid for
+`dispatchAgent`'s own internal calls — reachable here for the identical
+reason, once `deleteFiles` became a second caller that pre-holds the
+lock before calling a function that clears the dispatch-pending store.
+
+On the write side, `cmd/ethos/mission.go`'s `runMissionClaim` now wraps
+its `mission.WriteActiveMission` call in the SAME
+`mission.WithDispatchPendingLock`. Without this half, extending
+`deleteFiles`'s hold would have closed the window for a DISPATCH write
+(which already took this lock, per the previous amendment) but left it
+wide open for a CLAIM write, which had never taken any lock at all —
+and a claim, not a pending dispatch, is the scenario this finding's own
+wording named first ("writes a claim or pending dispatch").
+
+**Why reuse this lock rather than mint a fourth class.** `session.Store`
+had no lock class in common with `internal/mission`'s dispatch-pending
+lock before this amendment except the accidental, one-directional
+nesting the previous amendment already introduced and justified (roster
+lock outer, dispatch-pending lock inner, in `clearMissionSidecarsLocked`'s
+callers only). Reusing `AcquireDispatchPendingLock` for the claim write
+and the full teardown span keeps that same, already-justified nesting
+direction — `deleteFiles` still runs inside `Store.withLock`'s roster
+flock, still acquiring the dispatch-pending lock as the inner one, only
+now for its whole body instead of one substep — rather than requiring a
+SECOND new pairing to be independently reasoned about. `AcquireDispatchPendingLock`'s
+own doc comment is updated to name both of these additional consumers
+plainly, alongside its still-primary purpose guarding `dispatchAgent`'s
+match decision, per this document's standing rule against a comment
+describing a narrower scope than the code actually has.
+
+**Tests.** `TestStore_Delete_HoldsDispatchPendingLockThroughRosterRemoval`
+overrides a new test-only hook, `deleteFilesLockStillHeld` (mirroring
+`internal/hook/pretooluse_dispatch.go`'s `dispatchTierBConfirmedOpen`
+pattern), that fires from inside `deleteFiles` after the sidecar clear
+but before the roster removal, while the lock is still held; the
+override spawns a sibling `AcquireDispatchPendingLock` attempt and
+asserts it has NOT succeeded at that point, only afterward. Confirmed
+failing against a simulated pre-fix `deleteFiles` (lock scoped to the
+clear substep only, released before the hook fires): the sibling
+acquired immediately, before the roster was removed.
+`TestMissionClaim_WaitsForDispatchPendingLock` pins the write-side half:
+`runMissionClaim` blocks while a sibling holds the lock, writes nothing
+until release, and completes once it is free. Confirmed failing against
+the pre-fix unlocked `mission.WriteActiveMission` call: the claim wrote
+immediately regardless of the sibling holding the lock.

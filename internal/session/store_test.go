@@ -341,6 +341,75 @@ func TestStore_Delete_SidecarClearFailureKeepsRoster(t *testing.T) {
 	require.NoError(t, loadErr, "the roster must survive a sidecar-clear failure -- it is the retry token a later purge needs")
 }
 
+// TestStore_Delete_HoldsDispatchPendingLockThroughRosterRemoval pins the
+// leader's PR #509 tail-round finding: before this fix, deleteFiles
+// acquired mission's per-session dispatch-pending lock only around the
+// dispatch-pending CLEAR substep (via clearMissionSidecars's own call to
+// mission.WithDispatchPendingLock), releasing it before removing the
+// roster file -- leaving a gap in which a resumed session's own claim or
+// dispatch-pending WRITE (which also takes that lock) could land,
+// orphaning the fresh sidecar the instant the roster disappeared
+// (List()/Purge() only ever discover sessions via their roster file).
+//
+// deleteFilesLockStillHeld fires from inside deleteFiles' own critical
+// section, after clearing every sidecar but BEFORE removing the roster,
+// while the lock deleteFiles acquired at the top is still held. This
+// test overrides the hook to attempt a sibling AcquireDispatchPendingLock
+// for the SAME session from a separate goroutine and asserts it blocks
+// (proving the lock spans the whole clear-through-roster-removal
+// window, not only the clear substep) and only succeeds once Delete has
+// returned.
+func TestStore_Delete_HoldsDispatchPendingLockThroughRosterRemoval(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	sessionID := "sess-lock-spans-removal"
+	require.NoError(t, s.Create(sessionID, root, primary, "", ""))
+
+	proceed := make(chan struct{})
+	siblingAcquired := make(chan struct{})
+	t.Cleanup(func() { deleteFilesLockStillHeld = func() {} })
+	deleteFilesLockStillHeld = func() {
+		go func() {
+			release, err := mission.AcquireDispatchPendingLock(s.root, sessionID)
+			if err != nil {
+				close(siblingAcquired) // surfaced via the select below as a spurious close
+				return
+			}
+			defer release()
+			close(siblingAcquired)
+		}()
+		// Give the sibling goroutine time to enter Flock and block --
+		// mirrors TestAcquireDelegationLock_BlocksUntilRelease's own
+		// discipline elsewhere in this codebase.
+		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-siblingAcquired:
+			t.Error("sibling acquired the dispatch-pending lock while deleteFiles still holds it, " +
+				"before the roster was removed")
+		default:
+			// Expected: still blocked.
+		}
+		close(proceed)
+	}
+
+	require.NoError(t, s.Delete(sessionID))
+
+	select {
+	case <-proceed:
+	default:
+		t.Fatal("deleteFilesLockStillHeld hook never fired -- test did not exercise the intended path")
+	}
+	select {
+	case <-siblingAcquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sibling never acquired the lock after Delete returned")
+	}
+
+	_, err := s.Load(sessionID)
+	require.Error(t, err, "the roster must be gone once Delete returns")
+}
+
 // TestStore_Purge_ClearsMissionSidecars pins review finding K3's actual
 // scenario: a session that ended abnormally (SIGKILL, closed terminal,
 // crash -- simulated here by a dead PID, exactly what isStale detects)

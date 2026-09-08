@@ -4483,6 +4483,62 @@ func TestMissionClaim_WritesSidecar(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
+// TestMissionClaim_WaitsForDispatchPendingLock pins the leader's PR #509
+// tail-round finding: `ethos mission claim` used to write the
+// active-mission sidecar with no locking at all, so it could land in
+// the narrow window internal/session/store.go's Store.Delete leaves
+// open between clearing a session's sidecars and removing its roster --
+// a resumed session's claim would then be orphaned outside
+// roster-based purge discovery entirely, since List()/Purge() only
+// discover sessions via their roster file. runMissionClaim now runs its
+// write through mission.WithDispatchPendingLock, the SAME per-session
+// lock Store.Delete holds across its whole clear-through-roster-removal
+// span (internal/mission/active.go's AcquireDispatchPendingLock doc
+// comment names both consumers). This test proves the mutual exclusion
+// directly: while a sibling holds that lock, runMissionClaim must
+// block, and the sidecar must not exist until the sibling releases.
+func TestMissionClaim_WaitsForDispatchPendingLock(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	sessionID := "sess-claim-lock"
+
+	t.Setenv("ETHOS_SESSION", sessionID)
+	seedRosterForSession(t, sessionID)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runMissionClaim(id)
+	}()
+
+	// Give the goroutine time to enter Flock and block.
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("runMissionClaim completed while a sibling held the dispatch-pending lock (err=%v)", err)
+	default:
+		// Expected: still blocked.
+	}
+	sidecar := filepath.Join(globalRoot, "sessions", sessionID, "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr), "the claim must not be written while the lock is held elsewhere")
+
+	release()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("runMissionClaim did not complete within 2s after the sibling released")
+	}
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err, "the claim must be written once the lock becomes available")
+	assert.Equal(t, id+"\n", string(data))
+}
+
 func TestMissionClaim_RefusesUnknownMission(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-claim-2")

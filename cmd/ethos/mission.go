@@ -2056,7 +2056,16 @@ func runMissionClaim(idOrPrefix string) error {
 		return fmt.Errorf("mission claim: user home dir: %w", err)
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	if err := mission.WriteActiveMission(globalRoot, sessionID, id); err != nil {
+	// Locked (mission.WithDispatchPendingLock): `session.Store.Delete`
+	// (and Purge/PurgeTombstoned, which funnel through it) hold this
+	// same per-session lock across their whole clear-then-remove-roster
+	// span so a resumed session's claim write cannot land in the gap and
+	// get orphaned outside roster-based purge discovery — see
+	// internal/session/store.go's deleteFiles doc comment for the full
+	// account of the race this closes on the write side.
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		return mission.WriteActiveMission(globalRoot, sessionID, id)
+	}); err != nil {
 		return fmt.Errorf("mission claim: %w", err)
 	}
 
