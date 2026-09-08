@@ -593,6 +593,17 @@ func (s *Store) ensureMissionDir(missionID string) error {
 // Works on a shallow copy of c so a validation failure never mutates
 // the caller's struct. On success, UpdatedAt is reflected back to
 // the caller.
+//
+// createReadBackHook is a test-only synchronization seam, invoked with
+// the contract's on-disk path right after writeContract succeeds and
+// right before Create reads it back to verify it. Its zero value is a
+// no-op with negligible production cost; the ethos-ouy9 regression test
+// overrides it to corrupt the file at that exact point, proving the
+// read-back actually refuses rather than trusting the write. Mirrors
+// dispatchTierBConfirmedOpen's pattern (internal/hook) for the same
+// class of ordering-sensitive test.
+var createReadBackHook = func(contractPath string) {}
+
 func (s *Store) Create(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
@@ -703,6 +714,28 @@ func (s *Store) Create(c *Contract) error {
 			}
 			if err := s.writeContract(&staged); err != nil {
 				return err
+			}
+			// Test-only seam (ethos-ouy9): invoked between the write above
+			// and the read-back below, matching the existing
+			// dispatchTierBConfirmedOpen pattern (internal/hook) for
+			// exercising an ordering-sensitive path deterministically. The
+			// zero value is a no-op; the regression test overrides it to
+			// corrupt the just-written file, proving the read-back below
+			// actually refuses rather than trusting the write.
+			createReadBackHook(dest)
+			// Read-back verification (ethos-ouy9): confirm the contract
+			// just written actually loads before the "create" event is
+			// recorded and before Create returns success.
+			// writeContractFile's Sync closes the crash-durability gap; this
+			// closes the complementary gap where the write itself silently
+			// produced something unreadable (a corrupt encode, or a
+			// filesystem that accepted the write but not the bytes) —
+			// "reports success" is only a lie if nothing checked.
+			if _, err := s.Load(staged.MissionID); err != nil {
+				if rbErr := os.Remove(dest); rbErr != nil && !os.IsNotExist(rbErr) {
+					return fmt.Errorf("create: read-back verification failed: %w; rollback failed: %v", err, rbErr)
+				}
+				return fmt.Errorf("create: read-back verification failed, contract removed: %w", err)
 			}
 			if err := s.appendEventLocked(staged.MissionID, Event{
 				TS:    time.Now().UTC().Format(time.RFC3339),
@@ -1810,6 +1843,19 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 // directory under <repoRoot>/.punt-labs/ethos/missions/<id>/ before the temp
 // file is opened; the legacy single-root layout has no per-mission
 // directory and skips the mkdir.
+//
+// Matches session.Store.writeRoster's durability discipline (ethos-ouy9):
+// Sync before Close, the temp file removed on every error path, and a
+// failed fsync propagated rather than ignored. Before this fix,
+// writeContract renamed straight after WriteFile with no Sync — a crash,
+// power loss, or container kill between the rename and the kernel
+// flushing the data could land the directory entry while the contents
+// did not, leaving Create returning nil and printing "created: m-..."
+// for a contract a later Load could not read. A fixed (non-random)
+// temp-file name is safe here, unlike writeAtomicFile's per-delegation
+// siblings: writeContract always runs under s.withLock, which already
+// serializes every writer for this missionID, so there is no concurrent
+// second writer to trample the shared name.
 func (s *Store) writeContract(c *Contract) error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
@@ -1822,6 +1868,16 @@ func (s *Store) writeContract(c *Contract) error {
 	if err != nil {
 		return err
 	}
+	return writeContractFile(dest, data)
+}
+
+// writeContractFile writes data to dest atomically via a fixed-name
+// temp file plus rename, with the same fsync-before-rename and
+// remove-temp-on-every-error-path discipline as
+// session.Store.writeRoster. Shared by writeContract and
+// restoreContract so the two on-disk writers of a mission contract
+// cannot drift apart on durability.
+func writeContractFile(dest string, data []byte) error {
 	tmp := dest + ".tmp"
 	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
 	// at the temp path. os.WriteFile would follow a symlink at tmp,
@@ -1835,34 +1891,44 @@ func (s *Store) writeContract(c *Contract) error {
 	if err := rejectSymlink(tmp); err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp contract: %w", err)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening temp contract %s: %w", tmp, err)
 	}
-	return os.Rename(tmp, dest)
+	if n, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("writing temp contract %s: %w", tmp, err)
+	} else if n < len(data) {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("short write to temp contract %s: %d of %d bytes", tmp, n, len(data))
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("syncing temp contract %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("closing temp contract %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("renaming temp contract %s -> %s: %w", tmp, dest, err)
+	}
+	return nil
 }
 
 // restoreContract writes oldData back to dest atomically via temp+rename.
 // Used by Update and Close to roll back a contract write when the
 // follow-on event-log append fails, keeping the caller's view of
 // on-disk state consistent with the operation's success/failure.
+// Shares writeContractFile's durability discipline with writeContract
+// (ethos-ouy9) — a rollback that itself lands half-written is exactly
+// as unacceptable as the forward write it is undoing.
 func (s *Store) restoreContract(dest string, oldData []byte) error {
-	tmp := dest + ".tmp"
-	// Uniform symlink policy (paths.go): the rollback path runs after
-	// a failed event-log append, when an attacker may have raced to
-	// plant a symlink at the temp path. Refuse before WriteFile.
-	if err := rejectSymlink(dest); err != nil {
-		return fmt.Errorf("writing rollback temp: %w", err)
-	}
-	if err := rejectSymlink(tmp); err != nil {
-		return fmt.Errorf("writing rollback temp: %w", err)
-	}
-	if err := os.WriteFile(tmp, oldData, 0o600); err != nil {
-		return fmt.Errorf("writing rollback temp: %w", err)
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		return fmt.Errorf("renaming rollback temp: %w", err)
-	}
-	return nil
+	return writeContractFile(dest, oldData)
 }
 
 // withLock executes fn while holding an exclusive lock (flock on Unix,

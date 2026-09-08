@@ -152,6 +152,58 @@ current_round: 1
 	assert.NotContains(t, out, "deprecation", "conflict scan of a legacy bead mission must stay silent")
 }
 
+// TestStore_Create_ReadBackVerificationCatchesUnreadableWrite is the
+// regression gate for ethos-ouy9: Create must not report success for a
+// contract that cannot be read back. createReadBackHook fires at the
+// exact point between writeContract's return and Create's read-back
+// Load — the test uses it to corrupt the just-written file on disk,
+// reproducing the shape a torn write or a lying filesystem produces (a
+// directory entry with unreadable contents), which no fsync alone can
+// catch. Without the read-back check, Create returns nil here and the
+// mission has no contract a later Load, Show, or worker result submit
+// can find — exactly the 2026-08-15 vox incident.
+func TestStore_Create_ReadBackVerificationCatchesUnreadableWrite(t *testing.T) {
+	s := testStore(t)
+	c := withWriteSet("m-2026-04-08-950", "internal/foo/")
+
+	orig := createReadBackHook
+	t.Cleanup(func() { createReadBackHook = orig })
+	createReadBackHook = func(contractPath string) {
+		require.NoError(t, os.WriteFile(contractPath, []byte("not valid yaml: [["), 0o600))
+	}
+
+	err := s.Create(c)
+	require.Error(t, err, "Create must refuse when the just-written contract cannot be read back")
+	assert.Contains(t, err.Error(), "read-back verification failed")
+
+	_, statErr := os.Stat(mustContractPath(t, s, c.MissionID))
+	assert.True(t, os.IsNotExist(statErr),
+		"a failed read-back must roll back the contract file, not leave a corrupt one on disk")
+}
+
+// TestWriteContractFile_OpenFailureLeavesNoPartialArtifact covers
+// writeContractFile's earliest error path directly: when the temp
+// file cannot even be opened (a read-only containing directory), no
+// destination file is created and the error names the failure. General
+// robustness coverage for the ethos-ouy9 rewrite, not itself a
+// regression gate — the pre-fix os.WriteFile call failed identically
+// on a read-only directory.
+func TestWriteContractFile_OpenFailureLeavesNoPartialArtifact(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // let t.TempDir's cleanup remove it
+
+	dest := filepath.Join(dir, "m-2026-04-08-951.yaml")
+	err := writeContractFile(dest, []byte("mission_id: m-2026-04-08-951\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "opening temp contract")
+
+	_, statErr := os.Stat(dest)
+	assert.True(t, os.IsNotExist(statErr), "a failed write must leave no destination file")
+	_, statErr = os.Stat(dest + ".tmp")
+	assert.True(t, os.IsNotExist(statErr), "a failed write must leave no temp file")
+}
+
 func TestStore_RoundTrip(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-001")

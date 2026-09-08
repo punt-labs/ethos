@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on-disk contracts carry a repo field) and including it produced false
   conflicts against unrelated repos' open missions (ethos-6adb). See
   DES-075 in DESIGN.md for the full storage-layer decision.
+- **`ethos mission create`/`dispatch` no longer reports success for a
+  contract that was not durably persisted.** The contract writer now
+  syncs before rename and removes its temp file on every error path
+  (matching `session.Store.writeRoster`'s existing discipline), and
+  `Create` reads the just-written contract back before returning —
+  closing the gap where a torn write or crash between rename and disk
+  flush could leave `mission create` printing `created: m-...` for an ID
+  no later `mission show`/`result submit` could find (ethos-ouy9).
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`
