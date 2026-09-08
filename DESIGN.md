@@ -9773,20 +9773,29 @@ storage all three findings were symptoms of:
   `TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_TwoPendingSameWorkerCoexist`
   reproduces the leader's own repro sequence directly and asserts both
   missions resolve correctly across two sequential matching spawns.
-- **C2 no longer applies to dispatch bindings at all.** Nothing but
-  `ethos mission claim` writes to the active-mission/origin pair
-  anymore (`cmd/ethos/mission.go`'s and `internal/mcp/mission_tools.go`'s
-  `bindDispatchedMission` both write `WriteDispatchPending` instead), so
-  the "defaults to claim on ambiguity" behavior — which was the actual
-  bug once a shared file also carried dispatch state — is now always
-  the correct answer, because nothing else is ever found there. The
-  fix is the removal of the shared encoding, not a change to the
-  default direction, which is why this ADR does not claim to have
-  "inverted the reader's failure direction" as the finding first
-  suggested: there is no longer a decision to invert. `ConsumeDispatchPending`
-  is a single-file removal with no paired-file consistency question a
-  partial failure could leave mismatched — C2's whole class does not
-  exist for the new store.
+- **C2 no longer applies to dispatch bindings at all — for the WRITE
+  path.** Nothing but `ethos mission claim` writes to the
+  active-mission/origin pair anymore (`cmd/ethos/mission.go`'s and
+  `internal/mcp/mission_tools.go`'s `bindDispatchedMission` both write
+  `WriteDispatchPending` instead), so the "defaults to claim on
+  ambiguity" behavior — which was the actual bug once a shared file
+  also carried dispatch state — is now always the correct answer for
+  anything CURRENTLY written there, because nothing else is ever
+  written there on purpose. `ConsumeDispatchPending` is a single-file
+  removal with no paired-file consistency question a partial failure
+  could leave mismatched — C2's whole class does not exist for the new
+  store. **Correction (2026-09-08 amendment, below): this bullet
+  originally claimed the READ side needed no failure-direction inversion
+  either — false, and corrected by that amendment's `BindOriginUnknown`
+  change.** A mixed-binary window or a hand-inspected legacy sidecar can
+  still leave a well-formed, non-claim origin file on disk even though
+  nothing writes one on purpose anymore, and `ReadActiveMissionBinding`
+  used to default THAT case to `BindOriginClaim` — the exact permissive
+  failure direction the original finding named. `BindOriginUnknown` DOES
+  invert it: positive, non-claim evidence in the origin file is now
+  refused, not defaulted past. See that amendment for the full
+  before/after and the regression test pinning the well-formed legacy
+  shape specifically (review finding K7, m-2026-09-08-004 round 3).
 - **C3 is closed by removing the function that discarded the error.**
   `dispatchedWorker` is deleted. Matching a spawn against a pending
   dispatch needs no contract `Load` at all — the Worker was already
@@ -9802,9 +9811,18 @@ storage all three findings were symptoms of:
   is certain without a Load, a subsequently unloadable contract is a
   real, actionable problem for THIS spawn specifically, not ambient
   noise sitting behind every spawn in the session. Round 1's own test
-  asserting the opposite (`..._UnresolvableContractDoesNotBlock`) is
-  replaced by `..._MatchedButUnresolvableContractBlocks`, asserting the
-  new behavior and confirmed against the doctrine change directly.
+  asserting the opposite (`..._UnresolvableContractDoesNotBlock`) was
+  replaced by `..._MatchedButUnresolvableContractBlocks`, asserting this
+  doctrine directly. **Correction (2026-09-08 amendment, below): that
+  test itself is now stale and was replaced again.** K1 (full-branch
+  review, m-2026-09-08-004 round 3) found that "block" was the wrong
+  consequence when the unresolvable entry is the ONLY candidate — FIFO
+  always re-selects the same oldest entry, so a permanently unloadable
+  head entry denied every subsequent same-worker spawn forever. The
+  doctrine that a Load failure must not be silently discarded still
+  holds; what changed is the consequence: skip (fall through to Tier
+  A/B) rather than block, while still never clearing the entry on
+  unproven evidence. See that amendment for the current test names.
 
 **C7 — depth-refused (aborted) skeletons blocked `Abandon` exactly like
 captures, and disclaim couldn't tell them apart.** A matching spawn

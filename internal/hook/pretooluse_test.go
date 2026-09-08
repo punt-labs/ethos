@@ -2331,6 +2331,54 @@ func TestDispatchAgent_ActiveMissionSidecarMalformedRefuses(t *testing.T) {
 	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "ethos mission release")
 }
 
+// TestDispatchAgent_ActiveMissionSidecarLegacyDispatchOriginNotCaptured
+// pins review finding K7(b) (full-branch review, m-2026-09-08-004 round
+// 3): C2's fix (round 3, hardened further by the BindOriginUnknown
+// change) was verified against a MALFORMED origin file — truncated or
+// naming a different mission — but never against the WELL-FORMED shape
+// that actually exists in the field: a matching active-mission +
+// active-mission-origin pair naming BindOriginDispatch, exactly what
+// the CURRENTLY RELEASED (pre-round-3) `bindDispatchedMission` writes
+// on every dispatch, for every ethos install upgrading into this round.
+// On upgrade, any session with such a pair still on disk from before
+// the upgrade must not have its next same-type spawn captured by it —
+// readActiveMissionForDispatch's claim branch must refuse a
+// BindOriginDispatch-tagged binding exactly like it refuses
+// BindOriginUnknown, since only BindOriginClaim is ever accepted.
+func TestDispatchAgent_ActiveMissionSidecarLegacyDispatchOriginNotCaptured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-legacy-dispatch-origin"
+	missionID := "m-2026-09-08-730"
+	stageContract(t, home, missionID) // Worker: "bwk", status: open
+
+	// The exact well-formed shape the pre-round-3 bindDispatchedMission
+	// wrote: active-mission and active-mission-origin agree on the same
+	// mission, origin tagged "dispatch". WriteActiveMissionOrigin writes
+	// both files consistently, unlike the malformed-origin tests above
+	// which construct a deliberately broken pair.
+	require.NoError(t, mission.WriteActiveMissionOrigin(globalRoot, sessionID, missionID, mission.BindOriginDispatch))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.NotEqual(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a well-formed legacy dispatch-origin pair must never capture a spawn -- only a claim can")
+}
+
 // TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured
 // pins DES-076's regression case, reproduced live 2026-09-07 (ethos-7tqd):
 // `ethos mission dispatch --worker bwk` binds the session's
