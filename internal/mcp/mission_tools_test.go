@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,29 +17,17 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // captureStderr runs fn with os.Stderr redirected to a pipe and returns
-// the captured output. Restores os.Stderr in all cases.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	old := os.Stderr
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-	done := make(chan []byte, 1)
-	go func() {
-		b, _ := io.ReadAll(r)
-		done <- b
-	}()
-	fn()
-	_ = w.Close()
-	return string(<-done)
-}
+// the captured output. Delegates to internal/testhelpers: see that
+// package's doc comment for why the pipe/cleanup contract is a
+// canonical, shared implementation rather than a copy of its own.
+var captureStderr = testhelpers.CaptureStderr
 
 // validContractYAML is a minimal valid contract body the MCP create
 // handler accepts. It omits server-controlled fields (mission_id,
@@ -162,11 +149,42 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 // testHandlerWithSessions is testHandlerWithMissions plus a session
 // store. The sidecar cleanup on close is a no-op without one, so the
 // tests that exercise it need the wiring `ethos serve` does.
+//
+// Rooted at the CURRENT $HOME (os.UserHomeDir()), not an unrelated
+// t.TempDir() -- matching cmd/ethos/serve.go's real wiring
+// (mcp.WithSessionStore(sessionStore()), where sessionStore() also
+// roots at $HOME/.punt-labs/ethos) and every test's own globalRoot
+// computation (filepath.Join(home, ".punt-labs", "ethos") after
+// t.Setenv("HOME", home)). Before this fix the session store and
+// globalRoot pointed at two UNRELATED directories -- invisible only
+// because nothing on the create path ever consulted the session
+// store's own roster, the exact "papering over the mismatch" shape
+// review finding J5 (DES-076) already named once for the sibling
+// hook-package test fixture. hook.RefuseIfSessionGone (PR #509 tail)
+// now reads h.sessionStore.Load(sessionID) before every mission
+// sidecar write, which requires this store to see the SAME roster the
+// test itself wrote via seedSessionRoster below.
 func testHandlerWithSessions(t *testing.T) *Handler {
 	t.Helper()
 	h := testHandlerWithMissions(t)
-	WithSessionStore(session.NewStore(t.TempDir()))(h)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	WithSessionStore(session.NewStore(filepath.Join(home, ".punt-labs", "ethos")))(h)
 	return h
+}
+
+// seedSessionRoster creates a minimal roster for sessionID in ss so
+// hook.RefuseIfSessionGone's existence check (PR #509 tail) finds a
+// live session rather than refusing every mission-sidecar write as
+// if the session had already ended. Mirrors cmd/ethos/mission_test.go's
+// seedRosterForSession.
+func seedSessionRoster(t *testing.T, ss *session.Store, sessionID string) {
+	t.Helper()
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "jim", Persona: "jim"},
+		session.Participant{AgentID: "claude", Persona: "claude", Parent: "jim"},
+		"", "",
+	))
 }
 
 func TestHandleMission_NoStoreConfigured(t *testing.T) {
@@ -242,6 +260,7 @@ func TestHandleMission_CreateBindsActiveMission(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -255,15 +274,169 @@ func TestHandleMission_CreateBindsActiveMission(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &c))
 	require.NotEmpty(t, c.MissionID)
 
-	got, err := mission.ReadActiveMission(globalRoot, sess)
+	// DES-076 round 3: create writes a per-mission pending-dispatch
+	// entry, not the shared active-mission slot -- the create-time
+	// binding must never turn on commit trailers (unaffected by round
+	// 3: a pending dispatch was never eligible for trailers even before
+	// this change), and must not collide with a DIFFERENT mission's own
+	// pending dispatch.
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
 	require.NoError(t, err)
-	assert.Equal(t, c.MissionID, got,
-		"handleCreateMission must write the active-mission sidecar just like the CLI does")
+	require.Len(t, pending, 1, "handleCreateMission must write a pending-dispatch entry just like the CLI does")
+	assert.Equal(t, c.MissionID, pending[0].MissionID)
+	assert.Equal(t, c.Worker, pending[0].Worker)
 
-	binding, err := mission.ReadActiveMissionBinding(globalRoot, sess)
+	claimed, err := mission.ReadActiveMission(globalRoot, sess)
 	require.NoError(t, err)
-	assert.Equal(t, mission.BindOriginDispatch, binding.Origin,
-		"the create-time binding must be dispatch origin, not claim — create must not turn on commit trailers")
+	assert.Empty(t, claimed, "create must never touch the claim slot")
+}
+
+// TestHandleMission_CreateFreshBindNamesWorker is review finding F1 on
+// m-2026-09-08-003: before this fix, the MCP create surface emitted no
+// warning at all on a fresh (non-rebind) bind, unlike the CLI's
+// bindDispatchedMission, which prints the binding unconditionally and
+// names the worker it is scoped to (ethos-7tqd triage suggestion #3).
+// An MCP-driven leader had no way to learn the binding existed, let
+// alone that DES-076 scopes it to one specific worker's next spawn.
+func TestHandleMission_CreateFreshBindNamesWorker(t *testing.T) {
+	const sess = "sess-mcp-create-fresh-bind"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML, // worker: bwk
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	missionID, _ := payload["mission_id"].(string)
+	require.NotEmpty(t, missionID)
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "a fresh bind must be reported too, not only a rebind; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], missionID)
+	assert.Contains(t, warnings[0], "bwk", "the fresh-bind line must name the worker the binding is scoped to")
+}
+
+// TestHandleMission_CreateRefusesSessionRosterGone pins the leader's PR
+// #509 tail-round finding on the MCP surface: bindDispatchedMission
+// writes through the same mission.WithDispatchPendingLock +
+// hook.RefuseIfSessionGone sequence as the CLI, so a session whose
+// roster does not exist -- the shape a resumed session's write resumes
+// into once internal/session/store.go's deleteFiles has already
+// removed the roster and released the dispatch-pending lock -- must be
+// refused, not silently written into.
+//
+// Unlike the CLI's claim/dispatch paths (cmd/ethos/iam.go's
+// resolveHardSession re-verifies an ETHOS_SESSION-sourced ID against
+// the session store before the caller ever reaches the lock),
+// resolve.SessionID on the MCP surface never does that -- it is a bare
+// os.Getenv("ETHOS_SESSION") read, no store lookup at all -- so
+// hook.RefuseIfSessionGone inside bindDispatchedMission is the ONLY
+// existence gate here. A session with no roster reaches it directly, no
+// lock-hold choreography needed to reproduce what the CLI tests model
+// with a concurrent goroutine.
+//
+// Confirmed failing against the pre-fix code (no existence check inside
+// the locked closure): create wrote a pending-dispatch entry and
+// reported the ordinary "will attribute worker's next matching spawn"
+// warning even though the session had no roster anywhere on disk.
+func TestHandleMission_CreateRefusesSessionRosterGone(t *testing.T) {
+	const sess = "sess-mcp-roster-gone"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	// Deliberately no seedSessionRoster call: sess has no roster
+	// anywhere on disk.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "the mission contract itself must still be created")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	missionID, _ := payload["mission_id"].(string)
+	require.NotEmpty(t, missionID)
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "a refused binding must still warn; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	warning, _ := warnings[0].(string)
+	assert.Contains(t, warning, "no longer exists")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "no pending-dispatch entry must be written for a session with no roster")
+}
+
+// TestHandleMission_CreateBindsPastCorruptRoster is review finding G1
+// (PR #509 tail round 7): hook.RefuseIfSessionGone must refuse only
+// when the roster is genuinely absent, not on every error Store.Load
+// can return. A roster that exists but fails to PARSE is exactly the
+// shape List()/Purge() would still discover on disk -- it is not the
+// undiscoverable-sidecar hazard the check exists to prevent, so
+// refusing on it blocks a live session's legitimate write on unproven
+// evidence.
+//
+// Confirmed failing against the pre-fix code (RefuseIfSessionGone
+// refused on ANY Store.Load error): create's pending-dispatch write
+// was refused, no entry landed in globalRoot's pending-dispatch dir,
+// and the sole warning read "no longer exists" for a roster that was
+// on disk the entire time -- just not valid YAML.
+func TestHandleMission_CreateBindsPastCorruptRoster(t *testing.T) {
+	const sess = "sess-mcp-roster-corrupt"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	// Corrupt the roster in place -- present on disk, but not valid
+	// YAML, so Store.Load fails on Unmarshal rather than on ReadFile.
+	rosterPath := filepath.Join(globalRoot, "sessions", sess+".yaml")
+	require.NoError(t, os.WriteFile(rosterPath, []byte("not: valid: yaml: [["), 0o600))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "the mission contract itself must still be created")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	missionID, _ := payload["mission_id"].(string)
+	require.NotEmpty(t, missionID)
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "a fresh bind must still be reported; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	warning, _ := warnings[0].(string)
+	assert.NotContains(t, warning, "no longer exists",
+		"a corrupt-but-present roster must not be treated as a torn-down session")
+	assert.Contains(t, warning, missionID)
+	assert.Contains(t, warning, "bwk", "the fresh-bind line must name the worker the binding is scoped to")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the pending-dispatch entry must still be written past an unparseable roster")
+	assert.Equal(t, missionID, pending[0].MissionID)
 }
 
 // TestHandleMission_CreateNoSessionWarns asserts the advisory
@@ -291,7 +464,7 @@ func TestHandleMission_CreateNoSessionWarns(t *testing.T) {
 	require.True(t, ok, "no session store wired must still warn; got %#v", payload["warnings"])
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "no session store wired")
-	assert.Contains(t, warnings[0], "not updated")
+	assert.Contains(t, warnings[0], "not written")
 }
 
 // TestHandleMission_CreateNoSessionInContextWarns is the sibling of
@@ -320,7 +493,55 @@ func TestHandleMission_CreateNoSessionInContextWarns(t *testing.T) {
 	require.True(t, ok, "no session in context must still warn; got %#v", payload["warnings"])
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "no session in context")
-	assert.Contains(t, warnings[0], "not updated")
+	assert.Contains(t, warnings[0], "not written")
+}
+
+// TestHandleMission_SecondCreateToSameWorkerNamesQueuePosition pins
+// review finding K8 (full-branch review, m-2026-09-08-004 round 3) on
+// the MCP surface: bindDispatchedMission's advisory line claimed
+// unconditionally that worker's NEXT matching Agent() spawn goes to the
+// mission just created — false the moment an OLDER pending dispatch for
+// the same worker is already queued. Two back-to-back mission creates
+// (both worker "bwk", disjoint write_sets) must have the SECOND
+// message name the first mission as ahead of it in queue.
+func TestHandleMission_SecondCreateToSameWorkerNamesQueuePosition(t *testing.T) {
+	const sess = "sess-mcp-queue-position"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
+
+	first, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contractYAMLWithWriteSet("internal/alpha/store.go"),
+	}))
+	require.NoError(t, err)
+	require.False(t, first.IsError, "first create must succeed: %s", resultText(t, first))
+	var firstContract mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, first)), &firstContract))
+
+	second, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contractYAMLWithWriteSet("internal/beta/store.go"),
+	}))
+	require.NoError(t, err)
+	require.False(t, second.IsError, "second create must succeed: %s", resultText(t, second))
+	var secondContract mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, second)), &secondContract))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, second)), &payload))
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "the second create must carry a binding warning; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	warning, _ := warnings[0].(string)
+
+	assert.Contains(t, warning, firstContract.MissionID,
+		"the second create's message must name the OLDER pending dispatch ahead of it")
+	assert.Contains(t, warning, secondContract.MissionID)
+	assert.NotContains(t, warning, "will attribute worker",
+		"the second create is not first in queue, so it must not claim the next matching spawn for itself")
 }
 
 // TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode pins mission
@@ -337,7 +558,7 @@ func TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 	h := testHandlerWithSessions(t)
 
-	warnings := h.bindDispatchedMission("m-test-001")
+	warnings := h.bindDispatchedMission("m-test-001", "bwk")
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "resolving session")
 	assert.NotContains(t, warnings[0], "no session in context",
@@ -362,25 +583,25 @@ func TestClearClosedMissionBindings_ReportsRealCauseUnderClaudeCode(t *testing.T
 	assert.Contains(t, warnings[0], "resolving session")
 }
 
-// TestHandleMission_CreateRebindsWarnsOnDifferentMission mirrors the
-// CLI's bindDispatchedMission rebind warning (mission.go:2061): a
-// session already bound to a different, still-open mission gets
-// rebound on disk to the freshly created mission, and the response
-// carries a warning naming the old mission, the new mission, and the
-// remedy (`ethos mission claim`) — MCP has no stderr channel to print
-// the CLI's line to, so it rides in the payload's warnings array, the
-// same convention handleCloseMission already uses.
-func TestHandleMission_CreateRebindsWarnsOnDifferentMission(t *testing.T) {
-	const sess = "sess-mcp-create-rebind"
+// TestHandleMission_CreateCoexistsWithExistingClaim is the MCP-surface
+// sibling of the CLI's TestMissionDispatch_CoexistsWithExistingClaim.
+// DES-076 round 3 (review finding C1, m-2026-09-08-004 round 2)
+// replaced the old single-slot "rebind" with a per-mission
+// pending-dispatch store: creating a mission while the session already
+// holds an unrelated claim no longer disturbs that claim at all -- the
+// two coexist on independent storage.
+func TestHandleMission_CreateCoexistsWithExistingClaim(t *testing.T) {
+	const sess = "sess-mcp-create-coexist"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	const previous = "m-2026-07-30-501"
-	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, previous))
+	const claimed = "m-2026-07-30-501"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, claimed))
 
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":   "create",
@@ -396,14 +617,18 @@ func TestHandleMission_CreateRebindsWarnsOnDifferentMission(t *testing.T) {
 
 	warnings, ok := payload["warnings"].([]any)
 	require.True(t, ok, "warnings must be a top-level array; got %#v", payload["warnings"])
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], previous)
+	require.Len(t, warnings, 1, "there is no rebind case anymore -- dispatching never displaces a different mission's own pending entry")
 	assert.Contains(t, warnings[0], missionID)
-	assert.Contains(t, warnings[0], "ethos mission claim")
+	assert.Contains(t, warnings[0], "bwk", "the fresh-bind line must name the worker the binding is scoped to")
 
-	got, err := mission.ReadActiveMission(globalRoot, sess)
+	stillClaimed, err := mission.ReadActiveMission(globalRoot, sess)
 	require.NoError(t, err)
-	assert.Equal(t, missionID, got, "rebind must still move the sidecar to the new mission")
+	assert.Equal(t, claimed, stillClaimed, "an existing claim must survive an unrelated create")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, missionID, pending[0].MissionID)
 }
 
 func TestHandleMission_CreateMissingContract(t *testing.T) {
@@ -716,6 +941,7 @@ func TestHandleMission_CloseClearsActiveMission(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -762,6 +988,7 @@ func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -799,6 +1026,7 @@ func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -849,6 +1077,7 @@ func TestHandleMission_CloseWarnsPerCause(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -1065,6 +1294,221 @@ func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "result artifact")
+}
+
+// TestHandleMission_AbandonDisclaim pins DES-076 round 2's MCP-surface
+// parity: a mission whose only delegation was a dispatch-sidecar
+// capture (BoundVia matches the contract's own Worker, "bwk") is
+// disclaimed and abandoned in one call, and the response echoes the
+// disclaimed delegation ID.
+func TestHandleMission_AbandonDisclaim(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	delegationID := "d-2026-09-08-950"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// Pass, not aborted: verdict=aborted is excluded from Abandon's
+	// blocking gate unconditionally (DES-076 round 3, C7), which would
+	// let the "still refuses pre-disclaim" call below succeed outright
+	// instead of exercising the disclaim path this test targets.
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, delegationID,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	// Before disclaiming: abandon still refuses.
+	preResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "should still refuse pre-disclaim",
+	}))
+	require.NoError(t, err)
+	assert.True(t, preResult.IsError)
+
+	abandonResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "captured by the dispatch sidecar bug",
+		"disclaim":   []interface{}{delegationID},
+	}))
+	require.NoError(t, err)
+	require.False(t, abandonResult.IsError, "abandon must succeed once the capture is disclaimed: %s", resultText(t, abandonResult))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, abandonResult)), &payload))
+	assert.Equal(t, mission.StatusAbandoned, payload["status"])
+	disclaimed, _ := payload["disclaimed"].([]any)
+	require.Len(t, disclaimed, 1)
+	assert.Equal(t, delegationID, disclaimed[0])
+}
+
+// TestHandleMission_AbandonDisclaimRefusesWrongProvenance pins the
+// refusal path: a delegation bound via explicit MISSION_ID env cannot
+// be disclaimed through the MCP surface either, and the mission stays
+// open.
+func TestHandleMission_AbandonDisclaimRefusesWrongProvenance(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	delegationID := "d-2026-09-08-951"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, delegationID,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "trying to disclaim genuine work",
+		"disclaim":   []interface{}{delegationID},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), delegationID)
+	assert.Contains(t, resultText(t, result), "disclaimable")
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var loaded mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+	assert.Equal(t, mission.StatusOpen, loaded.Status, "a failed disclaim must never reach Abandon")
+}
+
+// TestHandleMission_AbandonDisclaimPartialFailureNamesCommitted pins
+// review finding M3 (full-branch review, m-2026-09-08-004 round 3) on
+// the MCP surface: a disclaim list naming two delegations where the
+// SECOND fails must name the FIRST as already committed and
+// irreversible, not just report the failing one.
+//
+// Confirmed failing against the pre-fix code: the error text named only
+// the failing delegation.
+func TestHandleMission_AbandonDisclaimPartialFailureNamesCommitted(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	disclaimable := "d-2026-09-08-952"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	notDisclaimable := "d-2026-09-08-953"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, notDisclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, notDisclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "one real, one not",
+		"disclaim":   []interface{}{disclaimable, notDisclaimable},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, notDisclaimable, "names the delegation that failed")
+	assert.Contains(t, text, disclaimable, "names the delegation that already committed")
+	assert.Contains(t, text, "cannot be undone")
+}
+
+// TestHandleMission_AbandonDisclaimSucceedsButAbandonFailsNamesCommitted
+// is M3's other half on the MCP surface: every requested disclaim
+// commits, but Abandon itself then fails (Gate 2: a result artifact
+// still exists). The error must still name the delegations that are now
+// permanently disclaimed.
+//
+// Confirmed failing against the pre-fix code: the error named only the
+// Gate 2 failure, with no mention of the committed disclaim.
+func TestHandleMission_AbandonDisclaimSucceedsButAbandonFailsNamesCommitted(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	disclaimable := "d-2026-09-08-954"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	submitResultForMCP(t, h, created.MissionID)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "disclaim then fail on Gate 2",
+		"disclaim":   []interface{}{disclaimable},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, "result artifact")
+	assert.Contains(t, text, disclaimable)
+	assert.Contains(t, text, "cannot be undone")
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var loaded mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+	assert.Equal(t, mission.StatusOpen, loaded.Status, "the failed abandon must not have transitioned the mission")
 }
 
 func TestHandleMission_UnknownMethod(t *testing.T) {

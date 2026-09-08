@@ -3,12 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"io"
-	"os"
 	"os/exec"
 	"runtime/debug"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,42 +50,16 @@ func TestSlugify(t *testing.T) {
 }
 
 // captureStdout runs fn while capturing os.Stdout and returns the output.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = w
-	defer func() { os.Stdout = old }()
+// Delegates to internal/testhelpers: see that package's doc comment for
+// why the pipe/cleanup contract (closing on every exit from fn, not just
+// a normal return) is a canonical, shared implementation rather than a
+// copy of its own.
+var captureStdout = testhelpers.CaptureStdout
 
-	fn()
-
-	w.Close()
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, r)
-	require.NoError(t, err)
-	return buf.String()
-}
-
-// captureStdoutE is like captureStdout but for functions that return error.
-// The error is checked with require.NoError so test failures are reported
-// at the call site rather than silently swallowed.
-func captureStdoutE(t *testing.T, fn func() error) string {
-	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = w
-	defer func() { os.Stdout = old }()
-
-	require.NoError(t, fn())
-
-	w.Close()
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, r)
-	require.NoError(t, err)
-	return buf.String()
-}
+// captureStdoutE is like captureStdout but for functions that return
+// error. The error is checked with require.NoError so test failures are
+// reported at the call site rather than silently swallowed.
+var captureStdoutE = testhelpers.CaptureStdoutE
 
 func TestVersionCommand(t *testing.T) {
 	jsonOutput = false

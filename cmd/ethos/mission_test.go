@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -18,6 +19,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -911,7 +913,7 @@ func TestMissionAbandon(t *testing.T) {
 	require.Len(t, ids, 1)
 
 	stdout := captureStdoutE(t, func() error {
-		return runMissionAbandon(ids[0], "never dispatched, blocking write_set")
+		return runMissionAbandon(ids[0], "never dispatched, blocking write_set", nil)
 	})
 	assert.Contains(t, stdout, "abandoned:")
 	assert.Contains(t, stdout, ids[0])
@@ -936,7 +938,7 @@ func TestMissionAbandon_RequiresReason(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
-	err = runMissionAbandon(ids[0], "")
+	err = runMissionAbandon(ids[0], "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reason is required")
 
@@ -960,7 +962,7 @@ func TestMissionAbandon_RefusesWithResult(t *testing.T) {
 
 	submitCLIResult(t, ids[0], 1)
 
-	err = runMissionAbandon(ids[0], "ignoring the submitted result")
+	err = runMissionAbandon(ids[0], "ignoring the submitted result", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "result artifact")
 
@@ -982,7 +984,7 @@ func TestMissionAbandon_PrefixMatch(t *testing.T) {
 	require.Len(t, ids, 1)
 
 	prefix := ids[0][:9]
-	captureStdoutE(t, func() error { return runMissionAbandon(prefix, "prefix match") })
+	captureStdoutE(t, func() error { return runMissionAbandon(prefix, "prefix match", nil) })
 
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
@@ -1003,7 +1005,7 @@ func TestMissionAbandon_JSON(t *testing.T) {
 
 	jsonOutput = true
 	defer func() { jsonOutput = false }()
-	out := captureStdoutE(t, func() error { return runMissionAbandon(ids[0], "json path") })
+	out := captureStdoutE(t, func() error { return runMissionAbandon(ids[0], "json path", nil) })
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1032,7 +1034,7 @@ func TestMissionAbandon_ExcludedFromWriteSetConflicts(t *testing.T) {
 	require.Error(t, err, "an open dead mission must still block a conflicting create")
 
 	captureStdoutE(t, func() error {
-		return runMissionAbandon(deadID, "dead mission blocking real work")
+		return runMissionAbandon(deadID, "dead mission blocking real work", nil)
 	})
 
 	missionCreateFile = writeContractFileWithWriteSet(t, "internal/shared/thing.go")
@@ -1050,6 +1052,180 @@ func TestMissionAbandon_HelpDistinguishesFromClose(t *testing.T) {
 	assert.Contains(t, stdout, "never actually dispatched")
 	assert.Contains(t, stdout, "reason")
 	assert.Contains(t, stdout, "close")
+	assert.Contains(t, stdout, "--disclaim", "the disclaim escape hatch must be discoverable in help (DES-076)")
+}
+
+// --- DES-076 round 2: `mission abandon --disclaim` ---
+
+// TestMissionAbandon_DisclaimHappyPath pins scenario (a) at the CLI
+// layer: a mission whose only delegation was a dispatch-sidecar
+// capture (BoundVia matches the contract's own Worker, "bwk") is
+// disclaimed and abandoned in one call.
+func TestMissionAbandon_DisclaimHappyPath(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t) // worker: bwk
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	delegationID := "d-2026-09-08-900"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// Pass, not aborted: verdict=aborted is excluded from Abandon's
+	// blocking gate unconditionally (DES-076 round 3, C7), which would
+	// let the "still refuses pre-disclaim" assertion below fail for the
+	// wrong reason (abandon succeeding outright, with nothing left to
+	// disclaim).
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, delegationID,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	// Before disclaiming: abandon still refuses, exactly as before this round.
+	err = runMissionAbandon(missionID, "should still refuse pre-disclaim", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delegation record")
+
+	stdout := captureStdoutE(t, func() error {
+		return runMissionAbandon(missionID, "captured by the dispatch sidecar bug", []string{delegationID})
+	})
+	assert.Contains(t, stdout, "abandoned:")
+	assert.Contains(t, stdout, "disclaimed:")
+	assert.Contains(t, stdout, delegationID)
+
+	c, err := ms.Load(missionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusAbandoned, c.Status)
+}
+
+// TestMissionAbandon_DisclaimRefusesWrongProvenance pins scenario (b)
+// at the CLI layer: a delegation bound via explicit MISSION_ID env
+// cannot be disclaimed, the CLI names which delegation and why, and
+// the mission stays open (neither the disclaim nor the abandon apply).
+func TestMissionAbandon_DisclaimRefusesWrongProvenance(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	delegationID := "d-2026-09-08-901"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, delegationID,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	err = runMissionAbandon(missionID, "trying to disclaim genuine work", []string{delegationID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), delegationID)
+	assert.Contains(t, err.Error(), "disclaimable")
+
+	c, err := ms.Load(missionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusOpen, c.Status, "a failed disclaim must never reach Abandon")
+}
+
+// TestMissionAbandon_DisclaimPartialFailureNamesCommitted pins review
+// finding M3 (full-branch review, m-2026-09-08-004 round 3): when a
+// disclaim list names two delegations and the SECOND one fails, the
+// FIRST one already committed -- DisclaimDelegation is irreversible on
+// success. The error must say so explicitly, or an operator retrying
+// the abandon has no way to know one of their delegations is already
+// permanently disclaimed.
+//
+// Confirmed failing against the pre-fix code: the error named only the
+// failing delegation, with no mention that the first one had already
+// committed.
+func TestMissionAbandon_DisclaimPartialFailureNamesCommitted(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	disclaimable := "d-2026-09-08-902"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	notDisclaimable := "d-2026-09-08-903"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, notDisclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, notDisclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	err = runMissionAbandon(missionID, "one real, one not", []string{disclaimable, notDisclaimable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), notDisclaimable, "names the delegation that failed")
+	assert.Contains(t, err.Error(), disclaimable, "names the delegation that already committed")
+	assert.Contains(t, err.Error(), "cannot be undone")
+}
+
+// TestMissionAbandon_DisclaimSucceedsButAbandonFailsNamesCommitted is
+// M3's other half: every requested disclaim commits, but Abandon itself
+// then fails (Gate 2: a result artifact still exists). The error must
+// still name the delegations that are now permanently disclaimed, even
+// though the mission itself did not abandon.
+//
+// Confirmed failing against the pre-fix code: the error named only the
+// abandon failure, with no mention that the disclaim had already
+// committed and could not be retried as a clean unit.
+func TestMissionAbandon_DisclaimSucceedsButAbandonFailsNamesCommitted(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	disclaimable := "d-2026-09-08-904"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	// A result artifact is Abandon's Gate 2 -- disclaiming a delegation
+	// (Gate 1) never satisfies it, so abandon fails here even after the
+	// disclaim above commits cleanly.
+	submitCLIResult(t, missionID, 1)
+
+	err = runMissionAbandon(missionID, "disclaim then fail on Gate 2", []string{disclaimable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "result artifact")
+	assert.Contains(t, err.Error(), disclaimable)
+	assert.Contains(t, err.Error(), "cannot be undone")
+
+	c, err := ms.Load(missionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusOpen, c.Status, "the failed abandon must not have transitioned the mission")
 }
 
 // --- 3.4: reflect, reflections, advance ---
@@ -4308,6 +4484,134 @@ func TestMissionClaim_WritesSidecar(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
+// TestMissionClaim_WaitsForDispatchPendingLock pins the leader's PR #509
+// tail-round finding: `ethos mission claim` used to write the
+// active-mission sidecar with no locking at all, so it could land in
+// the narrow window internal/session/store.go's Store.Delete leaves
+// open between clearing a session's sidecars and removing its roster --
+// a resumed session's claim would then be orphaned outside
+// roster-based purge discovery entirely, since List()/Purge() only
+// discover sessions via their roster file. runMissionClaim now runs its
+// write through mission.WithDispatchPendingLock, the SAME per-session
+// lock Store.Delete holds across its whole clear-through-roster-removal
+// span (internal/mission/active.go's AcquireDispatchPendingLock doc
+// comment names both consumers). This test proves the mutual exclusion
+// directly: while a sibling holds that lock, runMissionClaim must
+// block, and the sidecar must not exist until the sibling releases.
+func TestMissionClaim_WaitsForDispatchPendingLock(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	sessionID := "sess-claim-lock"
+
+	t.Setenv("ETHOS_SESSION", sessionID)
+	seedRosterForSession(t, sessionID)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runMissionClaim(id)
+	}()
+
+	// Give the goroutine time to enter Flock and block.
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("runMissionClaim completed while a sibling held the dispatch-pending lock (err=%v)", err)
+	default:
+		// Expected: still blocked.
+	}
+	sidecar := filepath.Join(globalRoot, "sessions", sessionID, "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr), "the claim must not be written while the lock is held elsewhere")
+
+	release()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("runMissionClaim did not complete within 2s after the sibling released")
+	}
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err, "the claim must be written once the lock becomes available")
+	assert.Equal(t, id+"\n", string(data))
+}
+
+// TestMissionClaim_RefusesWhenSessionRosterGone pins the leader's PR
+// #509 tail-round finding: internal/session/store.go's deleteFiles
+// holds mission.AcquireDispatchPendingLock across its whole
+// clear-then-remove-roster span so a concurrent claim/dispatch write
+// cannot land in the gap BETWEEN those two steps -- but that alone does
+// not stop a writer that was blocked waiting on the lock from resuming
+// the instant AFTER deleteFiles has already removed the roster:
+// deleteFiles's own deferred lock release fires once
+// os.Remove(rosterPath) has already returned, not before. Without
+// hook.RefuseIfSessionGone, runMissionClaim would recreate the sidecar
+// for a session with no roster at all -- the exact undiscoverable-
+// binding shape the lock-hold exists to prevent, reached one step later
+// than the race it closed.
+//
+// resolveSessionContext already verifies the roster exists once, up
+// front (DES-061 H2) -- but that check runs BEFORE runMissionClaim ever
+// tries to acquire the dispatch-pending lock, so it cannot see a roster
+// removed WHILE the caller is blocked waiting on that lock, which is
+// exactly the timeline this test reproduces: acquire the lock first (a
+// deleteFiles stand-in), start the claim (which passes the up-front
+// check, since the roster is still there), confirm it is blocked
+// entering Flock, THEN remove the roster while still holding the lock,
+// THEN release. Confirmed failing against the pre-fix code (no
+// existence check inside the locked closure): the claim resumed,
+// succeeded, and wrote sessions/<id>/active-mission even though
+// sessions/<id>.yaml no longer existed anywhere on disk.
+func TestMissionClaim_RefusesWhenSessionRosterGone(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	sessionID := "sess-claim-gone"
+
+	t.Setenv("ETHOS_SESSION", sessionID)
+	seedRosterForSession(t, sessionID)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runMissionClaim(id)
+	}()
+
+	// Give the goroutine time to pass resolveSessionContext (the roster
+	// still exists at this point) and then block entering Flock.
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("runMissionClaim completed while a sibling held the dispatch-pending lock (err=%v)", err)
+	default:
+		// Expected: still blocked.
+	}
+
+	// Simulate deleteFiles: while STILL holding the lock, remove the
+	// roster -- the exact state a resumed claim resumes into once the
+	// lock is released, per deleteFiles's own doc comment.
+	require.NoError(t, os.Remove(filepath.Join(globalRoot, "sessions", sessionID+".yaml")))
+	release()
+
+	select {
+	case claimErr := <-done:
+		require.Error(t, claimErr, "claim must refuse once it resumes into a torn-down session")
+		assert.Contains(t, claimErr.Error(), "no longer exists")
+	case <-time.After(2 * time.Second):
+		t.Fatal("runMissionClaim did not complete within 2s after the sibling released")
+	}
+
+	sidecar := filepath.Join(globalRoot, "sessions", sessionID, "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr), "no sidecar must be written for a torn-down session: %v", statErr)
+}
+
 func TestMissionClaim_RefusesUnknownMission(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-claim-2")
@@ -4512,18 +4816,31 @@ func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 }
 
 // TestMissionDispatch_RebindsStaleActiveMission pins ethos-7vo3: the
-// mission named at dispatch owns the session binding, so the next
-// Agent() spawn files its delegation under it. Before the fix the
-// sidecar stayed on whatever `mission claim` last wrote, and a leader
-// who dispatched a second mission without releasing the first filed
-// the new delegation under the old mission.
-func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
+// mission named at dispatch owns the session binding, so the worker's
+// next matching Agent() spawn files its delegation under it (DES-076
+// scopes that binding to the one spawn matching the contract's
+// declared Worker). Before the ethos-7vo3 fix the sidecar stayed on
+// whatever `mission claim` last wrote, and a leader who dispatched a
+// second mission without releasing the first filed the new delegation
+// under the old mission.
+//
+// DES-076 round 3 (review finding C1, m-2026-09-08-004 round 2)
+// replaced the old single-slot "rebind" with a per-mission
+// pending-dispatch store: dispatching no longer overwrites or
+// disturbs an existing claim at all — the two now coexist on
+// independent storage, and readActiveMissionForDispatch checks the
+// pending dispatch first (matching the OLD precedence: dispatch always
+// took priority over a standing claim, just via separate storage
+// instead of an overwrite). This test's name and assertions reflect
+// that: claim survives untouched, and a new pending-dispatch entry
+// appears for the freshly dispatched mission.
+func TestMissionDispatch_CoexistsWithExistingClaim(t *testing.T) {
 	home := missionTestEnv(t)
-	stale := seedMissionForClaim(t)
+	claimed := seedMissionForClaim(t)
 
-	t.Setenv("ETHOS_SESSION", "sess-rebind")
-	seedRosterForSession(t, "sess-rebind")
-	require.NoError(t, runMissionClaim(stale))
+	t.Setenv("ETHOS_SESSION", "sess-coexist")
+	seedRosterForSession(t, "sess-coexist")
+	require.NoError(t, runMissionClaim(claimed))
 
 	dispatchWorker = "bwk"
 	dispatchEvaluator = "djb"
@@ -4545,40 +4862,42 @@ func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 2, "the seeded mission and the dispatched one")
 	dispatched := ids[0]
-	if dispatched == stale {
+	if dispatched == claimed {
 		dispatched = ids[1]
 	}
 
-	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
-		"sess-rebind", "active-mission")
-	data, err := os.ReadFile(sidecar)
+	// The claim must survive completely untouched -- dispatching a
+	// DIFFERENT mission is no longer destructive to it.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	stillClaimed, err := mission.ReadActiveMission(globalRoot, "sess-coexist")
 	require.NoError(t, err)
-	assert.Equal(t, dispatched+"\n", string(data),
-		"dispatch must bind the session to the mission it just created")
-	// The origin rides in its own file so active-mission stays readable
-	// by older binaries (rsc on PR #415).
-	origin, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "sessions",
-		"sess-rebind", "active-mission-origin"))
-	require.NoError(t, err, "a dispatch must record its origin")
-	assert.Equal(t, mission.BindOriginDispatch+"\n"+dispatched+"\n", string(origin),
-		"the origin file names its own mission so a stale one is ignored")
+	assert.Equal(t, claimed, stillClaimed, "an existing claim must survive an unrelated dispatch")
 
-	assert.Contains(t, warning, stale, "the warning must name the stale binding")
+	// The dispatch lands in its own per-mission pending entry, not the
+	// claim's slot.
+	pending, _, err := mission.ReadDispatchPending(globalRoot, "sess-coexist")
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, dispatched, pending[0].MissionID)
+	assert.Equal(t, "bwk", pending[0].Worker)
+
 	assert.Contains(t, warning, dispatched, "the warning must name the new binding")
-	assert.Contains(t, warning, "commit trailers are off",
-		"the leader must be told the rebind stops their trailers")
+	assert.Contains(t, warning, "bwk", "the warning must name the worker the binding is scoped to")
 }
 
 // TestMissionDispatch_PrintsBindingOnFreshBind is the regression gate
 // for ethos-7tqd's triage suggestion #3: a FRESH bind (no prior
-// mission bound) must be visible too, not only a rebind. Before this
+// mission bound) must be visible too, not only a rebind. Before that
 // fix, bindDispatchedMission was silent unless it overwrote a
 // DIFFERENT mission's binding — a leader who dispatches from a clean
-// session gets no signal that the next Agent() spawn, however
-// unrelated, will file its delegation under the mission just
-// dispatched. That silent sidecar is what let a throwaway probe
-// mission capture an unrelated PR-fix agent's delegation record
-// (reproduced live 2026-09-07, see the bead's triage note).
+// session got no signal that a later Agent() spawn would be attributed
+// to the mission just dispatched. DES-076 has since scoped that
+// attribution to the one spawn matching the contract's declared Worker
+// (it no longer captures "the next spawn, however unrelated" — that
+// capture is what let a throwaway probe mission attribute an unrelated
+// PR-fix agent's delegation record, reproduced live 2026-09-07, see the
+// bead's triage note), but the visibility this test pins is unchanged:
+// the leader still sees the binding the moment it is made.
 func TestMissionDispatch_PrintsBindingOnFreshBind(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-fresh-bind")
@@ -4605,10 +4924,209 @@ func TestMissionDispatch_PrintsBindingOnFreshBind(t *testing.T) {
 	require.Len(t, ids, 1)
 	dispatched := ids[0]
 
-	assert.Contains(t, warning, "bound to "+dispatched,
+	assert.Contains(t, warning, dispatched,
 		"a fresh bind must print the mission it just bound to, not only a rebind")
+	assert.Contains(t, warning, "bwk", "the message must name the worker the binding is scoped to")
 	assert.Contains(t, warning, "mission release",
 		"the message must name the escape hatch for a leader who does not want the capture")
+}
+
+// TestMissionDispatch_RefusesWhenSessionRosterGone is
+// bindDispatchedMission's sibling of TestMissionClaim_RefusesWhenSessionRosterGone:
+// the same PR #509 tail-round finding applies to `mission dispatch`'s
+// pending-dispatch write, not only `mission claim`'s active-mission
+// write, since bindDispatchedMission runs through the identical
+// mission.WithDispatchPendingLock + hook.RefuseIfSessionGone sequence.
+//
+// The mission contract itself is still created -- Store.Create runs
+// BEFORE bindDispatchedMission and is unaffected by this fix, matching
+// bindDispatchedMission's own advisory contract (a real failure prints
+// one stderr line naming the cause; it never fails the command).
+//
+// Confirmed failing against the pre-fix code (no existence check inside
+// the locked closure): the dispatch resumed, wrote a pending-dispatch
+// entry, and printed the ordinary success line even though
+// sessions/<id>.yaml no longer existed anywhere on disk.
+func TestMissionDispatch_RefusesWhenSessionRosterGone(t *testing.T) {
+	home := missionTestEnv(t)
+	sessionID := "sess-dispatch-gone"
+	t.Setenv("ETHOS_SESSION", sessionID)
+	seedRosterForSession(t, sessionID)
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	require.NoError(t, err)
+
+	// testhelpers.CaptureStderr redirects os.Stderr BEFORE calling fn,
+	// so the redirect happens before the `go` statement below runs --
+	// the `go` statement itself is what makes the write visible to the
+	// new goroutine under the Go memory model. Swapping os.Stderr on
+	// either side of release(), an OS-level flock the race detector
+	// does not recognize as synchronization, would race, so both the
+	// redirect and every check below live inside fn: CaptureStderr's
+	// own deferred cleanup -- not a manual restore at each early exit
+	// -- is what guarantees os.Stderr comes back even if a require or
+	// t.Fatal(f) call here Goexits (PR #509 review finding, J-round).
+	var dispatchErr error
+	warning := testhelpers.CaptureStderr(t, func() {
+		done := make(chan error, 1)
+		go func() {
+			done <- runMissionDispatch()
+		}()
+
+		// Give the goroutine time to create the contract, pass
+		// resolveSessionContext (the roster still exists at this
+		// point), and then block entering Flock for the sidecar
+		// write.
+		time.Sleep(150 * time.Millisecond)
+		select {
+		case dispatchErr = <-done:
+			t.Fatalf("runMissionDispatch completed while a sibling held the dispatch-pending lock (err=%v)", dispatchErr)
+		default:
+			// Expected: still blocked.
+		}
+
+		// Simulate deleteFiles: while STILL holding the lock, remove
+		// the roster -- the exact state a resumed dispatch resumes
+		// into once the lock is released, per deleteFiles's own doc
+		// comment.
+		require.NoError(t, os.Remove(filepath.Join(globalRoot, "sessions", sessionID+".yaml")))
+		release()
+
+		select {
+		case dispatchErr = <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("runMissionDispatch did not complete within 2s after the sibling released")
+		}
+	})
+
+	require.NoError(t, dispatchErr, "an advisory sidecar-binding failure must not fail the dispatch")
+	assert.Contains(t, warning, "no longer exists", "the CLI must report the refusal on stderr")
+
+	ms := missionStore()
+	ids, listErr := ms.List()
+	require.NoError(t, listErr)
+	require.Len(t, ids, 1, "the mission contract itself is still created -- only the sidecar binding is refused")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "no pending-dispatch entry must be written for a torn-down session")
+}
+
+// TestMissionDispatch_SecondDispatchToSameWorkerNamesQueuePosition pins
+// review finding K8 (full-branch review, m-2026-09-08-004 round 3):
+// bindDispatchedMission's advisory line claimed unconditionally that
+// worker's NEXT matching Agent() spawn goes to the mission just
+// dispatched — false the moment an OLDER pending dispatch for the same
+// worker is already queued, since FIFO matches the older one first.
+// Two back-to-back `mission dispatch --worker bwk` calls to different
+// missions (this repo's own normal workflow) must have the SECOND
+// dispatch's message name the first mission as ahead of it in queue,
+// not claim the spawn for itself.
+func TestMissionDispatch_SecondDispatchToSameWorkerNamesQueuePosition(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-queue-position")
+	seedRosterForSession(t, "sess-queue-position")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	dispatchWriteSet = "internal/alpha/store.go"
+	captureStdoutE(t, func() error {
+		captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	ms := missionStore()
+	idsAfterFirst, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, idsAfterFirst, 1)
+	firstMission := idsAfterFirst[0]
+
+	dispatchWriteSet = "internal/beta/store.go"
+	var secondWarning string
+	captureStdoutE(t, func() error {
+		secondWarning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	idsAfterSecond, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, idsAfterSecond, 2)
+	var secondMission string
+	for _, id := range idsAfterSecond {
+		if id != firstMission {
+			secondMission = id
+		}
+	}
+	require.NotEmpty(t, secondMission)
+
+	assert.Contains(t, secondWarning, firstMission,
+		"the second dispatch's message must name the OLDER pending dispatch ahead of it")
+	assert.Contains(t, secondWarning, secondMission)
+	assert.NotContains(t, secondWarning, "will attribute worker",
+		"the second dispatch is not first in queue, so it must not claim the next matching spawn for itself")
+}
+
+// TestMissionDispatch_UnresolvableAheadEntryNotReportedAsBlocking pins
+// review finding J1 (full-branch review, m-2026-09-08-004 round 3),
+// correcting K8: an UNRESOLVABLE pending dispatch ahead of a fresh one
+// must NOT be reported as "ahead of it and will be matched first" --
+// matchDispatchPending itself would skip that entry (K1) and match the
+// fresh one instead, so a message claiming otherwise tells the operator
+// the exact opposite of what will happen. K8's own fix filtered on bare
+// Worker equality with no classification at all, so it could not tell
+// an unresolvable entry apart from a live one; both of K8's own
+// pinning tests happened to use two resolvable, open missions, the one
+// case where a naive Worker-only filter and the real matcher agree.
+func TestMissionDispatch_UnresolvableAheadEntryNotReportedAsBlocking(t *testing.T) {
+	home := missionTestEnv(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	unresolvable := "m-2026-09-08-800"
+	// Deliberately never staged: this pending dispatch can never Load.
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, "sess-cli-fixed", unresolvable, "bwk"))
+
+	// bindDispatchedMission resolves its session via resolveSessionContext,
+	// not a fixed ETHOS_SESSION var used elsewhere in this file for the
+	// unresolvable-session tests -- match this test's session to the one
+	// used by the real dispatch below.
+	t.Setenv("ETHOS_SESSION", "sess-cli-fixed")
+	seedRosterForSession(t, "sess-cli-fixed")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	assert.NotContains(t, warning, "ahead of it",
+		"an unresolvable entry must never be reported as blocking a fresh dispatch -- the matcher would skip it")
+	assert.Contains(t, warning, "will attribute worker",
+		"with no LIVE entry ahead of it, the fresh dispatch is first in the queue that actually matters")
 }
 
 // TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode pins
@@ -4833,21 +5351,10 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 }
 
 // captureStderrFn redirects os.Stderr for the duration of fn and returns
-// what was written.
-func captureStderrFn(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-	fn()
-	w.Close()
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(r)
-	require.NoError(t, err)
-	return buf.String()
-}
+// what was written. Delegates to internal/testhelpers: see that
+// package's doc comment for why the pipe/cleanup contract is a
+// canonical, shared implementation rather than a copy of its own.
+var captureStderrFn = testhelpers.CaptureStderr
 
 // TestWarnIfGlobalFallback pins the ethos-yofr loudness requirement: when
 // no repo store is in scope, the warning names the global store and the

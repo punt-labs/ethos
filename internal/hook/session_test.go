@@ -3,9 +3,11 @@ package hook
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,6 +85,61 @@ func TestHandleSessionEnd_NoSessionID(t *testing.T) {
 	input := bytes.NewReader([]byte(`{}`))
 	err := HandleSessionEnd(input, ss)
 	require.NoError(t, err)
+}
+
+// TestHandleSessionEnd_ClearsMissionBindings is review finding C6
+// (m-2026-09-08-004 round 2): `claude --resume` reuses the session ID,
+// so a claim or pending dispatch left over from before the session
+// ended would otherwise survive into the resumed session and capture
+// an entirely unrelated later spawn or commit. Session end is now
+// treated the same as an explicit `ethos mission release`.
+func TestHandleSessionEnd_ClearsMissionBindings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	// J5 (full-branch review, m-2026-09-08-004 round 3): HandleSessionEnd
+	// now clears mission sidecars solely through ss.Delete (session.Store),
+	// which resolves sidecars under ss's OWN root -- production always
+	// constructs this store at $HOME/.punt-labs/ethos
+	// (cmd/ethos/identity.go's sessionStore()), so the fixture must match
+	// that, not testStores(t)'s independently-rooted temp dir (which
+	// this test's mission.Write* calls below never wrote sidecars under,
+	// a mismatch invisible before J5 only because the sidecar-clearing
+	// code that ran before it resolved its own root via
+	// os.UserHomeDir() directly, independently of ss's own root).
+	ss := session.NewStore(globalRoot)
+
+	sessionID := "sess-end-clears"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "user1", Persona: "alice"},
+		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
+	))
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, "m-2026-09-08-720"))
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, "m-2026-09-08-721", "bwk"))
+	require.NoError(t, mission.WriteDelegationBinding(globalRoot, sessionID, mission.DelegationBinding{
+		MissionID:    "m-2026-09-08-721",
+		DelegationID: "d-2026-09-08-001",
+	}))
+
+	input := bytes.NewReader([]byte(`{"session_id": "` + sessionID + `"}`))
+	require.NoError(t, HandleSessionEnd(input, ss))
+
+	claimed, err := mission.ReadActiveMission(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, claimed, "a claim must not survive session end")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a pending dispatch must not survive session end")
+
+	// H2 (full-branch review, m-2026-09-08-004 round 3): the delegation-
+	// binding sidecar is the third thing `ethos mission release` clears,
+	// but session end was only clearing the other two. A survivor here
+	// lets the commit-msg hook tag a later, unrelated session's commits
+	// with a stale delegation (ethos-jawp's class).
+	_, err = os.Stat(mission.DelegationBindingPath(globalRoot, sessionID))
+	assert.True(t, os.IsNotExist(err), "the delegation-binding sidecar must not survive session end")
 }
 
 func TestHandleSubagentStart_JoinsRoster(t *testing.T) {

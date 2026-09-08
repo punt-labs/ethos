@@ -115,30 +115,15 @@ func setupRepoWithAgentLegacy(t *testing.T, agentHandle string) string {
 }
 
 // captureSessionStartOutput runs HandleSessionStart and captures stdout.
+// See captureStdout (capture_testhelpers_test.go) for the pipe/cleanup
+// contract: it closes on every exit path, not just success.
 func captureSessionStartOutput(t *testing.T, input string, deps SessionStartDeps) string {
 	t.Helper()
-
-	// Capture stdout with cleanup to prevent leaks on early exit.
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		w.Close()
-		r.Close()
+	out, err := captureStdout(t, func() error {
+		return HandleSessionStart(bytes.NewReader([]byte(input)), deps)
 	})
-	os.Stdout = w
-
-	in := bytes.NewReader([]byte(input))
-	require.NoError(t, HandleSessionStart(in, deps))
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(r)
 	require.NoError(t, err)
-	return buf.String()
+	return out
 }
 
 func TestHandleSessionStart_PersonaBlock(t *testing.T) {

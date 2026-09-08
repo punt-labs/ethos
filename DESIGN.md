@@ -9387,3 +9387,1765 @@ ownership evidence lives only in a linked worktree's sealed audit
 history — not merged to the main tree — is now caught by
 `create`/`dispatch`'s admission control; it previously was not. See
 `CHANGELOG.md` under `[Unreleased]`.
+
+## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (AMENDED 2026-09-08 — round 3)
+
+**Context.** DES-075's "Consequence for ethos-7tqd" section named this
+as follow-up work outside PR #508's write-set. Reproduced live
+2026-09-07: `ethos mission dispatch --worker X` writes the
+active-mission sidecar (`internal/mission/active.go`) with
+`BindOriginDispatch` immediately, and nothing cleared it before this
+change. `dispatchAgent` (`internal/hook/pretooluse_dispatch.go`) reads
+that sidecar for every subsequent `Agent()` spawn with no `MISSION_ID`
+env set, and bound whichever spawn came next — a throwaway probe
+mission captured the leader's own unrelated PR-fix agent as delegation
+`d-2026-09-07-039`. The filed bead's original framing ("orphaned
+contracts sit inert, nobody notices") was backwards: they don't sit
+inert, they capture.
+
+**The two-step-dispatch constraint.** `ethos mission dispatch` (writes
+the contract) and the leader's `Agent()` call (spawns the worker) are
+deliberately two separate operations — CLAUDE.md documents this and
+tells the leader "DO NOT FORGET" the second step. A leader-in-Claude-Code
+session cannot inject `MISSION_ID` into its own process env between the
+two calls (`active.go`'s own header comment explains why the sidecar
+exists at all), so *some* bridge across that gap is unavoidable — the
+sidecar itself is not the bug. The bug is that the bridge, once built,
+had no way to tell "the spawn this dispatch was for" from "whatever
+spawns next," so it answered every `Agent()` call the same way for as
+long as the sidecar sat there — which, absent an explicit `release` or a
+later `claim`/`dispatch` overwriting it, was indefinitely.
+
+**Decision — bind at dispatch, consume at the first spawn whose agent
+type matches the contract's declared `Worker`; a mismatch does not
+consume it.** The contract already carries the one piece of information
+that names the intended recipient of the binding: `Contract.Worker`,
+required non-empty by `validateContract` for every mission that can
+exist. `dispatchAgent` now reads the sidecar's origin
+(`ReadActiveMissionBinding`) and, for a `BindOriginDispatch` binding
+only, loads the contract and compares its `Worker` against the spawn's
+`subagent_type` (falling back to `CLAUDE_AGENT_TYPE`) before treating the
+spawn as Tier B for that mission:
+
+- **Match** — the spawn is bound Tier B under the mission, and the
+  binding is consumed (`consumeDispatchBinding` clears
+  `active-mission`/`active-mission-origin`) immediately after the
+  dispatch fully succeeds (the JSON response is written; a spawn that
+  gets blocked or hits an encode failure does not consume the binding,
+  so a retry of the *same* `Agent()` call still finds it). One dispatch,
+  one binding, one consuming spawn — the sidecar cannot outlive the
+  worker it was written for.
+- **Mismatch** — the spawn proceeds exactly as it would with no sidecar
+  at all (inheritance, then Tier A): not bound to the mission, not
+  logged as a delegation of it. The sidecar is left untouched, because
+  the leader's other unrelated `Agent()` call landing in the
+  create-then-spawn gap is not evidence the dispatched worker was
+  abandoned — the real worker may still spawn later in the same
+  session, and the binding needs to survive for it.
+- **Contract fails to load** (corrupt, deleted, or otherwise
+  unresolvable while gating a `BindOriginDispatch` sidecar) — treated as
+  a mismatch, not a block. This is the one place DES-076 diverges from
+  this file's own "malformed env never silently admits" doctrine
+  (`nonOpenReason`/`warnNonOpenMissionID` still block on a bad
+  `MISSION_ID` env or a bad `claim`), and the reason is the asymmetry
+  between the two origins: a `claim` or an explicit `MISSION_ID` is the
+  operator naming *this exact spawn's* mission, so a resolution failure
+  is the operator's own error and should surface loudly. A
+  `BindOriginDispatch` sidecar is an ambient bridge sitting in the
+  background of every later spawn in the session — refusing to identify
+  its Worker must never escalate into blocking the leader's unrelated
+  work; it can only ever fall back to "don't capture this one."
+
+**Why not the two rejected alternatives.**
+
+- **Status quo (dispatch-time binding, no expiry)** — this is the bug.
+  Rejected because it captures the very first `Agent()` call after
+  dispatch regardless of whether it was the intended worker, silently
+  corrupting the audit trail the bead calls "the product."
+- **Warn-only (the bead's own filed suggestion — print a louder
+  not-spawned hint)** — rejected because a warning narrates the capture
+  without preventing it. The leader's mission brief for this work states
+  this explicitly: it is not an authorized fallback. (A version of this
+  warning already shipped in `bindDispatchedMission` — "the next Agent()
+  spawn in this session files its delegation here, even if unrelated" —
+  as an interim visibility improvement while this fix was pending; that
+  message is now false and is corrected below, in the same commit as the
+  behavior it describes.)
+
+**What changed in `bindDispatchedMission` (`cmd/ethos/mission.go`).**
+Only the printed text: it named the old "next spawn, however unrelated"
+behavior, which no longer holds. It now names the actual scope — bound
+for the declared Worker's next matching spawn — so an operator reading
+the CLI's own output is not told something the code no longer does.
+
+**Round 2 (2026-09-08) — the abandon-cleanup half.** Round 1 shipped
+with this section marked a non-goal: the mission's second requirement —
+`ethos mission abandon` retiring a mission whose *only* delegation was
+wrongly attributed to it by a capture — needed `internal/mission/store.go`
+and `internal/mission/delegation.go`, both outside round 1's write-set.
+That was a leader scoping error, corrected by funding a follow-up
+mission with the right write-set rather than working around the
+boundary. This section previously said the half was blocked; it is not
+anymore, and the record is corrected here rather than left contradicting
+itself below.
+
+**Part 1 — record how a delegation was bound.** `Delegation` and
+`DelegationSkeleton` (`internal/mission/delegation.go`) gain a
+`BoundVia` field, a closed set of four values —
+`mission_id_env`, `inherited`, `active_mission_sidecar_claim`,
+`active_mission_sidecar_dispatch` — set by `dispatchTierB`
+(`internal/hook/pretooluse_dispatch.go`) at the exact call site that
+already knows which of DES-054's three admission paths produced this
+spawn (case 1's explicit env, `dispatchTierBOrTierA`'s inheritance hit,
+or DES-076 round 1's sidecar match). The empty string is the zero value
+for every delegation written before this field existed and for any
+future Tier B path that forgets to set it — `DisclaimDelegationRecord`
+(below) treats "" identically to every other non-eligible value, never
+as evidence a delegation may be disclaimed. This is the safe direction:
+an un-disclaimable delegation still blocks `Abandon`, costing an
+operator an unnecessary `mission close`; the reverse (unknown treated
+as disclaimable) would let an ordinary pre-existing delegation retire
+itself with no operator attestation at all. Both new struct fields are
+`omitempty`, so decoding an old record without the key is unaffected —
+verified by loading a real pre-existing record
+(`.punt-labs/ethos/missions/m-2026-08-22-048/delegations/d-2026-08-22-103/record.yaml`)
+through `LoadDelegation` before and after this change and confirming
+byte-identical field values other than the new zero-valued fields; see
+the round's result artifact for the captured before/after dump.
+
+**Part 2 — the disclaim path.** `DisclaimDelegationRecord`
+(`internal/mission/delegation.go`) is a pure, lock-free function that
+loads one delegation record and mechanically refuses unless ALL of:
+`BoundVia == active_mission_sidecar_dispatch` (the only provenance DES-076
+round 1's fix ever produces for a *captured* spawn — explicit-env and
+inherited delegations are refused by name, and unknown provenance is
+refused identically to a known-genuine one, per Part 1); `Verdict !=
+open` (a delegation still in flight names a spawn that may still be
+doing real work — disclaiming it before it closes could retire a
+mission out from under a running worker); and it has not already been
+disclaimed (the first disclaim's reason and timestamp are immutable
+audit history, not something a second call silently overwrites). On
+success it stamps `DisclaimedAt`/`DisclaimedReason` (redacted through
+the same `PathRedactor` every other operator-supplied free-text field
+in this package goes through) onto the record and writes it back
+atomically — the same `writeAtomicFile` discipline `CloseDelegationSkeleton`
+uses.
+
+`Store.DisclaimDelegation(missionID, delegationID, reason string)`
+(`internal/mission/store.go`) is the locked, audited wrapper: it
+requires an open mission, holds the SAME repo-tier exclusive per-mission
+lock `Abandon`'s own gate-1-and-commit sequence holds
+(`withAbandonDelegationLock`, now documented as shared between the two
+callers rather than Abandon-only), and appends a `disclaim_delegation`
+event to the mission's own append-only log (`Actor: <mission's Leader>`,
+`Details: {delegation_id, bound_via, reason}`) — the audit record of who
+disclaimed what and why. Sharing the lock is what makes a disclaim and
+an `Abandon` gate-1 check mutually exclusive: neither can read the
+other's half-finished state.
+
+If the event append itself fails after `DisclaimDelegationRecord` has
+already stamped the marker on disk, `DisclaimDelegation` restores the
+delegation record's pre-disclaim bytes — the same rollback discipline
+`Update`, `Close`, and `ForceReleaseWriteSet` already apply to the
+contract file, applied here to the delegation record. Without it, a
+disclaim with no matching audit-log entry would be exactly the
+half-finished state this section's own audit-trail claim promises
+never happens; a rolled-back delegation still blocks `Abandon`'s gate,
+so the failure mode stays safe (an operator retries the disclaim)
+rather than silent. Confirmed failing before the rollback was added:
+`TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure` (a
+directory sabotaging the live event-log path) left the delegation
+disclaimed with no event and a 0-count `countBlockingDelegations` when
+run against the pre-rollback code.
+
+`Abandon`'s gate 1 (`internal/mission/store.go`) now counts via a new
+`countBlockingDelegations`, not `countDelegations` — the latter is kept
+unchanged and still backs `ForceReleaseWriteSet`'s informational
+staleness snapshot, which counts every delegation whether disclaimed or
+not because it describes what happened, not what still blocks a
+transition; conflating the two would silently under-report staleness.
+`countBlockingDelegations` walks the same `delegations/` directory and
+excludes only entries whose own record carries a non-empty
+`DisclaimedAt` — a directory whose record cannot be loaded still counts
+as blocking (fail closed: an unreadable record is not evidence of a
+disclaim). This is the ONLY change to `Abandon`'s gate; gate 2 (the
+result-artifact check) is untouched and still refuses unconditionally
+if the mission has a result for any round, disclaimed delegations or
+not — see the security review below for why that matters.
+
+**Why not a bypass flag.** `Abandon`'s own doc comment already rejects
+one ("the gate is the whole point"), and this round does not add one:
+there is no flag that says "abandon anyway." The only lever is
+`DisclaimDelegation`, which is per-delegation, named by ID, and
+mechanically gated on a fact recorded at write time — an operator
+cannot wave away the gate in bulk, and cannot wave it away at all for a
+delegation whose provenance was never sidecar capture.
+
+**Security review (the mission's own required checklist).**
+
+- *Can this retire a mission that genuinely had a worker do real
+  work?* Yes, in one specific, narrow way: `DisclaimDelegationRecord`'s
+  eligibility check (provenance + closed) proves a delegation is a
+  *candidate* for having been a capture; it does not and cannot prove
+  the spawn's actual work was worthless. An operator who disclaims a
+  delegation whose matching-worker-type spawn did real, valuable work
+  it never got around to submitting as a mission `Result` can still
+  retire that work. Two things bound the blast radius: gate 2 still
+  refuses if a `Result` was ever submitted for any round (the normal
+  way real work concludes), and `--reason` is mandatory and permanently
+  attached to both the delegation record and the event log, so a wrong
+  disclaim is attributable, not silent. This is the same trust the
+  codebase already places in an operator's `--reason` on `Abandon`
+  itself and on `ForceReleaseWriteSet` — a human attestation backed by
+  a mechanical precondition, not an automated proof.
+- *Can a hand-edited `bound_via` on disk unlock the path?* Yes — an
+  operator with write access to the git-tracked mission tree could set
+  `bound_via: active_mission_sidecar_dispatch` on any delegation record
+  by hand and make it eligible. This is not a new gap: the same is true
+  of hand-editing a contract's `status: open` or a `Result`'s
+  `verdict: pass` today. Ethos's trust boundary for git-tracked mission
+  state is the repo's own commit history and review process, not a
+  runtime signature scheme — this round does not change that boundary
+  in either direction.
+- *Is there a second, WORSE way to hand-edit the same gate open?* Yes
+  (review finding K10, full-branch review, m-2026-09-08-004 round 3,
+  naming a sibling of the bullet above): hand-editing a delegation
+  record's `verdict: aborted` unlocks `countBlockingDelegations`'s
+  unconditional aborted exclusion directly, with no `--disclaim` call
+  at all — and unlike the disclaim path, this leaves NO audit trail on
+  the delegation or the mission's event log. Disclaiming a real capture
+  at least writes `disclaimed_at`/`disclaimed_reason` and a
+  `disclaim_delegation` event, permanently and attributably (see the
+  bullet below); a hand-edited verdict leaves nothing — the same trust
+  boundary as `bound_via` (git-tracked state, not runtime-verified), but
+  a strictly quieter exploit of it. Named here for the same reason the
+  `bound_via` case is: not a new gap this round introduces, but one this
+  round's own gate now depends on and had not previously named.
+- *Does the disclaim leave an audit record of who disclaimed what and
+  why?* Yes, twice over: the delegation's own record carries
+  `disclaimed_at`/`disclaimed_reason` permanently (immutable — a second
+  disclaim attempt is refused rather than allowed to overwrite it), and
+  the mission's append-only event log carries a `disclaim_delegation`
+  event naming the delegation ID, its provenance, and the reason. The
+  event's `Actor` is the contract's `Leader` field, the same source
+  `Abandon`'s own event already uses — this round does not add a
+  separate identity resolution for "who ran the CLI command," so a
+  disclaim run by someone other than the mission's leader is still
+  attributed to the leader in the log, exactly as `Abandon`'s own event
+  already is. Not a new gap; named here because it was explicitly
+  checked, not assumed.
+- *Detector validation.* Before repointing gate 1, `countDelegations`
+  was confirmed to have exactly two call sites (`grep`, both read in
+  full): `Abandon`'s gate 1 and `ForceReleaseWriteSet`'s staleness
+  snapshot. Only the former was repointed; the latter's doc comment
+  already states its count is informational, not gating, so leaving it
+  on the unfiltered `countDelegations` is correct, not an oversight.
+
+**Tests.** `TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured`
+pins the regression directly: dispatch-origin sidecar naming a
+mission with `Worker: bwk`, a spawn with a *different* agent type, and
+an assertion that the spawn is neither bound to the mission nor
+recorded as a delegation under it, and that the sidecar is left in
+place. Confirmed failing against the pre-fix code (the spawn WAS bound
+and WAS recorded). `..._MatchingWorkerConsumesBinding` pins the
+single-use half: a matching-worker spawn is bound Tier B and the sidecar
+is gone immediately after. `..._ClaimOriginStaysAfterConsume` pins the
+non-regression: an `ethos mission claim` binding is untouched by this
+change and stays sticky across a successful dispatch, exactly as before.
+
+**Amendment 2026-09-08 (local review, m-2026-09-08-003, six findings,
+all resolved in the follow-up mission that added the round 2 section
+above):** the round 1 Tests paragraph above did not cover the
+contract-load-failure branch this ADR's own text argues for (F5) —
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableContractDoesNotBlock`
+closes that gap: a dispatch-origin sidecar naming a mission the store
+cannot `Load` allows the spawn (never blocks, unlike the claim/explicit-
+`MISSION_ID` paths), does not capture it, and leaves the binding in
+place. `..._MismatchedWorkerNotCaptured` was also strengthened to
+assert `ReadActiveMissionBinding().Origin == BindOriginDispatch` on the
+surviving binding, not only that the mission ID string survives (F6's
+companion test gap — a degraded-to-claim binding would still pass the
+weaker assertion). Two further findings were process/comment quality,
+not behavior: F2 (a stale doc-comment claim that `dispatchTierB` called
+`spawnAgentType`, when it still inlined a duplicate) was already fixed
+incidentally when round 2 wired `BoundVia` through the same call site;
+F3 and F4 corrected two stderr/doc-comment claims (an unnamed
+contract-load failure printing `worker ""` with no explanation, and an
+understated failure-mode bound on `consumeDispatchBinding`) to match
+what the code actually does. F1 (MCP-surface parity) is covered
+separately, below.
+
+**F1 — MCP surface parity.** `internal/mcp/mission_tools.go`'s
+`bindDispatchedMission` mirrors the CLI's function of the same name and
+had not been updated: its doc comments still described the pre-DES-076
+"whatever mission the sidecar named a moment ago" capture, and — unlike
+the CLI, which now prints the binding unconditionally and names the
+Worker — it emitted nothing on a fresh (non-rebind) bind, so an
+MCP-driven leader had no way to learn a binding existed at all, let
+alone which worker it was scoped to. Fixed to match the CLI exactly:
+`bindDispatchedMission` now takes `worker` and reports the binding
+unconditionally (`TestHandleMission_CreateFreshBindNamesWorker`), and
+the rebind message names the worker too. Superseded by round 3 below:
+the "rebind" case this test covered no longer exists at all (the test
+is now `TestHandleMission_CreateCoexistsWithExistingClaim`), because
+round 3 replaced the shared slot this finding's fix still lived on top
+of.
+
+**F6 (the load-bearing one).** `ClearActiveMission`
+(`internal/mission/active.go`) removed both sidecar files
+unconditionally via `errors.Join`, and its own comment claimed "a
+half-cleared pair converges." It converges to the WRONG answer: a
+partial failure that removed the origin file but left `active-mission`
+behind leaves the shape `ReadActiveMissionBinding` reads as
+`BindOriginClaim` — sticky, ungated by agent type, stamping commit
+trailers — silently upgrading a dispatch binding into a claim through a
+different door than the one this ADR closed. Fixed by attempting the
+origin removal only after the active-mission removal succeeds, so a
+partial failure leaves the pair matched (both present, still agreeing)
+rather than mismatched.
+`TestClearActiveMission_StopsOnActiveMissionRemovalFailure` forces the
+active-mission removal to fail via a non-empty directory in its place
+(`ENOTEMPTY`, not a permission change — chmod-based failures are flaky
+under a root-running test process, the same lesson this repo's own
+DES-075 F6 amendment already applied elsewhere) and confirmed failing
+against the pre-fix `errors.Join` version before landing the fix.
+
+### Amendment 2026-09-08: round 3 (m-2026-09-08-004 round 2) — three local reviewers, 13 findings against round 1's code, 2 critical, 1 merge-blocker
+
+Round 1 and round 2 above were reviewed against `3cf6bf4` (round 1's
+commit) rather than the code that had already landed by the time review
+completed. Three critical/blocker findings (C1–C3) required a genuine
+redesign, not a patch; the rest (C4–C13) were coverage gaps and stale
+prose. This amendment corrects the record rather than appending a
+second, contradicting story: **the "one dispatch, one binding, one
+consuming spawn — the sidecar cannot outlive the worker it was written
+for" sentence in round 1's decision above was FALSE**, and C1 is the
+proof.
+
+**C1 (CRITICAL, independently verified).** `bindDispatchedMission`
+called `WriteActiveMissionOrigin` unconditionally, and the single
+active-mission slot could hold only ONE dispatch binding at a time.
+Sequence: dispatch `m-A` (worker `bwk`) → sidecar holds `(m-A,
+dispatch)`; dispatch `m-B` (worker `bwk`) before `m-A`'s worker ever
+spawns → sidecar now holds `(m-B, dispatch)`, **`m-A`'s binding is
+gone, silently**; the leader's next `bwk` spawn (intended for `m-A`)
+matches `m-B`'s Worker instead and files under `m-B`; `m-B`'s own
+eventual worker spawn finds no binding at all and goes unattributed
+(Tier A). Two misattributions from one ordinary sequence — and this
+repo pins ONE handle per specialty domain (`bwk` for every Go internals
+mission per `CLAUDE.md`'s own delegation table), so back-to-back
+same-worker dispatch is the NORMAL workflow here, not a corner case.
+The declared-Worker discriminator round 1 introduced had zero
+discriminating power in precisely the situation this repo generates
+most.
+
+**C2 (CRITICAL).** `ReadActiveMissionBinding` defaults to
+`BindOriginClaim` when the origin file is absent, truncated, or names a
+different mission — correct when `claim` was the *restrictive* origin
+(pre-DES-076), now dangerous once `claim` became the *permissive* one:
+sticky, ungated by agent type, and (per `commit_trailers.go`)
+trailer-eligible. A lost suppression now costs the ENTIRE capture gate
+and restores the full pre-DES-076 bug, not just a stray trailer. The
+round-2 addendum sharpened this further: the most likely producer of
+the failed-clear state was not an exotic filesystem fault but DES-076's
+OWN success path — `consumeDispatchBinding` calling `ClearActiveMission`
+and only logging a failure to unlink one of the two files. **DES-076's
+own consume path could, on a single failed unlink, restore both of the
+bugs it was written to close.**
+
+**C3 (MERGE-BLOCKER).** `dispatchedWorker` discarded both the
+store-resolution and contract-`Load` errors, and the caller folded
+`!ok` into the mismatch branch. A corrupt or deleted contract for the
+GENUINELY dispatched worker produced the identical output as an actual
+mismatch — `... is bound to m-X for worker "", but this spawn is "bwk"
+— not the dispatched worker`. The spawn WAS the dispatched worker; the
+message sent the diagnosis in the wrong direction, and the real
+worker's delegation was permanently absent from the audit trail with no
+signal why.
+
+**The fix: key the pending binding by MISSION, not by a single
+overwritable slot** (the leader's own two offered options were "refuse
+a second dispatch while one is outstanding" or "key the sidecar by
+mission so N bindings coexist" — the latter was chosen because refusing
+would make this repo's own normal same-handle-dispatch workflow fail
+outright). `internal/mission/active.go` gains a `dispatch-pending/`
+directory under each session — one file per pending dispatch, named by
+mission ID, content the Worker handle recorded at dispatch time.
+`ReadDispatchPending` lists them oldest-first (file mtime); a matching
+Agent() spawn resolves to the OLDEST entry whose Worker matches — the
+natural reading of `CLAUDE.md`'s own two-step dispatch-then-spawn
+protocol, since a leader dispatches A, then B, in that order, and
+(absent an out-of-order spawn — see the residual risk below) spawns
+their workers in the same order.
+
+This single change resolves all three critical findings, not by
+patching each in isolation but by removing the shared, ambiguous
+storage all three findings were symptoms of:
+
+- **C1 is closed structurally.** Two pending dispatches to the same
+  Worker are two files, not one slot fighting over the same bytes.
+  `TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_TwoPendingSameWorkerCoexist`
+  reproduces the leader's own repro sequence directly and asserts both
+  missions resolve correctly across two sequential matching spawns.
+- **C2 no longer applies to dispatch bindings at all — for the WRITE
+  path.** Nothing but `ethos mission claim` writes to the
+  active-mission/origin pair anymore (`cmd/ethos/mission.go`'s and
+  `internal/mcp/mission_tools.go`'s `bindDispatchedMission` both write
+  `WriteDispatchPending` instead), so the "defaults to claim on
+  ambiguity" behavior — which was the actual bug once a shared file
+  also carried dispatch state — is now always the correct answer for
+  anything CURRENTLY written there, because nothing else is ever
+  written there on purpose. `ConsumeDispatchPending` is a single-file
+  removal with no paired-file consistency question a partial failure
+  could leave mismatched — C2's whole class does not exist for the new
+  store. **Correction (2026-09-08 amendment, below): this bullet
+  originally claimed the READ side needed no failure-direction inversion
+  either — false, and corrected by that amendment's `BindOriginUnknown`
+  change.** A mixed-binary window or a hand-inspected legacy sidecar can
+  still leave a well-formed, non-claim origin file on disk even though
+  nothing writes one on purpose anymore, and `ReadActiveMissionBinding`
+  used to default THAT case to `BindOriginClaim` — the exact permissive
+  failure direction the original finding named. `BindOriginUnknown` DOES
+  invert it: positive, non-claim evidence in the origin file is now
+  refused, not defaulted past. See that amendment for the full
+  before/after and the regression test pinning the well-formed legacy
+  shape specifically (review finding K7, m-2026-09-08-004 round 3).
+- **C3 is closed by removing the function that discarded the error.**
+  `dispatchedWorker` is deleted. Matching a spawn against a pending
+  dispatch needs no contract `Load` at all — the Worker was already
+  recorded in the pending file — so there is no ambiguous
+  Load-failure-during-matching state to swallow. A contract that fails
+  to load for an ALREADY-MATCHED pending dispatch is now handled by
+  `dispatchTierB`'s own existing Load-and-block gate, exactly like an
+  explicit `MISSION_ID` naming an unloadable contract. This is a
+  **deliberate, documented doctrine revision** from round 1: round 1's
+  "never block the ambient bridge" rule applied to the PRE-match
+  uncertainty of a Load-dependent matcher, where a Load failure was
+  genuinely ambiguous (mismatch, or unresolvable match?); once a match
+  is certain without a Load, a subsequently unloadable contract is a
+  real, actionable problem for THIS spawn specifically, not ambient
+  noise sitting behind every spawn in the session. Round 1's own test
+  asserting the opposite (`..._UnresolvableContractDoesNotBlock`) was
+  replaced by `..._MatchedButUnresolvableContractBlocks`, asserting this
+  doctrine directly. **Correction (2026-09-08 amendment, below): that
+  test itself is now stale and was replaced again.** K1 (full-branch
+  review, m-2026-09-08-004 round 3) found that "block" was the wrong
+  consequence when the unresolvable entry is the ONLY candidate — FIFO
+  always re-selects the same oldest entry, so a permanently unloadable
+  head entry denied every subsequent same-worker spawn forever. The
+  doctrine that a Load failure must not be silently discarded still
+  holds; what changed is the consequence: skip (fall through to Tier
+  A/B) rather than block, while still never clearing the entry on
+  unproven evidence. See that amendment for the current test names.
+
+**C7 — depth-refused (aborted) skeletons blocked `Abandon` exactly like
+captures, and disclaim couldn't tell them apart.** A matching spawn
+writes the delegation skeleton, then `enforceDelegationDepth` refuses
+and closes it `verdict: aborted` — the binding is not consumed
+(correct), so a retry writes a SECOND record, and `Abandon`'s gate
+blocked on any entry regardless of verdict: a mission where no spawn
+ever ran could become permanently un-abandonable. Worse, the round 2
+disclaim gate (`BoundVia == active_mission_sidecar_dispatch` + `Verdict
+!= open`) would have accepted an aborted, genuinely-dispatched
+delegation as if it were a capture — provenance alone cannot
+distinguish "dispatched then refused before running" from "dispatched,
+ran, and was wrongly attributed," since both currently produce
+`BoundVia: active_mission_sidecar_dispatch`.
+
+**Decision: exclude `verdict == aborted` from `Abandon`'s blocking gate
+unconditionally, independent of `BoundVia` or any disclaim.** This is
+mechanical, not a heuristic: `DelegationVerdictAborted` is written by
+exactly two call sites in this codebase
+(`pretooluse_dispatch.go`'s depth-gate refusal,
+`subagent_start.go`'s hash-gate refusal), both of which fire BEFORE the
+worker process starts — genuinely zero work, always. A third write site
+(`Store.Close`'s escalate-result sweep) cannot appear on any delegation
+`countBlockingDelegations` ever reads, because that sweep only runs
+once the mission is already non-open, and `countBlockingDelegations` is
+only ever called from `Abandon`'s gate, which itself refuses before
+reaching this check unless the mission is `StatusOpen`.
+
+Rejected alternative: a distinct `BoundVia` value for
+"dispatched-then-refused." Provenance describes HOW a delegation was
+bound, not WHETHER its worker ran — the field that already answers that
+question is `Verdict`, and it already has the right value. Minting a
+new provenance value to duplicate information `Verdict` already carries
+would proliferate `BoundVia` values for every future refusal reason.
+
+Rejected alternative: narrowing `DisclaimDelegationRecord`'s own gate to
+require `Verdict == aborted` specifically (rather than merely
+`!= open`). This would defeat the disclaim mechanism's PRIMARY use
+case: a genuinely captured delegation is one whose spawn ran to normal
+completion (`pass`/`fail`/`error`) under the wrong mission —
+ethos-7tqd's own reproduction was an unrelated PR-fix agent that ran
+and finished, not one refused before it started. Disclaim's `!= open`
+check is untouched; the aborted exclusion is independent of it, sitting
+one level up in `countBlockingDelegations`.
+
+`TestCountBlockingDelegations_ExcludesAbortedUnconditionally` uses
+`BoundViaSidecarDispatch` deliberately — the SAME provenance a genuine
+capture carries — to prove the exclusion is keyed on `Verdict`, not
+provenance.
+`TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim` pins the
+same gate at the `Store.Abandon` unit level, confirming no `--disclaim`
+is needed or appropriate for this case — but it hand-calls
+`CloseDelegationSkeleton` directly (its own comment says "simulate"),
+not the real depth gate, and package `mission` cannot import package
+`hook` to drive that gate directly (`hook` already imports `mission`).
+**Correction (2026-09-08 amendment, below): this bullet previously
+called that test "the end-to-end proof," which overstated it (review
+finding K11(b), full-branch review, m-2026-09-08-004 round 3).** The
+actual end-to-end proof —
+`TestHandlePreToolUse_DepthRefusalThenAbandonNeedsNoDisclaim`, added by
+that amendment — lives in package `hook`, drives a real Tier B spawn
+through `enforceDelegationDepth` with the ceiling exceeded, confirms
+the hook itself denies the spawn and closes the skeleton
+`verdict: aborted`, then confirms `Store.Abandon` succeeds with no
+disclaim. The `mission`-package test above remains a real, useful unit
+pin on `Store.Abandon`'s own gate logic — it is just not the end-to-end
+one.
+
+**C4 — `subagent_type` appeared in ZERO test files repo-wide.** Every
+existing hook test drove agent type through `CLAUDE_AGENT_TYPE` with an
+empty `tool_input`, leaving the discriminator's PRIMARY input — what a
+real leader `Agent()` call actually sets — completely untested; deleting
+the `tool_input` branch from `spawnAgentType` would have left the whole
+suite green.
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UsesToolInputSubagentType`
+sets `subagent_type` and `CLAUDE_AGENT_TYPE` to DIFFERENT values and
+asserts both that the pending-dispatch match uses `subagent_type` and
+that the written `record.yaml`'s `AgentType` field reflects it.
+
+**C5 — `spawnAgentType`'s "shared" doc-comment claim was false when
+reviewed**, `dispatchTierB` inlined a duplicate at the exact call site
+the comment claimed called the helper. Already resolved incidentally
+when round 2 wired `BoundVia` through that same call site (verified by
+`grep -n 'agentType' internal/hook/pretooluse_dispatch.go` showing a
+single definition and two call sites, both through `spawnAgentType`).
+
+**C6 — `HandleSessionEnd` never cleared any mission binding.**
+`claude --resume` reuses the session ID, so a claim or pending dispatch
+left over from before a session ended survived into the resumed session
+and could capture an entirely unrelated later spawn or commit — C1's
+misattribution class, triggered by session resumption instead of
+back-to-back dispatch. Fixed: session end now clears the session's
+claim and every pending dispatch, the same scope `ethos mission
+release` clears.
+`TestHandleSessionEnd_ClearsMissionBindings` confirmed failing against
+the pre-fix `HandleSessionEnd` (both bindings survived) before landing.
+
+**C9 — `consumeDispatchBinding`'s failure messaging understated the
+consequence and omitted the remedy; the round-2 addendum added that
+`ClearMissionBindings` (the mission's own `close`/`abandon` cleanup)
+shares the identical failure mode.** Fixed the message to say the
+capture is unbounded under a persistent failure (not "one extra
+spawn") and to name `ethos mission release`. The doc comment goes
+further, per the addendum: `close`/`abandon`'s own cleanup and
+`mission release` both remove the same file through the same
+`os.Remove` call the original failure came from, so neither is a
+GUARANTEED fix under a truly persistent condition (EACCES, a full
+disk) — the genuine remedy in that case is fixing the filesystem
+condition directly, not retrying a different `ethos` command that
+shares the same failure mode. This is stated explicitly rather than
+implied, per the leader's standing rule that an ADR overstating its own
+remedies is worse than one admitting the gap.
+
+**C10 — the MCP surface (`internal/mcp/mission_tools.go`) still
+narrated pre-DES-076 semantics** in three places (two doc comments, one
+operator-facing warning string) even after round 1's own F1 fix,
+because the F1 fix predated round 3's storage redesign and had not been
+re-synced. `bindDispatchedMission`'s MCP twin now writes
+`WriteDispatchPending` exactly like the CLI, and its doc comment and
+warning text were rewritten in the same edit that changed its
+behavior, not left to drift again.
+
+**C11 — `internal/hook/commit_trailers.go`'s doc comment still said
+dispatch "files the next spawn's delegation under the right mission"**
+via the SAME active-mission sidecar this comment was describing.
+Corrected to name the pending-dispatch store instead.
+
+**C12 — `staleBindingReason`'s doc comment claim ("belongs to
+dispatchTierB, which refuses the spawn") was flagged as false for
+dispatch-origin bindings under round 1's code.** Moot after the round 3
+redesign: `staleBindingReason` is now called ONLY from the claim
+branch of `readActiveMissionForDispatch` (`matchDispatchPending` does
+not call it at all — no `Load` is needed to match a pending dispatch),
+so the original claim is accurate again for the only remaining caller.
+The doc comment now states this explicitly rather than leaving it
+implicit.
+
+**C13 — stale-binding warnings omitted `ethos mission release`, the
+actual remedy.** The claim-path warning in `readActiveMissionForDispatch`
+now names it. `warnNonOpenMissionID` deliberately does NOT: every
+caller of that function names its mission from the `MISSION_ID`
+environment variable (inherited by ordinary OS process-environment
+inheritance, not a sidecar file) or the `parent_delegation` inheritance
+walk — `mission release` only clears the claim slot and the
+pending-dispatch store, and would change neither source. Adding it
+there would be a false remedy, not a helpful one; this is stated
+explicitly in that function's doc comment rather than silently
+complying with the finding where it does not actually apply.
+
+**Honest residual-risk enumeration (the leader's explicit requirement
+after C1 falsified round 1's "cannot outlive the worker it was written
+for" claim).** This ADR does NOT claim the capture class is now
+impossible. What remains, named plainly:
+
+1. **Same-Worker-type, different-task capture** (named since round 1,
+   unchanged by round 3): a spawn whose agent type happens to equal a
+   pending dispatch's Worker, but whose actual task is unrelated to
+   that mission, still matches and is captured. The disclaim mechanism
+   (round 2) exists specifically because this case is not eliminated,
+   only narrowed from "any next spawn of any type" to "a next spawn of
+   the SAME type."
+2. **Out-of-order spawning breaks the FIFO assumption — now SIGNALLED,
+   not silent (2026-09-08 addendum below), and symmetric, not
+   single-sided (review finding K9, full-branch review, m-2026-09-08-004
+   round 3, correcting this item's own prior wording).** If a leader
+   dispatches `m-A` then `m-B` (same Worker) but spawns the worker for
+   `m-B`'s work FIRST — deliberately or by mistake — `matchDispatchPending`
+   still resolves to the OLDEST entry (`m-A`) and consumes it: `m-B`'s
+   work is misattributed to `m-A`. But that consumption also means the
+   leader's SECOND spawn (intended for `m-A`'s work) now matches the
+   only entry left, `m-B` — so `m-A`'s work is misattributed to `m-B`
+   right back. **Two misattributions from one out-of-order pair, a full
+   swap** — the same doubling C1 above names explicitly for its own
+   single-slot-overwrite sequence; this item previously described only
+   the first half. The FIFO ordering is a reasonable default given
+   `CLAUDE.md`'s own dispatch-then-immediately-spawn protocol, but it is
+   an assumption about operator behavior, not a guarantee enforced by
+   the code. Round 3 shipped this gap silent; the 2026-09-08 addendum
+   below adds a stderr warning naming the ambiguity, the candidates,
+   which one was chosen, and that `MISSION_ID` overrides the match — the
+   hazard itself is unchanged (FIFO still resolves to the oldest,
+   disclaim is still the only correction for each half of the swap), but
+   it can no longer happen without the operator being told.
+3. **Persistent filesystem failures degrade multiple guarantees at
+   once, not just one.** A truly persistent condition (not transient
+   contention) can defeat `consumeDispatchBinding`, `close`/`abandon`'s
+   own cleanup, AND `ethos mission release` identically, since all
+   three remove pending-dispatch files through the same underlying
+   `os.Remove` call (C9). The only real remedy in that case is fixing
+   the filesystem condition itself.
+4. **Hand-edited or corrupted pending-dispatch files are not
+   cryptographically verified.** A pending-dispatch file's Worker field
+   is plain text with no integrity check; an operator (or a bug) that
+   hand-edits or corrupts one could cause a false match or a false
+   non-match. This is the same trust boundary every other git-tracked
+   or session-local ethos state already accepts — this round does not
+   change it in either direction, and does not claim to.
+
+None of these four are new gaps introduced by round 3 — three (1, 3, 4)
+existed in some form since round 1 or round 2 and were previously
+described in language that undersold them ("cannot outlive," "at most
+one more spawn"); the fourth (2) is a genuinely new tradeoff the
+per-mission redesign introduces in exchange for closing C1. All four
+are now named in the same document that claims the fix, rather than
+requiring a future reviewer to discover them independently.
+
+**This is no longer the complete residual list.** A second full-branch
+review pass (m-2026-09-08-004 round 3, "Amendment 2026-09-08: J1-J6"
+below) found four more residuals this list did not name, plus one that
+this document had itself introduced without naming honestly (K1's
+skip-not-clear fix). See that amendment for all five.
+
+### Amendment 2026-09-08: C2 hardened further, plus two findings from a local review probe (F2, F3)
+
+A later review pass on the round-3 code above (still m-2026-09-08-004
+round 2, same review cycle) found C2 was closed for the LIVE
+production path but not for the underlying mechanism, and a review
+probe — an ad hoc reproduction script, not a permanent test, planted
+directly in the working tree and since removed — demonstrated two
+further gaps in the FIFO redesign itself. All three are closed here.
+
+**C2, completed.** Round 3 above closed C2 by removing dispatch's
+write access to the active-mission/origin pair entirely — true, and
+sufficient for every WRITE path in production. It did not touch the
+READ path's own defaulting logic, which the original C2 finding also
+named: `ReadActiveMissionBinding` still answered `BindOriginClaim` for
+an origin file that EXISTS but does not cleanly resolve (truncated, or
+naming a different mission) — positive, contradictory evidence, not
+mere absence. Nothing in production writes such a file anymore, but the
+function itself still could (a mixed-binary window, a hand-inspected
+legacy sidecar), and its own doc comment still argued for the
+permissive default in exactly the words the finding quoted. Closed
+properly now: a NEW `BindOriginUnknown` sentinel is returned for that
+case specifically (never written, read-only, refused by every
+`Origin`-gated caller by construction — `commit_trailers.go`'s gate and
+`readActiveMissionForDispatch`'s claim branch both check `Origin ==
+BindOriginClaim` explicitly, so `BindOriginUnknown` is refused with no
+separate check needed). Absence of the origin file is UNCHANGED and
+stays `BindOriginClaim` — that is the genuinely safe, positively
+meaningful legacy case DES-076's original origin-file design assigned
+it. `TestReadActiveMissionBinding_StaleOriginIsUnknownNotClaim` and its
+truncated-file sibling pin both non-resolving shapes; the
+`readActiveMissionForDispatch` claim branch was changed to consult the
+full binding and explicitly check `Origin == BindOriginClaim`, refusing
+otherwise, rather than treating any content in the file as a claim by
+assumption.
+
+**F2 — a stale pending-dispatch entry permanently head-of-line-blocked
+every newer one for the same Worker.** `matchDispatchPending` walks
+FIFO oldest-first and, per C3's own doctrine, deliberately does not
+Load a contract to pre-validate a match. But that meant a pending entry
+naming a mission that had SINCE closed/failed/escalated/abandoned
+(dispatched, then the mission was retired before its worker ever
+spawned) was never removed, and FIFO always re-selects the SAME oldest
+entry first — so that one stale entry blocked every subsequent
+matching spawn in the session from ever reaching a newer, genuinely
+open pending dispatch, for the rest of the session's life. Fixed by
+adding a narrow, positive check: an entry whose mission LOADS
+successfully and reports a non-open status is skipped AND cleared (it
+can never legitimately match — provably dead, not a heuristic guess).
+An entry whose mission FAILS to load is NOT skipped — matching C3's
+doctrine exactly, that case is still handed to `dispatchTierB`'s own
+Load-and-block gate unchanged, by returning it as the match.
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_StaleEntryDoesNotHeadOfLineBlock`
+confirmed failing against the pre-fix code (mission B's spawn fell
+through to Tier A, both entries survived unconsumed) before landing.
+
+**F3 — two concurrent `Agent()` spawns could both match the SAME
+pending entry before either consumed it.** This org's own conventions
+call for batching independent tool calls into one turn, so two
+`Agent()` calls landing in the same PreToolUse dispatch window
+concurrently is not a hypothetical: `matchDispatchPending` only reads
+the pending store, and the actual removal happens later, inside
+`dispatchTierB`'s `onDispatched` callback, well after the match
+decision — a genuine TOCTOU window. Fixed with a new per-session
+exclusive lock, `AcquireDispatchPendingLock`, held by `dispatchAgent`
+across the ENTIRE match-through-admit-or-fall-back sequence, not just
+the read — releasing it before `dispatchTierB` runs would still let a
+second waiter's read interleave with the first caller's still-pending
+consume decision. This is a NEW lock class, always acquired OUTERMOST
+(before any mission or delegation lock `dispatchTierB` itself acquires
+internally), so it introduces no reversal of the acquisition order this
+codebase's other locks already follow, and no existing call site
+acquires a mission or delegation lock and then tries to acquire this
+one. `TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch`
+reproduces the race directly (two serialized `matchDispatchPending` +
+`ConsumeDispatchPending` calls under the lock, asserting they never
+resolve to the same mission); the review probe that found this
+(captured verbatim before it was removed from the working tree)
+demonstrated the pre-fix double-match directly by calling
+`matchDispatchPending` twice with no lock at all.
+
+Both F2 and F3 are properties of the per-mission FIFO design round 3
+introduced, not regressions of anything pre-round-3 — the single-slot
+design they replaced could not have had a "stale entry blocks a newer
+one" bug (there was only ever one slot) or this SPECIFIC concurrent
+double-match shape (though it had its own, worse, unconditional
+overwrite race). Naming this plainly because the residual-risk
+enumeration above already commits this document to naming what a
+redesign trades away, not just what it fixes.
+
+### Amendment 2026-09-08: FIFO ambiguity signal, plus five findings from a full-branch review (H1, H2, M3, M4, L5)
+
+A full-branch review of the whole DES-076 line of work (m-2026-09-08-004
+round 3) found two HIGH findings, two MEDIUM, and one LOW-with-two-parts.
+All five are closed here, alongside a signal for residual-risk item 2
+above, requested separately from the same review pass.
+
+**FIFO ambiguity signal.** `matchDispatchPending` resolves a
+multi-candidate tie to the oldest entry silently — residual-risk item 2
+names why that is a real, not hypothetical, misattribution risk. Fixed
+by warning on stderr whenever two or more LIVE (non-stale) entries match
+the spawning worker: the count, the worker, every competing mission ID,
+which one FIFO chose, and that `MISSION_ID` overrides the match entirely
+(the one lever that lets an operator pick a different candidate for a
+specific spawn). Fires ONLY on a genuine same-worker tie — a session
+with pending dispatches for `bwk` and `rmh` is not ambiguous for either
+one's spawn and stays quiet, per the review's explicit requirement that
+the signal not become false-positive noise.
+`TestMatchDispatchPending_AmbiguitySignal` and
+`TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers` pin both
+halves; the first confirmed failing against pre-fix code (no signal at
+all), matching the residual-risk update above.
+
+**H1 (HIGH) — a pending-dispatch block read as an unrecoverable
+MISSION_ID environment-variable problem.** `dispatchTierB` already
+carried `boundVia`, recording whether `missionID` came from the
+MISSION_ID env var, parent-delegation inheritance, an active-mission
+claim, or a pending dispatch — but its Load-failure block message and
+its non-open-status warning both used one generic wording regardless,
+inherited from before pending dispatches existed as their own sidecar
+class. A spawn that matched a pending dispatch whose mission could not
+load, or was no longer open, was told to check `MISSION_ID` — an
+environment variable that was never involved — with no mention of the
+worker, the session, or `ethos mission release`, the actual remedy.
+`missionResolutionFailedMessage` and `warnNonOpenMission` now switch on
+`boundVia`: the two sidecar-backed origins (claim, dispatch) name the
+session, the mission, the worker (for dispatch), and `ethos mission
+release` (or the narrower `ethos mission close`/`abandon <id>` for a
+dispatch, matching `consumeDispatchBinding`'s own scoping); the two
+non-sidecar origins (env, inheritance) keep the original wording, since
+`mission release` would be a false remedy for either (review finding
+C13, m-2026-09-08-004 round 2, still correct). `warnNonOpenMissionID`'s
+doc comment, which claimed no caller ever named a clearable sidecar, is
+corrected — round 3 added exactly that caller.
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNamesRemedy`
+confirmed failing against pre-fix code.
+
+**H2 (HIGH) — the delegation-binding sidecar was never cleared on
+session end.** `clearSessionMissionBindings`'s own doc comment claimed
+the same three-way scope `ethos mission release` clears (active-mission
+claim, delegation-binding sidecar, pending-dispatch store), but the
+function only cleared two of the three — the delegation-binding sidecar
+(`mission.ClearDelegationBinding`) was missing. A survivor let the
+commit-msg hook tag a LATER, unrelated session's commits with a stale
+delegation — the same `ethos-jawp` class `ClearDelegationBinding`'s own
+doc comment names, reopened through session end instead of `mission
+release`. Fixed by adding the missing call with the same
+stderr-and-continue advisory discipline as the other two.
+`TestHandleSessionEnd_ClearsMissionBindings` extended to write a
+delegation binding before session end and assert its sidecar is gone
+after; confirmed failing against pre-fix code.
+
+**M3 (MEDIUM) — an abandon-with-disclaim partial failure discarded
+which disclaims already committed.** `DisclaimDelegation` is
+irreversible the moment it succeeds. Both `runMissionAbandon` (CLI) and
+`handleAbandonMission` (MCP) ran a disclaim loop followed by `Abandon`,
+but neither tracked which delegation IDs had already committed before a
+later failure — a second disclaim failing mid-loop, or `Abandon` itself
+failing after every disclaim succeeded (e.g. Gate 2: a result artifact
+still exists) — so an operator retrying after either failure had no way
+to know some of their delegations were already permanently disclaimed.
+Both call sites now accumulate a `disclaimed` slice as each commits and
+wrap the returned error to name it explicitly on both failure paths. On
+the MCP path this is carried in the error text, matching this handler's
+existing convention of a bare error string for every other failure
+mode in the file (`NewToolResultError` takes no structured payload).
+Four regression tests (two CLI, two MCP — one per failure path per
+surface) confirmed failing against pre-fix code.
+
+**M4 (MEDIUM) — a crashed-write dead-end delegation surfaced a bare
+filesystem error.** `countBlockingDelegations`'s doc comment said an
+unreadable delegation record "counts as blocking, fail-closed," but the
+code actually aborted the whole count with an error — the same
+fail-closed OUTCOME for `Abandon`'s caller (an error blocks exactly as
+effectively as a positive count would), but not the same code path, so
+the comment was corrected to say precisely which one this is.
+Separately, a missing `record.yaml` specifically (as opposed to a
+permission or decode failure) is a genuine dead end:
+`WriteDelegationSkeleton`'s documented write order (directory, then
+`prompt.md`, then `record.yaml` last) means a crash in that window
+leaves a directory nothing can load, disclaim, or count as real work.
+That case now gets its own message naming the actual remedy — remove
+the empty directory — rather than surfacing `LoadDelegation`'s bare "no
+such file or directory."
+`TestCountBlockingDelegations_MissingRecordNamesRemedy` confirmed
+failing against pre-fix code.
+
+**L5 (LOW, two parts) — `ReadDispatchPending`'s sort was not a stable
+FIFO discriminator, and it followed symlinks.** `sort.Slice`'s ordering
+is documented as unspecified for equal comparator keys, and mtime ties
+are real (coarse filesystem resolution, concurrent writers landing in
+the same tick) — the sort carried no tiebreak, so ReadDispatchPending
+had no contractual reason to prefer one order over another on a tie.
+Extracted the comparator to `dispatchPendingLess` and added a
+`MissionID` tiebreak (IDs are date-sequential, so lexical order is
+creation order), switched to `SliceStable`. The comparator is
+unit-tested directly rather than through the filesystem: `os.ReadDir`
+already returns entries sorted by filename, which for this repo's ID
+scheme coincides with creation order, so a filesystem-backed test
+cannot distinguish "correctly tiebroken" from "already alphabetical by
+coincidence" — exactly the reliance on an unstated implementation
+detail this finding flagged. Separately, every other sidecar reader in
+this package refuses a symlinked entry (`LoadDelegation`'s
+`rejectSymlink`) before reading it; `ReadDispatchPending` read straight
+through `os.ReadFile`, which follows symlinks. Added the same
+`rejectSymlink` call before the read.
+`TestDispatchPendingLess_TiebreaksOnMissionID` (a targeted revert of
+`dispatchPendingLess` to its bare mtime-only form, not a filesystem
+scenario, for the reason above) and
+`TestReadDispatchPending_RefusesSymlink` (git-stash falsification) both
+confirmed failing against pre-fix code.
+
+### Amendment 2026-09-08: J1-J6, an invariant review of the K round, and a habit worth naming
+
+An invariant-review pass of the K1-K11 amendment above (still
+m-2026-09-08-004 round 3) found that two of its own fixes did not do
+what they claimed — both proven by probe rather than by reading, the
+same discipline this whole document has been asking of itself since
+round 2's "reproduced, not just theorized" standard. One finding (K3)
+was confirmed sound; three code fixes and two documentation gaps
+follow. All were closed in the same review cycle.
+
+**J1 (HIGHEST PRIORITY) — the CLI/MCP dispatch-time queue-position
+advisory (K8's own fix) computed its answer by a DIFFERENT rule than
+the matcher it was describing.** K8 fixed `bindDispatchedMission`'s
+message to name a fresh dispatch's actual position in the queue instead
+of assuming it was first — but it did so with a bare Worker-equality
+filter, while `matchDispatchPending` (K1's own fix, landed in the SAME
+round) additionally skips-and-clears stale entries and skips
+unresolvable ones. The two could disagree, and did: with an
+unresolvable `m-800` ahead of a fresh `m-801` dispatch, K8's message
+read "1 pending dispatch(es) for bwk are ahead of it and will be
+matched first (m-800)" — but at spawn time `matchDispatchPending` would
+skip `m-800` and match `m-801` immediately. **The message told the
+operator the exact opposite of what would happen.** Both of K8's own
+pinning tests staged two resolvable, open missions — the one case where
+a naive filter and the real matcher happen to agree, so neither test
+could have caught this.
+
+Fixed by extracting the classification itself, not just consulting it
+twice: `mission.ClassifyPendingDispatches` (new,
+`internal/mission/active.go`) is now the single function both
+`matchDispatchPending` and the new exported `hook.DispatchBoundMessage`
+call. `hook.DispatchBoundMessage` also replaces the CLI's
+`dispatchBoundMessage` and the MCP surface's inline equivalent — the
+~30 duplicated lines between them (K8 fixed the SAME bug in both places
+independently, which is itself a symptom J5 below names directly) are
+now one implementation. `TestMissionDispatch_UnresolvableAheadEntryNotReportedAsBlocking`
+reproduces the reviewer's exact captured scenario and is confirmed
+failing against a targeted mutation reproducing the pre-J1 bare-filter
+behavior.
+
+**J2 — the K4 drift guard did not guard.** It claimed to enumerate
+"every WRITE-position occurrence across the two packages" but parsed a
+HARDCODED three-file list and recognized only `*ast.AssignStmt`/
+`*ast.CallExpr` as write positions. Falsified empirically, twice: a
+fourth writer in a NEW file calling `mission.CloseDelegation(...,
+DelegationVerdictAborted, ...)` — precisely the "cancel a running
+worker" command the guard's own doc comment names as the likely future
+addition — passed undetected, because the file list could never see a
+new file; and a `Delegation{Verdict: DelegationVerdictAborted}`
+composite literal in a WATCHED file also passed undetected, because its
+parent node is `*ast.KeyValueExpr`, outside the narrower write-position
+set. A positive control correctly failed, so the guard was not a
+no-op — its actual scope was just far narrower than its wording
+claimed.
+
+Fixed by replacing the file list with `filepath.WalkDir` over
+`internal/` and `cmd/` (skipping `_test.go`), and adding
+`*ast.KeyValueExpr`/`*ast.ValueSpec` to the write-position set. All four
+of the reviewer's falsifying scenarios (new-file writer,
+composite-literal writer, an unscanned `cmd/`-tree writer, a
+package-level var alias) were reproduced via temporary probe
+files/edits, confirmed caught, then removed before landing. Also
+cross-referenced the guard from `countBlockingDelegations`'s own doc
+comment (`store.go`) — the "exactly three call sites" claim had no
+mention that anything enforces it, so a reader had no way to discover
+the guard's existence, only its claim.
+
+**J3 — `deleteFiles` reopened the exact gap K3 closed, through its own
+failure path.** K3 moved the mission-sidecar clear into `deleteFiles`,
+the one primitive `Delete`/`Purge`/`PurgeTombstoned` all funnel through
+— correct, and verified STRUCTURALLY this round (`os.Remove(rosterPath)`
+appears exactly once; every deletion path routes through it). But the
+sidecar clear itself stayed advisory: failures went to stderr, and the
+roster was removed regardless. Once the roster is gone the session is
+absent from `List()`, so `Purge`/`PurgeTombstoned` never revisit it — a
+SINGLE sidecar-clear failure orphaned those sidecars permanently, with
+no GC path at all. That is the "no GC" gap K3's own commit message
+names as the problem, reopened by the fix meant to close it.
+
+The general principle this sharpens: advisory-and-continue is correct
+ONLY when something else will eventually retry. Every other `Clear*`
+call site in this codebase (`internal/hook/session_end.go`'s pre-J5
+duplicate, `cmd/ethos/mission.go`'s `runMissionRelease`) is a leaf
+action nothing downstream depends on, so logging and moving on is the
+right discipline there. `deleteFiles` is different: it is the LAST
+step before the one retry mechanism (a later purge pass) stops being
+able to find the orphan at all. Fixed by reordering (sidecars cleared
+BEFORE the roster is removed) and propagating the sidecar-clear failure
+as an error instead of swallowing it — the roster's continued presence
+in `List()` on failure is exactly the retry token a later purge needs.
+Regression test locks the sidecar's own directory (a sibling of the
+roster file, not an ancestor, so roster removal would otherwise still
+succeed) and confirms both that `Delete` returns an error and that the
+roster survives; confirmed failing against pre-fix code.
+
+**J4 (this amendment) — the K round shipped without a residual-risk
+update of its own**, despite fixing K1 (a scoped hazard trade, not an
+elimination — see J6 below), landing J1-J3 above (three genuine gaps,
+one of which — J3 — reopened a gap the SAME round had just closed), and
+leaving the CHANGELOG honest about the abnormal-session-death residual
+("closes the gap for the next `ethos session purge` run, not
+automatically on every resume") while DESIGN.md stayed silent about it.
+This document commits itself, in its own words, to "naming what a
+redesign trades away, not just what it fixes" — the residual list above
+now points here for the full account, and the account is: K3's own fix
+is NOT automatic (`ethos session purge` is an explicit, operator- or
+tooling-invoked step — nothing calls it on `claude --resume`, so a
+crashed session's sidecars persist until someone or something runs a
+purge), K1's skip-not-clear can oscillate back into a real
+misattribution (J6, next), the aborted-writer count is enforced by a
+parse whose exact coverage is now verified but still bounded to
+`internal/` and `cmd/` (a writer introduced through code generation or
+reflection would still be invisible to an AST walk), and the
+queue-position message and the matcher can now only agree because they
+share one function — a THIRD independent implementation of either would
+reopen J1's exact class.
+
+**J5 — two hand-maintained copies of the same three-clear list drifted
+by construction, not by accident.** `internal/hook/session_end.go`'s
+`clearSessionMissionBindings` and `internal/session/store.go`'s
+`clearMissionSidecars` (K3's own new code) each called
+`mission.ClearActiveMission`/`ClearDelegationBinding`/`ClearDispatchPending`
+independently. A fourth sidecar type added to one and not the other
+would drift silently — the exact shape J1 already found once this
+round, between the CLI and MCP copies of the same queue-position logic.
+Fixed by deleting the hook-local copy entirely: `HandleSessionEnd` now
+relies solely on `ss.Delete`, which (per J3, above) already clears the
+same three sidecars before removing the roster and propagates a
+failure instead of swallowing it — there was nothing left for a
+hook-local duplicate to do once `session.Store` did both jobs
+correctly. Fixing this exposed a real, previously-invisible test-fixture
+bug: `internal/hook`'s shared `testStores(t)` helper constructed its
+`session.Store` at an arbitrary temp directory, never at
+`$HOME/.punt-labs/ethos` the way `cmd/ethos/identity.go`'s production
+`sessionStore()` always does — invisible before this fix only because
+the OLD hook-local duplicate resolved its own root via
+`os.UserHomeDir()` independently of `ss`, papering over the mismatch.
+`TestHandleSessionEnd_ClearsMissionBindings` now constructs its own
+`session.Store` rooted at the same `$HOME`-derived path its
+`mission.Write*` setup calls use, matching production wiring.
+
+**J6 — K1's "it can still resolve on its own" was framed purely as a
+benefit; it is also a hazard, and the fix's own noise has no ceiling.**
+Two parts:
+
+1. *Oscillation.* Skip-not-clear trades K1's bug (permanent denial) for
+   a narrower but real one: dispatch `m-A` on branch X, `git checkout
+   main` (the contract disappears, the entry becomes unresolvable, the
+   next spawn falls through unbound), `git checkout X` again (the
+   contract reappears, the entry is resolvable again) — the NEXT `bwk`
+   spawn now matches `m-A`, even though the operator has moved on and
+   the spawn has nothing to do with it. This is DES-076's own
+   misattribution class re-entering through the door K1 opened, not a
+   new class — but the doc comment describing K1's fix framed
+   self-healing as pure upside without naming the other direction the
+   same property cuts. `matchDispatchPending`'s doc comment now names
+   this directly: `ethos mission release` is still the only positive
+   remedy, and it must run BEFORE switching back to a branch that could
+   resurrect a stale entry, not after.
+2. *Unbounded warning frequency.* Each Agent() spawn attempt is a fresh
+   OS process (an `ethos` CLI invocation), so an in-memory rate limiter
+   cannot exist; a persistently unresolvable entry re-emits its
+   identical stderr line on every single subsequent spawn attempt,
+   forever. Considered and rejected: a per-entry cooldown marker file
+   colocated in the dispatch-pending directory. Rejected because its
+   cleanup coordination is worse than the noise it removes —
+   `ClearDispatchPending` and `ConsumeDispatchPending` both currently
+   skip EVERY dotfile-prefixed entry to protect the `.lock` control
+   file specifically; a new `.warned-*` marker would need one of those
+   functions to start distinguishing dotfile PURPOSES rather than just
+   dotfile PRESENCE, a change to a shared, heavily-relied-on function
+   for a cosmetic noise fix. A stateless alternative (throttling by wall
+   clock modulo, no new files) was also considered and rejected for
+   being a surprising, non-obvious mechanism for a reader to trust
+   without a comment doing more explaining than the code. This is left
+   as an accepted, named residual, not a silent gap: the warning is
+   noisy but never wrong (K1 already ensures it never denies), and the
+   cost of fixing it correctly is a new persistent-state class this ADR
+   is not prepared to introduce for a "minor" finding. A future fix
+   should either accept the FIFO ambiguity signal's own precedent
+   (in-process only, no persistence, because that signal fires once per
+   dispatch, not once per spawn) or design the marker's cleanup
+   coordination as its own reviewed change, not a rider on this one.
+
+**A habit worth naming, since the reviewer asked for it directly.**
+Every fixture-shaped test this branch has produced (K8's own pinning
+tests, this amendment's J1 finding against them) shares one root cause:
+a regression test written to prove a FIX exists, using the SIMPLEST
+input that exercises the changed code path, rather than a test written
+to prove the INVARIANT the fix claims to establish, using the input
+that would most differentiate correct from almost-correct. K8's tests
+proved "the message names a position" using two resolvable missions —
+sufficient to prove the message CHANGED, insufficient to prove it
+changed to the RIGHT thing in every case the matcher itself handles.
+The general antidote, and the one this amendment's own J1/J2 tests try
+to model: after writing a regression test, ask "what is the LEAST
+convenient input this code has to handle correctly, per its own doc
+comment's list of cases?" and test that one, not only the one that
+happens to be easiest to set up. K1, K3, and K4's own doc comments each
+already enumerated the harder cases (unresolvable vs. stale vs. open;
+crash-mid-write; three specific writers) — the fixture-shaped tests in
+K8 simply did not consult them before writing the fixture.
+
+### Amendment 2026-09-08: an invariant review of the J round (A-F), and Bugbot's correction of E on PR #509
+
+An invariant-review pass of the J1-J6 amendment above (still
+m-2026-09-08-004 round 3) found six more findings (A-F), five doc/test
+fixes and one design decision (E) that was itself later found
+incomplete by Bugbot on PR #509 and corrected. The doc/test fixes (A,
+C, D, F) are recorded in their own commit messages and the affected
+comments; only E's correction is significant enough to need its own
+account here, because it reverses part of a decision this document
+would otherwise still be describing wrong.
+
+**E, as originally ruled — incomplete.** The original ruling: clear
+ALL THREE mission sidecars (active-mission claim, delegation-binding
+sidecar, pending-dispatch store) on `PurgeTombstoned`'s two refusal
+paths (an unreadable roster, or unsealed audit lines, both without
+`--force`), reasoning that "sidecars are not audit state" so clearing
+them does not touch what the tombstone guard exists to protect.
+
+**The reasoning was true but incomplete: the active-mission claim is
+not just non-audit state, it is the audit-lookup KEY.**
+`mission.SessionBoundMissions` (`internal/mission/binding.go`) reads
+`ReadActiveMission` as its FIRST source of mission IDs, and the
+unsealed-lines probe (`purgeOneTombstoned`) uses that returned list to
+find a session's mission live logs and count their unsealed lines.
+Clearing the claim on a refused pass destroys the very index the NEXT
+purge pass would use to re-verify this session is still unsafe to
+purge: with no claim and no delegation-bound missions apparent, the
+next `SessionBoundMissions` call returns an empty list, the probe finds
+nothing to check, and the session purges as if it had no unsealed
+state at all — stranding the unsealed audit lines the tombstone guard
+exists to protect, silently, on the very next purge run.
+
+**Corrected ruling: clear ONLY `ClearDispatchPending` on the refusal
+paths.** The pending-dispatch store is pure coordination state, never
+consulted by `SessionBoundMissions` or the unsealed-lines probe by any
+path — clearing it is unconditionally safe on a refusal, and it is
+also the headline capture-on-resume hazard (a fresh spawn matching a
+stale pending dispatch), so clearing it is where nearly all the
+practical benefit of E's original ruling actually was. The
+active-mission claim and the delegation-binding sidecar now survive
+until a purge actually PROCEEDS (i.e. `deleteFiles`'s own full
+three-clear runs, which is unaffected by this correction — it still
+clears all three, because a proceeding purge has already decided the
+roster and its audit trail are safe to lose).
+
+Both regression tests from E's original commit
+(`TestPurgeTombstoned_CorruptRosterRefusesWithoutForce`,
+renamed from `TestPurgeTombstoned_ClearsSidecarsOnUnsealedRefusal` to
+`TestPurgeTombstoned_ClearsPendingDispatchButKeepsClaimOnUnsealedRefusal`)
+were rewritten to assert the claim SURVIVES a refusal while the pending
+dispatch does not, and confirmed failing against a reverted mutation
+reproducing the original (incomplete) all-three-sidecars behavior.
+
+**The general lesson, stated plainly because this branch has now
+produced it twice in one week (C2/C9's "clearing X is always safe"
+claims, now E's):** a piece of state's own classification ("not audit
+state," "coordination-only") does not settle whether clearing it is
+safe — what settles it is whether anything ELSE, possibly in a
+completely different subsystem, uses that state as a LOOKUP KEY into
+something that IS protected. `ReadActiveMission` looks like disposable
+session-scoped coordination state from the dispatch/hook code that
+writes and reads it; it is also, unrelatedly, the seed value a
+completely different subsystem (the DES-058 audit-seal vacuum) uses to
+answer "does this session still have mission-bound live logs to
+check." Reviewing a clearing decision by asking "is this state itself
+important" is necessary but not sufficient — the harder, necessary
+question is "what ELSE reads this to find something important."
+
+### Amendment 2026-09-08: `WriteDispatchPending`/`ClearDispatchPending` gained no lock of their own, and every external caller now takes one
+
+A leader review of the round-3 line of work on PR #509, after CI and the
+first bot round were already clean, named one HIGH-priority gap this
+document had not covered: `AcquireDispatchPendingLock` protects
+`dispatchAgent`'s OWN read-match-then-admit sequence
+(`internal/hook/pretooluse_dispatch.go`), but `WriteDispatchPending` and
+`ClearDispatchPending` (`internal/mission/active.go`) are plain
+filesystem primitives — nothing stopped a caller other than
+`dispatchAgent` from mutating the pending-dispatch store while
+`dispatchAgent` held its lock and was mid-decision.
+
+**The gap, concretely.** `ethos mission dispatch`/`create` staging a new
+pending entry (`cmd/ethos/mission.go` and
+`internal/mcp/mission_tools.go`'s `bindDispatchedMission`),
+`ethos mission release` clearing every entry (`runMissionRelease`), a
+mission's own `close`/`abandon` consuming its one entry
+(`ClearMissionBindings`), and `ethos session purge`/`PurgeTombstoned`
+clearing a dying or stale session's entries
+(`internal/session/store.go`) all called `WriteDispatchPending` or
+`ClearDispatchPending` directly, unlocked. Every one of those runs as
+its own OS process (a fresh `ethos` invocation, distinct from whichever
+process is running `dispatchAgent`'s PreToolUse hook), so nothing
+serialized it against `dispatchAgent`'s held lock. Two concrete
+failure shapes: a `release`/`close`/`abandon`/purge clear removing a
+pending entry `dispatchAgent` had already matched but not yet
+consumed — the delegation skeleton `dispatchTierB` is about to write
+loses its provenance, or the removal races the eventual consume and one
+of the two `os.Remove` calls silently no-ops on an already-gone file
+(harmless in isolation, but evidence the two operations were never
+actually mutually exclusive); or a fresh `dispatch` write landing right
+after a concurrent `release`/purge had already scanned the (at that
+instant, empty) directory, leaving a session the operator just
+"released" bound to a new entry again.
+
+**Decision — keep the primitives unlocked; move locking to the call
+sites that do not already hold the lock.** The tempting fix is to make
+`WriteDispatchPending`/`ClearDispatchPending` self-locking. Rejected: a
+real `flock` locks an open file description, not a process — a second
+`os.OpenFile`+`flock` from the SAME process blocks on itself, with no
+re-entrant exemption the way a `sync.Mutex` would need one. `matchDispatchPending`'s
+stale-entry clear, `consumeDispatchBinding`'s post-admission consume,
+and `dispatchAgent`'s own explicit-`MISSION_ID` branch all call
+`ConsumeDispatchPending`/`WriteDispatchPending` directly from INSIDE the
+one critical section `dispatchAgent` already holds the lock for; making
+those primitives self-locking would deadlock `dispatchAgent` on its own
+first inner call — a self-deadlock, not a fix.
+
+Instead, `internal/mission/active.go` gains `WithDispatchPendingLock(globalRoot,
+sessionID string, fn func() error) error`, a thin wrapper that acquires
+`AcquireDispatchPendingLock`, runs `fn`, and releases. Every external
+caller now runs its mutation through this wrapper: `bindDispatchedMission`
+(CLI and MCP), `runMissionRelease`, `ClearMissionBindings`'s
+dispatch-pending clear, and the three `session.Store` call sites
+(`clearMissionSidecars`, and `PurgeTombstoned`'s two refusal-path
+clears). `dispatchAgent`'s own internal calls are UNCHANGED — they
+continue to call the raw, unlocked primitives directly, because they
+are already running inside the one call that holds the lock.
+
+**Lock-order note.** `AcquireDispatchPendingLock`'s own doc comment
+requires this lock to stay OUTERMOST relative to any mission or
+delegation lock — `dispatchTierB` acquires both while the caller still
+holds this one. `WithDispatchPendingLock`'s `fn` argument is always a
+single, self-contained filesystem mutation with no nested mission or
+delegation lock acquisition, so every caller of the wrapper trivially
+preserves that invariant. `internal/session/store.go`'s three callers
+run the wrapper from inside `Store.withLock`'s own session roster
+flock — a THIRD lock class, distinct from both the dispatch-pending
+lock and the mission/delegation locks. This introduces a new pairing
+(roster lock outer, dispatch-pending lock inner) that did not exist
+before, but only in this one direction: `dispatchAgent`, the
+dispatch-pending lock's only other holder, never touches
+`session.Store` and never acquires a roster lock, so there is no code
+path that acquires the dispatch-pending lock and then tries to acquire
+a session's roster lock — the reversal that would actually risk
+deadlock. Named explicitly here, per this document's own standing rule,
+rather than left for a future reader to have to re-derive.
+
+**Tests.** `TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder`
+pins the raw primitive's own behavior — it still completes immediately
+even while a sibling holds `AcquireDispatchPendingLock` for the same
+session, confirming the primitive itself was never made self-locking
+(which would silently reopen the deadlock hazard the decision above
+rejects) — and is the same scenario used to confirm this finding was
+real before the fix: run against the unlocked primitive directly, it
+demonstrated the write completing while the lock was held elsewhere,
+instead of waiting. `TestWithDispatchPendingLock_BlocksUntilRelease`
+pins the fix: a mutation run through the new wrapper blocks for as long
+as a sibling holds the lock, observes no effect until release, and
+completes with the mutation applied once the sibling releases.
+
+### Amendment 2026-09-08: `session.Store` teardown races a resumed session's own claim or dispatch write
+
+The same leader review pass named a second, related HIGH-priority gap:
+`session.Store.Delete` (and `Purge`/`PurgeTombstoned`, which funnel
+through it via `deleteFiles`) cleared a session's mission sidecars and
+then removed its roster file, both under `Store.withLock`'s own
+per-session roster flock — a lock no sidecar WRITER ever took. A
+resumed session reusing the same session ID (`claude --resume`, the
+scenario the K3/J3 amendments above already established as routine, not
+exotic) could write a fresh claim (`ethos mission claim`) or a fresh
+pending dispatch (`ethos mission dispatch`) at any point during
+`deleteFiles`'s run, including — after this document's own PREVIOUS
+amendment tightened the dispatch-pending clear to run under
+`AcquireDispatchPendingLock` — in the narrow gap between that clear
+releasing the lock and the roster's actual removal a few lines later.
+Once the roster is gone, `List()` (and therefore `Purge`/
+`PurgeTombstoned`) can never find that session again, so a binding
+written into that gap has no GC path at all — the exact "no GC" failure
+mode K3/J3 already fixed for a FAILED clear, reopened here for a
+SUCCESSFUL one that merely lost a race.
+
+**Decision — extend the dispatch-pending lock to span the whole
+teardown, and make the claim write take it too.** Rather than mint a
+new lock class, `deleteFiles` now calls
+`mission.AcquireDispatchPendingLock` ONCE at the top of its own body and
+holds it — via a plain `defer release()`, not the previous
+amendment's `WithDispatchPendingLock` wrapper — across clearing every
+sidecar AND removing the roster. The renamed `clearMissionSidecarsLocked`
+(previously `clearMissionSidecars`) documents that it REQUIRES the
+caller to already hold this lock, and calls the raw, unlocked
+`mission.ClearDispatchPending` directly rather than
+`WithDispatchPendingLock`: since `deleteFiles` already holds the lock
+by the time it calls this function, a second acquire from the SAME
+process would be the exact self-deadlock hazard the previous amendment
+introduced `WithDispatchPendingLock` specifically to avoid for
+`dispatchAgent`'s own internal calls — reachable here for the identical
+reason, once `deleteFiles` became a second caller that pre-holds the
+lock before calling a function that clears the dispatch-pending store.
+
+On the write side, `cmd/ethos/mission.go`'s `runMissionClaim` now wraps
+its `mission.WriteActiveMission` call in the SAME
+`mission.WithDispatchPendingLock`. Without this half, extending
+`deleteFiles`'s hold would have closed the window for a DISPATCH write
+(which already took this lock, per the previous amendment) but left it
+wide open for a CLAIM write, which had never taken any lock at all —
+and a claim, not a pending dispatch, is the scenario this finding's own
+wording named first ("writes a claim or pending dispatch").
+
+**Why reuse this lock rather than mint a fourth class.** `session.Store`
+had no lock class in common with `internal/mission`'s dispatch-pending
+lock before this amendment except the accidental, one-directional
+nesting the previous amendment already introduced and justified (roster
+lock outer, dispatch-pending lock inner, in `clearMissionSidecarsLocked`'s
+callers only). Reusing `AcquireDispatchPendingLock` for the claim write
+and the full teardown span keeps that same, already-justified nesting
+direction — `deleteFiles` still runs inside `Store.withLock`'s roster
+flock, still acquiring the dispatch-pending lock as the inner one, only
+now for its whole body instead of one substep — rather than requiring a
+SECOND new pairing to be independently reasoned about. `AcquireDispatchPendingLock`'s
+own doc comment is updated to name both of these additional consumers
+plainly, alongside its still-primary purpose guarding `dispatchAgent`'s
+match decision, per this document's standing rule against a comment
+describing a narrower scope than the code actually has.
+
+**Tests.** `TestStore_Delete_HoldsDispatchPendingLockThroughRosterRemoval`
+overrides a new test-only hook, `deleteFilesLockStillHeld` (mirroring
+`internal/hook/pretooluse_dispatch.go`'s `dispatchTierBConfirmedOpen`
+pattern), that fires from inside `deleteFiles` after the sidecar clear
+but before the roster removal, while the lock is still held; the
+override spawns a sibling `AcquireDispatchPendingLock` attempt and
+asserts it has NOT succeeded at that point, only afterward. Confirmed
+failing against a simulated pre-fix `deleteFiles` (lock scoped to the
+clear substep only, released before the hook fires): the sibling
+acquired immediately, before the roster was removed.
+`TestMissionClaim_WaitsForDispatchPendingLock` pins the write-side half:
+`runMissionClaim` blocks while a sibling holds the lock, writes nothing
+until release, and completes once it is free. Confirmed failing against
+the pre-fix unlocked `mission.WriteActiveMission` call: the claim wrote
+immediately regardless of the sibling holding the lock.
+
+### Amendment 2026-09-08: a fsync failure after a successful write did not roll back the line it wrote
+
+The leader's own review asked, before dispatching this as a fix,
+whether `internal/mission/log.go`'s existing truncate-on-short-write
+path already covered the case where `fsync` fails after a fully
+successful write. It does not, and could not: that truncate path lives
+in `appendEventLocked`'s LEGACY (single-tree) branch, which never calls
+`Sync` at all, and which every current in-repo mission bypasses
+entirely — `appendEventLocked`'s own routing (`if s.twoTreeStorage &&
+s.repoRoot != "" { return s.appendLiveEventLocked(...) }`) sends every
+two-tree mission's event append to `internal/audit`'s
+`AppendMonotonic` instead, which had NO rollback of any kind: a failed
+`Write` (short or otherwise) returned an error with the file
+untouched, and a `Write` that fully succeeded followed by a failing
+`Sync` also returned an error, but by then the line was already
+sitting in the file, `fsync` failure or not — `Sync` failing does not
+undo an already-successful `Write`; only `Truncate` does, and nothing
+called it.
+
+**Consequence.** `Store.DisclaimDelegation` (and every other caller of
+the event-append primitive: `Create`, `Update`, `Close`,
+`ForceReleaseWriteSet`, `correct.go`'s correction path, and more —
+`appendEventLocked` has eleven call sites) treats a returned append
+error as proof nothing new persisted, and `DisclaimDelegation`
+specifically acts on that belief: it restores the delegation record to
+its pre-disclaim bytes when the event append fails, reasoning that a
+rolled-back record correctly still blocks `Abandon` until a clean
+retry. With the sync-failure gap open, that reasoning was unsound for
+exactly this one failure shape: the `disclaim_delegation` event was
+genuinely in the live log — readable by `LoadEvents`, `mission log`,
+any post-mortem tool — while the delegation record itself said
+"never disclaimed," and a retried disclaim would append a SECOND
+`disclaim_delegation` line for what looks like the same event.
+
+**Fix.** `internal/audit/seal.go`'s `AppendMonotonic` now captures the
+pre-write file length (via the `Seek(SeekEnd)` call it already makes,
+whose return value was previously discarded) and truncates back to it
+on ANY failure past that point — a short or failed `Write`, or a
+`Sync` failure after a fully successful `Write` — mirroring the
+discipline the legacy single-tree path already applies to its own
+`Write` failures, extended to cover the `Sync` case the legacy path
+never needed to handle. `Sync` itself is now called through a new
+package var, `fsyncFile` (default `func(f *os.File) error { return
+f.Sync() }`), for the same reason `internal/mission/syncdir_unix.go`'s
+`syncDir` is already a package var: a real `fsync` failure (`ENOSPC`
+mid-flush, an unmounted device) is not something a portable test can
+engineer directly, so the test overrides the var instead.
+
+No change was needed in `Store.DisclaimDelegation` itself, or in any
+of the other ten `appendEventLocked` call sites — the fix is entirely
+in the shared primitive every one of them already depends on for the
+"my error means nothing persisted" guarantee, so all eleven callers
+gain the correct behavior from one change rather than needing the same
+truncate-back logic re-applied at each call site.
+
+**Tests.** `TestAppendMonotonic_SyncFailureTruncatesBack` overrides
+`fsyncFile` to fail unconditionally and asserts the live file is empty
+afterward. `TestAppendMonotonic_SyncFailureThenSuccessAppendsExactlyOnce`
+retries the same append with the override removed and asserts the file
+holds exactly one line, not two — proving the truncate genuinely
+removed the failed attempt rather than merely reporting an error while
+leaving it in place. Both confirmed failing against the pre-fix
+`AppendMonotonic` (a bare `return 0, fmt.Errorf("syncing %s: %w", ...)`
+with no `Truncate` call): the first line persisted despite the reported
+failure, and the retry produced two lines.
+
+The existing `TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure`
+(DES-076 round 2) continues to pass unmodified — it exercises a
+different sub-case (the live log path replaced by a directory, so
+`OpenFile` itself fails before any write is attempted) and already
+proved `DisclaimDelegation`'s OWN rollback mechanism works correctly
+once `appendEventLocked` reports an error; this amendment's fix is
+what makes that reported error trustworthy for the sync-failure
+sub-case specifically, at the layer beneath it. No cross-package test
+hook was added to drive a sync failure through `DisclaimDelegation`
+itself end-to-end: `fsyncFile` is unexported in `internal/audit`, and
+`internal/mission`'s tests cannot reach it without an exported
+test-only setter this fix does not otherwise need — the audit-package
+unit tests above pin the primitive directly, and the existing
+integration test already pins the caller's rollback behavior given a
+failure, which together cover the fix without growing `audit`'s public
+surface for a single test.
+
+### Amendment 2026-09-08: the sync-failure rollback above was itself not durable
+
+The leader's review of the amendment above (round 2 of the same PR)
+found a gap one layer deeper: `f.Truncate(end)` shortens the file's
+in-memory length, but `Truncate` is not `fsync` — nothing forces the
+truncated length to disk. A crash between the `Truncate` call
+returning and the filesystem's own background flush can leave the
+pre-truncate (post-write, post-failed-sync) length on disk after
+restart: exactly the line `AppendMonotonic` had just reported as never
+persisted, readable again once the process comes back up. The
+guarantee the amendment above set out to provide — a reported failure
+means nothing new is on disk — held for the in-memory/open-fd view
+tested by `TestAppendMonotonic_SyncFailureTruncatesBack`, but not
+across a crash.
+
+**Fix.** `AppendMonotonic` now calls `fsyncFile` a second time, after a
+successful rollback `Truncate`, best-effort. The original `Sync` error
+remains the primary cause returned to the caller — it is still why the
+append failed and still why the caller (e.g. `DisclaimDelegation`)
+must roll back its own contingent mutation — but if this second
+`fsync` also fails, the returned error says so explicitly
+(`"rollback not guaranteed durable across a crash"`) rather than
+returning the same message a single-fsync failure would produce. There
+is no retry loop: two consecutive `fsync` failures on the same file
+handle are not treated as a transient condition worth waiting out.
+
+**What the fix does not claim.** It does not make the rollback durable
+— a second `fsync` can fail too, and even a successful `fsync` only
+guarantees durability to the extent the underlying device honors the
+flush (a lying disk cache is outside what any userspace call can
+detect). What it adds is: try to make the rollback durable, and be
+honest in the error when that second attempt also fails, instead of
+silently reporting only the original cause and leaving the caller with
+no signal that the rollback itself is unconfirmed.
+
+**Tests.** There is no portable way to force a real crash between
+`Truncate` and the filesystem's flush and then inspect the file
+post-crash — the same limitation the amendment above already accepted
+for the first `fsync`, and the reason `fsyncFile` is a package var
+rather than something a test drives through an actual disk fault.
+`TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported` therefore checks
+what IS directly observable: with `fsyncFile` overridden to fail
+unconditionally, (a) the content-level rollback still happens — the
+live file is empty after the second simulated failure, same as after
+the first — and (b) the second `fsync` is actually attempted and its
+distinct failure surfaces in the error text. Confirmed failing against
+the pre-fix `AppendMonotonic` (single `fsyncFile` call, no second
+attempt): the returned error was the same single-failure message
+`TestAppendMonotonic_SyncFailureTruncatesBack` already asserts, so the
+new test's message check failed while the file-emptiness check still
+passed — pinning specifically the missing second call, not the
+already-fixed first one.
+
+**Follow-up (2026-09-08, round 3): the same gap existed on the sibling
+rollback path.** `AppendMonotonic` has two `Truncate`-back sites, not
+one — the write-failure/short-write branch thirty lines above the
+sync-failure branch this amendment fixed. The leader's review caught
+that only the sync-failure branch had received the second-`fsync`
+treatment; the write-failure branch still did a bare `Truncate` with
+no follow-up `fsync`, the exact hazard this amendment describes,
+un-fixed on its sibling. Arguably the higher-severity half: a short
+write means the un-rolled-back content is a *partial* line, so
+reviving it on crash resurrects malformed JSONL rather than a complete
+record.
+
+**Fix.** Both rollback sites now call one new helper,
+`rollbackTruncate(f, end)`, instead of each carrying its own
+`Truncate`-then-maybe-`fsync` logic. It truncates to `end`, fsyncs
+that truncate best-effort, and returns a distinct error when the
+second `fsync` fails — the same contract this amendment's fix gave the
+sync-failure path, now available to both call sites from one place so
+the rationale is stated once instead of duplicated (and, per the
+history in this section, silently drifting out of sync between
+copies). The write-failure branch also needed a new package var,
+`writeFile` (mirroring the existing `fsyncFile` var), so a test can
+inject a deterministic `Write` failure the same way `fsyncFile`
+injects a deterministic `Sync` failure — `Write` was called directly
+on `f` before, with no seam for a test double.
+
+**Tests.** Four new tests mirror the three sync-failure tests this
+amendment already has: `TestAppendMonotonic_WriteFailureTruncatesBack`,
+`TestAppendMonotonic_WriteFailureThenSuccessAppendsExactlyOnce`,
+`TestAppendMonotonic_WriteFailureRollbackFsyncAlsoFailsIsReported`, and
+`TestAppendMonotonic_ShortWriteRollbackFsyncAlsoFailsIsReported` (the
+short-write sub-case specifically, since it is the more severe half).
+Confirmed failing against the pre-fix code: with `writeFile` added as
+a behavior-preserving seam (still calling `f.Write` with no `fsync`
+change) but the rollback fix not yet applied, both
+`..._WriteFailureRollbackFsyncAlsoFailsIsReported` and
+`..._ShortWriteRollbackFsyncAlsoFailsIsReported` failed with the
+single-failure message (`writing ...: simulated write failure` /
+`writing ...: short write 15 of 30 bytes`, no mention of the rollback
+fsync), while the file-emptiness assertion in both still passed —
+same failure shape as this amendment's original sync-path red run,
+now reproduced on the write path. Same honest limit applies: these
+tests prove the second `fsync` is attempted and its failure reported,
+not that a real crash-then-recovery round-trip is safe, because there
+is still no portable way to force a real crash between `Truncate` and
+the filesystem's own flush.
+
+**Checked for the same shape elsewhere in the package.** No other
+occurrence. `truncateTornTailAndRecover`'s `Truncate` call (torn-tail
+repair on reopen) looks similar but is a different case, documented
+inline where it lives: it is not undoing a write this call made, it
+is idempotent cleanup of a *prior* crash's garbage that reruns on
+every open, and a successful append's own final `fsync` — same fd —
+flushes it too when one follows. `WriteChunkAtomic`,
+`writeTombstone`/`ackTombstone` (tombstone.go), and the quarantine
+temp-file writer (quarantine.go) all roll back a failed write by
+`os.Remove`-ing the temp file rather than truncating it in place — a
+different, unaffected shape, since a removed temp was never renamed
+into the name any reader looks for.
+
+### Amendment 2026-09-08: evaluated, and declined, a reservation/claim redesign of pending-dispatch consumption
+
+Residual-risk item 3 above (`consumeDispatchBinding`'s post-admission
+`os.Remove` failing persistently, capturing every later matching-worker
+spawn) prompted a specific proposal during the leader's own review: key
+the pending entry with a reservation state instead of consume-on-success
+— rename it under the lock BEFORE admission (removing it from
+`ReadDispatchPending`'s matchable set immediately, not just after a
+successful response), finalize by deleting the renamed file once
+admission fully succeeds, and restore it (rename back) on any admission
+failure so a refused spawn's entry is still matchable by a later retry,
+exactly as today.
+
+**The question asked directly: can a rename succeed where an unlink
+fails often enough to matter, for the two failure modes this residual
+already names (EACCES, a full disk)?** No, for both:
+
+- **EACCES.** Both `os.Rename` and `os.Remove` on a file within the same
+  directory are governed by the SAME check — write+execute permission on
+  the containing directory, not on the file itself. A directory-level
+  permission problem (the realistic shape of a "persistent" failure
+  here, since a single stray file losing write permission independent
+  of its directory is a much narrower and less "persistent-feeling"
+  fault) fails a rename identically to an unlink. There is no
+  permission-only case where one succeeds and the other does not.
+- **A full disk (ENOSPC).** `os.Remove` is, in the common case, a pure
+  metadata operation that FREES space rather than consuming it. `os.Rename`
+  to a new name in the same directory can need to grow the directory's
+  own entry table to accommodate the new filename — on a genuinely full
+  filesystem, this makes rename NO MORE reliable than unlink, and on
+  some filesystems (particularly journaled ones, which must log the
+  rename as a transaction) arguably less reliable, since unlink can
+  sometimes proceed by freeing the exact space its own journal entry
+  needs.
+
+**Where reservation genuinely would help, and the new cost it
+introduces in exchange.** Moving the state transition BEFORE admission
+does change one thing for the better: a reservation failure is caught
+at match time, before any delegation skeleton is written under the
+wrong (or any) attribution, so the matcher could cleanly fall through to
+Tier A/inheritance for that spawn instead of committing to a Tier-B
+delegation whose cleanup is already known to be broken. And a FINALIZE
+failure after a successful admission — today's actual C9/F4 shape — would
+leave the renamed entry under a name `ReadDispatchPending`'s existing
+dotfile-prefix exclusion (the same one that protects `.lock`) already
+treats as invisible, so it could no longer misattribute a later spawn
+at all; the tradeoff shifts from "wrong attribution forever" to "an
+orphaned file forever," strictly better for THIS mission's own audit
+correctness.
+
+But the same redesign opens a NEW failure mode on a route this residual
+never touched: the RESTORE step, on an admission REFUSAL. Depth-gate
+refusals are not rare — `enforceDelegationDepth` refuses routinely, by
+design, whenever a spawn would exceed the configured ceiling — and every
+one of `dispatchTierB`'s several refusal branches (initial Load failure,
+the TOCTOU status re-check, the depth gate, a response-encode failure)
+would need its OWN restore call threaded through. If a restore-rename
+itself fails on any of these ORDINARY, COMMON refusal paths, the pending
+dispatch is now silently un-matchable by any FUTURE spawn — a
+legitimate dispatch that simply hit a routine depth-gate refusal loses
+its binding permanently, with no equivalent to today's behavior (a
+refused admission leaves the original entry untouched, so a later retry
+of the same `Agent()` call still finds it). That is a worse, MORE
+frequently reachable failure mode than the persistent-fs-failure
+residual the redesign sets out to shrink.
+
+There is also a genuinely new bookkeeping cost even along the success
+path: a `.claimed-*`-style renamed file that never gets cleaned up (a
+finalize failure, or a process crash between rename and finalize) has
+NO GC path today — `ClearDispatchPending`/`ConsumeDispatchPending` both
+deliberately skip every dotfile-prefixed entry to protect `.lock`
+(review finding J6's own accepted-residual note on exactly this
+class of coupling). Making that skip smarter (distinguishing `.lock`
+from a `.claimed-*` orphan) is precisely the kind of change J6 already
+declined to make for a much smaller cosmetic fix (a per-entry warning
+cooldown marker), for the same reason: it touches a shared,
+heavily-relied-on function for every existing sidecar type.
+
+**Decision: keep the documented residual as-is, do not implement the
+reservation/claim redesign.** The redesign trades a low-probability,
+already-bounded residual (an operator can `mission abandon --disclaim`
+a genuinely captured delegation after the fact; the failure requires a
+PERSISTENT, not transient, filesystem condition; and a directory-level
+permission or disk-full fault of this kind would almost certainly also
+be breaking other `ethos` operations loudly enough for an operator to
+notice through a different channel first) for a materially larger
+change — a new restore-contract threaded through every one of
+`dispatchTierB`'s refusal branches — that introduces a NEW, more
+frequently reachable regression (silently losing a legitimate pending
+dispatch on an ordinary depth-gate refusal whose restore also fails) in
+exchange for narrowing a residual whose own two named failure modes
+(EACCES, ENOSPC) the rename does not reliably help with in the first
+place. This is not a reflexive "no" — the reservation idea is sound for
+the finalize-failure sub-case specifically, and would be worth
+revisiting on its own, narrowly scoped terms (with its own reviewed
+restore-path design and its own answer to the `.claimed-*` GC question)
+if the persistent-failure residual is ever observed in practice rather
+than reasoned about in the abstract.
+
+### Amendment 2026-09-08: serializing `deleteFiles` against a sidecar writer reordered the hazard instead of closing it
+
+Bugbot on PR #509's tail round found that the immediately preceding
+amendment ("`session.Store` teardown races a resumed session's own claim
+or dispatch write") did not do what its own title claimed. That amendment
+made `deleteFiles` hold `mission.AcquireDispatchPendingLock` across its
+whole clear-through-roster-removal span, and made `runMissionClaim` take
+the same lock before writing — reasoning that serializing the two
+operations closes the gap a writer could land in.
+
+**The gap it actually left.** `deleteFiles` removes the roster (a plain
+`os.Remove`) and THEN returns, and its lock release is a deferred call
+that fires once the function returns — so the roster is already gone by
+the time the lock is released. A writer (`runMissionClaim` or
+`bindDispatchedMission`, staging a fresh claim or pending-dispatch entry)
+that was blocked waiting on that same lock resumes the INSTANT the lock
+frees, which is the instant AFTER the roster disappeared, not before.
+Holding the lock genuinely prevents a write from landing DURING
+`deleteFiles`'s clear-then-remove span; it does nothing to stop a write
+from landing the moment AFTER that span ends. The writer proceeds,
+recreates the sidecar under `sessions/<id>/`, and the session has no
+roster for `List()`/`Purge()` to ever find it through again — the exact
+undiscoverable-binding shape the lock-hold exists to prevent, reached
+deterministically (any writer queued behind the lock hits it, not a
+narrow timing window) rather than by the original race.
+
+**Decision — a liveness check inside the same critical section, not more
+serialization.** Locking alone cannot close this: no amount of holding a
+lock stops a queued waiter from resuming into a world that has already
+changed underneath it. What the writer needs is to look, under the same
+lock, at whether the thing it is about to bind still exists. `internal/hook/pretooluse_dispatch.go`
+gains `RefuseIfSessionGone(ss *session.Store, sessionID string) error`,
+which loads the session's roster and returns an actionable error if it
+cannot. Every sidecar-writing call site — `cmd/ethos/mission.go`'s
+`runMissionClaim` and `bindDispatchedMission`, and
+`internal/mcp/mission_tools.go`'s `bindDispatchedMission` — now calls
+this FIRST, as the first statement inside the same
+`mission.WithDispatchPendingLock` closure that performs the write. Because
+`deleteFiles` holds the identical per-session lock across its own
+clear-through-roster-removal span, there is no window between this check
+succeeding and the write that follows it in which `deleteFiles` could
+remove the roster — the check and the write are atomic with respect to
+teardown, which locking alone was not sufficient to guarantee.
+
+**Why this cannot be bypassed by a future caller.** The check lives
+inside the SAME closure as the write, not as a separate pre-flight step a
+future caller could accidentally skip by calling the write function
+directly — anyone adding a fourth sidecar-writing call site through
+`mission.WithDispatchPendingLock` sees the existing three as the pattern
+to copy, and the check's own doc comment states explicitly that it must
+run first, inside the lock, not before acquiring it.
+
+**Why a legitimate new session reusing the same ID is not blocked.** The
+SessionStart hook always creates a session's roster before any `ethos
+mission claim`/`dispatch`/`create` command can run against that session —
+there is no ordering in which a real, live session reaches this check
+before its own roster exists. Refusal fires only for a session that has
+genuinely ended: `RefuseIfSessionGone`'s failure mode is "no roster
+anywhere on disk for this ID," which a session's own SessionStart already
+prevents for the case that matters.
+
+**On the MCP surface specifically, this is the ONLY existence gate.**
+Unlike the CLI's `resolveSessionContext` (`cmd/ethos/iam.go`'s
+`resolveHardSession`), which re-verifies an `ETHOS_SESSION`-sourced ID
+against the session store before the caller ever reaches the lock, the
+MCP surface's `resolve.SessionID` is a bare `os.Getenv("ETHOS_SESSION")`
+read with no store lookup at all. So on the CLI, reproducing the finding
+requires the exact interleaving (a writer already past its own up-front
+check, blocked on the lock, resuming after teardown); on MCP, a session ID
+naming no roster at all reaches `RefuseIfSessionGone` directly — no
+timing required. Both are covered:
+`TestMissionClaim_RefusesWhenSessionRosterGone` and
+`TestMissionDispatch_RefusesWhenSessionRosterGone`
+(`cmd/ethos/mission_test.go`) hold the dispatch-pending lock manually (a
+`deleteFiles` stand-in), confirm the CLI call is genuinely blocked
+entering `Flock`, remove the roster while still holding the lock, then
+release — reproducing the exact timeline Bugbot's finding names.
+`TestHandleMission_CreateRefusesSessionRosterGone`
+(`internal/mcp/mission_tools_test.go`) needs no such choreography. All
+three confirmed failing against the pre-fix code: the CLI tests logged
+`claimed ... for session ...` / `dispatched: ...` and left a live sidecar
+behind for a session with no roster; the MCP test's warning read the
+ordinary "will attribute worker's next matching spawn" text instead of a
+refusal, and left a pending-dispatch entry on disk.
+
+**Test-fixture correction, exposed by this fix.** `internal/mcp/mission_tools_test.go`'s
+`testHandlerWithSessions` rooted its `session.Store` at an unrelated
+`t.TempDir()`, never at the same `$HOME/.punt-labs/ethos` the test's own
+`globalRoot` used — invisible before this fix only because nothing on
+the create path ever consulted the session store's own roster, the exact
+"papering over the mismatch" shape review finding J5 (above) already
+named once for the sibling `internal/hook` test fixture. Fixed to root at
+`os.UserHomeDir()`, matching `cmd/ethos/serve.go`'s real production
+wiring (`mcp.WithSessionStore(sessionStore())`); the eight existing tests
+that exercise the create-then-bind path now seed a roster via a new
+`seedSessionRoster` helper before calling create, mirroring
+`cmd/ethos/mission_test.go`'s own `seedRosterForSession`.
+
+### Amendment 2026-09-08: `RefuseIfSessionGone` was refusing on ANY Load error, not only genuine absence (PR #509 tail round 7, G1)
+
+Review finding G1 on the previous amendment's own fix: `RefuseIfSessionGone`
+treated every error `session.Store.Load` could return as proof the
+session had ended, and refused the write in all of them. But
+`Store.Load` fails for two structurally different reasons — `os.ReadFile`
+returning `os.ErrNotExist` (no roster file at all), or `yaml.Unmarshal`
+failing on a roster that IS present but does not parse (corrupt on disk,
+or a transient partial write) — and only the first is evidence of
+anything. A corrupt-but-present roster is exactly the file
+`List()`/`Purge()` would still find on their next pass; it is not the
+undiscoverable-sidecar shape this check exists to prevent. Refusing on it
+blocked a live session's legitimate `claim`/`dispatch` write on an error
+that proved nothing about whether the session had ended.
+
+**This is the same doctrine the round-3 fix already applies to a
+different Load.** `staleBindingReason`'s own doc comment calls a
+contract that fails to load "unresolvable," explicitly not "stale," and
+hands it to `dispatchTierB` to refuse the SPAWN with a named reason
+rather than silently treating the binding as gone — a Load failure there
+is evidence of nothing except that this one Load failed. The pre-fix
+`RefuseIfSessionGone` violated that same principle for the roster's own
+Load, and G1 corrects it to match: `errors.Is(err, fs.ErrNotExist)`
+gates the refusal, since `Store.Load` wraps `os.ReadFile`'s underlying
+`*PathError` with a plain `%w`, so the sentinel survives the wrap and
+`errors.Is` finds it. Every other error — corrupt YAML, `EACCES`, or any
+other read fault — warns to stderr (naming the session and the
+underlying error) and returns `nil`, letting the write proceed.
+
+**Why warn-and-allow, not warn-and-still-refuse.** The two rejected
+alternatives were: (a) keep refusing on any error, accepting the false
+positive as a rare cost of a strict gate; and (b) refuse only louder,
+with a clearer message. Both were rejected for the same reason —
+refusing requires proof the session cannot be found again, and neither
+alternative supplies that proof for a corrupt-but-present roster. The
+failure this whole check exists to prevent (`deleteFiles` removing the
+roster out from under a queued writer) manifests as `os.ErrNotExist`,
+not as a parse error; a parse error means the file was never removed at
+all, so the hazard this check guards against did not occur. Warn-and-
+allow keeps the operator informed without blocking legitimate work on
+unproven evidence — matching `staleBindingReason`'s own choice to fall
+through rather than block on an unresolvable contract.
+
+**Confirmed failing against the pre-fix code.**
+`TestHandleMission_CreateBindsPastCorruptRoster`
+(`internal/mcp/mission_tools_test.go`) seeds a live roster, overwrites it
+in place with invalid YAML (present on disk, not valid), then calls
+`mission create`. Against the pre-fix `RefuseIfSessionGone`, the
+pending-dispatch write was refused, no entry landed under `globalRoot`'s
+pending-dispatch directory, and the sole warning read "no longer exists"
+for a roster that had never been removed — only corrupted. Against the
+fix, the write proceeds, the pending-dispatch entry is written, and the
+returned warning is the ordinary fresh-bind message naming the mission
+and worker, not a refusal.

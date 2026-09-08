@@ -8,10 +8,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // dispatchAgent handles the PreToolUse branch for `tool_name == "Agent"`.
@@ -44,73 +46,520 @@ import (
 // between "unset" (Tier A pre-DES-054) and "set to empty" (test
 // fixtures); the env block is still emitted.
 //
-// Sidecar (DES-054 extension, ethos-620t): when MISSION_ID is unset
-// the dispatch consults <globalRoot>/sessions/<id>/active-mission. A
+// Sidecars (DES-054 extension, ethos-620t; DES-076 round 3): when
+// MISSION_ID is unset the dispatch consults two independent stores
+// under <globalRoot>/sessions/<id>/ — the single-slot active-mission
+// claim, and the per-mission dispatch-pending directory. A
 // leader-in-Claude-Code session cannot inject MISSION_ID into its own
-// env from inside an active session, so the sidecar is the bridge
-// from `ethos mission claim` to the next Agent() spawn. The read is
-// best-effort: any error logs to stderr and falls through to the
-// inheritance / Tier A path, matching the pattern in
-// loadParentDelegation.
+// env from inside an active session, so these are the bridge from
+// `ethos mission claim`/`dispatch` to a later Agent() spawn. Every read
+// is best-effort: an error logs to stderr and falls through to the
+// inheritance / Tier A path, matching the pattern in loadParentDelegation.
+//
+// DES-076 round 1 scoped a dispatch binding to the ONE spawn whose
+// agent type matches the contract's declared Worker, single-use. Round
+// 3 (review findings C1-C3, m-2026-09-08-004 round 2) moved that
+// binding off the single active-mission slot entirely, into its own
+// per-mission pending-dispatch store (internal/mission/active.go) — a
+// single overwritable slot could hold only one pending dispatch at a
+// time, so a second `dispatch --worker bwk` before the first spawn
+// silently discarded the first mission's binding, guaranteeing a
+// misattribution the moment two missions shared a Worker handle (the
+// NORMAL case in this repo, where one specialist handle serves every
+// mission in its domain). See active.go's doc comment on the
+// dispatch-pending primitives for the full decision.
+//
+// A claim (`ethos mission claim`) is unaffected by any of this: it
+// stays on its own single sticky slot, ungated by agent type, until an
+// explicit claim or release. Pending dispatches are checked FIRST,
+// because a dispatch is a more specific, more recent instruction than
+// a standing claim — this mirrors the pre-round-3 behavior where a
+// fresh dispatch always took precedence over an existing claim
+// (previously by overwriting the shared slot; now via separate,
+// non-destructive storage that lets both coexist).
 func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
-	missionID := os.Getenv("MISSION_ID")
-	if missionID != "" {
-		return dispatchTierB(w, sessionID, missionID, toolInput)
+	// Review probe finding F3 (m-2026-09-08-004 round 2): two concurrent
+	// Agent() tool calls in the same session — a normal shape, this
+	// org's own conventions call for batching independent tool calls in
+	// one turn — could both match the SAME oldest pending-dispatch
+	// entry before either consumed it. The lock is held across the
+	// ENTIRE match-through-admit-or-fall-back sequence, not just the
+	// read: releasing it before dispatchTierB runs would still let a
+	// second waiter's read interleave with the first caller's
+	// still-pending consume decision. See AcquireDispatchPendingLock's
+	// own doc comment for why this introduces no new deadlock risk.
+	//
+	// Review finding P1 (qodo #2, full-branch review of PR #509,
+	// m-2026-09-08-004 round 3): the explicit-MISSION_ID branch used to
+	// return before this lock was even resolved, so it never consumed a
+	// pending-dispatch entry matching missionID — but explicit
+	// MISSION_ID is a SUPPORTED override (matchDispatchPending's own
+	// ambiguity warning tells the operator to set it to pick a
+	// DIFFERENT pending mission than FIFO would), so following our own
+	// advice left the entry live to capture the next matching-worker
+	// spawn too. The lock is now acquired unconditionally, before
+	// either branch, so both the explicit and the matched path can
+	// consume under it.
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: resolving global root: %v; "+
+				"falling through without pending-dispatch matching\n", err)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
-	if missionID := readActiveMissionForDispatch(sessionID); missionID != "" {
-		return dispatchTierB(w, sessionID, missionID, toolInput)
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: acquiring lock for %q: %v; "+
+				"falling through without pending-dispatch matching\n", sessionID, err)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
+	}
+	defer release()
+
+	if missionID := os.Getenv("MISSION_ID"); missionID != "" {
+		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv,
+			func() { consumeDispatchBinding(sessionID, missionID) })
+	}
+	agentType := spawnAgentType(toolInput)
+
+	if missionID, boundVia := readActiveMissionForDispatch(sessionID, agentType); missionID != "" {
+		var onDispatched func()
+		if boundVia == mission.BoundViaSidecarDispatch {
+			onDispatched = func() { consumeDispatchBinding(sessionID, missionID) }
+		}
+		return dispatchTierB(w, sessionID, missionID, toolInput, boundVia, onDispatched)
 	}
 	return dispatchTierBOrTierA(w, sessionID, toolInput)
 }
 
-// readActiveMissionForDispatch consults the active-mission sidecar
-// for sessionID. Returns "" on any non-found shape: empty sessionID,
-// missing global root, missing sidecar, read error. Errors that are
-// not "file not present" log to stderr so the operator can trace why
-// a claimed mission did not bind — the dispatch then proceeds along
-// the no-sidecar path (inheritance or Tier A) so the spawn still
+// spawnAgentType reports the agent type this Agent() call is spawning:
+// the tool_input's subagent_type when present, else CLAUDE_AGENT_TYPE.
+// Shared by the pending-dispatch Worker-match gate
+// (readActiveMissionForDispatch/matchDispatchPending) and dispatchTierB's
+// own delegation-skeleton write, so both see the same answer for the
+// same spawn (review finding C5, m-2026-09-08-004 round 2 — verified by
+// grep that no second inline copy of this logic remains anywhere in
+// this package).
+func spawnAgentType(toolInput map[string]any) string {
+	agentType, _ := toolInput["subagent_type"].(string)
+	if agentType == "" {
+		agentType = os.Getenv("CLAUDE_AGENT_TYPE")
+	}
+	return agentType
+}
+
+// readActiveMissionForDispatch reports whether agentType's spawn may
+// bind to a pending dispatch or an active claim for sessionID, and
+// which.
+//
+// Returns ("", "") on any non-found or non-usable shape: empty
+// sessionID, missing global root, no pending dispatch matching
+// agentType, no claim, or a claimed mission that is no longer open
+// (ethos-7vo3 — a fresh warning to stderr names why). Errors that are
+// not "file not present" log to stderr so the operator can trace why a
+// bound mission did not take the spawn — the dispatch then proceeds
+// along the no-match path (inheritance or Tier A) so the spawn still
 // runs (Bugbot precedent: dispatch helpers must be non-blocking).
 //
-// A sidecar naming a mission that is no longer open is stale and is
-// refused with a warning (ethos-7vo3). The sidecar is cleared when
-// the mission closes in the SAME session; a mission closed from
-// anywhere else leaves it behind, and filing a fresh delegation under
-// a mission whose results are already in is a false audit trail. The
-// spawn still runs — as Tier A, where it belongs.
-func readActiveMissionForDispatch(sessionID string) string {
+// boundVia names how the returned missionID may be attributed
+// (mission.BoundViaSidecarClaim or mission.BoundViaSidecarDispatch),
+// for the caller to both decide consumption and to stamp the
+// provenance field on the delegation record it writes.
+func readActiveMissionForDispatch(sessionID, agentType string) (missionID, boundVia string) {
 	if sessionID == "" {
-		return ""
+		return "", ""
 	}
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: resolving global root: %v; falling through\n",
 			err)
-		return ""
+		return "", ""
 	}
-	missionID, err := mission.ReadActiveMission(globalRoot, sessionID)
+
+	// 1. Pending dispatches, oldest matching entry first. No contract
+	// Load is needed to match — the Worker was recorded directly in the
+	// pending file at dispatch time (DES-076 round 3, C3) — so a
+	// resolution failure past this point (the matched mission's
+	// contract cannot Load, or is no longer open) is handled entirely
+	// by dispatchTierB's own existing Load-and-block / non-open-fallback
+	// gates, exactly like an explicit MISSION_ID naming an unloadable or
+	// closed contract. That is a deliberate doctrine change from round
+	// 1: round 1's "never block the ambient bridge" applied to the
+	// PRE-match uncertainty of a Load-dependent matcher; once a match is
+	// certain without a Load, a subsequently-unloadable contract is a
+	// genuine, actionable problem for THIS specific spawn, not ambient
+	// noise behind every spawn in the session.
+	if pendingMissionID := matchDispatchPending(globalRoot, sessionID, agentType); pendingMissionID != "" {
+		return pendingMissionID, mission.BoundViaSidecarDispatch
+	}
+
+	// 2. Claim: sticky, unconditional, unaffected by Worker matching.
+	// Nothing but `ethos mission claim` writes a fresh, clean binding to
+	// this sidecar as of DES-076 round 3 (dispatch moved to its own
+	// store above) — but "nothing writes a bad one on purpose" is not
+	// the same as "a bad one cannot exist": ReadActiveMissionBinding
+	// (active.go) can still return BindOriginUnknown for a truncated or
+	// mismatched origin file (a partial write, a mixed-binary window, a
+	// hand-inspected legacy sidecar) — review finding C2, m-2026-09-08-004
+	// round 2. That case is refused here explicitly, not treated as a
+	// claim just because dispatch no longer writes here on purpose:
+	// DES-076 made claim the PERMISSIVE origin (ungated by Worker, and
+	// per commit_trailers.go's gate the only origin that stamps commit
+	// trailers), so answering "claim" for ambiguous evidence would both
+	// mis-capture a spawn and turn on trailers for a binding the
+	// operator never explicitly claimed.
+	binding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: reading sidecar for %q: %v; falling through\n",
 			sessionID, err)
-		return ""
+		return "", ""
 	}
-	if missionID == "" {
-		return ""
+	if binding.MissionID == "" {
+		return "", ""
 	}
-	if reason := staleBindingReason(missionID); reason != "" {
+	if binding.Origin != mission.BindOriginClaim {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: session %q has an ambiguous binding to %s "+
+				"(origin %q, not a clean claim) — spawning without a mission; run `ethos mission "+
+				"claim <id>` (or `ethos mission release`) to resolve it\n",
+			sessionID, binding.MissionID, binding.Origin)
+		return "", ""
+	}
+	if reason := staleBindingReason(binding.MissionID); reason != "" {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s but %s; "+
-				"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
-			sessionID, missionID, reason)
+				"run `ethos mission claim <id>` (or `ethos mission release`) — spawning without a mission\n",
+			sessionID, binding.MissionID, reason)
+		return "", ""
+	}
+	return binding.MissionID, mission.BoundViaSidecarClaim
+}
+
+// matchDispatchPending scans sessionID's pending dispatches
+// (internal/mission/active.go's ReadDispatchPending, oldest first) for
+// the first entry whose recorded Worker equals agentType, and returns
+// its mission ID. Returns "" on any non-match: no pending dispatches,
+// none matching, or a read failure (logged to stderr, non-blocking —
+// matching the discipline every sidecar reader in this package
+// follows). Caller must hold AcquireDispatchPendingLock for the whole
+// match-through-admit sequence (review probe F3, m-2026-09-08-004
+// round 2) — this function does no locking of its own.
+//
+// A matching entry whose mission is PROVABLY non-open (Load succeeds
+// and the status is not "open") is skipped AND cleared, not returned:
+// review probe F2 (m-2026-09-08-004 round 2) demonstrated that leaving
+// a stale entry in place permanently head-of-line-blocks every NEWER
+// pending dispatch for the same Worker, since FIFO always re-selects
+// the oldest entry first. A closed/failed/escalated/abandoned mission
+// can never legitimately take a new delegation, so clearing its stale
+// entry here is not a heuristic guess — it is the same
+// nonOpenReason check dispatchTierB itself would apply, just run
+// before committing to a doomed match instead of after.
+//
+// A matching entry whose mission FAILS TO LOAD is a DIFFERENT case,
+// handled differently (review finding K1, full-branch review of
+// m-2026-09-08-004 round 3): a Load failure proves nothing — the
+// contract is git-tracked, so `mission dispatch` followed by `git
+// checkout` to a branch without it is a reachable, non-exotic way to
+// make one disappear and later reappear — so C3's doctrine still
+// forbids deleting it on unproven evidence. But round 3's original
+// behavior (fold it into `candidates` and return it as the match
+// whenever no OTHER open entry outranks it) meant an unloadable entry
+// at the head of the queue denied every subsequent same-worker spawn
+// FOREVER, since it is always the oldest and FIFO always re-selects the
+// oldest: a newer, perfectly valid pending dispatch for the same worker
+// was unreachable behind it. The entry is now SKIPPED (excluded from
+// `candidates`, loop continues to the next entry) but never cleared —
+// it can still resolve on its own (a later branch switch, a retried
+// write) and can always be cleared explicitly via `ethos mission
+// release`, which needs no Load at all (ClearDispatchPending is a pure
+// filesystem removal). A skip-only entry that is the LAST word — no
+// other entry matches — still yields no match here, so the spawn falls
+// through to Tier A/B; dispatchTierB is never reached for it and never
+// gets a chance to name the failure, so this function names it
+// directly instead.
+//
+// "It can still resolve on its own" is not purely a benefit (review
+// finding J6, full-branch review of m-2026-09-08-004 round 3): the same
+// property that lets a transient failure heal itself also lets a
+// TRULY stale entry re-enter the misattribution class DES-076 exists to
+// prevent, via oscillation rather than a single bad match. Sequence:
+// dispatch `m-A` on branch X, `git checkout main` (the contract is gone
+// — the entry is unresolvable, this spawn falls through unbound), `git
+// checkout X` again (the contract is back — the entry is resolvable
+// again) — the NEXT `bwk` spawn now matches `m-A`, even though it has
+// nothing to do with `m-A` and the operator has moved on. Skip-not-clear
+// trades "permanent denial" (K1's bug) for "eventual, silent,
+// re-triggerable misattribution" rather than eliminating the hazard
+// outright; `ethos mission release` is still the only positive remedy,
+// and it must be run BEFORE switching back to a branch that resurrects
+// a stale entry, not after.
+//
+// When two or more LIVE (non-stale, resolvable) entries match
+// agentType, the oldest wins by FIFO, but that is a silent,
+// unresolvable ambiguity for the operator unless it is named: two
+// missions can legitimately share one Worker handle (this repo's own
+// team assigns one specialist to every mission in its domain), and the
+// spawn now landing on THIS one instead of THAT one is exactly the
+// misattribution class DES-076 exists to prevent.
+// warnDispatchPendingAmbiguity emits that signal — only for a
+// two-or-more-match tie, never for a lone match, and never merely
+// because OTHER pending entries exist for a different Worker (a
+// session dispatching both `bwk` and `rmh` work is not ambiguous for a
+// `bwk` spawn).
+func matchDispatchPending(globalRoot, sessionID, agentType string) string {
+	// J1 (full-branch review, m-2026-09-08-004 round 3): classification
+	// now runs through mission.ClassifyPendingDispatches, the SAME
+	// function the CLI/MCP dispatch-time queue-position advisory calls
+	// (via hook.DispatchBoundMessage below) — a store construction
+	// failure here is reported the same way a read failure always was
+	// in this function, non-blocking.
+	store, err := tierBMissionStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: resolving mission store: %v; falling through\n", err)
 		return ""
 	}
-	return missionID
+	classified, warnings, err := mission.ClassifyPendingDispatches(store, globalRoot, sessionID, agentType)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: reading for %q: %v; falling through\n",
+			sessionID, err)
+		return ""
+	}
+	for _, warning := range warnings {
+		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: dispatch-pending: %s\n", warning)
+	}
+	var candidates []string
+	for _, entry := range classified {
+		switch entry.Status {
+		case mission.PendingEntryStale:
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch to %s is "+
+					"stale (%s); clearing it so it cannot block a newer pending dispatch\n",
+				sessionID, entry.MissionID, entry.Reason)
+			if clearErr := mission.ConsumeDispatchPending(globalRoot, sessionID, entry.MissionID); clearErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: pre-tool-use: dispatch-pending: clearing stale entry for %q: %v\n",
+					entry.MissionID, clearErr)
+			}
+			continue
+		case mission.PendingEntryUnresolvable:
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch to %s could "+
+					"not be resolved (%s); skipping it (not clearing it — the failure is not proof "+
+					"the mission is gone for good) so it cannot block a newer pending dispatch for "+
+					"worker %q; run `ethos mission release` if it is stuck for good\n",
+				sessionID, entry.MissionID, entry.Reason, agentType)
+			continue
+		default: // mission.PendingEntryOpen
+			candidates = append(candidates, entry.MissionID)
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	if len(candidates) > 1 {
+		warnDispatchPendingAmbiguity(agentType, candidates)
+	}
+	return candidates[0]
+}
+
+// warnDispatchPendingAmbiguity names a genuine multi-match ambiguity in
+// matchDispatchPending's candidate set: two or more live pending
+// dispatches recorded the same Worker, so FIFO's oldest-wins tiebreak is
+// resolving a real conflict rather than picking among options that all
+// mean the same thing. Names the count, the worker, every competing
+// mission ID, which one FIFO chose, and that MISSION_ID overrides the
+// match entirely — the one lever that actually lets the operator pick a
+// different one of the competing candidates for this specific spawn.
+func warnDispatchPendingAmbiguity(agentType string, candidates []string) {
+	fmt.Fprintf(os.Stderr,
+		"ethos: pre-tool-use: dispatch-pending: %d pending dispatches match worker %q (%s); "+
+			"binding this spawn to the oldest (%s). If this spawn is for a different mission, "+
+			"set MISSION_ID explicitly.\n",
+		len(candidates), agentType, strings.Join(candidates, ", "), candidates[0])
+}
+
+// DispatchBoundMessage builds the advisory line `mission dispatch`/
+// `mission create` prints (CLI, via cmd/ethos/mission.go's
+// bindDispatchedMission) or returns (MCP, via
+// internal/mcp/mission_tools.go's bindDispatchedMission) immediately
+// after writing a new pending-dispatch entry, naming missionID's actual
+// queue position among other pending dispatches for worker — not an
+// assumed "next spawn" position (review finding K8, corrected by J1:
+// full-branch review, m-2026-09-08-004 round 3).
+//
+// Exported so both the CLI and MCP surfaces call this ONE
+// implementation instead of maintaining two independently-drifting
+// copies (K8 already found the wording stale in both places at once;
+// J1 found the underlying classification logic diverged from
+// matchDispatchPending's own, in both copies, the same way). It shares
+// mission.ClassifyPendingDispatches with matchDispatchPending, so the
+// reported position and the entry the hook would actually match at
+// spawn time cannot disagree: an unresolvable or stale entry ahead of
+// missionID is never counted as "ahead of it," because
+// matchDispatchPending would skip it too.
+//
+// remedy is the caller's own escape-hatch wording (the CLI and MCP
+// phrasings differ slightly — "run `ethos mission ...`" vs. "call
+// mission ..." — which is cosmetic, not logic, so it stays a parameter
+// rather than being duplicated here). A store or read failure falls
+// back to the unconditional "will attribute worker's next matching
+// spawn" wording rather than blocking or omitting the advisory — this
+// line is best-effort visibility, never a gate.
+func DispatchBoundMessage(store *mission.Store, globalRoot, sessionID, missionID, worker, remedy string) string {
+	unconditional := fmt.Sprintf(
+		"session %s will attribute worker %q's next matching Agent() spawn to %s; %s",
+		sessionID, worker, missionID, remedy)
+	classified, _, err := mission.ClassifyPendingDispatches(store, globalRoot, sessionID, worker)
+	if err != nil {
+		return unconditional
+	}
+	var live []string
+	for _, c := range classified {
+		if c.Status == mission.PendingEntryOpen {
+			live = append(live, c.MissionID)
+		}
+	}
+	for i, id := range live {
+		if id != missionID {
+			continue
+		}
+		if i == 0 {
+			return unconditional
+		}
+		return fmt.Sprintf(
+			"session %s queued a pending dispatch of worker %q to %s, but %d pending dispatch(es) "+
+				"for %q are ahead of it and will be matched first (%s); %s",
+			sessionID, worker, missionID, i, worker, strings.Join(live[:i], ", "), remedy)
+	}
+	// missionID itself did not classify as open (should not happen
+	// right after a successful WriteDispatchPending, but fall back
+	// rather than claim a queue position for an entry we cannot find
+	// among the live ones).
+	return unconditional
+}
+
+// RefuseIfSessionGone refuses to let a mission-sidecar writer (an
+// `ethos mission claim` or a dispatch/create's pending-dispatch entry)
+// proceed for a session whose roster no longer exists.
+//
+// Leader review of PR #509's tail round: internal/session/store.go's
+// deleteFiles holds mission.AcquireDispatchPendingLock across its whole
+// clear-then-remove-roster span specifically so a concurrent sidecar
+// WRITE cannot land in the gap between the clear and the removal. But
+// serializing the two operations only reorders the hazard, it does not
+// remove it: deleteFiles releases the lock (via its own deferred
+// release) only AFTER os.Remove(rosterPath) has already returned, so a
+// writer that was blocked waiting on the lock resumes the instant the
+// lock is free -- which is the instant AFTER the roster is gone, not
+// before. Without this check, that writer recreates the exact
+// undiscoverable-sidecar shape the lock-hold exists to prevent: a
+// binding for a session List()/Purge() can never find again, because
+// both only ever discover sessions via their roster file.
+//
+// Callers run this INSIDE the same mission.WithDispatchPendingLock
+// critical section as the write itself (before the write, not after),
+// so the existence check and the write are atomic with respect to
+// deleteFiles, which holds the identical per-session lock across its
+// own clear-through-roster-removal span -- there is no window in which
+// deleteFiles could remove the roster between this check succeeding and
+// the write that follows it.
+//
+// A legitimate NEW session reusing sessionID is unaffected: the
+// SessionStart hook always creates that session's roster before any
+// `ethos mission claim`/`dispatch`/`create` command can run against it,
+// so the roster already exists by the time this check runs -- refusal
+// only fires for a session that has genuinely ended.
+//
+// Only a missing roster file counts as "gone." Store.Load also returns
+// an error for a roster that exists but fails to parse (corrupt YAML),
+// or one the caller lacks permission to read -- neither is proof the
+// session ended, only that this one read attempt didn't work. Review
+// finding G1 (PR #509 tail round 7): a corrupt-but-present roster is
+// exactly what List() and Purge() would still discover, so it is not
+// the undiscoverable-sidecar shape this check exists to prevent, and
+// refusing on it blocks a live session's legitimate write on unproven
+// evidence. This is the same doctrine staleBindingReason/
+// matchDispatchPending already apply to a contract that fails to load
+// (their doc comments call it "unresolvable," never "stale," and
+// deliberately do not refuse on it): a Load failure is evidence of
+// nothing except that this Load failed, so only the one failure mode
+// Load reports unambiguously -- os.ErrNotExist, unwrapped from
+// os.ReadFile's *PathError through Load's own %w -- refuses. Every
+// other error warns to stderr and allows the write.
+func RefuseIfSessionGone(ss *session.Store, sessionID string) error {
+	_, err := ss.Load(sessionID)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: session %s roster failed to load (%v); "+
+				"this is not proof the session ended, so the binding is proceeding anyway\n",
+			sessionID, err)
+		return nil
+	}
+	return fmt.Errorf("session %s no longer exists, so this binding was not recorded "+
+		"(it may have ended or been purged; re-run the command from a live session): %w", sessionID, err)
+}
+
+// consumeDispatchBinding removes missionID's pending-dispatch entry
+// after it has been consumed by its matching worker spawn (DES-076):
+// each pending dispatch is single-use, so it must not linger to
+// capture a later, different spawn of the same Worker.
+//
+// Unlike the pre-round-3 active-mission slot, this is a single-file
+// removal (internal/mission/active.go's ConsumeDispatchPending) — no
+// paired-file consistency question a partial failure could leave
+// mismatched (review finding C2's class does not apply here at all).
+//
+// Advisory, non-blocking, but LOUD about the consequence: a transient
+// failure means the very next matching-worker spawn is also captured
+// before a retry clears it; a PERSISTENT failure (EACCES, a read-only
+// sessions dir, a full disk) leaves the entry capturing every future
+// spawn of this Worker for as long as the underlying condition holds
+// (review finding F4/C9, unbounded, not "one extra spawn"). The
+// mission's own `close`/`abandon` also clears its own entry precisely
+// (ClearMissionBindings), and `ethos mission release` clears every
+// pending dispatch in the session unconditionally — but review finding
+// C9's addendum (m-2026-09-08-004 round 2) is the reason neither is
+// named here as a GUARANTEED fix: both remove the same file through the
+// same os.Remove call this function's own failure came from, so a truly
+// persistent condition (not a transient contention blip) defeats all
+// three identically. The genuine remedy in that case is fixing the
+// underlying filesystem condition directly, not retrying a different
+// ethos command that shares the same failure mode.
+func consumeDispatchBinding(sessionID, missionID string) {
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: resolving global root to consume %q: %v; "+
+				"the pending entry for %q was NOT cleared and will capture the next matching-worker "+
+				"spawn too; run `ethos mission release` to clear it\n",
+			missionID, missionID, err)
+		return
+	}
+	if err := mission.ConsumeDispatchPending(globalRoot, sessionID, missionID); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: clearing %q: %v; the pending entry was NOT "+
+				"cleared and will capture the next matching-worker spawn too; run `ethos mission "+
+				"release` to clear it\n",
+			missionID, err)
+	}
 }
 
 // staleBindingReason reports why the sidecar's mission cannot take a
 // new delegation, or "" when it can. Only one shape is stale: a
 // contract that loads and is no longer open.
+//
+// Since DES-076 round 3 this is called ONLY for a CLAIM-origin binding
+// (readActiveMissionForDispatch's claim branch); dispatch-pending
+// matching no longer calls it at all — see matchDispatchPending's own
+// doc comment for why a Load is not needed to match a pending dispatch.
 //
 // A store or contract that will not resolve is deliberately NOT
 // treated as stale. That case belongs to dispatchTierB, which refuses
@@ -142,15 +591,67 @@ func nonOpenReason(status string) string {
 	return fmt.Sprintf("that mission is %s", status)
 }
 
-// warnNonOpenMissionID writes the case-1 counterpart of
-// readActiveMissionForDispatch's stale-sidecar warning: same shape
-// (names the session, the mission, and the remedy), worded for an
-// explicit MISSION_ID rather than a claimed sidecar.
-func warnNonOpenMissionID(sessionID, missionID, reason string) {
-	fmt.Fprintf(os.Stderr,
-		"ethos: pre-tool-use: MISSION_ID: session %q named %s but %s; "+
-			"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
-		sessionID, missionID, reason)
+// missionResolutionFailedMessage builds dispatchTierB's block message for
+// the initial store.Load(missionID) failure, worded per boundVia (review
+// finding H1, full-branch review of m-2026-09-08-004 round 3): a spawn
+// that matched a pending dispatch is blocked by a clearable sidecar file,
+// not by an environment variable, and the operator needs to be told that
+// difference and the worker/session it names or the block reads as an
+// unrecoverable internal error with no path forward.
+func missionResolutionFailedMessage(sessionID, missionID, agentType, boundVia string, err error) string {
+	switch boundVia {
+	case mission.BoundViaSidecarDispatch:
+		return fmt.Sprintf(
+			"ethos pre-tool-use: session %q's pending dispatch bound worker %q to mission %s, "+
+				"but that mission failed to load: %v; run `ethos mission release` to clear the "+
+				"pending dispatch (or `ethos mission show %s` to inspect it)",
+			sessionID, agentType, missionID, err, missionID)
+	case mission.BoundViaSidecarClaim:
+		return fmt.Sprintf(
+			"ethos pre-tool-use: session %q is claimed to mission %s, but that mission failed to "+
+				"load: %v; run `ethos mission release` to clear the claim",
+			sessionID, missionID, err)
+	default:
+		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err)
+	}
+}
+
+// warnNonOpenMission writes dispatchTierB's non-open-status advisory,
+// worded per boundVia so the remedy named actually clears the source that
+// produced missionID (review finding H1, full-branch review of
+// m-2026-09-08-004 round 3).
+//
+// mission.BoundViaMissionIDEnv and mission.BoundViaInherited are NOT
+// backed by a clearable sidecar — the former is an OS environment
+// variable inherited by every later tool call a resumed subagent process
+// makes, the latter is the parent_delegation inheritance walk — so
+// `ethos mission release` would not change either source and would be a
+// false remedy for them (review finding C13, m-2026-09-08-004 round 2).
+// mission.BoundViaSidecarClaim and mission.BoundViaSidecarDispatch ARE
+// sidecar files `ethos mission release` clears, so both name it, and the
+// dispatch case additionally names the worker and the more targeted
+// `ethos mission close`/`abandon` remedy that clears only this one entry
+// (see consumeDispatchBinding's doc comment on that same scoping).
+func warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason string) {
+	switch boundVia {
+	case mission.BoundViaSidecarDispatch:
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch bound worker %q "+
+				"to mission %s but %s; run `ethos mission release` (clears every pending dispatch in "+
+				"this session) or `ethos mission close %s`/`abandon %s` (clears just this one) — "+
+				"spawning without a mission\n",
+			sessionID, agentType, missionID, reason, missionID, missionID)
+	case mission.BoundViaSidecarClaim:
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: session %q is claimed to mission %s but %s; "+
+				"run `ethos mission release` — spawning without a mission\n",
+			sessionID, missionID, reason)
+	default:
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: MISSION_ID: session %q named %s but %s; "+
+				"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
+			sessionID, missionID, reason)
+	}
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
@@ -227,7 +728,26 @@ var dispatchTierBConfirmedOpen = func() {}
 // repoRoot resolution uses resolve.FindRepoRoot — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
-func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any) error {
+//
+// boundVia is stamped onto the delegation skeleton's BoundVia field
+// (DES-076 round 2) — one of the mission.BoundVia* constants naming
+// which of the three admission paths (explicit MISSION_ID env, parent
+// inheritance, or active-mission sidecar consumption) produced this
+// spawn. It is the fact `mission abandon --disclaim` later checks
+// mechanically, so every caller must pass the value that actually
+// describes how IT resolved missionID — never a guess or a shared
+// default.
+//
+// onDispatched, when non-nil, runs exactly once — after the spawn is
+// fully admitted (the JSON response has been encoded), never on a
+// refusal or an internal fall-through to Tier A/B. DES-076 uses this to
+// consume a one-shot active-mission dispatch binding only once its
+// matching spawn has actually gone through; a blocked or failed spawn
+// leaves the binding in place so a retry of the same call can still
+// find it. Every caller but the active-mission sidecar's matching-spawn
+// path passes nil.
+func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any, boundVia string, onDispatched func()) error {
+	agentType := spawnAgentType(toolInput)
 	store, err := tierBMissionStore()
 	if err != nil {
 		return writeAgentBlock(w,
@@ -235,8 +755,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	}
 	c, err := store.Load(missionID)
 	if err != nil {
-		return writeAgentBlock(w,
-			fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err))
+		return writeAgentBlock(w, missionResolutionFailedMessage(sessionID, missionID, agentType, boundVia, err))
 	}
 	// Case-1 status re-check (docs/design-delegation-lifecycle.md
 	// facet 2): a MISSION_ID env value is inherited by ordinary OS
@@ -249,8 +768,8 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	// never a blocked spawn, matching every other attribution
 	// fallback in this file.
 	if reason := nonOpenReason(c.Status); reason != "" {
-		warnNonOpenMissionID(sessionID, missionID, reason)
-		return dispatchTierBOrTierA(w, sessionID, toolInput)
+		warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason)
+		return dispatchTierBOrTierA(w, sessionID, toolInput) // status re-check fallback: never consumes onDispatched
 	}
 
 	delegationID, releaseID, err := mission.NewID(mission.NamespaceDelegations, time.Now())
@@ -314,15 +833,11 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 	if reason := nonOpenReason(recheck.Status); reason != "" {
-		warnNonOpenMissionID(sessionID, missionID, reason)
+		warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason)
 		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
-	agentType, _ := toolInput["subagent_type"].(string)
-	if agentType == "" {
-		agentType = os.Getenv("CLAUDE_AGENT_TYPE")
-	}
 	promptBody, _ := toolInput["prompt"].(string)
 	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
 		Tier:             mission.TierB,
@@ -330,6 +845,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		ParentSession:    sessionID,
 		AgentType:        agentType,
 		Prompt:           []byte(promptBody),
+		BoundVia:         boundVia,
 	}); err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))
@@ -383,6 +899,12 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		fmt.Fprintf(os.Stderr,
 			"ethos pre-tool-use: tier-B response write: %v\n", err)
 		return err
+	}
+	// The spawn is now fully admitted as Tier B — the one point DES-076
+	// treats as "this dispatch actually happened," and the only point
+	// from which onDispatched runs.
+	if onDispatched != nil {
+		onDispatched()
 	}
 	return nil
 }

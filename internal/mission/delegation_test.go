@@ -978,3 +978,226 @@ func TestDelegationDepth_NonPositiveMaxFallsBackToDefault(t *testing.T) {
 	require.NoError(t, err, "negative max must collapse to the default backstop, not error")
 	assert.Equal(t, 0, depth)
 }
+
+// --- DES-076 round 2: BoundVia provenance + DisclaimDelegationRecord ---
+
+// TestWriteDelegationSkeleton_BoundViaRoundTrips pins Part 1: the
+// skeleton's BoundVia field lands on the on-disk record unchanged
+// (through PathRedactor, which is a no-op on these fixed enum values).
+func TestWriteDelegationSkeleton_BoundViaRoundTrips(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-800"
+	delegationID := "d-2026-09-08-001"
+
+	recordPath, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+		BoundVia:  BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, BoundViaSidecarDispatch, d.BoundVia)
+	assert.Empty(t, d.DisclaimedAt, "a fresh skeleton must never be pre-disclaimed")
+}
+
+// TestLoadDelegation_BackwardCompat_PreExistingRecordUnaffected loads a
+// REAL delegation record committed to this repo's own tree before
+// DES-076 round 2 added BoundVia/DisclaimedAt/DisclaimedReason, and
+// confirms every field this repo already depends on decodes exactly as
+// it did before those fields existed — the three new fields read as
+// their zero value, nothing else shifts. This is the backward-compat
+// evidence the round 2 contract requires: this repo is its own
+// consumer of the format being changed.
+func TestLoadDelegation_BackwardCompat_PreExistingRecordUnaffected(t *testing.T) {
+	// Relative to this package's directory (internal/mission), so the
+	// path resolves to <repoRoot>/.punt-labs/ethos/missions/... in a
+	// normal checkout of this repo. The exact record content was
+	// captured before this round's changes landed:
+	//
+	//   id: d-2026-08-22-103
+	//   tier: B
+	//   mission: m-2026-08-22-048
+	//   parent_session: 9eada5bb-ebd9-4a1a-a7a9-abd38894960d
+	//   agent_type: bwk
+	//   created_at: "2026-08-22T14:07:15Z"
+	//   closed_at: "2026-08-22T14:32:51Z"
+	//   verdict: pass
+	recordPath := filepath.Join("..", "..", ".punt-labs", "ethos", "missions",
+		"m-2026-08-22-048", "delegations", "d-2026-08-22-103", "record.yaml")
+	if _, err := os.Stat(recordPath); err != nil {
+		t.Skipf("fixture record not present (not a checkout of this repo, or history rewritten): %v", err)
+	}
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "d-2026-08-22-103", d.ID)
+	assert.Equal(t, TierB, d.Tier)
+	assert.Equal(t, "m-2026-08-22-048", d.Mission)
+	assert.Equal(t, "9eada5bb-ebd9-4a1a-a7a9-abd38894960d", d.ParentSession)
+	assert.Equal(t, "bwk", d.AgentType)
+	assert.Equal(t, "2026-08-22T14:07:15Z", d.CreatedAt)
+	assert.Equal(t, "2026-08-22T14:32:51Z", d.ClosedAt)
+	assert.Equal(t, DelegationVerdictPass, d.Verdict)
+
+	// The three new fields: absent from the file, so they decode as
+	// their zero value — never inferred, never defaulted to anything
+	// that would make this record look disclaimed or disclaimable.
+	assert.Empty(t, d.BoundVia, "a pre-existing record has unknown provenance, not a guessed one")
+	assert.Empty(t, d.DisclaimedAt)
+	assert.Empty(t, d.DisclaimedReason)
+}
+
+// TestDisclaimDelegationRecord_HappyPath pins the success path: a
+// delegation bound via the active-mission sidecar dispatch capture,
+// already closed, disclaims cleanly and the marker persists on reload.
+func TestDisclaimDelegationRecord_HappyPath(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-801"
+	delegationID := "d-2026-09-08-002"
+	recordPath, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, delegationID, DelegationVerdictAborted, "2026-09-08T12:00:00Z"))
+
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+	d, err := DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
+		"probe mission never spawned its own worker; this is an unrelated bwk spawn", "2026-09-08T12:05:00Z")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-09-08T12:05:00Z", d.DisclaimedAt)
+	assert.Contains(t, d.DisclaimedReason, "unrelated bwk spawn")
+
+	reloaded, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-09-08T12:05:00Z", reloaded.DisclaimedAt, "the disclaim marker must persist on disk")
+}
+
+// TestDisclaimDelegationRecord_RefusesNonSidecarDispatchProvenance
+// covers (b) and (c) from the contract's minimum test list in one
+// table: an explicit-env delegation, an inherited delegation, and a
+// pre-existing delegation with unknown (empty) provenance must all be
+// refused identically — only BoundViaSidecarDispatch is eligible.
+func TestDisclaimDelegationRecord_RefusesNonSidecarDispatchProvenance(t *testing.T) {
+	for _, boundVia := range []string{
+		BoundViaMissionIDEnv,
+		BoundViaInherited,
+		BoundViaSidecarClaim,
+		"", // unknown / pre-existing record
+	} {
+		t.Run("bound_via="+boundVia, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			missionID := "m-2026-09-08-802"
+			delegationID := "d-2026-09-08-003"
+			_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+				Tier: TierB, AgentType: "bwk", BoundVia: boundVia,
+			})
+			require.NoError(t, err)
+			require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, delegationID, DelegationVerdictPass, "2026-09-08T12:00:00Z"))
+
+			redact, err := NewPathRedactor(repoRoot)
+			require.NoError(t, err)
+			_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
+				"trying to disclaim genuine work", "2026-09-08T12:05:00Z")
+			require.Error(t, err, "only active_mission_sidecar_dispatch provenance is disclaimable")
+			assert.Contains(t, err.Error(), "disclaimable")
+		})
+	}
+}
+
+// TestDisclaimDelegationRecord_RefusesOpenVerdict pins the in-flight
+// safety check: a delegation whose spawn has not closed yet may still
+// be doing real work, so it cannot be disclaimed even with the right
+// provenance.
+func TestDisclaimDelegationRecord_RefusesOpenVerdict(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-803"
+	delegationID := "d-2026-09-08-004"
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// No CloseDelegationSkeleton call — the record stays verdict: open.
+
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+	_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
+		"trying to disclaim a still-running spawn", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "still open")
+}
+
+// TestDisclaimDelegationRecord_RefusesDoubleDisclaim pins immutability:
+// the first disclaim's reason and timestamp are audit history, not
+// something a second call can silently overwrite.
+func TestDisclaimDelegationRecord_RefusesDoubleDisclaim(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-804"
+	delegationID := "d-2026-09-08-005"
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, delegationID, DelegationVerdictAborted, "2026-09-08T12:00:00Z"))
+
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+	_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact, "first reason", "2026-09-08T12:05:00Z")
+	require.NoError(t, err)
+
+	_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact, "second reason", "2026-09-08T12:06:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already disclaimed")
+}
+
+// TestDisclaimDelegationRecord_RequiresReason mirrors Abandon's own
+// required-reason gate.
+func TestDisclaimDelegationRecord_RequiresReason(t *testing.T) {
+	repoRoot := t.TempDir()
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+	_, err = DisclaimDelegationRecord(repoRoot, "m-x", "d-x", redact, "  ", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reason is required")
+}
+
+// TestDisclaimDelegationRecord_MissingDelegation pins a clear error for
+// an operator-typo'd delegation ID, rather than a bare fs.ErrNotExist.
+func TestDisclaimDelegationRecord_MissingDelegation(t *testing.T) {
+	repoRoot := t.TempDir()
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+	_, err = DisclaimDelegationRecord(repoRoot, "m-2026-09-08-805", "d-does-not-exist", redact,
+		"typo'd delegation id", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestDisclaimDelegationRecord_EmptyArgs mirrors
+// TestWriteDelegationSkeleton_EmptyArgs: an empty repoRoot, missionID,
+// or delegationID must refuse with a named-field error before
+// DelegationDir ever builds a path from it. Without this guard an
+// empty repoRoot makes DelegationDir (via RepoStatePath's
+// filepath.Join) resolve to a path RELATIVE to the process's cwd
+// instead of erroring — the disclaim marker for a permanent,
+// unreversible state transition would land in an unintended tree
+// with no signal to the caller.
+func TestDisclaimDelegationRecord_EmptyArgs(t *testing.T) {
+	repoRoot := t.TempDir()
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+
+	_, err = DisclaimDelegationRecord("", "m-1", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoRoot")
+
+	_, err = DisclaimDelegationRecord(repoRoot, "", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missionID")
+
+	_, err = DisclaimDelegationRecord(repoRoot, "m-1", "", redact, "reason", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delegationID")
+}

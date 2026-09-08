@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -228,6 +230,38 @@ func TestStore_DeleteNonexistent(t *testing.T) {
 	require.NoError(t, s.Delete("nonexistent"))
 }
 
+// TestStore_Delete_ClearsMissionSidecars pins review finding K3
+// (full-branch review, m-2026-09-08-004 round 3): Delete is the shared
+// low-level primitive Purge and PurgeTombstoned also funnel through
+// (via deleteFiles), so clearing mission sidecars here closes the gap
+// for every deletion path, not only the clean HandleSessionEnd one.
+func TestStore_Delete_ClearsMissionSidecars(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-del-sidecars", root, primary, "", ""))
+
+	require.NoError(t, mission.WriteActiveMission(s.root, "sess-del-sidecars", "m-2026-09-08-720"))
+	require.NoError(t, mission.WriteDispatchPending(s.root, "sess-del-sidecars", "m-2026-09-08-721", "bwk"))
+	require.NoError(t, mission.WriteDelegationBinding(s.root, "sess-del-sidecars", mission.DelegationBinding{
+		MissionID:    "m-2026-09-08-721",
+		DelegationID: "d-2026-09-08-001",
+	}))
+
+	require.NoError(t, s.Delete("sess-del-sidecars"))
+
+	claimed, err := mission.ReadActiveMission(s.root, "sess-del-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, claimed)
+
+	pending, _, err := mission.ReadDispatchPending(s.root, "sess-del-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+
+	_, err = os.Stat(mission.DelegationBindingPath(s.root, "sess-del-sidecars"))
+	assert.True(t, os.IsNotExist(err))
+}
+
 func TestStore_List(t *testing.T) {
 	s := testStore(t)
 
@@ -263,13 +297,186 @@ func TestStore_Purge(t *testing.T) {
 	primary := Participant{AgentID: "9999999", Persona: "agent", Parent: "user1"}
 	require.NoError(t, s.Create("sess-stale", root, primary, "", ""))
 
-	purged, err := s.Purge()
+	purged, _, err := s.Purge()
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-stale")
 
 	ids, err := s.List()
 	require.NoError(t, err)
 	assert.Empty(t, ids)
+}
+
+// TestStore_Delete_SidecarClearFailureKeepsRoster pins review finding
+// J3 (full-branch review, m-2026-09-08-004 round 3), correcting K3: a
+// sidecar-clear failure used to be advisory only -- reported to stderr,
+// with the roster removed regardless. That reopened the exact gap K3
+// closed: once the roster is gone the session is absent from List(), so
+// Purge/PurgeTombstoned never revisit it, permanently orphaning the
+// sidecar with no GC path. deleteFiles must now clear sidecars BEFORE
+// removing the roster and propagate a clear failure instead of
+// swallowing it, so the roster survives as the retry token a later
+// purge needs.
+func TestStore_Delete_SidecarClearFailureKeepsRoster(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	sessionID := "sess-sidecar-clear-fails"
+	require.NoError(t, s.Create(sessionID, root, primary, "", ""))
+	require.NoError(t, mission.WriteActiveMission(s.root, sessionID, "m-2026-09-08-724"))
+
+	// Lock the mission sidecar's own directory (a sibling of the roster
+	// file, not an ancestor of it) so removing the sidecar fails while
+	// removing the roster itself would otherwise still succeed.
+	sidecarDir := filepath.Dir(mission.ActiveMissionPath(s.root, sessionID))
+	require.NoError(t, os.Chmod(sidecarDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(sidecarDir, 0o700) })
+
+	err := s.Delete(sessionID)
+	require.Error(t, err, "a sidecar-clear failure must surface, not be swallowed")
+
+	_, loadErr := s.Load(sessionID)
+	require.NoError(t, loadErr, "the roster must survive a sidecar-clear failure -- it is the retry token a later purge needs")
+}
+
+// TestStore_Delete_HoldsDispatchPendingLockThroughRosterRemoval pins the
+// leader's PR #509 tail-round finding: before this fix, deleteFiles
+// acquired mission's per-session dispatch-pending lock only around the
+// dispatch-pending CLEAR substep (via clearMissionSidecars's own call to
+// mission.WithDispatchPendingLock), releasing it before removing the
+// roster file -- leaving a gap in which a resumed session's own claim or
+// dispatch-pending WRITE (which also takes that lock) could land,
+// orphaning the fresh sidecar the instant the roster disappeared
+// (List()/Purge() only ever discover sessions via their roster file).
+//
+// deleteFilesLockStillHeld fires from inside deleteFiles' own critical
+// section, after clearing every sidecar but BEFORE removing the roster,
+// while the lock deleteFiles acquired at the top is still held. This
+// test overrides the hook to attempt a sibling AcquireDispatchPendingLock
+// for the SAME session from a separate goroutine and asserts it blocks
+// (proving the lock spans the whole clear-through-roster-removal
+// window, not only the clear substep) and only succeeds once Delete has
+// returned.
+func TestStore_Delete_HoldsDispatchPendingLockThroughRosterRemoval(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	sessionID := "sess-lock-spans-removal"
+	require.NoError(t, s.Create(sessionID, root, primary, "", ""))
+
+	proceed := make(chan struct{})
+	siblingAcquired := make(chan struct{})
+	t.Cleanup(func() { deleteFilesLockStillHeld = func() {} })
+	deleteFilesLockStillHeld = func() {
+		go func() {
+			release, err := mission.AcquireDispatchPendingLock(s.root, sessionID)
+			if err != nil {
+				close(siblingAcquired) // surfaced via the select below as a spurious close
+				return
+			}
+			defer release()
+			close(siblingAcquired)
+		}()
+		// Give the sibling goroutine time to enter Flock and block --
+		// mirrors TestAcquireDelegationLock_BlocksUntilRelease's own
+		// discipline elsewhere in this codebase.
+		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-siblingAcquired:
+			t.Error("sibling acquired the dispatch-pending lock while deleteFiles still holds it, " +
+				"before the roster was removed")
+		default:
+			// Expected: still blocked.
+		}
+		close(proceed)
+	}
+
+	require.NoError(t, s.Delete(sessionID))
+
+	select {
+	case <-proceed:
+	default:
+		t.Fatal("deleteFilesLockStillHeld hook never fired -- test did not exercise the intended path")
+	}
+	select {
+	case <-siblingAcquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sibling never acquired the lock after Delete returned")
+	}
+
+	_, err := s.Load(sessionID)
+	require.Error(t, err, "the roster must be gone once Delete returns")
+}
+
+// TestStore_Purge_ClearsMissionSidecars pins review finding K3's actual
+// scenario: a session that ended abnormally (SIGKILL, closed terminal,
+// crash -- simulated here by a dead PID, exactly what isStale detects)
+// left its mission sidecars behind indefinitely before this fix, with
+// no GC path. `claude --resume` reusing the same session ID would then
+// have its first matching spawn captured by a stale claim or pending
+// dispatch from before the death.
+func TestStore_Purge_ClearsMissionSidecars(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "9999999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-stale-sidecars", root, primary, "", ""))
+
+	require.NoError(t, mission.WriteActiveMission(s.root, "sess-stale-sidecars", "m-2026-09-08-722"))
+	require.NoError(t, mission.WriteDispatchPending(s.root, "sess-stale-sidecars", "m-2026-09-08-723", "bwk"))
+
+	purged, _, err := s.Purge()
+	require.NoError(t, err)
+	require.Contains(t, purged, "sess-stale-sidecars")
+
+	claimed, err := mission.ReadActiveMission(s.root, "sess-stale-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, claimed, "a dead session's claim must not survive to capture a resumed session's spawn")
+
+	pending, _, err := mission.ReadDispatchPending(s.root, "sess-stale-sidecars")
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a dead session's pending dispatch must not survive to capture a resumed session's spawn")
+}
+
+// TestStore_Purge_SidecarClearFailureIsReportedAndRefused pins review
+// finding B (full-branch review, m-2026-09-08-004 round 3), a
+// regression J3 introduced: `if s.deleteFiles(id) == nil { didPurge =
+// true }` treated a sidecar-clear failure (now possible since J3 made
+// deleteFiles propagate one) identically to "not stale" -- the session
+// was neither purged nor reported anywhere, with nothing reaching
+// stderr. That is strictly worse than pre-J3, which at least logged a
+// line per failed sidecar clear. Purge must log the failure (matching
+// its sibling PurgeTombstoned) and report the session in a refused
+// slice, not silently do nothing.
+func TestStore_Purge_SidecarClearFailureIsReportedAndRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "9999999", Persona: "agent", Parent: "user1"}
+	sessionID := "sess-purge-sidecar-fails"
+	require.NoError(t, s.Create(sessionID, root, primary, "", ""))
+	require.NoError(t, mission.WriteActiveMission(s.root, sessionID, "m-2026-09-08-725"))
+
+	sidecarDir := filepath.Dir(mission.ActiveMissionPath(s.root, sessionID))
+	require.NoError(t, os.Chmod(sidecarDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(sidecarDir, 0o700) })
+
+	var purged, refused []string
+	var purgeErr error
+	stderrText := testhelpers.CaptureStderr(t, func() {
+		purged, refused, purgeErr = s.Purge()
+	})
+
+	require.NoError(t, purgeErr)
+	assert.NotContains(t, purged, sessionID, "a session whose sidecar clear failed must not be reported as purged")
+	assert.Contains(t, refused, sessionID, "a session whose sidecar clear failed must be reported as refused")
+	assert.Contains(t, stderrText, sessionID, "the failure must reach stderr, matching PurgeTombstoned's own discipline")
+
+	_, loadErr := s.Load(sessionID)
+	require.NoError(t, loadErr, "the roster must survive so a later purge can retry")
 }
 
 func TestStore_PurgeKeepsLive(t *testing.T) {
@@ -284,7 +491,7 @@ func TestStore_PurgeKeepsLive(t *testing.T) {
 	}
 	require.NoError(t, s.Create("sess-live", root, primary, "", ""))
 
-	purged, err := s.Purge()
+	purged, _, err := s.Purge()
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 
@@ -426,7 +633,7 @@ func TestStore_PurgeCleansBothRostersAndPIDFiles(t *testing.T) {
 	// Write a PID file for the same dead PID.
 	require.NoError(t, s.WriteCurrentSession(deadPID, "sess-both"))
 
-	purged, err := s.Purge()
+	purged, _, err := s.Purge()
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-both")
 

@@ -160,10 +160,11 @@ func execPipelineHandler(t *testing.T, args ...string) (stdout string, errMsg st
 
 	err = rootCmd.Execute()
 
-	pw.Close()
+	require.NoError(t, pw.Close())
 	var outBuf bytes.Buffer
 	_, copyErr := io.Copy(&outBuf, pr)
 	require.NoError(t, copyErr)
+	require.NoError(t, pr.Close())
 
 	return outBuf.String(), errBuf.String(), err
 }

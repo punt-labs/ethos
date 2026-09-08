@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -207,13 +208,143 @@ func (s *Store) Delete(sessionID string) error {
 	return nil
 }
 
-// deleteFiles removes the roster file only (no lock file cleanup).
-// Used inside withLock where the lock file must remain.
+// deleteFiles clears the session's mission sidecars (the active-mission
+// claim, the delegation-binding sidecar, and every pending dispatch),
+// then removes the roster file (no lock file cleanup — used inside
+// withLock where the lock file must remain).
+//
+// This is the ONE low-level primitive Delete, Purge, and
+// PurgeTombstoned all funnel through, so putting the sidecar clear here
+// closes it for every deletion path at once, not just the clean
+// HandleSessionEnd one. Review finding K3 (full-branch review,
+// m-2026-09-08-004 round 3): before this, only the clean SessionEnd
+// path cleared these sidecars, via a hook-local duplicate of this same
+// three-call list (since deleted — review finding J5, below) — abnormal
+// session death (SIGKILL, a closed terminal, a crash) left them in
+// place indefinitely, with no GC, no purge, no tombstone path. `claude
+// --resume` reusing the same session ID then had the first matching
+// spawn silently captured by a claim or pending dispatch from before
+// the death. Purge and PurgeTombstoned are exactly the crash-recovery
+// paths that needed this and did not have it.
+//
+// Review finding J3 (full-branch review, m-2026-09-08-004 round 3),
+// correcting K3: a sidecar-clear failure used to be advisory —
+// reported to stderr, with the roster removed regardless. That reopened
+// exactly the gap K3 closed: once the roster is gone the session is
+// absent from List(), so Purge/PurgeTombstoned never revisit it — a
+// SINGLE sidecar-clear failure orphaned those files permanently, with
+// no GC path at all. Advisory-and-continue is the right discipline when
+// something else will eventually retry (every other Clear* call site in
+// this codebase — cmd/ethos/mission.go's runMissionRelease — is a leaf
+// action nothing depends on afterward); here, nothing retries an
+// orphaned sidecar once its roster is gone, so the ONE thing that WOULD
+// retry (a later Purge/PurgeTombstoned pass) must not be denied its own
+// retry token. Sidecars are now cleared BEFORE the roster is removed,
+// and a clear failure returns an error without removing the roster —
+// the roster's continued presence in List() is exactly the retry token
+// a later purge needs.
+//
+// Review finding J5 (full-branch review, m-2026-09-08-004 round 3):
+// internal/hook/session_end.go used to hand-maintain its own copy of
+// this same three-call list (clearSessionMissionBindings) — deleted
+// entirely once HandleSessionEnd could rely solely on Store.Delete for
+// the same effect, so a fourth sidecar type added here can no longer
+// drift silently out of sync with a second copy elsewhere.
+//
+// Leader review of PR #509 (m-2026-09-08-004, tail round): clearing the
+// sidecars and removing the roster happen under Store.withLock's own
+// roster flock, but that flock is never taken by a sidecar WRITER — a
+// resumed session reusing sessionID that writes a fresh claim or
+// dispatch-pending entry has no reason to wait for this function at
+// all. Before this fix, the dispatch-pending clear (below, inside
+// clearMissionSidecars) took mission's own dispatch-pending lock only
+// for the duration of the clear substep, then released it before the
+// roster removal ran — a resumed session's `mission dispatch` write
+// (which also takes that lock, per WithDispatchPendingLock's own doc
+// comment) could land in the gap between the clear releasing and the
+// roster actually being removed, orphaning the fresh entry outside
+// roster-based purge discovery entirely (deleteFiles is the ONLY
+// primitive Delete/Purge/PurgeTombstoned funnel through, and
+// List()/Purge() only ever look at ROSTER files). Fixed by acquiring
+// the dispatch-pending lock ONCE here, for the FULL clear-through-
+// roster-removal span, rather than around the clear substep alone —
+// see clearMissionSidecarsLocked's own doc comment for why that
+// function's dispatch-pending clear must NOT re-acquire the lock this
+// caller already holds. The other write-side half of this same fix is
+// cmd/ethos/mission.go's runMissionClaim, which now takes this SAME
+// lock before writing a fresh claim — without that, a claim write
+// would still not be excluded from this window, only a dispatch write
+// would.
 func (s *Store) deleteFiles(sessionID string) error {
+	release, err := mission.AcquireDispatchPendingLock(s.root, sessionID)
+	if err != nil {
+		return fmt.Errorf("acquiring dispatch-pending lock for %q: %w", sessionID, err)
+	}
+	defer release()
+
+	if err := s.clearMissionSidecarsLocked(sessionID); err != nil {
+		return fmt.Errorf("clearing mission sidecars for %q: %w", sessionID, err)
+	}
+	// Test-only synchronization point: fires while the dispatch-pending
+	// lock acquired above is STILL held, immediately before the roster
+	// is removed. Overridden by tests that need to prove a sibling
+	// acquire of the same lock blocks here rather than succeeding in the
+	// gap this function used to leave open — mirrors
+	// internal/hook/pretooluse_dispatch.go's dispatchTierBConfirmedOpen
+	// pattern for the same reason: a real synchronization point beats a
+	// blind time.Sleep guess at the race window.
+	deleteFilesLockStillHeld()
 	if err := os.Remove(s.rosterPath(sessionID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting session %q: %w", sessionID, err)
 	}
 	return nil
+}
+
+// deleteFilesLockStillHeld is deleteFiles's test-only synchronization
+// hook (see deleteFiles's own doc comment). Its zero value is a no-op
+// with negligible production cost.
+var deleteFilesLockStillHeld = func() {}
+
+// clearMissionSidecarsLocked clears sessionID's mission sidecars under
+// s.root (the same globalRoot mission.SessionBoundMissions already
+// reads above) — see deleteFiles's doc comment for why this lives here
+// and why its failure now propagates instead of only logging.
+//
+// REQUIRES the caller to already hold mission.AcquireDispatchPendingLock
+// for sessionID — deleteFiles, this function's only caller, acquires it
+// once for its whole body (see that function's doc comment for why).
+// The dispatch-pending clear below therefore calls the RAW, unlocked
+// mission.ClearDispatchPending directly rather than going through
+// mission.WithDispatchPendingLock: a real flock locks an open file
+// description, not a process, so a second acquire from the SAME
+// already-holding process would block on itself — the identical
+// self-deadlock hazard WithDispatchPendingLock's own doc comment warns
+// every OTHER caller about, reachable here specifically because this
+// one caller already holds the lock deleteFiles acquired.
+//
+// This function runs from inside Store.withLock's own session roster
+// flock (via Delete/Purge/PurgeTombstoned) as well as the
+// dispatch-pending lock deleteFiles now holds around it — a THIRD lock
+// class distinct from both the dispatch-pending lock and any
+// mission/delegation lock. No code path acquires the dispatch-pending
+// lock and then tries to acquire this session's roster lock —
+// internal/hook/pretooluse_dispatch.go's dispatchAgent, the
+// dispatch-pending lock's other steady-state holder, never touches
+// session.Store — so nesting the dispatch-pending lock inside the
+// roster lock here introduces no reversal of any existing pairing,
+// only a new one used in this single direction.
+func (s *Store) clearMissionSidecarsLocked(sessionID string) error {
+	var errs []error
+	if err := mission.ClearActiveMission(s.root, sessionID); err != nil {
+		errs = append(errs, fmt.Errorf("clearing active mission: %w", err))
+	}
+	if err := mission.ClearDelegationBinding(s.root, sessionID); err != nil {
+		errs = append(errs, fmt.Errorf("clearing delegation binding: %w", err))
+	}
+	if err := mission.ClearDispatchPending(s.root, sessionID); err != nil {
+		errs = append(errs, fmt.Errorf("clearing dispatch-pending: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // List returns all session IDs.
@@ -239,27 +370,44 @@ func (s *Store) List() ([]string, error) {
 // agent's PID is still alive. The primary agent is the second participant
 // (index 1) — the first participant with a numeric agent_id whose
 // process is no longer running.
-func (s *Store) Purge() ([]string, error) {
+//
+// Review finding B (full-branch review, m-2026-09-08-004 round 3,
+// reviewing J3): deleteFiles now propagates a mission-sidecar-clear
+// failure as an error (J3), which this function used to silently
+// discard — `if s.deleteFiles(id) == nil { didPurge = true }` treated
+// any error identically to "not stale," so a sidecar-clear failure
+// left the session neither purged nor reported anywhere, with nothing
+// reaching stderr. That is strictly worse than pre-J3, which at least
+// logged a line per failed sidecar clear. Both sibling callers
+// (purgeOneTombstoned, the unreadable-roster branch below) already log
+// and report; Purge now does too, and returns a refused slice
+// mirroring PurgeTombstoned's own signature.
+func (s *Store) Purge() (purged, refused []string, err error) {
 	ids, err := s.List()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var purged []string
 	for _, id := range ids {
-		didPurge := false
+		didPurge, didRefuse := false, false
 		if lockErr := s.withLock(id, func() error {
 			roster, err := s.Load(id)
 			if err != nil {
 				// Corrupt roster — delete under lock.
-				if s.deleteFiles(id) == nil {
-					didPurge = true
+				if dErr := s.deleteFiles(id); dErr != nil {
+					fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", id, dErr)
+					didRefuse = true
+					return nil
 				}
+				didPurge = true
 				return nil
 			}
 			if isStale(roster) {
-				if s.deleteFiles(id) == nil {
-					didPurge = true
+				if dErr := s.deleteFiles(id); dErr != nil {
+					fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", id, dErr)
+					didRefuse = true
+					return nil
 				}
+				didPurge = true
 			}
 			return nil
 		}); lockErr != nil {
@@ -269,9 +417,12 @@ func (s *Store) Purge() ([]string, error) {
 			os.Remove(s.lockPath(id))
 			purged = append(purged, id)
 		}
+		if didRefuse {
+			refused = append(refused, id)
+		}
 	}
 
-	return purged, nil
+	return purged, refused, nil
 }
 
 // PurgeTombstoned is Purge with the DES-058 unsealed-lines guard. Before
@@ -316,6 +467,35 @@ func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, re
 				// refuse unless --force. Under --force delete it, but surface
 				// that no tombstone can be recorded (repo unknown).
 				if !force {
+					// Review finding E (full-branch review, m-2026-09-08-004
+					// round 3), REVISED by Bugbot on PR #509 (round 4 — my
+					// original ruling was incomplete): the roster is kept
+					// on refusal so the unsealed audit lines it may be the
+					// only pointer to stay findable, but the active-mission
+					// claim is ITSELF part of that pointer chain —
+					// mission.SessionBoundMissions reads ReadActiveMission
+					// as its FIRST source of mission IDs, and the unsealed-
+					// lines probe uses that list to find a session's mission
+					// live logs. Clearing the claim here would destroy the
+					// lookup: the NEXT purge pass finds no bound missions,
+					// concludes the session is clean, and drops the roster —
+					// stranding the very unsealed lines this refusal exists
+					// to protect. Only the pending-dispatch store is cleared:
+					// it is pure coordination state (never consulted by
+					// SessionBoundMissions) and the headline capture-on-
+					// resume hazard; the claim and the delegation-binding
+					// sidecar survive until a purge actually proceeds.
+					//
+					// Locked (mission.WithDispatchPendingLock) for the same
+					// reason clearMissionSidecars is, above: this runs inside
+					// Store.withLock's roster flock, a distinct lock class no
+					// other holder of the dispatch-pending lock ever nests
+					// the other way around.
+					if cErr := mission.WithDispatchPendingLock(s.root, id, func() error {
+						return mission.ClearDispatchPending(s.root, id)
+					}); cErr != nil {
+						fmt.Fprintf(os.Stderr, "ethos: purge: clearing dispatch-pending for %s: %v\n", id, cErr)
+					}
 					fmt.Fprintf(os.Stderr,
 						"ethos: purge: refusing to purge %s: roster unreadable (%v); re-run with --force\n", id, lErr)
 					didRefuse = true
@@ -452,6 +632,31 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 				"run inside its checkout or re-run with --force\n", roster.Session)
 	}
 	if !force && (unsealed > 0 || probeFailed) {
+		// Review finding E (full-branch review, m-2026-09-08-004 round
+		// 3), REVISED by Bugbot on PR #509 (round 4 — my original ruling
+		// was incomplete): the roster is kept on refusal so the unsealed
+		// audit lines it may be the only pointer to stay findable, but
+		// the active-mission claim is ITSELF part of that pointer chain
+		// — mission.SessionBoundMissions reads ReadActiveMission as its
+		// FIRST source of mission IDs, and the unsealed-lines probe uses
+		// that list to find a session's mission live logs. Clearing the
+		// claim here would destroy the lookup: the NEXT purge pass finds
+		// no bound missions, concludes the session is clean, and drops
+		// the roster — stranding the very unsealed lines this refusal
+		// exists to protect. Only the pending-dispatch store is cleared:
+		// it is pure coordination state (never consulted by
+		// SessionBoundMissions) and the headline capture-on-resume
+		// hazard; the claim and the delegation-binding sidecar survive
+		// until a purge actually proceeds.
+		//
+		// Locked (mission.WithDispatchPendingLock), same reason as
+		// clearMissionSidecars above: purgeOneTombstoned runs inside
+		// Store.withLock's roster flock.
+		if cErr := mission.WithDispatchPendingLock(s.root, roster.Session, func() error {
+			return mission.ClearDispatchPending(s.root, roster.Session)
+		}); cErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: purge: clearing dispatch-pending for %s: %v\n", roster.Session, cErr)
+		}
 		if probeFailed {
 			fmt.Fprintf(os.Stderr,
 				"ethos: purge: refusing to purge %s: could not verify unsealed state; re-run with --force to purge anyway\n",

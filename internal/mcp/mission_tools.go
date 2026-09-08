@@ -22,7 +22,7 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, abandon, reflect, reflections, advance, result, results, log, correct. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Abandon retires a mission that was created but never had a worker actually spawned — it refuses if any delegation record or result artifact exists, at any round; use close (after a result is submitted) for missions with real work. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp. Correct files an additive-only annotation against a CLOSED mission — a fact discovered afterward, an integrity finding, or a leader's post-escalation decision — as a new event on the log; it never rewrites the contract, results, or reflections and is refused on an open mission."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, abandon, reflect, reflections, advance, result, results, log, correct. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Abandon retires a mission that was created but never had a worker actually spawned — it refuses if any BLOCKING delegation record or any result artifact exists, at any round; use close (after a result is submitted) for missions with real work. A delegation with verdict \"aborted\" (refused before its worker ever ran) is excluded automatically, no disclaim needed. disclaim (DES-076) names specific OTHER delegation IDs proven to be dispatch-sidecar captures, not real work — mechanically checked, never a blanket bypass; result artifacts still block regardless. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp. Correct files an additive-only annotation against a CLOSED mission — a fact discovered afterward, an integrity finding, or a leader's post-escalation decision — as a new event on the log; it never rewrites the contract, results, or reflections and is refused on an open mission."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("create", "show", "list", "close", "abandon", "reflect", "reflections", "advance", "result", "results", "log", "correct"),
 			mcplib.Description("Operation to perform."),
@@ -56,7 +56,11 @@ func (h *Handler) missionTool() mcplib.Tool {
 			mcplib.Description("Filter for list (open|closed|failed|escalated|abandoned|all) or terminal status for close (closed|failed|escalated)."),
 		),
 		mcplib.WithString("reason",
-			mcplib.Description("Why the mission is being retired without a worker ever spawning. Required for abandon."),
+			mcplib.Description("Why the mission is being retired without a worker ever spawning. Required for abandon. Also used as the disclaim reason for every entry in disclaim, if given."),
+		),
+		mcplib.WithArray("disclaim",
+			mcplib.Description("Optional for abandon (DES-076): delegation IDs to disclaim before attempting the abandon — each must have been bound via an active-mission-sidecar dispatch capture and already be closed; explicit-env and inherited delegations are refused by name. Repeatable; a disclaim failure stops before abandon is attempted."),
+			mcplib.Items(map[string]any{"type": "string"}),
 		),
 		mcplib.WithString("event",
 			mcplib.Description("Optional comma-separated list of event types for log (e.g. create,close). Unknown types are accepted and return empty."),
@@ -155,23 +159,26 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to create mission: %v", err)), nil
 	}
 	// Parity with the CLI's create/dispatch: minting a fresh mission is
-	// the leader naming one explicitly, so the session's active-mission
-	// sidecar must follow immediately (ethos-5jsf) -- otherwise the very
-	// next Agent() spawn in this session still writes its delegation
-	// under whatever mission the sidecar named a moment ago, d-040's
-	// exact pattern, reachable through the MCP surface even though
-	// dispatchTierB's own status re-check (facet 2) already closes the
-	// post-close half of the same root cause.
-	if warnings := h.bindDispatchedMission(c.MissionID); len(warnings) > 0 {
+	// the leader naming one explicitly, so a pending-dispatch entry must
+	// follow immediately (ethos-5jsf) -- otherwise a later Agent() spawn
+	// whose agent type matches this contract's Worker finds no entry to
+	// consume, d-040's original pattern, reachable through the MCP
+	// surface even though dispatchTierB's own status re-check (facet 2)
+	// already closes the post-close half of the same root cause.
+	// DES-076 round 3 keys this per mission (review finding C1,
+	// m-2026-09-08-004 round 2) — it no longer overwrites a DIFFERENT
+	// mission's own pending dispatch the way the old single slot did.
+	if warnings := h.bindDispatchedMission(c.MissionID, c.Worker); len(warnings) > 0 {
 		return jsonResult(createMissionResponse{Contract: &c, Warnings: warnings})
 	}
 	return jsonResult(&c)
 }
 
 // createMissionResponse is the wire shape for handleCreateMission's
-// rebind warnings: the created contract plus an optional warnings
-// list, present only when bindDispatchedMission's rebind left
-// something for the caller to see. Mirrors ShowPayload/LogPayload's
+// binding warnings: the created contract plus an optional warnings
+// list, present whenever bindDispatchedMission has something for the
+// caller to see (which per DES-076 round 3 is unconditional -- see
+// that function's own doc comment). Mirrors ShowPayload/LogPayload's
 // warnings convention (internal/mission/mission.go) as a local type
 // rather than a shared one -- mission.go is outside this fix's
 // write-set.
@@ -181,32 +188,45 @@ type createMissionResponse struct {
 }
 
 // bindDispatchedMission mirrors the CLI's bindDispatchedMission
-// (cmd/ethos/mission.go:2023) for the MCP create surface -- ethos-5jsf.
+// (cmd/ethos/mission.go) for the MCP create surface -- ethos-5jsf.
 // Creating a mission is the leader naming one explicitly, so it is the
-// moment the session's active-mission sidecar must follow: without
-// this, the next Agent() spawn in this session still writes under
-// whatever mission the sidecar named a moment ago (observed: d-078
-// under m-017, d-040 under m-002).
+// moment a pending-dispatch entry must be written: without this, a
+// later Agent() spawn matching this mission's Worker finds no entry to
+// consume (observed pre-DES-076: d-078 under m-017, d-040 under m-002,
+// back when an unscoped single slot captured whatever spawned next
+// regardless of type).
 //
-// The binding is written with dispatch origin, not claim -- creating a
-// mission on someone's behalf must not turn on commit trailers for
-// this session; only an explicit `ethos mission claim` does that.
+// The entry produces NO commit trailers -- creating a mission on
+// someone's behalf must not turn on trailers for this session; only an
+// explicit `ethos mission claim` does that. DES-076 round 1 scoped
+// consumption to the ONE spawn whose agent type matches worker,
+// single-use; round 3 (review finding C1, m-2026-09-08-004 round 2)
+// additionally keys the entry by MISSION, so creating mission B no
+// longer overwrites or disturbs a still-pending dispatch for mission A
+// -- see internal/mission/active.go's dispatch-pending doc comment and
+// internal/hook/pretooluse_dispatch.go's readActiveMissionForDispatch,
+// which is what actually matches and consumes it. This function only
+// writes the entry and reports what it wrote, mirroring the CLI's own
+// bindDispatchedMission split. There is no "rebind" case anymore:
+// dispatching never displaces a DIFFERENT mission's pending entry, so
+// there is nothing to warn about losing.
 //
 // Every step is advisory: a mission that was created stays created
-// regardless of whether the rebind below succeeds. But "advisory"
-// means the create call does not fail -- it does not mean the caller
-// is left with no signal. No session store wired, or no session in
-// context, means the rebind is skipped, and a warning says so: an MCP
-// client that trusts "creating a mission binds the session" has no
-// other way to distinguish "rebind happened" from "silently
-// skipped." Failures and skips alike are returned as strings for the
-// caller to fold into the result's warnings array -- MCP has no
-// stderr channel to print the CLI's line to.
-func (h *Handler) bindDispatchedMission(missionID string) []string {
+// regardless of whether the write below succeeds. But "advisory" means
+// the create call does not fail -- it does not mean the caller is left
+// with no signal. No session store wired, or no session in context,
+// means the write is skipped, and a warning says so: an MCP client
+// that trusts "creating a mission binds the session" has no other way
+// to distinguish "bound" from "silently skipped." Failures, skips, AND
+// a successful bind are all returned as strings for the caller to fold
+// into the result's warnings array -- MCP has no stderr channel to
+// print the CLI's line to, so this is the only signal an MCP-driven
+// leader gets that the binding exists and which worker it is scoped to.
+func (h *Handler) bindDispatchedMission(missionID, worker string) []string {
 	if h.sessionStore == nil {
 		return []string{
-			"binding mission: no session store wired -- active-mission sidecar not updated; " +
-				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
+			"binding mission: no session store wired -- pending-dispatch entry not written; " +
+				"the worker's matching Agent() spawn will not be attributed to this mission",
 		}
 	}
 	sessionID, _, err := resolve.SessionID(h.sessionStore)
@@ -222,13 +242,13 @@ func (h *Handler) bindDispatchedMission(missionID string) []string {
 		// text instead of being silent.
 		if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
 			return []string{
-				"binding mission: no session in context -- active-mission sidecar not updated; " +
-					"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
+				"binding mission: no session in context -- pending-dispatch entry not written; " +
+					"the worker's matching Agent() spawn will not be attributed to this mission",
 			}
 		}
 		return []string{
-			fmt.Sprintf("binding mission: resolving session: %v -- active-mission sidecar not updated; "+
-				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID", err),
+			fmt.Sprintf("binding mission: resolving session: %v -- pending-dispatch entry not "+
+				"written; the worker's matching Agent() spawn will not be attributed to this mission", err),
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -237,32 +257,46 @@ func (h *Handler) bindDispatchedMission(missionID string) []string {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	previous, prevErr := mission.ReadActiveMissionBinding(globalRoot, sessionID)
-	var warnings []string
-	if prevErr != nil {
-		// Report and continue: the rebind below is what makes the next
-		// spawn correct, and an unreadable sidecar is exactly the state
-		// that must be overwritten.
-		warnings = append(warnings, fmt.Sprintf("binding mission: reading active mission: %v", prevErr))
+	// This MCP call runs as its own process, so staging a new pending
+	// entry must take the dispatch-pending lock itself rather than
+	// write unlocked — an unlocked write could interleave with a
+	// concurrent dispatchAgent invocation's own held-lock read of the
+	// pending directory (mission.WithDispatchPendingLock's own doc
+	// comment).
+	//
+	// hook.RefuseIfSessionGone runs FIRST, inside the same critical
+	// section, so a writer that was waiting on this lock cannot proceed
+	// into a session Store.Delete has already torn down — see that
+	// function's own doc comment for the reorder this closes.
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		if err := hook.RefuseIfSessionGone(h.sessionStore, sessionID); err != nil {
+			return err
+		}
+		return mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker)
+	}); err != nil {
+		return []string{fmt.Sprintf("binding mission: recording dispatch for %s: %v", missionID, err)}
 	}
-	if err := mission.WriteActiveMissionOrigin(
-		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
-	); err != nil {
-		return append(warnings, fmt.Sprintf("binding mission: binding session %s to %s: %v", sessionID, missionID, err))
-	}
-	// create always mints a fresh mission ID, so a rebind onto the SAME
-	// mission cannot arise; only the changed-mission case is reachable.
-	if previous.MissionID == "" || previous.MissionID == missionID {
-		return warnings
-	}
-	warnings = append(warnings, fmt.Sprintf(
-		"session %s was bound to %s; rebound to %s -- delegations now file under %s, "+
-			"and commit trailers are off until you run `ethos mission claim <id>`",
-		sessionID, previous.MissionID, missionID, missionID))
-	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
-		warnings = append(warnings, fmt.Sprintf("binding mission: clearing delegation binding: %v", err))
-	}
-	return warnings
+	// Reported unconditionally (ethos-7tqd triage suggestion #3), and
+	// the only place an MCP-driven leader learns the binding is scoped
+	// to worker at all, since MCP has no stderr channel to print the
+	// CLI's equivalent line to.
+	//
+	// Review finding J1 (full-branch review, m-2026-09-08-004 round 3),
+	// correcting K8: hook.DispatchBoundMessage shares
+	// mission.ClassifyPendingDispatches with matchDispatchPending
+	// itself, so the reported queue position and the entry the hook
+	// would actually match at spawn time cannot disagree — K8's own fix
+	// filtered on bare Worker equality, which could name an unresolvable
+	// or stale entry as "ahead of it" when the matcher would actually
+	// skip that entry and match THIS one instead. Also collapses what
+	// was ~30 duplicated lines with the CLI twin
+	// (cmd/ethos/mission.go's bindDispatchedMission) into one shared
+	// implementation.
+	remedy := fmt.Sprintf(
+		"call mission release to clear every pending dispatch in this session, or close/abandon %s "+
+			"to clear this one specifically, if that is not what you want",
+		missionID)
+	return []string{hook.DispatchBoundMessage(h.missionStore, globalRoot, sessionID, missionID, worker, remedy)}
 }
 
 // handleShowMission resolves the requested mission by exact ID or
@@ -410,6 +444,20 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 // retires it via Store.Abandon — a distinct, more narrowly gated
 // operation from Close (see the Abandon doc comment in
 // internal/mission/store.go). reason is required.
+//
+// disclaim (DES-076 round 2), when given, runs Store.DisclaimDelegation
+// for each named delegation ID BEFORE attempting the abandon itself —
+// the same reason text covers both. A disclaim failure (wrong
+// provenance, still open, already disclaimed) returns immediately,
+// naming which delegation ID failed and why, without ever calling
+// Abandon.
+//
+// M3 (full-branch review, m-2026-09-08-004 round 3): DisclaimDelegation
+// is irreversible the moment it succeeds. Every failure path below
+// names any delegation IDs that already committed before the failure —
+// a subsequent disclaim in this loop, or the Abandon call after the
+// loop finishes — so a caller who only sees an error never has to
+// wonder whether some of the requested disclaims already stuck.
 func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	idArg := stringArg(req, "mission_id", "")
 	if idArg == "" {
@@ -419,19 +467,42 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 	if strings.TrimSpace(reason) == "" {
 		return mcplib.NewToolResultError("reason is required for abandon"), nil
 	}
+	disclaim, err := stringListArg(req, "disclaim")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 
 	id, err := h.missionStore.MatchByPrefix(idArg)
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
+	var disclaimed []string
+	for _, delegationID := range disclaim {
+		if _, dErr := h.missionStore.DisclaimDelegation(id, delegationID, reason); dErr != nil {
+			if len(disclaimed) > 0 {
+				return mcplib.NewToolResultError(fmt.Sprintf(
+					"failed to disclaim delegation %q: %v (already disclaimed and cannot be undone: %s)",
+					delegationID, dErr, strings.Join(disclaimed, ", "))), nil
+			}
+			return mcplib.NewToolResultError(
+				fmt.Sprintf("failed to disclaim delegation %q: %v", delegationID, dErr)), nil
+		}
+		disclaimed = append(disclaimed, delegationID)
+	}
 	c, err := h.missionStore.Abandon(id, reason)
 	if err != nil {
+		if len(disclaimed) > 0 {
+			return mcplib.NewToolResultError(fmt.Sprintf(
+				"failed to abandon mission: %v (disclaimed and cannot be undone despite the failed abandon: %s)",
+				err, strings.Join(disclaimed, ", "))), nil
+		}
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to abandon mission: %v", err)), nil
 	}
 	payload := map[string]any{
 		"mission_id": id,
 		"status":     c.Status,
 		"reason":     reason,
+		"disclaimed": disclaim,
 	}
 	// Parity with close: a terminal transition ends this session's work
 	// on the mission, so clear its sidecars.

@@ -3,10 +3,10 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -776,27 +776,70 @@ func TestFormatOutput_Mission_Create_Warnings(t *testing.T) {
 // only way to trace a dropped entry back to one of the six shared
 // call sites (silent-failure-hunter finding on PR #437's follow-up).
 func TestWriteMissionWarnings_DropsNonStringEntry(t *testing.T) {
-	origStderr := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-
 	var ctx strings.Builder
-	writeMissionWarnings(&ctx, []any{"a real warning", 42.0}, "mission.show")
-
-	require.NoError(t, w.Close())
-	os.Stderr = origStderr
-	var captured bytes.Buffer
-	_, err = captured.ReadFrom(r)
-	require.NoError(t, err)
+	stderr := testhelpers.CaptureStderr(t, func() {
+		writeMissionWarnings(&ctx, []any{"a real warning", 42.0}, "mission.show")
+	})
 
 	assert.Contains(t, ctx.String(), "\n  - a real warning")
 	assert.NotContains(t, ctx.String(), "42")
 
-	stderr := captured.String()
 	assert.Contains(t, stderr, "mission.show")
 	assert.Contains(t, stderr, "dropping")
 	assert.Contains(t, stderr, "defect in the tool's warnings emission")
+}
+
+// TestFormatOutput_Mission_Abandon_DropsNonStringDisclaimedEntry pins
+// the leader's PR #509 tail-round finding: a non-string entry in the
+// abandon payload's `disclaimed` array used to be silently skipped by
+// the ids-append loop, with no signal it had happened -- a genuine
+// entry alongside it still rendered, so the drop was invisible.
+// formatMissionAbandon now matches writeMissionWarnings's own
+// established convention (TestWriteMissionWarnings_DropsNonStringEntry,
+// above): skip the entry from the rendered line, but report it loudly
+// on stderr naming the caller and the malformed value.
+func TestFormatOutput_Mission_Abandon_DropsNonStringDisclaimedEntry(t *testing.T) {
+	result := `{"mission_id":"m-2026-09-08-001","status":"abandoned","reason":"probe mission",` +
+		`"disclaimed":["d-2026-09-08-001",42.0]}`
+	payload := makeToolPayload("mission", "abandon", result)
+
+	var out string
+	stderr := testhelpers.CaptureStderr(t, func() {
+		out = runFormat(t, payload)
+	})
+
+	res := parseFormatResult(t, out)
+	ctx := res.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Disclaimed: d-2026-09-08-001")
+	assert.NotContains(t, ctx, "42")
+
+	assert.Contains(t, stderr, "mission.abandon")
+	assert.Contains(t, stderr, "dropping")
+	assert.Contains(t, stderr, "defect in the tool's disclaimed emission")
+}
+
+// TestFormatOutput_Mission_Abandon_AllMalformedDisclaimedOmitsEmptyLine
+// pins the other half of the same finding: when EVERY entry in
+// `disclaimed` is malformed (not just some), the old code still printed
+// a bare "Disclaimed: " line with nothing after the colon -- an empty,
+// meaningless line masking the fact that the whole array failed to
+// decode. The line must not appear at all when no entry decoded.
+func TestFormatOutput_Mission_Abandon_AllMalformedDisclaimedOmitsEmptyLine(t *testing.T) {
+	result := `{"mission_id":"m-2026-09-08-002","status":"abandoned","reason":"probe mission",` +
+		`"disclaimed":[42.0,true]}`
+	payload := makeToolPayload("mission", "abandon", result)
+
+	var out string
+	stderr := testhelpers.CaptureStderr(t, func() {
+		out = runFormat(t, payload)
+	})
+
+	res := parseFormatResult(t, out)
+	assert.NotContains(t, res.HookSpecificOutput.AdditionalContext, "Disclaimed:",
+		"an entirely malformed disclaimed array must not leave behind an empty Disclaimed: line")
+
+	assert.Contains(t, stderr, "mission.abandon")
+	assert.Equal(t, 2, strings.Count(stderr, "dropping"), "both malformed entries must be reported")
 }
 
 func TestFormatOutput_Mission_Create_MissingMissionID(t *testing.T) {

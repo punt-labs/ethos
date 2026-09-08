@@ -318,7 +318,10 @@ closing; see "ethos mission result --help" for the required YAML shape.`,
 
 // --- mission abandon ---
 
-var missionAbandonReason string
+var (
+	missionAbandonReason   string
+	missionAbandonDisclaim []string
+)
 
 var missionAbandonCmd = &cobra.Command{
 	Use:   "abandon <id-or-prefix>",
@@ -333,22 +336,37 @@ design: a terminal verdict must be backed by structured worker
 output. Abandon exists for the case where there is no work to have a
 verdict on at all — a mission contract was written (via "mission
 create" or "mission dispatch") but the worker was never actually
-spawned, so there are zero delegation records and zero result
+spawned, so there are zero BLOCKING delegation records and zero result
 artifacts on disk.
 
-Abandon refuses, with no override, if:
+Abandon refuses, with no bypass flag, if:
   - the mission is already in a terminal state (closed, failed,
     escalated, or already abandoned)
-  - any delegation record exists under the mission's delegations/
-    directory, at any verdict
-  - a result artifact exists for any round
+  - any BLOCKING delegation record exists under the mission's
+    delegations/ directory — every record blocks EXCEPT one with
+    verdict "aborted" (refused before its worker ever ran; excluded
+    automatically, no --disclaim needed) or one explicitly disclaimed
+    (see --disclaim below)
+  - a result artifact exists for any round — disclaiming every
+    delegation does NOT touch this gate
 
 Any of those conditions means real work may exist; retire the mission
 with "ethos mission close" once a result has been submitted instead.
 
---reason is required and is recorded on the abandon event so the
-audit trail explains why the mission was retired, not just that it
-was.
+--disclaim <delegation-id> names a specific delegation you can prove
+was NOT real work: a spawn wrongly attributed to this mission by the
+active-mission dispatch sidecar (DES-076; see DESIGN.md). It is
+mechanically gated, never a blanket override — the named delegation
+must have been bound via that exact sidecar-capture path and must
+already be closed (a still-running spawn is refused: it may still be
+doing real work). Repeatable for a mission with more than one captured
+delegation. Every disclaim is permanently recorded on both the
+delegation's own record and the mission's audit log, with the same
+--reason text abandon itself uses.
+
+--reason is required and is recorded on the abandon event (and on
+every --disclaim, if given) so the audit trail explains why the
+mission was retired, not just that it was.
 
 The abandoned status is distinct from closed/failed/escalated: an
 open mission created with an overlapping write_set is blocked only by
@@ -356,7 +374,7 @@ OTHER OPEN missions, so abandoning a dead mission immediately frees
 its write_set for a new "mission create".`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runMissionAbandon(args[0], missionAbandonReason)
+		return runMissionAbandon(args[0], missionAbandonReason, missionAbandonDisclaim)
 	},
 }
 
@@ -893,6 +911,8 @@ func init() {
 
 	missionAbandonCmd.Flags().StringVar(&missionAbandonReason, "reason", "", "Why this mission is being retired without a worker ever spawning (required)")
 	_ = missionAbandonCmd.MarkFlagRequired("reason")
+	missionAbandonCmd.Flags().StringArrayVar(&missionAbandonDisclaim, "disclaim", nil,
+		"Delegation ID that was a dispatch-sidecar capture, not real work (DES-076; repeatable)")
 
 	missionReflectCmd.Flags().StringVarP(&missionReflectFile, "file", "f", "", "Read reflection YAML from file (required)")
 	_ = missionReflectCmd.MarkFlagRequired("file")
@@ -1068,7 +1088,7 @@ func runMissionCreate() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
-	bindDispatchedMission("create", c.MissionID)
+	bindDispatchedMission("create", c.MissionID, c.Worker)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -1496,7 +1516,14 @@ func runMissionClose(idOrPrefix, status string) error {
 // result gate — Abandon is Store's own, more narrowly gated
 // operation. See the Abandon doc comment in internal/mission/store.go
 // for the full rationale.
-func runMissionAbandon(idOrPrefix, reason string) error {
+// disclaim lists delegation IDs to run through Store.DisclaimDelegation
+// (DES-076 round 2) before attempting the abandon itself. Each is
+// disclaimed with the SAME reason text the abandon event carries — one
+// operator explanation covers why the mission is dead AND why any
+// named delegation does not represent real work. A disclaim failure
+// (wrong provenance, still open, already disclaimed) stops before
+// Abandon is even attempted, naming which delegation ID failed and why.
+func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("mission abandon: --reason is required")
 	}
@@ -1505,8 +1532,31 @@ func runMissionAbandon(idOrPrefix, reason string) error {
 	if err != nil {
 		return fmt.Errorf("mission abandon: %w", err)
 	}
+	// M3 (full-branch review, m-2026-09-08-004 round 3): DisclaimDelegation
+	// is irreversible the moment it succeeds -- a delegation cannot be
+	// un-disclaimed. Track every one that has already committed so a
+	// LATER failure (a subsequent disclaim in this same loop, or the
+	// Abandon call after the loop finishes) can say so explicitly. An
+	// operator who sees only "abandon failed" would have no way to know
+	// some of the delegations they asked to abandon are already
+	// permanently disclaimed and cannot be retried as a clean unit.
+	var disclaimed []string
+	for _, delegationID := range disclaim {
+		if _, dErr := ms.DisclaimDelegation(id, delegationID, reason); dErr != nil {
+			if len(disclaimed) > 0 {
+				return fmt.Errorf("mission abandon: disclaiming %q: %w (already disclaimed and cannot be undone: %s)",
+					delegationID, dErr, strings.Join(disclaimed, ", "))
+			}
+			return fmt.Errorf("mission abandon: disclaiming %q: %w", delegationID, dErr)
+		}
+		disclaimed = append(disclaimed, delegationID)
+	}
 	c, err := ms.Abandon(id, reason)
 	if err != nil {
+		if len(disclaimed) > 0 {
+			return fmt.Errorf("mission abandon: %w (disclaimed and cannot be undone despite the failed abandon: %s)",
+				err, strings.Join(disclaimed, ", "))
+		}
 		return fmt.Errorf("mission abandon: %w", err)
 	}
 	// Parity with close: seal the checkout's mission-log tail so the
@@ -1527,10 +1577,14 @@ func runMissionAbandon(idOrPrefix, reason string) error {
 			"mission_id": id,
 			"status":     c.Status,
 			"reason":     reason,
+			"disclaimed": disclaim,
 		})
 		return nil
 	}
 	fmt.Printf("abandoned: %s reason=%q\n", id, reason)
+	if len(disclaim) > 0 {
+		fmt.Printf("disclaimed: %s\n", strings.Join(disclaim, ", "))
+	}
 	return nil
 }
 
@@ -1963,7 +2017,7 @@ func runMissionDispatch() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission dispatch: %w", err)
 	}
-	bindDispatchedMission("dispatch", c.MissionID)
+	bindDispatchedMission("dispatch", c.MissionID, c.Worker)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -2002,7 +2056,26 @@ func runMissionClaim(idOrPrefix string) error {
 		return fmt.Errorf("mission claim: user home dir: %w", err)
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	if err := mission.WriteActiveMission(globalRoot, sessionID, id); err != nil {
+	// Locked (mission.WithDispatchPendingLock): `session.Store.Delete`
+	// (and Purge/PurgeTombstoned, which funnel through it) hold this
+	// same per-session lock across their whole clear-then-remove-roster
+	// span so a resumed session's claim write cannot land in the gap and
+	// get orphaned outside roster-based purge discovery — see
+	// internal/session/store.go's deleteFiles doc comment for the full
+	// account of the race this closes on the write side.
+	//
+	// hook.RefuseIfSessionGone runs FIRST, inside the same critical
+	// section: holding the lock serializes against deleteFiles but does
+	// not, by itself, stop a writer that was waiting on the lock from
+	// proceeding the instant AFTER deleteFiles has already removed the
+	// roster — see that function's own doc comment for the reorder this
+	// closes.
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		if err := hook.RefuseIfSessionGone(sessionStore(), sessionID); err != nil {
+			return err
+		}
+		return mission.WriteActiveMission(globalRoot, sessionID, id)
+	}); err != nil {
 		return fmt.Errorf("mission claim: %w", err)
 	}
 
@@ -2039,6 +2112,24 @@ func runMissionRelease() error {
 	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
 		return fmt.Errorf("mission release: %w", err)
 	}
+	// Clear every pending dispatch too (DES-076 round 3) — release means
+	// "forget everything this session is bound to," not only the claim
+	// slot. Without this, a stuck pending dispatch from a persistent
+	// consume failure (review finding C9) would survive an operator's
+	// own release call, the one remedy meant to always work.
+	//
+	// `mission release` runs as its own process, so it must take the
+	// dispatch-pending lock itself rather than call ClearDispatchPending
+	// unlocked — an unlocked clear could race a concurrent dispatchAgent
+	// invocation's own held-lock match-through-admit window, either
+	// removing an entry out from under an in-flight admission or leaving
+	// a "released" session bound again to a write that landed just after
+	// this scan (mission.WithDispatchPendingLock's own doc comment).
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		return mission.ClearDispatchPending(globalRoot, sessionID)
+	}); err != nil {
+		return fmt.Errorf("mission release: %w", err)
+	}
 
 	if jsonOutput {
 		printJSON(map[string]string{"session": sessionID})
@@ -2048,38 +2139,39 @@ func runMissionRelease() error {
 	return nil
 }
 
-// bindDispatchedMission points the caller's session at the mission it
-// just named, so the next Agent() spawn files its delegation record
-// under that mission (ethos-7vo3).
+// bindDispatchedMission records a pending dispatch for missionID, so
+// the ONE Agent() spawn matching worker's agent type files its
+// delegation record under that mission (ethos-7vo3, DES-076 round 3).
 //
 // The PreToolUse dispatch cannot see a MISSION_ID the leader never
-// exported into its own environment, so it falls back to the
-// active-mission sidecar. The sidecar was written only by `ethos
-// mission claim` and stayed put until an explicit `release`, which
-// made it sticky: a leader who created m-B while still bound to m-A
-// filed m-B's delegation under m-A (observed: d-078 under m-017).
-// Creating or dispatching a mission is the leader naming one
-// explicitly, so it is the moment the binding must follow.
+// exported into its own environment, so it consults the pending-dispatch
+// store (internal/mission/active.go's DispatchPendingPath family)
+// instead. Creating or dispatching a mission is the leader naming one
+// explicitly, so it is the moment the binding must be staged;
+// `internal/hook/pretooluse_dispatch.go`'s readActiveMissionForDispatch
+// is what actually matches and consumes it — this function only writes
+// the pending entry and reports what it wrote.
 //
-// The binding is written with dispatch origin, so it files delegation
-// records but produces NO commit trailers. Dispatching names a mission
-// for someone else; the leader keeps doing unrelated work in the same
-// session, and stamping those commits with a dispatched mission is
-// ethos-jawp's false-trailer class arriving through a new door. Only
-// an explicit `ethos mission claim` turns trailers on.
+// DES-076 round 3 (review finding C1, m-2026-09-08-004 round 2): this
+// is additive, not an overwrite. Each pending dispatch gets its own
+// file keyed by mission ID, so a second `dispatch --worker bwk` before
+// the first spawn no longer discards the first mission's binding — the
+// two coexist, and the matching spawn resolves to the OLDEST pending
+// entry for its Worker. There is therefore no "rebind" concept anymore:
+// dispatching never displaces a different mission's pending entry, so
+// there is nothing to warn about losing.
 //
-// A rebind over a different mission prints one stderr line — the
-// leader is losing a binding they may still want, and a silent
-// rebind is how the stale-binding class hides. The delegation-binding
-// sidecar from the previous mission's dispatch is cleared with it;
-// it describes a dispatch that is no longer current.
+// The binding produces NO commit trailers — dispatching names a mission
+// for someone else, and stamping the leader's own later commits with it
+// would be ethos-jawp's false-trailer class arriving through a new
+// door. Only an explicit `ethos mission claim` turns trailers on.
 //
 // Every step is advisory: a session that will not resolve is the
-// ordinary case for a human running dispatch from a plain terminal,
-// and a mission that was created stays created. Real failures print
-// one stderr line naming op so the leader can tell which command left
-// the binding behind.
-func bindDispatchedMission(op, missionID string) {
+// ordinary case for a human running dispatch from a plain terminal, and
+// a mission that was created stays created. Real failures print one
+// stderr line naming op so the leader can tell which command left the
+// binding behind.
+func bindDispatchedMission(op, missionID, worker string) {
 	sessionID, _, err := resolveSessionContext()
 	if err != nil {
 		if !errors.Is(err, errNoSession) {
@@ -2097,47 +2189,50 @@ func bindDispatchedMission(op, missionID string) {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	previous, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
-	if err != nil {
-		// Report and continue: the rebind below is what makes the next
-		// spawn correct, and an unreadable sidecar is exactly the state
-		// that must be overwritten.
-		fmt.Fprintf(os.Stderr, "ethos: mission %s: reading active mission: %v\n", op, err)
-	}
-	if err := mission.WriteActiveMissionOrigin(
-		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
-	); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission %s: binding session %s to %s: %v\n",
-			op, sessionID, missionID, err)
+	// `mission dispatch`/`create` runs as its own process, so staging a
+	// new pending entry must take the dispatch-pending lock itself
+	// rather than write unlocked — an unlocked write could interleave
+	// with a concurrent dispatchAgent invocation's own held-lock read of
+	// the pending directory (mission.WithDispatchPendingLock's own doc
+	// comment).
+	//
+	// hook.RefuseIfSessionGone runs FIRST, inside the same critical
+	// section, so a writer that was waiting on this lock cannot proceed
+	// into a session Store.Delete has already torn down — see that
+	// function's own doc comment for the reorder this closes.
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		if err := hook.RefuseIfSessionGone(sessionStore(), sessionID); err != nil {
+			return err
+		}
+		return mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker)
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: recording dispatch for %s: %v\n", op, missionID, err)
 		return
 	}
-	// Print the binding unconditionally, not only on a rebind
-	// (ethos-7tqd, triage suggestion #3): the binding is stickier than
-	// its useful window — it stays until an explicit `mission claim` or
-	// `mission release` — so the NEXT Agent() spawn in this session,
-	// however unrelated, files its delegation under missionID until
-	// then. Making that visible at the moment it happens is cheap;
-	// discovering it later via a misattributed commit or a delegation
-	// record that blocks `mission abandon` is not (reproduced live
-	// 2026-09-07, see ethos-7tqd's triage note).
-	fmt.Fprintf(os.Stderr,
-		"ethos: mission %s: session %s bound to %s — the next Agent() spawn in this "+
-			"session files its delegation here, even if unrelated; run `ethos mission "+
-			"release` first if that is not what you want\n",
-		op, sessionID, missionID)
-	// create and dispatch always mint a fresh mission ID, so a rebind
-	// onto the SAME mission cannot arise from either caller; only the
-	// changed-mission case is reachable and reported.
-	if previous.MissionID == "" || previous.MissionID == missionID {
-		return
-	}
-	fmt.Fprintf(os.Stderr,
-		"ethos: mission %s: session %s was bound to %s; rebound to %s — delegations now file under %s, "+
-			"and commit trailers are off until you run `ethos mission claim <id>`\n",
-		op, sessionID, previous.MissionID, missionID, missionID)
-	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission %s: clearing delegation binding: %v\n", op, err)
-	}
+	// Printed unconditionally (ethos-7tqd, triage suggestion #3):
+	// making the binding visible at the moment it happens is cheap, and
+	// this is the only place the leader sees the Worker name that
+	// governs which spawn it can still take.
+	//
+	// Review finding J1 (full-branch review, m-2026-09-08-004 round 3),
+	// correcting K8: hook.DispatchBoundMessage shares
+	// mission.ClassifyPendingDispatches with matchDispatchPending
+	// itself, so the reported queue position and the entry the hook
+	// would actually match at spawn time cannot disagree — K8's own fix
+	// filtered on bare Worker equality, which could name an unresolvable
+	// or stale entry as "ahead of it" when the matcher would actually
+	// skip that entry and match THIS one instead. Also collapses what
+	// was ~30 duplicated lines with the MCP twin
+	// (internal/mcp/mission_tools.go's bindDispatchedMission) into one
+	// shared implementation.
+	repoRoot := resolve.StoreRepoRoot()
+	store := mission.NewStoreWithRoots(repoRoot, globalRoot)
+	remedy := fmt.Sprintf(
+		"run `ethos mission release` to clear every pending dispatch in this session, "+
+			"or `ethos mission close`/`abandon %s` to clear this one specifically, if that is not what you want",
+		missionID)
+	fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", op,
+		hook.DispatchBoundMessage(store, globalRoot, sessionID, missionID, worker, remedy))
 }
 
 // clearClosedSessionBindings resolves the caller's session and hands it
@@ -2572,6 +2667,12 @@ func summarizeDetails(evType string, details map[string]any) string {
 		)
 	case "abandon":
 		return kv("reason", detailStr(details, "reason"))
+	case "disclaim_delegation":
+		return joinParts(
+			kv("delegation", detailStr(details, "delegation_id")),
+			kv("bound_via", detailStr(details, "bound_via")),
+			kv("reason", detailStr(details, "reason")),
+		)
 	case "result":
 		return joinParts(
 			kvRound("round", detailRound(details, "round")),

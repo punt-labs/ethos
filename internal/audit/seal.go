@@ -11,6 +11,18 @@ import (
 	"time"
 )
 
+// fsyncFile calls f.Sync(). A package var so a test can inject a
+// simulated fsync failure — the same technique
+// internal/mission/syncdir_unix.go's syncDir uses for the identical
+// reason: a real fsync failure (ENOSPC mid-flush, an unmounted device)
+// is not something a portable test can engineer directly.
+var fsyncFile = func(f *os.File) error { return f.Sync() }
+
+// writeFile calls f.Write(b). A package var for the same reason fsyncFile
+// is: a test cannot portably force a real Write failure (a full disk, a
+// device yanked mid-write) so this lets a test inject one deterministically.
+var writeFile = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
+
 // AppendMonotonic appends one line to a live file under a strictly-monotonic
 // per-writer timestamp. The caller must already hold the live-zone flock. It
 // reopens the file, truncates a non-newline-terminated tail, recovers the max
@@ -21,6 +33,32 @@ import (
 // line receives the allocated ts and returns the complete line bytes (no
 // trailing newline); this lets a caller inject its own line type with the ts
 // field set to the allocated value.
+//
+// Leader review of PR #509 (m-2026-09-08-004 tail round): a caller that
+// reports THIS call's error as "nothing new persisted" — as
+// internal/mission/store.go's Store.DisclaimDelegation does, rolling
+// back its own delegation-record write on an event-append failure —
+// depends on that being true. Before this fix it was not, for TWO
+// failure modes this function could produce: a short or partial Write,
+// and (the leader's specific finding) f.Sync failing AFTER a fully
+// successful Write. In both cases the line's bytes could already be
+// sitting in the file (fully, for the sync case; partially, for the
+// write case) with no rollback, so the caller's own "the log shows
+// nothing" assumption was false — the log could show exactly the event
+// the caller believes never happened, and a retry after such a failure
+// appends a SECOND line for what looks like the same logical event.
+// internal/mission/log.go's own legacy (single-tree) appendEventLocked
+// already truncates back to the pre-write length on a write failure —
+// this mirrors that discipline here, plus extends it to cover a
+// write-succeeded-but-sync-failed outcome, which the legacy path did
+// not need to handle because it never calls Sync at all.
+//
+// Leader review of PR #509 (I1, second tail round, and its write-failure
+// sibling found in the round after): a bare Truncate rollback is not itself
+// durable. Both rollback sites below — a failed or short Write, and a failed
+// Sync after a successful Write — go through rollbackTruncate, which fsyncs
+// the truncate too and reports a second failure distinctly; see that
+// function for the rationale.
 func AppendMonotonic(livePath string, watermark int64, now time.Time, line func(ts int64) ([]byte, error)) (int64, error) {
 	if err := os.MkdirAll(filepath.Dir(livePath), 0o700); err != nil {
 		return 0, fmt.Errorf("creating live dir: %w", err)
@@ -47,16 +85,79 @@ func AppendMonotonic(livePath string, watermark int64, now time.Time, line func(
 	if err != nil {
 		return 0, err
 	}
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+	fullLine := append(body, '\n')
+
+	// end is the pre-write file length: the rollback target for either
+	// failure mode below. Seek(SeekEnd) returns the new (and, since
+	// nothing has written yet, current) offset directly.
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
 		return 0, fmt.Errorf("seeking %s: %w", livePath, err)
 	}
-	if _, err := f.Write(append(body, '\n')); err != nil {
-		return 0, fmt.Errorf("writing %s: %w", livePath, err)
+
+	// The io.Writer contract says a short write (n < len(fullLine)) must
+	// be accompanied by a non-nil error, but defensive code should not
+	// trust implementations to honor the contract — the same reasoning
+	// internal/mission/log.go's appendEventLocked already applies to its
+	// own Write call.
+	n, writeErr := writeFile(f, fullLine)
+	if writeErr != nil || n != len(fullLine) {
+		rbErr := rollbackTruncate(f, end)
+		switch {
+		case writeErr != nil && rbErr != nil:
+			return 0, fmt.Errorf("writing %s: %w; %w", livePath, writeErr, rbErr)
+		case writeErr != nil:
+			return 0, fmt.Errorf("writing %s: %w", livePath, writeErr)
+		case rbErr != nil:
+			return 0, fmt.Errorf("writing %s: short write %d of %d bytes; %w", livePath, n, len(fullLine), rbErr)
+		default:
+			return 0, fmt.Errorf("writing %s: short write %d of %d bytes", livePath, n, len(fullLine))
+		}
 	}
-	if err := f.Sync(); err != nil {
+
+	// The write fully succeeded — the bytes are on disk (or in the page
+	// cache) whether or not Sync below succeeds. A Sync failure does not
+	// undo that write; only Truncate does. Without rolling back here, a
+	// caller treating this function's error as "nothing new persisted"
+	// would be wrong: the line is genuinely readable by anyone opening
+	// the file, even though the caller believes the append never
+	// happened and may act on that belief (e.g. rolling back a sibling
+	// mutation it made contingent on this append succeeding).
+	if err := fsyncFile(f); err != nil {
+		if rbErr := rollbackTruncate(f, end); rbErr != nil {
+			return 0, fmt.Errorf("syncing %s: %w; %w", livePath, err, rbErr)
+		}
 		return 0, fmt.Errorf("syncing %s: %w", livePath, err)
 	}
 	return ts, nil
+}
+
+// rollbackTruncate undoes a failed or partial append by truncating f back to
+// end (the pre-write length) and fsyncing that truncate, best-effort. It
+// returns nil when both succeed, and otherwise an error describing which step
+// failed — a Truncate failure, or a Truncate that succeeded but whose own
+// fsync then failed.
+//
+// The fsync matters because Truncate alone only shortens the file's
+// in-memory length: without flushing that truncate, a crash between the
+// Truncate call and the filesystem's own flush can leave the old, longer
+// length on disk — the very bytes AppendMonotonic's caller is about to be
+// told never persisted (PR #509, findings I1 and the write-failure sibling
+// of I1). Both of AppendMonotonic's rollback sites — a failed or short
+// Write, and a failed Sync after a successful Write — share this exact
+// hazard, so they share this one implementation rather than each carrying
+// its own copy of the rationale.
+//
+// We do not retry the second fsync: a device that just failed two syncs in a
+// row is not a transient condition this call can wait out.
+func rollbackTruncate(f *os.File, end int64) error {
+	if tErr := f.Truncate(end); tErr != nil {
+		return fmt.Errorf("truncating to %d failed: %w", end, tErr)
+	}
+	if sErr := fsyncFile(f); sErr != nil {
+		return fmt.Errorf("rollback truncate to %d succeeded but its own fsync failed: %w (rollback not guaranteed durable across a crash)", end, sErr)
+	}
+	return nil
 }
 
 // truncateTornTailAndRecover truncates a non-newline-terminated tail on the
@@ -75,6 +176,19 @@ func truncateTornTailAndRecover(f *os.File, path string) (int64, error) {
 	}
 	if b[len(b)-1] != '\n' {
 		cut := lastNewline(b) + 1
+		// Unlike AppendMonotonic's own rollbackTruncate sites, this
+		// truncate does not need its own fsync. It is not undoing a
+		// write this call made — it is repairing garbage left by some
+		// PRIOR crash, and it runs unconditionally on every open. If
+		// this call goes on to append and fsync, that fsync flushes
+		// this truncate too (same fd, one flush covers everything
+		// buffered on it). If this call instead fails before ever
+		// reaching that fsync, the truncate may never reach disk — but
+		// no new line was reported as persisted either way, so the
+		// caller's "nothing new persisted" assumption still holds, and
+		// the next open simply re-detects and re-truncates the same
+		// torn tail. Idempotent cleanup does not need durability; a
+		// value the caller is relying on does.
 		if err := f.Truncate(int64(cut)); err != nil {
 			return 0, fmt.Errorf("truncating torn tail of %s: %w", path, err)
 		}

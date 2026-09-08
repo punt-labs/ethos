@@ -23,29 +23,15 @@ import (
 )
 
 // captureSubagentStartOutput runs HandleSubagentStart and captures stdout.
+// See captureStdout (capture_testhelpers_test.go) for the pipe/cleanup
+// contract: it closes on every exit path, not just success.
 func captureSubagentStartOutput(t *testing.T, input string, s identity.IdentityStore, ss *session.Store) string {
 	t.Helper()
-
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		w.Close()
-		r.Close()
+	out, err := captureStdout(t, func() error {
+		return HandleSubagentStart(bytes.NewReader([]byte(input)), s, ss)
 	})
-	os.Stdout = w
-
-	in := bytes.NewReader([]byte(input))
-	require.NoError(t, HandleSubagentStart(in, s, ss))
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(r)
 	require.NoError(t, err)
-	return buf.String()
+	return out
 }
 
 func TestHandleSubagentStart_PersonaBlock(t *testing.T) {
@@ -575,32 +561,20 @@ func runHookForVerifier(
 		))
 	}
 
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = w
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		w.Close()
-		r.Close()
-	})
-
 	payload := fmt.Sprintf(`{"agent_id":"sub-verifier","agent_type":%q,"session_id":%q}`,
 		agentType, sessionID)
-	in := bytes.NewReader([]byte(payload))
-	hookErr := HandleSubagentStartWithDeps(in, SubagentStartDeps{
-		Identities: idStore,
-		Sessions:   ss,
-		Missions:   missions,
-		Hash:       hash,
+
+	// captureStdout returns the hook's error rather than asserting it —
+	// callers of runHookForVerifier want to inspect a refusal, not treat
+	// it as a test failure.
+	return captureStdout(t, func() error {
+		return HandleSubagentStartWithDeps(bytes.NewReader([]byte(payload)), SubagentStartDeps{
+			Identities: idStore,
+			Sessions:   ss,
+			Missions:   missions,
+			Hash:       hash,
+		})
 	})
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-	return buf.String(), hookErr
 }
 
 // TestSubagentStart_VerifierMatchingHashAllowsSpawn asserts the happy
@@ -1038,19 +1012,13 @@ func TestSubagentStart_VerifierGateNoMissionStoreIsLegacy(t *testing.T) {
 
 	payload := `{"agent_id":"sub-1","agent_type":"djb","session_id":"no-mission-test"}`
 
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = w
-
-	hookErr := HandleSubagentStartWithDeps(bytes.NewReader([]byte(payload)),
-		SubagentStartDeps{
-			Identities: idStore,
-			Sessions:   sessions,
-		})
-	w.Close()
-	os.Stdout = oldStdout
-	r.Close()
+	_, hookErr := captureStdout(t, func() error {
+		return HandleSubagentStartWithDeps(bytes.NewReader([]byte(payload)),
+			SubagentStartDeps{
+				Identities: idStore,
+				Sessions:   sessions,
+			})
+	})
 
 	require.NoError(t, hookErr, "legacy install (no mission store) must not block")
 }

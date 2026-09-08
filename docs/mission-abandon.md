@@ -40,26 +40,82 @@ new, separately gated operation. It is not a flag on `Close`.
 
 1. The mission is currently `open` (not already terminal — closed,
    failed, escalated, or already abandoned).
-2. Zero entries exist under the mission's
-   `.punt-labs/ethos/missions/<id>/delegations/` directory, at any
-   verdict. Any entry — even one that already closed pass or fail —
-   proves a worker was actually spawned, which means there may be
-   recoverable work; that is `close`'s territory, not abandon's.
+2. Zero *blocking* entries exist under the mission's
+   `.punt-labs/ethos/missions/<id>/delegations/` directory
+   (`countBlockingDelegations`, `internal/mission/store.go`). This was
+   originally "zero entries at any verdict" — see the two carve-outs
+   below, both added after the gate as first designed proved too broad
+   in practice (DES-076, DESIGN.md):
+   - **`verdict: aborted` is excluded unconditionally**, independent of
+     any disclaim. A delegation refused before its worker ever ran (the
+     `max_delegation_depth` guard, or the content-hash verifier gate)
+     never represents real work — there is nothing to have judged, and
+     nothing `close` could meaningfully close. This exclusion applies
+     even to a delegation recorded via the dispatch-sidecar path
+     (`BoundVia`); it is keyed on `Verdict`, not on provenance.
+   - **An explicitly disclaimed entry is excluded** — see "Disclaiming a
+     captured delegation" below. Unlike the aborted exclusion, this one
+     is not automatic: it requires the operator to name the specific
+     delegation and prove its provenance.
 3. Zero result artifacts exist, for **any** round, not only the
    mission's current round. A result recorded for an earlier round
-   the mission has since advanced past is still recoverable work.
+   the mission has since advanced past is still recoverable work. This
+   gate has no exception, override, or disclaim path — see
+   "What `--disclaim` does NOT do" below.
 
 Any failing condition refuses the transition with a specific error
-naming which condition failed and pointing at `mission close` as the
-remediation. There is no override flag, for the same reason `close`
-has none: the gate is the whole point. Weakening it would let a
-leader retire a mission that has recoverable work sitting on disk.
+naming which condition failed and pointing at `mission close` (or
+`--disclaim`, when the delegation is provably a sidecar capture) as the
+remediation.
 
-**Why the check is on existence, not verdict.** A delegation record
-that already closed with a `pass` verdict still proves a worker ran —
-discarding that mission's history via abandon rather than close would
-lose the audit trail linking the work to its outcome. Abandon is only
-for missions where nothing happened at all.
+**Why the check is on existence, not verdict — except for `aborted` and
+an explicit disclaim.** A delegation record that already closed with a
+`pass` verdict still proves a worker ran — discarding that mission's
+history via abandon rather than close would lose the audit trail
+linking the work to its outcome. Abandon is for missions where nothing
+happened at all, OR where something happened but is proven, by one of
+the two carve-outs above, not to be real work: a refusal before the
+worker ran (`aborted`), or a real spawn later proven to have been
+misattributed to the wrong mission by the dispatch-sidecar bug
+(disclaim).
+
+## Disclaiming a captured delegation
+
+A delegation record does not always mean the mission it is filed under
+actually did the work. DES-076 (DESIGN.md) describes a class of bugs
+where the active-mission dispatch sidecar misattributed an unrelated
+`Agent()` spawn to a mission, writing a delegation record for work that
+mission never asked for. `mission abandon --disclaim <delegation-id>`
+(CLI) / `disclaim: [<delegation-id>, ...]` (MCP `abandon` method) is the
+mechanically-gated exception that lets such a mission still retire.
+
+**The disclaim gate**, checked per named delegation ID
+(`Store.DisclaimDelegation`), is NOT a blanket override:
+
+- `BoundVia` must equal the sidecar-dispatch provenance value recorded
+  at spawn time — a delegation bound via explicit `MISSION_ID` or
+  parent-delegation inheritance is refused by name; only a dispatch-
+  sidecar capture is eligible.
+- The delegation must already be closed (`Verdict != open`) — a
+  delegation still in flight cannot be disclaimed out from under its
+  running worker.
+- A delegation cannot be disclaimed twice.
+
+Every disclaim is applied to every named delegation ID BEFORE `Abandon`
+itself runs, and is permanently recorded on the delegation's own record
+and the mission's append-only event log — a disclaim cannot be undone.
+If any named delegation fails its gate, or `Abandon` itself then fails
+(e.g. a result artifact still exists), the error names every delegation
+ID that had already been disclaimed before the failure, since those
+commitments cannot be retried as a clean unit with the rest of the call.
+
+**What `--disclaim` does NOT do.** It only ever affects Gate 2
+(delegation existence). `Abandon`'s result-artifact gate (Gate 3 above)
+is completely untouched by disclaim — a mission with a submitted result
+still refuses regardless of any disclaim. There is still no override
+flag for that gate, for the same reason `close` has none: it is the
+whole point, and weakening it would let a leader retire a mission that
+has recoverable work sitting on disk.
 
 **Why a distinct terminal status.** `Store.Abandon` transitions the
 contract to `status: abandoned` — a value distinct from `closed`,
@@ -90,12 +146,17 @@ its existing refusal of `status == StatusOpen`.
 ## Usage
 
 ```bash
-# CLI
+# CLI, no delegations at all
 ethos mission abandon m-2026-08-06-002 --reason "created via dispatch, worker never spawned"
+
+# CLI, disclaiming a dispatch-sidecar capture (repeatable for more than one)
+ethos mission abandon m-2026-08-06-002 --reason "captured by the dispatch sidecar bug" \
+  --disclaim d-2026-08-06-001
 
 # MCP
 mission(method="abandon", mission_id="m-2026-08-06-002",
-        reason="created via dispatch, worker never spawned")
+        reason="captured by the dispatch sidecar bug",
+        disclaim=["d-2026-08-06-001"])
 ```
 
 `--reason` (CLI) / `reason` (MCP) is required and is recorded on the
@@ -111,8 +172,11 @@ actor, the same way `close` renders `status=`/`verdict=`/`round=`.
 | A worker was spawned, ran, and submitted a result | `mission close` |
 | A worker was spawned but hasn't submitted a result yet | Neither — submit a result first, then `mission close` |
 | A mission contract exists but no worker was ever spawned against it | `mission abandon` |
+| Every delegation on record was refused before its worker ran (`verdict: aborted`) | `mission abandon` — no `--disclaim` needed, the aborted exclusion is automatic |
+| A delegation is real work, but was misattributed to this mission by the dispatch-sidecar bug (DES-076) | `mission abandon --disclaim <delegation-id>`, once its provenance and closed status are confirmed |
 | You are not sure whether a worker was spawned | Run `ethos mission log <id>` — if the only event is `create`, it's safe to abandon; if there are `result`, `reflect`, or `round_advanced` events, or `close` has ever been attempted, use `close` after submitting a result |
 
-The safety invariant in one sentence: zero delegations and zero
-results means nothing to lose, which means it is safe to retire
-without a verdict.
+The safety invariant in one sentence: zero *blocking* delegations
+(after the automatic `aborted` exclusion and any proven-safe
+`--disclaim`) and zero results means nothing to lose, which means it is
+safe to retire without a verdict.

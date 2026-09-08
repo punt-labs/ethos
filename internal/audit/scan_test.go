@@ -1,11 +1,21 @@
 package audit
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// errSimulatedFsync is the injected error for fsyncFile overrides in
+// the AppendMonotonic sync-failure tests below.
+var errSimulatedFsync = errors.New("simulated fsync failure")
+
+// errSimulatedWrite is the injected error for writeFile overrides in the
+// AppendMonotonic write-failure tests below.
+var errSimulatedWrite = errors.New("simulated write failure")
 
 // writeChunk creates a JSONL file holding one line per timestamp.
 func writeChunk(t *testing.T, dir, name string, tss ...int64) {
@@ -288,6 +298,332 @@ func TestAppendMonotonicSeedsAboveWatermark(t *testing.T) {
 	})
 	if ts <= 5000 {
 		t.Errorf("ts %d did not sort above watermark 5000", ts)
+	}
+}
+
+// TestAppendMonotonic_SyncFailureTruncatesBack pins the leader's PR #509
+// tail-round finding: a fully-successful Write followed by a failing
+// Sync must not leave the line on disk. Callers of AppendMonotonic
+// (internal/mission's appendLiveEventLocked, and through it
+// Store.DisclaimDelegation's own rollback-on-append-failure) treat this
+// function's error as proof nothing new persisted; before this fix that
+// was false for exactly this failure shape, because Sync failing does
+// not undo an already-successful Write, and nothing truncated the file
+// back.
+//
+// fsyncFile is a package var for the same reason
+// internal/mission/syncdir_unix.go's syncDir is: a real fsync failure
+// is not something a portable test can engineer directly.
+func TestAppendMonotonic_SyncFailureTruncatesBack(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	orig := fsyncFile
+	t.Cleanup(func() { fsyncFile = orig })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+
+	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	})
+	if err == nil {
+		t.Fatal("expected an error from the simulated sync failure")
+	}
+
+	data, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(data) != 0 {
+		t.Errorf("a failed sync must leave no persisted line behind, got %q", data)
+	}
+}
+
+// TestAppendMonotonic_SyncFailureThenSuccessAppendsExactlyOnce is the
+// end-to-end half of the same fix: a retry after a sync failure must
+// produce exactly one line, not two — proving the truncate-back
+// genuinely removed the failed attempt rather than merely reporting an
+// error while leaving it in place.
+func TestAppendMonotonic_SyncFailureThenSuccessAppendsExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	mk := func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	}
+
+	orig := fsyncFile
+	t.Cleanup(func() { fsyncFile = orig })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+	if _, err := AppendMonotonic(live, 0, now, mk); err == nil {
+		t.Fatal("expected the first (simulated-failing) append to error")
+	}
+
+	fsyncFile = orig
+	if _, err := AppendMonotonic(live, 0, now, mk); err != nil {
+		t.Fatalf("retry after truncate-back must succeed: %v", err)
+	}
+
+	data, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := SplitLines(data)
+	if len(lines) != 1 {
+		t.Errorf("expected exactly 1 line after retry, got %d: %q", len(lines), data)
+	}
+}
+
+// TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported pins the leader's
+// PR #509 finding I1: the truncate-back on a sync failure must itself be
+// fsynced, and if that second fsync also fails, the caller must be told
+// the rollback is not guaranteed durable rather than getting the same
+// message as an ordinary single sync failure.
+//
+// What this test can and cannot prove: there is no portable way to force
+// a real crash between Truncate and the filesystem's own flush and then
+// inspect the file post-crash — the same limitation
+// TestAppendMonotonic_SyncFailureTruncatesBack's doc comment already
+// notes for the first fsync. What IS directly checkable, and what this
+// test checks, is (a) the content-level rollback still happens — the
+// file is empty after two simulated fsync failures, exactly as it is
+// after one — and (b) the second fsync is actually attempted and its
+// failure is surfaced distinctly in the returned error, rather than
+// silently discarded as the pre-fix code did (pre-fix, this function
+// called fsyncFile exactly once, so a fake that always errors produces
+// the same single-failure message tested by
+// TestAppendMonotonic_SyncFailureTruncatesBack; this test's message
+// assertion is what fails against that pre-fix code).
+func TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	orig := fsyncFile
+	t.Cleanup(func() { fsyncFile = orig })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+
+	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	})
+	if err == nil {
+		t.Fatal("expected an error from the simulated sync failure")
+	}
+	if !strings.Contains(err.Error(), "rollback not guaranteed durable across a crash") {
+		t.Errorf("error must say the rollback's own fsync also failed and durability is not guaranteed, got: %v", err)
+	}
+
+	data, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(data) != 0 {
+		t.Errorf("the content-level rollback must still truncate the line even when its own fsync fails, got %q", data)
+	}
+}
+
+// shortRealWriteThenError is a writeFile stub for the write-failure tests
+// below. It writes a real prefix of b to the file before reporting the
+// simulated failure, so the file is genuinely non-empty ahead of
+// AppendMonotonic's rollback -- unlike a stub that reports failure
+// without writing anything, whose target file is empty before AND after
+// the call whether or not rollbackTruncate ever runs. That earlier shape
+// (leader's PR #509 review, finding J1) made
+// TestAppendMonotonic_WriteFailureTruncatesBack and
+// TestAppendMonotonic_WriteFailureThenSuccessAppendsExactlyOnce pass
+// identically with rollbackTruncate deleted from the write-failure branch
+// entirely -- confirmed by deleting it and rerunning both, which is the
+// falsification this stub is designed to catch instead.
+func shortRealWriteThenError(f *os.File, b []byte) (int, error) {
+	half := len(b) / 2
+	if _, err := f.Write(b[:half]); err != nil {
+		return 0, err
+	}
+	return half, errSimulatedWrite
+}
+
+// TestAppendMonotonic_WriteFailureTruncatesBack pins the leader's PR #509
+// second tail-round finding: the write-failure rollback path (a failing or
+// short Write) truncates back to the pre-write length exactly like the
+// sync-failure rollback path above, and both leave the file at its
+// pre-append length.
+//
+// writeFile is a package var for the same reason fsyncFile is: a test
+// cannot portably force a real Write failure.
+func TestAppendMonotonic_WriteFailureTruncatesBack(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	writeFile = shortRealWriteThenError
+
+	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	})
+	if err == nil {
+		t.Fatal("expected an error from the simulated write failure")
+	}
+
+	data, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(data) != 0 {
+		t.Errorf("a failed write must leave no persisted line behind, got %q", data)
+	}
+}
+
+// TestAppendMonotonic_WriteFailureThenSuccessAppendsExactlyOnce is the
+// end-to-end half of the write-failure fix: a retry after a write failure
+// must produce exactly one line, not zero and not two.
+func TestAppendMonotonic_WriteFailureThenSuccessAppendsExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	mk := func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	}
+
+	orig := writeFile
+	t.Cleanup(func() { writeFile = orig })
+	writeFile = shortRealWriteThenError
+	if _, err := AppendMonotonic(live, 0, now, mk); err == nil {
+		t.Fatal("expected the first (simulated-failing) append to error")
+	}
+
+	// The rollback must already have truncated the file back to empty
+	// before the retry runs. Checking this here, rather than only the
+	// end-to-end line count below, matters because AppendMonotonic's own
+	// torn-tail recovery (truncateTornTailAndRecover) would independently
+	// clean up a bare short write with no trailing newline on the retry's
+	// reopen -- converging to the same "exactly 1 line" result even with
+	// rollbackTruncate deleted entirely from the write-failure branch. An
+	// end-to-end-only assertion would therefore still pass against that
+	// falsification; this intermediate check is what actually catches it.
+	mid, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(mid) != 0 {
+		t.Fatalf("rollback must truncate the file before the retry runs, got %q", mid)
+	}
+
+	writeFile = orig
+	if _, err := AppendMonotonic(live, 0, now, mk); err != nil {
+		t.Fatalf("retry after truncate-back must succeed: %v", err)
+	}
+
+	data, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := SplitLines(data)
+	if len(lines) != 1 {
+		t.Errorf("expected exactly 1 line after retry, got %d: %q", len(lines), data)
+	}
+}
+
+// TestAppendMonotonic_WriteFailureRollbackFsyncAlsoFailsIsReported is the
+// write-path counterpart to TestAppendMonotonic_RollbackFsyncAlsoFailsIsReported
+// (leader's PR #509 finding: the write-failure rollback truncate was not
+// itself fsynced). It pins the same two properties for the write-failure
+// branch: the content-level rollback still empties the file, and a second
+// fsync failure on the rollback truncate is surfaced distinctly rather than
+// silently discarded.
+//
+// Same honest limit as the sync-path test: there is no portable way to force
+// a real crash between Truncate and the filesystem's own flush and inspect
+// post-crash state. This proves the second fsync is attempted and its
+// failure reported, not that a crash-then-recovery round-trip is safe.
+func TestAppendMonotonic_WriteFailureRollbackFsyncAlsoFailsIsReported(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	origWrite := writeFile
+	t.Cleanup(func() { writeFile = origWrite })
+	writeFile = shortRealWriteThenError
+	origSync := fsyncFile
+	t.Cleanup(func() { fsyncFile = origSync })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+
+	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	})
+	if err == nil {
+		t.Fatal("expected an error from the simulated write failure")
+	}
+	if !strings.Contains(err.Error(), "rollback not guaranteed durable across a crash") {
+		t.Errorf("error must say the rollback's own fsync also failed and durability is not guaranteed, got: %v", err)
+	}
+
+	data, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(data) != 0 {
+		t.Errorf("the content-level rollback must still truncate the line even when its own fsync fails, got %q", data)
+	}
+}
+
+// TestAppendMonotonic_ShortWriteRollbackFsyncAlsoFailsIsReported covers the
+// short-write sub-case of the write-failure branch (n < len(fullLine) with a
+// nil error) — the leader flagged this as the more severe half of the
+// finding, since reviving a short write resurrects a malformed partial line
+// rather than a complete one. It must go through the identical rollback
+// helper as a hard write error, including the second-fsync-failure report.
+func TestAppendMonotonic_ShortWriteRollbackFsyncAlsoFailsIsReported(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	origWrite := writeFile
+	t.Cleanup(func() { writeFile = origWrite })
+	writeFile = func(f *os.File, b []byte) (int, error) {
+		// Simulate a short write: write half the bytes, report no error,
+		// per the io.Writer contract violation AppendMonotonic already
+		// defends against.
+		half := len(b) / 2
+		if _, err := f.Write(b[:half]); err != nil {
+			return 0, err
+		}
+		return half, nil
+	}
+	origSync := fsyncFile
+	t.Cleanup(func() { fsyncFile = origSync })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+
+	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	})
+	if err == nil {
+		t.Fatal("expected an error from the simulated short write")
+	}
+	if !strings.Contains(err.Error(), "short write") {
+		t.Errorf("error must identify the failure as a short write, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rollback not guaranteed durable across a crash") {
+		t.Errorf("error must say the rollback's own fsync also failed and durability is not guaranteed, got: %v", err)
+	}
+
+	data, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(data) != 0 {
+		t.Errorf("the content-level rollback must still truncate the half-written line, got %q", data)
 	}
 }
 

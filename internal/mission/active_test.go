@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -183,7 +186,19 @@ func TestActiveMissionSidecar_StaysOneLine(t *testing.T) {
 // TestReadActiveMissionBinding_StaleOriginIgnored asserts the two files
 // are self-checking: an origin sidecar naming a different mission is
 // left over from an earlier binding and must not label the current one.
-func TestReadActiveMissionBinding_StaleOriginIgnored(t *testing.T) {
+// TestReadActiveMissionBinding_StaleOriginIsUnknownNotClaim pins DES-076
+// round 3's fix for review finding C2 (m-2026-09-08-004 round 2): a
+// stale origin file naming a DIFFERENT mission than active-mission is
+// still ignored for matching purposes (the mismatch check itself is
+// unchanged), but the resulting binding's Origin must read as
+// BindOriginUnknown, NOT BindOriginClaim. Answering "claim" for
+// positive, contradictory evidence would both let the mismatched
+// mission ID capture a spawn it was never bound to gate on Worker for,
+// and (per commit_trailers.go's Origin == BindOriginClaim gate) turn on
+// commit trailers for a binding the operator never explicitly claimed
+// — the exact false-trailer class BindOriginDispatch exists to prevent,
+// reachable through the read path instead of the write path.
+func TestReadActiveMissionBinding_StaleOriginIsUnknownNotClaim(t *testing.T) {
 	root := t.TempDir()
 	sess := "sess-stale-origin"
 	require.NoError(t, WriteActiveMission(root, sess, "m-2026-07-31-004"))
@@ -191,9 +206,30 @@ func TestReadActiveMissionBinding_StaleOriginIgnored(t *testing.T) {
 
 	b, err := ReadActiveMissionBinding(root, sess)
 	require.NoError(t, err)
-	assert.Equal(t, "m-2026-07-31-004", b.MissionID)
-	assert.Equal(t, BindOriginClaim, b.Origin,
-		"an origin naming another mission must be ignored")
+	assert.Equal(t, "m-2026-07-31-004", b.MissionID,
+		"the mismatched origin must still be ignored for matching purposes")
+	assert.Equal(t, BindOriginUnknown, b.Origin,
+		"a positively contradictory origin must read as unknown, never silently as claim")
+}
+
+// TestReadActiveMissionBinding_TruncatedOriginIsUnknownNotClaim is the
+// sibling of the mismatch case above: an origin file that exists but is
+// too short to parse (a partial write) must ALSO read as
+// BindOriginUnknown, not BindOriginClaim -- the same reasoning applies
+// regardless of which way the origin file failed to resolve cleanly.
+func TestReadActiveMissionBinding_TruncatedOriginIsUnknownNotClaim(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-truncated-origin"
+	require.NoError(t, WriteActiveMission(root, sess, "m-2026-07-31-005"))
+	path := ActiveMissionOriginPath(root, sess)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("dispatch\n"), 0o600)) // missing the mission-ID line
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-07-31-005", b.MissionID)
+	assert.Equal(t, BindOriginUnknown, b.Origin,
+		"a truncated origin file must read as unknown, never silently as claim")
 }
 
 // TestWriteActiveMission_ClaimClearsDispatchOrigin asserts a claim over
@@ -227,6 +263,44 @@ func TestClearActiveMission_RemovesOriginToo(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "active-mission must be gone: %v", statErr)
 	_, statErr = os.Stat(ActiveMissionOriginPath(root, sess))
 	assert.True(t, os.IsNotExist(statErr), "active-mission-origin must be gone: %v", statErr)
+}
+
+// TestClearActiveMission_StopsOnActiveMissionRemovalFailure is review
+// finding F6 (m-2026-09-08-003): a failed active-mission removal must
+// NOT still attempt to remove the origin file. The pre-fix
+// errors.Join(removeSidecarFile(active), removeSidecarFile(origin))
+// ran both unconditionally; a partial failure that removed the origin
+// but left active-mission behind converges to "active-mission present,
+// origin absent," which ReadActiveMissionBinding reads as
+// BindOriginClaim — sticky, ungated by agent type, stamping commit
+// trailers. That silently upgrades a dispatch binding into a claim,
+// resurrecting the unscoped-capture bug DES-076 fixed through a
+// different door.
+//
+// The active-mission removal is forced to fail deterministically via a
+// non-empty directory in its place (ENOTEMPTY), not a permission
+// change — a chmod-based failure is flaky under a root-running test
+// process, since root bypasses permission checks entirely (the same
+// lesson DES-075's F6 amendment already applied to a different test in
+// this codebase).
+func TestClearActiveMission_StopsOnActiveMissionRemovalFailure(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-clear-partial-failure"
+	missionID := "m-2026-09-08-704"
+	require.NoError(t, WriteActiveMissionOrigin(root, sess, missionID, BindOriginDispatch))
+
+	activePath := ActiveMissionPath(root, sess)
+	require.NoError(t, os.Remove(activePath))
+	require.NoError(t, os.Mkdir(activePath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(activePath, "blocker"), []byte("x"), 0o600))
+
+	err := ClearActiveMission(root, sess)
+	require.Error(t, err, "a failed active-mission removal must surface, not be swallowed")
+
+	data, err := os.ReadFile(ActiveMissionOriginPath(root, sess))
+	require.NoError(t, err, "the origin file must survive untouched when the active-mission removal failed")
+	assert.Equal(t, BindOriginDispatch+"\n"+missionID+"\n", string(data),
+		"the surviving origin file must still name the same mission with dispatch origin, not be removed")
 }
 
 // writeOriginFile stages the origin sidecar directly, for the cases
@@ -508,4 +582,163 @@ func TestClearMissionBindings_ReportsClearFailure(t *testing.T) {
 	err := ClearMissionBindings(root, sess, clearTestMission)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "clearing active mission")
+}
+
+// TestDispatchPendingLess_TiebreaksOnMissionID pins review finding L5
+// (full-branch review, m-2026-09-08-004 round 3): two entries with
+// identical CreatedAt (a real possibility on filesystems with coarse
+// mtime resolution, or two writers landing in the same tick) must
+// compare deterministically by MissionID, not report neither-less-than
+// (sort.Slice's documented unspecified order for a tied comparator).
+//
+// Tests the comparator directly rather than through
+// ReadDispatchPending/os.ReadDir: os.ReadDir itself returns entries
+// sorted by filename, which for this repo's date-sequential mission IDs
+// already happens to coincide with creation order, so a filesystem-level
+// test cannot distinguish "sorted because of the tiebreak" from "sorted
+// because os.ReadDir's incidental filename order already matched" --
+// exactly the reliance on an unstated implementation detail this finding
+// flags. Testing the comparator in isolation is the only way to pin the
+// actual defect: with the tie unresolved, Less(a, b) and Less(b, a) are
+// both false, which is what "unspecified" order comes from.
+//
+// Confirmed failing against the pre-fix code (the bare CreatedAt-only
+// comparator, before dispatchPendingLess existed): Less(newer, older)
+// was false as expected, but so was Less(older, newer) -- neither
+// ordering was preferred, so a sort built on that comparator has no
+// contractual reason to land on old-first.
+func TestDispatchPendingLess_TiebreaksOnMissionID(t *testing.T) {
+	tie := time.Now()
+	older := DispatchPendingEntry{MissionID: "m-2026-09-08-100", Worker: "bwk", CreatedAt: tie}
+	newer := DispatchPendingEntry{MissionID: "m-2026-09-08-200", Worker: "bwk", CreatedAt: tie}
+
+	assert.True(t, dispatchPendingLess(older, newer),
+		"the lexically-earlier mission ID must sort first on an exact CreatedAt tie")
+	assert.False(t, dispatchPendingLess(newer, older))
+}
+
+// TestReadDispatchPending_RefusesSymlink pins the second half of L5: a
+// symlinked pending-dispatch entry must be refused, matching
+// LoadDelegation's own rejectSymlink discipline, rather than silently
+// followed via a plain os.ReadFile.
+func TestReadDispatchPending_RefusesSymlink(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-dispatch-symlink"
+	missionID := "m-2026-09-08-300"
+
+	outside := filepath.Join(t.TempDir(), "worker.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("bwk\n"), 0o600))
+
+	path := DispatchPendingPath(root, sess, missionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.Symlink(outside, path))
+
+	entries, warnings, err := ReadDispatchPending(root, sess)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "a symlinked entry must not be returned as a live pending dispatch")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "refusing to follow symlink")
+}
+
+// TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder
+// pins the DEFECT WithDispatchPendingLock exists to close: the raw,
+// unlocked WriteDispatchPending completes immediately even while a
+// separate goroutine holds AcquireDispatchPendingLock for the SAME
+// session -- exactly the shape internal/hook/pretooluse_dispatch.go's
+// dispatchAgent relies on being exclusive across its own
+// read-match-then-admit sequence. This is deliberately kept as a
+// pinned, permanent assertion of the primitive's OWN behavior (not a
+// call this codebase's production code paths make anymore -- see
+// WithDispatchPendingLock's doc comment for why every external caller
+// was moved off the raw primitive), so a future edit that makes
+// WriteDispatchPending self-locking (and silently reopens the
+// self-deadlock hazard WithDispatchPendingLock's own doc comment
+// warns about) is caught here rather than only in a slower, harder-to-
+// diagnose dispatchAgent hang.
+func TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-unlocked-write"
+
+	release, err := AcquireDispatchPendingLock(root, sess)
+	require.NoError(t, err)
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- WriteDispatchPending(root, sess, "m-2026-09-08-401", "bwk")
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "unlocked write must still succeed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("WriteDispatchPending unexpectedly blocked -- if this is intentional, " +
+			"WithDispatchPendingLock's callers must be re-audited for self-deadlock")
+	}
+}
+
+// TestWithDispatchPendingLock_BlocksUntilRelease is the fix this round
+// adds: a mutation run through WithDispatchPendingLock must block for
+// as long as another holder has the session's dispatch-pending lock
+// (the same lock internal/hook/pretooluse_dispatch.go's dispatchAgent
+// acquires and holds across its whole match-through-admit sequence),
+// and must observe the mutation's effect only after that holder
+// releases. Confirmed failing before WithDispatchPendingLock existed:
+// TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder
+// above reproduces the exact race this test would have hit had it
+// called the unlocked primitive directly -- the write completed
+// immediately instead of waiting, which is precisely the interleaving
+// hazard (a selected pending entry vanishing mid-admission, or a write
+// landing after a concurrent cleanup scan) the leader's review named.
+func TestWithDispatchPendingLock_BlocksUntilRelease(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-locked-write"
+
+	release, err := AcquireDispatchPendingLock(root, sess)
+	require.NoError(t, err)
+
+	var wroteWhileLockHeld atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		done <- WithDispatchPendingLock(root, sess, func() error {
+			wroteWhileLockHeld.Store(true)
+			return WriteDispatchPending(root, sess, "m-2026-09-08-402", "bwk")
+		})
+	}()
+
+	// Give the goroutine time to enter Flock and block -- mirrors
+	// TestAcquireDelegationLock_BlocksUntilRelease's own discipline: the
+	// assertion below is on observable order (nothing ran while the
+	// lock was held), not on the exact duration.
+	time.Sleep(150 * time.Millisecond)
+	assert.False(t, wroteWhileLockHeld.Load(),
+		"WithDispatchPendingLock's fn must not run while a sibling holds the lock")
+	entries, _, err := ReadDispatchPending(root, sess)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the write must not have landed while the lock was held elsewhere")
+
+	release()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		require.NoError(t, <-done)
+	}()
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WithDispatchPendingLock did not complete within 2s after the sibling released")
+	}
+
+	assert.True(t, wroteWhileLockHeld.Load(), "fn must have run after the lock became available")
+	entries, _, err = ReadDispatchPending(root, sess)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "m-2026-09-08-402", entries[0].MissionID)
 }

@@ -5968,3 +5968,415 @@ func TestStore_ForceReleaseWriteSet_SerializesAgainstConcurrentCreate_RollbackFo
 		assert.Empty(t, loaded.WriteSetReleasedAt, "trial %d: the rolled-back release must leave no trace on disk", trial)
 	}
 }
+
+// --- DES-076 round 2: Store.DisclaimDelegation + Abandon's disclaim-aware gate ---
+
+// TestStore_DisclaimDelegation_ThenAbandonSucceeds pins scenario (a)
+// from the round 2 contract's minimum test list: a mission whose ONLY
+// delegation was a dispatch-sidecar capture can be disclaimed and then
+// abandoned. Before DisclaimDelegation existed, this mission could
+// never be retired — Abandon refused unconditionally on the delegation
+// record's mere existence, with no path forward but `mission close`
+// (which itself requires a result the mission never had, because no
+// worker was ever legitimately doing its actual work).
+func TestStore_DisclaimDelegation_ThenAbandonSucceeds(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-810")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-010"
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// Pass, not aborted: ethos-7tqd's real reproduction was an unrelated
+	// agent that ran to normal completion, not one refused before it
+	// started. verdict=aborted is excluded from the blocking gate
+	// unconditionally (DES-076 round 3, C7) and would make this test's
+	// "before disclaiming" assertion below fail for the wrong reason.
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
+		time.Now().UTC().Format(time.RFC3339)))
+
+	// Before disclaiming: Abandon refuses exactly as it always has.
+	_, err = s.Abandon(c.MissionID, "should still refuse before the disclaim")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delegation record")
+
+	d, err := s.DisclaimDelegation(c.MissionID, delegationID, "unrelated bwk spawn captured by the dispatch sidecar bug")
+	require.NoError(t, err)
+	assert.NotEmpty(t, d.DisclaimedAt)
+
+	abandoned, err := s.Abandon(c.MissionID, "capture disclaimed; retiring the dead mission")
+	require.NoError(t, err, "abandon must succeed once the mission's only delegation is disclaimed")
+	assert.Equal(t, StatusAbandoned, abandoned.Status)
+
+	// The disclaim is on the audit trail.
+	events, _, err := s.LoadEvents(c.MissionID)
+	require.NoError(t, err)
+	var sawDisclaim bool
+	for _, e := range events {
+		if e.Event == "disclaim_delegation" {
+			sawDisclaim = true
+			assert.Equal(t, c.Leader, e.Actor)
+			assert.Equal(t, delegationID, e.Details["delegation_id"])
+			assert.Equal(t, BoundViaSidecarDispatch, e.Details["bound_via"])
+		}
+	}
+	assert.True(t, sawDisclaim, "the disclaim must appear on the mission's own event log")
+}
+
+// TestStore_DisclaimDelegation_SerializesWithDelegationLockHolder pins
+// review finding P1 (qodo #7, full-branch review of PR #509,
+// m-2026-09-08-004 round 3) -- ethos-lj4k's exact class, previously
+// fixed on this same bead for Abandon vs a concurrent dispatch, now
+// found again for DisclaimDelegation vs the refusal-close paths
+// (pretooluse_dispatch.go's closeDelegationAborted, subagent_start.go's
+// closeSkeletonOnHashRefusal), which mutate the SAME record.yaml under
+// AcquireDelegationLock alone -- a lock DisclaimDelegation did not
+// previously take at all. Without it, a refusal-closer that loaded the
+// record before a concurrent disclaim wrote its own DisclaimedAt field
+// could overwrite that field with its own stale, pre-disclaim copy on
+// its own atomic write -- a delegation that looked disclaimed silently
+// reverting to blocking Abandon, with no error and no signal why.
+//
+// This test proves DisclaimDelegation now genuinely SERIALIZES on the
+// same per-delegation lock closeSkeletonOnHashRefusal already takes:
+// a goroutine holding AcquireDelegationLock for this exact delegation
+// ID must block DisclaimDelegation until it releases. Confirmed failing
+// against pre-fix code (DisclaimDelegation completed immediately,
+// concurrently with the lock holder, proving no exclusion existed).
+func TestStore_DisclaimDelegation_SerializesWithDelegationLockHolder(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-811")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-011"
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
+		time.Now().UTC().Format(time.RFC3339)))
+
+	// Simulate a refusal-closer already holding the per-delegation lock,
+	// exactly as closeSkeletonOnHashRefusal does for the same delegation
+	// ID -- the same lock class, same key, held on a separate goroutine
+	// standing in for the separate SubagentStart process invocation.
+	release, err := AcquireDelegationLock(globalRoot, delegationID)
+	require.NoError(t, err)
+
+	disclaimDone := make(chan error, 1)
+	go func() {
+		_, dErr := s.DisclaimDelegation(c.MissionID, delegationID, "captured by the dispatch sidecar bug")
+		disclaimDone <- dErr
+	}()
+
+	// DisclaimDelegation must NOT complete while the lock is held --
+	// this is the actual exclusion the fix establishes, not a race that
+	// merely resolves correctly by luck.
+	select {
+	case err := <-disclaimDone:
+		t.Fatalf("DisclaimDelegation completed while the delegation lock was held (err=%v) -- "+
+			"it is not serializing with the same lock closeSkeletonOnHashRefusal takes", err)
+	case <-time.After(150 * time.Millisecond):
+		// Expected: still blocked.
+	}
+
+	release()
+
+	select {
+	case err := <-disclaimDone:
+		require.NoError(t, err, "DisclaimDelegation must succeed once the lock is released")
+	case <-time.After(2 * time.Second):
+		t.Fatal("DisclaimDelegation did not complete after the delegation lock was released")
+	}
+}
+
+// TestStore_DisclaimDelegation_GenuineDelegationCannotBeDisclaimed
+// pins scenario (b): a delegation bound via explicit MISSION_ID env —
+// the genuine, fully-intentional Tier B path — cannot be disclaimed,
+// and Abandon still refuses.
+func TestStore_DisclaimDelegation_GenuineDelegationCannotBeDisclaimed(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-811")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-011"
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
+		time.Now().UTC().Format(time.RFC3339)))
+
+	_, err = s.DisclaimDelegation(c.MissionID, delegationID, "trying to disclaim genuine work")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disclaimable")
+
+	_, err = s.Abandon(c.MissionID, "should still refuse")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delegation record")
+}
+
+// TestStore_DisclaimDelegation_DoesNotBypassResultGate pins scenario
+// (d): disclaiming every delegation does not touch Abandon's gate 2 —
+// a mission with a submitted result is real work, disclaimed
+// delegations or not, and Close is the only path forward.
+func TestStore_DisclaimDelegation_DoesNotBypassResultGate(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-812")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-012"
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
+		time.Now().UTC().Format(time.RFC3339)))
+	submitRoundResult(t, s, c, VerdictPass)
+
+	_, err = s.DisclaimDelegation(c.MissionID, delegationID, "disclaiming even though real work happened")
+	require.NoError(t, err, "the disclaim itself succeeds -- provenance and verdict are both eligible")
+
+	_, err = s.Abandon(c.MissionID, "trying to abandon a mission with a submitted result")
+	require.Error(t, err, "gate 2 (results) must still refuse regardless of any disclaim")
+	assert.Contains(t, err.Error(), "result artifact")
+}
+
+// TestStore_DisclaimDelegation_RefusesOnNonOpenMission pins a
+// precondition distinct from DisclaimDelegationRecord's own checks:
+// disclaiming against a mission that is not open is refused before
+// any delegation is even inspected.
+func TestStore_DisclaimDelegation_RefusesOnNonOpenMission(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-813")
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
+
+	_, err = s.DisclaimDelegation(c.MissionID, "d-does-not-matter", "mission is already closed")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disclaim only applies to an open mission")
+}
+
+// TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure mirrors
+// TestStore_UpdateRollsBackOnEventAppendFailure /
+// TestStore_ForceReleaseWriteSet_EventAppendFailureRollsBackContract:
+// if appendEventLocked fails after DisclaimDelegationRecord already
+// stamped the disclaim marker on disk, the delegation record must be
+// restored to its pre-disclaim bytes, not left disclaimed with no
+// audit-log entry to explain it — a disclaim with no matching event is
+// exactly the half-finished state DES-076 round 2's security review
+// promises never happens.
+func TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-815")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-013"
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// Pass, not aborted -- verdict=aborted is excluded from the
+	// blocking gate unconditionally (DES-076 round 3, C7), which would
+	// make this test's post-rollback "must still block" assertion pass
+	// for the wrong reason regardless of whether the rollback worked.
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
+		time.Now().UTC().Format(time.RFC3339)))
+
+	recordPath := filepath.Join(DelegationDir(repoRoot, c.MissionID, delegationID), "record.yaml")
+	originalBytes, err := os.ReadFile(recordPath)
+	require.NoError(t, err)
+
+	// Sabotage the live event log path so appendEventLocked's append
+	// fails — a directory in place of the file it wants to open,
+	// mirroring the tracked-log sabotage the sibling rollback tests use
+	// for the single-tree case. This store has no separate checkout
+	// root, so auditRoot() resolves to repoRoot and s.resolveSessionID()
+	// is empty (no resolver configured), giving sessionlessID. The file
+	// already exists (s.Create's own "create" event created it), so it
+	// must be removed before it can become a directory.
+	logPath := audit.LiveMissionLogPath(repoRoot, c.MissionID, sessionlessID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	_, err = s.DisclaimDelegation(c.MissionID, delegationID, "this disclaim must roll back")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event append failed")
+	assert.Contains(t, err.Error(), "rolled back")
+
+	restoredBytes, err := os.ReadFile(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalBytes), string(restoredBytes),
+		"delegation record must be byte-identical after rollback")
+
+	reloaded, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.DisclaimedAt, "a rolled-back disclaim must not leave a marker behind")
+
+	n, err := countBlockingDelegations(repoRoot, c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "the delegation must still block Abandon after a rolled-back disclaim")
+}
+
+// TestCountBlockingDelegations_ExcludesOnlyDisclaimed pins the pure
+// counting function Abandon's gate 1 now uses: two delegations, one
+// disclaimed and one not, must report exactly one blocking record.
+func TestCountBlockingDelegations_ExcludesOnlyDisclaimed(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-814"
+
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-020", DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// Pass, not aborted -- this delegation is disclaimed below to prove
+	// the disclaim-exclusion half of the gate; verdict=aborted would
+	// already be excluded unconditionally (DES-076 round 3, C7) and
+	// would not exercise the disclaim path this test targets.
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-020",
+		DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	_, err = WriteDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-021", DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-021",
+		DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	n, err := countBlockingDelegations(repoRoot, missionID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "before any disclaim, both delegations block")
+
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+	_, err = DisclaimDelegationRecord(repoRoot, missionID, "d-2026-09-08-020", redact,
+		"capture", time.Now().UTC().Format(time.RFC3339))
+	require.NoError(t, err)
+
+	n, err = countBlockingDelegations(repoRoot, missionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "the disclaimed delegation must no longer count as blocking")
+
+	// countDelegations (ForceReleaseWriteSet's informational snapshot)
+	// must NOT change behavior -- it still counts every delegation.
+	total, err := countDelegations(repoRoot, missionID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, total, "countDelegations must stay unfiltered — it backs an informational snapshot, not a gate")
+}
+
+// TestCountBlockingDelegations_MissingRecordNamesRemedy pins review
+// finding M4 (full-branch review, m-2026-09-08-004 round 3): a
+// delegation directory with no record.yaml (a WriteDelegationSkeleton
+// write that crashed between creating the directory and writing the
+// record — see that function's own doc comment on write ordering) is a
+// genuine dead end: it cannot be loaded, cannot be disclaimed (disclaim
+// loads the same missing file), and cannot be counted as real work. The
+// error must name that and the manual remedy (removing the empty
+// directory), not surface a bare "no such file or directory" that reads
+// like an internal bug with no path forward.
+//
+// Confirmed failing against the pre-fix code: the error text was just
+// "loading delegation <id>: open <path>: no such file or directory",
+// with no removal instruction and no explanation of why the delegation
+// cannot resolve on its own.
+func TestCountBlockingDelegations_MissingRecordNamesRemedy(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-815"
+	delegationID := "d-2026-09-08-030"
+
+	// Simulate the crash window: the directory exists, record.yaml does
+	// not, matching WriteDelegationSkeleton's documented write order
+	// (directory first, then prompt.md, then record.yaml last).
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	_, err := countBlockingDelegations(repoRoot, missionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), delegationID)
+	assert.Contains(t, err.Error(), "rm -rf")
+	assert.Contains(t, err.Error(), dir)
+	assert.NotContains(t, err.Error(), "no such file or directory",
+		"the bare filesystem error must be replaced with an actionable remedy, not surfaced verbatim")
+}
+
+// TestCountBlockingDelegations_ExcludesAbortedUnconditionally is
+// review finding C7 (m-2026-09-08-004 round 2): a delegation refused
+// before its worker ever ran (verdict=aborted, written by the
+// max_delegation_depth or content-hash-gate refusal paths) never
+// represents real work, independent of BoundVia or any disclaim.
+// BoundViaSidecarDispatch is deliberately used here — the SAME
+// provenance a genuine capture carries — to prove the exclusion is
+// keyed on Verdict, not on provenance: an aborted delegation must be
+// excluded even though its provenance alone would also satisfy
+// DisclaimDelegationRecord's eligibility check.
+func TestCountBlockingDelegations_ExcludesAbortedUnconditionally(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-816"
+
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-030", DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, "d-2026-09-08-030",
+		DelegationVerdictAborted, time.Now().UTC().Format(time.RFC3339)))
+
+	n, err := countBlockingDelegations(repoRoot, missionID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "an aborted (never-ran) delegation must never block Abandon, disclaimed or not")
+
+	// No disclaim was ever recorded -- the exclusion is unconditional,
+	// not routed through the disclaim mechanism.
+	d, err := LoadDelegation(filepath.Join(DelegationDir(repoRoot, missionID, "d-2026-09-08-030"), "record.yaml"))
+	require.NoError(t, err)
+	assert.Empty(t, d.DisclaimedAt, "the aborted delegation must be excluded without ever being disclaimed")
+}
+
+// TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim is the
+// end-to-end proof for C7: a mission whose only delegation was refused
+// by the REAL max_delegation_depth gate (not a hand-constructed aborted
+// record) can be abandoned directly -- no --disclaim needed, because
+// the delegation never represented real work in the first place. Before
+// this fix, such a mission was permanently un-abandonable: Abandon's
+// gate blocked on the aborted record's mere existence, and disclaiming
+// it would have mislabeled a genuine depth-refused dispatch as a
+// dispatch-sidecar "capture," which it was not.
+func TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-817")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-031"
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	// Simulate exactly what enforceDelegationDepth's refusal path does
+	// (internal/hook/pretooluse_dispatch.go's closeDelegationAborted):
+	// close the just-written skeleton as aborted BEFORE any worker ever
+	// ran. The spawn itself was refused; this delegation record is the
+	// only trace it left.
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictAborted, closedAt))
+
+	abandoned, err := s.Abandon(c.MissionID, "the only delegation was refused before it ever ran")
+	require.NoError(t, err, "a mission whose only delegation never ran must be abandonable with no disclaim")
+	assert.Equal(t, StatusAbandoned, abandoned.Status)
+}

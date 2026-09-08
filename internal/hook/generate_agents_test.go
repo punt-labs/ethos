@@ -37,7 +37,11 @@ import (
 // closed to unblock the drain goroutine, the drain is joined, the
 // reader is closed, and the drained buffer is copied into the named
 // return value. Both file descriptors are always freed, even if fn
-// panics.
+// panics. On the non-panic path the drain and Close errors are
+// asserted, not discarded -- a swallowed read failure here would let
+// a test assert on an empty capture and pass for the wrong reason. If
+// fn panicked, the fds are still cleaned up but the panic is
+// re-raised untouched rather than masked by an assertion.
 func captureStderr(t *testing.T, fn func()) (out string) {
 	t.Helper()
 	old := os.Stderr
@@ -46,18 +50,26 @@ func captureStderr(t *testing.T, fn func()) (out string) {
 	os.Stderr = w
 
 	var buf bytes.Buffer
+	var copyErr error
 	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(&buf, r)
+		_, copyErr = io.Copy(&buf, r)
 		close(done)
 	}()
 
 	defer func() {
 		os.Stderr = old
-		_ = w.Close()
+		closeWriteErr := w.Close()
 		<-done
-		_ = r.Close()
+		closeReadErr := r.Close()
 		out = buf.String()
+
+		if p := recover(); p != nil {
+			panic(p)
+		}
+		require.NoError(t, closeWriteErr)
+		require.NoError(t, copyErr)
+		require.NoError(t, closeReadErr)
 	}()
 
 	fn()

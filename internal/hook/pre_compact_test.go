@@ -17,35 +17,15 @@ import (
 )
 
 // capturePreCompactOutput runs HandlePreCompact and captures stdout.
+// See captureStdout (capture_testhelpers_test.go) for the pipe/cleanup
+// contract: it closes on every exit path, not just success.
 func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) string {
 	t.Helper()
-
-	oldStdout := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		_ = r.Close()
+	out, err := captureStdout(t, func() error {
+		return HandlePreCompact(bytes.NewReader([]byte(input)), deps)
 	})
-	os.Stdout = w
-
-	// Drain the pipe in a goroutine to avoid deadlock if output
-	// exceeds the OS pipe buffer (~64KB).
-	var buf bytes.Buffer
-	done := make(chan error, 1)
-	go func() {
-		_, readErr := buf.ReadFrom(r)
-		done <- readErr
-	}()
-
-	in := bytes.NewReader([]byte(input))
-	require.NoError(t, HandlePreCompact(in, deps))
-
-	w.Close() // unblocks the reader goroutine
-	os.Stdout = oldStdout
-
-	require.NoError(t, <-done)
-	return buf.String()
+	require.NoError(t, err)
+	return out
 }
 
 // makeDeps creates PreCompactDeps from an identity store and session store.
