@@ -1135,7 +1135,8 @@ func missingRepoTreeDir(statErr error) bool {
 // this around its whole read-then-write sequence — countDelegations,
 // the results check, and the writeContract commit — so the sequence is
 // atomic with respect to any dispatchTierB in flight (ethos-lj4k, ADR
-// DES-075 in DESIGN.md).
+// DES-075 Decision 4 — "which lock is authoritative for
+// delegation-directory access" — amended round 2, in DESIGN.md).
 //
 // Before this, Abandon's countDelegations ran only under s.withLock,
 // the GLOBAL per-mission lock — a different file from the repo-tier
@@ -1354,7 +1355,8 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 		// commit all run under the repo-tier per-mission lock
 		// (withAbandonDelegationLock), NOT just the global lock this
 		// closure is already inside. See that method's doc comment and
-		// ADR DES-075 (DESIGN.md) for why: dispatchTierB writes a
+		// ADR DES-075 Decision 4 (DESIGN.md, amended round 2) for why:
+		// dispatchTierB writes a
 		// delegation record under a DIFFERENT lock file than the one
 		// this method's outer s.withLock takes, so without this nested
 		// acquisition a delegation could land in the window between
@@ -1843,8 +1845,9 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 
 // conflictScanIDs returns the mission IDs checkWriteSetConflicts
 // compares a new contract against. See ADR DES-075 (DESIGN.md,
-// Decision 1, amended round 2) for the full layer-model decision this
-// implements.
+// Decision 3 — "which tree is authoritative for the write-set conflict
+// SCAN" — amended rounds 2, 3, 4, and 7) for the full layer-model
+// decision this implements.
 //
 // In two-tree storage mode (repoRoot set), this is the repo tree PLUS
 // any open global-tree mission this repo's OWN audit trail references.
