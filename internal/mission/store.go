@@ -1644,39 +1644,9 @@ func DecodeContractStrict(data []byte, label string) (*Contract, error) {
 // Both shapes are normalized to a bare mission ID before merging.
 func (s *Store) List() ([]string, error) {
 	seen := make(map[string]struct{})
-	var ids []string
-
-	// Repo tree (when active). A per-mission subdirectory holding
-	// contract.yaml counts as one mission. Empty subdirectories or
-	// directories without a contract.yaml are skipped — they may be
-	// in-flight Creates or stale state, not first-class entries.
-	if s.twoTreeStorage && s.repoRoot != "" {
-		repoEntries, err := os.ReadDir(s.repoMissionsDir())
-		switch {
-		case err == nil:
-			for _, entry := range repoEntries {
-				if !entry.IsDir() {
-					continue
-				}
-				name := entry.Name()
-				if strings.HasPrefix(name, ".") {
-					continue
-				}
-				contractFile := filepath.Join(s.repoMissionsDir(), name, "contract.yaml")
-				if _, statErr := os.Stat(contractFile); statErr != nil {
-					continue
-				}
-				if _, dup := seen[name]; dup {
-					continue
-				}
-				seen[name] = struct{}{}
-				ids = append(ids, name)
-			}
-		case os.IsNotExist(err):
-			// First-run repo with no missions yet — fall through.
-		default:
-			return nil, fmt.Errorf("reading repo missions directory: %w", err)
-		}
+	ids, err := s.listRepoTree(seen)
+	if err != nil {
+		return nil, err
 	}
 
 	// Global tree. Flat-shape files; sibling artifacts are filtered
@@ -1704,6 +1674,76 @@ func (s *Store) List() ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+// listRepoTree returns the mission IDs under the repo tree (empty
+// when two-tree storage is inactive). A per-mission subdirectory
+// holding contract.yaml counts as one mission. Empty subdirectories or
+// directories without a contract.yaml are skipped — they may be
+// in-flight Creates or stale state, not first-class entries. seen is
+// the caller's dedup set; every ID returned is also recorded in it so
+// a caller merging in a second source does not double-count.
+func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
+	if !s.twoTreeStorage || s.repoRoot == "" {
+		return nil, nil
+	}
+	var ids []string
+	repoEntries, err := os.ReadDir(s.repoMissionsDir())
+	switch {
+	case err == nil:
+	case os.IsNotExist(err):
+		// First-run repo with no missions yet.
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("reading repo missions directory: %w", err)
+	}
+	for _, entry := range repoEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		contractFile := filepath.Join(s.repoMissionsDir(), name, "contract.yaml")
+		if _, statErr := os.Stat(contractFile); statErr != nil {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		ids = append(ids, name)
+	}
+	return ids, nil
+}
+
+// conflictScanIDs returns the mission IDs checkWriteSetConflicts
+// compares a new contract against. See ADR DES-075 (DESIGN.md) for
+// the full layer-model decision this implements.
+//
+// In two-tree storage mode (repoRoot set), this is the REPO TREE
+// ONLY — every new create in this mode lands in the repo tree
+// (writeLayer), so the current repo's own open missions live there
+// exclusively. The legacy global tree is deliberately excluded from
+// this scan even though Load/List still fall back to it for reads:
+// the global tree is a flat namespace shared by every repo on the
+// machine with no per-entry way to tell which repo an existing
+// contract belongs to (measured 2026-09-07: zero of 841 global-tree
+// contracts carry a populated Repo field), so including it compared
+// this repo's new mission against unrelated repos' open missions and
+// produced false conflicts (ethos-6adb) — not because of cwd
+// resolution, but because the enumeration itself was unscoped.
+//
+// Legacy single-tree mode (repoRoot == "") keeps scanning the full
+// global tree — it is the ONLY tree in that mode, so every entry
+// genuinely shares one undifferentiated namespace and the previous
+// behavior (List()) is unchanged.
+func (s *Store) conflictScanIDs() ([]string, error) {
+	if !s.twoTreeStorage || s.repoRoot == "" {
+		return s.List()
+	}
+	return s.listRepoTree(make(map[string]struct{}))
 }
 
 // isContractFile reports whether a missions-directory entry name is a
@@ -2501,10 +2541,10 @@ func canonicalRoleSlug(name string) string {
 	return name
 }
 
-// checkWriteSetConflicts loads every existing mission, filters to
-// open ones, and asks findWriteSetConflicts whether the new contract's
-// write_set overlaps any of them. Returns a non-nil error iff there
-// is at least one conflict.
+// checkWriteSetConflicts loads every existing mission IN SCOPE for
+// this repo, filters to open ones, and asks findWriteSetConflicts
+// whether the new contract's write_set overlaps any of them. Returns
+// a non-nil error iff there is at least one conflict.
 //
 // The caller must hold the directory-level create lock so that the
 // scan-then-write transition is atomic with respect to other Creates.
@@ -2513,7 +2553,7 @@ func canonicalRoleSlug(name string) string {
 // Unloadable missions cannot conflict — the safe default is skip,
 // not block all future creates.
 func (s *Store) checkWriteSetConflicts(c *Contract) error {
-	ids, err := s.List()
+	ids, err := s.conflictScanIDs()
 	if err != nil {
 		return fmt.Errorf("create: listing existing missions: %w", err)
 	}

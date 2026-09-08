@@ -8890,3 +8890,152 @@ passes against the code as it already stands after the amendment
 directly above, and exists so a future, well-intentioned fallback
 cannot reintroduce the collision this ruling explicitly rejected without
 first deleting or rewriting this test.
+
+## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (ACCEPTED)
+
+**Context.** `internal/mission` (DES-054 phase 1) stores a mission in one
+of two trees and locks it through one of two lock files, and different call
+sites picked between them inconsistently. Cluster-2 triage on 2026-09-07
+(ethos-6adb, ethos-ouy9, ethos-lj4k, ethos-5yej, ethos-7tqd) found the same
+ambiguity underneath four of the five bugs filed against this package. This
+ADR names what each layer and each lock is for, so the fix for each bead
+follows from one decision instead of four separate patches.
+
+**The two trees.**
+
+- **Repo tree** — `<repoRoot>/.punt-labs/ethos/missions/<id>/contract.yaml`
+  (`repoMissionsDir`, `paths.go:120`). Git-tracked. Active when a Store is
+  built with `NewStoreWithRoots(repoRoot, ...)` and `repoRoot != ""` — the
+  case for every CLI/MCP invocation run from inside a repo checkout
+  (`missionStore`, `cmd/ethos/mission.go:56`).
+- **Global tree** — `<globalRoot>/missions/<id>.yaml`
+  (`globalMissionsDir`, `paths.go:131`), `globalRoot` always
+  `~/.punt-labs/ethos`. Flat, one namespace shared by every repo on the
+  machine. Not git-tracked.
+
+**Decision 1 — which tree is authoritative for NEW writes.** The repo
+tree, whenever one is in scope (`writeLayer`, `paths.go:198`). The global
+tree is written only when no repo is in scope at all (`ethos mission
+create` run outside any git checkout) — a rare, already loudly-warned path
+(`warnIfGlobalFallback`, `cmd/ethos/mission.go:103`). This was already the
+code's behavior; this ADR just names it as the standing decision so the
+next change doesn't have to re-derive it.
+
+**Decision 2 — which tree is authoritative for READS of an existing
+mission.** Repo-first, global-fallback (`resolveLayer`, `paths.go:172`).
+Unchanged by this round. The fallback exists so a mission created before a
+repo adopted the two-tree layout (or created with no repo in scope) is
+still loadable.
+
+**Decision 3 — which tree is authoritative for the write-set conflict
+SCAN (`Create`'s admission control).** The repo tree ONLY, once a repo is
+in scope — never the global tree. This is new; it is the fix for
+**ethos-6adb**.
+
+The global tree cannot be scoped by repo: it is flat, and measured
+2026-09-07 showed 841 contracts on the local host, 19 open, ZERO carrying a
+populated `repo:` field. A per-entry repo filter is therefore not available
+today, and back-filling it retroactively does nothing for the 841 already
+on disk. Since Decision 1 means a repo's own new missions never land in the
+global tree once a repo is in scope, the global tree's remaining open
+entries are guaranteed to be either pre-two-tree-adoption leftovers or
+another repo's missions entirely — comparing a new mission's write_set
+against them can only produce false conflicts, never a real one. Excluding
+the global tree from the scan (not filtering it) is therefore not a loss of
+coverage, only a removal of noise. `conflictScanIDs` (`store.go`)
+implements this: it calls the repo-tree listing directly and skips the
+union with the global tree that `List()` still performs for the general
+"show me every mission" case (CLI `mission list`, `MatchByPrefix`), which
+is unaffected — a stale cross-repo prefix match was never this cluster's
+complaint and stays out of scope here.
+
+**Decision 4 — which lock is authoritative for delegation-directory
+access.** The REPO-TIER per-mission lock —
+`AcquireMissionLock`/`AcquireMissionLockExclusive`
+(`<repoRoot>/.punt-labs/ethos/missions/<id>/.lock`, `delegation.go:467`) —
+not the GLOBAL per-mission lock (`Store.withLock`/`Store.lockPath`,
+`<globalRoot>/missions/<id>.lock`, `store.go:424`). This is the fix for
+**ethos-lj4k**.
+
+Both locks exist and both stay: the global lock still serializes every
+Store method that mutates a contract file (`Create`, `Update`, `Close`,
+`Abandon`, `AdvanceRound`, ...) exactly as before — this decision does not
+touch that. The repo-tier lock is the one thing every actor that reads or
+writes `delegations/` under a mission already used — `dispatchTierB`
+(shared, `internal/hook/pretooluse_dispatch.go:273`) and `Store.Close`'s
+delegation sweep (exclusive, `store.go:1063`) — except `Store.Abandon`,
+whose `countDelegations` check ran under the GLOBAL lock only. Two
+different lock files gave two independent critical sections over the SAME
+directory: `dispatchTierB` could write a delegation record in the window
+between `Abandon`'s read and its commit, with neither side excluding the
+other. The fix nests `AcquireMissionLockExclusive` INSIDE the existing
+`s.withLock` for the delegation-count-and-commit sequence
+(`withAbandonDelegationLock`, `store.go`) — global lock outer, repo-tier
+lock inner, matching the acquisition order `delegation.go`'s own doc
+comment already prescribed (`global → repo → per-mission(shared) →
+per-delegation(exclusive)`) but that no call site had actually exercised
+until now. No existing call site acquires the repo-tier lock and then
+tries to acquire the global lock, so this ordering introduces no reversal
+and no new deadlock risk; `Store.Close`'s existing repo-tier acquisition
+runs strictly AFTER releasing the global lock (sequential, not nested),
+which is a subset of the same order, not a conflicting one. Rejected: just
+adding `AcquireMissionLockExclusive` to `Abandon` as a second, independent
+acquisition alongside the existing global lock with no defined order
+between the two — safe today only by accident of which call sites exist,
+and the first future call site that reversed the order would deadlock
+silently. Naming one fixed order removes that trap.
+
+**Decision 5 — what a linked worktree's own `.punt-labs/ethos/` means.**
+Inert. `FindRepoEthosRoot` and `StoreRepoRoot` (`internal/resolve`) both
+resolve through the git common-dir to the MAIN work tree, so a linked
+worktree's own `.punt-labs/ethos/` — even one `ethos enable` deposited
+directly into that checkout — is never read or written by the mission
+store, the identity/team/role layered stores, or session resolution. This
+is deliberate (ethos-yofr) and is what lets a worktree see its parent
+session's missions and rosters without any special-casing. It is also
+undocumented as a NAMED state today: a worktree's own store directory
+silently means nothing rather than erroring or being explicitly labeled
+inert. This ADR is that naming; per the mission triage
+(ethos-5yej), no behavior changes — the bead closes once this section
+lands.
+
+**Non-goal for this round.** Populating `Contract.Repo` at create time
+(so a future repo filter on the global tree becomes possible) is
+deliberately deferred. `Contract.Repo` is set from two entry points — the
+CLI (`cmd/ethos/mission.go`, in scope for this round) and the MCP server
+(`internal/mcp/mission_tools.go`, NOT in scope for this round) — and
+`ApplyServerFields`'s whole contract with its callers (see its own doc
+comment) is that CLI and MCP stay in lockstep for every server-controlled
+field. Setting `Repo` from only one of the two entry points would make the
+field's presence depend on which surface created the mission, a new and
+worse inconsistency than the one being fixed. A follow-up that widens the
+write-set to include the MCP path can do this properly.
+
+**Consequence for ethos-ouy9.** Independent of the layer model above,
+`writeContract` (`store.go`) — the function that persists every mission
+contract, in whichever layer `Decision 1` selects — had no `Sync()` before
+its `Rename`, unlike its sibling `session.writeRoster`
+(`internal/session/store.go:653`), which does. `writeContract` now matches
+`writeRoster`'s discipline (`Sync` before `Close`, temp removed on every
+error path, a failed fsync propagated). `Store.Create` additionally reads
+the just-written contract back before returning success. Neither of the
+two other candidate causes the ethos-ouy9 triage note raised (a
+create/read layer mismatch; a create landing in a different repo's tree)
+is ruled out by this ADR's decisions — Decision 1/2 already prevent both
+for any repo-scoped invocation — but the missing fsync is a real,
+independently-reproducible durability gap on its own, fixed regardless of
+which candidate explains the original 2026-08-15 vox incident.
+
+**Consequence for ethos-7tqd.** Out of scope for the layer model itself —
+this is an active-mission-sidecar attribution bug (`internal/mission/active.go`),
+not a storage-layer ambiguity — but it was reproduced and triaged in the
+same pass. `ethos mission dispatch`/`create` now print the binding they
+take (`cmd/ethos/mission.go`) so a leader sees "session bound to mission
+X" rather than discovering it later via a misattributed commit or a
+blocked abandon. The deeper fix — bind at worker-spawn time instead of at
+dispatch time, per the triage note's stated preference — requires changing
+`internal/hook/pretooluse_dispatch.go`'s dispatch/attribution logic, which
+is outside this mission's write-set (`internal/mission/**`,
+`internal/resolve/resolve.go`, `cmd/ethos/mission.go`, `DESIGN.md`,
+`CHANGELOG.md`). Flagged for a follow-up mission scoped to
+`internal/hook/**`.

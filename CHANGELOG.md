@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ethos mission create`/`dispatch`'s write-set conflict check no
+  longer compares against missions in the shared, cross-repo global
+  mission tree.** A two-tree Store (any invocation run inside a repo
+  checkout) now scopes the scan to the repo's own mission tree only —
+  the global tree cannot be attributed to a repo (measured: zero of 841
+  on-disk contracts carry a repo field) and including it produced false
+  conflicts against unrelated repos' open missions (ethos-6adb). See
+  DES-075 in DESIGN.md for the full storage-layer decision.
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`

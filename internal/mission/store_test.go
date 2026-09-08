@@ -1569,6 +1569,46 @@ func TestStore_CreateAllowsDisjointWriteSets(t *testing.T) {
 	assert.Len(t, ids, 2)
 }
 
+// TestStore_CreateIgnoresGlobalTreeConflictsInTwoTreeMode is the
+// regression gate for ethos-6adb: a two-tree Store (repoRoot set)
+// must not compare a new mission's write_set against an open mission
+// that lives ONLY in the shared global tree. The global tree is a
+// flat namespace shared by every repo on the machine (measured
+// 2026-09-07: 841 contracts, 19 open, zero carrying a Repo field), so
+// an entry there cannot be proven to belong to this repo — treating
+// it as a conflict source produced exactly the cross-repo false
+// conflict the bead reported (a vox mission blocking a lux write_set).
+//
+// The "foreign" mission is created via a bare legacy Store
+// (NewStore, repoRoot=="") pointed at the SAME globalRoot, landing
+// it in the flat global tree exactly the way a pre-DES-054 mission,
+// or a mission created outside any repo, would. The repo Store under
+// test then creates a mission with an overlapping write_set and must
+// succeed.
+func TestStore_CreateIgnoresGlobalTreeConflictsInTwoTreeMode(t *testing.T) {
+	globalRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	foreign := withWriteSet("m-2026-04-08-900", "internal/shared/")
+	require.NoError(t, legacy.Create(foreign))
+
+	repoRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	mine := withWriteSet("m-2026-04-08-901", "internal/shared/thing.go")
+	require.NoError(t, s.Create(mine),
+		"an open mission that lives only in the shared global tree must not "+
+			"block a two-tree repo's create — it cannot be proven to belong to this repo")
+
+	// The two-tree Store's own repo-tree missions still conflict-check
+	// normally against each other — this fix narrows the SCAN, it does
+	// not disable admission control.
+	overlap := withWriteSet("m-2026-04-08-902", "internal/shared/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "two missions in the SAME repo tree must still conflict")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
+}
+
 // TestStore_CreateMultiConflictReportsAllBlockers asserts that a new
 // mission overlapping two existing open missions surfaces both
 // blockers in the error message — one line per blocker.
