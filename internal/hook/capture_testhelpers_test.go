@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 
@@ -18,30 +17,38 @@ import (
 // buffer (~64KB) cannot deadlock the writer, and returns the captured
 // text alongside fn's error.
 //
-// The write end closes on every exit from fn -- success, a returned
-// error, or a panic -- so a caller never leaks the drain goroutine or
-// its file descriptors (the PR #509 round 8 regression: a version
-// that closed only after a successful fn left the goroutine blocked
-// on ReadFrom for the life of the test binary whenever fn failed).
-// Restoring os.Stdout, closing the read end, and waiting for the
-// drain to finish all happen before this function returns, so a
-// caller's own require.NoError(t, err) on fn's error is free to fail
-// the test without leaving anything open.
+// Cleanup happens in a single deferred path, mirroring
+// generate_agents_test.go's captureStderr: os.Stdout is restored, the
+// write end is closed (unblocking the drain goroutine), the drain is
+// joined, and the read end is closed -- in that order, unconditionally,
+// on every exit from fn including a panic or t.Fatal (the PR #509 round
+// 8 regression this guards against: a version that closed the write end
+// only after a successful fn left the goroutine blocked on ReadFrom for
+// the life of the test binary whenever fn failed; the follow-up gap a
+// later round found: joining the drain and closing the read end only
+// ran on the non-panic path, so a panicking fn still leaked the read
+// descriptor and the goroutine, even though the comment claimed every
+// exit path was covered). Only after that unconditional cleanup does
+// the deferred func re-panic if fn panicked, so a caller's own
+// require.NoError(t, err) on fn's error -- and a panic -- are both free
+// to end the test without leaving anything open.
 //
-// Infra failures (os.Pipe, the drain read, closing the read end) are
-// asserted here directly -- they are never expected and a caller
-// should not have to plumb a second error value for them. fn's error
-// is returned, not asserted, so callers that want to assert success
-// (most) and callers that want to inspect the error themselves (e.g.
-// runHookForVerifier) share one implementation.
-func captureStdout(t *testing.T, fn func() error) (string, error) {
+// Infra failures (os.Pipe, closing the write end, the drain read,
+// closing the read end) are asserted here directly -- they are never
+// expected and a caller should not have to plumb a second error value
+// for them. These asserts are skipped on the panic path so the original
+// panic surfaces, not a require failure about a pipe that closed abnormally
+// because fn already blew up. fn's error is returned, not asserted, so
+// callers that want to assert success (most) and callers that want to
+// inspect the error themselves (e.g. runHookForVerifier) share one
+// implementation.
+func captureStdout(t *testing.T, fn func() error) (out string, fnErr error) {
 	t.Helper()
 
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stdout = w
-	defer func() { os.Stdout = oldStdout }()
 
 	var buf bytes.Buffer
 	done := make(chan error, 1)
@@ -50,20 +57,23 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 		done <- readErr
 	}()
 
-	// sync.Once makes the deferred safety-net close a no-op once the
-	// explicit close below has already run on the normal path.
-	var closeOnce sync.Once
-	closeW := func() { closeOnce.Do(func() { _ = w.Close() }) }
-	defer closeW()
+	defer func() {
+		os.Stdout = oldStdout
+		closeWriteErr := w.Close()
+		drainErr := <-done
+		closeReadErr := r.Close()
+		out = buf.String()
 
-	fnErr := fn()
-	closeW() // unblocks the reader goroutine promptly on every path
+		if p := recover(); p != nil {
+			panic(p)
+		}
+		require.NoError(t, closeWriteErr)
+		require.NoError(t, drainErr)
+		require.NoError(t, closeReadErr)
+	}()
 
-	drainErr := <-done
-	require.NoError(t, r.Close())
-	require.NoError(t, drainErr)
-
-	return buf.String(), fnErr
+	fnErr = fn()
+	return
 }
 
 // TestCaptureStdout_DrainGoroutineExitsOnFnError guards the round 8
@@ -104,4 +114,61 @@ func TestCaptureStdout_DrainGoroutineExitsOnFnError(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// countOpenFDs returns the number of open file descriptors for the
+// current process via /dev/fd (present on Linux and macOS, the two
+// platforms this suite actually runs tests on -- Windows has no CI test
+// job, see GOOS=windows in the Makefile's cross-compile-only check).
+// Skips rather than fails if /dev/fd is unavailable, since this is a
+// portability probe, not the property under test.
+func countOpenFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		t.Skipf("cannot count open file descriptors on this platform: %v", err)
+	}
+	return len(entries)
+}
+
+// TestCaptureStdout_PanicStillClosesReadEndAndJoinsDrain pins the I3
+// finding: captureStdout's doc comment claimed every exit path --
+// including a panic -- restores stdout, closes the read end, and joins
+// the drain before returning. That was false. The write end closed on
+// panic (a bare `defer closeW()` covered it), which kept the earlier
+// TestCaptureStdout_DrainGoroutineExitsOnFnError passing even for a
+// panicking fn since a closed write end unblocks the drain goroutine's
+// ReadFrom regardless of who is watching for it to finish. But the
+// join-and-close-read-end steps ran only in the straight-line code
+// after fn() returned normally, so a panicking fn skipped past them
+// entirely, leaking the read end of the pipe -- a real fd leak the
+// comment said could not happen. captureStderr in this same package
+// (generate_agents_test.go) already did all cleanup in one
+// unconditional defer; that is the shape adopted here, closing the gap
+// instead of just correcting the comment.
+//
+// Falsified pre-fix: reverting captureStdout's body to the
+// sync.Once-guarded `defer closeW()` plus a non-deferred `drainErr :=
+// <-done; require.NoError(t, r.Close())` tail (this PR's prior shape)
+// makes this test fail -- countOpenFDs after the panic is one higher
+// than baseline, because r is never closed on the panic path.
+func TestCaptureStdout_PanicStillClosesReadEndAndJoinsDrain(t *testing.T) {
+	baseline := countOpenFDs(t)
+
+	func() {
+		defer func() {
+			p := recover()
+			require.Equal(t, "boom", p)
+		}()
+		_, _ = captureStdout(t, func() error {
+			panic("boom")
+		})
+	}()
+
+	// No polling needed here the way the drain-goroutine test above
+	// needs it: captureStdout's deferred cleanup joins the drain and
+	// closes r synchronously, before it re-panics, so both are already
+	// done by the time recover() above returns.
+	got := countOpenFDs(t)
+	assert.Equal(t, baseline, got, "read end of the capture pipe leaked across a panic in fn")
 }
