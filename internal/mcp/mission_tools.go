@@ -423,6 +423,13 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 // provenance, still open, already disclaimed) returns immediately,
 // naming which delegation ID failed and why, without ever calling
 // Abandon.
+//
+// M3 (full-branch review, m-2026-09-08-004 round 3): DisclaimDelegation
+// is irreversible the moment it succeeds. Every failure path below
+// names any delegation IDs that already committed before the failure —
+// a subsequent disclaim in this loop, or the Abandon call after the
+// loop finishes — so a caller who only sees an error never has to
+// wonder whether some of the requested disclaims already stuck.
 func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	idArg := stringArg(req, "mission_id", "")
 	if idArg == "" {
@@ -441,14 +448,26 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
+	var disclaimed []string
 	for _, delegationID := range disclaim {
 		if _, dErr := h.missionStore.DisclaimDelegation(id, delegationID, reason); dErr != nil {
+			if len(disclaimed) > 0 {
+				return mcplib.NewToolResultError(fmt.Sprintf(
+					"failed to disclaim delegation %q: %v (already disclaimed and cannot be undone: %s)",
+					delegationID, dErr, strings.Join(disclaimed, ", "))), nil
+			}
 			return mcplib.NewToolResultError(
 				fmt.Sprintf("failed to disclaim delegation %q: %v", delegationID, dErr)), nil
 		}
+		disclaimed = append(disclaimed, delegationID)
 	}
 	c, err := h.missionStore.Abandon(id, reason)
 	if err != nil {
+		if len(disclaimed) > 0 {
+			return mcplib.NewToolResultError(fmt.Sprintf(
+				"failed to abandon mission: %v (disclaimed and cannot be undone despite the failed abandon: %s)",
+				err, strings.Join(disclaimed, ", "))), nil
+		}
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to abandon mission: %v", err)), nil
 	}
 	payload := map[string]any{

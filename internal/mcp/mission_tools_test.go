@@ -1216,6 +1216,115 @@ func TestHandleMission_AbandonDisclaimRefusesWrongProvenance(t *testing.T) {
 	assert.Equal(t, mission.StatusOpen, loaded.Status, "a failed disclaim must never reach Abandon")
 }
 
+// TestHandleMission_AbandonDisclaimPartialFailureNamesCommitted pins
+// review finding M3 (full-branch review, m-2026-09-08-004 round 3) on
+// the MCP surface: a disclaim list naming two delegations where the
+// SECOND fails must name the FIRST as already committed and
+// irreversible, not just report the failing one.
+//
+// Confirmed failing against the pre-fix code: the error text named only
+// the failing delegation.
+func TestHandleMission_AbandonDisclaimPartialFailureNamesCommitted(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	disclaimable := "d-2026-09-08-952"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	notDisclaimable := "d-2026-09-08-953"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, notDisclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, notDisclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "one real, one not",
+		"disclaim":   []interface{}{disclaimable, notDisclaimable},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, notDisclaimable, "names the delegation that failed")
+	assert.Contains(t, text, disclaimable, "names the delegation that already committed")
+	assert.Contains(t, text, "cannot be undone")
+}
+
+// TestHandleMission_AbandonDisclaimSucceedsButAbandonFailsNamesCommitted
+// is M3's other half on the MCP surface: every requested disclaim
+// commits, but Abandon itself then fails (Gate 2: a result artifact
+// still exists). The error must still name the delegations that are now
+// permanently disclaimed.
+//
+// Confirmed failing against the pre-fix code: the error named only the
+// Gate 2 failure, with no mention of the committed disclaim.
+func TestHandleMission_AbandonDisclaimSucceedsButAbandonFailsNamesCommitted(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	disclaimable := "d-2026-09-08-954"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	submitResultForMCP(t, h, created.MissionID)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "disclaim then fail on Gate 2",
+		"disclaim":   []interface{}{disclaimable},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, "result artifact")
+	assert.Contains(t, text, disclaimable)
+	assert.Contains(t, text, "cannot be undone")
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var loaded mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+	assert.Equal(t, mission.StatusOpen, loaded.Status, "the failed abandon must not have transitioned the mission")
+}
+
 func TestHandleMission_UnknownMethod(t *testing.T) {
 	h := testHandlerWithMissions(t)
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{

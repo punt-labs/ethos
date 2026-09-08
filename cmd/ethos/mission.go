@@ -1530,13 +1530,31 @@ func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 	if err != nil {
 		return fmt.Errorf("mission abandon: %w", err)
 	}
+	// M3 (full-branch review, m-2026-09-08-004 round 3): DisclaimDelegation
+	// is irreversible the moment it succeeds -- a delegation cannot be
+	// un-disclaimed. Track every one that has already committed so a
+	// LATER failure (a subsequent disclaim in this same loop, or the
+	// Abandon call after the loop finishes) can say so explicitly. An
+	// operator who sees only "abandon failed" would have no way to know
+	// some of the delegations they asked to abandon are already
+	// permanently disclaimed and cannot be retried as a clean unit.
+	var disclaimed []string
 	for _, delegationID := range disclaim {
 		if _, dErr := ms.DisclaimDelegation(id, delegationID, reason); dErr != nil {
+			if len(disclaimed) > 0 {
+				return fmt.Errorf("mission abandon: disclaiming %q: %w (already disclaimed and cannot be undone: %s)",
+					delegationID, dErr, strings.Join(disclaimed, ", "))
+			}
 			return fmt.Errorf("mission abandon: disclaiming %q: %w", delegationID, dErr)
 		}
+		disclaimed = append(disclaimed, delegationID)
 	}
 	c, err := ms.Abandon(id, reason)
 	if err != nil {
+		if len(disclaimed) > 0 {
+			return fmt.Errorf("mission abandon: %w (disclaimed and cannot be undone despite the failed abandon: %s)",
+				err, strings.Join(disclaimed, ", "))
+		}
 		return fmt.Errorf("mission abandon: %w", err)
 	}
 	// Parity with close: seal the checkout's mission-log tail so the

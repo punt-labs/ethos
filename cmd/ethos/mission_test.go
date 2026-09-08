@@ -1136,6 +1136,97 @@ func TestMissionAbandon_DisclaimRefusesWrongProvenance(t *testing.T) {
 	assert.Equal(t, mission.StatusOpen, c.Status, "a failed disclaim must never reach Abandon")
 }
 
+// TestMissionAbandon_DisclaimPartialFailureNamesCommitted pins review
+// finding M3 (full-branch review, m-2026-09-08-004 round 3): when a
+// disclaim list names two delegations and the SECOND one fails, the
+// FIRST one already committed -- DisclaimDelegation is irreversible on
+// success. The error must say so explicitly, or an operator retrying
+// the abandon has no way to know one of their delegations is already
+// permanently disclaimed.
+//
+// Confirmed failing against the pre-fix code: the error named only the
+// failing delegation, with no mention that the first one had already
+// committed.
+func TestMissionAbandon_DisclaimPartialFailureNamesCommitted(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	disclaimable := "d-2026-09-08-902"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	notDisclaimable := "d-2026-09-08-903"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, notDisclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, notDisclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	err = runMissionAbandon(missionID, "one real, one not", []string{disclaimable, notDisclaimable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), notDisclaimable, "names the delegation that failed")
+	assert.Contains(t, err.Error(), disclaimable, "names the delegation that already committed")
+	assert.Contains(t, err.Error(), "cannot be undone")
+}
+
+// TestMissionAbandon_DisclaimSucceedsButAbandonFailsNamesCommitted is
+// M3's other half: every requested disclaim commits, but Abandon itself
+// then fails (Gate 2: a result artifact still exists). The error must
+// still name the delegations that are now permanently disclaimed, even
+// though the mission itself did not abandon.
+//
+// Confirmed failing against the pre-fix code: the error named only the
+// abandon failure, with no mention that the disclaim had already
+// committed and could not be retried as a clean unit.
+func TestMissionAbandon_DisclaimSucceedsButAbandonFailsNamesCommitted(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	disclaimable := "d-2026-09-08-904"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, disclaimable, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, disclaimable,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	// A result artifact is Abandon's Gate 2 -- disclaiming a delegation
+	// (Gate 1) never satisfies it, so abandon fails here even after the
+	// disclaim above commits cleanly.
+	submitCLIResult(t, missionID, 1)
+
+	err = runMissionAbandon(missionID, "disclaim then fail on Gate 2", []string{disclaimable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "result artifact")
+	assert.Contains(t, err.Error(), disclaimable)
+	assert.Contains(t, err.Error(), "cannot be undone")
+
+	c, err := ms.Load(missionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusOpen, c.Status, "the failed abandon must not have transitioned the mission")
+}
+
 // --- 3.4: reflect, reflections, advance ---
 
 // writeReflectionFile drops a reflection YAML body into a temp file
