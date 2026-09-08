@@ -1926,6 +1926,90 @@ func TestDispatchAgent_InheritanceChainTooDeep(t *testing.T) {
 		"depth bound must land in stderr so the operator sees the runaway-chain warning")
 }
 
+// TestHandlePreToolUse_DepthRefusalThenAbandonNeedsNoDisclaim is review
+// finding K11(b) (full-branch review, m-2026-09-08-004 round 3):
+// DESIGN.md calls
+// `TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim` (package
+// mission) "the end-to-end proof using the real depth-refusal shape,"
+// but that test's own comment says "simulate" — it hand-calls
+// CloseDelegationSkeleton directly rather than driving the depth gate
+// through HandlePreToolUse. package mission cannot import package hook
+// (hook already imports mission), so a TRUE end-to-end proof has to
+// live here instead. This drives a real Tier B (MISSION_ID) spawn
+// through enforceDelegationDepth with the ceiling exceeded, confirms
+// the hook denies it and closes the skeleton verdict=aborted itself
+// (not a test-injected shortcut), then confirms Store.Abandon succeeds
+// on that mission with no --disclaim, mirroring the package-mission
+// test's own assertion but from the real refusal path.
+func TestHandlePreToolUse_DepthRefusalThenAbandonNeedsNoDisclaim(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-09-08-740"
+	stageContract(t, home, missionID) // Worker: "bwk", global tree
+
+	// max_delegation_depth=1: one staged ancestor (depth 1) plus this
+	// spawn (proposed depth 2) exceeds it.
+	cfgDir := filepath.Join(repo, ".punt-labs")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cfgDir, "ethos.yaml"),
+		[]byte("max_delegation_depth: 1\n"),
+		0o600,
+	))
+	// Staged under a DIFFERENT mission than the one under test: the
+	// depth walker resolves an ancestor delegation ID by scanning every
+	// mission tree (delegationLoader), so its own mission membership
+	// does not matter to the walk -- but if it were staged under
+	// missionID itself, it would sit in that mission's own
+	// delegations/ directory as a still-OPEN record and block Abandon
+	// for a real, unrelated reason, defeating this test's own premise
+	// that the depth-refused delegation is the mission's ONLY one.
+	stageParentDelegationSkeleton(t, repo, "m-2026-09-08-741", "d-ancestor", "")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("PARENT_DELEGATION_ID", "d-ancestor")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-depth-refused"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision)
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "max_delegation_depth")
+
+	// Discover the delegation ID the hook itself allocated -- the only
+	// entry under this mission's delegations/ dir other than the staged
+	// ancestor.
+	delegationsDir := filepath.Dir(mission.DelegationDir(repo, missionID, "x"))
+	entries, err := os.ReadDir(delegationsDir)
+	require.NoError(t, err)
+	var refusedID string
+	for _, e := range entries {
+		if e.Name() != "d-ancestor" {
+			refusedID = e.Name()
+		}
+	}
+	require.NotEmpty(t, refusedID, "the hook must have written a delegation skeleton before refusing it")
+
+	d, err := mission.LoadDelegation(filepath.Join(delegationsDir, refusedID, "record.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, mission.DelegationVerdictAborted, d.Verdict,
+		"the depth-refused skeleton must be closed aborted by the hook itself, not a test shortcut")
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	s := mission.NewStoreWithRoots(repo, globalRoot)
+	abandoned, err := s.Abandon(missionID, "the only delegation was refused before it ever ran")
+	require.NoError(t, err, "a mission whose only delegation was depth-refused must be abandonable with no disclaim")
+	assert.Equal(t, mission.StatusAbandoned, abandoned.Status)
+}
+
 // TestDispatchAgent_InheritanceEmptyParent confirms the existing
 // Tier A path is unchanged: with PARENT_DELEGATION_ID unset, the
 // hook never enters the inheritance walk and the response shape
@@ -2900,6 +2984,18 @@ func TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume(t *test
 	require.NoError(t, err)
 	assert.Equal(t, missionID, after,
 		"a claim binding must stay sticky after use — only dispatch bindings are single-use")
+
+	// K11(a) (full-branch review, m-2026-09-08-004 round 3): the dispatch
+	// side of this same mirror (round 1's F6) asserts Origin explicitly,
+	// not only the mission ID that survives both a claim and a stale
+	// dispatch shape identically. The claim side was never made
+	// symmetric — assert it never silently converted to a dispatch
+	// origin, which ReadActiveMission's bare mission-ID string could
+	// never distinguish from this claim staying a claim.
+	binding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.BindOriginClaim, binding.Origin,
+		"a claim binding must still read back as a claim after use, never drift to another origin")
 }
 
 // TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchedButUnresolvableContractBlocks

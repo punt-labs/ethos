@@ -9607,6 +9607,20 @@ delegation whose provenance was never sidecar capture.
   state is the repo's own commit history and review process, not a
   runtime signature scheme — this round does not change that boundary
   in either direction.
+- *Is there a second, WORSE way to hand-edit the same gate open?* Yes
+  (review finding K10, full-branch review, m-2026-09-08-004 round 3,
+  naming a sibling of the bullet above): hand-editing a delegation
+  record's `verdict: aborted` unlocks `countBlockingDelegations`'s
+  unconditional aborted exclusion directly, with no `--disclaim` call
+  at all — and unlike the disclaim path, this leaves NO audit trail on
+  the delegation or the mission's event log. Disclaiming a real capture
+  at least writes `disclaimed_at`/`disclaimed_reason` and a
+  `disclaim_delegation` event, permanently and attributably (see the
+  bullet below); a hand-edited verdict leaves nothing — the same trust
+  boundary as `bound_via` (git-tracked state, not runtime-verified), but
+  a strictly quieter exploit of it. Named here for the same reason the
+  `bound_via` case is: not a new gap this round introduces, but one this
+  round's own gate now depends on and had not previously named.
 - *Does the disclaim leave an audit record of who disclaimed what and
   why?* Yes, twice over: the delegation's own record carries
   `disclaimed_at`/`disclaimed_reason` permanently (immutable — a second
@@ -9872,10 +9886,24 @@ one level up in `countBlockingDelegations`.
 `BoundViaSidecarDispatch` deliberately — the SAME provenance a genuine
 capture carries — to prove the exclusion is keyed on `Verdict`, not
 provenance.
-`TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim` is the
-end-to-end proof using the real depth-refusal shape
-(`CloseDelegationSkeleton` with `DelegationVerdictAborted`), confirming
-no `--disclaim` is needed or appropriate for this case.
+`TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim` pins the
+same gate at the `Store.Abandon` unit level, confirming no `--disclaim`
+is needed or appropriate for this case — but it hand-calls
+`CloseDelegationSkeleton` directly (its own comment says "simulate"),
+not the real depth gate, and package `mission` cannot import package
+`hook` to drive that gate directly (`hook` already imports `mission`).
+**Correction (2026-09-08 amendment, below): this bullet previously
+called that test "the end-to-end proof," which overstated it (review
+finding K11(b), full-branch review, m-2026-09-08-004 round 3).** The
+actual end-to-end proof —
+`TestHandlePreToolUse_DepthRefusalThenAbandonNeedsNoDisclaim`, added by
+that amendment — lives in package `hook`, drives a real Tier B spawn
+through `enforceDelegationDepth` with the ceiling exceeded, confirms
+the hook itself denies the spawn and closes the skeleton
+`verdict: aborted`, then confirms `Store.Abandon` succeeds with no
+disclaim. The `mission`-package test above remains a real, useful unit
+pin on `Store.Abandon`'s own gate logic — it is just not the end-to-end
+one.
 
 **C4 — `subagent_type` appeared in ZERO test files repo-wide.** Every
 existing hook test drove agent type through `CLAUDE_AGENT_TYPE` with an
@@ -9971,19 +9999,27 @@ impossible. What remains, named plainly:
    only narrowed from "any next spawn of any type" to "a next spawn of
    the SAME type."
 2. **Out-of-order spawning breaks the FIFO assumption — now SIGNALLED,
-   not silent (2026-09-08 addendum below).** If a leader dispatches
-   `m-A` then `m-B` (same Worker) but spawns the worker for `m-B` FIRST
-   — deliberately or by mistake — `matchDispatchPending` still resolves
-   to the OLDEST entry (`m-A`), misattributing `m-B`'s spawn to `m-A`.
-   The FIFO ordering is a reasonable default given `CLAUDE.md`'s own
-   dispatch-then-immediately-spawn protocol, but it is an assumption
-   about operator behavior, not a guarantee enforced by the code. Round
-   3 shipped this gap silent; the 2026-09-08 addendum below adds a
-   stderr warning naming the ambiguity, the candidates, which one was
-   chosen, and that `MISSION_ID` overrides the match — the hazard
-   itself is unchanged (FIFO still resolves to the oldest, disclaim is
-   still the only correction), but it can no longer happen without the
-   operator being told.
+   not silent (2026-09-08 addendum below), and symmetric, not
+   single-sided (review finding K9, full-branch review, m-2026-09-08-004
+   round 3, correcting this item's own prior wording).** If a leader
+   dispatches `m-A` then `m-B` (same Worker) but spawns the worker for
+   `m-B`'s work FIRST — deliberately or by mistake — `matchDispatchPending`
+   still resolves to the OLDEST entry (`m-A`) and consumes it: `m-B`'s
+   work is misattributed to `m-A`. But that consumption also means the
+   leader's SECOND spawn (intended for `m-A`'s work) now matches the
+   only entry left, `m-B` — so `m-A`'s work is misattributed to `m-B`
+   right back. **Two misattributions from one out-of-order pair, a full
+   swap** — the same doubling C1 above names explicitly for its own
+   single-slot-overwrite sequence; this item previously described only
+   the first half. The FIFO ordering is a reasonable default given
+   `CLAUDE.md`'s own dispatch-then-immediately-spawn protocol, but it is
+   an assumption about operator behavior, not a guarantee enforced by
+   the code. Round 3 shipped this gap silent; the 2026-09-08 addendum
+   below adds a stderr warning naming the ambiguity, the candidates,
+   which one was chosen, and that `MISSION_ID` overrides the match — the
+   hazard itself is unchanged (FIFO still resolves to the oldest,
+   disclaim is still the only correction for each half of the swap), but
+   it can no longer happen without the operator being told.
 3. **Persistent filesystem failures degrade multiple guarantees at
    once, not just one.** A truly persistent condition (not transient
    contention) can defeat `consumeDispatchBinding`, `close`/`abandon`'s
