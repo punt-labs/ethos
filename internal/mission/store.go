@@ -576,6 +576,16 @@ func (s *Store) ensureMissionDir(missionID string) error {
 	return nil
 }
 
+// createReadBackHook is a test-only synchronization seam, invoked with
+// the contract's on-disk path right after writeContract succeeds and
+// right before Create reads it back to verify it. Its zero value is a
+// no-op with negligible production cost; the ethos-ouy9 regression test
+// overrides it to corrupt the file at that exact point, proving the
+// read-back actually refuses rather than trusting the write. Mirrors
+// dispatchTierBConfirmedOpen's pattern (internal/hook) for the same
+// class of ordering-sensitive test.
+var createReadBackHook = func(contractPath string) {}
+
 // Create persists a new mission contract. The caller must supply a
 // fully-populated Contract (the server-controlled fields — MissionID,
 // Status, CreatedAt, UpdatedAt, ClosedAt, Evaluator.PinnedAt — can be
@@ -593,26 +603,13 @@ func (s *Store) ensureMissionDir(missionID string) error {
 // Works on a shallow copy of c so a validation failure never mutates
 // the caller's struct. On success, UpdatedAt is reflected back to
 // the caller.
-//
-// createReadBackHook is a test-only synchronization seam, invoked with
-// the contract's on-disk path right after writeContract succeeds and
-// right before Create reads it back to verify it. Its zero value is a
-// no-op with negligible production cost; the ethos-ouy9 regression test
-// overrides it to corrupt the file at that exact point, proving the
-// read-back actually refuses rather than trusting the write. Mirrors
-// dispatchTierBConfirmedOpen's pattern (internal/hook) for the same
-// class of ordering-sensitive test.
-var createReadBackHook = func(contractPath string) {}
-
 func (s *Store) Create(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
-	// Work on a shallow copy so a validation failure never mutates
-	// the caller's struct. The UpdatedAt default-fill and Validate
-	// both touch only the copy. On success we reflect the new
-	// UpdatedAt back to the caller — the one field Create is
-	// contracted to set.
+	// staged is the shallow copy the doc comment above promises: the
+	// UpdatedAt default-fill below and Validate() both touch only this
+	// copy, never c.
 	staged := *c
 	if staged.UpdatedAt == "" {
 		staged.UpdatedAt = staged.CreatedAt
@@ -1128,6 +1125,11 @@ func missingRepoTreeDir(statErr error) bool {
 	return statErr != nil && os.IsNotExist(statErr)
 }
 
+// abandonAfterZeroCountHook is a test-only synchronization seam
+// invoked from inside fn (Abandon's own closure) — see its
+// declaration for what it exercises.
+var abandonAfterZeroCountHook = func() {}
+
 // withAbandonDelegationLock runs fn while holding the repo-tier
 // exclusive per-mission lock (AcquireMissionLockExclusive) — the same
 // lock file a concurrent dispatchTierB acquires SHARED before it
@@ -1175,12 +1177,6 @@ func missingRepoTreeDir(statErr error) bool {
 // — the same reasoning already applied to the repoRoot=="" guard above
 // (djb's probe: "silently trusting the absence of evidence as evidence
 // of absence").
-//
-// abandonAfterZeroCountHook is a test-only synchronization seam
-// invoked from inside fn (Abandon's own closure) — see its
-// declaration for what it exercises.
-var abandonAfterZeroCountHook = func() {}
-
 func (s *Store) withAbandonDelegationLock(missionID string, fn func() error) error {
 	release, err := AcquireMissionLockExclusive(s.repoRoot, missionID)
 	if err != nil {
