@@ -77,12 +77,6 @@ import (
 // (previously by overwriting the shared slot; now via separate,
 // non-destructive storage that lets both coexist).
 func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
-	missionID := os.Getenv("MISSION_ID")
-	if missionID != "" {
-		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv, nil)
-	}
-	agentType := spawnAgentType(toolInput)
-
 	// Review probe finding F3 (m-2026-09-08-004 round 2): two concurrent
 	// Agent() tool calls in the same session — a normal shape, this
 	// org's own conventions call for batching independent tool calls in
@@ -93,6 +87,18 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) erro
 	// second waiter's read interleave with the first caller's
 	// still-pending consume decision. See AcquireDispatchPendingLock's
 	// own doc comment for why this introduces no new deadlock risk.
+	//
+	// Review finding P1 (qodo #2, full-branch review of PR #509,
+	// m-2026-09-08-004 round 3): the explicit-MISSION_ID branch used to
+	// return before this lock was even resolved, so it never consumed a
+	// pending-dispatch entry matching missionID — but explicit
+	// MISSION_ID is a SUPPORTED override (matchDispatchPending's own
+	// ambiguity warning tells the operator to set it to pick a
+	// DIFFERENT pending mission than FIFO would), so following our own
+	// advice left the entry live to capture the next matching-worker
+	// spawn too. The lock is now acquired unconditionally, before
+	// either branch, so both the explicit and the matched path can
+	// consume under it.
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -108,6 +114,12 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) erro
 		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 	defer release()
+
+	if missionID := os.Getenv("MISSION_ID"); missionID != "" {
+		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv,
+			func() { consumeDispatchBinding(sessionID, missionID) })
+	}
+	agentType := spawnAgentType(toolInput)
 
 	if missionID, boundVia := readActiveMissionForDispatch(sessionID, agentType); missionID != "" {
 		var onDispatched func()

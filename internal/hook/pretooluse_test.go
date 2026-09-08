@@ -2377,6 +2377,49 @@ func TestDispatchAgent_ActiveMissionSidecarPrefersEnv(t *testing.T) {
 		"MISSION_ID env must win over the sidecar — the sidecar is a fallback, not an override")
 }
 
+// TestDispatchAgent_ExplicitMissionIDConsumesMatchingPendingEntry pins
+// review finding P1 (qodo #2, full-branch review of PR #509,
+// m-2026-09-08-004 round 3): an explicit MISSION_ID is a SUPPORTED
+// override -- matchDispatchPending's own ambiguity warning tells the
+// operator to set it explicitly to pick a DIFFERENT pending mission
+// than FIFO would. Before this fix, the explicit-MISSION_ID branch
+// never consumed a pending-dispatch entry at all, so following our own
+// advice left the entry live to capture the NEXT matching-worker spawn
+// too -- a second bwk spawn, with nothing to do with the mission the
+// operator explicitly named, would still be silently attributed to it.
+func TestDispatchAgent_ExplicitMissionIDConsumesMatchingPendingEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-09-08-742"
+	stageContract(t, home, missionID) // Worker: "bwk", status: open
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-explicit-consumes-pending"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionID, "bwk"))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"])
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, pending,
+		"an explicit MISSION_ID matching a pending entry must consume it -- otherwise the entry survives to capture the next matching-worker spawn too")
+}
+
 // TestDispatchAgent_ActiveMissionSidecarMalformedFallsThrough asserts
 // the non-blocking contract: a sidecar pointing at a missionID the
 // store cannot Load surfaces the Tier B refusal (named MISSION_ID),
