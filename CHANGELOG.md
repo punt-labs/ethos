@@ -105,11 +105,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round 2 in DESIGN.md for the full decision and security review).
 - **`ethos mission abandon` no longer requires `--disclaim` for a
   delegation that was refused before its worker ever ran.** A
-  delegation with `verdict: aborted` — written only by the
-  `max_delegation_depth` refusal or the content-hash-gate refusal, both
-  of which fire before the spawn happens — is now excluded from
-  Abandon's blocking-delegation gate unconditionally and automatically,
-  independent of `BoundVia` or any disclaim. Before this, a mission
+  delegation with `verdict: aborted` is now excluded from Abandon's
+  blocking-delegation gate unconditionally and automatically,
+  independent of `BoundVia` or any disclaim, wherever it was written —
+  the exclusion holds because every current writer is unreachable from
+  the gate while its mission is still open, not because every writer
+  fires before the worker starts (the `max_delegation_depth` and
+  content-hash-gate refusals do; `Store.Close`'s own sweep does not,
+  but only ever runs once the mission is already non-open, one
+  precondition short of Abandon's own gate). Before this, a mission
   whose only "delegation" was a pre-run refusal still required an
   operator to disclaim it as if it were a genuine dispatch-sidecar
   capture, even though nothing about it needed proving — there was
@@ -189,12 +193,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ethos session purge` (and the repo-scoped `PurgeTombstoned`) now
   also clears a purged session's mission sidecars** — the active-mission
   claim, the delegation-binding sidecar, and every pending dispatch —
-  not only its roster. Before this, only a CLEANLY ended session (normal
-  `SessionEnd`) had its sidecars cleared; a session that ended abnormally
-  (SIGKILL, a closed terminal, a crash) left them in place indefinitely,
-  with no GC path, so `claude --resume` reusing that session ID could
-  have its first matching spawn captured by a stale claim or pending
-  dispatch from before the death. This closes the gap for the next
+  not only its roster, and it clears them even when it REFUSES to
+  remove the roster (unsealed audit lines, or an unreadable roster,
+  without `--force`). Mission sidecars are not audit state, so the
+  tombstone guard that protects unsealed lines has no reason to also
+  protect a stale claim or pending dispatch — and a SIGKILL'd session
+  (the canonical trigger for both) is exactly the scenario most likely
+  to hit that refusal path, not an edge case. Before this, only a
+  CLEANLY ended session (normal `SessionEnd`) had its sidecars cleared;
+  a session that ended abnormally left them in place indefinitely, with
+  no GC path, so `claude --resume` reusing that session ID could have
+  its first matching spawn captured by a stale claim or pending dispatch
+  from before the death. This closes the gap for the next
   `ethos session purge` run, not automatically on every resume — purge
   is still an explicit, operator- or tooling-invoked step.
 - **The `mission dispatch`/`mission create` advisory naming a fresh
