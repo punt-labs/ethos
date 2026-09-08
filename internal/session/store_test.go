@@ -305,6 +305,41 @@ func TestStore_Purge(t *testing.T) {
 	assert.Empty(t, ids)
 }
 
+// TestStore_Delete_SidecarClearFailureKeepsRoster pins review finding
+// J3 (full-branch review, m-2026-09-08-004 round 3), correcting K3: a
+// sidecar-clear failure used to be advisory only -- reported to stderr,
+// with the roster removed regardless. That reopened the exact gap K3
+// closed: once the roster is gone the session is absent from List(), so
+// Purge/PurgeTombstoned never revisit it, permanently orphaning the
+// sidecar with no GC path. deleteFiles must now clear sidecars BEFORE
+// removing the roster and propagate a clear failure instead of
+// swallowing it, so the roster survives as the retry token a later
+// purge needs.
+func TestStore_Delete_SidecarClearFailureKeepsRoster(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	sessionID := "sess-sidecar-clear-fails"
+	require.NoError(t, s.Create(sessionID, root, primary, "", ""))
+	require.NoError(t, mission.WriteActiveMission(s.root, sessionID, "m-2026-09-08-724"))
+
+	// Lock the mission sidecar's own directory (a sibling of the roster
+	// file, not an ancestor of it) so removing the sidecar fails while
+	// removing the roster itself would otherwise still succeed.
+	sidecarDir := filepath.Dir(mission.ActiveMissionPath(s.root, sessionID))
+	require.NoError(t, os.Chmod(sidecarDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(sidecarDir, 0o700) })
+
+	err := s.Delete(sessionID)
+	require.Error(t, err, "a sidecar-clear failure must surface, not be swallowed")
+
+	_, loadErr := s.Load(sessionID)
+	require.NoError(t, loadErr, "the roster must survive a sidecar-clear failure -- it is the retry token a later purge needs")
+}
+
 // TestStore_Purge_ClearsMissionSidecars pins review finding K3's actual
 // scenario: a session that ended abnormally (SIGKILL, closed terminal,
 // crash -- simulated here by a dead PID, exactly what isStale detects)
