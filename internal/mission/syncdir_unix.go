@@ -12,9 +12,13 @@ import "os"
 // this build tag covers.
 //
 // A package-level var, not a plain func, so
-// TestWriteContractFile_SyncDirFailurePropagates can inject a failure
-// deterministically — a real fsync failure on a directory is not
-// something a portable test can otherwise engineer.
+// TestWriteContractFile_SyncDirFailureIsWarnedNotErrored can inject a
+// failure deterministically — a real fsync failure on a directory is
+// not something a portable test can otherwise engineer. The name
+// reflects the current contract (PR #508 round 3, G2/G3): the rename
+// this follows is the commit point, so a syncDir failure is warned to
+// stderr, not returned as an error — dest already holds the correct,
+// complete contract regardless of what syncDir reports.
 var syncDir = func(dir string) error {
 	f, err := os.Open(dir)
 	if err != nil {

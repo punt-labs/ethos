@@ -1849,9 +1849,12 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 // In two-tree storage mode (repoRoot set), this is the repo tree PLUS
 // any open global-tree mission this repo's OWN audit trail references.
 // Ownership is decided by repoMissionIDs — the identical mechanism
-// `ethos mission migrate` already uses: it scans
-// <repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl for contract_id
-// references, which is a reliable per-repo signal even though
+// `ethos mission migrate` already uses: it scans sealed audit chunks,
+// the frozen legacy audit.jsonl, and the live not-yet-sealed tail
+// under <repoRoot>/.punt-labs/ethos/sessions/ (plus, when this repo is
+// a linked worktree, the checkout's own live tail — see repoMissionIDs'
+// doc comment in migrate.go for the full three-source breakdown) for
+// contract_id references, which is a reliable per-repo signal even though
 // Contract.Repo itself is not (measured 2026-09-07: zero of 841
 // global-tree contracts carry a populated Repo field). Mission IDs are
 // allocated from one shared, global, strictly-increasing daily
@@ -1870,11 +1873,13 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 // repo-tree-only scan — a new mission could claim an overlapping
 // write_set against it with nothing to stop it.
 //
-// Cost: repoMissionIDs reads every audit.jsonl line under every
-// session this repo has ever recorded, once per Create. This mirrors
-// the cost `mission migrate` already accepts for the identical scan;
-// unlike migrate, Create pays it on every call, not just an operator-
-// invoked one-off — acceptable for now (creates are infrequent, not a
+// Cost: repoMissionIDs reads every sealed audit chunk and the frozen
+// legacy audit.jsonl (where one still exists) under every session this
+// repo has ever recorded, plus the live tail under both repoRoot and
+// auditRoot()'s checkoutRoot, once per Create. This mirrors the cost
+// `mission migrate` already accepts for the identical scan; unlike
+// migrate, Create pays it on every call, not just an operator-invoked
+// one-off — acceptable for now (creates are infrequent, not a
 // per-tool-call hot path), but a real cost worth remembering if this
 // repo's session history grows large enough to make it visible.
 //

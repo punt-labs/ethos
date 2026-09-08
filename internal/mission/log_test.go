@@ -518,18 +518,6 @@ func TestLoadEvents_PermissionDenied(t *testing.T) {
 	assert.Contains(t, strings.ToLower(err.Error()), "permission")
 }
 
-// TestLoadEvents_FollowsSymlink_KnownWeaknessMatchesStoreLoad
-// documents the deliberate carry of a known weakness shared across
-// all four loaders. os.ReadFile follows symlinks, so a symlink
-// planted at the mission log path whose target is an attacker-
-// controlled file outside missionsDir is read as if it were the
-// mission's log. LoadEvents does not tighten this alone: the fix
-// must land uniformly across Store.Load, LoadReflections,
-// LoadResults, and LoadEvents, otherwise the asymmetry is worse
-// than the current consistent weakness. See bead ethos-jjm for the
-// follow-up that hardens all four loaders together.
-//
-// This test pins the current behavior so the follow-up is an
 // TestLoadEvents_RejectsSymlink asserts that LoadEvents refuses to
 // follow a symlink at the log path. Symlinks are a local-attacker
 // vector: pointing a log file outside the missions directory would
