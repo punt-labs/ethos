@@ -2442,6 +2442,61 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumes
 		"a consumed dispatch binding must not resurrect itself for a later spawn")
 }
 
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UsesToolInputSubagentType
+// is review finding C4 (m-2026-09-08-004 round 2): `subagent_type`
+// appeared in ZERO test files repo-wide before this test, even though
+// it is spawnAgentType's PRIMARY input and the one a real leader
+// Agent() call actually sets — every prior test drove agent type
+// through CLAUDE_AGENT_TYPE with an empty tool_input, leaving the
+// tool_input branch (and therefore its precedence over the env var)
+// completely unexercised. Sets subagent_type and CLAUDE_AGENT_TYPE to
+// DIFFERENT values and asserts both that the pending-dispatch match
+// uses subagent_type, and that the written record.yaml's AgentType
+// field also reflects it, not the env var.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UsesToolInputSubagentType(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-09-08-706"
+	stageContract(t, home, missionID) // Worker: "bwk"
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-dispatch-tool-input"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionID, "bwk"))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "mdm") // deliberately DIFFERENT from tool_input
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payloadMap := map[string]any{
+		"tool_name":  "Agent",
+		"tool_input": map[string]any{"subagent_type": "bwk"},
+		"session_id": sessionID,
+	}
+	data, err := json.Marshal(payloadMap)
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(bytes.NewReader(data), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"the match must use tool_input's subagent_type ('bwk'), not CLAUDE_AGENT_TYPE ('mdm')")
+
+	delegationID := r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"]
+	require.NotEmpty(t, delegationID)
+	recordPath := filepath.Join(mission.DelegationDir(repo, missionID, delegationID), "record.yaml")
+	d, err := mission.LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, "bwk", d.AgentType,
+		"the written delegation record must carry tool_input's subagent_type, not the env var")
+}
+
 // TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_TwoPendingSameWorkerCoexist
 // is the direct regression test for review finding C1 (m-2026-09-08-004
 // round 2), reproducing the leader's own repro sequence: two missions

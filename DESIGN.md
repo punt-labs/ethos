@@ -9388,7 +9388,7 @@ history — not merged to the main tree — is now caught by
 `create`/`dispatch`'s admission control; it previously was not. See
 `CHANGELOG.md` under `[Unreleased]`.
 
-## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (SETTLED)
+## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (AMENDED 2026-09-08 — round 3)
 
 **Context.** DES-075's "Consequence for ethos-7tqd" section named this
 as follow-up work outside PR #508's write-set. Reproduced live
@@ -9671,9 +9671,11 @@ MCP-driven leader had no way to learn a binding existed at all, let
 alone which worker it was scoped to. Fixed to match the CLI exactly:
 `bindDispatchedMission` now takes `worker` and reports the binding
 unconditionally (`TestHandleMission_CreateFreshBindNamesWorker`), and
-the rebind message names the worker too
-(`TestHandleMission_CreateRebindsWarnsOnDifferentMission`, updated to
-expect both messages).
+the rebind message names the worker too. Superseded by round 3 below:
+the "rebind" case this test covered no longer exists at all (the test
+is now `TestHandleMission_CreateCoexistsWithExistingClaim`), because
+round 3 replaced the shared slot this finding's fix still lived on top
+of.
 
 **F6 (the load-bearing one).** `ClearActiveMission`
 (`internal/mission/active.go`) removed both sidecar files
@@ -9693,3 +9695,291 @@ active-mission removal to fail via a non-empty directory in its place
 under a root-running test process, the same lesson this repo's own
 DES-075 F6 amendment already applied elsewhere) and confirmed failing
 against the pre-fix `errors.Join` version before landing the fix.
+
+### Amendment 2026-09-08: round 3 (m-2026-09-08-004 round 2) — three local reviewers, 13 findings against round 1's code, 2 critical, 1 merge-blocker
+
+Round 1 and round 2 above were reviewed against `3cf6bf4` (round 1's
+commit) rather than the code that had already landed by the time review
+completed. Three critical/blocker findings (C1–C3) required a genuine
+redesign, not a patch; the rest (C4–C13) were coverage gaps and stale
+prose. This amendment corrects the record rather than appending a
+second, contradicting story: **the "one dispatch, one binding, one
+consuming spawn — the sidecar cannot outlive the worker it was written
+for" sentence in round 1's decision above was FALSE**, and C1 is the
+proof.
+
+**C1 (CRITICAL, independently verified).** `bindDispatchedMission`
+called `WriteActiveMissionOrigin` unconditionally, and the single
+active-mission slot could hold only ONE dispatch binding at a time.
+Sequence: dispatch `m-A` (worker `bwk`) → sidecar holds `(m-A,
+dispatch)`; dispatch `m-B` (worker `bwk`) before `m-A`'s worker ever
+spawns → sidecar now holds `(m-B, dispatch)`, **`m-A`'s binding is
+gone, silently**; the leader's next `bwk` spawn (intended for `m-A`)
+matches `m-B`'s Worker instead and files under `m-B`; `m-B`'s own
+eventual worker spawn finds no binding at all and goes unattributed
+(Tier A). Two misattributions from one ordinary sequence — and this
+repo pins ONE handle per specialty domain (`bwk` for every Go internals
+mission per `CLAUDE.md`'s own delegation table), so back-to-back
+same-worker dispatch is the NORMAL workflow here, not a corner case.
+The declared-Worker discriminator round 1 introduced had zero
+discriminating power in precisely the situation this repo generates
+most.
+
+**C2 (CRITICAL).** `ReadActiveMissionBinding` defaults to
+`BindOriginClaim` when the origin file is absent, truncated, or names a
+different mission — correct when `claim` was the *restrictive* origin
+(pre-DES-076), now dangerous once `claim` became the *permissive* one:
+sticky, ungated by agent type, and (per `commit_trailers.go`)
+trailer-eligible. A lost suppression now costs the ENTIRE capture gate
+and restores the full pre-DES-076 bug, not just a stray trailer. The
+round-2 addendum sharpened this further: the most likely producer of
+the failed-clear state was not an exotic filesystem fault but DES-076's
+OWN success path — `consumeDispatchBinding` calling `ClearActiveMission`
+and only logging a failure to unlink one of the two files. **DES-076's
+own consume path could, on a single failed unlink, restore both of the
+bugs it was written to close.**
+
+**C3 (MERGE-BLOCKER).** `dispatchedWorker` discarded both the
+store-resolution and contract-`Load` errors, and the caller folded
+`!ok` into the mismatch branch. A corrupt or deleted contract for the
+GENUINELY dispatched worker produced the identical output as an actual
+mismatch — `... is bound to m-X for worker "", but this spawn is "bwk"
+— not the dispatched worker`. The spawn WAS the dispatched worker; the
+message sent the diagnosis in the wrong direction, and the real
+worker's delegation was permanently absent from the audit trail with no
+signal why.
+
+**The fix: key the pending binding by MISSION, not by a single
+overwritable slot** (the leader's own two offered options were "refuse
+a second dispatch while one is outstanding" or "key the sidecar by
+mission so N bindings coexist" — the latter was chosen because refusing
+would make this repo's own normal same-handle-dispatch workflow fail
+outright). `internal/mission/active.go` gains a `dispatch-pending/`
+directory under each session — one file per pending dispatch, named by
+mission ID, content the Worker handle recorded at dispatch time.
+`ReadDispatchPending` lists them oldest-first (file mtime); a matching
+Agent() spawn resolves to the OLDEST entry whose Worker matches — the
+natural reading of `CLAUDE.md`'s own two-step dispatch-then-spawn
+protocol, since a leader dispatches A, then B, in that order, and
+(absent an out-of-order spawn — see the residual risk below) spawns
+their workers in the same order.
+
+This single change resolves all three critical findings, not by
+patching each in isolation but by removing the shared, ambiguous
+storage all three findings were symptoms of:
+
+- **C1 is closed structurally.** Two pending dispatches to the same
+  Worker are two files, not one slot fighting over the same bytes.
+  `TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_TwoPendingSameWorkerCoexist`
+  reproduces the leader's own repro sequence directly and asserts both
+  missions resolve correctly across two sequential matching spawns.
+- **C2 no longer applies to dispatch bindings at all.** Nothing but
+  `ethos mission claim` writes to the active-mission/origin pair
+  anymore (`cmd/ethos/mission.go`'s and `internal/mcp/mission_tools.go`'s
+  `bindDispatchedMission` both write `WriteDispatchPending` instead), so
+  the "defaults to claim on ambiguity" behavior — which was the actual
+  bug once a shared file also carried dispatch state — is now always
+  the correct answer, because nothing else is ever found there. The
+  fix is the removal of the shared encoding, not a change to the
+  default direction, which is why this ADR does not claim to have
+  "inverted the reader's failure direction" as the finding first
+  suggested: there is no longer a decision to invert. `ConsumeDispatchPending`
+  is a single-file removal with no paired-file consistency question a
+  partial failure could leave mismatched — C2's whole class does not
+  exist for the new store.
+- **C3 is closed by removing the function that discarded the error.**
+  `dispatchedWorker` is deleted. Matching a spawn against a pending
+  dispatch needs no contract `Load` at all — the Worker was already
+  recorded in the pending file — so there is no ambiguous
+  Load-failure-during-matching state to swallow. A contract that fails
+  to load for an ALREADY-MATCHED pending dispatch is now handled by
+  `dispatchTierB`'s own existing Load-and-block gate, exactly like an
+  explicit `MISSION_ID` naming an unloadable contract. This is a
+  **deliberate, documented doctrine revision** from round 1: round 1's
+  "never block the ambient bridge" rule applied to the PRE-match
+  uncertainty of a Load-dependent matcher, where a Load failure was
+  genuinely ambiguous (mismatch, or unresolvable match?); once a match
+  is certain without a Load, a subsequently unloadable contract is a
+  real, actionable problem for THIS spawn specifically, not ambient
+  noise sitting behind every spawn in the session. Round 1's own test
+  asserting the opposite (`..._UnresolvableContractDoesNotBlock`) is
+  replaced by `..._MatchedButUnresolvableContractBlocks`, asserting the
+  new behavior and confirmed against the doctrine change directly.
+
+**C7 — depth-refused (aborted) skeletons blocked `Abandon` exactly like
+captures, and disclaim couldn't tell them apart.** A matching spawn
+writes the delegation skeleton, then `enforceDelegationDepth` refuses
+and closes it `verdict: aborted` — the binding is not consumed
+(correct), so a retry writes a SECOND record, and `Abandon`'s gate
+blocked on any entry regardless of verdict: a mission where no spawn
+ever ran could become permanently un-abandonable. Worse, the round 2
+disclaim gate (`BoundVia == active_mission_sidecar_dispatch` + `Verdict
+!= open`) would have accepted an aborted, genuinely-dispatched
+delegation as if it were a capture — provenance alone cannot
+distinguish "dispatched then refused before running" from "dispatched,
+ran, and was wrongly attributed," since both currently produce
+`BoundVia: active_mission_sidecar_dispatch`.
+
+**Decision: exclude `verdict == aborted` from `Abandon`'s blocking gate
+unconditionally, independent of `BoundVia` or any disclaim.** This is
+mechanical, not a heuristic: `DelegationVerdictAborted` is written by
+exactly two call sites in this codebase
+(`pretooluse_dispatch.go`'s depth-gate refusal,
+`subagent_start.go`'s hash-gate refusal), both of which fire BEFORE the
+worker process starts — genuinely zero work, always. A third write site
+(`Store.Close`'s escalate-result sweep) cannot appear on any delegation
+`countBlockingDelegations` ever reads, because that sweep only runs
+once the mission is already non-open, and `countBlockingDelegations` is
+only ever called from `Abandon`'s gate, which itself refuses before
+reaching this check unless the mission is `StatusOpen`.
+
+Rejected alternative: a distinct `BoundVia` value for
+"dispatched-then-refused." Provenance describes HOW a delegation was
+bound, not WHETHER its worker ran — the field that already answers that
+question is `Verdict`, and it already has the right value. Minting a
+new provenance value to duplicate information `Verdict` already carries
+would proliferate `BoundVia` values for every future refusal reason.
+
+Rejected alternative: narrowing `DisclaimDelegationRecord`'s own gate to
+require `Verdict == aborted` specifically (rather than merely
+`!= open`). This would defeat the disclaim mechanism's PRIMARY use
+case: a genuinely captured delegation is one whose spawn ran to normal
+completion (`pass`/`fail`/`error`) under the wrong mission —
+ethos-7tqd's own reproduction was an unrelated PR-fix agent that ran
+and finished, not one refused before it started. Disclaim's `!= open`
+check is untouched; the aborted exclusion is independent of it, sitting
+one level up in `countBlockingDelegations`.
+
+`TestCountBlockingDelegations_ExcludesAbortedUnconditionally` uses
+`BoundViaSidecarDispatch` deliberately — the SAME provenance a genuine
+capture carries — to prove the exclusion is keyed on `Verdict`, not
+provenance.
+`TestStore_Abandon_SucceedsAfterDepthRefusalWithNoDisclaim` is the
+end-to-end proof using the real depth-refusal shape
+(`CloseDelegationSkeleton` with `DelegationVerdictAborted`), confirming
+no `--disclaim` is needed or appropriate for this case.
+
+**C4 — `subagent_type` appeared in ZERO test files repo-wide.** Every
+existing hook test drove agent type through `CLAUDE_AGENT_TYPE` with an
+empty `tool_input`, leaving the discriminator's PRIMARY input — what a
+real leader `Agent()` call actually sets — completely untested; deleting
+the `tool_input` branch from `spawnAgentType` would have left the whole
+suite green.
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UsesToolInputSubagentType`
+sets `subagent_type` and `CLAUDE_AGENT_TYPE` to DIFFERENT values and
+asserts both that the pending-dispatch match uses `subagent_type` and
+that the written `record.yaml`'s `AgentType` field reflects it.
+
+**C5 — `spawnAgentType`'s "shared" doc-comment claim was false when
+reviewed**, `dispatchTierB` inlined a duplicate at the exact call site
+the comment claimed called the helper. Already resolved incidentally
+when round 2 wired `BoundVia` through that same call site (verified by
+`grep -n 'agentType' internal/hook/pretooluse_dispatch.go` showing a
+single definition and two call sites, both through `spawnAgentType`).
+
+**C6 — `HandleSessionEnd` never cleared any mission binding.**
+`claude --resume` reuses the session ID, so a claim or pending dispatch
+left over from before a session ended survived into the resumed session
+and could capture an entirely unrelated later spawn or commit — C1's
+misattribution class, triggered by session resumption instead of
+back-to-back dispatch. Fixed: session end now clears the session's
+claim and every pending dispatch, the same scope `ethos mission
+release` clears.
+`TestHandleSessionEnd_ClearsMissionBindings` confirmed failing against
+the pre-fix `HandleSessionEnd` (both bindings survived) before landing.
+
+**C9 — `consumeDispatchBinding`'s failure messaging understated the
+consequence and omitted the remedy; the round-2 addendum added that
+`ClearMissionBindings` (the mission's own `close`/`abandon` cleanup)
+shares the identical failure mode.** Fixed the message to say the
+capture is unbounded under a persistent failure (not "one extra
+spawn") and to name `ethos mission release`. The doc comment goes
+further, per the addendum: `close`/`abandon`'s own cleanup and
+`mission release` both remove the same file through the same
+`os.Remove` call the original failure came from, so neither is a
+GUARANTEED fix under a truly persistent condition (EACCES, a full
+disk) — the genuine remedy in that case is fixing the filesystem
+condition directly, not retrying a different `ethos` command that
+shares the same failure mode. This is stated explicitly rather than
+implied, per the leader's standing rule that an ADR overstating its own
+remedies is worse than one admitting the gap.
+
+**C10 — the MCP surface (`internal/mcp/mission_tools.go`) still
+narrated pre-DES-076 semantics** in three places (two doc comments, one
+operator-facing warning string) even after round 1's own F1 fix,
+because the F1 fix predated round 3's storage redesign and had not been
+re-synced. `bindDispatchedMission`'s MCP twin now writes
+`WriteDispatchPending` exactly like the CLI, and its doc comment and
+warning text were rewritten in the same edit that changed its
+behavior, not left to drift again.
+
+**C11 — `internal/hook/commit_trailers.go`'s doc comment still said
+dispatch "files the next spawn's delegation under the right mission"**
+via the SAME active-mission sidecar this comment was describing.
+Corrected to name the pending-dispatch store instead.
+
+**C12 — `staleBindingReason`'s doc comment claim ("belongs to
+dispatchTierB, which refuses the spawn") was flagged as false for
+dispatch-origin bindings under round 1's code.** Moot after the round 3
+redesign: `staleBindingReason` is now called ONLY from the claim
+branch of `readActiveMissionForDispatch` (`matchDispatchPending` does
+not call it at all — no `Load` is needed to match a pending dispatch),
+so the original claim is accurate again for the only remaining caller.
+The doc comment now states this explicitly rather than leaving it
+implicit.
+
+**C13 — stale-binding warnings omitted `ethos mission release`, the
+actual remedy.** The claim-path warning in `readActiveMissionForDispatch`
+now names it. `warnNonOpenMissionID` deliberately does NOT: every
+caller of that function names its mission from the `MISSION_ID`
+environment variable (inherited by ordinary OS process-environment
+inheritance, not a sidecar file) or the `parent_delegation` inheritance
+walk — `mission release` only clears the claim slot and the
+pending-dispatch store, and would change neither source. Adding it
+there would be a false remedy, not a helpful one; this is stated
+explicitly in that function's doc comment rather than silently
+complying with the finding where it does not actually apply.
+
+**Honest residual-risk enumeration (the leader's explicit requirement
+after C1 falsified round 1's "cannot outlive the worker it was written
+for" claim).** This ADR does NOT claim the capture class is now
+impossible. What remains, named plainly:
+
+1. **Same-Worker-type, different-task capture** (named since round 1,
+   unchanged by round 3): a spawn whose agent type happens to equal a
+   pending dispatch's Worker, but whose actual task is unrelated to
+   that mission, still matches and is captured. The disclaim mechanism
+   (round 2) exists specifically because this case is not eliminated,
+   only narrowed from "any next spawn of any type" to "a next spawn of
+   the SAME type."
+2. **Out-of-order spawning breaks the FIFO assumption.** If a leader
+   dispatches `m-A` then `m-B` (same Worker) but spawns the worker for
+   `m-B` FIRST — deliberately or by mistake — `matchDispatchPending`
+   still resolves to the OLDEST entry (`m-A`), misattributing `m-B`'s
+   spawn to `m-A`. The FIFO ordering is a reasonable default given
+   `CLAUDE.md`'s own dispatch-then-immediately-spawn protocol, but it
+   is an assumption about operator behavior, not a guarantee enforced
+   by the code. No mitigation beyond disclaim (round 2) is implemented
+   for this case in round 3.
+3. **Persistent filesystem failures degrade multiple guarantees at
+   once, not just one.** A truly persistent condition (not transient
+   contention) can defeat `consumeDispatchBinding`, `close`/`abandon`'s
+   own cleanup, AND `ethos mission release` identically, since all
+   three remove pending-dispatch files through the same underlying
+   `os.Remove` call (C9). The only real remedy in that case is fixing
+   the filesystem condition itself.
+4. **Hand-edited or corrupted pending-dispatch files are not
+   cryptographically verified.** A pending-dispatch file's Worker field
+   is plain text with no integrity check; an operator (or a bug) that
+   hand-edits or corrupts one could cause a false match or a false
+   non-match. This is the same trust boundary every other git-tracked
+   or session-local ethos state already accepts — this round does not
+   change it in either direction, and does not claim to.
+
+None of these four are new gaps introduced by round 3 — three (1, 3, 4)
+existed in some form since round 1 or round 2 and were previously
+described in language that undersold them ("cannot outlive," "at most
+one more spawn"); the fourth (2) is a genuinely new tradeoff the
+per-mission redesign introduces in exchange for closing C1. All four
+are now named in the same document that claims the fix, rather than
+requiring a future reviewer to discover them independently.

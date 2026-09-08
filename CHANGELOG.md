@@ -81,12 +81,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the moment the leader's own unrelated work ran (reproduced live
   2026-09-07: a probe mission attributed the leader's own PR-fix agent).
   `ethos mission create`/`dispatch` still print the binding they take,
-  on every bind, now naming the worker it is scoped to; the message no
-  longer claims the binding captures "the next spawn... even if
-  unrelated," since it no longer does (ethos-7tqd; see DES-076 in
-  DESIGN.md for the full binding-lifetime decision). A narrower residual
-  case remains — a same-type spawn for unrelated work — and its
-  abandon-side cleanup is the next entry.
+  on every bind, now naming the worker it is scoped to. A narrower
+  residual case remains — a same-type spawn for unrelated work — and
+  its abandon-side cleanup is a later entry below. **The initial fix
+  (worker-matching against a single, shared binding slot) was itself
+  incomplete** — see the round-3 entry near the end of this section for
+  the corrected design (per-mission, not per-session, binding storage).
 - **`ethos mission abandon` can now retire a mission whose only
   delegation was wrongly attributed to it by the dispatch-sidecar
   capture above**, via a new `--disclaim <delegation-id>` flag (CLI) and
@@ -103,6 +103,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate is completely untouched — a mission with a submitted result
   still refuses regardless of any disclaim (ethos-7tqd; see DES-076
   round 2 in DESIGN.md for the full decision and security review).
+- **Two `ethos mission dispatch --worker <same handle>` calls to
+  DIFFERENT missions before either worker spawned no longer
+  misattribute both spawns.** The dispatch-binding fix above bound the
+  session to only ONE mission at a time; a second dispatch to the same
+  Worker before the first spawn silently discarded the first mission's
+  binding, so the eventual first-mission spawn filed under the SECOND
+  mission and the second mission's own spawn went unattributed
+  entirely. This repo pins one specialist handle per domain (e.g. `bwk`
+  for every Go internals mission), so this was the normal
+  back-to-back-dispatch workflow, not an edge case. Pending dispatch
+  bindings are now keyed per MISSION, not per session, so any number of
+  pending dispatches to the same Worker coexist and resolve in dispatch
+  order (oldest first) as their matching spawns occur. `claude --resume`
+  reusing a session ID also no longer inherits a stale claim or pending
+  dispatch from before the session ended (ethos-7tqd; see DES-076's
+  round 3 amendment in DESIGN.md, including an explicit accounting of
+  what residual risk this does and does not close).
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`

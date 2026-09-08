@@ -222,11 +222,16 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 // sessions dir, a full disk) leaves the entry capturing every future
 // spawn of this Worker for as long as the underlying condition holds
 // (review finding F4/C9, unbounded, not "one extra spawn"). The
-// mission's own `close`/`abandon` clears its own entry precisely
-// (ClearMissionBindings); a stuck entry for a DIFFERENT mission, or one
-// this mission's own close cannot reach because the same persistent
-// condition blocks that too, needs `ethos mission release`, which
-// clears every pending dispatch in the session unconditionally.
+// mission's own `close`/`abandon` also clears its own entry precisely
+// (ClearMissionBindings), and `ethos mission release` clears every
+// pending dispatch in the session unconditionally — but review finding
+// C9's addendum (m-2026-09-08-004 round 2) is the reason neither is
+// named here as a GUARANTEED fix: both remove the same file through the
+// same os.Remove call this function's own failure came from, so a truly
+// persistent condition (not a transient contention blip) defeats all
+// three identically. The genuine remedy in that case is fixing the
+// underlying filesystem condition directly, not retrying a different
+// ethos command that shares the same failure mode.
 func consumeDispatchBinding(sessionID, missionID string) {
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {
@@ -249,6 +254,11 @@ func consumeDispatchBinding(sessionID, missionID string) {
 // staleBindingReason reports why the sidecar's mission cannot take a
 // new delegation, or "" when it can. Only one shape is stale: a
 // contract that loads and is no longer open.
+//
+// Since DES-076 round 3 this is called ONLY for a CLAIM-origin binding
+// (readActiveMissionForDispatch's claim branch); dispatch-pending
+// matching no longer calls it at all — see matchDispatchPending's own
+// doc comment for why a Load is not needed to match a pending dispatch.
 //
 // A store or contract that will not resolve is deliberately NOT
 // treated as stale. That case belongs to dispatchTierB, which refuses
@@ -284,6 +294,19 @@ func nonOpenReason(status string) string {
 // readActiveMissionForDispatch's stale-sidecar warning: same shape
 // (names the session, the mission, and the remedy), worded for an
 // explicit MISSION_ID rather than a claimed sidecar.
+//
+// Deliberately does NOT suggest `ethos mission release` (review
+// finding C13, m-2026-09-08-004 round 2, considered and rejected for
+// this specific function): every caller of this function names
+// missionID from either the MISSION_ID environment variable
+// (inherited by ordinary OS process-environment inheritance across a
+// resumed subagent's later tool calls) or the parent_delegation
+// inheritance walk — neither is a sidecar file, so `mission release`
+// (which only clears the claim slot and the pending-dispatch store)
+// would not change either source and would be a false remedy. The
+// claim-path warning in readActiveMissionForDispatch DOES name
+// `mission release`, correctly, because that one IS about a clearable
+// sidecar.
 func warnNonOpenMissionID(sessionID, missionID, reason string) {
 	fmt.Fprintf(os.Stderr,
 		"ethos: pre-tool-use: MISSION_ID: session %q named %s but %s; "+

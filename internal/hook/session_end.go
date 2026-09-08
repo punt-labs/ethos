@@ -4,14 +4,30 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // HandleSessionEnd reads the SessionEnd hook payload from stdin,
-// deletes the session roster, and cleans up the PID-keyed current file.
+// deletes the session roster, cleans up the PID-keyed current file, and
+// clears the session's mission bindings.
+//
+// Review finding C6 (m-2026-09-08-004 round 2): `claude --resume`
+// reuses the session ID, so without this a claim or pending dispatch
+// left over from before the session ended survived into the resumed
+// session and could capture an entirely unrelated later spawn or
+// commit — the same class of stale-binding risk this whole ADR exists
+// to close, triggered by session resumption instead of back-to-back
+// dispatch. A session ending is treated the same as an explicit
+// `ethos mission release`: every claim and pending dispatch for this
+// session ID is cleared, so a resumed session starts with no
+// inherited attribution. Best-effort and non-fatal, matching every
+// other cleanup step here — a failure here must not stop the roster
+// deletion that follows.
 func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
@@ -23,6 +39,8 @@ func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 		return nil
 	}
 
+	clearSessionMissionBindings(sessionID)
+
 	if err := ss.Delete(sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to delete session %s: %v\n", sessionID, err)
 	}
@@ -33,4 +51,24 @@ func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 	}
 
 	return nil
+}
+
+// clearSessionMissionBindings clears sessionID's claim and every
+// pending dispatch — the same scope `ethos mission release` clears —
+// so a resumed session (C6) never inherits attribution from before it
+// ended. Advisory: errors are reported to stderr, never returned,
+// matching HandleSessionEnd's own non-fatal cleanup discipline.
+func clearSessionMissionBindings(sessionID string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-end: user home dir: %v\n", err)
+		return
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-end: clearing active mission for %q: %v\n", sessionID, err)
+	}
+	if err := mission.ClearDispatchPending(globalRoot, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-end: clearing dispatch-pending for %q: %v\n", sessionID, err)
+	}
 }
