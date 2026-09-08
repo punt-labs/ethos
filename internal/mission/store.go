@@ -1177,6 +1177,14 @@ var abandonAfterZeroCountHook = func() {}
 // — the same reasoning already applied to the repoRoot=="" guard above
 // (djb's probe: "silently trusting the absence of evidence as evidence
 // of absence").
+//
+// DES-076 round 2: DisclaimDelegation also nests inside this lock for
+// the identical reason Abandon does — it mutates a delegation record
+// under the same repo-tier directory Abandon's gate 1 reads, so the two
+// must never observe or commit past each other's half-finished state.
+// The name stays Abandon-specific because Abandon is still the primary
+// caller and the one this doc comment's history is about; a disclaim
+// is, in effect, a small mutation in service of a later Abandon call.
 func (s *Store) withAbandonDelegationLock(missionID string, fn func() error) error {
 	release, err := AcquireMissionLockExclusive(s.repoRoot, missionID)
 	if err != nil {
@@ -1324,22 +1332,28 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 				missionID, c.Status,
 			)
 		}
-		// Gate 1: zero delegation records. Any entry under
+		// Gate 1: zero BLOCKING delegation records. Any entry under
 		// delegations/ — open, closed, any verdict — means a worker
-		// was actually spawned against this contract. That is real
-		// work; Close's result gate, not Abandon, is the correct
-		// arbiter of whether it may retire.
+		// was actually spawned against this contract, and blocks
+		// Abandon UNLESS an operator has explicitly disclaimed it via
+		// DisclaimDelegation (DES-076 round 2: a mechanically-gated,
+		// per-delegation, evidence-checked exception for a delegation
+		// proven to be a dispatch-sidecar capture — never a blanket
+		// bypass; see DESIGN.md). Every non-disclaimed delegation is
+		// still real work; Close's result gate, not Abandon, is the
+		// correct arbiter of whether IT may retire.
 		//
 		// A missing repoRoot must REFUSE, not skip: an empty
-		// s.repoRoot means countDelegations has no directory to look
-		// under, so "no delegations found" would be indistinguishable
-		// from "delegations exist but we didn't check." djb's probe
-		// proved the earlier `if s.repoRoot != ""` guard let a mission
-		// with a real spawned worker abandon cleanly with no error
-		// when repoRoot was empty — silently trusting the absence of
-		// evidence as evidence of absence. Fail closed instead: the
-		// operator gets an actionable error naming the fix (run from
-		// inside the repo checkout), not a silently unsafe abandon.
+		// s.repoRoot means countBlockingDelegations has no directory to
+		// look under, so "no delegations found" would be
+		// indistinguishable from "delegations exist but we didn't
+		// check." djb's probe proved the earlier `if s.repoRoot != ""`
+		// guard let a mission with a real spawned worker abandon
+		// cleanly with no error when repoRoot was empty — silently
+		// trusting the absence of evidence as evidence of absence. Fail
+		// closed instead: the operator gets an actionable error naming
+		// the fix (run from inside the repo checkout), not a silently
+		// unsafe abandon.
 		if s.repoRoot == "" {
 			return fmt.Errorf(
 				"mission %q cannot be abandoned: no repo root in scope, so the "+
@@ -1356,19 +1370,23 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 		// delegation record under a DIFFERENT lock file than the one
 		// this method's outer s.withLock takes, so without this nested
 		// acquisition a delegation could land in the window between
-		// countDelegations returning 0 and writeContract committing
-		// StatusAbandoned (ethos-lj4k).
+		// countBlockingDelegations returning 0 and writeContract
+		// committing StatusAbandoned (ethos-lj4k). The same lock is now
+		// also held by DisclaimDelegation, so a disclaim can never land
+		// in that same window either (DES-076 round 2).
 		return s.withAbandonDelegationLock(missionID, func() error {
-			n, dErr := countDelegations(s.repoRoot, missionID)
+			n, dErr := countBlockingDelegations(s.repoRoot, missionID)
 			if dErr != nil {
 				return fmt.Errorf("abandon: checking delegations for %q: %w", missionID, dErr)
 			}
 			if n > 0 {
 				return fmt.Errorf(
-					"mission %q cannot be abandoned: %d delegation record(s) exist under delegations/; "+
-						"a worker was spawned, so this mission may have recoverable work — "+
-						"submit a result and run `ethos mission close %s` instead",
-					missionID, n, missionID,
+					"mission %q cannot be abandoned: %d delegation record(s) exist under delegations/ "+
+						"and are not disclaimed; a worker was spawned, so this mission may have "+
+						"recoverable work — submit a result and run `ethos mission close %s` instead, "+
+						"or run `ethos mission abandon %s --disclaim <delegation-id>` if you can prove "+
+						"a specific delegation was a dispatch-sidecar capture",
+					missionID, n, missionID, missionID,
 				)
 			}
 			// Test-only seam: invoked after countDelegations has returned
@@ -1449,6 +1467,90 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
 	}
 	return abandoned, nil
+}
+
+// DisclaimDelegation marks a single, operator-named delegation as
+// disclaimed, removing it from Abandon's gate-1 count
+// (countBlockingDelegations) without weakening the gate itself
+// (DES-076 round 2; see DESIGN.md for the full decision, rejected
+// alternatives, and security review). It does not retire the mission
+// — a caller still runs Abandon afterward once every blocking
+// delegation is either genuinely absent or disclaimed.
+//
+// The eligibility check is entirely mechanical and lives in
+// DisclaimDelegationRecord (delegation.go): BoundVia must be exactly
+// BoundViaSidecarDispatch, Verdict must not be open, and the
+// delegation must not already be disclaimed. This method supplies the
+// locking and audit-trail discipline around that check — modeled
+// directly on Abandon for the same reasons Abandon itself gives:
+// reason is required and redacted before it touches disk, and every
+// precondition is checked before any mutation so a refusal never
+// leaves a half-written record.
+//
+// Locked exactly like Abandon's own gate-1-and-commit sequence
+// (withAbandonDelegationLock, nested inside s.withLock) so a disclaim
+// and a concurrent Abandon call can never read or commit past each
+// other's half-finished state — see that method's doc comment.
+//
+// A successful disclaim appends a "disclaim_delegation" event to the
+// mission's own append-only log (Actor: the contract's Leader, mirrring
+// Abandon's own event) naming the delegation, its provenance, and the
+// reason — the audit record of who disclaimed what and why.
+func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Delegation, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("disclaim: reason is required")
+	}
+	if containsControlChar(reason) {
+		return nil, fmt.Errorf("disclaim: reason contains control character")
+	}
+	if s.repoRoot == "" {
+		return nil, fmt.Errorf(
+			"disclaim: no repo root in scope; run from inside the repo checkout",
+		)
+	}
+	// Built before the lock, mirroring Abandon's own construction order
+	// and rationale: NewPathRedactor depends only on s.repoRoot and the
+	// environment, so there is no reason to defer it, and validating it
+	// here means a redactor failure happens before any mutation.
+	redact, err := NewPathRedactor(s.repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("disclaim: building path redactor: %w", err)
+	}
+	var disclaimed *Delegation
+	err = s.withLock(missionID, func() error {
+		c, _, lErr := s.loadLocked(missionID)
+		if lErr != nil {
+			return lErr
+		}
+		if c.Status != StatusOpen {
+			return fmt.Errorf(
+				"mission %q is %q; disclaim only applies to an open mission awaiting abandon",
+				missionID, c.Status,
+			)
+		}
+		return s.withAbandonDelegationLock(missionID, func() error {
+			now := time.Now().UTC().Format(time.RFC3339)
+			d, dErr := DisclaimDelegationRecord(s.repoRoot, missionID, delegationID, redact, reason, now)
+			if dErr != nil {
+				return dErr
+			}
+			disclaimed = d
+			return s.appendEventLocked(missionID, Event{
+				TS:    now,
+				Event: "disclaim_delegation",
+				Actor: c.Leader,
+				Details: redact.Map(map[string]any{
+					"delegation_id": delegationID,
+					"bound_via":     d.BoundVia,
+					"reason":        reason,
+				}),
+			})
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return disclaimed, nil
 }
 
 // ForceReleaseWriteSet marks an open mission's write_set/extract_into
@@ -1657,12 +1759,21 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 }
 
 // countDelegations returns the number of delegation record
-// subdirectories under the mission's delegations/ directory. Mirrors
-// the walk closeDelegationSkeletons uses, but only counts — Abandon's
-// gate does not care about verdict, only whether a worker was ever
-// spawned. A missing delegations/ directory (never created because no
-// worker was ever spawned — the common case) reports zero, not an
-// error.
+// subdirectories under the mission's delegations/ directory, whether
+// disclaimed or not. Mirrors the walk closeDelegationSkeletons uses.
+//
+// Used ONLY by ForceReleaseWriteSet's informational staleness snapshot
+// — that snapshot describes what happened, not what still blocks a
+// transition, so it must count every delegation regardless of DES-076
+// round 2's disclaim marker. Abandon's own gate 1 uses
+// countBlockingDelegations instead, which excludes disclaimed entries;
+// do not repoint this function to that behavior, and do not repoint
+// Abandon back to this one — see DESIGN.md DES-076 round 2's "Detector
+// validation" note for why the two callers were deliberately kept on
+// different counts.
+//
+// A missing delegations/ directory (never created because no worker
+// was ever spawned — the common case) reports zero, not an error.
 func countDelegations(repoRoot, missionID string) (int, error) {
 	delegationsDir := filepath.Join(
 		RepoStatePath(repoRoot, "missions"),
@@ -1680,6 +1791,52 @@ func countDelegations(repoRoot, missionID string) (int, error) {
 		if e.IsDir() {
 			n++
 		}
+	}
+	return n, nil
+}
+
+// countBlockingDelegations returns the number of delegation records
+// under the mission's delegations/ directory that still block
+// Abandon's gate 1 — every entry EXCEPT one an operator has explicitly
+// disclaimed via DisclaimDelegation (DES-076 round 2). Unlike
+// countDelegations, this walk must open and parse each record.yaml to
+// read its DisclaimedAt marker, because "how many entries" and "how
+// many still block" are no longer the same question once a disclaim
+// exists.
+//
+// A delegation directory whose record cannot be read or parsed is NOT
+// treated as disclaimed by that fact — DisclaimDelegationRecord itself
+// would refuse to disclaim a record it cannot load, so an unreadable
+// record can never legitimately carry a disclaim marker. It counts as
+// blocking, fail-closed, matching Gate 1's overall "any sign of work
+// blocks" philosophy: an error here must never silently narrow the
+// count.
+func countBlockingDelegations(repoRoot, missionID string) (int, error) {
+	delegationsDir := filepath.Join(
+		RepoStatePath(repoRoot, "missions"),
+		filepath.Base(missionID), "delegations",
+	)
+	entries, err := os.ReadDir(delegationsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		recordPath := filepath.Join(delegationsDir, e.Name(), "record.yaml")
+		d, lErr := LoadDelegation(recordPath)
+		if lErr != nil {
+			return 0, fmt.Errorf("loading delegation %s: %w", e.Name(), lErr)
+		}
+		if d.DisclaimedAt != "" {
+			continue
+		}
+		n++
 	}
 	return n, nil
 }

@@ -263,8 +263,9 @@ func dispatchTierBOrTierA(w io.Writer, sessionID string, toolInput map[string]an
 	if missionID, ok := pretooluseInheritReader(repoRoot, parentDelegation, childAgentType); ok {
 		// Inherited from a parent delegation's SpawnPattern match, not
 		// from the active-mission sidecar — DES-076's consume callback
-		// is not applicable here.
-		return dispatchTierB(w, sessionID, missionID, toolInput, nil)
+		// is not applicable here, and BoundViaInherited (round 2) names
+		// this admission path for the disclaim eligibility check.
+		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaInherited, nil)
 	}
 	return dispatchTierA(w, sessionID)
 }

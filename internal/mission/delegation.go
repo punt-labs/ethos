@@ -38,6 +38,30 @@ const (
 	DelegationVerdictAborted = "aborted"
 )
 
+// BoundVia records how a Tier B delegation came to be attributed to
+// its mission — a fact Tier alone cannot recover, since explicit
+// MISSION_ID env, parent-delegation inheritance, and active-mission
+// sidecar consumption (DES-076) all produce Tier: B. It is a closed
+// set, set by dispatchTierB (internal/hook/pretooluse_dispatch.go) at
+// the call site that already knows which of the three admission paths
+// produced the spawn.
+//
+// The empty string is the zero value for every delegation written
+// before this field existed (2026-09-08) and for any future Tier B
+// write path that forgets to set it. DisclaimDelegationRecord treats
+// "" identically to every other non-eligible value — NEVER as evidence
+// a delegation may be disclaimed. That is the safe direction: an
+// un-disclaimable delegation still blocks Abandon, at worst costing an
+// operator an unnecessary `mission close`; the reverse (unknown
+// treated as disclaimable) would let an ordinary pre-existing
+// delegation retire itself with no operator attestation at all.
+const (
+	BoundViaMissionIDEnv    = "mission_id_env"
+	BoundViaInherited       = "inherited"
+	BoundViaSidecarClaim    = "active_mission_sidecar_claim"
+	BoundViaSidecarDispatch = "active_mission_sidecar_dispatch"
+)
+
 // MaxDelegationDepthDefault is the depth ceiling applied when
 // `.punt-labs/ethos.yaml` does not set `max_delegation_depth`.
 // DES-054 v5: every Agent spawn walks the parent_delegation chain
@@ -97,6 +121,16 @@ type Delegation struct {
 	Verdict          string `yaml:"verdict" json:"verdict"`
 	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty"`
 	Reason           string `yaml:"reason,omitempty" json:"reason,omitempty"`
+
+	// BoundVia, DisclaimedAt, and DisclaimedReason are DES-076 round 2
+	// additions — see the BoundVia doc comment above. All three are
+	// omitempty and absent from every delegation record written before
+	// this change; a decode of an old record leaves them at their zero
+	// value, which DisclaimDelegationRecord and countBlockingDelegations
+	// (store.go) both treat as "not disclaimed, not disclaimable."
+	BoundVia         string `yaml:"bound_via,omitempty" json:"bound_via,omitempty"`
+	DisclaimedAt     string `yaml:"disclaimed_at,omitempty" json:"disclaimed_at,omitempty"`
+	DisclaimedReason string `yaml:"disclaimed_reason,omitempty" json:"disclaimed_reason,omitempty"`
 }
 
 // MatchSpawnPattern reports whether agentType matches pattern. The
@@ -254,6 +288,11 @@ type DelegationSkeleton struct {
 	SpawnPattern     string `yaml:"spawn_pattern,omitempty" json:"spawn_pattern,omitempty"`
 	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty"`
 	Prompt           []byte `yaml:"-" json:"-"`
+	// BoundVia is DES-076 round 2's provenance tag — one of the
+	// BoundVia* constants above. The caller (dispatchTierB) always
+	// knows which admission path produced this spawn; an empty value
+	// here is only correct for a caller that predates this field.
+	BoundVia string `yaml:"bound_via,omitempty" json:"bound_via,omitempty"`
 }
 
 // DelegationDir returns the on-disk per-delegation directory under a
@@ -350,6 +389,7 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 		PromptHash:       payload.PromptHash,
 		CreatedAt:        now,
 		Verdict:          DelegationVerdictOpen,
+		BoundVia:         redact.Text(payload.BoundVia),
 	}
 	data, err := yaml.Marshal(&d)
 	if err != nil {
@@ -649,6 +689,95 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
 	return nil
+}
+
+// DisclaimDelegationRecord marks the delegation at
+// <repoRoot>/.../missions/<missionID>/delegations/<delegationID>/record.yaml
+// as disclaimed: an operator's explicit, evidence-checked assertion
+// that this ONE delegation was a dispatch-sidecar capture, not real
+// work, and should no longer block `mission abandon`'s delegation gate
+// (DES-076 round 2; see DESIGN.md for the full decision and its
+// security review).
+//
+// The caller must hold the same repo-tier exclusive per-mission lock
+// Store.Abandon's own gate-1-and-commit sequence holds
+// (withAbandonDelegationLock) — this function does no locking of its
+// own, matching CloseDelegationSkeleton's contract.
+//
+// Mechanically gated, never inferred by heuristic:
+//
+//   - BoundVia must be exactly BoundViaSidecarDispatch. Every other
+//     value — including the empty string, a delegation written before
+//     this field existed or by any future path that forgets to set it
+//     — refuses. Unknown provenance is never treated as evidence of a
+//     capture: that direction fails safe (see the BoundVia doc comment).
+//   - Verdict must not be DelegationVerdictOpen: a delegation still in
+//     flight names a spawn that may still be doing real work, and
+//     disclaiming it before it closes could retire a mission out from
+//     under a running worker.
+//   - Must not already be disclaimed: the first disclaim's reason and
+//     timestamp are immutable audit history, not something a second
+//     call can silently overwrite.
+//
+// reason is required and is redacted through redact before it lands on
+// disk, matching every other operator-supplied free-text field this
+// package persists (WriteDelegationSkeleton's prompt body, Abandon's
+// reason).
+func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact PathRedactor, reason, disclaimedAt string) (*Delegation, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("disclaim: reason is required")
+	}
+	if containsControlChar(reason) {
+		return nil, fmt.Errorf("disclaim: reason contains control character")
+	}
+	if strings.TrimSpace(disclaimedAt) == "" {
+		return nil, fmt.Errorf("disclaim: disclaimedAt is required")
+	}
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	recordPath := filepath.Join(dir, "record.yaml")
+	d, err := LoadDelegation(recordPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf(
+				"disclaim: delegation %q not found under mission %q", delegationID, missionID,
+			)
+		}
+		return nil, fmt.Errorf("disclaim: loading %s: %w", recordPath, err)
+	}
+	if d.BoundVia != BoundViaSidecarDispatch {
+		reported := d.BoundVia
+		if reported == "" {
+			reported = "unknown (a pre-existing record, or written before provenance tracking)"
+		}
+		return nil, fmt.Errorf(
+			"disclaim: delegation %q was bound via %s, not an active-mission-sidecar dispatch "+
+				"capture; only that provenance is disclaimable",
+			delegationID, reported,
+		)
+	}
+	if d.Verdict == DelegationVerdictOpen {
+		return nil, fmt.Errorf(
+			"disclaim: delegation %q is still open (no verdict recorded yet); wait for its spawn "+
+				"to finish before disclaiming it, in case it is doing real work",
+			delegationID,
+		)
+	}
+	if d.DisclaimedAt != "" {
+		return nil, fmt.Errorf(
+			"disclaim: delegation %q was already disclaimed at %s: %q",
+			delegationID, d.DisclaimedAt, d.DisclaimedReason,
+		)
+	}
+	d.DisclaimedAt = disclaimedAt
+	d.DisclaimedReason = redact.Text(reason)
+	data, err := yaml.Marshal(d)
+	if err != nil {
+		return nil, fmt.Errorf("disclaim: marshaling record: %w", err)
+	}
+	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+		return nil, fmt.Errorf("disclaim: %w", err)
+	}
+	return d, nil
 }
 
 // DelegationDepth walks the parent_delegation chain starting from

@@ -62,15 +62,15 @@ import (
 func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
 	missionID := os.Getenv("MISSION_ID")
 	if missionID != "" {
-		return dispatchTierB(w, sessionID, missionID, toolInput, nil)
+		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv, nil)
 	}
 	agentType := spawnAgentType(toolInput)
-	if missionID, consume := readActiveMissionForDispatch(sessionID, agentType); missionID != "" {
+	if missionID, boundVia := readActiveMissionForDispatch(sessionID, agentType); missionID != "" {
 		var onDispatched func()
-		if consume {
+		if boundVia == mission.BoundViaSidecarDispatch {
 			onDispatched = func() { consumeDispatchBinding(sessionID, missionID) }
 		}
-		return dispatchTierB(w, sessionID, missionID, toolInput, onDispatched)
+		return dispatchTierB(w, sessionID, missionID, toolInput, boundVia, onDispatched)
 	}
 	return dispatchTierBOrTierA(w, sessionID, toolInput)
 }
@@ -100,45 +100,48 @@ func spawnAgentType(toolInput map[string]any) string {
 // (inheritance or Tier A) so the spawn still runs (Bugbot precedent:
 // dispatch helpers must be non-blocking).
 //
-// consume reports whether the CALLER must clear the binding after a
-// successful Tier B dispatch (DES-076). It is true only for a
-// BindOriginDispatch sidecar whose matching spawn just consumed it — a
-// dispatch names a mission FOR SOMEONE ELSE, so its binding is scoped
-// to the ONE spawn matching the contract's declared Worker, never to
-// "whatever spawns next." A BindOriginClaim sidecar is the operator
-// explicitly saying "I am working on this" and is always (missionID,
-// false): sticky across every spawn until an explicit claim or
-// release, unaffected by the agent-type check below.
-func readActiveMissionForDispatch(sessionID, agentType string) (missionID string, consume bool) {
+// boundVia names how the returned missionID may be attributed
+// (mission.BoundViaSidecarClaim or mission.BoundViaSidecarDispatch),
+// for the caller to both decide consumption and to stamp
+// DES-076 round 2's provenance field on the delegation record it
+// writes. It is only true for a BindOriginDispatch sidecar whose
+// matching spawn just consumed it — a dispatch names a mission FOR
+// SOMEONE ELSE, so its binding is scoped to the ONE spawn matching the
+// contract's declared Worker, never to "whatever spawns next." A
+// BindOriginClaim sidecar is the operator explicitly saying "I am
+// working on this" and always returns BoundViaSidecarClaim: sticky
+// across every spawn until an explicit claim or release, unaffected by
+// the agent-type check below.
+func readActiveMissionForDispatch(sessionID, agentType string) (missionID, boundVia string) {
 	if sessionID == "" {
-		return "", false
+		return "", ""
 	}
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: resolving global root: %v; falling through\n",
 			err)
-		return "", false
+		return "", ""
 	}
 	binding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: reading sidecar for %q: %v; falling through\n",
 			sessionID, err)
-		return "", false
+		return "", ""
 	}
 	if binding.MissionID == "" {
-		return "", false
+		return "", ""
 	}
 	if reason := staleBindingReason(binding.MissionID); reason != "" {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s but %s; "+
 				"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
 			sessionID, binding.MissionID, reason)
-		return "", false
+		return "", ""
 	}
 	if binding.Origin != mission.BindOriginDispatch {
-		return binding.MissionID, false
+		return binding.MissionID, mission.BoundViaSidecarClaim
 	}
 
 	// DES-076: a dispatch binding only takes the ONE spawn whose agent
@@ -157,9 +160,9 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID string
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s for worker %q, but this "+
 				"spawn is %q — not the dispatched worker, so it is not captured; the binding stays for %q\n",
 			sessionID, binding.MissionID, worker, agentType, worker)
-		return "", false
+		return "", ""
 	}
-	return binding.MissionID, true
+	return binding.MissionID, mission.BoundViaSidecarDispatch
 }
 
 // dispatchedWorker loads missionID's contract and reports its declared
@@ -333,6 +336,15 @@ var dispatchTierBConfirmedOpen = func() {}
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
 //
+// boundVia is stamped onto the delegation skeleton's BoundVia field
+// (DES-076 round 2) — one of the mission.BoundVia* constants naming
+// which of the three admission paths (explicit MISSION_ID env, parent
+// inheritance, or active-mission sidecar consumption) produced this
+// spawn. It is the fact `mission abandon --disclaim` later checks
+// mechanically, so every caller must pass the value that actually
+// describes how IT resolved missionID — never a guess or a shared
+// default.
+//
 // onDispatched, when non-nil, runs exactly once — after the spawn is
 // fully admitted (the JSON response has been encoded), never on a
 // refusal or an internal fall-through to Tier A/B. DES-076 uses this to
@@ -341,7 +353,7 @@ var dispatchTierBConfirmedOpen = func() {}
 // leaves the binding in place so a retry of the same call can still
 // find it. Every caller but the active-mission sidecar's matching-spawn
 // path passes nil.
-func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any, onDispatched func()) error {
+func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any, boundVia string, onDispatched func()) error {
 	store, err := tierBMissionStore()
 	if err != nil {
 		return writeAgentBlock(w,
@@ -433,10 +445,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	}
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
-	agentType, _ := toolInput["subagent_type"].(string)
-	if agentType == "" {
-		agentType = os.Getenv("CLAUDE_AGENT_TYPE")
-	}
+	agentType := spawnAgentType(toolInput)
 	promptBody, _ := toolInput["prompt"].(string)
 	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
 		Tier:             mission.TierB,
@@ -444,6 +453,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		ParentSession:    sessionID,
 		AgentType:        agentType,
 		Prompt:           []byte(promptBody),
+		BoundVia:         boundVia,
 	}); err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))

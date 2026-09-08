@@ -9388,7 +9388,7 @@ history — not merged to the main tree — is now caught by
 `create`/`dispatch`'s admission control; it previously was not. See
 `CHANGELOG.md` under `[Unreleased]`.
 
-## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (PARTIAL — see Non-goal)
+## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (SETTLED)
 
 **Context.** DES-075's "Consequence for ethos-7tqd" section named this
 as follow-up work outside PR #508's write-set. Reproduced live
@@ -9478,43 +9478,139 @@ behavior, which no longer holds. It now names the actual scope — bound
 for the declared Worker's next matching spawn — so an operator reading
 the CLI's own output is not told something the code no longer does.
 
-**Non-goal for this round — the abandon-cleanup half is BLOCKED by this
-mission's write-set, not implemented.** The mission's second requirement
-was: `ethos mission abandon` should be able to retire a mission whose
-*only* delegation is one a capture wrongly attributed to it, without
-weakening `Abandon`'s existing all-delegations-block gate
-(`Store.Abandon`, `internal/mission/store.go`) or its result gate.
-Distinguishing "captured" from "genuine" needs a fact that is not
-recorded anywhere on today's `Delegation`/`DelegationSkeleton`
-(`internal/mission/delegation.go`): *how* the delegation was bound
-(explicit `MISSION_ID` env / inherited from a parent / consumed from a
-dispatch sidecar) — Tier alone cannot distinguish them, since all three
-paths produce `Tier: B`. Recording that fact requires a new field on
-`DelegationSkeleton` (written by `dispatchTierB`) and `Delegation`, and
-the actual retirement path requires a new, narrowly-gated method (or a
-parameter on `Abandon`) in `Store` that accepts an explicit,
-operator-named, per-delegation disclaim — checked mechanically against
-the recorded bind-provenance field, never inferred by heuristic, and
-never a blanket bypass flag, since `Abandon`'s own doc comment already
-rejects one for exactly the reason this ADR must respect: "the gate is
-the whole point." Both `delegation.go` and `store.go` are outside this
-mission's write-set (`internal/hook/**`, `internal/mission/active.go`,
-`internal/mission/active_test.go`, `internal/mission/binding.go`,
-`internal/mission/binding_test.go`, `cmd/ethos/mission.go`,
-`cmd/ethos/mission_test.go`, `DESIGN.md`, `CHANGELOG.md`), and no
-combination of changes confined to that write-set can implement it:
-`Store.Abandon`'s delegation-count gate is unconditional and unexported,
-with no composable primitive a caller outside `internal/mission` can
-use to get a different answer for a delegation it can prove was
-captured. Escalated to the leader rather than worked around; the root
-cause fixed by this ADR already eliminates the general "any next spawn
-is captured" class the bead reproduced, which was the majority of the
-practical risk. The residual case this leaves unaddressed is narrower:
-a spawn whose agent type happens to equal the dispatched Worker, but
-whose actual task is unrelated to the mission — recommend a follow-up
-mission scoped to `internal/mission/store.go` + `delegation.go` (+ their
-test files, + `internal/mcp/mission_tools.go` for MCP-surface parity)
-to add the bind-provenance field and the disclaim path.
+**Round 2 (2026-09-08) — the abandon-cleanup half.** Round 1 shipped
+with this section marked a non-goal: the mission's second requirement —
+`ethos mission abandon` retiring a mission whose *only* delegation was
+wrongly attributed to it by a capture — needed `internal/mission/store.go`
+and `internal/mission/delegation.go`, both outside round 1's write-set.
+That was a leader scoping error, corrected by funding a follow-up
+mission with the right write-set rather than working around the
+boundary. This section previously said the half was blocked; it is not
+anymore, and the record is corrected here rather than left contradicting
+itself below.
+
+**Part 1 — record how a delegation was bound.** `Delegation` and
+`DelegationSkeleton` (`internal/mission/delegation.go`) gain a
+`BoundVia` field, a closed set of four values —
+`mission_id_env`, `inherited`, `active_mission_sidecar_claim`,
+`active_mission_sidecar_dispatch` — set by `dispatchTierB`
+(`internal/hook/pretooluse_dispatch.go`) at the exact call site that
+already knows which of DES-054's three admission paths produced this
+spawn (case 1's explicit env, `dispatchTierBOrTierA`'s inheritance hit,
+or DES-076 round 1's sidecar match). The empty string is the zero value
+for every delegation written before this field existed and for any
+future Tier B path that forgets to set it — `DisclaimDelegationRecord`
+(below) treats "" identically to every other non-eligible value, never
+as evidence a delegation may be disclaimed. This is the safe direction:
+an un-disclaimable delegation still blocks `Abandon`, costing an
+operator an unnecessary `mission close`; the reverse (unknown treated
+as disclaimable) would let an ordinary pre-existing delegation retire
+itself with no operator attestation at all. Both new struct fields are
+`omitempty`, so decoding an old record without the key is unaffected —
+verified by loading a real pre-existing record
+(`.punt-labs/ethos/missions/m-2026-08-22-048/delegations/d-2026-08-22-103/record.yaml`)
+through `LoadDelegation` before and after this change and confirming
+byte-identical field values other than the new zero-valued fields; see
+the round's result artifact for the captured before/after dump.
+
+**Part 2 — the disclaim path.** `DisclaimDelegationRecord`
+(`internal/mission/delegation.go`) is a pure, lock-free function that
+loads one delegation record and mechanically refuses unless ALL of:
+`BoundVia == active_mission_sidecar_dispatch` (the only provenance DES-076
+round 1's fix ever produces for a *captured* spawn — explicit-env and
+inherited delegations are refused by name, and unknown provenance is
+refused identically to a known-genuine one, per Part 1); `Verdict !=
+open` (a delegation still in flight names a spawn that may still be
+doing real work — disclaiming it before it closes could retire a
+mission out from under a running worker); and it has not already been
+disclaimed (the first disclaim's reason and timestamp are immutable
+audit history, not something a second call silently overwrites). On
+success it stamps `DisclaimedAt`/`DisclaimedReason` (redacted through
+the same `PathRedactor` every other operator-supplied free-text field
+in this package goes through) onto the record and writes it back
+atomically — the same `writeAtomicFile` discipline `CloseDelegationSkeleton`
+uses.
+
+`Store.DisclaimDelegation(missionID, delegationID, reason string)`
+(`internal/mission/store.go`) is the locked, audited wrapper: it
+requires an open mission, holds the SAME repo-tier exclusive per-mission
+lock `Abandon`'s own gate-1-and-commit sequence holds
+(`withAbandonDelegationLock`, now documented as shared between the two
+callers rather than Abandon-only), and appends a `disclaim_delegation`
+event to the mission's own append-only log (`Actor: <mission's Leader>`,
+`Details: {delegation_id, bound_via, reason}`) — the audit record of who
+disclaimed what and why. Sharing the lock is what makes a disclaim and
+an `Abandon` gate-1 check mutually exclusive: neither can read the
+other's half-finished state.
+
+`Abandon`'s gate 1 (`internal/mission/store.go`) now counts via a new
+`countBlockingDelegations`, not `countDelegations` — the latter is kept
+unchanged and still backs `ForceReleaseWriteSet`'s informational
+staleness snapshot, which counts every delegation whether disclaimed or
+not because it describes what happened, not what still blocks a
+transition; conflating the two would silently under-report staleness.
+`countBlockingDelegations` walks the same `delegations/` directory and
+excludes only entries whose own record carries a non-empty
+`DisclaimedAt` — a directory whose record cannot be loaded still counts
+as blocking (fail closed: an unreadable record is not evidence of a
+disclaim). This is the ONLY change to `Abandon`'s gate; gate 2 (the
+result-artifact check) is untouched and still refuses unconditionally
+if the mission has a result for any round, disclaimed delegations or
+not — see the security review below for why that matters.
+
+**Why not a bypass flag.** `Abandon`'s own doc comment already rejects
+one ("the gate is the whole point"), and this round does not add one:
+there is no flag that says "abandon anyway." The only lever is
+`DisclaimDelegation`, which is per-delegation, named by ID, and
+mechanically gated on a fact recorded at write time — an operator
+cannot wave away the gate in bulk, and cannot wave it away at all for a
+delegation whose provenance was never sidecar capture.
+
+**Security review (the mission's own required checklist).**
+
+- *Can this retire a mission that genuinely had a worker do real
+  work?* Yes, in one specific, narrow way: `DisclaimDelegationRecord`'s
+  eligibility check (provenance + closed) proves a delegation is a
+  *candidate* for having been a capture; it does not and cannot prove
+  the spawn's actual work was worthless. An operator who disclaims a
+  delegation whose matching-worker-type spawn did real, valuable work
+  it never got around to submitting as a mission `Result` can still
+  retire that work. Two things bound the blast radius: gate 2 still
+  refuses if a `Result` was ever submitted for any round (the normal
+  way real work concludes), and `--reason` is mandatory and permanently
+  attached to both the delegation record and the event log, so a wrong
+  disclaim is attributable, not silent. This is the same trust the
+  codebase already places in an operator's `--reason` on `Abandon`
+  itself and on `ForceReleaseWriteSet` — a human attestation backed by
+  a mechanical precondition, not an automated proof.
+- *Can a hand-edited `bound_via` on disk unlock the path?* Yes — an
+  operator with write access to the git-tracked mission tree could set
+  `bound_via: active_mission_sidecar_dispatch` on any delegation record
+  by hand and make it eligible. This is not a new gap: the same is true
+  of hand-editing a contract's `status: open` or a `Result`'s
+  `verdict: pass` today. Ethos's trust boundary for git-tracked mission
+  state is the repo's own commit history and review process, not a
+  runtime signature scheme — this round does not change that boundary
+  in either direction.
+- *Does the disclaim leave an audit record of who disclaimed what and
+  why?* Yes, twice over: the delegation's own record carries
+  `disclaimed_at`/`disclaimed_reason` permanently (immutable — a second
+  disclaim attempt is refused rather than allowed to overwrite it), and
+  the mission's append-only event log carries a `disclaim_delegation`
+  event naming the delegation ID, its provenance, and the reason. The
+  event's `Actor` is the contract's `Leader` field, the same source
+  `Abandon`'s own event already uses — this round does not add a
+  separate identity resolution for "who ran the CLI command," so a
+  disclaim run by someone other than the mission's leader is still
+  attributed to the leader in the log, exactly as `Abandon`'s own event
+  already is. Not a new gap; named here because it was explicitly
+  checked, not assumed.
+- *Detector validation.* Before repointing gate 1, `countDelegations`
+  was confirmed to have exactly two call sites (`grep`, both read in
+  full): `Abandon`'s gate 1 and `ForceReleaseWriteSet`'s staleness
+  snapshot. Only the former was repointed; the latter's doc comment
+  already states its count is informational, not gating, so leaving it
+  on the unfiltered `countDelegations` is correct, not an oversight.
 
 **Tests.** `TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured`
 pins the regression directly: dispatch-origin sidecar naming a
