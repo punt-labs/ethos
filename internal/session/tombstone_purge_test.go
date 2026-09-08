@@ -369,27 +369,27 @@ func TestPurgeTombstoned_RefusesUnsealed(t *testing.T) {
 	assert.Contains(t, ids, "sess-unsealed")
 }
 
-// TestPurgeTombstoned_ClearsSidecarsOnUnsealedRefusal pins review
-// finding E (full-branch review, m-2026-09-08-004 round 3): mission
-// sidecars are not audit state, so the tombstone guard's refusal
-// (unsealed audit lines, roster kept) must not also leave a stale claim
-// or pending dispatch behind. A SIGKILL'd session is the canonical
-// holder of unsealed lines AND the CHANGELOG's headline scenario for a
-// stale sidecar surviving into a resumed session — this is the CLI-
-// reachable path (`ethos session purge`), unlike the bare Purge()
-// TestStore_Purge_ClearsMissionSidecars already covers, which no CLI
-// command calls.
 // TestPurgeTombstoned_ClearsPendingDispatchButKeepsClaimOnUnsealedRefusal
 // pins review finding E (full-branch review, m-2026-09-08-004 round 3),
 // REVISED after Bugbot found the original ruling incomplete on PR #509
-// round 4: mission.SessionBoundMissions reads ReadActiveMission as the
-// FIRST source of mission IDs the unsealed-lines probe uses to find a
-// session's mission live logs. Clearing the claim on a refused pass
-// would destroy that lookup -- the NEXT purge pass would find no bound
-// missions, conclude the session is clean, and drop the roster,
-// stranding the very unsealed lines this refusal exists to protect.
-// Only the pending-dispatch store (pure coordination state, never
-// consulted by SessionBoundMissions) is cleared on refusal.
+// round 4. The original ruling cleared BOTH the active-mission claim and
+// the pending-dispatch store on a refused purge, reasoning that neither
+// is audit state, so the tombstone guard's refusal (unsealed audit
+// lines, roster kept) should not leave either sidecar behind. That
+// reasoning was true but incomplete: mission.SessionBoundMissions reads
+// ReadActiveMission as the FIRST source of mission IDs the unsealed-
+// lines probe uses to find a session's mission live logs. Clearing the
+// claim on a refused pass would destroy that lookup -- the NEXT purge
+// pass would find no bound missions, conclude the session is clean, and
+// drop the roster, stranding the very unsealed lines this refusal
+// exists to protect. Only the pending-dispatch store (pure coordination
+// state, never consulted by SessionBoundMissions) is cleared on
+// refusal; the claim survives until a purge actually proceeds. A
+// SIGKILL'd session is the canonical holder of unsealed lines AND the
+// CHANGELOG's headline scenario for a stale sidecar surviving into a
+// resumed session -- this is the CLI-reachable path (`ethos session
+// purge`), unlike the bare Purge() TestStore_Purge_ClearsMissionSidecars
+// already covers, which no CLI command calls.
 func TestPurgeTombstoned_ClearsPendingDispatchButKeepsClaimOnUnsealedRefusal(t *testing.T) {
 	s := testStore(t)
 	repoRoot := t.TempDir()
