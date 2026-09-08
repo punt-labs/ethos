@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,36 +17,17 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // captureStderr runs fn with os.Stderr redirected to a pipe and returns
-// the captured output. Restores os.Stderr in all cases.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	old := os.Stderr
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-	type result struct {
-		b   []byte
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		b, err := io.ReadAll(r)
-		done <- result{b, err}
-	}()
-	fn()
-	require.NoError(t, w.Close())
-	res := <-done
-	require.NoError(t, res.err)
-	require.NoError(t, r.Close())
-	return string(res.b)
-}
+// the captured output. Delegates to internal/testhelpers: see that
+// package's doc comment for why the pipe/cleanup contract is a
+// canonical, shared implementation rather than a copy of its own.
+var captureStderr = testhelpers.CaptureStderr
 
 // validContractYAML is a minimal valid contract body the MCP create
 // handler accepts. It omits server-controlled fields (mission_id,

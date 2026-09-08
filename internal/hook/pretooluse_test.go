@@ -2296,7 +2296,7 @@ func TestDispatchAgent_ActiveMissionSidecarStaleWarns(t *testing.T) {
 
 	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
 	var out bytes.Buffer
-	warning := captureHookStderr(t, func() {
+	warning := captureStderr(t, func() {
 		require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	})
 
@@ -2329,23 +2329,9 @@ func stageClosedContract(t *testing.T, home, missionID string) {
 	require.NoError(t, err)
 }
 
-// captureHookStderr redirects os.Stderr for the duration of fn and
-// returns what the hook wrote there.
-func captureHookStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-	fn()
-	require.NoError(t, w.Close())
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(r)
-	require.NoError(t, err)
-	require.NoError(t, r.Close())
-	return buf.String()
-}
+// captureStderr (generate_agents_test.go, same package) is reused here
+// instead of a second local copy; see its doc comment for the
+// pipe/cleanup contract every capture helper in this repo now follows.
 
 // TestDispatchAgent_ActiveMissionSidecarPrefersEnv asserts the
 // dispatch ordering: a MISSION_ID env override beats the sidecar.

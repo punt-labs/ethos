@@ -1,7 +1,6 @@
 package resolve
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1426,22 +1426,11 @@ func chdir(t *testing.T, dir string) {
 }
 
 // captureStderr redirects os.Stderr for the duration of fn and returns what
-// was written, so a test can assert on the loud warnings the resolvers emit.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-	fn()
-	require.NoError(t, w.Close())
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(r)
-	require.NoError(t, err)
-	require.NoError(t, r.Close())
-	return buf.String()
-}
+// was written, so a test can assert on the loud warnings the resolvers
+// emit. Delegates to internal/testhelpers: see that package's doc
+// comment for why the pipe/cleanup contract is a canonical, shared
+// implementation rather than a copy of its own.
+var captureStderr = testhelpers.CaptureStderr
 
 // --- GitConfig tests ---
 

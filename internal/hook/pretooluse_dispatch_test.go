@@ -80,7 +80,7 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck(t *testing.T) {
 
 			payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-` + status + `"}`
 			var out bytes.Buffer
-			warning := captureHookStderr(t, func() {
+			warning := captureStderr(t, func() {
 				require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 			})
 
@@ -172,7 +172,7 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU(t *testing.T) {
 
 	var out bytes.Buffer
 	var dispatchErr error
-	warning := captureHookStderr(t, func() {
+	warning := captureStderr(t, func() {
 		dispatchDone := make(chan struct{})
 		go func() {
 			payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-toctou"}`
@@ -272,7 +272,7 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_LoadErrorFallsThrough(t *testin
 
 	var out bytes.Buffer
 	var dispatchErr error
-	warning := captureHookStderr(t, func() {
+	warning := captureStderr(t, func() {
 		// Wait until dispatch has passed its first status check (which
 		// confirmed open) via the dispatchTierBConfirmedOpen test hook,
 		// so we know it's about to acquire the shared lock — not a

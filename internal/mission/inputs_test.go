@@ -3,41 +3,20 @@ package mission
 import (
 	"bytes"
 	"encoding/json"
-	"io"
-	"os"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
 // captureStderr runs fn with os.Stderr redirected to a pipe and returns
-// the captured output. Restores os.Stderr before returning in all cases.
-// Shared by tests across the package that assert stderr diagnostics.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	old := os.Stderr
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-	type result struct {
-		b   []byte
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		b, err := io.ReadAll(r)
-		done <- result{b, err}
-	}()
-	fn()
-	require.NoError(t, w.Close())
-	res := <-done
-	require.NoError(t, res.err)
-	require.NoError(t, r.Close())
-	return string(res.b)
-}
+// the captured output. Shared by tests across the package that assert
+// stderr diagnostics. Delegates to internal/testhelpers: see that
+// package's doc comment for why the pipe/cleanup contract is a
+// canonical, shared implementation rather than a copy of its own.
+var captureStderr = testhelpers.CaptureStderr
 
 func TestInputs_YAML_Ticket(t *testing.T) {
 	data := []byte("ticket: ethos-42\nfiles:\n  - foo.go\n")
