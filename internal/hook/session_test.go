@@ -107,6 +107,10 @@ func TestHandleSessionEnd_ClearsMissionBindings(t *testing.T) {
 	))
 	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, "m-2026-09-08-720"))
 	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, "m-2026-09-08-721", "bwk"))
+	require.NoError(t, mission.WriteDelegationBinding(globalRoot, sessionID, mission.DelegationBinding{
+		MissionID:    "m-2026-09-08-721",
+		DelegationID: "d-2026-09-08-001",
+	}))
 
 	input := bytes.NewReader([]byte(`{"session_id": "` + sessionID + `"}`))
 	require.NoError(t, HandleSessionEnd(input, ss))
@@ -118,6 +122,14 @@ func TestHandleSessionEnd_ClearsMissionBindings(t *testing.T) {
 	pending, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
 	assert.Empty(t, pending, "a pending dispatch must not survive session end")
+
+	// H2 (full-branch review, m-2026-09-08-004 round 3): the delegation-
+	// binding sidecar is the third thing `ethos mission release` clears,
+	// but session end was only clearing the other two. A survivor here
+	// lets the commit-msg hook tag a later, unrelated session's commits
+	// with a stale delegation (ethos-jawp's class).
+	_, err = os.Stat(mission.DelegationBindingPath(globalRoot, sessionID))
+	assert.True(t, os.IsNotExist(err), "the delegation-binding sidecar must not survive session end")
 }
 
 func TestHandleSubagentStart_JoinsRoster(t *testing.T) {

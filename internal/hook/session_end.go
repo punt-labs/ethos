@@ -53,11 +53,18 @@ func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 	return nil
 }
 
-// clearSessionMissionBindings clears sessionID's claim and every
-// pending dispatch — the same scope `ethos mission release` clears —
-// so a resumed session (C6) never inherits attribution from before it
-// ended. Advisory: errors are reported to stderr, never returned,
-// matching HandleSessionEnd's own non-fatal cleanup discipline.
+// clearSessionMissionBindings clears sessionID's claim, its
+// delegation-binding sidecar, and every pending dispatch — the same
+// three-way scope `ethos mission release` clears (cmd/ethos/mission.go's
+// runMissionRelease) — so a resumed session (C6) never inherits
+// attribution from before it ended. Review finding H2 (full-branch
+// review, m-2026-09-08-004 round 3): this function's comment already
+// claimed release parity, but the delegation-binding clear itself was
+// missing, so a stale binding survived session end and could tag a
+// later, unrelated session's commits (the same ethos-jawp class
+// ClearDelegationBinding's own doc comment names). Advisory: errors are
+// reported to stderr, never returned, matching HandleSessionEnd's own
+// non-fatal cleanup discipline.
 func clearSessionMissionBindings(sessionID string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -67,6 +74,9 @@ func clearSessionMissionBindings(sessionID string) {
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-end: clearing active mission for %q: %v\n", sessionID, err)
+	}
+	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-end: clearing delegation binding for %q: %v\n", sessionID, err)
 	}
 	if err := mission.ClearDispatchPending(globalRoot, sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-end: clearing dispatch-pending for %q: %v\n", sessionID, err)
