@@ -81,6 +81,33 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) erro
 		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv, nil)
 	}
 	agentType := spawnAgentType(toolInput)
+
+	// Review probe finding F3 (m-2026-09-08-004 round 2): two concurrent
+	// Agent() tool calls in the same session — a normal shape, this
+	// org's own conventions call for batching independent tool calls in
+	// one turn — could both match the SAME oldest pending-dispatch
+	// entry before either consumed it. The lock is held across the
+	// ENTIRE match-through-admit-or-fall-back sequence, not just the
+	// read: releasing it before dispatchTierB runs would still let a
+	// second waiter's read interleave with the first caller's
+	// still-pending consume decision. See AcquireDispatchPendingLock's
+	// own doc comment for why this introduces no new deadlock risk.
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: resolving global root: %v; "+
+				"falling through without pending-dispatch matching\n", err)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
+	}
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: acquiring lock for %q: %v; "+
+				"falling through without pending-dispatch matching\n", sessionID, err)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
+	}
+	defer release()
+
 	if missionID, boundVia := readActiveMissionForDispatch(sessionID, agentType); missionID != "" {
 		var onDispatched func()
 		if boundVia == mission.BoundViaSidecarDispatch {
@@ -154,30 +181,46 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 	}
 
 	// 2. Claim: sticky, unconditional, unaffected by Worker matching.
-	// Nothing but `ethos mission claim` writes to this sidecar as of
-	// DES-076 round 3 (dispatch moved to its own store above), so any
-	// content found here is unambiguously a claim — see active.go's
-	// dispatch-pending doc comment for why this closes review finding
-	// C2's "ambiguous defaulting" class structurally rather than by
-	// patching the default direction.
-	claimed, err := mission.ReadActiveMission(globalRoot, sessionID)
+	// Nothing but `ethos mission claim` writes a fresh, clean binding to
+	// this sidecar as of DES-076 round 3 (dispatch moved to its own
+	// store above) — but "nothing writes a bad one on purpose" is not
+	// the same as "a bad one cannot exist": ReadActiveMissionBinding
+	// (active.go) can still return BindOriginUnknown for a truncated or
+	// mismatched origin file (a partial write, a mixed-binary window, a
+	// hand-inspected legacy sidecar) — review finding C2, m-2026-09-08-004
+	// round 2. That case is refused here explicitly, not treated as a
+	// claim just because dispatch no longer writes here on purpose:
+	// DES-076 made claim the PERMISSIVE origin (ungated by Worker, and
+	// per commit_trailers.go's gate the only origin that stamps commit
+	// trailers), so answering "claim" for ambiguous evidence would both
+	// mis-capture a spawn and turn on trailers for a binding the
+	// operator never explicitly claimed.
+	binding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: reading sidecar for %q: %v; falling through\n",
 			sessionID, err)
 		return "", ""
 	}
-	if claimed == "" {
+	if binding.MissionID == "" {
 		return "", ""
 	}
-	if reason := staleBindingReason(claimed); reason != "" {
+	if binding.Origin != mission.BindOriginClaim {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: session %q has an ambiguous binding to %s "+
+				"(origin %q, not a clean claim) — spawning without a mission; run `ethos mission "+
+				"claim <id>` (or `ethos mission release`) to resolve it\n",
+			sessionID, binding.MissionID, binding.Origin)
+		return "", ""
+	}
+	if reason := staleBindingReason(binding.MissionID); reason != "" {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s but %s; "+
 				"run `ethos mission claim <id>` (or `ethos mission release`) — spawning without a mission\n",
-			sessionID, claimed, reason)
+			sessionID, binding.MissionID, reason)
 		return "", ""
 	}
-	return claimed, mission.BoundViaSidecarClaim
+	return binding.MissionID, mission.BoundViaSidecarClaim
 }
 
 // matchDispatchPending scans sessionID's pending dispatches
@@ -186,7 +229,24 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 // its mission ID. Returns "" on any non-match: no pending dispatches,
 // none matching, or a read failure (logged to stderr, non-blocking —
 // matching the discipline every sidecar reader in this package
-// follows).
+// follows). Caller must hold AcquireDispatchPendingLock for the whole
+// match-through-admit sequence (review probe F3, m-2026-09-08-004
+// round 2) — this function does no locking of its own.
+//
+// A matching entry whose mission is PROVABLY non-open (Load succeeds
+// and the status is not "open") is skipped AND cleared, not returned:
+// review probe F2 (m-2026-09-08-004 round 2) demonstrated that leaving
+// a stale entry in place permanently head-of-line-blocks every NEWER
+// pending dispatch for the same Worker, since FIFO always re-selects
+// the oldest entry first. A closed/failed/escalated/abandoned mission
+// can never legitimately take a new delegation, so clearing its stale
+// entry here is not a heuristic guess — it is the same
+// nonOpenReason check dispatchTierB itself would apply, just run
+// before committing to a doomed match instead of after. A Load
+// FAILURE (as opposed to a successful Load reporting non-open status)
+// is NOT proof of anything and is NOT skipped — matching C3's
+// doctrine exactly, that case is handed to dispatchTierB's own
+// Load-and-block gate unchanged, by returning it as the match.
 func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 	entries, warnings, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	if err != nil {
@@ -199,11 +259,43 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: dispatch-pending: %s\n", warning)
 	}
 	for _, entry := range entries {
-		if entry.Worker == agentType {
-			return entry.MissionID
+		if entry.Worker != agentType {
+			continue
 		}
+		if reason := nonOpenPendingReason(entry.MissionID); reason != "" {
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch to %s is "+
+					"stale (%s); clearing it so it cannot block a newer pending dispatch\n",
+				sessionID, entry.MissionID, reason)
+			if clearErr := mission.ConsumeDispatchPending(globalRoot, sessionID, entry.MissionID); clearErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: pre-tool-use: dispatch-pending: clearing stale entry for %q: %v\n",
+					entry.MissionID, clearErr)
+			}
+			continue
+		}
+		return entry.MissionID
 	}
 	return ""
+}
+
+// nonOpenPendingReason reports why a pending dispatch's mission can
+// never be matched, or "" when it can (status is open) OR when its
+// status cannot be determined at all. A Load failure returns "" — NOT
+// treated as proof of staleness, matching staleBindingReason's own
+// documented rule for the claim path: a store or contract that will
+// not resolve belongs to dispatchTierB's own Load-and-block gate, never
+// silently discarded here.
+func nonOpenPendingReason(missionID string) string {
+	store, err := tierBMissionStore()
+	if err != nil {
+		return ""
+	}
+	c, err := store.Load(missionID)
+	if err != nil {
+		return ""
+	}
+	return nonOpenReason(c.Status)
 }
 
 // consumeDispatchBinding removes missionID's pending-dispatch entry

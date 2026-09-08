@@ -9983,3 +9983,92 @@ one more spawn"); the fourth (2) is a genuinely new tradeoff the
 per-mission redesign introduces in exchange for closing C1. All four
 are now named in the same document that claims the fix, rather than
 requiring a future reviewer to discover them independently.
+
+### Amendment 2026-09-08: C2 hardened further, plus two findings from a local review probe (F2, F3)
+
+A later review pass on the round-3 code above (still m-2026-09-08-004
+round 2, same review cycle) found C2 was closed for the LIVE
+production path but not for the underlying mechanism, and a review
+probe — an ad hoc reproduction script, not a permanent test, planted
+directly in the working tree and since removed — demonstrated two
+further gaps in the FIFO redesign itself. All three are closed here.
+
+**C2, completed.** Round 3 above closed C2 by removing dispatch's
+write access to the active-mission/origin pair entirely — true, and
+sufficient for every WRITE path in production. It did not touch the
+READ path's own defaulting logic, which the original C2 finding also
+named: `ReadActiveMissionBinding` still answered `BindOriginClaim` for
+an origin file that EXISTS but does not cleanly resolve (truncated, or
+naming a different mission) — positive, contradictory evidence, not
+mere absence. Nothing in production writes such a file anymore, but the
+function itself still could (a mixed-binary window, a hand-inspected
+legacy sidecar), and its own doc comment still argued for the
+permissive default in exactly the words the finding quoted. Closed
+properly now: a NEW `BindOriginUnknown` sentinel is returned for that
+case specifically (never written, read-only, refused by every
+`Origin`-gated caller by construction — `commit_trailers.go`'s gate and
+`readActiveMissionForDispatch`'s claim branch both check `Origin ==
+BindOriginClaim` explicitly, so `BindOriginUnknown` is refused with no
+separate check needed). Absence of the origin file is UNCHANGED and
+stays `BindOriginClaim` — that is the genuinely safe, positively
+meaningful legacy case DES-076's original origin-file design assigned
+it. `TestReadActiveMissionBinding_StaleOriginIsUnknownNotClaim` and its
+truncated-file sibling pin both non-resolving shapes; the
+`readActiveMissionForDispatch` claim branch was changed to consult the
+full binding and explicitly check `Origin == BindOriginClaim`, refusing
+otherwise, rather than treating any content in the file as a claim by
+assumption.
+
+**F2 — a stale pending-dispatch entry permanently head-of-line-blocked
+every newer one for the same Worker.** `matchDispatchPending` walks
+FIFO oldest-first and, per C3's own doctrine, deliberately does not
+Load a contract to pre-validate a match. But that meant a pending entry
+naming a mission that had SINCE closed/failed/escalated/abandoned
+(dispatched, then the mission was retired before its worker ever
+spawned) was never removed, and FIFO always re-selects the SAME oldest
+entry first — so that one stale entry blocked every subsequent
+matching spawn in the session from ever reaching a newer, genuinely
+open pending dispatch, for the rest of the session's life. Fixed by
+adding a narrow, positive check: an entry whose mission LOADS
+successfully and reports a non-open status is skipped AND cleared (it
+can never legitimately match — provably dead, not a heuristic guess).
+An entry whose mission FAILS to load is NOT skipped — matching C3's
+doctrine exactly, that case is still handed to `dispatchTierB`'s own
+Load-and-block gate unchanged, by returning it as the match.
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_StaleEntryDoesNotHeadOfLineBlock`
+confirmed failing against the pre-fix code (mission B's spawn fell
+through to Tier A, both entries survived unconsumed) before landing.
+
+**F3 — two concurrent `Agent()` spawns could both match the SAME
+pending entry before either consumed it.** This org's own conventions
+call for batching independent tool calls into one turn, so two
+`Agent()` calls landing in the same PreToolUse dispatch window
+concurrently is not a hypothetical: `matchDispatchPending` only reads
+the pending store, and the actual removal happens later, inside
+`dispatchTierB`'s `onDispatched` callback, well after the match
+decision — a genuine TOCTOU window. Fixed with a new per-session
+exclusive lock, `AcquireDispatchPendingLock`, held by `dispatchAgent`
+across the ENTIRE match-through-admit-or-fall-back sequence, not just
+the read — releasing it before `dispatchTierB` runs would still let a
+second waiter's read interleave with the first caller's still-pending
+consume decision. This is a NEW lock class, always acquired OUTERMOST
+(before any mission or delegation lock `dispatchTierB` itself acquires
+internally), so it introduces no reversal of the acquisition order this
+codebase's other locks already follow, and no existing call site
+acquires a mission or delegation lock and then tries to acquire this
+one. `TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch`
+reproduces the race directly (two serialized `matchDispatchPending` +
+`ConsumeDispatchPending` calls under the lock, asserting they never
+resolve to the same mission); the review probe that found this
+(captured verbatim before it was removed from the working tree)
+demonstrated the pre-fix double-match directly by calling
+`matchDispatchPending` twice with no lock at all.
+
+Both F2 and F3 are properties of the per-mission FIFO design round 3
+introduced, not regressions of anything pre-round-3 — the single-slot
+design they replaced could not have had a "stale entry blocks a newer
+one" bug (there was only ever one slot) or this SPECIFIC concurrent
+double-match shape (though it had its own, worse, unconditional
+overwrite race). Naming this plainly because the residual-risk
+enumeration above already commits this document to naming what a
+redesign trades away, not just what it fixes.

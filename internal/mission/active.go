@@ -80,16 +80,43 @@ func ActiveMissionOriginPath(globalRoot, sessionID string) string {
 // sidecar written before this change looks like. Only a dispatch
 // writes one, so an upgrade needs no migration and a downgrade loses
 // only the suppression, falling back to the pre-fix default.
+//
+// DES-076 round 3 (review finding C2, m-2026-09-08-004 round 2): as of
+// the dispatch-pending redesign, nothing in production writes
+// BindOriginDispatch to this pair anymore (dispatch bindings live in
+// their own per-mission store — see the dispatch-pending doc comment
+// below) — but the reading and writing machinery for a non-claim
+// origin is retained for the same reason it always was: a mixed-binary
+// window (rsc on PR #415) or a hand-inspected legacy sidecar could
+// still produce one. BindOriginUnknown exists for exactly that
+// residual case: an origin file that EXISTS but does not cleanly
+// resolve (truncated, or naming a different mission than
+// active-mission) is no longer defaulted to BindOriginClaim.
+// Positive, contradictory evidence that the binding's origin is NOT a
+// plain claim must never be discarded in the permissive direction —
+// see ReadActiveMissionBinding's own doc comment for why an ABSENT
+// origin file is a different, genuinely safe case from a PRESENT one
+// that fails to parse.
 const (
 	BindOriginClaim    = "claim"
 	BindOriginDispatch = "dispatch"
+	// BindOriginUnknown is never written by this package. It is a
+	// read-only sentinel ReadActiveMissionBinding returns when the
+	// origin file exists but its content does not resolve into a known
+	// shape — see that function's doc comment. Every caller that gates
+	// a capability on Origin == BindOriginClaim (commit trailer
+	// emission, the dispatch-vs-claim match in
+	// internal/hook/pretooluse_dispatch.go) already refuses this value
+	// by construction, with no separate check needed: it is neither
+	// BindOriginClaim nor BindOriginDispatch.
+	BindOriginUnknown = "unknown"
 )
 
 // ActiveMissionBinding is the session's mission binding: which mission,
 // and how it was made.
 type ActiveMissionBinding struct {
 	MissionID string
-	Origin    string // BindOriginClaim or BindOriginDispatch
+	Origin    string // BindOriginClaim, BindOriginDispatch, or BindOriginUnknown
 }
 
 // ReadActiveMission reads the active-mission sidecar for sessionID.
@@ -121,13 +148,42 @@ func ReadActiveMission(globalRoot, sessionID string) (string, error) {
 // origin file left over from an earlier binding names a different
 // mission and is ignored, so the two files cannot drift into a wrong
 // answer — the failure mode a second file would otherwise introduce.
-// Absent, stale, empty, or short reads as a claim, which is the
-// pre-origin behavior.
 //
-// An origin file that exists but will not read is NOT one of those: it
-// surfaces as an error. Absence is a state this design assigns a
-// meaning to, but an I/O failure on a file that is there means the
-// binding is unknown, and answering "claim" would invent one.
+// Two DIFFERENT non-matches are deliberately given two DIFFERENT
+// answers (DES-076 round 3, review finding C2, m-2026-09-08-004 round
+// 2 — this distinction did not exist before that round, and its
+// absence is what let a claim's own permissive defaulting apply to a
+// case it was never meant to cover):
+//
+//   - The origin file is ABSENT. This is the legitimate, unambiguous
+//     legacy shape: every sidecar written before the origin file
+//     existed looks exactly like this, and `ethos mission claim` still
+//     produces it today (WriteActiveMissionOrigin's claim branch writes
+//     active-mission then REMOVES the origin file). Absence is a state
+//     this design assigns a real meaning to — BindOriginClaim — not a
+//     guess.
+//   - The origin file EXISTS but does not cleanly resolve: it is
+//     truncated/short, or it names a DIFFERENT mission than
+//     active-mission. This is POSITIVE evidence that something is
+//     wrong — a partial write, a stale leftover, or (before DES-076
+//     round 3 moved dispatch off this pair entirely) a dispatch binding
+//     whose second write failed. Defaulting THIS case to BindOriginClaim
+//     was the round-1/round-2 behavior, and it was dangerous: DES-076
+//     made claim the PERMISSIVE origin (sticky, ungated by Worker, and
+//     — per internal/hook/commit_trailers.go's gate — the only origin
+//     that stamps commit trailers), so silently answering "claim" for
+//     an ambiguous read would both mis-capture a spawn and turn on
+//     trailers for a mission the operator never explicitly claimed.
+//     This case now returns BindOriginUnknown instead — a value every
+//     Origin-gated caller already refuses by construction (see the
+//     constant's own doc comment), so there is no separate check for a
+//     caller to forget.
+//
+// An origin file that exists but will not read at all (a genuine I/O
+// error, not merely unparseable content) is NEITHER of those: it
+// surfaces as an error, exactly as before this round. An I/O failure on
+// a file that is there means the binding is unknown for a reason the
+// caller needs to see, not silently answer.
 func ReadActiveMissionBinding(globalRoot, sessionID string) (ActiveMissionBinding, error) {
 	missionID, err := ReadActiveMission(globalRoot, sessionID)
 	if err != nil {
@@ -148,12 +204,19 @@ func ReadActiveMissionBinding(globalRoot, sessionID string) (ActiveMissionBindin
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) < 2 {
+		b.Origin = BindOriginUnknown
 		return b, nil
 	}
 	origin := strings.TrimSpace(lines[0])
-	if origin != "" && strings.TrimSpace(lines[1]) == missionID {
-		b.Origin = origin
+	if origin == "" {
+		b.Origin = BindOriginUnknown
+		return b, nil
 	}
+	if strings.TrimSpace(lines[1]) != missionID {
+		b.Origin = BindOriginUnknown
+		return b, nil
+	}
+	b.Origin = origin
 	return b, nil
 }
 
@@ -410,6 +473,63 @@ func dispatchPendingRoot(globalRoot, sessionID string) string {
 	return filepath.Join(globalRoot, "sessions", filepath.Base(sessionID), "dispatch-pending")
 }
 
+// AcquireDispatchPendingLock opens (and creates if needed) an exclusive
+// per-session flock guarding sessionID's ENTIRE pending-dispatch match
+// decision — from reading the candidate list through to
+// `dispatchTierB`'s full admission (or fallback). Review probe finding
+// F3 (m-2026-09-08-004 round 2, planted alongside C1-C13): two
+// concurrent `Agent()` tool calls in the same session (a normal shape —
+// this org's own conventions call for batching independent tool calls
+// in one turn) could both call matchDispatchPending before either
+// consumed its match, resolving to the SAME oldest pending entry twice
+// — the exact double-match the review probe demonstrated directly.
+//
+// The lock is held by the CALLER across the whole
+// read-match-then-admit-or-fall-back sequence
+// (internal/hook/pretooluse_dispatch.go's dispatchAgent), not just the
+// read — a lock released before `dispatchTierB` runs would still let a
+// second waiter's read interleave with the first caller's still-pending
+// consume decision. This is a NEW lock class with no existing caller
+// that acquires a mission or delegation lock first and this one
+// second, so it introduces no reversal of the acquisition order
+// AcquireMissionLockExclusive's own doc comment already prescribes —
+// this lock is always the OUTERMOST one, acquired before any mission or
+// delegation lock, never nested inside one.
+//
+// Deliberately does NOT wrap the deferred `onDispatched` consumption
+// itself in a SEPARATE acquisition — the caller holds this lock for the
+// whole call, so the eventual `ConsumeDispatchPending` (or the decision
+// not to call it, on a fallback) happens under the same critical
+// section the match did.
+func AcquireDispatchPendingLock(globalRoot, sessionID string) (func(), error) {
+	dir := dispatchPendingRoot(globalRoot, sessionID)
+	if dir == "" {
+		return nil, fmt.Errorf("globalRoot and sessionID are required for dispatch-pending lock")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating dispatch-pending directory %s: %w", dir, err)
+	}
+	lockPath := filepath.Join(dir, ".lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening dispatch-pending lock %s: %w", lockPath, err)
+	}
+	if err := flock(f, lockExclusive); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("acquiring exclusive dispatch-pending lock %s: %w", lockPath, err)
+	}
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		_ = funlock(f)
+		_ = f.Close()
+	}
+	return release, nil
+}
+
 // DispatchPendingPath returns the path to the pending-dispatch file for
 // one mission. Returns "" when any argument is empty.
 func DispatchPendingPath(globalRoot, sessionID, missionID string) string {
@@ -465,6 +585,13 @@ func ReadDispatchPending(globalRoot, sessionID string) ([]DispatchPendingEntry, 
 	var warnings []string
 	for _, de := range dirEntries {
 		if de.IsDir() {
+			continue
+		}
+		// The per-session dispatch-pending lock file (".lock",
+		// AcquireDispatchPendingLock) lives in this same directory and
+		// is not a pending entry -- a mission ID is never dotfile-named,
+		// so this exclusion cannot collide with a real entry.
+		if strings.HasPrefix(de.Name(), ".") {
 			continue
 		}
 		path := filepath.Join(dir, de.Name())
@@ -526,6 +653,13 @@ func ClearDispatchPending(globalRoot, sessionID string) error {
 	var errs []error
 	for _, de := range dirEntries {
 		if de.IsDir() {
+			continue
+		}
+		// Leave the lock file in place -- it is not a pending entry (see
+		// the matching exclusion in ReadDispatchPending), and removing a
+		// lock file a concurrent holder still has open is unnecessary
+		// churn, not a correctness requirement.
+		if strings.HasPrefix(de.Name(), ".") {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, de.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {

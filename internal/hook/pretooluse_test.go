@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2562,6 +2563,129 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_TwoPendingSameWorkerCo
 	remaining, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "both pending dispatches must be consumed after their matching spawns")
+}
+
+// setContractStatus rewrites the on-disk contract's status field
+// directly, for tests that need a mission to exist as non-open without
+// walking the full Close/Abandon lifecycle.
+func setContractStatus(t *testing.T, home, missionID, status string) {
+	t.Helper()
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	found := ""
+	require.NoError(t, filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(p, ".yaml") && strings.Contains(p, missionID) {
+			found = p
+		}
+		return nil
+	}))
+	require.NotEmpty(t, found, "contract file not found under %s", root)
+	data, err := os.ReadFile(found)
+	require.NoError(t, err)
+	out := strings.Replace(string(data), "status: open", "status: "+status, 1)
+	require.NotEqual(t, string(data), out, "status: open not present in %s", found)
+	if status != mission.StatusOpen {
+		// decodeAndValidate refuses a terminal status with no closed_at
+		// -- a hand-edited contract missing it fails to Load entirely
+		// (a validation error, not a clean non-open read), which is a
+		// different failure shape than the one these tests target.
+		out += "\nclosed_at: \"2026-09-08T00:00:00Z\"\n"
+	}
+	require.NoError(t, os.WriteFile(found, []byte(out), 0o600))
+}
+
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_StaleEntryDoesNotHeadOfLineBlock
+// closes a gap a local review probe found in the FIFO redesign above: a
+// pending entry naming a NON-OPEN mission (e.g. one abandoned after it
+// was dispatched but before its worker ever spawned) was never
+// consumed, and FIFO always re-selects the OLDEST matching entry first
+// — so that one stale entry permanently blocked every NEWER pending
+// dispatch for the same Worker from ever being reached, for the rest
+// of the session. matchDispatchPending now skips AND clears any entry
+// it can PROVE is non-open (a successful Load reporting a non-open
+// status), while still handing a genuinely UNRESOLVABLE entry (a Load
+// failure) to dispatchTierB's own gate unchanged, per C3's doctrine.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_StaleEntryDoesNotHeadOfLineBlock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionA := "m-2026-09-08-707"
+	missionB := "m-2026-09-08-708"
+	stageContract(t, home, missionA)
+	stageContractCustomWriteSet(t, home, missionB, []string{"docs/"})
+	setContractStatus(t, home, missionA, "abandoned")
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-stale-head-of-line"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionA, "bwk"))
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionB, "bwk"))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, missionB, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"the stale entry for the abandoned mission must be skipped, not permanently block mission B")
+
+	remaining, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "the stale entry must be cleared, and the matched entry consumed")
+}
+
+// TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch closes a
+// second gap a local review probe found: two concurrent calls to
+// matchDispatchPending (standing in for two Agent() tool calls the
+// leader batched in one turn — an explicitly encouraged pattern in
+// this org's own conventions) could both read the pending store before
+// either consumed its match, resolving to the SAME oldest entry twice.
+// dispatchAgent now holds AcquireDispatchPendingLock across the whole
+// match-through-admit sequence; this test exercises matchDispatchPending
+// directly under that same lock discipline to prove two serialized
+// callers never collide.
+func TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionA := "m-2026-09-08-709"
+	missionB := "m-2026-09-08-710"
+	stageContract(t, home, missionA)
+	stageContractCustomWriteSet(t, home, missionB, []string{"docs/"})
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-concurrent-match"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionA, "bwk"))
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionB, "bwk"))
+
+	match := func() string {
+		release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+		require.NoError(t, err)
+		defer release()
+		m := matchDispatchPending(globalRoot, sessionID, "bwk")
+		if m != "" {
+			require.NoError(t, mission.ConsumeDispatchPending(globalRoot, sessionID, m))
+		}
+		return m
+	}
+
+	m1 := match()
+	m2 := match()
+	assert.NotEqual(t, m1, m2, "two serialized matches must never resolve to the same mission")
+	assert.ElementsMatch(t, []string{missionA, missionB}, []string{m1, m2})
 }
 
 // TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume is

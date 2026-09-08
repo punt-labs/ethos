@@ -119,7 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reusing a session ID also no longer inherits a stale claim or pending
   dispatch from before the session ended (ethos-7tqd; see DES-076's
   round 3 amendment in DESIGN.md, including an explicit accounting of
-  what residual risk this does and does not close).
+  what residual risk this does and does not close). A stale pending
+  dispatch naming an already-closed mission no longer permanently
+  head-of-line-blocks a newer one for the same Worker, and two
+  concurrent `Agent()` spawns in the same session (a normal shape when
+  independent tool calls are batched in one turn) can no longer both
+  match the same pending entry.
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`

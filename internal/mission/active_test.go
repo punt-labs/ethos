@@ -183,7 +183,19 @@ func TestActiveMissionSidecar_StaysOneLine(t *testing.T) {
 // TestReadActiveMissionBinding_StaleOriginIgnored asserts the two files
 // are self-checking: an origin sidecar naming a different mission is
 // left over from an earlier binding and must not label the current one.
-func TestReadActiveMissionBinding_StaleOriginIgnored(t *testing.T) {
+// TestReadActiveMissionBinding_StaleOriginIsUnknownNotClaim pins DES-076
+// round 3's fix for review finding C2 (m-2026-09-08-004 round 2): a
+// stale origin file naming a DIFFERENT mission than active-mission is
+// still ignored for matching purposes (the mismatch check itself is
+// unchanged), but the resulting binding's Origin must read as
+// BindOriginUnknown, NOT BindOriginClaim. Answering "claim" for
+// positive, contradictory evidence would both let the mismatched
+// mission ID capture a spawn it was never bound to gate on Worker for,
+// and (per commit_trailers.go's Origin == BindOriginClaim gate) turn on
+// commit trailers for a binding the operator never explicitly claimed
+// — the exact false-trailer class BindOriginDispatch exists to prevent,
+// reachable through the read path instead of the write path.
+func TestReadActiveMissionBinding_StaleOriginIsUnknownNotClaim(t *testing.T) {
 	root := t.TempDir()
 	sess := "sess-stale-origin"
 	require.NoError(t, WriteActiveMission(root, sess, "m-2026-07-31-004"))
@@ -191,9 +203,30 @@ func TestReadActiveMissionBinding_StaleOriginIgnored(t *testing.T) {
 
 	b, err := ReadActiveMissionBinding(root, sess)
 	require.NoError(t, err)
-	assert.Equal(t, "m-2026-07-31-004", b.MissionID)
-	assert.Equal(t, BindOriginClaim, b.Origin,
-		"an origin naming another mission must be ignored")
+	assert.Equal(t, "m-2026-07-31-004", b.MissionID,
+		"the mismatched origin must still be ignored for matching purposes")
+	assert.Equal(t, BindOriginUnknown, b.Origin,
+		"a positively contradictory origin must read as unknown, never silently as claim")
+}
+
+// TestReadActiveMissionBinding_TruncatedOriginIsUnknownNotClaim is the
+// sibling of the mismatch case above: an origin file that exists but is
+// too short to parse (a partial write) must ALSO read as
+// BindOriginUnknown, not BindOriginClaim -- the same reasoning applies
+// regardless of which way the origin file failed to resolve cleanly.
+func TestReadActiveMissionBinding_TruncatedOriginIsUnknownNotClaim(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-truncated-origin"
+	require.NoError(t, WriteActiveMission(root, sess, "m-2026-07-31-005"))
+	path := ActiveMissionOriginPath(root, sess)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("dispatch\n"), 0o600)) // missing the mission-ID line
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-07-31-005", b.MissionID)
+	assert.Equal(t, BindOriginUnknown, b.Origin,
+		"a truncated origin file must read as unknown, never silently as claim")
 }
 
 // TestWriteActiveMission_ClaimClearsDispatchOrigin asserts a claim over
