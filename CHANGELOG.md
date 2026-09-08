@@ -103,6 +103,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate is completely untouched — a mission with a submitted result
   still refuses regardless of any disclaim (ethos-7tqd; see DES-076
   round 2 in DESIGN.md for the full decision and security review).
+- **`ethos mission abandon` no longer requires `--disclaim` for a
+  delegation that was refused before its worker ever ran.** A
+  delegation with `verdict: aborted` — written only by the
+  `max_delegation_depth` refusal or the content-hash-gate refusal, both
+  of which fire before the spawn happens — is now excluded from
+  Abandon's blocking-delegation gate unconditionally and automatically,
+  independent of `BoundVia` or any disclaim. Before this, a mission
+  whose only "delegation" was a pre-run refusal still required an
+  operator to disclaim it as if it were a genuine dispatch-sidecar
+  capture, even though nothing about it needed proving — there was
+  never any work to have judged (DES-076, DESIGN.md; review finding C7,
+  m-2026-09-08-004 round 2).
 - **Two `ethos mission dispatch --worker <same handle>` calls to
   DIFFERENT missions before either worker spawned no longer
   misattribute both spawns.** The dispatch-binding fix above bound the
@@ -117,7 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending dispatches to the same Worker coexist and resolve in dispatch
   order (oldest first) as their matching spawns occur. `claude --resume`
   reusing a session ID also no longer inherits a stale claim or pending
-  dispatch from before the session ended (ethos-7tqd; see DES-076's
+  dispatch from a session that ended cleanly (ethos-7tqd; see DES-076's
   round 3 amendment in DESIGN.md, including an explicit accounting of
   what residual risk this does and does not close). A stale pending
   dispatch naming an already-closed mission no longer permanently
@@ -166,6 +178,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filesystems with coarse resolution) now tiebreak deterministically on
   mission ID; a symlinked entry is refused, matching every other sidecar
   reader in the package.
+- **A pending dispatch that matched a spawn but whose mission contract
+  cannot load no longer permanently denies every subsequent spawn of
+  the same worker.** It is skipped (never cleared — a Load failure
+  proves nothing) so a newer, resolvable pending dispatch for the same
+  worker behind it is reachable instead of stuck forever. Reachable
+  without exotic faults: mission contracts are git-tracked, so `mission
+  dispatch` followed by `git checkout` to a branch without the contract
+  reproduces it directly.
+- **`ethos session purge` (and the repo-scoped `PurgeTombstoned`) now
+  also clears a purged session's mission sidecars** — the active-mission
+  claim, the delegation-binding sidecar, and every pending dispatch —
+  not only its roster. Before this, only a CLEANLY ended session (normal
+  `SessionEnd`) had its sidecars cleared; a session that ended abnormally
+  (SIGKILL, a closed terminal, a crash) left them in place indefinitely,
+  with no GC path, so `claude --resume` reusing that session ID could
+  have its first matching spawn captured by a stale claim or pending
+  dispatch from before the death. This closes the gap for the next
+  `ethos session purge` run, not automatically on every resume — purge
+  is still an explicit, operator- or tooling-invoked step.
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`
