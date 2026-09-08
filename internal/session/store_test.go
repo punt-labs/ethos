@@ -4,7 +4,6 @@ package session
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -464,19 +464,11 @@ func TestStore_Purge_SidecarClearFailureIsReportedAndRefused(t *testing.T) {
 	require.NoError(t, os.Chmod(sidecarDir, 0o500))
 	t.Cleanup(func() { _ = os.Chmod(sidecarDir, 0o700) })
 
-	oldStderr := os.Stderr
-	pr, pw, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = pw
-
-	purged, refused, purgeErr := s.Purge()
-
-	require.NoError(t, pw.Close())
-	os.Stderr = oldStderr
-	stderrBytes, err := io.ReadAll(pr)
-	require.NoError(t, err)
-	require.NoError(t, pr.Close())
-	stderrText := string(stderrBytes)
+	var purged, refused []string
+	var purgeErr error
+	stderrText := testhelpers.CaptureStderr(t, func() {
+		purged, refused, purgeErr = s.Purge()
+	})
 
 	require.NoError(t, purgeErr)
 	assert.NotContains(t, purged, sessionID, "a session whose sidecar clear failed must not be reported as purged")

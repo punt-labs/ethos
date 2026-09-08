@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -4965,53 +4964,48 @@ func TestMissionDispatch_RefusesWhenSessionRosterGone(t *testing.T) {
 	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
 	require.NoError(t, err)
 
-	// Redirect stderr BEFORE starting the goroutine below (the `go`
-	// statement itself is what makes this write visible to the new
-	// goroutine under the Go memory model -- swapping os.Stderr on
+	// testhelpers.CaptureStderr redirects os.Stderr BEFORE calling fn,
+	// so the redirect happens before the `go` statement below runs --
+	// the `go` statement itself is what makes the write visible to the
+	// new goroutine under the Go memory model. Swapping os.Stderr on
 	// either side of release(), an OS-level flock the race detector
-	// does not recognize as synchronization, would race).
-	r, w, pipeErr := os.Pipe()
-	require.NoError(t, pipeErr)
-	oldStderr := os.Stderr
-	os.Stderr = w
-
-	done := make(chan error, 1)
-	go func() {
-		done <- runMissionDispatch()
-	}()
-
-	// Give the goroutine time to create the contract, pass
-	// resolveSessionContext (the roster still exists at this point),
-	// and then block entering Flock for the sidecar write.
-	time.Sleep(150 * time.Millisecond)
-	select {
-	case dispatchErr := <-done:
-		os.Stderr = oldStderr
-		t.Fatalf("runMissionDispatch completed while a sibling held the dispatch-pending lock (err=%v)", dispatchErr)
-	default:
-		// Expected: still blocked.
-	}
-
-	// Simulate deleteFiles: while STILL holding the lock, remove the
-	// roster -- the exact state a resumed dispatch resumes into once
-	// the lock is released, per deleteFiles's own doc comment.
-	require.NoError(t, os.Remove(filepath.Join(globalRoot, "sessions", sessionID+".yaml")))
-	release()
-
+	// does not recognize as synchronization, would race, so both the
+	// redirect and every check below live inside fn: CaptureStderr's
+	// own deferred cleanup -- not a manual restore at each early exit
+	// -- is what guarantees os.Stderr comes back even if a require or
+	// t.Fatal(f) call here Goexits (PR #509 review finding, J-round).
 	var dispatchErr error
-	select {
-	case dispatchErr = <-done:
-	case <-time.After(2 * time.Second):
-		os.Stderr = oldStderr
-		t.Fatal("runMissionDispatch did not complete within 2s after the sibling released")
-	}
-	os.Stderr = oldStderr
-	require.NoError(t, w.Close())
-	var buf bytes.Buffer
-	_, readErr := io.Copy(&buf, r)
-	require.NoError(t, readErr)
-	require.NoError(t, r.Close())
-	warning := buf.String()
+	warning := testhelpers.CaptureStderr(t, func() {
+		done := make(chan error, 1)
+		go func() {
+			done <- runMissionDispatch()
+		}()
+
+		// Give the goroutine time to create the contract, pass
+		// resolveSessionContext (the roster still exists at this
+		// point), and then block entering Flock for the sidecar
+		// write.
+		time.Sleep(150 * time.Millisecond)
+		select {
+		case dispatchErr = <-done:
+			t.Fatalf("runMissionDispatch completed while a sibling held the dispatch-pending lock (err=%v)", dispatchErr)
+		default:
+			// Expected: still blocked.
+		}
+
+		// Simulate deleteFiles: while STILL holding the lock, remove
+		// the roster -- the exact state a resumed dispatch resumes
+		// into once the lock is released, per deleteFiles's own doc
+		// comment.
+		require.NoError(t, os.Remove(filepath.Join(globalRoot, "sessions", sessionID+".yaml")))
+		release()
+
+		select {
+		case dispatchErr = <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("runMissionDispatch did not complete within 2s after the sibling released")
+		}
+	})
 
 	require.NoError(t, dispatchErr, "an advisory sidecar-binding failure must not fail the dispatch")
 	assert.Contains(t, warning, "no longer exists", "the CLI must report the refusal on stderr")

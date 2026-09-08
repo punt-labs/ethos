@@ -3,10 +3,10 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -776,25 +776,14 @@ func TestFormatOutput_Mission_Create_Warnings(t *testing.T) {
 // only way to trace a dropped entry back to one of the six shared
 // call sites (silent-failure-hunter finding on PR #437's follow-up).
 func TestWriteMissionWarnings_DropsNonStringEntry(t *testing.T) {
-	origStderr := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-
 	var ctx strings.Builder
-	writeMissionWarnings(&ctx, []any{"a real warning", 42.0}, "mission.show")
-
-	require.NoError(t, w.Close())
-	os.Stderr = origStderr
-	var captured bytes.Buffer
-	_, err = captured.ReadFrom(r)
-	require.NoError(t, err)
-	require.NoError(t, r.Close())
+	stderr := testhelpers.CaptureStderr(t, func() {
+		writeMissionWarnings(&ctx, []any{"a real warning", 42.0}, "mission.show")
+	})
 
 	assert.Contains(t, ctx.String(), "\n  - a real warning")
 	assert.NotContains(t, ctx.String(), "42")
 
-	stderr := captured.String()
 	assert.Contains(t, stderr, "mission.show")
 	assert.Contains(t, stderr, "dropping")
 	assert.Contains(t, stderr, "defect in the tool's warnings emission")
@@ -810,29 +799,20 @@ func TestWriteMissionWarnings_DropsNonStringEntry(t *testing.T) {
 // above): skip the entry from the rendered line, but report it loudly
 // on stderr naming the caller and the malformed value.
 func TestFormatOutput_Mission_Abandon_DropsNonStringDisclaimedEntry(t *testing.T) {
-	origStderr := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-
 	result := `{"mission_id":"m-2026-09-08-001","status":"abandoned","reason":"probe mission",` +
 		`"disclaimed":["d-2026-09-08-001",42.0]}`
 	payload := makeToolPayload("mission", "abandon", result)
-	out := runFormat(t, payload)
 
-	require.NoError(t, w.Close())
-	os.Stderr = origStderr
-	var captured bytes.Buffer
-	_, err = captured.ReadFrom(r)
-	require.NoError(t, err)
-	require.NoError(t, r.Close())
+	var out string
+	stderr := testhelpers.CaptureStderr(t, func() {
+		out = runFormat(t, payload)
+	})
 
 	res := parseFormatResult(t, out)
 	ctx := res.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, "Disclaimed: d-2026-09-08-001")
 	assert.NotContains(t, ctx, "42")
 
-	stderr := captured.String()
 	assert.Contains(t, stderr, "mission.abandon")
 	assert.Contains(t, stderr, "dropping")
 	assert.Contains(t, stderr, "defect in the tool's disclaimed emission")
@@ -845,28 +825,19 @@ func TestFormatOutput_Mission_Abandon_DropsNonStringDisclaimedEntry(t *testing.T
 // meaningless line masking the fact that the whole array failed to
 // decode. The line must not appear at all when no entry decoded.
 func TestFormatOutput_Mission_Abandon_AllMalformedDisclaimedOmitsEmptyLine(t *testing.T) {
-	origStderr := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-
 	result := `{"mission_id":"m-2026-09-08-002","status":"abandoned","reason":"probe mission",` +
 		`"disclaimed":[42.0,true]}`
 	payload := makeToolPayload("mission", "abandon", result)
-	out := runFormat(t, payload)
 
-	require.NoError(t, w.Close())
-	os.Stderr = origStderr
-	var captured bytes.Buffer
-	_, err = captured.ReadFrom(r)
-	require.NoError(t, err)
-	require.NoError(t, r.Close())
+	var out string
+	stderr := testhelpers.CaptureStderr(t, func() {
+		out = runFormat(t, payload)
+	})
 
 	res := parseFormatResult(t, out)
 	assert.NotContains(t, res.HookSpecificOutput.AdditionalContext, "Disclaimed:",
 		"an entirely malformed disclaimed array must not leave behind an empty Disclaimed: line")
 
-	stderr := captured.String()
 	assert.Contains(t, stderr, "mission.abandon")
 	assert.Equal(t, 2, strings.Count(stderr, "dropping"), "both malformed entries must be reported")
 }
