@@ -26,14 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file, missing every session whose trail had been sealed by `ethos
   audit seal` — the normal state for an actively-committed repo, not an
   edge case — so it now also reads sealed chunks and the live (not yet
-  sealed) tail. The live-tail read also now covers a linked worktree's
-  own gitignored local zone, not only the main work tree — a session
+  sealed) tail. Both the live tail AND the sealed chunks now also cover
+  a linked worktree's own state, not only the main work tree: a session
   running in a worktree (the common case, not an edge one) previously
-  had its own not-yet-sealed audit content invisible to this scan. `ethos
-  mission migrate` shares this exact ownership-scan mechanism and gained
-  the same fixes, plus a `checkoutRoot` parameter mirroring the CLI's
-  existing worktree-aware store construction. See DES-075 in DESIGN.md
-  for the full storage-layer decision.
+  had its own not-yet-sealed audit content invisible to this scan, and
+  — because git-tracked means identical at the same commit, not
+  identical across every checkout — a worktree on an unmerged branch
+  can also carry SEALED audit chunks the main tree's own working copy
+  does not have, which were likewise invisible until now. A mission
+  whose only ownership evidence lived in either place was previously
+  invisible to `create`/`dispatch`'s conflict check; both are now
+  detected. `ethos mission migrate` shares this exact ownership-scan
+  mechanism and gained the same fixes, plus a `checkoutRoot` parameter
+  mirroring the CLI's existing worktree-aware store construction. See
+  DES-075 in DESIGN.md for the full storage-layer decision.
 - **`ethos mission create`/`dispatch` no longer reports success for a
   contract that was not durably persisted, and no longer reports FAILURE
   for one that durably was.** The contract writer syncs the file before

@@ -1901,6 +1901,50 @@ func TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit(t *testing.T) {
 	assert.Contains(t, err.Error(), mine.MissionID)
 }
 
+// TestStore_CreateDetectsSameRepoConflictViaWorktreeSealedAudit is the
+// regression gate for PR #508 round 7 finding J1: git-tracked does
+// not mean "identical across every checkout" — it means identical AT
+// THE SAME COMMIT. A linked worktree on an unmerged branch has sealed
+// chunks committed to that branch which the main tree's own working
+// copy of .punt-labs/ethos/sessions/ does not carry (measured
+// directly by the leader: six sealed chunks present in a worktree
+// checkout, absent from main's). The round-4 fix (H1) widened the
+// LIVE scan to cover both repoRoot and checkoutRoot but left the
+// SEALED scan reading repoRoot only — so a mission whose sole
+// ownership evidence sealed onto an unmerged branch was invisible to
+// admission control: it had left the live tail (it sealed) and never
+// reached the main tree's sealed history (unmerged), reopening the F4
+// false-negative class one layer down from where H1 closed it for the
+// live zone.
+//
+// Modeled the same way TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit
+// is: two separate temp dirs standing in for the main tree (repoRoot)
+// and a linked worktree (checkoutRoot) — no real git worktree needed,
+// only the same directory split Store.WithCheckoutRoot already
+// threads through. The only difference from that test is which zone
+// (sealed vs. live) carries the referencing session.
+func TestStore_CreateDetectsSameRepoConflictViaWorktreeSealedAudit(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()     // stands in for the main work tree
+	worktreeRoot := t.TempDir() // stands in for a linked worktree
+
+	legacy := NewStore(globalRoot)
+	mine := withWriteSet("m-2026-04-08-932", "internal/worktreesealed/")
+	require.NoError(t, legacy.Create(mine))
+	// The referencing session's SEALED chunk lives under the
+	// WORKTREE's own sessions tree, not the main tree's — repoRoot's
+	// sealed zone has no knowledge of this session at all.
+	writeSealedAuditContractIDLine(t, worktreeRoot, "2026-04-08-sess-worktree-sealed", mine.MissionID)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot).WithCheckoutRoot(worktreeRoot)
+	overlap := withWriteSet("m-2026-04-08-933", "internal/worktreesealed/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "an un-migrated same-repo global mission referenced only from a "+
+		"WORKTREE's SEALED audit chunk must still block an overlapping create")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
+}
+
 // TestStore_CreateMultiConflictReportsAllBlockers asserts that a new
 // mission overlapping two existing open missions surfaces both
 // blockers in the error message — one line per blocker.

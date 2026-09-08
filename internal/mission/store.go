@@ -1855,21 +1855,25 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 // root:
 //
 //   - SEALED zone — sealed audit chunks plus the frozen legacy
-//     audit.jsonl — lives at <repoRoot>/.punt-labs/ethos/sessions/
-//     and is git-tracked, so every checkout of this repo sees the
-//     same sealed history regardless of which one produced it.
+//     audit.jsonl — lives at <root>/.punt-labs/ethos/sessions/ and is
+//     git-tracked.
 //   - LIVE zone — the not-yet-sealed tail of a session that has not
 //     committed yet — lives at a DIFFERENT root,
 //     <root>/.punt-labs/local/ethos/sessions/, and is gitignored:
 //     machine-local to whichever checkout wrote it.
 //
-// That is exactly why the live half of the scan takes a SECOND root
-// (auditRoot(), below) while the sealed half does not: a linked
-// worktree's live tail sits under the worktree's own gitignored zone,
-// never under the main tree's, so scanning repoRoot alone would miss
-// it — but repoRoot alone is correct and sufficient for the sealed
-// zone, which is git-tracked and therefore identical from either
-// checkout. See repoMissionIDs' doc comment in migrate.go for the
+// "Git-tracked" does not mean "identical across every checkout" — it
+// means identical AT THE SAME COMMIT. A linked worktree on an
+// unmerged branch has sealed chunks committed to that branch which
+// the main tree's own working copy of the sealed zone does not carry
+// (PR #508 round 7, finding J1 — measured directly: six sealed chunks
+// existed in a worktree checkout and not in the main tree's). So BOTH
+// zones take a SECOND root (auditRoot(), below) when this repo is a
+// linked worktree, not just the live one: a mission whose only
+// ownership evidence sealed onto an unmerged branch would otherwise be
+// invisible to admission control, reopening the F4 false-negative
+// class one layer down from where round 4 (H1) closed it for the live
+// zone alone. See repoMissionIDs' doc comment in migrate.go for the
 // full three-source breakdown of contract_id references, which is a
 // reliable per-repo signal even though Contract.Repo itself is not
 // (measured 2026-09-07: zero of 841 global-tree contracts carry a
@@ -1891,15 +1895,15 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 //
 // Cost: repoMissionIDs reads, once per Create, every SEALED chunk and
 // the frozen legacy audit.jsonl under every session this repo has
-// ever recorded, plus the LIVE zone's not-yet-sealed tail under two
-// separate roots — repoRoot's own live zone and, when different,
-// auditRoot()'s checkoutRoot live zone (see the two-zone breakdown
-// above). This mirrors the cost `mission migrate` already accepts for
-// the identical scan; unlike migrate, Create pays it on every call,
-// not just an operator-invoked one-off — acceptable for now (creates
-// are infrequent, not a per-tool-call hot path), but a real cost
-// worth remembering if this repo's session history grows large enough
-// to make it visible.
+// ever recorded, PLUS the LIVE zone's not-yet-sealed tail — both under
+// repoRoot and, when different, auditRoot()'s checkoutRoot (see the
+// two-zone breakdown above; both zones take both roots as of round
+// 7). This mirrors the cost `mission migrate` already accepts for the
+// identical scan; unlike migrate, Create pays it on every call, not
+// just an operator-invoked one-off — acceptable for now (creates are
+// infrequent, not a per-tool-call hot path), but a real cost worth
+// remembering if this repo's session history grows large enough to
+// make it visible.
 //
 // Legacy single-tree mode (repoRoot == "") keeps scanning the full
 // global tree — it is the ONLY tree in that mode, so every entry

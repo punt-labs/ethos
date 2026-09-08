@@ -9334,3 +9334,56 @@ the prefix to `"ethos: mission:"` in the two functions genuinely shared
 between callers; `MigrateMission`'s own per-mission failure messages
 (which really are migrate-specific) keep their `"ethos: mission migrate:"`
 prefix unchanged.
+
+### Amendment 2026-09-08: PR #508 review round 7 — J1 corrects a false assumption the round-4 fix rested on
+
+**J1 (High) — `repoMissionIDs`'s SEALED-zone scan read `repoRoot` only,
+on the assumption that "git-tracked" means "identical across every
+checkout."** It does not: git-tracked means identical AT THE SAME
+COMMIT. A linked worktree on an unmerged branch has sealed audit
+chunks committed to that branch which the main tree's own working
+copy of `.punt-labs/ethos/sessions/` does not carry — measured
+directly in the worktree that produced this PR: `diff -rq` between the
+worktree's sealed-sessions tree and the main tree's found six sealed
+chunks present in one and absent from the other.
+
+This is the same worktree-state question H1 (round 4) closed for the
+LIVE zone, reopened one layer down: H1's own fix widened
+`collectLiveContractIDs` to cover both `repoRoot` and `checkoutRoot`,
+but the sealed-chunk scan next to it kept reading `repoRoot` alone,
+reasoning (stated explicitly in the round-4 comment this amendment
+removes) that the sealed zone's git-tracked status made a second root
+unnecessary. That reasoning was never tested against an actual
+divergent worktree and turned out to be false. The practical
+consequence is the exact F4 false-negative class this whole ADR
+exists to close, at one further remove: a mission whose ownership
+evidence sealed onto an unmerged branch had, by the time it sealed,
+already left the live zone (round 4's fix covers a session still
+writing) and had not reached the main tree's sealed zone (unmerged) —
+invisible to admission control in the gap between the two.
+
+**Fix.** `repoMissionIDs` now scans the sealed zone under both roots,
+symmetric with the live zone: `collectSealedContractIDs` (extracted
+from the loop the round-1/G1 versions inlined directly into
+`repoMissionIDs`, no behavior change beyond the extraction) is called
+once for `repoRoot` and, when `checkoutRoot` differs, once more for
+`checkoutRoot` — the identical pattern `collectLiveContractIDs`
+already used. The frozen legacy `audit.jsonl` path lives inside the
+same per-session sealed directory the sealed-chunk scan walks, so it
+is covered by the same extraction and the same two-root call; a
+separate check confirmed no other single-root read exists anywhere
+else in `repoMissionIDs` — the function now composes exactly two
+per-zone scans, both root-symmetric, and nothing else touches a root.
+
+`TestStore_CreateDetectsSameRepoConflictViaWorktreeSealedAudit` covers
+this directly — the sealed-zone sibling of round 4's
+`..._ViaWorktreeLiveAudit` test, differing only in which zone (sealed
+vs. live) carries the referencing session. Confirmed failing against
+the round-6 code (the un-migrated same-repo mission was NOT detected,
+`Create` returned no error) before this fix, passing after.
+
+User-visible: a write-set conflict against a same-repo mission whose
+ownership evidence lives only in a linked worktree's sealed audit
+history — not merged to the main tree — is now caught by
+`create`/`dispatch`'s admission control; it previously was not. See
+`CHANGELOG.md` under `[Unreleased]`.
