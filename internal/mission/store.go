@@ -1875,10 +1875,29 @@ func countDelegations(repoRoot, missionID string) (int, error) {
 // already is; the aborted exclusion here is independent of it.
 //
 // A delegation directory whose record cannot be read or parsed is NOT
-// treated as disclaimed or aborted by that fact — it counts as
-// blocking, fail-closed, matching Gate 1's overall "any sign of work
-// blocks" philosophy: an error here must never silently narrow the
-// count.
+// treated as disclaimed or aborted by that fact — Abandon refuses
+// rather than silently narrow the count, matching Gate 1's overall "any
+// sign of work blocks" philosophy. That refusal is reported as an
+// ERROR (aborting the whole count), not as an extra +1 folded silently
+// into the returned total: an unreadable record is itself evidence the
+// operator needs to see and act on, not a number to add up with the
+// legitimately-blocking ones. (Review finding M4, full-branch review,
+// m-2026-09-08-004 round 3, corrected this comment: it previously said
+// "counts as blocking" while the code aborted the count entirely — same
+// fail-closed OUTCOME for Abandon's caller either way, since an error
+// here blocks Abandon exactly as effectively as a positive count would,
+// but the two are not the same code path and the comment must say
+// which one this is.)
+//
+// A missing record.yaml specifically (fs.ErrNotExist, as opposed to a
+// permission or decode failure) is a distinct, actionable dead end: a
+// WriteDelegationSkeleton write that crashed between creating the
+// delegation directory and writing record.yaml into it leaves a
+// directory with nothing to load, nothing DisclaimDelegation can act on
+// (it loads the same missing file), and nothing to disclaim. That case
+// gets its own message naming the manual remedy (removing the empty
+// directory) rather than surfacing LoadDelegation's bare "no such file
+// or directory", which reads like an internal bug with no path forward.
 func countBlockingDelegations(repoRoot, missionID string) (int, error) {
 	delegationsDir := filepath.Join(
 		RepoStatePath(repoRoot, "missions"),
@@ -1896,9 +1915,18 @@ func countBlockingDelegations(repoRoot, missionID string) (int, error) {
 		if !e.IsDir() {
 			continue
 		}
-		recordPath := filepath.Join(delegationsDir, e.Name(), "record.yaml")
+		recordDir := filepath.Join(delegationsDir, e.Name())
+		recordPath := filepath.Join(recordDir, "record.yaml")
 		d, lErr := LoadDelegation(recordPath)
 		if lErr != nil {
+			if errors.Is(lErr, fs.ErrNotExist) {
+				return 0, fmt.Errorf(
+					"delegation %s has no record.yaml -- a WriteDelegationSkeleton write likely "+
+						"crashed before the record was written; it cannot be loaded, disclaimed, or "+
+						"counted as real work, so it cannot resolve on its own -- remove the empty "+
+						"directory to clear it: rm -rf %s",
+					e.Name(), recordDir)
+			}
 			return 0, fmt.Errorf("loading delegation %s: %w", e.Name(), lErr)
 		}
 		if d.DisclaimedAt != "" {

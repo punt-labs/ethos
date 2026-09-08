@@ -6211,6 +6211,41 @@ func TestCountBlockingDelegations_ExcludesOnlyDisclaimed(t *testing.T) {
 	assert.Equal(t, 2, total, "countDelegations must stay unfiltered — it backs an informational snapshot, not a gate")
 }
 
+// TestCountBlockingDelegations_MissingRecordNamesRemedy pins review
+// finding M4 (full-branch review, m-2026-09-08-004 round 3): a
+// delegation directory with no record.yaml (a WriteDelegationSkeleton
+// write that crashed between creating the directory and writing the
+// record — see that function's own doc comment on write ordering) is a
+// genuine dead end: it cannot be loaded, cannot be disclaimed (disclaim
+// loads the same missing file), and cannot be counted as real work. The
+// error must name that and the manual remedy (removing the empty
+// directory), not surface a bare "no such file or directory" that reads
+// like an internal bug with no path forward.
+//
+// Confirmed failing against the pre-fix code: the error text was just
+// "loading delegation <id>: open <path>: no such file or directory",
+// with no removal instruction and no explanation of why the delegation
+// cannot resolve on its own.
+func TestCountBlockingDelegations_MissingRecordNamesRemedy(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-09-08-815"
+	delegationID := "d-2026-09-08-030"
+
+	// Simulate the crash window: the directory exists, record.yaml does
+	// not, matching WriteDelegationSkeleton's documented write order
+	// (directory first, then prompt.md, then record.yaml last).
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	_, err := countBlockingDelegations(repoRoot, missionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), delegationID)
+	assert.Contains(t, err.Error(), "rm -rf")
+	assert.Contains(t, err.Error(), dir)
+	assert.NotContains(t, err.Error(), "no such file or directory",
+		"the bare filesystem error must be replaced with an actionable remedy, not surfaced verbatim")
+}
+
 // TestCountBlockingDelegations_ExcludesAbortedUnconditionally is
 // review finding C7 (m-2026-09-08-004 round 2): a delegation refused
 // before its worker ever ran (verdict=aborted, written by the
