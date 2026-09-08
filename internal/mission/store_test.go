@@ -6097,6 +6097,65 @@ func TestStore_DisclaimDelegation_RefusesOnNonOpenMission(t *testing.T) {
 	assert.Contains(t, err.Error(), "disclaim only applies to an open mission")
 }
 
+// TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure mirrors
+// TestStore_UpdateRollsBackOnEventAppendFailure /
+// TestStore_ForceReleaseWriteSet_EventAppendFailureRollsBackContract:
+// if appendEventLocked fails after DisclaimDelegationRecord already
+// stamped the disclaim marker on disk, the delegation record must be
+// restored to its pre-disclaim bytes, not left disclaimed with no
+// audit-log entry to explain it — a disclaim with no matching event is
+// exactly the half-finished state DES-076 round 2's security review
+// promises never happens.
+func TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-815")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-013"
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictAborted,
+		time.Now().UTC().Format(time.RFC3339)))
+
+	recordPath := filepath.Join(DelegationDir(repoRoot, c.MissionID, delegationID), "record.yaml")
+	originalBytes, err := os.ReadFile(recordPath)
+	require.NoError(t, err)
+
+	// Sabotage the live event log path so appendEventLocked's append
+	// fails — a directory in place of the file it wants to open,
+	// mirroring the tracked-log sabotage the sibling rollback tests use
+	// for the single-tree case. This store has no separate checkout
+	// root, so auditRoot() resolves to repoRoot and s.resolveSessionID()
+	// is empty (no resolver configured), giving sessionlessID. The file
+	// already exists (s.Create's own "create" event created it), so it
+	// must be removed before it can become a directory.
+	logPath := audit.LiveMissionLogPath(repoRoot, c.MissionID, sessionlessID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	_, err = s.DisclaimDelegation(c.MissionID, delegationID, "this disclaim must roll back")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event append failed")
+	assert.Contains(t, err.Error(), "rolled back")
+
+	restoredBytes, err := os.ReadFile(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalBytes), string(restoredBytes),
+		"delegation record must be byte-identical after rollback")
+
+	reloaded, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.DisclaimedAt, "a rolled-back disclaim must not leave a marker behind")
+
+	n, err := countBlockingDelegations(repoRoot, c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "the delegation must still block Abandon after a rolled-back disclaim")
+}
+
 // TestCountBlockingDelegations_ExcludesOnlyDisclaimed pins the pure
 // counting function Abandon's gate 1 now uses: two delegations, one
 // disclaimed and one not, must report exactly one blocking record.

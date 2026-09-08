@@ -1529,13 +1529,25 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 			)
 		}
 		return s.withAbandonDelegationLock(missionID, func() error {
+			// Captured before the mutating call so a failed event
+			// append can restore exactly what was there — the same
+			// discipline Abandon and Update apply to the contract file,
+			// applied here to the delegation record. A read failure
+			// here is not fatal on its own: DisclaimDelegationRecord's
+			// own LoadDelegation call below will report the same
+			// failure with an actionable message; oldData simply stays
+			// nil, and the rollback branch is skipped in that case
+			// (nothing to roll back to).
+			recordPath := filepath.Join(DelegationDir(s.repoRoot, missionID, delegationID), "record.yaml")
+			oldData, _ := os.ReadFile(recordPath)
+
 			now := time.Now().UTC().Format(time.RFC3339)
 			d, dErr := DisclaimDelegationRecord(s.repoRoot, missionID, delegationID, redact, reason, now)
 			if dErr != nil {
 				return dErr
 			}
 			disclaimed = d
-			return s.appendEventLocked(missionID, Event{
+			if evErr := s.appendEventLocked(missionID, Event{
 				TS:    now,
 				Event: "disclaim_delegation",
 				Actor: c.Leader,
@@ -1544,7 +1556,25 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 					"bound_via":     d.BoundVia,
 					"reason":        reason,
 				}),
-			})
+			}); evErr != nil {
+				// A disclaim with no matching audit-log entry is
+				// exactly the half-finished state this package's other
+				// terminal-adjacent mutations (Abandon, Update) refuse
+				// to leave behind — restore the pre-disclaim record so
+				// the delegation still blocks Abandon's gate until a
+				// retry succeeds cleanly.
+				if len(oldData) > 0 {
+					dir := filepath.Dir(recordPath)
+					if rbErr := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, oldData); rbErr != nil {
+						return fmt.Errorf(
+							"disclaim: event append failed: %w; rollback failed: %v", evErr, rbErr,
+						)
+					}
+					return fmt.Errorf("disclaim: event append failed, delegation record rolled back: %w", evErr)
+				}
+				return fmt.Errorf("disclaim: event append failed: %w", evErr)
+			}
+			return nil
 		})
 	})
 	if err != nil {

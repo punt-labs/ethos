@@ -9543,6 +9543,21 @@ disclaimed what and why. Sharing the lock is what makes a disclaim and
 an `Abandon` gate-1 check mutually exclusive: neither can read the
 other's half-finished state.
 
+If the event append itself fails after `DisclaimDelegationRecord` has
+already stamped the marker on disk, `DisclaimDelegation` restores the
+delegation record's pre-disclaim bytes — the same rollback discipline
+`Update`, `Close`, and `ForceReleaseWriteSet` already apply to the
+contract file, applied here to the delegation record. Without it, a
+disclaim with no matching audit-log entry would be exactly the
+half-finished state this section's own audit-trail claim promises
+never happens; a rolled-back delegation still blocks `Abandon`'s gate,
+so the failure mode stays safe (an operator retries the disclaim)
+rather than silent. Confirmed failing before the rollback was added:
+`TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure` (a
+directory sabotaging the live event-log path) left the delegation
+disclaimed with no event and a 0-count `countBlockingDelegations` when
+run against the pre-rollback code.
+
 `Abandon`'s gate 1 (`internal/mission/store.go`) now counts via a new
 `countBlockingDelegations`, not `countDelegations` — the latter is kept
 unchanged and still backs `ForceReleaseWriteSet`'s informational
