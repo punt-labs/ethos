@@ -1174,3 +1174,30 @@ func TestDisclaimDelegationRecord_MissingDelegation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+// TestDisclaimDelegationRecord_EmptyArgs mirrors
+// TestWriteDelegationSkeleton_EmptyArgs: an empty repoRoot, missionID,
+// or delegationID must refuse with a named-field error before
+// DelegationDir ever builds a path from it. Without this guard an
+// empty repoRoot makes DelegationDir (via RepoStatePath's
+// filepath.Join) resolve to a path RELATIVE to the process's cwd
+// instead of erroring — the disclaim marker for a permanent,
+// unreversible state transition would land in an unintended tree
+// with no signal to the caller.
+func TestDisclaimDelegationRecord_EmptyArgs(t *testing.T) {
+	repoRoot := t.TempDir()
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+
+	_, err = DisclaimDelegationRecord("", "m-1", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoRoot")
+
+	_, err = DisclaimDelegationRecord(repoRoot, "", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missionID")
+
+	_, err = DisclaimDelegationRecord(repoRoot, "m-1", "", redact, "reason", "2026-09-08T12:05:00Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delegationID")
+}

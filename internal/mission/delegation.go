@@ -724,6 +724,15 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 // package persists (WriteDelegationSkeleton's prompt body, Abandon's
 // reason).
 func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact PathRedactor, reason, disclaimedAt string) (*Delegation, error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		return nil, fmt.Errorf("disclaim: repoRoot is required")
+	}
+	if strings.TrimSpace(missionID) == "" {
+		return nil, fmt.Errorf("disclaim: missionID is required")
+	}
+	if strings.TrimSpace(delegationID) == "" {
+		return nil, fmt.Errorf("disclaim: delegationID is required")
+	}
 	if strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("disclaim: reason is required")
 	}
