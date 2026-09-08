@@ -339,6 +339,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the caller, but a second `fsync` failure is now surfaced distinctly
   in the error text rather than silently discarded, since it means the
   rollback itself may not survive a crash.
+- **The write-failure/short-write rollback truncate — the sibling of the
+  sync-failure one above, in the same function — is now fsynced too.**
+  Only the sync-failure rollback had received the fix above; the
+  write-failure branch still did a bare `Truncate` with no follow-up
+  `fsync`, the identical crash-durability gap. This is the more severe
+  half: a short write leaves a *partial* line, so a revived rollback
+  resurrects malformed JSONL rather than a complete record. Both
+  rollback sites now share one helper (`rollbackTruncate`) instead of
+  each carrying its own copy of the truncate-then-fsync logic, so the
+  rationale is stated once rather than duplicated across two sites in
+  one function.
 - **`ethos mission abandon`'s formatted output no longer prints an empty
   "Disclaimed: " line, or silently drops a malformed disclaimed-ID entry
   with no signal.** `formatMissionAbandon` now matches

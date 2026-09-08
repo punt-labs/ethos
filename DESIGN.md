@@ -10838,6 +10838,66 @@ new test's message check failed while the file-emptiness check still
 passed — pinning specifically the missing second call, not the
 already-fixed first one.
 
+**Follow-up (2026-09-08, round 3): the same gap existed on the sibling
+rollback path.** `AppendMonotonic` has two `Truncate`-back sites, not
+one — the write-failure/short-write branch thirty lines above the
+sync-failure branch this amendment fixed. The leader's review caught
+that only the sync-failure branch had received the second-`fsync`
+treatment; the write-failure branch still did a bare `Truncate` with
+no follow-up `fsync`, the exact hazard this amendment describes,
+un-fixed on its sibling. Arguably the higher-severity half: a short
+write means the un-rolled-back content is a *partial* line, so
+reviving it on crash resurrects malformed JSONL rather than a complete
+record.
+
+**Fix.** Both rollback sites now call one new helper,
+`rollbackTruncate(f, end)`, instead of each carrying its own
+`Truncate`-then-maybe-`fsync` logic. It truncates to `end`, fsyncs
+that truncate best-effort, and returns a distinct error when the
+second `fsync` fails — the same contract this amendment's fix gave the
+sync-failure path, now available to both call sites from one place so
+the rationale is stated once instead of duplicated (and, per the
+history in this section, silently drifting out of sync between
+copies). The write-failure branch also needed a new package var,
+`writeFile` (mirroring the existing `fsyncFile` var), so a test can
+inject a deterministic `Write` failure the same way `fsyncFile`
+injects a deterministic `Sync` failure — `Write` was called directly
+on `f` before, with no seam for a test double.
+
+**Tests.** Four new tests mirror the three sync-failure tests this
+amendment already has: `TestAppendMonotonic_WriteFailureTruncatesBack`,
+`TestAppendMonotonic_WriteFailureThenSuccessAppendsExactlyOnce`,
+`TestAppendMonotonic_WriteFailureRollbackFsyncAlsoFailsIsReported`, and
+`TestAppendMonotonic_ShortWriteRollbackFsyncAlsoFailsIsReported` (the
+short-write sub-case specifically, since it is the more severe half).
+Confirmed failing against the pre-fix code: with `writeFile` added as
+a behavior-preserving seam (still calling `f.Write` with no `fsync`
+change) but the rollback fix not yet applied, both
+`..._WriteFailureRollbackFsyncAlsoFailsIsReported` and
+`..._ShortWriteRollbackFsyncAlsoFailsIsReported` failed with the
+single-failure message (`writing ...: simulated write failure` /
+`writing ...: short write 15 of 30 bytes`, no mention of the rollback
+fsync), while the file-emptiness assertion in both still passed —
+same failure shape as this amendment's original sync-path red run,
+now reproduced on the write path. Same honest limit applies: these
+tests prove the second `fsync` is attempted and its failure reported,
+not that a real crash-then-recovery round-trip is safe, because there
+is still no portable way to force a real crash between `Truncate` and
+the filesystem's own flush.
+
+**Checked for the same shape elsewhere in the package.** No other
+occurrence. `truncateTornTailAndRecover`'s `Truncate` call (torn-tail
+repair on reopen) looks similar but is a different case, documented
+inline where it lives: it is not undoing a write this call made, it
+is idempotent cleanup of a *prior* crash's garbage that reruns on
+every open, and a successful append's own final `fsync` — same fd —
+flushes it too when one follows. `WriteChunkAtomic`,
+`writeTombstone`/`ackTombstone` (tombstone.go), and the quarantine
+temp-file writer (quarantine.go) all roll back a failed write by
+`os.Remove`-ing the temp file rather than truncating it in place — a
+different, unaffected shape, since a removed temp was never renamed
+into the name any reader looks for.
+
 ### Amendment 2026-09-08: evaluated, and declined, a reservation/claim redesign of pending-dispatch consumption
 
 Residual-risk item 3 above (`consumeDispatchBinding`'s post-admission
