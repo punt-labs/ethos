@@ -106,11 +106,15 @@ func TestVacuumCrossCheckRosterActiveMissingLive(t *testing.T) {
 }
 
 // TestVacuumCrossCheckSilentOnSealedMissionLive is ethos-q6e2: a checkout that
-// did not write a mission's live log must not call the lines lost. Sealed
-// chunks are git-tracked and reach every checkout; the live log is per-checkout
-// and reaches none of them. Warning on absence alone reported loss for every
-// mission a long-lived session had touched, on every commit, in every other
-// checkout.
+// did not write a mission's live log must not call the lines lost. The
+// chunk this test writes directly into `committing`'s own sealed tree is
+// present there at the commit under test — git-tracked means every checkout
+// AT THAT COMMIT sees it, not every checkout unconditionally (a distinct,
+// separately tracked gap: PR #508 round 7/8, internal/audit/paths.go's note
+// above SessionUnsealedCountAcross). The live log is per-checkout and
+// reaches none of the others. Warning on absence alone reported loss for
+// every mission a long-lived session had touched, on every commit, in
+// every other checkout.
 //
 // The roster records the checkout that really wrote the log, so the probe
 // follows it there and finds the file. That is the whole mechanism: the fix is

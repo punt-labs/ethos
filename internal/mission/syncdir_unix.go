@@ -24,6 +24,22 @@ var syncDir = func(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return f.Sync()
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if syncErr != nil {
+		// Sync()'s error is the one that actually means something:
+		// fsync failed, so the directory-entry update is unconfirmed.
+		// Prefer it over closeErr even when both fire.
+		return syncErr
+	}
+	// Defensive, not load-bearing: f is a read-only (O_RDONLY) fd with
+	// nothing buffered, so there is no delayed-write data for Close to
+	// flush and no durability signal for it to carry — unlike the
+	// buffered-write case Copilot's rationale describes elsewhere, a
+	// Close error here means something went wrong with the fd itself
+	// (EBADF, EINTR), not that data failed to reach disk. Checked
+	// anyway because it costs nothing and removes a recurring review
+	// question, but do not read this as fsync-strength durability
+	// checking — it is not.
+	return closeErr
 }
