@@ -1067,6 +1067,108 @@ func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "result artifact")
 }
 
+// TestHandleMission_AbandonDisclaim pins DES-076 round 2's MCP-surface
+// parity: a mission whose only delegation was a dispatch-sidecar
+// capture (BoundVia matches the contract's own Worker, "bwk") is
+// disclaimed and abandoned in one call, and the response echoes the
+// disclaimed delegation ID.
+func TestHandleMission_AbandonDisclaim(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	delegationID := "d-2026-09-08-950"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, delegationID,
+		mission.DelegationVerdictAborted, time.Now().UTC().Format(time.RFC3339)))
+
+	// Before disclaiming: abandon still refuses.
+	preResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "should still refuse pre-disclaim",
+	}))
+	require.NoError(t, err)
+	assert.True(t, preResult.IsError)
+
+	abandonResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "captured by the dispatch sidecar bug",
+		"disclaim":   []interface{}{delegationID},
+	}))
+	require.NoError(t, err)
+	require.False(t, abandonResult.IsError, "abandon must succeed once the capture is disclaimed: %s", resultText(t, abandonResult))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, abandonResult)), &payload))
+	assert.Equal(t, mission.StatusAbandoned, payload["status"])
+	disclaimed, _ := payload["disclaimed"].([]any)
+	require.Len(t, disclaimed, 1)
+	assert.Equal(t, delegationID, disclaimed[0])
+}
+
+// TestHandleMission_AbandonDisclaimRefusesWrongProvenance pins the
+// refusal path: a delegation bound via explicit MISSION_ID env cannot
+// be disclaimed through the MCP surface either, and the mission stays
+// open.
+func TestHandleMission_AbandonDisclaimRefusesWrongProvenance(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	repoRoot := t.TempDir()
+	h.missionStore = h.missionStore.WithRepoRoot(repoRoot)
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	delegationID := "d-2026-09-08-951"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, created.MissionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, created.MissionID, delegationID,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "trying to disclaim genuine work",
+		"disclaim":   []interface{}{delegationID},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), delegationID)
+	assert.Contains(t, resultText(t, result), "disclaimable")
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var loaded mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+	assert.Equal(t, mission.StatusOpen, loaded.Status, "a failed disclaim must never reach Abandon")
+}
+
 func TestHandleMission_UnknownMethod(t *testing.T) {
 	h := testHandlerWithMissions(t)
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{

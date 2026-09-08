@@ -887,6 +887,12 @@ func summarizeEventDetailsRaw(evType string, details map[string]any) string {
 		)
 	case "abandon":
 		return eventKV("reason", eventStr(details, "reason"))
+	case "disclaim_delegation":
+		return joinEventParts(
+			eventKV("delegation", eventStr(details, "delegation_id")),
+			eventKV("bound_via", eventStr(details, "bound_via")),
+			eventKV("reason", eventStr(details, "reason")),
+		)
 	case "result":
 		return joinEventParts(
 			eventKVRound("round", eventRound(details, "round")),
@@ -1551,10 +1557,11 @@ func formatMissionClose(w io.Writer, result string) error {
 }
 
 // formatMissionAbandon renders the abandon method's confirmation as a
-// single-line summary, plus a Warnings section when the payload carries
-// one. Parallels formatMissionClose — abandon is a terminal transition
-// like close, and shares the same sidecar-cleanup warning path
-// (ethos-jawp).
+// single-line summary, plus a Disclaimed line (DES-076 round 2, when
+// any delegation IDs were disclaimed as part of this call) and a
+// Warnings section when the payload carries one. Parallels
+// formatMissionClose — abandon is a terminal transition like close,
+// and shares the same sidecar-cleanup warning path (ethos-jawp).
 func formatMissionAbandon(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -1567,12 +1574,24 @@ func formatMissionAbandon(w io.Writer, result string) error {
 		return emitSimple(w, truncate(result, 200))
 	}
 	summary := fmt.Sprintf("Abandoned %s as %s: %s", missionID, status, reason)
+	disclaimed, _ := c["disclaimed"].([]any)
 	warnings, _ := c["warnings"].([]any)
-	if len(warnings) == 0 {
+	if len(disclaimed) == 0 && len(warnings) == 0 {
 		return emitSimple(w, summary)
 	}
 	var ctx strings.Builder
-	writeMissionWarnings(&ctx, warnings, "mission.abandon")
+	if len(disclaimed) > 0 {
+		ids := make([]string, 0, len(disclaimed))
+		for _, d := range disclaimed {
+			if s, ok := d.(string); ok {
+				ids = append(ids, s)
+			}
+		}
+		fmt.Fprintf(&ctx, "\n\nDisclaimed: %s", strings.Join(ids, ", "))
+	}
+	if len(warnings) > 0 {
+		writeMissionWarnings(&ctx, warnings, "mission.abandon")
+	}
 	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
 }
 

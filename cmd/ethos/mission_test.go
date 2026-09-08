@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -911,7 +912,7 @@ func TestMissionAbandon(t *testing.T) {
 	require.Len(t, ids, 1)
 
 	stdout := captureStdoutE(t, func() error {
-		return runMissionAbandon(ids[0], "never dispatched, blocking write_set")
+		return runMissionAbandon(ids[0], "never dispatched, blocking write_set", nil)
 	})
 	assert.Contains(t, stdout, "abandoned:")
 	assert.Contains(t, stdout, ids[0])
@@ -936,7 +937,7 @@ func TestMissionAbandon_RequiresReason(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
-	err = runMissionAbandon(ids[0], "")
+	err = runMissionAbandon(ids[0], "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reason is required")
 
@@ -960,7 +961,7 @@ func TestMissionAbandon_RefusesWithResult(t *testing.T) {
 
 	submitCLIResult(t, ids[0], 1)
 
-	err = runMissionAbandon(ids[0], "ignoring the submitted result")
+	err = runMissionAbandon(ids[0], "ignoring the submitted result", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "result artifact")
 
@@ -982,7 +983,7 @@ func TestMissionAbandon_PrefixMatch(t *testing.T) {
 	require.Len(t, ids, 1)
 
 	prefix := ids[0][:9]
-	captureStdoutE(t, func() error { return runMissionAbandon(prefix, "prefix match") })
+	captureStdoutE(t, func() error { return runMissionAbandon(prefix, "prefix match", nil) })
 
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
@@ -1003,7 +1004,7 @@ func TestMissionAbandon_JSON(t *testing.T) {
 
 	jsonOutput = true
 	defer func() { jsonOutput = false }()
-	out := captureStdoutE(t, func() error { return runMissionAbandon(ids[0], "json path") })
+	out := captureStdoutE(t, func() error { return runMissionAbandon(ids[0], "json path", nil) })
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1032,7 +1033,7 @@ func TestMissionAbandon_ExcludedFromWriteSetConflicts(t *testing.T) {
 	require.Error(t, err, "an open dead mission must still block a conflicting create")
 
 	captureStdoutE(t, func() error {
-		return runMissionAbandon(deadID, "dead mission blocking real work")
+		return runMissionAbandon(deadID, "dead mission blocking real work", nil)
 	})
 
 	missionCreateFile = writeContractFileWithWriteSet(t, "internal/shared/thing.go")
@@ -1050,6 +1051,84 @@ func TestMissionAbandon_HelpDistinguishesFromClose(t *testing.T) {
 	assert.Contains(t, stdout, "never actually dispatched")
 	assert.Contains(t, stdout, "reason")
 	assert.Contains(t, stdout, "close")
+	assert.Contains(t, stdout, "--disclaim", "the disclaim escape hatch must be discoverable in help (DES-076)")
+}
+
+// --- DES-076 round 2: `mission abandon --disclaim` ---
+
+// TestMissionAbandon_DisclaimHappyPath pins scenario (a) at the CLI
+// layer: a mission whose only delegation was a dispatch-sidecar
+// capture (BoundVia matches the contract's own Worker, "bwk") is
+// disclaimed and abandoned in one call.
+func TestMissionAbandon_DisclaimHappyPath(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t) // worker: bwk
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	delegationID := "d-2026-09-08-900"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, delegationID,
+		mission.DelegationVerdictAborted, time.Now().UTC().Format(time.RFC3339)))
+
+	// Before disclaiming: abandon still refuses, exactly as before this round.
+	err = runMissionAbandon(missionID, "should still refuse pre-disclaim", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delegation record")
+
+	stdout := captureStdoutE(t, func() error {
+		return runMissionAbandon(missionID, "captured by the dispatch sidecar bug", []string{delegationID})
+	})
+	assert.Contains(t, stdout, "abandoned:")
+	assert.Contains(t, stdout, "disclaimed:")
+	assert.Contains(t, stdout, delegationID)
+
+	c, err := ms.Load(missionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusAbandoned, c.Status)
+}
+
+// TestMissionAbandon_DisclaimRefusesWrongProvenance pins scenario (b)
+// at the CLI layer: a delegation bound via explicit MISSION_ID env
+// cannot be disclaimed, the CLI names which delegation and why, and
+// the mission stays open (neither the disclaim nor the abandon apply).
+func TestMissionAbandon_DisclaimRefusesWrongProvenance(t *testing.T) {
+	home := missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	missionID := ids[0]
+
+	repoRoot := filepath.Join(home, "repo")
+	delegationID := "d-2026-09-08-901"
+	_, err = mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", BoundVia: mission.BoundViaMissionIDEnv,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mission.CloseDelegationSkeleton(repoRoot, missionID, delegationID,
+		mission.DelegationVerdictPass, time.Now().UTC().Format(time.RFC3339)))
+
+	err = runMissionAbandon(missionID, "trying to disclaim genuine work", []string{delegationID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), delegationID)
+	assert.Contains(t, err.Error(), "disclaimable")
+
+	c, err := ms.Load(missionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusOpen, c.Status, "a failed disclaim must never reach Abandon")
 }
 
 // --- 3.4: reflect, reflections, advance ---

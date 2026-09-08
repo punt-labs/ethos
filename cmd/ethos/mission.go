@@ -318,7 +318,10 @@ closing; see "ethos mission result --help" for the required YAML shape.`,
 
 // --- mission abandon ---
 
-var missionAbandonReason string
+var (
+	missionAbandonReason   string
+	missionAbandonDisclaim []string
+)
 
 var missionAbandonCmd = &cobra.Command{
 	Use:   "abandon <id-or-prefix>",
@@ -333,22 +336,35 @@ design: a terminal verdict must be backed by structured worker
 output. Abandon exists for the case where there is no work to have a
 verdict on at all — a mission contract was written (via "mission
 create" or "mission dispatch") but the worker was never actually
-spawned, so there are zero delegation records and zero result
+spawned, so there are zero BLOCKING delegation records and zero result
 artifacts on disk.
 
-Abandon refuses, with no override, if:
+Abandon refuses, with no bypass flag, if:
   - the mission is already in a terminal state (closed, failed,
     escalated, or already abandoned)
   - any delegation record exists under the mission's delegations/
-    directory, at any verdict
-  - a result artifact exists for any round
+    directory, at any verdict, and has not been disclaimed (see
+    --disclaim below)
+  - a result artifact exists for any round — disclaiming every
+    delegation does NOT touch this gate
 
 Any of those conditions means real work may exist; retire the mission
 with "ethos mission close" once a result has been submitted instead.
 
---reason is required and is recorded on the abandon event so the
-audit trail explains why the mission was retired, not just that it
-was.
+--disclaim <delegation-id> names a specific delegation you can prove
+was NOT real work: a spawn wrongly attributed to this mission by the
+active-mission dispatch sidecar (DES-076; see DESIGN.md). It is
+mechanically gated, never a blanket override — the named delegation
+must have been bound via that exact sidecar-capture path and must
+already be closed (a still-running spawn is refused: it may still be
+doing real work). Repeatable for a mission with more than one captured
+delegation. Every disclaim is permanently recorded on both the
+delegation's own record and the mission's audit log, with the same
+--reason text abandon itself uses.
+
+--reason is required and is recorded on the abandon event (and on
+every --disclaim, if given) so the audit trail explains why the
+mission was retired, not just that it was.
 
 The abandoned status is distinct from closed/failed/escalated: an
 open mission created with an overlapping write_set is blocked only by
@@ -356,7 +372,7 @@ OTHER OPEN missions, so abandoning a dead mission immediately frees
 its write_set for a new "mission create".`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runMissionAbandon(args[0], missionAbandonReason)
+		return runMissionAbandon(args[0], missionAbandonReason, missionAbandonDisclaim)
 	},
 }
 
@@ -893,6 +909,8 @@ func init() {
 
 	missionAbandonCmd.Flags().StringVar(&missionAbandonReason, "reason", "", "Why this mission is being retired without a worker ever spawning (required)")
 	_ = missionAbandonCmd.MarkFlagRequired("reason")
+	missionAbandonCmd.Flags().StringArrayVar(&missionAbandonDisclaim, "disclaim", nil,
+		"Delegation ID that was a dispatch-sidecar capture, not real work (DES-076; repeatable)")
 
 	missionReflectCmd.Flags().StringVarP(&missionReflectFile, "file", "f", "", "Read reflection YAML from file (required)")
 	_ = missionReflectCmd.MarkFlagRequired("file")
@@ -1496,7 +1514,14 @@ func runMissionClose(idOrPrefix, status string) error {
 // result gate — Abandon is Store's own, more narrowly gated
 // operation. See the Abandon doc comment in internal/mission/store.go
 // for the full rationale.
-func runMissionAbandon(idOrPrefix, reason string) error {
+// disclaim lists delegation IDs to run through Store.DisclaimDelegation
+// (DES-076 round 2) before attempting the abandon itself. Each is
+// disclaimed with the SAME reason text the abandon event carries — one
+// operator explanation covers why the mission is dead AND why any
+// named delegation does not represent real work. A disclaim failure
+// (wrong provenance, still open, already disclaimed) stops before
+// Abandon is even attempted, naming which delegation ID failed and why.
+func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("mission abandon: --reason is required")
 	}
@@ -1504,6 +1529,11 @@ func runMissionAbandon(idOrPrefix, reason string) error {
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
 		return fmt.Errorf("mission abandon: %w", err)
+	}
+	for _, delegationID := range disclaim {
+		if _, dErr := ms.DisclaimDelegation(id, delegationID, reason); dErr != nil {
+			return fmt.Errorf("mission abandon: disclaiming %q: %w", delegationID, dErr)
+		}
 	}
 	c, err := ms.Abandon(id, reason)
 	if err != nil {
@@ -1527,10 +1557,14 @@ func runMissionAbandon(idOrPrefix, reason string) error {
 			"mission_id": id,
 			"status":     c.Status,
 			"reason":     reason,
+			"disclaimed": disclaim,
 		})
 		return nil
 	}
 	fmt.Printf("abandoned: %s reason=%q\n", id, reason)
+	if len(disclaim) > 0 {
+		fmt.Printf("disclaimed: %s\n", strings.Join(disclaim, ", "))
+	}
 	return nil
 }
 
@@ -2570,6 +2604,12 @@ func summarizeDetails(evType string, details map[string]any) string {
 		)
 	case "abandon":
 		return kv("reason", detailStr(details, "reason"))
+	case "disclaim_delegation":
+		return joinParts(
+			kv("delegation", detailStr(details, "delegation_id")),
+			kv("bound_via", detailStr(details, "bound_via")),
+			kv("reason", detailStr(details, "reason")),
+		)
 	case "result":
 		return joinParts(
 			kvRound("round", detailRound(details, "round")),

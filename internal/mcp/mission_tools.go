@@ -22,7 +22,7 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, abandon, reflect, reflections, advance, result, results, log, correct. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Abandon retires a mission that was created but never had a worker actually spawned — it refuses if any delegation record or result artifact exists, at any round; use close (after a result is submitted) for missions with real work. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp. Correct files an additive-only annotation against a CLOSED mission — a fact discovered afterward, an integrity finding, or a leader's post-escalation decision — as a new event on the log; it never rewrites the contract, results, or reflections and is refused on an open mission."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, abandon, reflect, reflections, advance, result, results, log, correct. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Abandon retires a mission that was created but never had a worker actually spawned — it refuses if any non-disclaimed delegation record or any result artifact exists, at any round; use close (after a result is submitted) for missions with real work. disclaim (DES-076) names specific delegation IDs proven to be dispatch-sidecar captures, not real work — mechanically checked, never a blanket bypass; result artifacts still block regardless. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp. Correct files an additive-only annotation against a CLOSED mission — a fact discovered afterward, an integrity finding, or a leader's post-escalation decision — as a new event on the log; it never rewrites the contract, results, or reflections and is refused on an open mission."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("create", "show", "list", "close", "abandon", "reflect", "reflections", "advance", "result", "results", "log", "correct"),
 			mcplib.Description("Operation to perform."),
@@ -56,7 +56,11 @@ func (h *Handler) missionTool() mcplib.Tool {
 			mcplib.Description("Filter for list (open|closed|failed|escalated|abandoned|all) or terminal status for close (closed|failed|escalated)."),
 		),
 		mcplib.WithString("reason",
-			mcplib.Description("Why the mission is being retired without a worker ever spawning. Required for abandon."),
+			mcplib.Description("Why the mission is being retired without a worker ever spawning. Required for abandon. Also used as the disclaim reason for every entry in disclaim, if given."),
+		),
+		mcplib.WithArray("disclaim",
+			mcplib.Description("Optional for abandon (DES-076): delegation IDs to disclaim before attempting the abandon — each must have been bound via an active-mission-sidecar dispatch capture and already be closed; explicit-env and inherited delegations are refused by name. Repeatable; a disclaim failure stops before abandon is attempted."),
+			mcplib.Items(map[string]any{"type": "string"}),
 		),
 		mcplib.WithString("event",
 			mcplib.Description("Optional comma-separated list of event types for log (e.g. create,close). Unknown types are accepted and return empty."),
@@ -410,6 +414,13 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 // retires it via Store.Abandon — a distinct, more narrowly gated
 // operation from Close (see the Abandon doc comment in
 // internal/mission/store.go). reason is required.
+//
+// disclaim (DES-076 round 2), when given, runs Store.DisclaimDelegation
+// for each named delegation ID BEFORE attempting the abandon itself —
+// the same reason text covers both. A disclaim failure (wrong
+// provenance, still open, already disclaimed) returns immediately,
+// naming which delegation ID failed and why, without ever calling
+// Abandon.
 func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	idArg := stringArg(req, "mission_id", "")
 	if idArg == "" {
@@ -419,10 +430,20 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 	if strings.TrimSpace(reason) == "" {
 		return mcplib.NewToolResultError("reason is required for abandon"), nil
 	}
+	disclaim, err := stringListArg(req, "disclaim")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 
 	id, err := h.missionStore.MatchByPrefix(idArg)
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	for _, delegationID := range disclaim {
+		if _, dErr := h.missionStore.DisclaimDelegation(id, delegationID, reason); dErr != nil {
+			return mcplib.NewToolResultError(
+				fmt.Sprintf("failed to disclaim delegation %q: %v", delegationID, dErr)), nil
+		}
 	}
 	c, err := h.missionStore.Abandon(id, reason)
 	if err != nil {
@@ -432,6 +453,7 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 		"mission_id": id,
 		"status":     c.Status,
 		"reason":     reason,
+		"disclaimed": disclaim,
 	}
 	// Parity with close: a terminal transition ends this session's work
 	// on the mission, so clear its sidecars.
