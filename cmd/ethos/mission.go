@@ -2169,62 +2169,25 @@ func bindDispatchedMission(op, missionID, worker string) {
 	// this is the only place the leader sees the Worker name that
 	// governs which spawn it can still take.
 	//
-	// Review finding K8 (full-branch review, m-2026-09-08-004 round 3):
-	// this used to claim unconditionally that worker's NEXT matching
-	// spawn goes to missionID — false whenever an OLDER pending dispatch
-	// for the same worker is already queued (matchDispatchPending's own
-	// FIFO warning fires at spawn time; this message is wrong at dispatch
-	// time). Read the pending store back to report this entry's actual
-	// queue position instead of assuming it is first.
-	fmt.Fprintf(os.Stderr, "%s\n", dispatchBoundMessage(op, sessionID, missionID, worker, globalRoot))
-}
-
-// dispatchBoundMessage builds bindDispatchedMission's advisory line,
-// naming the actual queue position a freshly-written pending dispatch
-// holds among other pending dispatches for the same worker (K8): first
-// in line gets the "will attribute worker's next matching spawn"
-// wording; queued behind an older entry gets a wording naming what is
-// ahead of it instead, since FIFO will match the older one first. A
-// read failure falls back to the original unconditional wording rather
-// than blocking or silencing the advisory — this line is best-effort
-// visibility, never a gate.
-func dispatchBoundMessage(op, sessionID, missionID, worker, globalRoot string) string {
+	// Review finding J1 (full-branch review, m-2026-09-08-004 round 3),
+	// correcting K8: hook.DispatchBoundMessage shares
+	// mission.ClassifyPendingDispatches with matchDispatchPending
+	// itself, so the reported queue position and the entry the hook
+	// would actually match at spawn time cannot disagree — K8's own fix
+	// filtered on bare Worker equality, which could name an unresolvable
+	// or stale entry as "ahead of it" when the matcher would actually
+	// skip that entry and match THIS one instead. Also collapses what
+	// was ~30 duplicated lines with the MCP twin
+	// (internal/mcp/mission_tools.go's bindDispatchedMission) into one
+	// shared implementation.
+	repoRoot := resolve.StoreRepoRoot()
+	store := mission.NewStoreWithRoots(repoRoot, globalRoot)
 	remedy := fmt.Sprintf(
 		"run `ethos mission release` to clear every pending dispatch in this session, "+
 			"or `ethos mission close`/`abandon %s` to clear this one specifically, if that is not what you want",
 		missionID)
-	entries, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
-	if err != nil {
-		return fmt.Sprintf(
-			"ethos: mission %s: session %s will attribute worker %q's next matching Agent() spawn "+
-				"to %s; %s", op, sessionID, worker, missionID, remedy)
-	}
-	var sameWorker []string
-	for _, e := range entries {
-		if e.Worker == worker {
-			sameWorker = append(sameWorker, e.MissionID)
-		}
-	}
-	for i, id := range sameWorker {
-		if id != missionID {
-			continue
-		}
-		if i == 0 {
-			return fmt.Sprintf(
-				"ethos: mission %s: session %s will attribute worker %q's next matching Agent() spawn "+
-					"to %s; %s", op, sessionID, worker, missionID, remedy)
-		}
-		return fmt.Sprintf(
-			"ethos: mission %s: session %s queued a pending dispatch of worker %q to %s, but %d "+
-				"pending dispatch(es) for %q are ahead of it and will be matched first (%s); %s",
-			op, sessionID, worker, missionID, i, worker, strings.Join(sameWorker[:i], ", "), remedy)
-	}
-	// missionID not found among sameWorker — should not happen right
-	// after a successful WriteDispatchPending, but fall back rather
-	// than print a queue claim about an entry we cannot locate.
-	return fmt.Sprintf(
-		"ethos: mission %s: session %s will attribute worker %q's next matching Agent() spawn "+
-			"to %s; %s", op, sessionID, worker, missionID, remedy)
+	fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", op,
+		hook.DispatchBoundMessage(store, globalRoot, sessionID, missionID, worker, remedy))
 }
 
 // clearClosedSessionBindings resolves the caller's session and hands it

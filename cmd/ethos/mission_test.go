@@ -4864,6 +4864,53 @@ func TestMissionDispatch_SecondDispatchToSameWorkerNamesQueuePosition(t *testing
 		"the second dispatch is not first in queue, so it must not claim the next matching spawn for itself")
 }
 
+// TestMissionDispatch_UnresolvableAheadEntryNotReportedAsBlocking pins
+// review finding J1 (full-branch review, m-2026-09-08-004 round 3),
+// correcting K8: an UNRESOLVABLE pending dispatch ahead of a fresh one
+// must NOT be reported as "ahead of it and will be matched first" --
+// matchDispatchPending itself would skip that entry (K1) and match the
+// fresh one instead, so a message claiming otherwise tells the operator
+// the exact opposite of what will happen. K8's own fix filtered on bare
+// Worker equality with no classification at all, so it could not tell
+// an unresolvable entry apart from a live one; both of K8's own
+// pinning tests happened to use two resolvable, open missions, the one
+// case where a naive Worker-only filter and the real matcher agree.
+func TestMissionDispatch_UnresolvableAheadEntryNotReportedAsBlocking(t *testing.T) {
+	home := missionTestEnv(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	unresolvable := "m-2026-09-08-800"
+	// Deliberately never staged: this pending dispatch can never Load.
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, "sess-cli-fixed", unresolvable, "bwk"))
+
+	// bindDispatchedMission resolves its session via resolveSessionContext,
+	// not a fixed ETHOS_SESSION var used elsewhere in this file for the
+	// unresolvable-session tests -- match this test's session to the one
+	// used by the real dispatch below.
+	t.Setenv("ETHOS_SESSION", "sess-cli-fixed")
+	seedRosterForSession(t, "sess-cli-fixed")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	assert.NotContains(t, warning, "ahead of it",
+		"an unresolvable entry must never be reported as blocking a fresh dispatch -- the matcher would skip it")
+	assert.Contains(t, warning, "will attribute worker",
+		"with no LIVE entry ahead of it, the fresh dispatch is first in the queue that actually matters")
+}
+
 // TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode pins
 // round 2, R5: a session that was expected (running under Claude Code)
 // but could not be identified is a REAL resolution failure, not the

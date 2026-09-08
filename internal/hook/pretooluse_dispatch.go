@@ -281,7 +281,19 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 // session dispatching both `bwk` and `rmh` work is not ambiguous for a
 // `bwk` spawn).
 func matchDispatchPending(globalRoot, sessionID, agentType string) string {
-	entries, warnings, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	// J1 (full-branch review, m-2026-09-08-004 round 3): classification
+	// now runs through mission.ClassifyPendingDispatches, the SAME
+	// function the CLI/MCP dispatch-time queue-position advisory calls
+	// (via hook.DispatchBoundMessage below) — a store construction
+	// failure here is reported the same way a read failure always was
+	// in this function, non-blocking.
+	store, err := tierBMissionStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: resolving mission store: %v; falling through\n", err)
+		return ""
+	}
+	classified, warnings, err := mission.ClassifyPendingDispatches(store, globalRoot, sessionID, agentType)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: dispatch-pending: reading for %q: %v; falling through\n",
@@ -292,32 +304,28 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: dispatch-pending: %s\n", warning)
 	}
 	var candidates []string
-	for _, entry := range entries {
-		if entry.Worker != agentType {
-			continue
-		}
-		status, reason := classifyPendingEntry(entry.MissionID)
-		switch status {
-		case pendingEntryStale:
+	for _, entry := range classified {
+		switch entry.Status {
+		case mission.PendingEntryStale:
 			fmt.Fprintf(os.Stderr,
 				"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch to %s is "+
 					"stale (%s); clearing it so it cannot block a newer pending dispatch\n",
-				sessionID, entry.MissionID, reason)
+				sessionID, entry.MissionID, entry.Reason)
 			if clearErr := mission.ConsumeDispatchPending(globalRoot, sessionID, entry.MissionID); clearErr != nil {
 				fmt.Fprintf(os.Stderr,
 					"ethos: pre-tool-use: dispatch-pending: clearing stale entry for %q: %v\n",
 					entry.MissionID, clearErr)
 			}
 			continue
-		case pendingEntryUnresolvable:
+		case mission.PendingEntryUnresolvable:
 			fmt.Fprintf(os.Stderr,
 				"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch to %s could "+
 					"not be resolved (%s); skipping it (not clearing it — the failure is not proof "+
 					"the mission is gone for good) so it cannot block a newer pending dispatch for "+
 					"worker %q; run `ethos mission release` if it is stuck for good\n",
-				sessionID, entry.MissionID, reason, agentType)
+				sessionID, entry.MissionID, entry.Reason, agentType)
 			continue
-		default: // pendingEntryOpen
+		default: // mission.PendingEntryOpen
 			candidates = append(candidates, entry.MissionID)
 		}
 	}
@@ -346,46 +354,64 @@ func warnDispatchPendingAmbiguity(agentType string, candidates []string) {
 		len(candidates), agentType, strings.Join(candidates, ", "), candidates[0])
 }
 
-// pendingEntryStatus classifies a pending-dispatch entry's mission for
-// matchDispatchPending's loop — see classifyPendingEntry.
-type pendingEntryStatus int
-
-const (
-	// pendingEntryOpen: Load succeeded and the mission's status is
-	// "open" — a live, matchable candidate.
-	pendingEntryOpen pendingEntryStatus = iota
-	// pendingEntryStale: Load succeeded but the mission's status is
-	// something other than "open" — provably dead, safe to clear.
-	pendingEntryStale
-	// pendingEntryUnresolvable: Load itself failed. Proves nothing
-	// (review finding K1, full-branch review of m-2026-09-08-004 round
-	// 3, sharpening C3's original doctrine) — must be skipped so it
-	// cannot permanently head-of-line-block a newer entry, but never
-	// cleared, since the failure may be transient (a branch switch that
-	// temporarily removed the git-tracked contract file, a lock
-	// contention blip) and the entry may resolve on its own.
-	pendingEntryUnresolvable
-)
-
-// classifyPendingEntry reports whether a pending dispatch's mission is
-// open, provably non-open, or unresolvable (Load failed), plus a
-// human-readable reason for the non-open cases. Mirrors
-// staleBindingReason's documented rule for the claim path: a store or
-// contract that will not resolve is not evidence of anything, so it
-// gets its own status distinct from "provably dead."
-func classifyPendingEntry(missionID string) (pendingEntryStatus, string) {
-	store, err := tierBMissionStore()
+// DispatchBoundMessage builds the advisory line `mission dispatch`/
+// `mission create` prints (CLI, via cmd/ethos/mission.go's
+// bindDispatchedMission) or returns (MCP, via
+// internal/mcp/mission_tools.go's bindDispatchedMission) immediately
+// after writing a new pending-dispatch entry, naming missionID's actual
+// queue position among other pending dispatches for worker — not an
+// assumed "next spawn" position (review finding K8, corrected by J1:
+// full-branch review, m-2026-09-08-004 round 3).
+//
+// Exported so both the CLI and MCP surfaces call this ONE
+// implementation instead of maintaining two independently-drifting
+// copies (K8 already found the wording stale in both places at once;
+// J1 found the underlying classification logic diverged from
+// matchDispatchPending's own, in both copies, the same way). It shares
+// mission.ClassifyPendingDispatches with matchDispatchPending, so the
+// reported position and the entry the hook would actually match at
+// spawn time cannot disagree: an unresolvable or stale entry ahead of
+// missionID is never counted as "ahead of it," because
+// matchDispatchPending would skip it too.
+//
+// remedy is the caller's own escape-hatch wording (the CLI and MCP
+// phrasings differ slightly — "run `ethos mission ...`" vs. "call
+// mission ..." — which is cosmetic, not logic, so it stays a parameter
+// rather than being duplicated here). A store or read failure falls
+// back to the unconditional "will attribute worker's next matching
+// spawn" wording rather than blocking or omitting the advisory — this
+// line is best-effort visibility, never a gate.
+func DispatchBoundMessage(store *mission.Store, globalRoot, sessionID, missionID, worker, remedy string) string {
+	unconditional := fmt.Sprintf(
+		"session %s will attribute worker %q's next matching Agent() spawn to %s; %s",
+		sessionID, worker, missionID, remedy)
+	classified, _, err := mission.ClassifyPendingDispatches(store, globalRoot, sessionID, worker)
 	if err != nil {
-		return pendingEntryUnresolvable, err.Error()
+		return unconditional
 	}
-	c, err := store.Load(missionID)
-	if err != nil {
-		return pendingEntryUnresolvable, err.Error()
+	var live []string
+	for _, c := range classified {
+		if c.Status == mission.PendingEntryOpen {
+			live = append(live, c.MissionID)
+		}
 	}
-	if reason := nonOpenReason(c.Status); reason != "" {
-		return pendingEntryStale, reason
+	for i, id := range live {
+		if id != missionID {
+			continue
+		}
+		if i == 0 {
+			return unconditional
+		}
+		return fmt.Sprintf(
+			"session %s queued a pending dispatch of worker %q to %s, but %d pending dispatch(es) "+
+				"for %q are ahead of it and will be matched first (%s); %s",
+			sessionID, worker, missionID, i, worker, strings.Join(live[:i], ", "), remedy)
 	}
-	return pendingEntryOpen, ""
+	// missionID itself did not classify as open (should not happen
+	// right after a successful WriteDispatchPending, but fall back
+	// rather than claim a queue position for an entry we cannot find
+	// among the live ones).
+	return unconditional
 }
 
 // consumeDispatchBinding removes missionID's pending-dispatch entry

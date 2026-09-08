@@ -658,6 +658,85 @@ func dispatchPendingLess(a, b DispatchPendingEntry) bool {
 	return a.MissionID < b.MissionID
 }
 
+// PendingEntryStatus classifies a pending-dispatch entry's mission for
+// ClassifyPendingDispatches.
+type PendingEntryStatus int
+
+const (
+	// PendingEntryOpen: the mission's contract loaded and its status is
+	// "open" — a live, matchable candidate.
+	PendingEntryOpen PendingEntryStatus = iota
+	// PendingEntryStale: the contract loaded but its status is
+	// something other than "open" — provably dead.
+	PendingEntryStale
+	// PendingEntryUnresolvable: loading the contract itself failed.
+	// Proves nothing — the failure may be transient (a branch switch
+	// that temporarily removed a git-tracked contract file, a lock
+	// contention blip) — so an unresolvable entry is neither a live
+	// candidate nor provably dead.
+	PendingEntryUnresolvable
+)
+
+// ClassifyPendingEntry reports whether missionID's contract is open,
+// provably non-open ("stale"), or unresolvable (Load failed), plus a
+// human-readable reason for the non-open cases.
+func ClassifyPendingEntry(store *Store, missionID string) (PendingEntryStatus, string) {
+	if store == nil {
+		return PendingEntryUnresolvable, "no mission store"
+	}
+	c, err := store.Load(missionID)
+	if err != nil {
+		return PendingEntryUnresolvable, err.Error()
+	}
+	if c.Status != StatusOpen {
+		return PendingEntryStale, fmt.Sprintf("that mission is %s", c.Status)
+	}
+	return PendingEntryOpen, ""
+}
+
+// ClassifiedPendingEntry pairs a DispatchPendingEntry with its
+// ClassifyPendingEntry result.
+type ClassifiedPendingEntry struct {
+	DispatchPendingEntry
+	Status PendingEntryStatus
+	Reason string
+}
+
+// ClassifyPendingDispatches is the single source of truth for "which of
+// sessionID's pending dispatches for worker would actually be matched
+// by a spawn right now" — oldest first, every entry classified.
+//
+// Review finding J1 (full-branch review, m-2026-09-08-004 round 3): the
+// hook's own matcher (internal/hook's matchDispatchPending) and the CLI
+// and MCP surfaces' dispatch-time queue-position advisory used to
+// compute this independently — the matcher's classify-and-filter logic
+// lived only in the hook package, while the advisory messages did a
+// bare Worker-equality filter with no classification at all. The two
+// could disagree: an unresolvable entry ahead of a new dispatch was
+// reported as "ahead of it and will be matched first" when the matcher
+// itself would actually SKIP that unresolvable entry and match the new
+// one instead — the message told the operator the opposite of what
+// would happen. Both call sites now share this one function so the
+// reported queue position and the entry the hook would actually match
+// cannot diverge; a caller that needs to know why an entry was
+// excluded (to clear a stale one, or warn about an unresolvable one)
+// reads Status/Reason directly rather than re-deriving them.
+func ClassifyPendingDispatches(store *Store, globalRoot, sessionID, worker string) ([]ClassifiedPendingEntry, []string, error) {
+	entries, warnings, err := ReadDispatchPending(globalRoot, sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []ClassifiedPendingEntry
+	for _, e := range entries {
+		if e.Worker != worker {
+			continue
+		}
+		status, reason := ClassifyPendingEntry(store, e.MissionID)
+		out = append(out, ClassifiedPendingEntry{DispatchPendingEntry: e, Status: status, Reason: reason})
+	}
+	return out, warnings, nil
+}
+
 // ConsumeDispatchPending removes ONE pending dispatch entry — called
 // once its matching spawn has been fully admitted (DES-076: after the
 // JSON response has been encoded, never on a refusal). Missing is not

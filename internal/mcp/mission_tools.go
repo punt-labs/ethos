@@ -265,45 +265,22 @@ func (h *Handler) bindDispatchedMission(missionID, worker string) []string {
 	// to worker at all, since MCP has no stderr channel to print the
 	// CLI's equivalent line to.
 	//
-	// Review finding K8 (full-branch review, m-2026-09-08-004 round 3):
-	// this used to claim unconditionally that worker's NEXT matching
-	// spawn goes to missionID — false whenever an OLDER pending dispatch
-	// for the same worker is already queued. Read the pending store back
-	// to report this entry's actual queue position, mirroring the CLI's
-	// dispatchBoundMessage.
+	// Review finding J1 (full-branch review, m-2026-09-08-004 round 3),
+	// correcting K8: hook.DispatchBoundMessage shares
+	// mission.ClassifyPendingDispatches with matchDispatchPending
+	// itself, so the reported queue position and the entry the hook
+	// would actually match at spawn time cannot disagree — K8's own fix
+	// filtered on bare Worker equality, which could name an unresolvable
+	// or stale entry as "ahead of it" when the matcher would actually
+	// skip that entry and match THIS one instead. Also collapses what
+	// was ~30 duplicated lines with the CLI twin
+	// (cmd/ethos/mission.go's bindDispatchedMission) into one shared
+	// implementation.
 	remedy := fmt.Sprintf(
 		"call mission release to clear every pending dispatch in this session, or close/abandon %s "+
 			"to clear this one specifically, if that is not what you want",
 		missionID)
-	entries, _, rErr := mission.ReadDispatchPending(globalRoot, sessionID)
-	if rErr != nil {
-		return []string{fmt.Sprintf(
-			"session %s will attribute worker %q's next matching Agent() spawn to %s; %s",
-			sessionID, worker, missionID, remedy)}
-	}
-	var sameWorker []string
-	for _, e := range entries {
-		if e.Worker == worker {
-			sameWorker = append(sameWorker, e.MissionID)
-		}
-	}
-	for i, id := range sameWorker {
-		if id != missionID {
-			continue
-		}
-		if i == 0 {
-			return []string{fmt.Sprintf(
-				"session %s will attribute worker %q's next matching Agent() spawn to %s; %s",
-				sessionID, worker, missionID, remedy)}
-		}
-		return []string{fmt.Sprintf(
-			"session %s queued a pending dispatch of worker %q to %s, but %d pending dispatch(es) "+
-				"for %q are ahead of it and will be matched first (%s); %s",
-			sessionID, worker, missionID, i, worker, strings.Join(sameWorker[:i], ", "), remedy)}
-	}
-	return []string{fmt.Sprintf(
-		"session %s will attribute worker %q's next matching Agent() spawn to %s; %s",
-		sessionID, worker, missionID, remedy)}
+	return []string{hook.DispatchBoundMessage(h.missionStore, globalRoot, sessionID, missionID, worker, remedy)}
 }
 
 // handleShowMission resolves the requested mission by exact ID or
