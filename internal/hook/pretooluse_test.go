@@ -2324,3 +2324,153 @@ func TestDispatchAgent_ActiveMissionSidecarMalformedRefuses(t *testing.T) {
 		"a sidecar pointing at an unresolvable mission must block (same contract as MISSION_ID env)")
 	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "MISSION_ID")
 }
+
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured
+// pins DES-076's regression case, reproduced live 2026-09-07 (ethos-7tqd):
+// `ethos mission dispatch --worker bwk` binds the session's
+// active-mission sidecar immediately. Before this fix, ANY next Agent()
+// spawn in the session — regardless of its own agent type — was
+// attributed to that mission as a Tier B delegation, even work with
+// nothing to do with it. This spawns a DIFFERENT agent type than the
+// contract's declared Worker and asserts it is neither promoted to Tier
+// B nor recorded as a delegation, and that the dispatch binding is left
+// in place for the real worker's later spawn.
+//
+// Confirmed failing against the pre-fix code: MISSION_ID was populated
+// in additional_env and record.yaml existed under delegations/ for the
+// mismatched agent type.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-09-08-700"
+	stageContract(t, home, missionID) // Worker: "bwk"
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-dispatch-mismatch"
+	require.NoError(t, mission.WriteActiveMissionOrigin(
+		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
+	))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "mdm") // NOT the dispatched worker (bwk)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+		"an unrelated spawn must not be blocked by someone else's dispatch binding")
+	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a spawn whose agent type does not match the dispatched Worker must not be captured")
+
+	delegationsDir := filepath.Join(mission.RepoStatePath(repo, "missions"), missionID, "delegations")
+	entries, err := os.ReadDir(delegationsDir)
+	if err == nil {
+		assert.Empty(t, entries, "no delegation record may exist for the mismatched spawn")
+	} else {
+		assert.True(t, os.IsNotExist(err), "delegations dir should not exist at all: %v", err)
+	}
+
+	still, err := mission.ReadActiveMission(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, missionID, still,
+		"the dispatch binding must survive an unrelated spawn so the real worker can still consume it")
+}
+
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumesBinding
+// pins the single-use half of DES-076: the ONE spawn whose agent type
+// matches the contract's declared Worker is bound Tier B, and the
+// dispatch binding is cleared immediately afterward so it cannot also
+// capture whatever spawns next.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumesBinding(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-09-08-701"
+	stageContract(t, home, missionID) // Worker: "bwk"
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-dispatch-match"
+	require.NoError(t, mission.WriteActiveMissionOrigin(
+		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
+	))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk") // the dispatched worker
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"the matching worker's spawn must be bound Tier B")
+
+	after, err := mission.ReadActiveMission(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, after,
+		"a dispatch binding is single-use — it must be cleared once its matching spawn consumes it")
+
+	// A second spawn in the same session, even of the same agent type,
+	// must NOT find a mission to bind to: the binding is gone.
+	var out2 bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out2))
+	var r2 PreToolUseResult
+	require.NoError(t, json.Unmarshal(out2.Bytes(), &r2))
+	assert.Empty(t, r2.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a consumed dispatch binding must not resurrect itself for a later spawn")
+}
+
+// TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume is
+// the non-regression guard for DES-076: an `ethos mission claim`
+// binding (BindOriginClaim) is the operator explicitly saying "I am
+// working on this," and stays sticky across every spawn in the session
+// until an explicit claim/release — the worker-match consumption rule
+// applies ONLY to BindOriginDispatch.
+func TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-09-08-702"
+	stageContract(t, home, missionID) // Worker: "bwk"
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-claim-sticky"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, missionID))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "some-other-agent") // deliberately NOT Worker
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a claim binds regardless of agent type — it is not gated on Worker")
+
+	after, err := mission.ReadActiveMission(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, missionID, after,
+		"a claim binding must stay sticky after use — only dispatch bindings are single-use")
+}

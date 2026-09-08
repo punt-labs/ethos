@@ -9387,3 +9387,143 @@ ownership evidence lives only in a linked worktree's sealed audit
 history — not merged to the main tree — is now caught by
 `create`/`dispatch`'s admission control; it previously was not. See
 `CHANGELOG.md` under `[Unreleased]`.
+
+## DES-076: Active-mission dispatch binding is single-use, scoped to the declared Worker (PARTIAL — see Non-goal)
+
+**Context.** DES-075's "Consequence for ethos-7tqd" section named this
+as follow-up work outside PR #508's write-set. Reproduced live
+2026-09-07: `ethos mission dispatch --worker X` writes the
+active-mission sidecar (`internal/mission/active.go`) with
+`BindOriginDispatch` immediately, and nothing cleared it before this
+change. `dispatchAgent` (`internal/hook/pretooluse_dispatch.go`) reads
+that sidecar for every subsequent `Agent()` spawn with no `MISSION_ID`
+env set, and bound whichever spawn came next — a throwaway probe
+mission captured the leader's own unrelated PR-fix agent as delegation
+`d-2026-09-07-039`. The filed bead's original framing ("orphaned
+contracts sit inert, nobody notices") was backwards: they don't sit
+inert, they capture.
+
+**The two-step-dispatch constraint.** `ethos mission dispatch` (writes
+the contract) and the leader's `Agent()` call (spawns the worker) are
+deliberately two separate operations — CLAUDE.md documents this and
+tells the leader "DO NOT FORGET" the second step. A leader-in-Claude-Code
+session cannot inject `MISSION_ID` into its own process env between the
+two calls (`active.go`'s own header comment explains why the sidecar
+exists at all), so *some* bridge across that gap is unavoidable — the
+sidecar itself is not the bug. The bug is that the bridge, once built,
+had no way to tell "the spawn this dispatch was for" from "whatever
+spawns next," so it answered every `Agent()` call the same way for as
+long as the sidecar sat there — which, absent an explicit `release` or a
+later `claim`/`dispatch` overwriting it, was indefinitely.
+
+**Decision — bind at dispatch, consume at the first spawn whose agent
+type matches the contract's declared `Worker`; a mismatch does not
+consume it.** The contract already carries the one piece of information
+that names the intended recipient of the binding: `Contract.Worker`,
+required non-empty by `validateContract` for every mission that can
+exist. `dispatchAgent` now reads the sidecar's origin
+(`ReadActiveMissionBinding`) and, for a `BindOriginDispatch` binding
+only, loads the contract and compares its `Worker` against the spawn's
+`subagent_type` (falling back to `CLAUDE_AGENT_TYPE`) before treating the
+spawn as Tier B for that mission:
+
+- **Match** — the spawn is bound Tier B under the mission, and the
+  binding is consumed (`consumeDispatchBinding` clears
+  `active-mission`/`active-mission-origin`) immediately after the
+  dispatch fully succeeds (the JSON response is written; a spawn that
+  gets blocked or hits an encode failure does not consume the binding,
+  so a retry of the *same* `Agent()` call still finds it). One dispatch,
+  one binding, one consuming spawn — the sidecar cannot outlive the
+  worker it was written for.
+- **Mismatch** — the spawn proceeds exactly as it would with no sidecar
+  at all (inheritance, then Tier A): not bound to the mission, not
+  logged as a delegation of it. The sidecar is left untouched, because
+  the leader's other unrelated `Agent()` call landing in the
+  create-then-spawn gap is not evidence the dispatched worker was
+  abandoned — the real worker may still spawn later in the same
+  session, and the binding needs to survive for it.
+- **Contract fails to load** (corrupt, deleted, or otherwise
+  unresolvable while gating a `BindOriginDispatch` sidecar) — treated as
+  a mismatch, not a block. This is the one place DES-076 diverges from
+  this file's own "malformed env never silently admits" doctrine
+  (`nonOpenReason`/`warnNonOpenMissionID` still block on a bad
+  `MISSION_ID` env or a bad `claim`), and the reason is the asymmetry
+  between the two origins: a `claim` or an explicit `MISSION_ID` is the
+  operator naming *this exact spawn's* mission, so a resolution failure
+  is the operator's own error and should surface loudly. A
+  `BindOriginDispatch` sidecar is an ambient bridge sitting in the
+  background of every later spawn in the session — refusing to identify
+  its Worker must never escalate into blocking the leader's unrelated
+  work; it can only ever fall back to "don't capture this one."
+
+**Why not the two rejected alternatives.**
+
+- **Status quo (dispatch-time binding, no expiry)** — this is the bug.
+  Rejected because it captures the very first `Agent()` call after
+  dispatch regardless of whether it was the intended worker, silently
+  corrupting the audit trail the bead calls "the product."
+- **Warn-only (the bead's own filed suggestion — print a louder
+  not-spawned hint)** — rejected because a warning narrates the capture
+  without preventing it. The leader's mission brief for this work states
+  this explicitly: it is not an authorized fallback. (A version of this
+  warning already shipped in `bindDispatchedMission` — "the next Agent()
+  spawn in this session files its delegation here, even if unrelated" —
+  as an interim visibility improvement while this fix was pending; that
+  message is now false and is corrected below, in the same commit as the
+  behavior it describes.)
+
+**What changed in `bindDispatchedMission` (`cmd/ethos/mission.go`).**
+Only the printed text: it named the old "next spawn, however unrelated"
+behavior, which no longer holds. It now names the actual scope — bound
+for the declared Worker's next matching spawn — so an operator reading
+the CLI's own output is not told something the code no longer does.
+
+**Non-goal for this round — the abandon-cleanup half is BLOCKED by this
+mission's write-set, not implemented.** The mission's second requirement
+was: `ethos mission abandon` should be able to retire a mission whose
+*only* delegation is one a capture wrongly attributed to it, without
+weakening `Abandon`'s existing all-delegations-block gate
+(`Store.Abandon`, `internal/mission/store.go`) or its result gate.
+Distinguishing "captured" from "genuine" needs a fact that is not
+recorded anywhere on today's `Delegation`/`DelegationSkeleton`
+(`internal/mission/delegation.go`): *how* the delegation was bound
+(explicit `MISSION_ID` env / inherited from a parent / consumed from a
+dispatch sidecar) — Tier alone cannot distinguish them, since all three
+paths produce `Tier: B`. Recording that fact requires a new field on
+`DelegationSkeleton` (written by `dispatchTierB`) and `Delegation`, and
+the actual retirement path requires a new, narrowly-gated method (or a
+parameter on `Abandon`) in `Store` that accepts an explicit,
+operator-named, per-delegation disclaim — checked mechanically against
+the recorded bind-provenance field, never inferred by heuristic, and
+never a blanket bypass flag, since `Abandon`'s own doc comment already
+rejects one for exactly the reason this ADR must respect: "the gate is
+the whole point." Both `delegation.go` and `store.go` are outside this
+mission's write-set (`internal/hook/**`, `internal/mission/active.go`,
+`internal/mission/active_test.go`, `internal/mission/binding.go`,
+`internal/mission/binding_test.go`, `cmd/ethos/mission.go`,
+`cmd/ethos/mission_test.go`, `DESIGN.md`, `CHANGELOG.md`), and no
+combination of changes confined to that write-set can implement it:
+`Store.Abandon`'s delegation-count gate is unconditional and unexported,
+with no composable primitive a caller outside `internal/mission` can
+use to get a different answer for a delegation it can prove was
+captured. Escalated to the leader rather than worked around; the root
+cause fixed by this ADR already eliminates the general "any next spawn
+is captured" class the bead reproduced, which was the majority of the
+practical risk. The residual case this leaves unaddressed is narrower:
+a spawn whose agent type happens to equal the dispatched Worker, but
+whose actual task is unrelated to the mission — recommend a follow-up
+mission scoped to `internal/mission/store.go` + `delegation.go` (+ their
+test files, + `internal/mcp/mission_tools.go` for MCP-surface parity)
+to add the bind-provenance field and the disclaim path.
+
+**Tests.** `TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured`
+pins the regression directly: dispatch-origin sidecar naming a
+mission with `Worker: bwk`, a spawn with a *different* agent type, and
+an assertion that the spawn is neither bound to the mission nor
+recorded as a delegation under it, and that the sidecar is left in
+place. Confirmed failing against the pre-fix code (the spawn WAS bound
+and WAS recorded). `..._MatchingWorkerConsumesBinding` pins the
+single-use half: a matching-worker spawn is bound Tier B and the sidecar
+is gone immediately after. `..._ClaimOriginStaysAfterConsume` pins the
+non-regression: an `ethos mission claim` binding is untouched by this
+change and stays sticky across a successful dispatch, exactly as before.

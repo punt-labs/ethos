@@ -1068,7 +1068,7 @@ func runMissionCreate() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
-	bindDispatchedMission("create", c.MissionID)
+	bindDispatchedMission("create", c.MissionID, c.Worker)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -1963,7 +1963,7 @@ func runMissionDispatch() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission dispatch: %w", err)
 	}
-	bindDispatchedMission("dispatch", c.MissionID)
+	bindDispatchedMission("dispatch", c.MissionID, c.Worker)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -2049,17 +2049,16 @@ func runMissionRelease() error {
 }
 
 // bindDispatchedMission points the caller's session at the mission it
-// just named, so the next Agent() spawn files its delegation record
-// under that mission (ethos-7vo3).
+// just named, so the ONE Agent() spawn matching worker's agent type
+// files its delegation record under that mission (ethos-7vo3, DES-076).
 //
 // The PreToolUse dispatch cannot see a MISSION_ID the leader never
 // exported into its own environment, so it falls back to the
-// active-mission sidecar. The sidecar was written only by `ethos
-// mission claim` and stayed put until an explicit `release`, which
-// made it sticky: a leader who created m-B while still bound to m-A
-// filed m-B's delegation under m-A (observed: d-078 under m-017).
-// Creating or dispatching a mission is the leader naming one
-// explicitly, so it is the moment the binding must follow.
+// active-mission sidecar. Creating or dispatching a mission is the
+// leader naming one explicitly, so it is the moment the binding must
+// be staged; `internal/hook/pretooluse_dispatch.go`'s
+// readActiveMissionForDispatch is what actually gates and consumes it
+// — this function only writes the sidecar and reports what it wrote.
 //
 // The binding is written with dispatch origin, so it files delegation
 // records but produces NO commit trailers. Dispatching names a mission
@@ -2079,7 +2078,7 @@ func runMissionRelease() error {
 // and a mission that was created stays created. Real failures print
 // one stderr line naming op so the leader can tell which command left
 // the binding behind.
-func bindDispatchedMission(op, missionID string) {
+func bindDispatchedMission(op, missionID, worker string) {
 	sessionID, _, err := resolveSessionContext()
 	if err != nil {
 		if !errors.Is(err, errNoSession) {
@@ -2112,19 +2111,18 @@ func bindDispatchedMission(op, missionID string) {
 		return
 	}
 	// Print the binding unconditionally, not only on a rebind
-	// (ethos-7tqd, triage suggestion #3): the binding is stickier than
-	// its useful window — it stays until an explicit `mission claim` or
-	// `mission release` — so the NEXT Agent() spawn in this session,
-	// however unrelated, files its delegation under missionID until
-	// then. Making that visible at the moment it happens is cheap;
-	// discovering it later via a misattributed commit or a delegation
-	// record that blocks `mission abandon` is not (reproduced live
-	// 2026-09-07, see ethos-7tqd's triage note).
+	// (ethos-7tqd, triage suggestion #3): making it visible at the
+	// moment it happens is cheap, and it is the only place the leader
+	// sees the Worker name that governs which spawn the binding can
+	// still take. DES-076: the binding is single-use and scoped to the
+	// ONE spawn whose agent type matches worker — an unrelated spawn in
+	// the same session is never captured (see
+	// internal/hook/pretooluse_dispatch.go's readActiveMissionForDispatch).
 	fmt.Fprintf(os.Stderr,
-		"ethos: mission %s: session %s bound to %s — the next Agent() spawn in this "+
-			"session files its delegation here, even if unrelated; run `ethos mission "+
-			"release` first if that is not what you want\n",
-		op, sessionID, missionID)
+		"ethos: mission %s: session %s bound to %s for worker %q — only that worker's next "+
+			"Agent() spawn in this session is attributed to it; run `ethos mission release` "+
+			"first if that is not what you want\n",
+		op, sessionID, missionID, worker)
 	// create and dispatch always mint a fresh mission ID, so a rebind
 	// onto the SAME mission cannot arise from either caller; only the
 	// changed-mission case is reachable and reported.
@@ -2132,9 +2130,9 @@ func bindDispatchedMission(op, missionID string) {
 		return
 	}
 	fmt.Fprintf(os.Stderr,
-		"ethos: mission %s: session %s was bound to %s; rebound to %s — delegations now file under %s, "+
-			"and commit trailers are off until you run `ethos mission claim <id>`\n",
-		op, sessionID, previous.MissionID, missionID, missionID)
+		"ethos: mission %s: session %s was bound to %s; rebound to %s — worker %q's next matching "+
+			"spawn now files under %s, and commit trailers are off until you run `ethos mission claim <id>`\n",
+		op, sessionID, previous.MissionID, missionID, worker, missionID)
 	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: clearing delegation binding: %v\n", op, err)
 	}

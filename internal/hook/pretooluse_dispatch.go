@@ -48,64 +48,169 @@ import (
 // the dispatch consults <globalRoot>/sessions/<id>/active-mission. A
 // leader-in-Claude-Code session cannot inject MISSION_ID into its own
 // env from inside an active session, so the sidecar is the bridge
-// from `ethos mission claim` to the next Agent() spawn. The read is
-// best-effort: any error logs to stderr and falls through to the
-// inheritance / Tier A path, matching the pattern in
+// from `ethos mission claim`/`dispatch` to a later Agent() spawn. The
+// read is best-effort: any error logs to stderr and falls through to
+// the inheritance / Tier A path, matching the pattern in
 // loadParentDelegation.
+//
+// DES-076: a BindOriginDispatch sidecar is single-use and scoped to
+// the ONE spawn whose agent type matches the contract's declared
+// Worker — see readActiveMissionForDispatch and consumeDispatchBinding.
+// A BindOriginClaim sidecar (the operator's own `ethos mission claim`)
+// is unaffected: it stays sticky across every spawn until an explicit
+// claim or release, exactly as before.
 func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
 	missionID := os.Getenv("MISSION_ID")
 	if missionID != "" {
-		return dispatchTierB(w, sessionID, missionID, toolInput)
+		return dispatchTierB(w, sessionID, missionID, toolInput, nil)
 	}
-	if missionID := readActiveMissionForDispatch(sessionID); missionID != "" {
-		return dispatchTierB(w, sessionID, missionID, toolInput)
+	agentType := spawnAgentType(toolInput)
+	if missionID, consume := readActiveMissionForDispatch(sessionID, agentType); missionID != "" {
+		var onDispatched func()
+		if consume {
+			onDispatched = func() { consumeDispatchBinding(sessionID, missionID) }
+		}
+		return dispatchTierB(w, sessionID, missionID, toolInput, onDispatched)
 	}
 	return dispatchTierBOrTierA(w, sessionID, toolInput)
 }
 
-// readActiveMissionForDispatch consults the active-mission sidecar
-// for sessionID. Returns "" on any non-found shape: empty sessionID,
-// missing global root, missing sidecar, read error. Errors that are
-// not "file not present" log to stderr so the operator can trace why
-// a claimed mission did not bind — the dispatch then proceeds along
-// the no-sidecar path (inheritance or Tier A) so the spawn still
-// runs (Bugbot precedent: dispatch helpers must be non-blocking).
+// spawnAgentType reports the agent type this Agent() call is spawning:
+// the tool_input's subagent_type when present, else CLAUDE_AGENT_TYPE.
+// Shared by the sidecar Worker-match gate (readActiveMissionForDispatch)
+// and dispatchTierB's own delegation-skeleton write, so both see the
+// same answer for the same spawn.
+func spawnAgentType(toolInput map[string]any) string {
+	agentType, _ := toolInput["subagent_type"].(string)
+	if agentType == "" {
+		agentType = os.Getenv("CLAUDE_AGENT_TYPE")
+	}
+	return agentType
+}
+
+// readActiveMissionForDispatch consults the active-mission sidecar for
+// sessionID and reports whether agentType's spawn may bind to it.
 //
-// A sidecar naming a mission that is no longer open is stale and is
-// refused with a warning (ethos-7vo3). The sidecar is cleared when
-// the mission closes in the SAME session; a mission closed from
-// anywhere else leaves it behind, and filing a fresh delegation under
-// a mission whose results are already in is a false audit trail. The
-// spawn still runs — as Tier A, where it belongs.
-func readActiveMissionForDispatch(sessionID string) string {
+// Returns ("", false) on any non-found or non-usable shape: empty
+// sessionID, missing global root, missing sidecar, read error, a
+// mission that is no longer open (ethos-7vo3 — a fresh warning to
+// stderr names why). Errors that are not "file not present" log to
+// stderr so the operator can trace why a bound mission did not take
+// the spawn — the dispatch then proceeds along the no-sidecar path
+// (inheritance or Tier A) so the spawn still runs (Bugbot precedent:
+// dispatch helpers must be non-blocking).
+//
+// consume reports whether the CALLER must clear the binding after a
+// successful Tier B dispatch (DES-076). It is true only for a
+// BindOriginDispatch sidecar whose matching spawn just consumed it — a
+// dispatch names a mission FOR SOMEONE ELSE, so its binding is scoped
+// to the ONE spawn matching the contract's declared Worker, never to
+// "whatever spawns next." A BindOriginClaim sidecar is the operator
+// explicitly saying "I am working on this" and is always (missionID,
+// false): sticky across every spawn until an explicit claim or
+// release, unaffected by the agent-type check below.
+func readActiveMissionForDispatch(sessionID, agentType string) (missionID string, consume bool) {
 	if sessionID == "" {
-		return ""
+		return "", false
 	}
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: resolving global root: %v; falling through\n",
 			err)
-		return ""
+		return "", false
 	}
-	missionID, err := mission.ReadActiveMission(globalRoot, sessionID)
+	binding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: reading sidecar for %q: %v; falling through\n",
 			sessionID, err)
-		return ""
+		return "", false
 	}
-	if missionID == "" {
-		return ""
+	if binding.MissionID == "" {
+		return "", false
 	}
-	if reason := staleBindingReason(missionID); reason != "" {
+	if reason := staleBindingReason(binding.MissionID); reason != "" {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s but %s; "+
 				"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
-			sessionID, missionID, reason)
-		return ""
+			sessionID, binding.MissionID, reason)
+		return "", false
 	}
-	return missionID
+	if binding.Origin != mission.BindOriginDispatch {
+		return binding.MissionID, false
+	}
+
+	// DES-076: a dispatch binding only takes the ONE spawn whose agent
+	// type matches the contract's declared Worker. A contract that
+	// fails to load here is treated identically to a mismatch — not a
+	// block — because this sidecar is an ambient bridge sitting behind
+	// every later spawn in the session; refusing to identify its
+	// Worker must never escalate into blocking the leader's unrelated
+	// work (contrast with the explicit-MISSION_ID/claim paths above,
+	// where an unresolvable binding IS a block: there the operator
+	// named this exact spawn's mission, so a resolution failure is
+	// their own error and should surface loudly).
+	worker, ok := dispatchedWorker(binding.MissionID)
+	if !ok || worker == "" || worker != agentType {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: session %q is bound to %s for worker %q, but this "+
+				"spawn is %q — not the dispatched worker, so it is not captured; the binding stays for %q\n",
+			sessionID, binding.MissionID, worker, agentType, worker)
+		return "", false
+	}
+	return binding.MissionID, true
+}
+
+// dispatchedWorker loads missionID's contract and reports its declared
+// Worker handle. ok is false on any load failure — the caller (DES-076)
+// treats that identically to "no match," never as license to guess.
+func dispatchedWorker(missionID string) (worker string, ok bool) {
+	store, err := tierBMissionStore()
+	if err != nil {
+		return "", false
+	}
+	c, err := store.Load(missionID)
+	if err != nil {
+		return "", false
+	}
+	return c.Worker, true
+}
+
+// consumeDispatchBinding clears the active-mission sidecar after a
+// BindOriginDispatch binding has been consumed by its matching worker
+// spawn (DES-076): the binding is single-use, so it must not linger to
+// capture whatever spawns next in the session.
+//
+// Re-reads the binding before clearing and proceeds only when it still
+// names missionID with dispatch origin — a fresh claim or dispatch that
+// landed in the window between the match and this call must not be
+// clobbered. Advisory: a failure here degrades the fix to "capture at
+// most one more spawn," not a spawn refusal, matching every other
+// sidecar helper in this file.
+func consumeDispatchBinding(sessionID, missionID string) {
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: resolving global root to consume binding for %q: %v\n",
+			missionID, err)
+		return
+	}
+	b, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: re-reading sidecar to consume binding for %q: %v\n",
+			missionID, err)
+		return
+	}
+	if b.MissionID != missionID || b.Origin != mission.BindOriginDispatch {
+		return
+	}
+	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: clearing consumed binding for %q: %v\n",
+			missionID, err)
+	}
 }
 
 // staleBindingReason reports why the sidecar's mission cannot take a
@@ -227,7 +332,16 @@ var dispatchTierBConfirmedOpen = func() {}
 // repoRoot resolution uses resolve.FindRepoRoot — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
-func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any) error {
+//
+// onDispatched, when non-nil, runs exactly once — after the spawn is
+// fully admitted (the JSON response has been encoded), never on a
+// refusal or an internal fall-through to Tier A/B. DES-076 uses this to
+// consume a one-shot active-mission dispatch binding only once its
+// matching spawn has actually gone through; a blocked or failed spawn
+// leaves the binding in place so a retry of the same call can still
+// find it. Every caller but the active-mission sidecar's matching-spawn
+// path passes nil.
+func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any, onDispatched func()) error {
 	store, err := tierBMissionStore()
 	if err != nil {
 		return writeAgentBlock(w,
@@ -250,7 +364,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	// fallback in this file.
 	if reason := nonOpenReason(c.Status); reason != "" {
 		warnNonOpenMissionID(sessionID, missionID, reason)
-		return dispatchTierBOrTierA(w, sessionID, toolInput)
+		return dispatchTierBOrTierA(w, sessionID, toolInput) // status re-check fallback: never consumes onDispatched
 	}
 
 	delegationID, releaseID, err := mission.NewID(mission.NamespaceDelegations, time.Now())
@@ -383,6 +497,12 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		fmt.Fprintf(os.Stderr,
 			"ethos pre-tool-use: tier-B response write: %v\n", err)
 		return err
+	}
+	// The spawn is now fully admitted as Tier B — the one point DES-076
+	// treats as "this dispatch actually happened," and the only point
+	// from which onDispatched runs.
+	if onDispatched != nil {
+		onDispatched()
 	}
 	return nil
 }

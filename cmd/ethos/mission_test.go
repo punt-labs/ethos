@@ -4512,11 +4512,14 @@ func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 }
 
 // TestMissionDispatch_RebindsStaleActiveMission pins ethos-7vo3: the
-// mission named at dispatch owns the session binding, so the next
-// Agent() spawn files its delegation under it. Before the fix the
-// sidecar stayed on whatever `mission claim` last wrote, and a leader
-// who dispatched a second mission without releasing the first filed
-// the new delegation under the old mission.
+// mission named at dispatch owns the session binding, so the worker's
+// next matching Agent() spawn files its delegation under it (DES-076
+// scopes that binding to the one spawn matching the contract's
+// declared Worker; the fields this test checks — the sidecar contents
+// and the rebind warning — are unaffected by that later change). Before
+// the ethos-7vo3 fix the sidecar stayed on whatever `mission claim`
+// last wrote, and a leader who dispatched a second mission without
+// releasing the first filed the new delegation under the old mission.
 func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 	home := missionTestEnv(t)
 	stale := seedMissionForClaim(t)
@@ -4571,14 +4574,17 @@ func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 
 // TestMissionDispatch_PrintsBindingOnFreshBind is the regression gate
 // for ethos-7tqd's triage suggestion #3: a FRESH bind (no prior
-// mission bound) must be visible too, not only a rebind. Before this
+// mission bound) must be visible too, not only a rebind. Before that
 // fix, bindDispatchedMission was silent unless it overwrote a
 // DIFFERENT mission's binding — a leader who dispatches from a clean
-// session gets no signal that the next Agent() spawn, however
-// unrelated, will file its delegation under the mission just
-// dispatched. That silent sidecar is what let a throwaway probe
-// mission capture an unrelated PR-fix agent's delegation record
-// (reproduced live 2026-09-07, see the bead's triage note).
+// session got no signal that a later Agent() spawn would be attributed
+// to the mission just dispatched. DES-076 has since scoped that
+// attribution to the one spawn matching the contract's declared Worker
+// (it no longer captures "the next spawn, however unrelated" — that
+// capture is what let a throwaway probe mission attribute an unrelated
+// PR-fix agent's delegation record, reproduced live 2026-09-07, see the
+// bead's triage note), but the visibility this test pins is unchanged:
+// the leader still sees the binding the moment it is made.
 func TestMissionDispatch_PrintsBindingOnFreshBind(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-fresh-bind")

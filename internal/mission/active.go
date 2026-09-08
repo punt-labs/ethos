@@ -53,11 +53,17 @@ func ActiveMissionOriginPath(globalRoot, sessionID string) string {
 //   - BindOriginClaim — `ethos mission claim`. The operator said "I am
 //     working on this mission", so their commits carry its trailers.
 //   - BindOriginDispatch — `ethos mission create` / `mission dispatch`.
-//     The leader named a mission FOR SOMEONE ELSE. The binding still
-//     files the next Agent() spawn's delegation record under it, but
-//     it must not stamp the leader's own commits: the leader goes on
-//     to do unrelated work in the same session, and tagging it would
-//     re-open ethos-jawp's false-trailer class through a new door.
+//     The leader named a mission FOR SOMEONE ELSE. DES-076: unlike a
+//     claim, this binding is single-use and scoped to the ONE Agent()
+//     spawn whose agent type matches the contract's declared Worker —
+//     internal/hook/pretooluse_dispatch.go's readActiveMissionForDispatch
+//     gates on that match and consumeDispatchBinding clears the sidecar
+//     the moment it is consumed, so it can never also attribute
+//     whatever the leader spawns next. It also must not stamp the
+//     leader's own commits even for that one matching spawn: the
+//     leader goes on to do unrelated work in the same session, and
+//     tagging it would re-open ethos-jawp's false-trailer class through
+//     a new door.
 //
 // THE ORIGIN LIVES IN ITS OWN FILE, and active-mission stays exactly
 // one line. A second line in active-mission broke every older reader:

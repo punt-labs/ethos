@@ -71,16 +71,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   create`/`dispatch`.** That scan is now shared by both, and a
   `mission migrate`-prefixed warning during an ordinary create could
   read as a migration silently running.
-- **`ethos mission create`/`dispatch` now print the session binding
-  they take, on every bind — not only when it overwrites a different
-  mission's binding.** The binding stays in effect until an explicit
-  `mission claim` or `mission release`, so the next `Agent()` spawn in
-  the session files its delegation under it even if unrelated; a
-  throwaway probe mission previously captured an unrelated agent's
-  delegation record with no visible signal at the moment it happened
-  (ethos-7tqd, partial — the deeper fix, binding at worker-spawn time
-  instead of dispatch time, needs `internal/hook` and is tracked as a
-  follow-up).
+- **`ethos mission create`/`dispatch` no longer attribute an unrelated
+  later `Agent()` spawn to the mission just named.** The session binding
+  those commands stage is now single-use and scoped to the ONE spawn
+  whose agent type matches the contract's declared `Worker`: a
+  throwaway probe mission previously captured whatever the leader
+  spawned next in the same session — including a fully unrelated
+  agent — as a Tier B delegation of itself, corrupting the audit trail
+  the moment the leader's own unrelated work ran (reproduced live
+  2026-09-07: a probe mission attributed the leader's own PR-fix agent).
+  `ethos mission create`/`dispatch` still print the binding they take,
+  on every bind, now naming the worker it is scoped to; the message no
+  longer claims the binding captures "the next spawn... even if
+  unrelated," since it no longer does (ethos-7tqd; see DES-076 in
+  DESIGN.md for the full binding-lifetime decision, including the
+  narrower residual case — a same-type spawn for unrelated work — that
+  remains and the abandon-side cleanup for it that is still blocked on a
+  write-set outside this fix's scope).
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`

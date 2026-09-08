@@ -258,13 +258,13 @@ func dispatchTierBOrTierA(w io.Writer, sessionID string, toolInput map[string]an
 	if parentDelegation == "" {
 		return dispatchTierA(w, sessionID)
 	}
-	childAgentType, _ := toolInput["subagent_type"].(string)
-	if childAgentType == "" {
-		childAgentType = os.Getenv("CLAUDE_AGENT_TYPE")
-	}
+	childAgentType := spawnAgentType(toolInput)
 	repoRoot := tierBStoreRoot()
 	if missionID, ok := pretooluseInheritReader(repoRoot, parentDelegation, childAgentType); ok {
-		return dispatchTierB(w, sessionID, missionID, toolInput)
+		// Inherited from a parent delegation's SpawnPattern match, not
+		// from the active-mission sidecar — DES-076's consume callback
+		// is not applicable here.
+		return dispatchTierB(w, sessionID, missionID, toolInput, nil)
 	}
 	return dispatchTierA(w, sessionID)
 }
