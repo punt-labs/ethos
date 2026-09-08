@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -247,6 +248,18 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 // is NOT proof of anything and is NOT skipped — matching C3's
 // doctrine exactly, that case is handed to dispatchTierB's own
 // Load-and-block gate unchanged, by returning it as the match.
+//
+// When two or more LIVE (non-stale) entries match agentType, the oldest
+// wins by FIFO, but that is a silent, unresolvable ambiguity for the
+// operator unless it is named: two missions can legitimately share one
+// Worker handle (this repo's own team assigns one specialist to every
+// mission in its domain), and the spawn now landing on THIS one instead
+// of THAT one is exactly the misattribution class DES-076 exists to
+// prevent. genuineAmbiguityWarning emits that signal — only for a
+// two-or-more-match tie, never for a lone match, and never merely
+// because OTHER pending entries exist for a different Worker (a
+// session dispatching both `bwk` and `rmh` work is not ambiguous for a
+// `bwk` spawn).
 func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 	entries, warnings, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	if err != nil {
@@ -258,6 +271,7 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 	for _, warning := range warnings {
 		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: dispatch-pending: %s\n", warning)
 	}
+	var candidates []string
 	for _, entry := range entries {
 		if entry.Worker != agentType {
 			continue
@@ -274,9 +288,31 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 			}
 			continue
 		}
-		return entry.MissionID
+		candidates = append(candidates, entry.MissionID)
 	}
-	return ""
+	if len(candidates) == 0 {
+		return ""
+	}
+	if len(candidates) > 1 {
+		warnDispatchPendingAmbiguity(agentType, candidates)
+	}
+	return candidates[0]
+}
+
+// warnDispatchPendingAmbiguity names a genuine multi-match ambiguity in
+// matchDispatchPending's candidate set: two or more live pending
+// dispatches recorded the same Worker, so FIFO's oldest-wins tiebreak is
+// resolving a real conflict rather than picking among options that all
+// mean the same thing. Names the count, the worker, every competing
+// mission ID, which one FIFO chose, and that MISSION_ID overrides the
+// match entirely — the one lever that actually lets the operator pick a
+// different one of the competing candidates for this specific spawn.
+func warnDispatchPendingAmbiguity(agentType string, candidates []string) {
+	fmt.Fprintf(os.Stderr,
+		"ethos: pre-tool-use: dispatch-pending: %d pending dispatches match worker %q (%s); "+
+			"binding this spawn to the oldest (%s). If this spawn is for a different mission, "+
+			"set MISSION_ID explicitly.\n",
+		len(candidates), agentType, strings.Join(candidates, ", "), candidates[0])
 }
 
 // nonOpenPendingReason reports why a pending dispatch's mission can
@@ -382,28 +418,67 @@ func nonOpenReason(status string) string {
 	return fmt.Sprintf("that mission is %s", status)
 }
 
-// warnNonOpenMissionID writes the case-1 counterpart of
-// readActiveMissionForDispatch's stale-sidecar warning: same shape
-// (names the session, the mission, and the remedy), worded for an
-// explicit MISSION_ID rather than a claimed sidecar.
+// missionResolutionFailedMessage builds dispatchTierB's block message for
+// the initial store.Load(missionID) failure, worded per boundVia (review
+// finding H1, full-branch review of m-2026-09-08-004 round 3): a spawn
+// that matched a pending dispatch is blocked by a clearable sidecar file,
+// not by an environment variable, and the operator needs to be told that
+// difference and the worker/session it names or the block reads as an
+// unrecoverable internal error with no path forward.
+func missionResolutionFailedMessage(sessionID, missionID, agentType, boundVia string, err error) string {
+	switch boundVia {
+	case mission.BoundViaSidecarDispatch:
+		return fmt.Sprintf(
+			"ethos pre-tool-use: session %q's pending dispatch bound worker %q to mission %s, "+
+				"but that mission failed to load: %v; run `ethos mission release` to clear the "+
+				"pending dispatch (or `ethos mission show %s` to inspect it)",
+			sessionID, agentType, missionID, err, missionID)
+	case mission.BoundViaSidecarClaim:
+		return fmt.Sprintf(
+			"ethos pre-tool-use: session %q is claimed to mission %s, but that mission failed to "+
+				"load: %v; run `ethos mission release` to clear the claim",
+			sessionID, missionID, err)
+	default:
+		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err)
+	}
+}
+
+// warnNonOpenMission writes dispatchTierB's non-open-status advisory,
+// worded per boundVia so the remedy named actually clears the source that
+// produced missionID (review finding H1, full-branch review of
+// m-2026-09-08-004 round 3).
 //
-// Deliberately does NOT suggest `ethos mission release` (review
-// finding C13, m-2026-09-08-004 round 2, considered and rejected for
-// this specific function): every caller of this function names
-// missionID from either the MISSION_ID environment variable
-// (inherited by ordinary OS process-environment inheritance across a
-// resumed subagent's later tool calls) or the parent_delegation
-// inheritance walk — neither is a sidecar file, so `mission release`
-// (which only clears the claim slot and the pending-dispatch store)
-// would not change either source and would be a false remedy. The
-// claim-path warning in readActiveMissionForDispatch DOES name
-// `mission release`, correctly, because that one IS about a clearable
-// sidecar.
-func warnNonOpenMissionID(sessionID, missionID, reason string) {
-	fmt.Fprintf(os.Stderr,
-		"ethos: pre-tool-use: MISSION_ID: session %q named %s but %s; "+
-			"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
-		sessionID, missionID, reason)
+// mission.BoundViaMissionIDEnv and mission.BoundViaInherited are NOT
+// backed by a clearable sidecar — the former is an OS environment
+// variable inherited by every later tool call a resumed subagent process
+// makes, the latter is the parent_delegation inheritance walk — so
+// `ethos mission release` would not change either source and would be a
+// false remedy for them (review finding C13, m-2026-09-08-004 round 2).
+// mission.BoundViaSidecarClaim and mission.BoundViaSidecarDispatch ARE
+// sidecar files `ethos mission release` clears, so both name it, and the
+// dispatch case additionally names the worker and the more targeted
+// `ethos mission close`/`abandon` remedy that clears only this one entry
+// (see consumeDispatchBinding's doc comment on that same scoping).
+func warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason string) {
+	switch boundVia {
+	case mission.BoundViaSidecarDispatch:
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: session %q's pending dispatch bound worker %q "+
+				"to mission %s but %s; run `ethos mission release` (clears every pending dispatch in "+
+				"this session) or `ethos mission close %s`/`abandon %s` (clears just this one) — "+
+				"spawning without a mission\n",
+			sessionID, agentType, missionID, reason, missionID, missionID)
+	case mission.BoundViaSidecarClaim:
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: session %q is claimed to mission %s but %s; "+
+				"run `ethos mission release` — spawning without a mission\n",
+			sessionID, missionID, reason)
+	default:
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: MISSION_ID: session %q named %s but %s; "+
+				"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
+			sessionID, missionID, reason)
+	}
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
@@ -499,6 +574,7 @@ var dispatchTierBConfirmedOpen = func() {}
 // find it. Every caller but the active-mission sidecar's matching-spawn
 // path passes nil.
 func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any, boundVia string, onDispatched func()) error {
+	agentType := spawnAgentType(toolInput)
 	store, err := tierBMissionStore()
 	if err != nil {
 		return writeAgentBlock(w,
@@ -506,8 +582,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	}
 	c, err := store.Load(missionID)
 	if err != nil {
-		return writeAgentBlock(w,
-			fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err))
+		return writeAgentBlock(w, missionResolutionFailedMessage(sessionID, missionID, agentType, boundVia, err))
 	}
 	// Case-1 status re-check (docs/design-delegation-lifecycle.md
 	// facet 2): a MISSION_ID env value is inherited by ordinary OS
@@ -520,7 +595,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	// never a blocked spawn, matching every other attribution
 	// fallback in this file.
 	if reason := nonOpenReason(c.Status); reason != "" {
-		warnNonOpenMissionID(sessionID, missionID, reason)
+		warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason)
 		return dispatchTierBOrTierA(w, sessionID, toolInput) // status re-check fallback: never consumes onDispatched
 	}
 
@@ -585,12 +660,11 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 	if reason := nonOpenReason(recheck.Status); reason != "" {
-		warnNonOpenMissionID(sessionID, missionID, reason)
+		warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason)
 		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
-	agentType := spawnAgentType(toolInput)
 	promptBody, _ := toolInput["prompt"].(string)
 	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
 		Tier:             mission.TierB,

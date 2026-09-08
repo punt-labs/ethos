@@ -2323,7 +2323,12 @@ func TestDispatchAgent_ActiveMissionSidecarMalformedRefuses(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
 	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
 		"a sidecar pointing at an unresolvable mission must block (same contract as MISSION_ID env)")
-	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "MISSION_ID")
+	// H1 (full-branch review, m-2026-09-08-004 round 3): a claim-bound
+	// block must name the actual clearable source (the sidecar) and its
+	// remedy (`ethos mission release`), not a generic "MISSION_ID" phrase
+	// that would send the operator looking at the wrong thing.
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "m-2026-05-23-999")
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "ethos mission release")
 }
 
 // TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured
@@ -2643,6 +2648,119 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_StaleEntryDoesNotHeadO
 	remaining, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "the stale entry must be cleared, and the matched entry consumed")
+}
+
+// TestMatchDispatchPending_AmbiguitySignal pins the FIFO ambiguity
+// warning requested against m-2026-09-08-004 round 3: when two or more
+// LIVE pending dispatches match the spawning worker, matchDispatchPending
+// still resolves to the oldest (FIFO is unchanged), but must name the
+// ambiguity on stderr — the count, the worker, every competing mission
+// ID, which one was chosen, and that MISSION_ID overrides the match.
+//
+// Confirmed failing against the pre-fix code: matchDispatchPending
+// returned the first match with no signal of the second candidate at
+// all.
+func TestMatchDispatchPending_AmbiguitySignal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionA := "m-2026-09-08-712"
+	missionB := "m-2026-09-08-713"
+	stageContract(t, home, missionA)
+	stageContractCustomWriteSet(t, home, missionB, []string{"docs/"})
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-fifo-ambiguity"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionA, "bwk"))
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionB, "bwk"))
+
+	var matched string
+	stderrText := captureStderr(t, func() {
+		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+	})
+
+	assert.Equal(t, missionA, matched, "FIFO still resolves to the oldest entry")
+	assert.Contains(t, stderrText, "2 pending dispatches match worker \"bwk\"")
+	assert.Contains(t, stderrText, missionA)
+	assert.Contains(t, stderrText, missionB)
+	assert.Contains(t, stderrText, "MISSION_ID")
+}
+
+// TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers is the
+// negative case the leader called out explicitly: a session with
+// pending dispatches for two DIFFERENT workers is not ambiguous for
+// either one's spawn and must stay quiet.
+func TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionA := "m-2026-09-08-714"
+	missionB := "m-2026-09-08-715"
+	stageContract(t, home, missionA)                                  // Worker: "bwk"
+	stageContractCustomWriteSet(t, home, missionB, []string{"docs/"}) // Worker: "bwk" too, but re-tagged rmh below
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-no-ambiguity-cross-worker"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionA, "bwk"))
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionB, "rmh"))
+
+	var matched string
+	stderrText := captureStderr(t, func() {
+		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+	})
+
+	assert.Equal(t, missionA, matched)
+	assert.NotContains(t, stderrText, "pending dispatches match",
+		"one match for this spawn's worker is not ambiguous, even with another pending dispatch for a different worker")
+}
+
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNamesRemedy
+// pins review finding H1 (full-branch review, m-2026-09-08-004 round 3):
+// a spawn that matched a pending dispatch whose mission contract cannot
+// load must be blocked with a message naming the worker, the session,
+// and `ethos mission release` as the remedy — not the generic
+// MISSION_ID-env wording, which sends the operator looking at an
+// environment variable that was never involved.
+//
+// Confirmed failing against the pre-fix code: dispatchTierB's Load
+// failure always produced `resolving MISSION_ID %q: %v`, regardless of
+// whether missionID came from the MISSION_ID env var or a pending
+// dispatch sidecar.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNamesRemedy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-09-08-711"
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-unloadable-dispatch"
+	require.NoError(t, mission.WriteDispatchPending(globalRoot, sessionID, missionID, "bwk"))
+	// Deliberately never staged: store.Load(missionID) must fail.
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision)
+	reason := r.HookSpecificOutput.PermissionDecisionReason
+	assert.Contains(t, reason, sessionID)
+	assert.Contains(t, reason, "bwk")
+	assert.Contains(t, reason, missionID)
+	assert.Contains(t, reason, "ethos mission release")
+	assert.NotContains(t, reason, "MISSION_ID",
+		"a pending-dispatch block must not read as a MISSION_ID environment-variable problem")
 }
 
 // TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch closes a
