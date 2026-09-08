@@ -10701,3 +10701,86 @@ acquired immediately, before the roster was removed.
 until release, and completes once it is free. Confirmed failing against
 the pre-fix unlocked `mission.WriteActiveMission` call: the claim wrote
 immediately regardless of the sibling holding the lock.
+
+### Amendment 2026-09-08: a fsync failure after a successful write did not roll back the line it wrote
+
+The leader's own review asked, before dispatching this as a fix,
+whether `internal/mission/log.go`'s existing truncate-on-short-write
+path already covered the case where `fsync` fails after a fully
+successful write. It does not, and could not: that truncate path lives
+in `appendEventLocked`'s LEGACY (single-tree) branch, which never calls
+`Sync` at all, and which every current in-repo mission bypasses
+entirely — `appendEventLocked`'s own routing (`if s.twoTreeStorage &&
+s.repoRoot != "" { return s.appendLiveEventLocked(...) }`) sends every
+two-tree mission's event append to `internal/audit`'s
+`AppendMonotonic` instead, which had NO rollback of any kind: a failed
+`Write` (short or otherwise) returned an error with the file
+untouched, and a `Write` that fully succeeded followed by a failing
+`Sync` also returned an error, but by then the line was already
+sitting in the file, `fsync` failure or not — `Sync` failing does not
+undo an already-successful `Write`; only `Truncate` does, and nothing
+called it.
+
+**Consequence.** `Store.DisclaimDelegation` (and every other caller of
+the event-append primitive: `Create`, `Update`, `Close`,
+`ForceReleaseWriteSet`, `correct.go`'s correction path, and more —
+`appendEventLocked` has eleven call sites) treats a returned append
+error as proof nothing new persisted, and `DisclaimDelegation`
+specifically acts on that belief: it restores the delegation record to
+its pre-disclaim bytes when the event append fails, reasoning that a
+rolled-back record correctly still blocks `Abandon` until a clean
+retry. With the sync-failure gap open, that reasoning was unsound for
+exactly this one failure shape: the `disclaim_delegation` event was
+genuinely in the live log — readable by `LoadEvents`, `mission log`,
+any post-mortem tool — while the delegation record itself said
+"never disclaimed," and a retried disclaim would append a SECOND
+`disclaim_delegation` line for what looks like the same event.
+
+**Fix.** `internal/audit/seal.go`'s `AppendMonotonic` now captures the
+pre-write file length (via the `Seek(SeekEnd)` call it already makes,
+whose return value was previously discarded) and truncates back to it
+on ANY failure past that point — a short or failed `Write`, or a
+`Sync` failure after a fully successful `Write` — mirroring the
+discipline the legacy single-tree path already applies to its own
+`Write` failures, extended to cover the `Sync` case the legacy path
+never needed to handle. `Sync` itself is now called through a new
+package var, `fsyncFile` (default `func(f *os.File) error { return
+f.Sync() }`), for the same reason `internal/mission/syncdir_unix.go`'s
+`syncDir` is already a package var: a real `fsync` failure (`ENOSPC`
+mid-flush, an unmounted device) is not something a portable test can
+engineer directly, so the test overrides the var instead.
+
+No change was needed in `Store.DisclaimDelegation` itself, or in any
+of the other ten `appendEventLocked` call sites — the fix is entirely
+in the shared primitive every one of them already depends on for the
+"my error means nothing persisted" guarantee, so all eleven callers
+gain the correct behavior from one change rather than needing the same
+truncate-back logic re-applied at each call site.
+
+**Tests.** `TestAppendMonotonic_SyncFailureTruncatesBack` overrides
+`fsyncFile` to fail unconditionally and asserts the live file is empty
+afterward. `TestAppendMonotonic_SyncFailureThenSuccessAppendsExactlyOnce`
+retries the same append with the override removed and asserts the file
+holds exactly one line, not two — proving the truncate genuinely
+removed the failed attempt rather than merely reporting an error while
+leaving it in place. Both confirmed failing against the pre-fix
+`AppendMonotonic` (a bare `return 0, fmt.Errorf("syncing %s: %w", ...)`
+with no `Truncate` call): the first line persisted despite the reported
+failure, and the retry produced two lines.
+
+The existing `TestStore_DisclaimDelegation_RollsBackOnEventAppendFailure`
+(DES-076 round 2) continues to pass unmodified — it exercises a
+different sub-case (the live log path replaced by a directory, so
+`OpenFile` itself fails before any write is attempted) and already
+proved `DisclaimDelegation`'s OWN rollback mechanism works correctly
+once `appendEventLocked` reports an error; this amendment's fix is
+what makes that reported error trustworthy for the sync-failure
+sub-case specifically, at the layer beneath it. No cross-package test
+hook was added to drive a sync failure through `DisclaimDelegation`
+itself end-to-end: `fsyncFile` is unexported in `internal/audit`, and
+`internal/mission`'s tests cannot reach it without an exported
+test-only setter this fix does not otherwise need — the audit-package
+unit tests above pin the primitive directly, and the existing
+integration test already pins the caller's rollback behavior given a
+failure, which together cover the fix without growing `audit`'s public
+surface for a single test.

@@ -280,6 +280,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pending clear substep, and `ethos mission claim` now takes that same
   lock before writing — closing the gap on both the teardown side and
   the write side.
+- **A mission event-log append that fails because `fsync` failed AFTER
+  a fully successful write no longer leaves the line on disk.** Every
+  caller of the append primitive (`Store.DisclaimDelegation` among
+  them) treats a returned error as proof nothing new persisted, so it
+  can safely roll back a sibling mutation it made contingent on the
+  append succeeding — `DisclaimDelegation` restores the delegation
+  record to its pre-disclaim bytes on an append failure specifically
+  because it trusts that. A `Write` succeeding and then `Sync` failing
+  broke that trust: the line was genuinely readable in the file even
+  though the caller believed the append never happened, so a
+  `DisclaimDelegation` retry after such a failure could append a SECOND
+  `disclaim_delegation` event for what looked like the same disclaim.
+  The append primitive now truncates the file back to its pre-write
+  length on either a write failure/short write or a sync failure, not
+  only the write case (the file-based single-tree log already truncated
+  on a write failure; it never needed the sync case because it never
+  calls `fsync` at all).
 - **`GOOS=windows GOARCH=amd64 go build ./...` now succeeds.** Windows is
   still not a supported/shipped target (no release binary, no CI job), but
   the whole module now cross-compiles: `internal/process` gained a

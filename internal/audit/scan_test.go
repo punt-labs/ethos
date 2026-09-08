@@ -1,11 +1,16 @@
 package audit
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// errSimulatedFsync is the injected error for fsyncFile overrides in
+// the AppendMonotonic sync-failure tests below.
+var errSimulatedFsync = errors.New("simulated fsync failure")
 
 // writeChunk creates a JSONL file holding one line per timestamp.
 func writeChunk(t *testing.T, dir, name string, tss ...int64) {
@@ -288,6 +293,83 @@ func TestAppendMonotonicSeedsAboveWatermark(t *testing.T) {
 	})
 	if ts <= 5000 {
 		t.Errorf("ts %d did not sort above watermark 5000", ts)
+	}
+}
+
+// TestAppendMonotonic_SyncFailureTruncatesBack pins the leader's PR #509
+// tail-round finding: a fully-successful Write followed by a failing
+// Sync must not leave the line on disk. Callers of AppendMonotonic
+// (internal/mission's appendLiveEventLocked, and through it
+// Store.DisclaimDelegation's own rollback-on-append-failure) treat this
+// function's error as proof nothing new persisted; before this fix that
+// was false for exactly this failure shape, because Sync failing does
+// not undo an already-successful Write, and nothing truncated the file
+// back.
+//
+// fsyncFile is a package var for the same reason
+// internal/mission/syncdir_unix.go's syncDir is: a real fsync failure
+// is not something a portable test can engineer directly.
+func TestAppendMonotonic_SyncFailureTruncatesBack(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+	orig := fsyncFile
+	t.Cleanup(func() { fsyncFile = orig })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+
+	_, err := AppendMonotonic(live, 0, now, func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	})
+	if err == nil {
+		t.Fatal("expected an error from the simulated sync failure")
+	}
+
+	data, readErr := os.ReadFile(live)
+	if readErr != nil {
+		t.Fatalf("reading live file after failed append: %v", readErr)
+	}
+	if len(data) != 0 {
+		t.Errorf("a failed sync must leave no persisted line behind, got %q", data)
+	}
+}
+
+// TestAppendMonotonic_SyncFailureThenSuccessAppendsExactlyOnce is the
+// end-to-end half of the same fix: a retry after a sync failure must
+// produce exactly one line, not two — proving the truncate-back
+// genuinely removed the failed attempt rather than merely reporting an
+// error while leaving it in place.
+func TestAppendMonotonic_SyncFailureThenSuccessAppendsExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "s.audit.jsonl")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	mk := func(ts int64) ([]byte, error) {
+		return []byte(`{"ts":"` + FormatLineTS(ts) + `"}`), nil
+	}
+
+	orig := fsyncFile
+	t.Cleanup(func() { fsyncFile = orig })
+	fsyncFile = func(f *os.File) error {
+		return errSimulatedFsync
+	}
+	if _, err := AppendMonotonic(live, 0, now, mk); err == nil {
+		t.Fatal("expected the first (simulated-failing) append to error")
+	}
+
+	fsyncFile = orig
+	if _, err := AppendMonotonic(live, 0, now, mk); err != nil {
+		t.Fatalf("retry after truncate-back must succeed: %v", err)
+	}
+
+	data, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := SplitLines(data)
+	if len(lines) != 1 {
+		t.Errorf("expected exactly 1 line after retry, got %d: %q", len(lines), data)
 	}
 }
 
