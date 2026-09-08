@@ -87,6 +87,15 @@ research/
 # ethos runtime (never track) — DES-058 live zone + mission locks
 .punt-labs/ethos/missions/**/*.lock
 
+# The trace-log lock file (internal/mission/trace.go) sits BESIDE the
+# tracked missions.jsonl, not under missions/ like the rule above — a
+# sibling, not a descendant, so that glob does not reach it. Without this
+# it's an untracked runtime artifact in a directory people deliberately
+# commit (missions.jsonl is the tracked audit trail), so the first
+# `git add -A` commits it, and a stale .lock can then arrive via `git
+# pull` on a machine that never created it.
+.punt-labs/ethos/missions.jsonl.lock
+
 # Store-level create locks (internal/mission, internal/mcp test fixtures) —
 # runtime artifacts, never source. See ethos-qs0v.
 **/.create.lock
