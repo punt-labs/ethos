@@ -132,7 +132,7 @@ func captureSessionStartOutput(t *testing.T, input string, deps SessionStartDeps
 	in := bytes.NewReader([]byte(input))
 	require.NoError(t, HandleSessionStart(in, deps))
 
-	w.Close()
+	require.NoError(t, w.Close())
 	os.Stdout = oldStdout
 
 	var buf bytes.Buffer

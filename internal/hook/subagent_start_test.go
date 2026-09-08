@@ -39,7 +39,7 @@ func captureSubagentStartOutput(t *testing.T, input string, s identity.IdentityS
 	in := bytes.NewReader([]byte(input))
 	require.NoError(t, HandleSubagentStart(in, s, ss))
 
-	w.Close()
+	require.NoError(t, w.Close())
 	os.Stdout = oldStdout
 
 	var buf bytes.Buffer
@@ -595,11 +595,12 @@ func runHookForVerifier(
 		Hash:       hash,
 	})
 
-	w.Close()
+	require.NoError(t, w.Close())
 	os.Stdout = oldStdout
 
 	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
+	_, readErr := buf.ReadFrom(r)
+	require.NoError(t, readErr)
 	return buf.String(), hookErr
 }
 
@@ -1048,9 +1049,9 @@ func TestSubagentStart_VerifierGateNoMissionStoreIsLegacy(t *testing.T) {
 			Identities: idStore,
 			Sessions:   sessions,
 		})
-	w.Close()
+	require.NoError(t, w.Close())
 	os.Stdout = oldStdout
-	r.Close()
+	require.NoError(t, r.Close())
 
 	require.NoError(t, hookErr, "legacy install (no mission store) must not block")
 }

@@ -32,16 +32,21 @@ func captureStderr(t *testing.T, fn func()) string {
 	old := os.Stderr
 	os.Stderr = w
 	defer func() { os.Stderr = old }()
-	done := make(chan []byte, 1)
+	type result struct {
+		b   []byte
+		err error
+	}
+	done := make(chan result, 1)
 	go func() {
-		b, _ := io.ReadAll(r)
-		done <- b
+		b, err := io.ReadAll(r)
+		done <- result{b, err}
 	}()
 	fn()
-	_ = w.Close()
-	out := string(<-done)
-	_ = r.Close()
-	return out
+	require.NoError(t, w.Close())
+	res := <-done
+	require.NoError(t, res.err)
+	require.NoError(t, r.Close())
+	return string(res.b)
 }
 
 // validContractYAML is a minimal valid contract body the MCP create
