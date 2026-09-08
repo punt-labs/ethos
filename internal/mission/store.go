@@ -1855,6 +1855,15 @@ func countDelegations(repoRoot, missionID string) (int, error) {
 // mean "refused pre-run" — genuinely zero work, independent of who
 // dispatched it or why.
 //
+// This "exactly three call sites" claim is enforced, not just
+// asserted: TestAbortedVerdictWriteSites_MatchKnownThree
+// (aborted_writer_drift_test.go) parses every non-test .go file under
+// internal/ and cmd/ and fails if the set of write-position occurrences
+// of DelegationVerdictAborted ever differs from these three (review
+// finding J2, full-branch review, m-2026-09-08-004 round 3 — a fourth
+// writer, e.g. a future "cancel a running worker" command, must
+// re-justify this exclusion, not silently inherit it).
+//
 // Rejected alternative: a distinct BoundVia value for "dispatched then
 // depth/hash-refused." Provenance describes HOW a delegation was
 // bound, not whether its worker ran — the field that already means
