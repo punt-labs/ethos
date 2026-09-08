@@ -342,9 +342,11 @@ artifacts on disk.
 Abandon refuses, with no bypass flag, if:
   - the mission is already in a terminal state (closed, failed,
     escalated, or already abandoned)
-  - any delegation record exists under the mission's delegations/
-    directory, at any verdict, and has not been disclaimed (see
-    --disclaim below)
+  - any BLOCKING delegation record exists under the mission's
+    delegations/ directory — every record blocks EXCEPT one with
+    verdict "aborted" (refused before its worker ever ran; excluded
+    automatically, no --disclaim needed) or one explicitly disclaimed
+    (see --disclaim below)
   - a result artifact exists for any round — disclaiming every
     delegation does NOT touch this gate
 
