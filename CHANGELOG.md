@@ -124,7 +124,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   head-of-line-blocks a newer one for the same Worker, and two
   concurrent `Agent()` spawns in the same session (a normal shape when
   independent tool calls are batched in one turn) can no longer both
-  match the same pending entry.
+  match the same pending entry. When two or more pending dispatches
+  match one spawn's worker (a real ambiguity, e.g. two same-Worker
+  missions dispatched before either spawn), a stderr warning now names
+  the count, the worker, every competing mission ID, which one FIFO
+  chose, and that `MISSION_ID` overrides the match — silent only when a
+  single mission legitimately matches (see DES-076's residual-risk
+  update in DESIGN.md).
+- **A block or warning produced when a spawn matched a pending dispatch
+  or an active claim no longer reads as a `MISSION_ID`
+  environment-variable problem.** A pending dispatch whose mission could
+  not load, or was no longer open, now names the session, the worker,
+  the mission, and `ethos mission release` (or the narrower `ethos
+  mission close`/`abandon <id>`) — not the generic wording meant for the
+  MISSION_ID env var, which was never involved (ethos-7tqd; DES-076's
+  2026-09-08 full-branch-review amendment in DESIGN.md).
+- **`ethos session end`'s cleanup of a session's mission bindings now
+  also clears the delegation-binding sidecar**, not only the
+  active-mission claim and the pending-dispatch store. A survivor let
+  the commit-msg hook tag a later, unrelated session's commits with a
+  stale delegation — the same class of bug `ethos mission release`'s own
+  delegation-binding clear exists to prevent (ethos-jawp), reopened
+  through session end instead.
+- **`ethos mission abandon --disclaim`, on both the CLI and the MCP
+  `mission` tool, now names every delegation ID that was already
+  disclaimed when a later step in the same call fails** — a second
+  disclaim failing mid-list, or the abandon itself failing after every
+  disclaim succeeded (e.g. a result artifact still exists). Disclaiming
+  is irreversible on success; an operator retrying after either failure
+  previously had no way to know some delegations were already
+  permanently disclaimed.
+- **`ethos mission abandon`'s delegation-count check now names an actual
+  remedy for a delegation directory left behind by a crashed
+  `WriteDelegationSkeleton` write** (a directory with no `record.yaml`
+  — nothing to load, disclaim, or count as real work), instead of
+  surfacing a bare "no such file or directory" that read like an
+  internal bug with no path forward.
+- **Pending-dispatch FIFO ordering no longer depends on `sort.Slice`'s
+  unspecified tie behavior**, and no longer follows a symlinked pending-
+  dispatch entry. Two entries recorded at the exact same mtime (real on
+  filesystems with coarse resolution) now tiebreak deterministically on
+  mission ID; a symlinked entry is refused, matching every other sidecar
+  reader in the package.
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`

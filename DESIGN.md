@@ -9952,15 +9952,20 @@ impossible. What remains, named plainly:
    (round 2) exists specifically because this case is not eliminated,
    only narrowed from "any next spawn of any type" to "a next spawn of
    the SAME type."
-2. **Out-of-order spawning breaks the FIFO assumption.** If a leader
-   dispatches `m-A` then `m-B` (same Worker) but spawns the worker for
-   `m-B` FIRST — deliberately or by mistake — `matchDispatchPending`
-   still resolves to the OLDEST entry (`m-A`), misattributing `m-B`'s
-   spawn to `m-A`. The FIFO ordering is a reasonable default given
-   `CLAUDE.md`'s own dispatch-then-immediately-spawn protocol, but it
-   is an assumption about operator behavior, not a guarantee enforced
-   by the code. No mitigation beyond disclaim (round 2) is implemented
-   for this case in round 3.
+2. **Out-of-order spawning breaks the FIFO assumption — now SIGNALLED,
+   not silent (2026-09-08 addendum below).** If a leader dispatches
+   `m-A` then `m-B` (same Worker) but spawns the worker for `m-B` FIRST
+   — deliberately or by mistake — `matchDispatchPending` still resolves
+   to the OLDEST entry (`m-A`), misattributing `m-B`'s spawn to `m-A`.
+   The FIFO ordering is a reasonable default given `CLAUDE.md`'s own
+   dispatch-then-immediately-spawn protocol, but it is an assumption
+   about operator behavior, not a guarantee enforced by the code. Round
+   3 shipped this gap silent; the 2026-09-08 addendum below adds a
+   stderr warning naming the ambiguity, the candidates, which one was
+   chosen, and that `MISSION_ID` overrides the match — the hazard
+   itself is unchanged (FIFO still resolves to the oldest, disclaim is
+   still the only correction), but it can no longer happen without the
+   operator being told.
 3. **Persistent filesystem failures degrade multiple guarantees at
    once, not just one.** A truly persistent condition (not transient
    contention) can defeat `consumeDispatchBinding`, `close`/`abandon`'s
@@ -10072,3 +10077,125 @@ double-match shape (though it had its own, worse, unconditional
 overwrite race). Naming this plainly because the residual-risk
 enumeration above already commits this document to naming what a
 redesign trades away, not just what it fixes.
+
+### Amendment 2026-09-08: FIFO ambiguity signal, plus five findings from a full-branch review (H1, H2, M3, M4, L5)
+
+A full-branch review of the whole DES-076 line of work (m-2026-09-08-004
+round 3) found two HIGH findings, two MEDIUM, and one LOW-with-two-parts.
+All five are closed here, alongside a signal for residual-risk item 2
+above, requested separately from the same review pass.
+
+**FIFO ambiguity signal.** `matchDispatchPending` resolves a
+multi-candidate tie to the oldest entry silently — residual-risk item 2
+names why that is a real, not hypothetical, misattribution risk. Fixed
+by warning on stderr whenever two or more LIVE (non-stale) entries match
+the spawning worker: the count, the worker, every competing mission ID,
+which one FIFO chose, and that `MISSION_ID` overrides the match entirely
+(the one lever that lets an operator pick a different candidate for a
+specific spawn). Fires ONLY on a genuine same-worker tie — a session
+with pending dispatches for `bwk` and `rmh` is not ambiguous for either
+one's spawn and stays quiet, per the review's explicit requirement that
+the signal not become false-positive noise.
+`TestMatchDispatchPending_AmbiguitySignal` and
+`TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers` pin both
+halves; the first confirmed failing against pre-fix code (no signal at
+all), matching the residual-risk update above.
+
+**H1 (HIGH) — a pending-dispatch block read as an unrecoverable
+MISSION_ID environment-variable problem.** `dispatchTierB` already
+carried `boundVia`, recording whether `missionID` came from the
+MISSION_ID env var, parent-delegation inheritance, an active-mission
+claim, or a pending dispatch — but its Load-failure block message and
+its non-open-status warning both used one generic wording regardless,
+inherited from before pending dispatches existed as their own sidecar
+class. A spawn that matched a pending dispatch whose mission could not
+load, or was no longer open, was told to check `MISSION_ID` — an
+environment variable that was never involved — with no mention of the
+worker, the session, or `ethos mission release`, the actual remedy.
+`missionResolutionFailedMessage` and `warnNonOpenMission` now switch on
+`boundVia`: the two sidecar-backed origins (claim, dispatch) name the
+session, the mission, the worker (for dispatch), and `ethos mission
+release` (or the narrower `ethos mission close`/`abandon <id>` for a
+dispatch, matching `consumeDispatchBinding`'s own scoping); the two
+non-sidecar origins (env, inheritance) keep the original wording, since
+`mission release` would be a false remedy for either (review finding
+C13, m-2026-09-08-004 round 2, still correct). `warnNonOpenMissionID`'s
+doc comment, which claimed no caller ever named a clearable sidecar, is
+corrected — round 3 added exactly that caller.
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNamesRemedy`
+confirmed failing against pre-fix code.
+
+**H2 (HIGH) — the delegation-binding sidecar was never cleared on
+session end.** `clearSessionMissionBindings`'s own doc comment claimed
+the same three-way scope `ethos mission release` clears (active-mission
+claim, delegation-binding sidecar, pending-dispatch store), but the
+function only cleared two of the three — the delegation-binding sidecar
+(`mission.ClearDelegationBinding`) was missing. A survivor let the
+commit-msg hook tag a LATER, unrelated session's commits with a stale
+delegation — the same `ethos-jawp` class `ClearDelegationBinding`'s own
+doc comment names, reopened through session end instead of `mission
+release`. Fixed by adding the missing call with the same
+stderr-and-continue advisory discipline as the other two.
+`TestHandleSessionEnd_ClearsMissionBindings` extended to write a
+delegation binding before session end and assert its sidecar is gone
+after; confirmed failing against pre-fix code.
+
+**M3 (MEDIUM) — an abandon-with-disclaim partial failure discarded
+which disclaims already committed.** `DisclaimDelegation` is
+irreversible the moment it succeeds. Both `runMissionAbandon` (CLI) and
+`handleAbandonMission` (MCP) ran a disclaim loop followed by `Abandon`,
+but neither tracked which delegation IDs had already committed before a
+later failure — a second disclaim failing mid-loop, or `Abandon` itself
+failing after every disclaim succeeded (e.g. Gate 2: a result artifact
+still exists) — so an operator retrying after either failure had no way
+to know some of their delegations were already permanently disclaimed.
+Both call sites now accumulate a `disclaimed` slice as each commits and
+wrap the returned error to name it explicitly on both failure paths. On
+the MCP path this is carried in the error text, matching this handler's
+existing convention of a bare error string for every other failure
+mode in the file (`NewToolResultError` takes no structured payload).
+Four regression tests (two CLI, two MCP — one per failure path per
+surface) confirmed failing against pre-fix code.
+
+**M4 (MEDIUM) — a crashed-write dead-end delegation surfaced a bare
+filesystem error.** `countBlockingDelegations`'s doc comment said an
+unreadable delegation record "counts as blocking, fail-closed," but the
+code actually aborted the whole count with an error — the same
+fail-closed OUTCOME for `Abandon`'s caller (an error blocks exactly as
+effectively as a positive count would), but not the same code path, so
+the comment was corrected to say precisely which one this is.
+Separately, a missing `record.yaml` specifically (as opposed to a
+permission or decode failure) is a genuine dead end:
+`WriteDelegationSkeleton`'s documented write order (directory, then
+`prompt.md`, then `record.yaml` last) means a crash in that window
+leaves a directory nothing can load, disclaim, or count as real work.
+That case now gets its own message naming the actual remedy — remove
+the empty directory — rather than surfacing `LoadDelegation`'s bare "no
+such file or directory."
+`TestCountBlockingDelegations_MissingRecordNamesRemedy` confirmed
+failing against pre-fix code.
+
+**L5 (LOW, two parts) — `ReadDispatchPending`'s sort was not a stable
+FIFO discriminator, and it followed symlinks.** `sort.Slice`'s ordering
+is documented as unspecified for equal comparator keys, and mtime ties
+are real (coarse filesystem resolution, concurrent writers landing in
+the same tick) — the sort carried no tiebreak, so ReadDispatchPending
+had no contractual reason to prefer one order over another on a tie.
+Extracted the comparator to `dispatchPendingLess` and added a
+`MissionID` tiebreak (IDs are date-sequential, so lexical order is
+creation order), switched to `SliceStable`. The comparator is
+unit-tested directly rather than through the filesystem: `os.ReadDir`
+already returns entries sorted by filename, which for this repo's ID
+scheme coincides with creation order, so a filesystem-backed test
+cannot distinguish "correctly tiebroken" from "already alphabetical by
+coincidence" — exactly the reliance on an unstated implementation
+detail this finding flagged. Separately, every other sidecar reader in
+this package refuses a symlinked entry (`LoadDelegation`'s
+`rejectSymlink`) before reading it; `ReadDispatchPending` read straight
+through `os.ReadFile`, which follows symlinks. Added the same
+`rejectSymlink` call before the read.
+`TestDispatchPendingLess_TiebreaksOnMissionID` (a targeted revert of
+`dispatchPendingLess` to its bare mtime-only form, not a filesystem
+scenario, for the reason above) and
+`TestReadDispatchPending_RefusesSymlink` (git-stash falsification) both
+confirmed failing against pre-fix code.
