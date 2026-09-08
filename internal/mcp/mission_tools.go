@@ -160,13 +160,15 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	}
 	// Parity with the CLI's create/dispatch: minting a fresh mission is
 	// the leader naming one explicitly, so the session's active-mission
-	// sidecar must follow immediately (ethos-5jsf) -- otherwise the very
-	// next Agent() spawn in this session still writes its delegation
-	// under whatever mission the sidecar named a moment ago, d-040's
-	// exact pattern, reachable through the MCP surface even though
-	// dispatchTierB's own status re-check (facet 2) already closes the
-	// post-close half of the same root cause.
-	if warnings := h.bindDispatchedMission(c.MissionID); len(warnings) > 0 {
+	// sidecar must follow immediately (ethos-5jsf) -- otherwise a later
+	// Agent() spawn whose agent type matches this contract's Worker
+	// finds no sidecar to consume, d-040's original pattern, reachable
+	// through the MCP surface even though dispatchTierB's own status
+	// re-check (facet 2) already closes the post-close half of the same
+	// root cause. DES-076 (round 1) scoped this binding to the ONE spawn
+	// matching Worker, single-use -- it no longer takes whatever spawns
+	// next regardless of type.
+	if warnings := h.bindDispatchedMission(c.MissionID, c.Worker); len(warnings) > 0 {
 		return jsonResult(createMissionResponse{Contract: &c, Warnings: warnings})
 	}
 	return jsonResult(&c)
@@ -185,16 +187,23 @@ type createMissionResponse struct {
 }
 
 // bindDispatchedMission mirrors the CLI's bindDispatchedMission
-// (cmd/ethos/mission.go:2023) for the MCP create surface -- ethos-5jsf.
+// (cmd/ethos/mission.go) for the MCP create surface -- ethos-5jsf.
 // Creating a mission is the leader naming one explicitly, so it is the
 // moment the session's active-mission sidecar must follow: without
-// this, the next Agent() spawn in this session still writes under
-// whatever mission the sidecar named a moment ago (observed: d-078
-// under m-017, d-040 under m-002).
+// this, a later Agent() spawn matching this mission's Worker finds no
+// sidecar to consume (observed pre-DES-076: d-078 under m-017, d-040
+// under m-002, back when an unscoped sidecar captured whatever spawned
+// next regardless of type).
 //
 // The binding is written with dispatch origin, not claim -- creating a
 // mission on someone's behalf must not turn on commit trailers for
 // this session; only an explicit `ethos mission claim` does that.
+// DES-076 (round 1) additionally scopes it to the ONE spawn whose
+// agent type matches worker, single-use — see
+// internal/hook/pretooluse_dispatch.go's readActiveMissionForDispatch,
+// which is what actually gates and consumes it. This function only
+// writes the sidecar and reports what it wrote, mirroring the CLI's
+// own bindDispatchedMission split.
 //
 // Every step is advisory: a mission that was created stays created
 // regardless of whether the rebind below succeeds. But "advisory"
@@ -203,10 +212,12 @@ type createMissionResponse struct {
 // context, means the rebind is skipped, and a warning says so: an MCP
 // client that trusts "creating a mission binds the session" has no
 // other way to distinguish "rebind happened" from "silently
-// skipped." Failures and skips alike are returned as strings for the
-// caller to fold into the result's warnings array -- MCP has no
-// stderr channel to print the CLI's line to.
-func (h *Handler) bindDispatchedMission(missionID string) []string {
+// skipped." Failures, skips, AND a successful fresh bind are all
+// returned as strings for the caller to fold into the result's
+// warnings array -- MCP has no stderr channel to print the CLI's line
+// to, so this is the only signal an MCP-driven leader gets that the
+// binding exists and which worker it is scoped to.
+func (h *Handler) bindDispatchedMission(missionID, worker string) []string {
 	if h.sessionStore == nil {
 		return []string{
 			"binding mission: no session store wired -- active-mission sidecar not updated; " +
@@ -254,15 +265,24 @@ func (h *Handler) bindDispatchedMission(missionID string) []string {
 	); err != nil {
 		return append(warnings, fmt.Sprintf("binding mission: binding session %s to %s: %v", sessionID, missionID, err))
 	}
+	// Report the binding unconditionally, not only on a rebind --
+	// parity with the CLI's bindDispatchedMission (ethos-7tqd triage
+	// suggestion #3), and the only place an MCP-driven leader learns
+	// the binding is scoped to worker at all, since MCP has no stderr
+	// channel to print the CLI's equivalent line to.
+	warnings = append(warnings, fmt.Sprintf(
+		"session %s bound to %s for worker %q -- only that worker's next Agent() spawn in "+
+			"this session is attributed to it; call mission release first if that is not what you want",
+		sessionID, missionID, worker))
 	// create always mints a fresh mission ID, so a rebind onto the SAME
 	// mission cannot arise; only the changed-mission case is reachable.
 	if previous.MissionID == "" || previous.MissionID == missionID {
 		return warnings
 	}
 	warnings = append(warnings, fmt.Sprintf(
-		"session %s was bound to %s; rebound to %s -- delegations now file under %s, "+
-			"and commit trailers are off until you run `ethos mission claim <id>`",
-		sessionID, previous.MissionID, missionID, missionID))
+		"session %s was bound to %s; rebound to %s -- worker %q's next matching spawn now files "+
+			"under %s, and commit trailers are off until you run `ethos mission claim <id>`",
+		sessionID, previous.MissionID, missionID, worker, missionID))
 	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
 		warnings = append(warnings, fmt.Sprintf("binding mission: clearing delegation binding: %v", err))
 	}

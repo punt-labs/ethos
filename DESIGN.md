@@ -9638,3 +9638,58 @@ single-use half: a matching-worker spawn is bound Tier B and the sidecar
 is gone immediately after. `..._ClaimOriginStaysAfterConsume` pins the
 non-regression: an `ethos mission claim` binding is untouched by this
 change and stays sticky across a successful dispatch, exactly as before.
+
+**Amendment 2026-09-08 (local review, m-2026-09-08-003, six findings,
+all resolved in the follow-up mission that added the round 2 section
+above):** the round 1 Tests paragraph above did not cover the
+contract-load-failure branch this ADR's own text argues for (F5) —
+`TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableContractDoesNotBlock`
+closes that gap: a dispatch-origin sidecar naming a mission the store
+cannot `Load` allows the spawn (never blocks, unlike the claim/explicit-
+`MISSION_ID` paths), does not capture it, and leaves the binding in
+place. `..._MismatchedWorkerNotCaptured` was also strengthened to
+assert `ReadActiveMissionBinding().Origin == BindOriginDispatch` on the
+surviving binding, not only that the mission ID string survives (F6's
+companion test gap — a degraded-to-claim binding would still pass the
+weaker assertion). Two further findings were process/comment quality,
+not behavior: F2 (a stale doc-comment claim that `dispatchTierB` called
+`spawnAgentType`, when it still inlined a duplicate) was already fixed
+incidentally when round 2 wired `BoundVia` through the same call site;
+F3 and F4 corrected two stderr/doc-comment claims (an unnamed
+contract-load failure printing `worker ""` with no explanation, and an
+understated failure-mode bound on `consumeDispatchBinding`) to match
+what the code actually does. F1 (MCP-surface parity) is covered
+separately, below.
+
+**F1 — MCP surface parity.** `internal/mcp/mission_tools.go`'s
+`bindDispatchedMission` mirrors the CLI's function of the same name and
+had not been updated: its doc comments still described the pre-DES-076
+"whatever mission the sidecar named a moment ago" capture, and — unlike
+the CLI, which now prints the binding unconditionally and names the
+Worker — it emitted nothing on a fresh (non-rebind) bind, so an
+MCP-driven leader had no way to learn a binding existed at all, let
+alone which worker it was scoped to. Fixed to match the CLI exactly:
+`bindDispatchedMission` now takes `worker` and reports the binding
+unconditionally (`TestHandleMission_CreateFreshBindNamesWorker`), and
+the rebind message names the worker too
+(`TestHandleMission_CreateRebindsWarnsOnDifferentMission`, updated to
+expect both messages).
+
+**F6 (the load-bearing one).** `ClearActiveMission`
+(`internal/mission/active.go`) removed both sidecar files
+unconditionally via `errors.Join`, and its own comment claimed "a
+half-cleared pair converges." It converges to the WRONG answer: a
+partial failure that removed the origin file but left `active-mission`
+behind leaves the shape `ReadActiveMissionBinding` reads as
+`BindOriginClaim` — sticky, ungated by agent type, stamping commit
+trailers — silently upgrading a dispatch binding into a claim through a
+different door than the one this ADR closed. Fixed by attempting the
+origin removal only after the active-mission removal succeeds, so a
+partial failure leaves the pair matched (both present, still agreeing)
+rather than mismatched.
+`TestClearActiveMission_StopsOnActiveMissionRemovalFailure` forces the
+active-mission removal to fail via a non-empty directory in its place
+(`ENOTEMPTY`, not a permission change — chmod-based failures are flaky
+under a root-running test process, the same lesson this repo's own
+DES-075 F6 amendment already applied elsewhere) and confirmed failing
+against the pre-fix `errors.Join` version before landing the fix.

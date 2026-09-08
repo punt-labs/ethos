@@ -2383,6 +2383,19 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCap
 	require.NoError(t, err)
 	assert.Equal(t, missionID, still,
 		"the dispatch binding must survive an unrelated spawn so the real worker can still consume it")
+
+	// Review finding F6 (m-2026-09-08-003): asserting ReadActiveMission
+	// alone cannot tell a live dispatch binding apart from a dispatch
+	// binding whose origin file was dropped (e.g. by a partial
+	// ClearActiveMission failure) — both read the same missionID.
+	// ReadActiveMissionBinding's Origin is what actually decides
+	// whether the NEXT session activity treats this as still
+	// worker-scoped-and-single-use (dispatch) or as a sticky claim that
+	// stamps commit trailers regardless of agent type.
+	stillBinding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.BindOriginDispatch, stillBinding.Origin,
+		"the surviving binding must still be dispatch origin, not silently degraded to a sticky claim")
 }
 
 // TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MatchingWorkerConsumesBinding
@@ -2473,4 +2486,54 @@ func TestDispatchAgent_ActiveMissionSidecarClaimOrigin_StaysAfterConsume(t *test
 	require.NoError(t, err)
 	assert.Equal(t, missionID, after,
 		"a claim binding must stay sticky after use — only dispatch bindings are single-use")
+}
+
+// TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableContractDoesNotBlock
+// is review finding F5 (m-2026-09-08-003): the only existing malformed-
+// sidecar test (TestDispatchAgent_ActiveMissionSidecarMalformedRefuses)
+// uses a CLAIM-origin sidecar and asserts a BLOCK — the opposite branch
+// from DES-076's stated dispatch-origin doctrine, which treats an
+// unresolvable contract identically to a Worker mismatch (never a
+// block, since the sidecar is an ambient bridge behind every later
+// spawn, not the operator naming this exact spawn's mission). Without
+// this test, a regression that made the dispatch path block on an
+// unresolvable contract — resurrecting the doctrine the ADR explicitly
+// argues against — would pass the entire suite.
+func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnresolvableContractDoesNotBlock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+	// Deliberately no stageContract call: the sidecar names a mission
+	// the store cannot Load, matching TestDispatchAgent_ActiveMissionSidecarMalformedRefuses's
+	// setup, but with BindOriginDispatch instead of a claim.
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-dispatch-unresolvable"
+	missionID := "m-2026-09-08-703"
+	require.NoError(t, mission.WriteActiveMissionOrigin(
+		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
+	))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+		"an unresolvable dispatch-origin contract must never block the spawn (contrast with claim/MISSION_ID)")
+	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a contract that cannot be loaded must not be treated as a match")
+
+	still, err := mission.ReadActiveMission(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, missionID, still,
+		"the unresolvable binding must be left in place, not cleared, since it was never consumed")
 }

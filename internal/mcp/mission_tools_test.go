@@ -266,6 +266,40 @@ func TestHandleMission_CreateBindsActiveMission(t *testing.T) {
 		"the create-time binding must be dispatch origin, not claim — create must not turn on commit trailers")
 }
 
+// TestHandleMission_CreateFreshBindNamesWorker is review finding F1 on
+// m-2026-09-08-003: before this fix, the MCP create surface emitted no
+// warning at all on a fresh (non-rebind) bind, unlike the CLI's
+// bindDispatchedMission, which prints the binding unconditionally and
+// names the worker it is scoped to (ethos-7tqd triage suggestion #3).
+// An MCP-driven leader had no way to learn the binding existed, let
+// alone that DES-076 scopes it to one specific worker's next spawn.
+func TestHandleMission_CreateFreshBindNamesWorker(t *testing.T) {
+	const sess = "sess-mcp-create-fresh-bind"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML, // worker: bwk
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	missionID, _ := payload["mission_id"].(string)
+	require.NotEmpty(t, missionID)
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "a fresh bind must be reported too, not only a rebind; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], missionID)
+	assert.Contains(t, warnings[0], "bwk", "the fresh-bind line must name the worker the binding is scoped to")
+}
+
 // TestHandleMission_CreateNoSessionWarns asserts the advisory
 // contract: an MCP call with no session store wired must not fail the
 // create — mirrors the CLI's bindDispatchedMission, which proceeds
@@ -337,7 +371,7 @@ func TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 	h := testHandlerWithSessions(t)
 
-	warnings := h.bindDispatchedMission("m-test-001")
+	warnings := h.bindDispatchedMission("m-test-001", "bwk")
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "resolving session")
 	assert.NotContains(t, warnings[0], "no session in context",
@@ -396,10 +430,15 @@ func TestHandleMission_CreateRebindsWarnsOnDifferentMission(t *testing.T) {
 
 	warnings, ok := payload["warnings"].([]any)
 	require.True(t, ok, "warnings must be a top-level array; got %#v", payload["warnings"])
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], previous)
+	// Two entries: the unconditional fresh-bind confirmation (F1 —
+	// parity with the CLI's own unconditional stderr line, naming the
+	// worker the binding is scoped to) plus the rebind-specific message.
+	require.Len(t, warnings, 2)
 	assert.Contains(t, warnings[0], missionID)
-	assert.Contains(t, warnings[0], "ethos mission claim")
+	assert.Contains(t, warnings[0], "bwk", "the fresh-bind line must name the worker the binding is scoped to")
+	assert.Contains(t, warnings[1], previous)
+	assert.Contains(t, warnings[1], missionID)
+	assert.Contains(t, warnings[1], "ethos mission claim")
 
 	got, err := mission.ReadActiveMission(globalRoot, sess)
 	require.NoError(t, err)

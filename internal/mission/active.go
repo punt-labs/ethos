@@ -329,19 +329,32 @@ func ReadDelegationBinding(globalRoot, sessionID string) (DelegationBinding, err
 // ClearActiveMission removes the active-mission sidecar for sessionID.
 // Missing is not an error — clearing an already-clear slot is a no-op
 // so `ethos mission release` is safe to call unconditionally.
-// Both files go: the origin sidecar describes a binding that no longer
-// exists, and leaving it behind would label the session's NEXT
-// dispatch-free binding. It is removed even when the mission file is
-// already gone, so a half-cleared pair converges.
+//
+// Both files go, but NOT unconditionally in parallel: the origin
+// removal is attempted only after the active-mission removal succeeds.
+// ReadActiveMissionBinding reads "active-mission present, origin
+// absent" as BindOriginClaim — the pre-origin default, sticky and
+// ungated by agent type. If a partial failure removed the origin file
+// but left active-mission behind (a permissions race, a concurrent
+// writer, anything that makes one os.Remove succeed and the other
+// fail), that shape silently upgrades whatever mission active-mission
+// still names into a sticky claim — resurrecting the exact unscoped-
+// capture bug DES-076 fixed, through a different door (review finding
+// F6, m-2026-09-08-003). Removing the active-mission file first and
+// stopping on its failure means the pair either both go or neither
+// does; a failed active-mission removal leaves the origin file in
+// place, matching the mission it still names, so the reader's
+// same-mission check (ReadActiveMissionBinding) keeps the two
+// consistent rather than converging to the wrong answer.
 func ClearActiveMission(globalRoot, sessionID string) error {
 	path := ActiveMissionPath(globalRoot, sessionID)
 	if path == "" {
 		return nil
 	}
-	return errors.Join(
-		removeSidecarFile(path),
-		removeSidecarFile(ActiveMissionOriginPath(globalRoot, sessionID)),
-	)
+	if err := removeSidecarFile(path); err != nil {
+		return err
+	}
+	return removeSidecarFile(ActiveMissionOriginPath(globalRoot, sessionID))
 }
 
 // ClearMissionBindings removes sessionID's active-mission and

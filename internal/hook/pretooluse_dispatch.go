@@ -155,7 +155,23 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 	// named this exact spawn's mission, so a resolution failure is
 	// their own error and should surface loudly).
 	worker, ok := dispatchedWorker(binding.MissionID)
-	if !ok || worker == "" || worker != agentType {
+	if !ok {
+		// Distinct from the mismatch case below: worker is "" here only
+		// because the contract would not load (validate.go's rule 11
+		// makes Worker mandatory non-empty on every contract that CAN
+		// load), not because the operator ever declared an empty
+		// Worker. Reporting this with the mismatch line's wording would
+		// print `worker ""` with no hint why — the exact "documented
+		// but unobservable" gap review finding F3 (m-2026-09-08-003)
+		// flagged.
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: session %q is bound to %s, but its contract could "+
+				"not be loaded to identify the dispatched worker — spawn %q is not captured; the "+
+				"binding stays in place for whichever spawn eventually matches it\n",
+			sessionID, binding.MissionID, agentType)
+		return "", ""
+	}
+	if worker != agentType {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s for worker %q, but this "+
 				"spawn is %q — not the dispatched worker, so it is not captured; the binding stays for %q\n",
@@ -188,9 +204,15 @@ func dispatchedWorker(missionID string) (worker string, ok bool) {
 // Re-reads the binding before clearing and proceeds only when it still
 // names missionID with dispatch origin — a fresh claim or dispatch that
 // landed in the window between the match and this call must not be
-// clobbered. Advisory: a failure here degrades the fix to "capture at
-// most one more spawn," not a spawn refusal, matching every other
-// sidecar helper in this file.
+// clobbered. Advisory: a transient failure here means the very next
+// matching-worker spawn (if any) is also captured before a retry
+// clears it, but a PERSISTENT failure (EACCES, a read-only sessions
+// dir, a full disk) leaves the sidecar surviving every subsequent call
+// indefinitely — every future spawn matching this Worker is captured
+// for as long as the underlying condition holds, not bounded to one
+// extra spawn (review finding F4, m-2026-09-08-003). Never a spawn
+// refusal either way, matching every other sidecar helper in this
+// file — the failure mode is a data-quality degradation, not an outage.
 func consumeDispatchBinding(sessionID, missionID string) {
 	globalRoot, err := tierBGlobalRoot()
 	if err != nil {

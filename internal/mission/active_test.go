@@ -229,6 +229,44 @@ func TestClearActiveMission_RemovesOriginToo(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "active-mission-origin must be gone: %v", statErr)
 }
 
+// TestClearActiveMission_StopsOnActiveMissionRemovalFailure is review
+// finding F6 (m-2026-09-08-003): a failed active-mission removal must
+// NOT still attempt to remove the origin file. The pre-fix
+// errors.Join(removeSidecarFile(active), removeSidecarFile(origin))
+// ran both unconditionally; a partial failure that removed the origin
+// but left active-mission behind converges to "active-mission present,
+// origin absent," which ReadActiveMissionBinding reads as
+// BindOriginClaim — sticky, ungated by agent type, stamping commit
+// trailers. That silently upgrades a dispatch binding into a claim,
+// resurrecting the unscoped-capture bug DES-076 fixed through a
+// different door.
+//
+// The active-mission removal is forced to fail deterministically via a
+// non-empty directory in its place (ENOTEMPTY), not a permission
+// change — a chmod-based failure is flaky under a root-running test
+// process, since root bypasses permission checks entirely (the same
+// lesson DES-075's F6 amendment already applied to a different test in
+// this codebase).
+func TestClearActiveMission_StopsOnActiveMissionRemovalFailure(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-clear-partial-failure"
+	missionID := "m-2026-09-08-704"
+	require.NoError(t, WriteActiveMissionOrigin(root, sess, missionID, BindOriginDispatch))
+
+	activePath := ActiveMissionPath(root, sess)
+	require.NoError(t, os.Remove(activePath))
+	require.NoError(t, os.Mkdir(activePath, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(activePath, "blocker"), []byte("x"), 0o600))
+
+	err := ClearActiveMission(root, sess)
+	require.Error(t, err, "a failed active-mission removal must surface, not be swallowed")
+
+	data, err := os.ReadFile(ActiveMissionOriginPath(root, sess))
+	require.NoError(t, err, "the origin file must survive untouched when the active-mission removal failed")
+	assert.Equal(t, BindOriginDispatch+"\n"+missionID+"\n", string(data),
+		"the surviving origin file must still name the same mission with dispatch origin, not be removed")
+}
+
 // writeOriginFile stages the origin sidecar directly, for the cases
 // that need a shape the writers do not produce.
 func writeOriginFile(t *testing.T, root, sess, origin, missionID string) {
