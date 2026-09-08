@@ -23,11 +23,8 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		_ = r.Close()
-	})
 	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
 
 	// Drain the pipe in a goroutine to avoid deadlock if output
 	// exceeds the OS pipe buffer (~64KB).
@@ -45,6 +42,7 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	os.Stdout = oldStdout
 
 	require.NoError(t, <-done)
+	require.NoError(t, r.Close())
 	return buf.String()
 }
 

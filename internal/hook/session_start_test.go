@@ -118,16 +118,11 @@ func setupRepoWithAgentLegacy(t *testing.T, agentHandle string) string {
 func captureSessionStartOutput(t *testing.T, input string, deps SessionStartDeps) string {
 	t.Helper()
 
-	// Capture stdout with cleanup to prevent leaks on early exit.
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		w.Close()
-		r.Close()
-	})
 	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
 
 	in := bytes.NewReader([]byte(input))
 	require.NoError(t, HandleSessionStart(in, deps))
@@ -138,6 +133,7 @@ func captureSessionStartOutput(t *testing.T, input string, deps SessionStartDeps
 	var buf bytes.Buffer
 	_, err = buf.ReadFrom(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 	return buf.String()
 }
 

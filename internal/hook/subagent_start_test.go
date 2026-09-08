@@ -29,12 +29,8 @@ func captureSubagentStartOutput(t *testing.T, input string, s identity.IdentityS
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		w.Close()
-		r.Close()
-	})
 	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
 
 	in := bytes.NewReader([]byte(input))
 	require.NoError(t, HandleSubagentStart(in, s, ss))
@@ -45,6 +41,7 @@ func captureSubagentStartOutput(t *testing.T, input string, s identity.IdentityS
 	var buf bytes.Buffer
 	_, err = buf.ReadFrom(r)
 	require.NoError(t, err)
+	require.NoError(t, r.Close())
 	return buf.String()
 }
 
@@ -579,11 +576,7 @@ func runHookForVerifier(
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stdout = w
-	t.Cleanup(func() {
-		os.Stdout = oldStdout
-		w.Close()
-		r.Close()
-	})
+	defer func() { os.Stdout = oldStdout }()
 
 	payload := fmt.Sprintf(`{"agent_id":"sub-verifier","agent_type":%q,"session_id":%q}`,
 		agentType, sessionID)
@@ -601,6 +594,7 @@ func runHookForVerifier(
 	var buf bytes.Buffer
 	_, readErr := buf.ReadFrom(r)
 	require.NoError(t, readErr)
+	require.NoError(t, r.Close())
 	return buf.String(), hookErr
 }
 
