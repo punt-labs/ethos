@@ -600,6 +600,16 @@ func ReadDispatchPending(globalRoot, sessionID string) ([]DispatchPendingEntry, 
 			warnings = append(warnings, fmt.Sprintf("stat %q: %v", path, statErr))
 			continue
 		}
+		// L5 (full-branch review, m-2026-09-08-004 round 3): every other
+		// reader in this package refuses a symlinked entry
+		// (LoadDelegation's own rejectSymlink call) rather than silently
+		// following it; this one was reading straight through
+		// os.ReadFile, which does follow symlinks, unlike every sibling
+		// reader's discipline.
+		if symErr := rejectSymlink(path); symErr != nil {
+			warnings = append(warnings, symErr.Error())
+			continue
+		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			warnings = append(warnings, fmt.Sprintf("reading %q: %v", path, readErr))
@@ -616,8 +626,36 @@ func ReadDispatchPending(globalRoot, sessionID string) ([]DispatchPendingEntry, 
 			CreatedAt: info.ModTime(),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	// L5 (full-branch review, m-2026-09-08-004 round 3): mtime alone is
+	// not a stable FIFO discriminator — two entries written within the
+	// same filesystem mtime tick (coarse on some filesystems/platforms;
+	// concurrent writers holding the same AcquireDispatchPendingLock in
+	// quick succession) sort with sort.Slice's documented non-stable,
+	// unspecified relative order, so a rerun of the identical input can
+	// silently pick a different "oldest" entry. Mission IDs are
+	// date-sequential with a fixed-width numeric suffix (mission.NewID),
+	// so they are lexically sortable in creation order; break a
+	// CreatedAt tie on MissionID for a fully deterministic total order,
+	// and use SliceStable so any residual non-comparator-visible ordering
+	// (there is none left, but the cost of the extra guard is nil) can
+	// never introduce nondeterminism either.
+	sort.SliceStable(out, func(i, j int) bool { return dispatchPendingLess(out[i], out[j]) })
 	return out, warnings, nil
+}
+
+// dispatchPendingLess is ReadDispatchPending's FIFO ordering: oldest
+// CreatedAt first, tiebroken on MissionID when two entries share a
+// mtime — see ReadDispatchPending's sort call for why the tiebreak is
+// necessary (review finding L5, m-2026-09-08-004 round 3). Extracted so
+// the ordering logic itself is unit-testable without depending on
+// os.ReadDir's incidental sorted-by-filename return order, which today
+// happens to already match mission-ID order and would otherwise mask a
+// broken tiebreak in any filesystem-backed test.
+func dispatchPendingLess(a, b DispatchPendingEntry) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.MissionID < b.MissionID
 }
 
 // ConsumeDispatchPending removes ONE pending dispatch entry — called

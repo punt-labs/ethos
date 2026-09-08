@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -579,4 +580,60 @@ func TestClearMissionBindings_ReportsClearFailure(t *testing.T) {
 	err := ClearMissionBindings(root, sess, clearTestMission)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "clearing active mission")
+}
+
+// TestDispatchPendingLess_TiebreaksOnMissionID pins review finding L5
+// (full-branch review, m-2026-09-08-004 round 3): two entries with
+// identical CreatedAt (a real possibility on filesystems with coarse
+// mtime resolution, or two writers landing in the same tick) must
+// compare deterministically by MissionID, not report neither-less-than
+// (sort.Slice's documented unspecified order for a tied comparator).
+//
+// Tests the comparator directly rather than through
+// ReadDispatchPending/os.ReadDir: os.ReadDir itself returns entries
+// sorted by filename, which for this repo's date-sequential mission IDs
+// already happens to coincide with creation order, so a filesystem-level
+// test cannot distinguish "sorted because of the tiebreak" from "sorted
+// because os.ReadDir's incidental filename order already matched" --
+// exactly the reliance on an unstated implementation detail this finding
+// flags. Testing the comparator in isolation is the only way to pin the
+// actual defect: with the tie unresolved, Less(a, b) and Less(b, a) are
+// both false, which is what "unspecified" order comes from.
+//
+// Confirmed failing against the pre-fix code (the bare CreatedAt-only
+// comparator, before dispatchPendingLess existed): Less(newer, older)
+// was false as expected, but so was Less(older, newer) -- neither
+// ordering was preferred, so a sort built on that comparator has no
+// contractual reason to land on old-first.
+func TestDispatchPendingLess_TiebreaksOnMissionID(t *testing.T) {
+	tie := time.Now()
+	older := DispatchPendingEntry{MissionID: "m-2026-09-08-100", Worker: "bwk", CreatedAt: tie}
+	newer := DispatchPendingEntry{MissionID: "m-2026-09-08-200", Worker: "bwk", CreatedAt: tie}
+
+	assert.True(t, dispatchPendingLess(older, newer),
+		"the lexically-earlier mission ID must sort first on an exact CreatedAt tie")
+	assert.False(t, dispatchPendingLess(newer, older))
+}
+
+// TestReadDispatchPending_RefusesSymlink pins the second half of L5: a
+// symlinked pending-dispatch entry must be refused, matching
+// LoadDelegation's own rejectSymlink discipline, rather than silently
+// followed via a plain os.ReadFile.
+func TestReadDispatchPending_RefusesSymlink(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-dispatch-symlink"
+	missionID := "m-2026-09-08-300"
+
+	outside := filepath.Join(t.TempDir(), "worker.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("bwk\n"), 0o600))
+
+	path := DispatchPendingPath(root, sess, missionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.Symlink(outside, path))
+
+	entries, warnings, err := ReadDispatchPending(root, sess)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "a symlinked entry must not be returned as a live pending dispatch")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "refusing to follow symlink")
 }
