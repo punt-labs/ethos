@@ -1128,6 +1128,70 @@ func missingRepoTreeDir(statErr error) bool {
 	return statErr != nil && os.IsNotExist(statErr)
 }
 
+// withAbandonDelegationLock runs fn while holding the repo-tier
+// exclusive per-mission lock (AcquireMissionLockExclusive) — the same
+// lock file a concurrent dispatchTierB acquires SHARED before it
+// writes a delegation skeleton (delegation.go). Store.Abandon calls
+// this around its whole read-then-write sequence — countDelegations,
+// the results check, and the writeContract commit — so the sequence is
+// atomic with respect to any dispatchTierB in flight (ethos-lj4k, ADR
+// DES-075 in DESIGN.md).
+//
+// Before this, Abandon's countDelegations ran only under s.withLock,
+// the GLOBAL per-mission lock — a different file from the repo-tier
+// lock dispatchTierB and Store.Close's delegation sweep already use.
+// A dispatchTierB holding the repo-tier lock could write a delegation
+// record in the window between countDelegations returning 0 and
+// writeContract committing StatusAbandoned, since neither lock
+// excluded the other.
+//
+// Nests INSIDE the caller's s.withLock (global, already held) rather
+// than replacing it: this matches the acquisition order
+// AcquireMissionLockExclusive's own doc comment already prescribes
+// (global → repo → per-mission(shared) → per-delegation(exclusive)),
+// which no call site had exercised until now. No other call site
+// acquires the repo-tier lock and then tries to acquire the global
+// one — Store.Close's own repo-tier acquisition runs strictly AFTER
+// releasing the global lock, a subset of the same order, not a
+// reversal — so this nesting introduces no new deadlock risk.
+//
+// Skips the lock (runs fn directly) when the repo-tree per-mission
+// directory does not exist: that is a mission living entirely in the
+// legacy global tree, where no dispatchTierB can be racing under this
+// repoRoot (its own first act is the same directory's MkdirAll), and
+// creating an empty repo-tree footprint as a side effect of locking
+// would be an unwanted regression — mirrors Close's identical guard
+// (missingRepoTreeDir) one section up.
+//
+// A lock-acquisition failure is reported to stderr and falls through
+// to an unlocked fn call rather than refusing the abandon outright,
+// matching Close's fallback for the same failure: an operator-visible
+// warning plus a narrower TOCTOU window is judged better than blocking
+// every abandon on a single flock error.
+func (s *Store) withAbandonDelegationLock(missionID string, fn func() error) error {
+	missionDir := RepoStatePath(s.repoRoot, "missions", filepath.Base(missionID))
+	_, statErr := os.Stat(missionDir)
+	if missingRepoTreeDir(statErr) {
+		return fn()
+	}
+	if statErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission %s: stat %s failed, treating directory as present: %v\n",
+			missionID, missionDir, statErr)
+	}
+	release, lockErr := AcquireMissionLockExclusive(s.repoRoot, missionID)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission %s: acquiring exclusive lock for abandon delegation check: %v — "+
+				"falling back to an unlocked check — a concurrent dispatchTierB may still "+
+				"race a delegation write past this abandon\n",
+			missionID, lockErr)
+		return fn()
+	}
+	defer release()
+	return fn()
+}
+
 // closeDelegationSkeletons walks delegations/ under the per-mission
 // directory and closes any skeleton whose verdict is still "open".
 func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
@@ -1285,67 +1349,79 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 				missionID,
 			)
 		}
-		n, dErr := countDelegations(s.repoRoot, missionID)
-		if dErr != nil {
-			return fmt.Errorf("abandon: checking delegations for %q: %w", missionID, dErr)
-		}
-		if n > 0 {
-			return fmt.Errorf(
-				"mission %q cannot be abandoned: %d delegation record(s) exist under delegations/; "+
-					"a worker was spawned, so this mission may have recoverable work — "+
-					"submit a result and run `ethos mission close %s` instead",
-				missionID, n, missionID,
-			)
-		}
-		// Gate 2: zero result artifacts, for any round — not only the
-		// mission's current round. A result recorded for an earlier
-		// round (e.g. the mission advanced past a round that still
-		// produced output) is exactly the recoverable-work case this
-		// gate exists to catch.
-		results, rErr := s.loadResultsLocked(missionID)
-		if rErr != nil {
-			return fmt.Errorf("abandon: loading results for %q: %w", missionID, rErr)
-		}
-		if len(results) > 0 {
-			rounds := make([]string, len(results))
-			for i, r := range results {
-				rounds[i] = fmt.Sprintf("%d", r.Round)
+		// Gate 1 (delegation count), Gate 2 (results), and the terminal
+		// commit all run under the repo-tier per-mission lock
+		// (withAbandonDelegationLock), NOT just the global lock this
+		// closure is already inside. See that method's doc comment and
+		// ADR DES-075 (DESIGN.md) for why: dispatchTierB writes a
+		// delegation record under a DIFFERENT lock file than the one
+		// this method's outer s.withLock takes, so without this nested
+		// acquisition a delegation could land in the window between
+		// countDelegations returning 0 and writeContract committing
+		// StatusAbandoned (ethos-lj4k).
+		return s.withAbandonDelegationLock(missionID, func() error {
+			n, dErr := countDelegations(s.repoRoot, missionID)
+			if dErr != nil {
+				return fmt.Errorf("abandon: checking delegations for %q: %w", missionID, dErr)
 			}
-			return fmt.Errorf(
-				"mission %q cannot be abandoned: result artifact(s) exist for round(s) %s; "+
-					"a result means the worker produced output — run `ethos mission close %s` instead",
-				missionID, strings.Join(rounds, ", "), missionID,
-			)
-		}
+			if n > 0 {
+				return fmt.Errorf(
+					"mission %q cannot be abandoned: %d delegation record(s) exist under delegations/; "+
+						"a worker was spawned, so this mission may have recoverable work — "+
+						"submit a result and run `ethos mission close %s` instead",
+					missionID, n, missionID,
+				)
+			}
+			// Gate 2: zero result artifacts, for any round — not only the
+			// mission's current round. A result recorded for an earlier
+			// round (e.g. the mission advanced past a round that still
+			// produced output) is exactly the recoverable-work case this
+			// gate exists to catch.
+			results, rErr := s.loadResultsLocked(missionID)
+			if rErr != nil {
+				return fmt.Errorf("abandon: loading results for %q: %w", missionID, rErr)
+			}
+			if len(results) > 0 {
+				rounds := make([]string, len(results))
+				for i, r := range results {
+					rounds[i] = fmt.Sprintf("%d", r.Round)
+				}
+				return fmt.Errorf(
+					"mission %q cannot be abandoned: result artifact(s) exist for round(s) %s; "+
+						"a result means the worker produced output — run `ethos mission close %s` instead",
+					missionID, strings.Join(rounds, ", "), missionID,
+				)
+			}
 
-		now := time.Now().UTC().Format(time.RFC3339)
-		c.Status = StatusAbandoned
-		c.ClosedAt = now
-		c.UpdatedAt = now
-		if err := s.validateContract(c); err != nil {
-			return fmt.Errorf("invalid contract after abandon: %w", err)
-		}
-		if err := s.writeContract(c); err != nil {
-			return err
-		}
-		// redact was built before the lock (see the comment at the top
-		// of Abandon) so its construction cannot fail here, after
-		// writeContract has already stamped the terminal state.
-		if err := s.appendEventLocked(missionID, Event{
-			TS:    now,
-			Event: "abandon",
-			Actor: c.Leader,
-			Details: redact.Map(map[string]any{
-				"reason": reason,
-			}),
-		}); err != nil {
-			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
-				return fmt.Errorf("abandon: event append failed: %w; rollback failed: %v", err, rbErr)
+			now := time.Now().UTC().Format(time.RFC3339)
+			c.Status = StatusAbandoned
+			c.ClosedAt = now
+			c.UpdatedAt = now
+			if err := s.validateContract(c); err != nil {
+				return fmt.Errorf("invalid contract after abandon: %w", err)
 			}
-			return fmt.Errorf("abandon: event append failed, contract rolled back: %w", err)
-		}
-		abandoned = c
-		return nil
+			if err := s.writeContract(c); err != nil {
+				return err
+			}
+			// redact was built before the lock (see the comment at the top
+			// of Abandon) so its construction cannot fail here, after
+			// writeContract has already stamped the terminal state.
+			if err := s.appendEventLocked(missionID, Event{
+				TS:    now,
+				Event: "abandon",
+				Actor: c.Leader,
+				Details: redact.Map(map[string]any{
+					"reason": reason,
+				}),
+			}); err != nil {
+				if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+					return fmt.Errorf("abandon: event append failed: %w; rollback failed: %v", err, rbErr)
+				}
+				return fmt.Errorf("abandon: event append failed, contract rolled back: %w", err)
+			}
+			abandoned = c
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, err

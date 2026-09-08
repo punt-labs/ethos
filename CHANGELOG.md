@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closing the gap where a torn write or crash between rename and disk
   flush could leave `mission create` printing `created: m-...` for an ID
   no later `mission show`/`result submit` could find (ethos-ouy9).
+- **`ethos mission abandon` no longer races a concurrent worker spawn.**
+  Its delegation-count check previously ran under a different lock file
+  than the one `dispatchTierB` (the PreToolUse-on-Agent dispatch path)
+  takes before writing a delegation record, so a worker spawn could land
+  a delegation in the window between the count returning zero and the
+  mission committing `abandoned` — attaching recoverable work to a
+  mission the abandon gate exists specifically to refuse for. Abandon now
+  holds the same repo-tier per-mission lock `dispatchTierB` and
+  `mission close`'s delegation sweep already use, for the whole
+  check-and-commit sequence (ethos-lj4k).
 - **`ethos session start --persona <handle>` now validates the handle
   resolves to a known identity before writing the roster**, instead of
   minting a session keyed on a dangling reference. A typo'd `--persona`

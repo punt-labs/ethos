@@ -4706,6 +4706,104 @@ func TestStore_TwoRoot_CloseStaysInItsLayer(t *testing.T) {
 		"Close must not create a repo-tree per-mission dir for a global mission")
 }
 
+// TestStore_TwoRoot_AbandonStaysInItsLayer is Abandon's sibling to
+// TestStore_TwoRoot_CloseStaysInItsLayer: withAbandonDelegationLock's
+// missingRepoTreeDir guard must skip AcquireMissionLockExclusive (and
+// its own MkdirAll) for a mission that lives entirely in the legacy
+// global tree, so abandoning it creates no repo-tree footprint.
+func TestStore_TwoRoot_AbandonStaysInItsLayer(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	c := newContract("m-2026-05-22-022")
+	require.NoError(t, legacy.Create(c))
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	_, err := s.Abandon("m-2026-05-22-022", "dead mission, never dispatched")
+	require.NoError(t, err)
+
+	reloaded, err := s.Load("m-2026-05-22-022")
+	require.NoError(t, err)
+	assert.Equal(t, StatusAbandoned, reloaded.Status)
+
+	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
+		"m-2026-05-22-022")
+	_, err = os.Stat(repoMissionDir)
+	assert.True(t, os.IsNotExist(err),
+		"Abandon must not create a repo-tree per-mission dir for a global mission")
+}
+
+// TestStore_Abandon_ExcludesConcurrentDelegationWrite is the
+// regression gate for ethos-lj4k: a dispatchTierB-shaped writer
+// holding the repo-tier per-mission lock (AcquireMissionLock, shared)
+// must block Abandon's delegation-count-and-commit sequence until it
+// releases — proving the two are no longer independently lockable.
+//
+// Without the fix, Abandon's countDelegations runs under the GLOBAL
+// lock only, which the writer never touches, so Abandon proceeds
+// immediately regardless of the writer holding the repo-tier lock —
+// abandonResult fires well inside the timeout below. With the fix,
+// Abandon blocks on AcquireMissionLockExclusive (the SAME file the
+// writer holds shared) until the writer releases, so abandonResult
+// must NOT fire before writerDone.
+func TestStore_Abandon_ExcludesConcurrentDelegationWrite(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-05-22-023")
+	require.NoError(t, s.Create(c))
+
+	lockHeld := make(chan struct{})
+	proceedWrite := make(chan struct{})
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		release, err := AcquireMissionLock(repoRoot, "m-2026-05-22-023")
+		require.NoError(t, err)
+		close(lockHeld)
+		<-proceedWrite
+		_, err = WriteDelegationSkeleton(repoRoot, "m-2026-05-22-023", "d-2026-05-22-001", DelegationSkeleton{
+			Tier:      "b",
+			AgentType: "bwk",
+		})
+		require.NoError(t, err)
+		release()
+	}()
+	<-lockHeld
+
+	type abandonResult struct {
+		err error
+	}
+	abandonResultCh := make(chan abandonResult, 1)
+	go func() {
+		_, err := s.Abandon("m-2026-05-22-023", "racing the delegation writer")
+		abandonResultCh <- abandonResult{err: err}
+	}()
+
+	select {
+	case <-abandonResultCh:
+		t.Fatal("Abandon must not resolve while a dispatchTierB-shaped writer holds the repo-tier lock")
+	case <-time.After(200 * time.Millisecond):
+		// Still blocked, as required — let the writer proceed.
+	}
+
+	close(proceedWrite)
+	<-writerDone
+
+	select {
+	case res := <-abandonResultCh:
+		require.Error(t, res.err, "Abandon must refuse once it sees the delegation the writer landed")
+		assert.Contains(t, res.err.Error(), "delegation record")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Abandon never resolved after the writer released its lock")
+	}
+
+	loaded, err := s.Load("m-2026-05-22-023")
+	require.NoError(t, err)
+	assert.Equal(t, StatusOpen, loaded.Status, "a refused abandon must not mutate the mission")
+}
+
 // TestStore_TwoRoot_ResultsAndReflectionsInRepoTree asserts that
 // AppendResult and AppendReflection on a repo-tree mission write
 // their sibling YAML files under the per-mission directory, not in
