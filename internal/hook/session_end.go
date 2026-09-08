@@ -30,11 +30,19 @@ import (
 // session.Store.deleteFiles also maintains (a fourth sidecar type added
 // to one and not the other would have drifted silently). ss.Delete
 // alone now does both jobs — it clears the same three sidecars (via
-// deleteFiles, review finding K3/J3) BEFORE removing the roster, and
-// propagates a clear failure as an error rather than swallowing it —
-// there is nothing left for a hook-local duplicate to do. A clear
-// failure here is reported to stderr, matching every other
-// non-fatal cleanup step in this function.
+// deleteFiles, review finding K3/J3) BEFORE removing the roster —
+// there is nothing left for a hook-local duplicate to do.
+//
+// The retry-token guarantee lives entirely inside ss.Delete, not here:
+// on a sidecar-clear failure deleteFiles returns an error WITHOUT
+// removing the roster (review finding J3), so the roster survives in
+// List() as the token a later Purge/PurgeTombstoned pass needs to find
+// and retry this session. That ordering is what matters — this
+// function's own response to the returned error is deliberately
+// best-effort: log to stderr and continue, the same as every other
+// non-fatal cleanup step below. Failing the hook here would not
+// improve on that guarantee (the roster was already left in place by
+// ss.Delete) and would only make session end itself unreliable.
 func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
