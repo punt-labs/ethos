@@ -6027,6 +6027,75 @@ func TestStore_DisclaimDelegation_ThenAbandonSucceeds(t *testing.T) {
 	assert.True(t, sawDisclaim, "the disclaim must appear on the mission's own event log")
 }
 
+// TestStore_DisclaimDelegation_SerializesWithDelegationLockHolder pins
+// review finding P1 (qodo #7, full-branch review of PR #509,
+// m-2026-09-08-004 round 3) -- ethos-lj4k's exact class, previously
+// fixed on this same bead for Abandon vs a concurrent dispatch, now
+// found again for DisclaimDelegation vs the refusal-close paths
+// (pretooluse_dispatch.go's closeDelegationAborted, subagent_start.go's
+// closeSkeletonOnHashRefusal), which mutate the SAME record.yaml under
+// AcquireDelegationLock alone -- a lock DisclaimDelegation did not
+// previously take at all. Without it, a refusal-closer that loaded the
+// record before a concurrent disclaim wrote its own DisclaimedAt field
+// could overwrite that field with its own stale, pre-disclaim copy on
+// its own atomic write -- a delegation that looked disclaimed silently
+// reverting to blocking Abandon, with no error and no signal why.
+//
+// This test proves DisclaimDelegation now genuinely SERIALIZES on the
+// same per-delegation lock closeSkeletonOnHashRefusal already takes:
+// a goroutine holding AcquireDelegationLock for this exact delegation
+// ID must block DisclaimDelegation until it releases. Confirmed failing
+// against pre-fix code (DisclaimDelegation completed immediately,
+// concurrently with the lock holder, proving no exclusion existed).
+func TestStore_DisclaimDelegation_SerializesWithDelegationLockHolder(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-09-08-811")
+	require.NoError(t, s.Create(c))
+
+	delegationID := "d-2026-09-08-011"
+	_, err := WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, c.MissionID, delegationID, DelegationVerdictPass,
+		time.Now().UTC().Format(time.RFC3339)))
+
+	// Simulate a refusal-closer already holding the per-delegation lock,
+	// exactly as closeSkeletonOnHashRefusal does for the same delegation
+	// ID -- the same lock class, same key, held on a separate goroutine
+	// standing in for the separate SubagentStart process invocation.
+	release, err := AcquireDelegationLock(globalRoot, delegationID)
+	require.NoError(t, err)
+
+	disclaimDone := make(chan error, 1)
+	go func() {
+		_, dErr := s.DisclaimDelegation(c.MissionID, delegationID, "captured by the dispatch sidecar bug")
+		disclaimDone <- dErr
+	}()
+
+	// DisclaimDelegation must NOT complete while the lock is held --
+	// this is the actual exclusion the fix establishes, not a race that
+	// merely resolves correctly by luck.
+	select {
+	case err := <-disclaimDone:
+		t.Fatalf("DisclaimDelegation completed while the delegation lock was held (err=%v) -- "+
+			"it is not serializing with the same lock closeSkeletonOnHashRefusal takes", err)
+	case <-time.After(150 * time.Millisecond):
+		// Expected: still blocked.
+	}
+
+	release()
+
+	select {
+	case err := <-disclaimDone:
+		require.NoError(t, err, "DisclaimDelegation must succeed once the lock is released")
+	case <-time.After(2 * time.Second):
+		t.Fatal("DisclaimDelegation did not complete after the delegation lock was released")
+	}
+}
+
 // TestStore_DisclaimDelegation_GenuineDelegationCannotBeDisclaimed
 // pins scenario (b): a delegation bound via explicit MISSION_ID env —
 // the genuine, fully-intentional Tier B path — cannot be disclaimed,

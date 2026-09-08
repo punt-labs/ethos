@@ -1546,6 +1546,38 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 			)
 		}
 		return s.withAbandonDelegationLock(missionID, func() error {
+			// Review finding P1 (qodo #7, full-branch review of PR #509,
+			// m-2026-09-08-004 round 3, verified real before fixing —
+			// ethos-lj4k's exact class, previously fixed on this same
+			// bead for Abandon vs a concurrent dispatch): the refusal-
+			// close paths (pretooluse_dispatch.go's closeDelegationAborted,
+			// subagent_start.go's closeSkeletonOnHashRefusal) mutate this
+			// SAME record.yaml under AcquireDelegationLock alone, never
+			// the mission lock — closeDelegationAborted runs inside
+			// dispatchTierB while it holds the SHARED AcquireMissionLock,
+			// which already excludes this call's EXCLUSIVE
+			// AcquireMissionLockExclusive (a reader-writer pair), so that
+			// pairing was never actually racy. closeSkeletonOnHashRefusal
+			// is different: it runs from an entirely separate
+			// SubagentStart process invocation that never touches the
+			// mission lock at all, so nothing here excluded it from
+			// loading record.yaml, writing its own verdict:aborted
+			// mutation from a stale pre-disclaim copy, and silently
+			// reverting DisclaimedAt/DisclaimedReason — a delegation that
+			// looked disclaimed would go back to blocking Abandon with no
+			// error and no signal why. Acquiring the SAME per-delegation
+			// lock closeSkeletonOnHashRefusal already takes closes this
+			// for real: neither refusal-close path ever escalates from
+			// AcquireDelegationLock to AcquireMissionLockExclusive, so
+			// nesting the delegation lock INSIDE the mission-exclusive
+			// lock already held here is one-directional (never reversed
+			// elsewhere) and introduces no new deadlock risk.
+			releaseDelegation, dlErr := AcquireDelegationLock(s.root, delegationID)
+			if dlErr != nil {
+				return fmt.Errorf("disclaim: acquiring delegation lock for %q: %w", delegationID, dlErr)
+			}
+			defer releaseDelegation()
+
 			// Captured before the mutating call so a failed event
 			// append can restore exactly what was there — the same
 			// discipline Abandon and Update apply to the contract file,
