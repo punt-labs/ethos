@@ -193,17 +193,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ethos session purge` (and the repo-scoped `PurgeTombstoned`) now
   also clears a purged session's mission sidecars** — the active-mission
   claim, the delegation-binding sidecar, and every pending dispatch —
-  not only its roster, and it clears them even when it REFUSES to
-  remove the roster (unsealed audit lines, or an unreadable roster,
-  without `--force`). Mission sidecars are not audit state, so the
-  tombstone guard that protects unsealed lines has no reason to also
-  protect a stale claim or pending dispatch — and a SIGKILL'd session
-  (the canonical trigger for both) is exactly the scenario most likely
-  to hit that refusal path, not an edge case. Before this, only a
-  CLEANLY ended session (normal `SessionEnd`) had its sidecars cleared;
-  a session that ended abnormally left them in place indefinitely, with
-  no GC path, so `claude --resume` reusing that session ID could have
-  its first matching spawn captured by a stale claim or pending dispatch
+  not only its roster. When a purge REFUSES to remove the roster
+  (unsealed audit lines, or an unreadable roster, without `--force`), it
+  now clears only the pending-dispatch store, not the claim or the
+  delegation-binding sidecar: the claim is the lookup key a later purge
+  pass's own unsealed-lines probe reads first to find a session's
+  mission live logs, so clearing it on a refusal would make the NEXT
+  purge pass conclude the session has no bound missions and drop the
+  roster, stranding the very unsealed lines the refusal exists to
+  protect. The pending-dispatch store carries no such role — it is pure
+  coordination state and the headline capture-on-resume hazard — so it
+  is always safe to clear, refusal or not. Before this, only a CLEANLY
+  ended session (normal `SessionEnd`) had its sidecars cleared; a
+  session that ended abnormally left them in place indefinitely, with no
+  GC path, so `claude --resume` reusing that session ID could have its
+  first matching spawn captured by a stale claim or pending dispatch
   from before the death. This closes the gap for the next
   `ethos session purge` run, not automatically on every resume — purge
   is still an explicit, operator- or tooling-invoked step.

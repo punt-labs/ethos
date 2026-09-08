@@ -399,16 +399,25 @@ func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, re
 				// that no tombstone can be recorded (repo unknown).
 				if !force {
 					// Review finding E (full-branch review, m-2026-09-08-004
-					// round 3): the roster (and the unsealed audit lines it
-					// may be the only pointer to) is kept on refusal, but
-					// mission sidecars are NOT audit state — the tombstone
-					// guard protects unsealed lines specifically, and a
-					// SIGKILL'd session (this branch's canonical trigger) is
-					// exactly the shape most likely to leave a stale claim or
-					// pending dispatch behind too. Clearing them here does not
-					// touch what the guard exists to protect.
-					if cErr := s.clearMissionSidecars(id); cErr != nil {
-						fmt.Fprintf(os.Stderr, "ethos: purge: clearing mission sidecars for %s: %v\n", id, cErr)
+					// round 3), REVISED by Bugbot on PR #509 (round 4 — my
+					// original ruling was incomplete): the roster is kept
+					// on refusal so the unsealed audit lines it may be the
+					// only pointer to stay findable, but the active-mission
+					// claim is ITSELF part of that pointer chain —
+					// mission.SessionBoundMissions reads ReadActiveMission
+					// as its FIRST source of mission IDs, and the unsealed-
+					// lines probe uses that list to find a session's mission
+					// live logs. Clearing the claim here would destroy the
+					// lookup: the NEXT purge pass finds no bound missions,
+					// concludes the session is clean, and drops the roster —
+					// stranding the very unsealed lines this refusal exists
+					// to protect. Only the pending-dispatch store is cleared:
+					// it is pure coordination state (never consulted by
+					// SessionBoundMissions) and the headline capture-on-
+					// resume hazard; the claim and the delegation-binding
+					// sidecar survive until a purge actually proceeds.
+					if cErr := mission.ClearDispatchPending(s.root, id); cErr != nil {
+						fmt.Fprintf(os.Stderr, "ethos: purge: clearing dispatch-pending for %s: %v\n", id, cErr)
 					}
 					fmt.Fprintf(os.Stderr,
 						"ethos: purge: refusing to purge %s: roster unreadable (%v); re-run with --force\n", id, lErr)
@@ -547,16 +556,23 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	}
 	if !force && (unsealed > 0 || probeFailed) {
 		// Review finding E (full-branch review, m-2026-09-08-004 round
-		// 3): the roster is kept on refusal so the tombstone guard's
-		// unsealed audit lines stay findable, but mission sidecars are
-		// NOT audit state -- clearing them here does not touch what the
-		// guard protects. A SIGKILL'd session (the canonical holder of
-		// unsealed lines) is exactly the CHANGELOG's headline scenario
-		// for a stale claim or pending dispatch surviving into a
-		// resumed session, so this refusal path is the one most likely
-		// to matter in practice, not an edge case.
-		if cErr := s.clearMissionSidecars(roster.Session); cErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: purge: clearing mission sidecars for %s: %v\n", roster.Session, cErr)
+		// 3), REVISED by Bugbot on PR #509 (round 4 — my original ruling
+		// was incomplete): the roster is kept on refusal so the unsealed
+		// audit lines it may be the only pointer to stay findable, but
+		// the active-mission claim is ITSELF part of that pointer chain
+		// — mission.SessionBoundMissions reads ReadActiveMission as its
+		// FIRST source of mission IDs, and the unsealed-lines probe uses
+		// that list to find a session's mission live logs. Clearing the
+		// claim here would destroy the lookup: the NEXT purge pass finds
+		// no bound missions, concludes the session is clean, and drops
+		// the roster — stranding the very unsealed lines this refusal
+		// exists to protect. Only the pending-dispatch store is cleared:
+		// it is pure coordination state (never consulted by
+		// SessionBoundMissions) and the headline capture-on-resume
+		// hazard; the claim and the delegation-binding sidecar survive
+		// until a purge actually proceeds.
+		if cErr := mission.ClearDispatchPending(s.root, roster.Session); cErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: purge: clearing dispatch-pending for %s: %v\n", roster.Session, cErr)
 		}
 		if probeFailed {
 			fmt.Fprintf(os.Stderr,

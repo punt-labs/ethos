@@ -10462,3 +10462,71 @@ happens to be easiest to set up. K1, K3, and K4's own doc comments each
 already enumerated the harder cases (unresolvable vs. stale vs. open;
 crash-mid-write; three specific writers) — the fixture-shaped tests in
 K8 simply did not consult them before writing the fixture.
+
+### Amendment 2026-09-08: an invariant review of the J round (A-F), and Bugbot's correction of E on PR #509
+
+An invariant-review pass of the J1-J6 amendment above (still
+m-2026-09-08-004 round 3) found six more findings (A-F), five doc/test
+fixes and one design decision (E) that was itself later found
+incomplete by Bugbot on PR #509 and corrected. The doc/test fixes (A,
+C, D, F) are recorded in their own commit messages and the affected
+comments; only E's correction is significant enough to need its own
+account here, because it reverses part of a decision this document
+would otherwise still be describing wrong.
+
+**E, as originally ruled — incomplete.** The original ruling: clear
+ALL THREE mission sidecars (active-mission claim, delegation-binding
+sidecar, pending-dispatch store) on `PurgeTombstoned`'s two refusal
+paths (an unreadable roster, or unsealed audit lines, both without
+`--force`), reasoning that "sidecars are not audit state" so clearing
+them does not touch what the tombstone guard exists to protect.
+
+**The reasoning was true but incomplete: the active-mission claim is
+not just non-audit state, it is the audit-lookup KEY.**
+`mission.SessionBoundMissions` (`internal/mission/binding.go`) reads
+`ReadActiveMission` as its FIRST source of mission IDs, and the
+unsealed-lines probe (`purgeOneTombstoned`) uses that returned list to
+find a session's mission live logs and count their unsealed lines.
+Clearing the claim on a refused pass destroys the very index the NEXT
+purge pass would use to re-verify this session is still unsafe to
+purge: with no claim and no delegation-bound missions apparent, the
+next `SessionBoundMissions` call returns an empty list, the probe finds
+nothing to check, and the session purges as if it had no unsealed
+state at all — stranding the unsealed audit lines the tombstone guard
+exists to protect, silently, on the very next purge run.
+
+**Corrected ruling: clear ONLY `ClearDispatchPending` on the refusal
+paths.** The pending-dispatch store is pure coordination state, never
+consulted by `SessionBoundMissions` or the unsealed-lines probe by any
+path — clearing it is unconditionally safe on a refusal, and it is
+also the headline capture-on-resume hazard (a fresh spawn matching a
+stale pending dispatch), so clearing it is where nearly all the
+practical benefit of E's original ruling actually was. The
+active-mission claim and the delegation-binding sidecar now survive
+until a purge actually PROCEEDS (i.e. `deleteFiles`'s own full
+three-clear runs, which is unaffected by this correction — it still
+clears all three, because a proceeding purge has already decided the
+roster and its audit trail are safe to lose).
+
+Both regression tests from E's original commit
+(`TestPurgeTombstoned_CorruptRosterRefusesWithoutForce`,
+renamed from `TestPurgeTombstoned_ClearsSidecarsOnUnsealedRefusal` to
+`TestPurgeTombstoned_ClearsPendingDispatchButKeepsClaimOnUnsealedRefusal`)
+were rewritten to assert the claim SURVIVES a refusal while the pending
+dispatch does not, and confirmed failing against a reverted mutation
+reproducing the original (incomplete) all-three-sidecars behavior.
+
+**The general lesson, stated plainly because this branch has now
+produced it twice in one week (C2/C9's "clearing X is always safe"
+claims, now E's):** a piece of state's own classification ("not audit
+state," "coordination-only") does not settle whether clearing it is
+safe — what settles it is whether anything ELSE, possibly in a
+completely different subsystem, uses that state as a LOOKUP KEY into
+something that IS protected. `ReadActiveMission` looks like disposable
+session-scoped coordination state from the dispatch/hook code that
+writes and reads it; it is also, unrelatedly, the seed value a
+completely different subsystem (the DES-058 audit-seal vacuum) uses to
+answer "does this session still have mission-bound live logs to
+check." Reviewing a clearing decision by asking "is this state itself
+important" is necessary but not sufficient — the harder, necessary
+question is "what ELSE reads this to find something important."

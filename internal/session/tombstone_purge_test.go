@@ -302,11 +302,20 @@ func TestPurgeTombstoned_CorruptRosterRefusesWithoutForce(t *testing.T) {
 	require.NoError(t, s.Create("sess-corrupt", root, primary, testRepoID, ""))
 	// Corrupt the roster so Load fails — a crash artifact.
 	require.NoError(t, os.WriteFile(s.rosterPath("sess-corrupt"), []byte("[unclosed"), 0o600))
-	// Review finding E (full-branch review, m-2026-09-08-004 round 3):
-	// mission sidecars are keyed on the session ID (the filename), not
-	// on the roster body being readable -- an unreadable roster must
-	// still have its sidecars cleared, since they are not audit state.
+	// Review finding E (full-branch review, m-2026-09-08-004 round 3),
+	// REVISED after Bugbot on PR #509 round 4: mission sidecars are
+	// keyed on the session ID (the filename), not on the roster body
+	// being readable -- an unreadable roster must still have its
+	// PENDING DISPATCHES cleared (pure coordination state, never
+	// consulted by the unsealed-lines probe). The active-mission claim
+	// must NOT be cleared here: mission.SessionBoundMissions reads it as
+	// the FIRST source of mission IDs the unsealed-lines probe uses to
+	// find a session's mission live logs, so clearing it on a refused
+	// pass would make the NEXT purge conclude the session has no bound
+	// missions and drop the roster, stranding the lines this refusal
+	// exists to protect.
 	require.NoError(t, mission.WriteActiveMission(s.root, "sess-corrupt", "m-2026-09-08-728"))
+	require.NoError(t, mission.WriteDispatchPending(s.root, "sess-corrupt", "m-2026-09-08-729", "bwk"))
 
 	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
 	require.NoError(t, err)
@@ -319,7 +328,12 @@ func TestPurgeTombstoned_CorruptRosterRefusesWithoutForce(t *testing.T) {
 
 	claimed, err := mission.ReadActiveMission(s.root, "sess-corrupt")
 	require.NoError(t, err)
-	assert.Empty(t, claimed, "a claim must not survive a refused purge even when the roster is unreadable")
+	assert.Equal(t, "m-2026-09-08-728", claimed,
+		"the claim must survive a refused purge -- it is the audit-lookup key SessionBoundMissions reads first")
+
+	pending, _, err := mission.ReadDispatchPending(s.root, "sess-corrupt")
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a pending dispatch must not survive a refused purge -- it is pure coordination state")
 }
 
 func TestPurgeTombstoned_CorruptRosterForcePurges(t *testing.T) {
@@ -365,7 +379,18 @@ func TestPurgeTombstoned_RefusesUnsealed(t *testing.T) {
 // reachable path (`ethos session purge`), unlike the bare Purge()
 // TestStore_Purge_ClearsMissionSidecars already covers, which no CLI
 // command calls.
-func TestPurgeTombstoned_ClearsSidecarsOnUnsealedRefusal(t *testing.T) {
+// TestPurgeTombstoned_ClearsPendingDispatchButKeepsClaimOnUnsealedRefusal
+// pins review finding E (full-branch review, m-2026-09-08-004 round 3),
+// REVISED after Bugbot found the original ruling incomplete on PR #509
+// round 4: mission.SessionBoundMissions reads ReadActiveMission as the
+// FIRST source of mission IDs the unsealed-lines probe uses to find a
+// session's mission live logs. Clearing the claim on a refused pass
+// would destroy that lookup -- the NEXT purge pass would find no bound
+// missions, conclude the session is clean, and drop the roster,
+// stranding the very unsealed lines this refusal exists to protect.
+// Only the pending-dispatch store (pure coordination state, never
+// consulted by SessionBoundMissions) is cleared on refusal.
+func TestPurgeTombstoned_ClearsPendingDispatchButKeepsClaimOnUnsealedRefusal(t *testing.T) {
 	s := testStore(t)
 	repoRoot := t.TempDir()
 	root := Participant{AgentID: "user1"}
@@ -387,14 +412,18 @@ func TestPurgeTombstoned_ClearsSidecarsOnUnsealedRefusal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, ids, sessionID)
 
-	// The mission sidecars do NOT survive — they are not audit state.
+	// The claim survives — it is SessionBoundMissions's own lookup key
+	// for the unsealed-lines probe, not disposable coordination state.
 	claimed, err := mission.ReadActiveMission(s.root, sessionID)
 	require.NoError(t, err)
-	assert.Empty(t, claimed, "a claim must not survive a refused purge -- it is not audit state")
+	assert.Equal(t, "m-2026-09-08-726", claimed,
+		"the claim must survive a refused purge -- it is the audit-lookup key SessionBoundMissions reads first")
 
+	// The pending dispatch does NOT survive — pure coordination state
+	// and the headline capture-on-resume hazard.
 	pending, _, err := mission.ReadDispatchPending(s.root, sessionID)
 	require.NoError(t, err)
-	assert.Empty(t, pending, "a pending dispatch must not survive a refused purge -- it is not audit state")
+	assert.Empty(t, pending, "a pending dispatch must not survive a refused purge -- it is pure coordination state")
 }
 
 func TestPurgeTombstoned_ForceLeavesTombstone(t *testing.T) {
