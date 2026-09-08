@@ -263,7 +263,15 @@ func (h *Handler) bindDispatchedMission(missionID, worker string) []string {
 	// concurrent dispatchAgent invocation's own held-lock read of the
 	// pending directory (mission.WithDispatchPendingLock's own doc
 	// comment).
+	//
+	// hook.RefuseIfSessionGone runs FIRST, inside the same critical
+	// section, so a writer that was waiting on this lock cannot proceed
+	// into a session Store.Delete has already torn down — see that
+	// function's own doc comment for the reorder this closes.
 	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		if err := hook.RefuseIfSessionGone(h.sessionStore, sessionID); err != nil {
+			return err
+		}
 		return mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker)
 	}); err != nil {
 		return []string{fmt.Sprintf("binding mission: recording dispatch for %s: %v", missionID, err)}

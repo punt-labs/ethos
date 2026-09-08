@@ -13,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // dispatchAgent handles the PreToolUse branch for `tool_name == "Agent"`.
@@ -440,6 +441,45 @@ func DispatchBoundMessage(store *mission.Store, globalRoot, sessionID, missionID
 	// rather than claim a queue position for an entry we cannot find
 	// among the live ones).
 	return unconditional
+}
+
+// RefuseIfSessionGone refuses to let a mission-sidecar writer (an
+// `ethos mission claim` or a dispatch/create's pending-dispatch entry)
+// proceed for a session whose roster no longer exists.
+//
+// Leader review of PR #509's tail round: internal/session/store.go's
+// deleteFiles holds mission.AcquireDispatchPendingLock across its whole
+// clear-then-remove-roster span specifically so a concurrent sidecar
+// WRITE cannot land in the gap between the clear and the removal. But
+// serializing the two operations only reorders the hazard, it does not
+// remove it: deleteFiles releases the lock (via its own deferred
+// release) only AFTER os.Remove(rosterPath) has already returned, so a
+// writer that was blocked waiting on the lock resumes the instant the
+// lock is free -- which is the instant AFTER the roster is gone, not
+// before. Without this check, that writer recreates the exact
+// undiscoverable-sidecar shape the lock-hold exists to prevent: a
+// binding for a session List()/Purge() can never find again, because
+// both only ever discover sessions via their roster file.
+//
+// Callers run this INSIDE the same mission.WithDispatchPendingLock
+// critical section as the write itself (before the write, not after),
+// so the existence check and the write are atomic with respect to
+// deleteFiles, which holds the identical per-session lock across its
+// own clear-through-roster-removal span -- there is no window in which
+// deleteFiles could remove the roster between this check succeeding and
+// the write that follows it.
+//
+// A legitimate NEW session reusing sessionID is unaffected: the
+// SessionStart hook always creates that session's roster before any
+// `ethos mission claim`/`dispatch`/`create` command can run against it,
+// so the roster already exists by the time this check runs -- refusal
+// only fires for a session that has genuinely ended.
+func RefuseIfSessionGone(ss *session.Store, sessionID string) error {
+	if _, err := ss.Load(sessionID); err != nil {
+		return fmt.Errorf("session %s no longer exists, so this binding was not recorded "+
+			"(it may have ended or been purged; re-run the command from a live session): %w", sessionID, err)
+	}
+	return nil
 }
 
 // consumeDispatchBinding removes missionID's pending-dispatch entry

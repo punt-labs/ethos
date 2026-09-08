@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -4539,6 +4540,78 @@ func TestMissionClaim_WaitsForDispatchPendingLock(t *testing.T) {
 	assert.Equal(t, id+"\n", string(data))
 }
 
+// TestMissionClaim_RefusesWhenSessionRosterGone pins the leader's PR
+// #509 tail-round finding: internal/session/store.go's deleteFiles
+// holds mission.AcquireDispatchPendingLock across its whole
+// clear-then-remove-roster span so a concurrent claim/dispatch write
+// cannot land in the gap BETWEEN those two steps -- but that alone does
+// not stop a writer that was blocked waiting on the lock from resuming
+// the instant AFTER deleteFiles has already removed the roster:
+// deleteFiles's own deferred lock release fires once
+// os.Remove(rosterPath) has already returned, not before. Without
+// hook.RefuseIfSessionGone, runMissionClaim would recreate the sidecar
+// for a session with no roster at all -- the exact undiscoverable-
+// binding shape the lock-hold exists to prevent, reached one step later
+// than the race it closed.
+//
+// resolveSessionContext already verifies the roster exists once, up
+// front (DES-061 H2) -- but that check runs BEFORE runMissionClaim ever
+// tries to acquire the dispatch-pending lock, so it cannot see a roster
+// removed WHILE the caller is blocked waiting on that lock, which is
+// exactly the timeline this test reproduces: acquire the lock first (a
+// deleteFiles stand-in), start the claim (which passes the up-front
+// check, since the roster is still there), confirm it is blocked
+// entering Flock, THEN remove the roster while still holding the lock,
+// THEN release. Confirmed failing against the pre-fix code (no
+// existence check inside the locked closure): the claim resumed,
+// succeeded, and wrote sessions/<id>/active-mission even though
+// sessions/<id>.yaml no longer existed anywhere on disk.
+func TestMissionClaim_RefusesWhenSessionRosterGone(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	sessionID := "sess-claim-gone"
+
+	t.Setenv("ETHOS_SESSION", sessionID)
+	seedRosterForSession(t, sessionID)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runMissionClaim(id)
+	}()
+
+	// Give the goroutine time to pass resolveSessionContext (the roster
+	// still exists at this point) and then block entering Flock.
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("runMissionClaim completed while a sibling held the dispatch-pending lock (err=%v)", err)
+	default:
+		// Expected: still blocked.
+	}
+
+	// Simulate deleteFiles: while STILL holding the lock, remove the
+	// roster -- the exact state a resumed claim resumes into once the
+	// lock is released, per deleteFiles's own doc comment.
+	require.NoError(t, os.Remove(filepath.Join(globalRoot, "sessions", sessionID+".yaml")))
+	release()
+
+	select {
+	case claimErr := <-done:
+		require.Error(t, claimErr, "claim must refuse once it resumes into a torn-down session")
+		assert.Contains(t, claimErr.Error(), "no longer exists")
+	case <-time.After(2 * time.Second):
+		t.Fatal("runMissionClaim did not complete within 2s after the sibling released")
+	}
+
+	sidecar := filepath.Join(globalRoot, "sessions", sessionID, "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr), "no sidecar must be written for a torn-down session: %v", statErr)
+}
+
 func TestMissionClaim_RefusesUnknownMission(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-claim-2")
@@ -4856,6 +4929,99 @@ func TestMissionDispatch_PrintsBindingOnFreshBind(t *testing.T) {
 	assert.Contains(t, warning, "bwk", "the message must name the worker the binding is scoped to")
 	assert.Contains(t, warning, "mission release",
 		"the message must name the escape hatch for a leader who does not want the capture")
+}
+
+// TestMissionDispatch_RefusesWhenSessionRosterGone is
+// bindDispatchedMission's sibling of TestMissionClaim_RefusesWhenSessionRosterGone:
+// the same PR #509 tail-round finding applies to `mission dispatch`'s
+// pending-dispatch write, not only `mission claim`'s active-mission
+// write, since bindDispatchedMission runs through the identical
+// mission.WithDispatchPendingLock + hook.RefuseIfSessionGone sequence.
+//
+// The mission contract itself is still created -- Store.Create runs
+// BEFORE bindDispatchedMission and is unaffected by this fix, matching
+// bindDispatchedMission's own advisory contract (a real failure prints
+// one stderr line naming the cause; it never fails the command).
+//
+// Confirmed failing against the pre-fix code (no existence check inside
+// the locked closure): the dispatch resumed, wrote a pending-dispatch
+// entry, and printed the ordinary success line even though
+// sessions/<id>.yaml no longer existed anywhere on disk.
+func TestMissionDispatch_RefusesWhenSessionRosterGone(t *testing.T) {
+	home := missionTestEnv(t)
+	sessionID := "sess-dispatch-gone"
+	t.Setenv("ETHOS_SESSION", sessionID)
+	seedRosterForSession(t, sessionID)
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
+	require.NoError(t, err)
+
+	// Redirect stderr BEFORE starting the goroutine below (the `go`
+	// statement itself is what makes this write visible to the new
+	// goroutine under the Go memory model -- swapping os.Stderr on
+	// either side of release(), an OS-level flock the race detector
+	// does not recognize as synchronization, would race).
+	r, w, pipeErr := os.Pipe()
+	require.NoError(t, pipeErr)
+	oldStderr := os.Stderr
+	os.Stderr = w
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runMissionDispatch()
+	}()
+
+	// Give the goroutine time to create the contract, pass
+	// resolveSessionContext (the roster still exists at this point),
+	// and then block entering Flock for the sidecar write.
+	time.Sleep(150 * time.Millisecond)
+	select {
+	case dispatchErr := <-done:
+		os.Stderr = oldStderr
+		t.Fatalf("runMissionDispatch completed while a sibling held the dispatch-pending lock (err=%v)", dispatchErr)
+	default:
+		// Expected: still blocked.
+	}
+
+	// Simulate deleteFiles: while STILL holding the lock, remove the
+	// roster -- the exact state a resumed dispatch resumes into once
+	// the lock is released, per deleteFiles's own doc comment.
+	require.NoError(t, os.Remove(filepath.Join(globalRoot, "sessions", sessionID+".yaml")))
+	release()
+
+	var dispatchErr error
+	select {
+	case dispatchErr = <-done:
+	case <-time.After(2 * time.Second):
+		os.Stderr = oldStderr
+		t.Fatal("runMissionDispatch did not complete within 2s after the sibling released")
+	}
+	os.Stderr = oldStderr
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, readErr := io.Copy(&buf, r)
+	require.NoError(t, readErr)
+	warning := buf.String()
+
+	require.NoError(t, dispatchErr, "an advisory sidecar-binding failure must not fail the dispatch")
+	assert.Contains(t, warning, "no longer exists", "the CLI must report the refusal on stderr")
+
+	ms := missionStore()
+	ids, listErr := ms.List()
+	require.NoError(t, listErr)
+	require.Len(t, ids, 1, "the mission contract itself is still created -- only the sidecar binding is refused")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "no pending-dispatch entry must be written for a torn-down session")
 }
 
 // TestMissionDispatch_SecondDispatchToSameWorkerNamesQueuePosition pins

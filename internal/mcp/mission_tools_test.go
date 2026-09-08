@@ -162,11 +162,42 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 // testHandlerWithSessions is testHandlerWithMissions plus a session
 // store. The sidecar cleanup on close is a no-op without one, so the
 // tests that exercise it need the wiring `ethos serve` does.
+//
+// Rooted at the CURRENT $HOME (os.UserHomeDir()), not an unrelated
+// t.TempDir() -- matching cmd/ethos/serve.go's real wiring
+// (mcp.WithSessionStore(sessionStore()), where sessionStore() also
+// roots at $HOME/.punt-labs/ethos) and every test's own globalRoot
+// computation (filepath.Join(home, ".punt-labs", "ethos") after
+// t.Setenv("HOME", home)). Before this fix the session store and
+// globalRoot pointed at two UNRELATED directories -- invisible only
+// because nothing on the create path ever consulted the session
+// store's own roster, the exact "papering over the mismatch" shape
+// review finding J5 (DES-076) already named once for the sibling
+// hook-package test fixture. hook.RefuseIfSessionGone (PR #509 tail)
+// now reads h.sessionStore.Load(sessionID) before every mission
+// sidecar write, which requires this store to see the SAME roster the
+// test itself wrote via seedSessionRoster below.
 func testHandlerWithSessions(t *testing.T) *Handler {
 	t.Helper()
 	h := testHandlerWithMissions(t)
-	WithSessionStore(session.NewStore(t.TempDir()))(h)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	WithSessionStore(session.NewStore(filepath.Join(home, ".punt-labs", "ethos")))(h)
 	return h
+}
+
+// seedSessionRoster creates a minimal roster for sessionID in ss so
+// hook.RefuseIfSessionGone's existence check (PR #509 tail) finds a
+// live session rather than refusing every mission-sidecar write as
+// if the session had already ended. Mirrors cmd/ethos/mission_test.go's
+// seedRosterForSession.
+func seedSessionRoster(t *testing.T, ss *session.Store, sessionID string) {
+	t.Helper()
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "jim", Persona: "jim"},
+		session.Participant{AgentID: "claude", Persona: "claude", Parent: "jim"},
+		"", "",
+	))
 }
 
 func TestHandleMission_NoStoreConfigured(t *testing.T) {
@@ -242,6 +273,7 @@ func TestHandleMission_CreateBindsActiveMission(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -286,6 +318,7 @@ func TestHandleMission_CreateFreshBindNamesWorker(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":   "create",
@@ -304,6 +337,63 @@ func TestHandleMission_CreateFreshBindNamesWorker(t *testing.T) {
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], missionID)
 	assert.Contains(t, warnings[0], "bwk", "the fresh-bind line must name the worker the binding is scoped to")
+}
+
+// TestHandleMission_CreateRefusesSessionRosterGone pins the leader's PR
+// #509 tail-round finding on the MCP surface: bindDispatchedMission
+// writes through the same mission.WithDispatchPendingLock +
+// hook.RefuseIfSessionGone sequence as the CLI, so a session whose
+// roster does not exist -- the shape a resumed session's write resumes
+// into once internal/session/store.go's deleteFiles has already
+// removed the roster and released the dispatch-pending lock -- must be
+// refused, not silently written into.
+//
+// Unlike the CLI's claim/dispatch paths (cmd/ethos/iam.go's
+// resolveHardSession re-verifies an ETHOS_SESSION-sourced ID against
+// the session store before the caller ever reaches the lock),
+// resolve.SessionID on the MCP surface never does that -- it is a bare
+// os.Getenv("ETHOS_SESSION") read, no store lookup at all -- so
+// hook.RefuseIfSessionGone inside bindDispatchedMission is the ONLY
+// existence gate here. A session with no roster reaches it directly, no
+// lock-hold choreography needed to reproduce what the CLI tests model
+// with a concurrent goroutine.
+//
+// Confirmed failing against the pre-fix code (no existence check inside
+// the locked closure): create wrote a pending-dispatch entry and
+// reported the ordinary "will attribute worker's next matching spawn"
+// warning even though the session had no roster anywhere on disk.
+func TestHandleMission_CreateRefusesSessionRosterGone(t *testing.T) {
+	const sess = "sess-mcp-roster-gone"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	// Deliberately no seedSessionRoster call: sess has no roster
+	// anywhere on disk.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "the mission contract itself must still be created")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	missionID, _ := payload["mission_id"].(string)
+	require.NotEmpty(t, missionID)
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "a refused binding must still warn; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	warning, _ := warnings[0].(string)
+	assert.Contains(t, warning, "no longer exists")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "no pending-dispatch entry must be written for a session with no roster")
 }
 
 // TestHandleMission_CreateNoSessionWarns asserts the advisory
@@ -377,6 +467,7 @@ func TestHandleMission_SecondCreateToSameWorkerNamesQueuePosition(t *testing.T) 
 	t.Setenv("HOME", home)
 	t.Setenv("ETHOS_SESSION", sess)
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 
 	first, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":   "create",
@@ -463,6 +554,7 @@ func TestHandleMission_CreateCoexistsWithExistingClaim(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	const claimed = "m-2026-07-30-501"
@@ -806,6 +898,7 @@ func TestHandleMission_CloseClearsActiveMission(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -852,6 +945,7 @@ func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -889,6 +983,7 @@ func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -939,6 +1034,7 @@ func TestHandleMission_CloseWarnsPerCause(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sess)
 
 	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{

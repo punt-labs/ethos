@@ -2063,7 +2063,17 @@ func runMissionClaim(idOrPrefix string) error {
 	// get orphaned outside roster-based purge discovery — see
 	// internal/session/store.go's deleteFiles doc comment for the full
 	// account of the race this closes on the write side.
+	//
+	// hook.RefuseIfSessionGone runs FIRST, inside the same critical
+	// section: holding the lock serializes against deleteFiles but does
+	// not, by itself, stop a writer that was waiting on the lock from
+	// proceeding the instant AFTER deleteFiles has already removed the
+	// roster — see that function's own doc comment for the reorder this
+	// closes.
 	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		if err := hook.RefuseIfSessionGone(sessionStore(), sessionID); err != nil {
+			return err
+		}
 		return mission.WriteActiveMission(globalRoot, sessionID, id)
 	}); err != nil {
 		return fmt.Errorf("mission claim: %w", err)
@@ -2185,7 +2195,15 @@ func bindDispatchedMission(op, missionID, worker string) {
 	// with a concurrent dispatchAgent invocation's own held-lock read of
 	// the pending directory (mission.WithDispatchPendingLock's own doc
 	// comment).
+	//
+	// hook.RefuseIfSessionGone runs FIRST, inside the same critical
+	// section, so a writer that was waiting on this lock cannot proceed
+	// into a session Store.Delete has already torn down — see that
+	// function's own doc comment for the reorder this closes.
 	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		if err := hook.RefuseIfSessionGone(sessionStore(), sessionID); err != nil {
+			return err
+		}
 		return mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker)
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: recording dispatch for %s: %v\n", op, missionID, err)
