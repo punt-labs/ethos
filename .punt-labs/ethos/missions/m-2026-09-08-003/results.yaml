@@ -1,0 +1,75 @@
+results:
+    - mission: m-2026-09-08-003
+      round: 1
+      created_at: "2026-09-08T04:37:31Z"
+      author: bwk
+      verdict: escalate
+      confidence: 0.8
+      files_changed:
+        - path: DESIGN.md
+          added: 132
+          removed: 0
+        - path: CHANGELOG.md
+          added: 16
+          removed: 9
+        - path: internal/hook/pretooluse_dispatch.go
+          added: 148
+          removed: 33
+        - path: internal/hook/pretooluse_inherit.go
+          added: 5
+          removed: 6
+        - path: internal/hook/pretooluse_test.go
+          added: 148
+          removed: 0
+        - path: internal/mission/active.go
+          added: 9
+          removed: 4
+        - path: cmd/ethos/mission.go
+          added: 20
+          removed: 20
+        - path: cmd/ethos/mission_test.go
+          added: 16
+          removed: 8
+      evidence:
+        - name: 'regression test confirmed RED pre-fix: TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_MismatchedWorkerNotCaptured'
+          status: pass
+        - name: regression test confirmed GREEN post-fix (same test)
+          status: pass
+        - name: make check (full suite, in-session)
+          status: pass
+        - name: 'detached gate: rm -rf .tmp/hc; git archive HEAD | tar -x; setsid env -u CLAUDE_* sh -c ''go test ./... -count=1'' | tee out.txt'
+          status: pass
+        - name: GOOS=windows GOARCH=amd64 go build ./...
+          status: pass
+      open_questions:
+        - 'REQUIREMENT 1 (bind at worker-spawn match, single-use) is COMPLETE. REQUIREMENT 2 (abandon must retire a mission whose only delegation was captured) is BLOCKED by this mission''s write-set: the delegation-count gate and the Delegation/DelegationSkeleton structs live in internal/mission/store.go and internal/mission/delegation.go, both outside {internal/hook/**, internal/mission/active.go, internal/mission/active_test.go, internal/mission/binding.go, internal/mission/binding_test.go, cmd/ethos/mission.go, cmd/ethos/mission_test.go, DESIGN.md, CHANGELOG.md}. Store.Abandon''s delegation-count check is unconditional, unexported, and has no composable primitive a caller outside internal/mission can use to get a different answer for a delegation it can prove was captured; Update() cannot substitute without bypassing every safety Abandon provides (no repo-tier lock, no reason redaction, no result gate — that path was explicitly rejected as unsafe, see DES-076''s ''Non-goal'' section). DES-076 documents the full analysis, why the two rejected workarounds (auto-exclude by an inferred heuristic; blanket bypass flag) are unsafe, and the recommended follow-up scope (internal/mission/store.go + delegation.go + their test files + internal/mcp/mission_tools.go for MCP parity), adding a bind-provenance field to the delegation record and a narrowly-gated, per-delegation, evidence-checked disclaim path on Abandon -- never a blanket override, per Abandon''s own existing ''no override flag'' design invariant. Root-cause fix already eliminates the general ''any next spawn is captured'' class the bead reproduced; residual risk is narrower (same agent-type, unrelated task). Requesting: (a) amend this mission''s write-set to add store.go/delegation.go/mission_tools.go and their tests, so req 2 can be closed in round 2, or (b) rule req 2 out of scope for this mission and file the follow-up separately.'
+      prose: |
+        Round 1 implements DES-076 in full for requirement 1: the active-mission
+        dispatch sidecar (internal/mission/active.go's BindOriginDispatch) is now
+        single-use, consumed only by the one Agent() spawn whose agent type
+        matches the contract's declared Worker. A mismatched spawn is neither
+        bound to the mission nor recorded as a delegation, and the sidecar is
+        left in place so the real worker's later spawn can still consume it.
+        BindOriginClaim (`ethos mission claim`) is untouched and stays sticky.
+
+        Wrote three new tests in internal/hook/pretooluse_test.go pinning the
+        regression, the single-use consumption, and the claim-origin
+        non-regression. The regression test was run against the pre-fix code and
+        confirmed failing (MISSION_ID was populated and a delegation record
+        existed for the mismatched agent type) before the fix landed, per the
+        contract's evidence requirement.
+
+        Requirement 2 (abandon-cleanup for a captured delegation) is not
+        implemented. This is not a "warn instead of fix" fallback -- it's a
+        hard write-set boundary: the only correctness-preserving implementation
+        requires editing internal/mission/store.go's Store.Abandon (to accept a
+        per-delegation, evidence-gated disclaim) and internal/mission/delegation.go
+        (to record how a delegation was bound), and both files are outside this
+        mission's write-set. I did not attempt an in-write-set workaround (e.g.
+        deleting delegation records to force the existing gate to pass, or using
+        the generic Store.Update to flip status to abandoned) because both would
+        destroy or bypass exactly the audit-trail integrity and locking
+        discipline this whole bug class exists to protect -- see DES-076's
+        "Non-goal" section for the full reasoning and the recommended follow-up
+        scope. Escalating per the contract's explicit instruction rather than
+        forcing a compromise.

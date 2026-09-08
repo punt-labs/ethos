@@ -1,0 +1,77 @@
+mission_id: m-2026-09-08-003
+status: escalated
+type: implement
+created_at: "2026-09-08T04:17:24Z"
+updated_at: "2026-09-08T04:40:23Z"
+closed_at: "2026-09-08T04:40:23Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-08T04:17:24Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    files:
+        - internal/hook/pretooluse_dispatch.go
+        - internal/mission/active.go
+        - internal/mission/binding.go
+        - cmd/ethos/mission.go
+        - DESIGN.md
+write_set:
+    - internal/hook/**
+    - internal/mission/active.go
+    - internal/mission/active_test.go
+    - internal/mission/binding.go
+    - internal/mission/binding_test.go
+    - cmd/ethos/mission.go
+    - cmd/ethos/mission_test.go
+    - DESIGN.md
+    - CHANGELOG.md
+success_criteria:
+    - 'READ THE BEAD FIRST: `bd show ethos-7tqd`. Its ORIGINAL filed framing is BACKWARDS and the 2026-09-07 triage note says so. The filing claims orphaned mission contracts sit inert and nobody notices. They do not sit inert — they CAPTURE. Build to the triage note and the reproduction below, not to the original text, and do not implement the filed suggestion (a louder not-spawned hint) as if it were the fix: a warning does not stop the capture.'
+    - 'THE DEFECT, reproduced live 2026-09-07: `ethos mission dispatch` binds the session''s active-mission sidecar at DISPATCH time. Nothing unbinds it. The next unrelated Agent() spawn in that same session is therefore recorded as a delegation of the orphaned mission. Measured: a throwaway probe mission captured the leader''s PR-fix agent as delegation d-2026-09-07-039 — an agent doing entirely unrelated work, attributed to a mission it had never heard of. The audit trail IS the product here; a wrong delegation edge silently corrupts the record ethos exists to keep.'
+    - 'PREFERRED FIX: bind at worker-spawn time, not at dispatch time. Dispatch writes the contract; the binding should come into existence when a worker is actually spawned against it, and must not outlive that worker. NOTE THE CONSTRAINT: `mission dispatch` and the Agent() spawn are deliberately two separate operations (documented in CLAUDE.md), so the binding must survive the gap between them WITHOUT capturing an unrelated spawn that lands in that gap. Decide and DOCUMENT how you distinguish ''the worker this dispatch was for'' from ''the next agent that happens to spawn.'' That decision is the heart of this mission — write it down before you write code.'
+    - 'There is existing machinery to understand BEFORE designing: internal/mission/active.go carries an `active-mission` sidecar AND a companion `active-mission-origin` sidecar, and its own comments explain why the origin lives in a separate file (a second line in active-mission broke every older reader). ClearMissionBindings already exists. Read the ordering discipline those comments describe — claim writes active-mission first THEN removes origin; a stale origin does not match until active-mission catches up — and preserve it. If the origin file already encodes enough to identify the intended worker, say so: the fix may be smaller than it looks.'
+    - 'SECOND REQUIREMENT (the cleanup half): `ethos mission abandon` must be able to retire a mission whose ONLY delegation is one it wrongly captured. Today the capture blocks cleanup of the very contract that caused it — abandon refuses when any delegation exists, so a mission that captured an innocent agent becomes unretireable. This must NOT weaken abandon''s real guard (docs/mission-abandon.md: abandon is not a bypass of close''s result gate). Distinguishing a captured delegation from a genuine one may require recording HOW a delegation was bound; if so, record it explicitly rather than inferring it by heuristic.'
+    - 'If binding-at-spawn proves genuinely infeasible, STOP and report why with evidence rather than falling back to the filed ''print a loud hint'' suggestion. Warn-only is a fallback I have NOT authorized: it leaves the corruption in place and merely narrates it. Escalate to the leader with the blocking reason and your recommended alternative.'
+    - Every behavioural change needs a regression test verified FAILING against pre-fix code before the fix lands. The capture bug specifically needs a test that reproduces the CAPTURE — dispatch without spawning, then spawn an unrelated agent, and assert it is NOT recorded as a delegation. State in your result which tests you confirmed red first and what the pre-fix failure output was.
+    - make check green before EVERY commit. No suppressions. If make check does not cover a class you changed (it does not catch Go doc-comment misattachment, for one), say which verification you used instead and paste its output.
+    - 'Detached gate before reporting: `rm -rf .tmp/hc && mkdir -p .tmp/hc && git archive HEAD | tar -x -C .tmp/hc`, then `setsid env -u CLAUDE_PID -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_AGENT -u CLAUDE_CODE_CHILD_SESSION sh -c ''cd <abs>/.tmp/hc && go test ./... -count=1'' < /dev/null | tee out.txt`. PIPE, never redirect — redirecting truncates the file to 0 bytes while still exiting 0. Report the `ok` count AND the `FAIL` count; a zero FAIL count alone cannot distinguish nothing-failed from nothing-ran. This gate exists because this package''s tests can pass inside a live Claude Code session and fail in CI.'
+    - GOOS=windows GOARCH=amd64 go build ./... must still exit 0.
+    - 'ADR in DESIGN.md recording the binding-lifetime decision: when a binding is created, what it is scoped to, when it is cleared, and how a spawn that does not match it is treated. Include the rejected alternatives — dispatch-time binding (the status quo) and warn-only — with why each was rejected.'
+    - 'CHANGELOG under [Unreleased]. User-visible: delegations are attributed correctly, and abandon can clean up after a capture.'
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - Do NOT push. Report and the leader pushes.
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+context: |
+    Final remaining piece of the ethos cluster-2 bug triage (mission state
+    persistence). The other four bugs in the cluster shipped in PR #508
+    (merged 34f0e33); this is the half of ethos-7tqd that PR #508's
+    write-set could not reach, because the fix lives in internal/hook.
+
+    What PR #508 already did for this bead: settled the storage layer model
+    (DES-075) so the two mission trees agree on scope, which means an
+    orphaned contract can now be cleaned up rather than wedged by
+    inconsistent enumeration. What it did NOT do: stop the capture itself.
+
+    Read DES-075 in DESIGN.md before starting — it is the decision record
+    for the layer model you are operating inside.
+
+    Two process notes from PR #508's ten review rounds, both earned the
+    hard way and both directly relevant here:
+
+    1. A comment describing what the code USED to do is a defect, not
+       untidiness. Four review rounds went to stale comments, and one of
+       them — prose asserting that git-tracked audit state is identical in
+       every checkout — was hiding a real correctness bug. Writing down WHY
+       forced a claim precise enough to falsify. Same discipline here: when
+       you document the binding lifetime, state the reason, not just the
+       rule.
+
+    2. Validate a detector before trusting a clean result from it. When you
+       sweep for other instances of a pattern, first confirm your method
+       fires on the known-bad case. "I searched and found nothing" is
+       worthless if the search could not have found anything.

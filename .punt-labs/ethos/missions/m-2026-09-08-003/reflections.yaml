@@ -1,0 +1,14 @@
+reflections:
+    - mission: m-2026-09-08-003
+      round: 1
+      created_at: "2026-09-08T04:40:20Z"
+      author: claude
+      converging: true
+      signals:
+        - 'Requirement 1 delivered and verified independently by the leader: make check fully green including the race detector, GOOS=windows GOARCH=amd64 go build ./... exit 0. Regression test confirmed RED against pre-fix code before the fix landed.'
+        - 'The worker escalated requirement 2 instead of falling back to warn-only, which the contract explicitly forbade as an unauthorized fallback. It enumerated why no in-write-set workaround is safe: deleting delegation records destroys the audit trail the bead calls the product, and Store.Update bypasses Abandon''s lock, redaction, and result gates. That is the behaviour the escalate verdict exists for.'
+        - 'The blocking analysis is correct and I verified its premise: distinguishing a captured delegation from a genuine one needs a fact recorded nowhere today — HOW the delegation was bound. Tier alone cannot distinguish, since explicit MISSION_ID, parent inheritance, and dispatch-sidecar consumption all produce Tier B. That is a data-model change on DelegationSkeleton and Delegation, in internal/mission, outside this contract''s write-set.'
+        - 'LEADER ERROR, not worker error: I scoped the write-set to internal/hook plus active.go/binding.go while writing a second requirement whose fix necessarily lives in store.go and delegation.go. The contract asked for something its own write-set forbade. Re-scoping is the correction.'
+        - 'DES-076 is honest about what it does not fix. It names the residual case explicitly — a spawn whose agent type equals the dispatched Worker but whose task is unrelated — rather than claiming the class is closed. That residual is NOT rare in this repo: the leader spawns bwk repeatedly, so same-type unrelated spawns are the common shape, which is why requirement 2 is being funded rather than deferred.'
+      recommendation: escalate
+      reason: Requirement 1 is complete and verified; requirement 2 is unreachable from this contract's write-set. Closing escalated and re-scoping into a follow-on mission with internal/mission/store.go, delegation.go, their tests, and internal/mcp/mission_tools.go added. The escalation is a correct response to a contract I scoped wrong, not a worker shortfall.

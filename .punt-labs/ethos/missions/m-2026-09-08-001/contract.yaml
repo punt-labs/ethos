@@ -1,0 +1,73 @@
+mission_id: m-2026-09-08-001
+status: closed
+type: implement
+created_at: "2026-09-08T00:56:01Z"
+updated_at: "2026-09-08T04:17:20Z"
+closed_at: "2026-09-08T04:17:20Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-08T00:56:01Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    files:
+        - internal/mission/store.go
+        - internal/mission/paths.go
+        - internal/mission/delegation.go
+        - internal/mission/conflict.go
+        - internal/resolve/resolve.go
+        - internal/session/store.go
+        - DESIGN.md
+write_set:
+    - internal/mission/**
+    - internal/resolve/resolve.go
+    - internal/resolve/resolve_test.go
+    - cmd/ethos/mission.go
+    - cmd/ethos/mission_test.go
+    - DESIGN.md
+    - CHANGELOG.md
+success_criteria:
+    - READ THE TRIAGE FIRST. Run `bd show` on ethos-6adb, ethos-ouy9, ethos-lj4k, ethos-5yej and ethos-7tqd. Each carries a triage note dated 2026-09-07 with a measured mechanism. THREE of them record a WRONG mechanism in the original filing and the triage note corrects it — build to the note, not to the original text, and do not implement a fix the note marks as rejected.
+    - 'THE CENTRAL FINDING: four of these five are one defect. internal/mission has TWO storage layers — a per-repo tree (repoMissionsDir, <repoRoot>/.punt-labs/ethos/missions) and a flat GLOBAL tree (globalMissionsDir, ~/.punt-labs/ethos/missions, shared by every repo on the machine) — and call sites choose between them inconsistently. Write down the layer model BEFORE changing code: which layer is authoritative for enumeration, for locking, for reads, for writes, and what the global tree is still for. Put it in DESIGN.md as a new ADR. The code changes follow from that decision; do not start with the code.'
+    - 'ethos-6adb: Store.List() (store.go:1645) enumerates the repo tree AND the global tree, and checkWriteSetConflicts (store.go:2515) compares a new contract against every open mission it returns with no repo filter. Measured on this host: 841 contracts in the global tree, 19 open, ZERO carrying a `repo:` field — so they cannot be filtered by repo even if the check wanted to. Scope conflict detection to the current repo. Note the filed fix (a --repo flag, or git rev-parse at invocation) is explicitly REJECTED in the triage note: the enumeration is not cwd-derived.'
+    - 'ethos-lj4k: Store.withLock locks <globalMissionsDir>/<id>.lock (store.go:424) while AcquireMissionLockExclusive locks <repoRoot>/.punt-labs/ethos/missions/<id>/.lock (delegation.go:450). Two different files, two independent flocks. Abandon counts delegations under the first while dispatchTierB writes them under the second, so neither excludes the other. Make ONE lock authoritative for delegation-directory access and use it on both sides. Do NOT simply add the second lock to Abandon — the triage note explains that taking both invites a lock-ordering deadlock.'
+    - 'ethos-ouy9: writeContract (store.go:1773) does os.WriteFile(tmp) then os.Rename with NO Sync(), while session.writeRoster syncs and removes its temp on every error path. Match writeRoster''s discipline: Sync before Close, temp removed on every error path, a failed fsync propagated not ignored. Then add the read-back the bead''s title implies — Create should confirm the contract loads before returning nil. The triage note lists two other candidate causes for the original incident; say in your result whether the layer work rules either of them out.'
+    - 'ethos-5yej: correctly ruled NOT-A-BUG and must stay that way — resolving the repo layer to the main work tree is what lets a linked worktree see its parent''s missions, which this leader depended on today. Do not change the behaviour. Your ADR must NAME what a linked worktree''s own .punt-labs/ethos means (inert / an error / a supported layer). Today it silently means nothing, which is defensible but undocumented. Once named in the ADR, say so and I will close the bead.'
+    - 'ethos-7tqd: `mission dispatch` binds the session''s active-mission sidecar, and nothing unbinds it — so the next unrelated Agent() spawn in that session is captured as a delegation of the orphaned mission. Reproduced live 2026-09-07: a throwaway probe captured this leader''s PR-fix agent as delegation d-2026-09-07-039. The filed framing (orphans sit inert, nobody notices) is BACKWARDS and the triage note says so. Preferred fix: bind at worker-spawn time, not at dispatch time. If that is not feasible, make dispatch print the binding it took so it is visible, and make abandon able to clean up a mission whose only delegation is one it captured — currently the capture blocks cleanup of the very contract that caused it.'
+    - Every behavioural change needs a regression test verified FAILING against pre-fix code before the fix lands. State in your result which tests you confirmed red first.
+    - make check green before EVERY commit. No suppressions.
+    - 'Detached gate before reporting: rm -rf .tmp/hc && mkdir -p .tmp/hc && git archive HEAD | tar -x -C .tmp/hc, then `setsid env -u CLAUDE_PID -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_AGENT -u CLAUDE_CODE_CHILD_SESSION sh -c ''cd <abs>/.tmp/hc && go test ./... -count=1'' < /dev/null | tee out.txt`. PIPE, never redirect — redirecting truncates to 0 bytes. Report the `ok` count AND the `FAIL` count; a zero FAIL count alone cannot distinguish nothing-failed from nothing-ran. Expect 27 ok / 0 FAIL / 1 no-test-files.'
+    - 'GOOS=windows GOARCH=amd64 go build ./... must still exit 0 — internal/mission gained Windows locking in PR #507 and your changes touch that package.'
+    - Commit incrementally — one commit per logical step. Each commit passes make check. Do not accumulate more than 30 minutes of uncommitted work.
+    - CHANGELOG under [Unreleased] for user-visible changes. The conflict-scoping and the dispatch-binding change are user-visible; the fsync and lock unification are arguably not — use your judgement and say which you chose.
+    - Do NOT push. Report and the leader pushes.
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+context: |
+    Cluster 2 of the ethos bug triage: mission state persistence. Five beads,
+    two P1s. All five were triaged by the leader on 2026-09-07 with measured
+    mechanisms recorded on each bead — read those notes before anything else.
+
+    The headline is that this is NOT five independent bugs. Four of them are
+    one defect: internal/mission carries two storage layers that disagree
+    about scope, and different call sites pick different layers. Enumeration
+    spans both. Locking uses one while the data lives in the other.
+    Resolution uses only one. Fixing these one at a time means three or four
+    passes over the same ambiguity, each patching a symptom without settling
+    what the layers mean — which is why the ADR comes first.
+
+    Three of the five beads record a mechanism that turned out to be wrong,
+    and the triage notes correct them. ethos-6adb blamed cwd resolution; it is
+    the unscoped global tree. ethos-lj4k said Abandon is unlocked; it holds a
+    different lock file. ethos-7tqd said orphans are inert; they capture the
+    next agent spawned. Building to the original text will produce fixes that
+    miss.
+
+    Prior art worth reading: PR #507 (merged ec47a92) fixed the same
+    asymmetry shape one package over — session.WriteCurrentSession was a plain
+    non-atomic write while writeRoster beside it was fully atomic. ouy9's
+    writeContract is that defect again. DES-074 in DESIGN.md is the decision
+    record for the session-identity work that preceded this cluster.
