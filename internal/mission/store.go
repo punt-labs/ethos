@@ -2058,8 +2058,30 @@ func writeContractFile(dest string, data []byte) error {
 	// rename returning and the directory entry reaching stable storage
 	// could still lose the "created: m-..." contract on recovery — the
 	// exact ethos-ouy9 symptom the file-level Sync alone did not close.
+	//
+	// The rename above is the commit point (PR #508 round 3, G2/G3):
+	// dest now holds the correct, complete contract no matter what
+	// happens next. A syncDir failure here means the rename's
+	// directory-entry update is not CONFIRMED durable against a crash —
+	// it does not mean the write failed, and dest is not "maybe wrong,"
+	// it is right, now, on disk. Returning an error from this point and
+	// having the caller clean up dest would remove a contract that is
+	// currently completely valid, in exchange for a clean-looking
+	// failure — trading a proven-good state for a guaranteed-bad one to
+	// make an unconfirmed durability signal read like an ordinary
+	// error. ethos-ouy9's whole complaint was "reports success for an
+	// absent contract"; turning this into a hard error would produce
+	// its exact inverse, "reports failure for a present one," which is
+	// no better — a retry after either shape hits "already exists" with
+	// no clean path back. Warned, not returned: the same treatment
+	// Store.Close already gives its own post-commit, non-essential
+	// failures (the trace-summary write).
 	if err := syncDir(filepath.Dir(dest)); err != nil {
-		return fmt.Errorf("syncing directory %s after renaming contract: %w", filepath.Dir(dest), err)
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission: syncing directory %s after renaming contract %s: %v — "+
+				"the contract itself is written and correct; only its durability against "+
+				"a crash before the next filesystem sync is unconfirmed\n",
+			filepath.Dir(dest), dest, err)
 	}
 	return nil
 }

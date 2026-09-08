@@ -9183,3 +9183,93 @@ Windows case was already inert, but the root case was not). Fixed by
 forcing the failure through a NONEXISTENT containing directory instead — a
 bare path-resolution `ENOENT`, which fails identically regardless of
 platform or privilege level.
+
+### Amendment 2026-09-08: PR #508 review round 3 — G1 undercuts F4's foundation, G2/G3 correct the syncDir contract
+
+**G1 (High) — `repoMissionIDs` (the ownership signal round 2's F4 fix
+depends on) read only the frozen pre-DES-058 legacy file, never a sealed
+chunk.** This is worse than "misses some audits": `ethos audit seal` runs at
+every pre-commit in an ethos-enabled repo (the sealed chunks travel in the
+same commit as the work), moving session audit content OUT of a flat
+`audit.jsonl` and into dated `audit-<first>-<last>.jsonl` chunks
+(`internal/audit/names.go`) on essentially every commit. `repoMissionIDs`
+looked for a file literally named `audit.jsonl` inside
+`<repoRoot>/.punt-labs/ethos/sessions/<dir>/` — the SEALED zone — but that
+exact name is the pre-DES-058 legacy shape (see
+`internal/hook/audit_monotonic.go`'s `sessionLegacyPath`), not what a
+sealed chunk is ever named. For any repo whose sessions have ever sealed —
+the normal state of an actively-committed repo, not an edge case —
+`repoMissionIDs` returned an empty (or near-empty) set, silently
+reopening F4's gap for the exact same-repo un-migrated missions it was
+written to catch. `mission migrate` shares the identical blind spot,
+since it uses the same function; this was not only round 2's problem.
+
+Fixed by having `repoMissionIDs` read all three sources a session's audit
+trail can live in: sealed chunks (`audit.ScanSealedDir` +
+`collectContractIDs` per chunk file), the frozen legacy file (unchanged),
+and the live tail of a session that has not sealed yet
+(`audit.LiveSessionsDir`/`audit.LiveAuditPath`, the gitignored local
+zone) — reusing `internal/audit`'s existing exported primitives rather
+than reimplementing chunk-name parsing. Deliberately does NOT reuse
+`internal/audit.Watermark`/dedup-by-identity machinery
+(`internal/hook/audit_read.go`'s `sessionUnionLines`, the canonical full
+audit reconstruction): that logic exists to produce an exactly-once,
+time-ordered reconstruction for display, which this function does not
+need — it only accumulates a SET of `contract_id` strings, so a mission ID
+appearing in more than one source (a sealed chunk and an overlapping live
+tail, say) collapses for free via the map. This keeps the fix a fraction
+of the size the full union-read pattern would have been.
+
+The scan is deliberately best-effort at different granularities for
+different sources: a corrupt or unclassifiable sealed session directory
+is warned to stderr and skipped, since this function's result now feeds
+`Store.Create`'s admission control on every call and a single damaged
+HISTORICAL chunk (`ethos audit quarantine`'s job to fix, asynchronously)
+must not block every future mission create in the repo; the frozen legacy
+file and the live tail keep the pre-existing, stricter contract (a
+genuine read error still propagates), since each is a single,
+currently-relevant file rather than an unbounded pool of history.
+
+`TestStore_CreateDetectsSameRepoConflictViaSealedAuditChunk` covers G1
+directly — writes a real sealed-chunk-shaped file (via
+`audit.SessionChunkFile`) rather than the flat legacy name — and was
+confirmed failing against the round-2 code before this fix.
+
+**G2 + G3 (the same finding, two reviewers) — a `syncDir` failure (F2,
+round 2) made `writeContractFile` fail AFTER the rename had already
+committed a correct contract to disk.** `Create` then reported failure for
+a mission that existed, and a retry hit "already exists" with no clean
+path forward — the exact inverse of ethos-ouy9 (which reported SUCCESS for
+an ABSENT contract), and no better: both leave the caller's belief about
+durable state wrong, just in opposite directions.
+
+**Decision: the rename is the commit point.** Once `os.Rename` returns
+nil, `dest` holds the correct, complete contract — full stop, regardless
+of what any subsequent step reports. A `syncDir` failure past that point
+means the rename's directory-entry update is not CONFIRMED durable
+against a crash; it does not mean the write failed, and `dest` is not
+"maybe wrong" — it is right, right now, on disk. Returning an error from
+that point and having the caller clean up `dest` would delete a contract
+that is, in that instant, completely valid, purely to make an unconfirmed
+durability signal look like an ordinary clean failure — trading a
+proven-good state for a guaranteed-bad one for the sake of a tidy error
+return. `writeContractFile` now warns to stderr on a `syncDir` failure
+(naming the path and stating explicitly that the contract itself is
+correct) and returns `nil`, matching the treatment `Store.Close` already
+gives its own post-commit, non-essential failure (the trace-summary
+write: "the mission is already closed; a trace failure must not roll back
+the close").
+
+Rejected: keep it an error and have `Create` clean up the just-written
+contract so a retry is possible. This was round 2's actual behavior and
+is what G2/G3 report as broken — "clean up so a retry works" sounds
+attractive but requires discarding real, correct data to manufacture that
+retriability, and the retry it enables still can't distinguish "the
+original write never landed" from "the write landed and we deleted it to
+tidy up," which is a worse epistemic position than either extreme alone.
+
+`TestWriteContractFile_SyncDirFailureIsWarnedNotErrored` (renamed from
+round 2's `..._SyncDirFailurePropagates`, which asserted the now-rejected
+contract) covers this: confirmed failing against the round-2 code (an
+error was returned) before this fix, passing after (a warning on stderr,
+`nil` returned, contract intact and readable).

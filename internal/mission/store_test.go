@@ -211,14 +211,21 @@ func TestWriteContractFile_OpenFailureLeavesNoPartialArtifact(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "a failed write must leave no temp file")
 }
 
-// TestWriteContractFile_SyncDirFailurePropagates is the regression
-// gate for ethos-ouy9 round 2 finding F2: writeContractFile must
-// fsync the containing directory after the rename, not only the
-// file's own contents before it, and a failure there must surface
-// rather than be swallowed. A real directory-fsync failure is not
-// something a portable test can engineer, so syncDir is overridden
-// (it is a package var for exactly this reason).
-func TestWriteContractFile_SyncDirFailurePropagates(t *testing.T) {
+// TestWriteContractFile_SyncDirFailureIsWarnedNotErrored is the
+// regression gate for PR #508 round 3 findings G2/G3: writeContractFile
+// must fsync the containing directory after the rename (F2, round 2),
+// but the rename is the commit point — dest already holds the
+// correct, complete contract at that instant regardless of what
+// happens next. A failed directory sync must be a WARNING, not an
+// error: round 2's version returned an error here while dest already
+// existed, so Create reported failure for a contract that was, in
+// fact, present and correct — the exact inverse of ethos-ouy9 (which
+// reported success for an ABSENT contract), and just as broken: a
+// retry after either shape hits "already exists" with no clean path
+// forward. A real directory-fsync failure is not something a portable
+// test can engineer, so syncDir is overridden (it is a package var
+// for exactly this reason).
+func TestWriteContractFile_SyncDirFailureIsWarnedNotErrored(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "m-2026-04-08-952.yaml")
 
@@ -228,15 +235,18 @@ func TestWriteContractFile_SyncDirFailurePropagates(t *testing.T) {
 		return fmt.Errorf("simulated directory fsync failure for %s", d)
 	}
 
-	err := writeContractFile(dest, []byte("mission_id: m-2026-04-08-952\n"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "syncing directory")
+	var err error
+	warning := captureStderr(t, func() {
+		err = writeContractFile(dest, []byte("mission_id: m-2026-04-08-952\n"))
+	})
+	require.NoError(t, err, "a syncDir failure must not fail writeContractFile — "+
+		"the rename already committed a correct contract")
+	assert.Contains(t, warning, "syncing directory",
+		"the durability gap must still be visible on stderr, not silently swallowed")
 
-	// The rename itself already completed before the (simulated)
-	// directory-sync failure — the file is real and readable. Only the
-	// durability guarantee for the rename's directory-entry update is
-	// unconfirmed, which is exactly what the propagated error reports;
-	// writeContractFile has nothing left to roll back at this point.
+	// The rename completed before the (simulated) directory-sync
+	// failure — the file is real and readable, exactly as
+	// writeContractFile reported.
 	data, readErr := os.ReadFile(dest)
 	require.NoError(t, readErr)
 	assert.Contains(t, string(data), "m-2026-04-08-952")
@@ -1748,6 +1758,49 @@ func TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict(t *testing.T) {
 	unrelated := withWriteSet("m-2026-04-08-912", "internal/other/thing.go")
 	require.NoError(t, s2.Create(unrelated),
 		"a global mission absent from THIS repo's audit trail must not block its create")
+}
+
+// writeSealedAuditContractIDLine writes a SEALED session audit chunk
+// (audit-<first>-<last>.jsonl, the real on-disk shape `ethos audit
+// seal` produces — see internal/audit/names.go) referencing
+// contractID, as opposed to writeAuditContractIDLine's flat
+// pre-DES-058 legacy audit.jsonl. Test helper for the G1 regression
+// (PR #508 round 3): repoMissionIDs originally read only the legacy
+// shape and went blind the moment a session's audit trail was sealed.
+func writeSealedAuditContractIDLine(t *testing.T, repoRoot, sessionDir, contractID string) {
+	t.Helper()
+	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", sessionDir)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	chunkFile := audit.SessionChunkFile(1000, 2000)
+	line := fmt.Sprintf(`{"ts":"2026-04-08T00:00:00Z","contract_id":%q}`+"\n", contractID)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, chunkFile), []byte(line), 0o600))
+}
+
+// TestStore_CreateDetectsSameRepoConflictViaSealedAuditChunk is the
+// regression gate for PR #508 round 3 finding G1: repoMissionIDs (the
+// signal both `mission migrate` and TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict's
+// F4 fix depend on) must see a mission referenced from a SEALED audit
+// chunk, not only the flat pre-DES-058 legacy audit.jsonl file. `ethos
+// audit seal` runs at every pre-commit in an ethos-enabled repo, so a
+// sealed chunk is the NORMAL shape for any actively-committed repo's
+// audit history, not an edge case — missing it reopens F4's gap for
+// essentially every repo that has ever committed.
+func TestStore_CreateDetectsSameRepoConflictViaSealedAuditChunk(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	mine := withWriteSet("m-2026-04-08-920", "internal/sealed/")
+	require.NoError(t, legacy.Create(mine))
+	writeSealedAuditContractIDLine(t, repoRoot, "2026-04-08-sess-sealed", mine.MissionID)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	overlap := withWriteSet("m-2026-04-08-921", "internal/sealed/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "an un-migrated same-repo global mission referenced only from a "+
+		"SEALED audit chunk must still block an overlapping create")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
 }
 
 // TestStore_CreateMultiConflictReportsAllBlockers asserts that a new

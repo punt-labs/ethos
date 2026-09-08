@@ -12,26 +12,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ethos mission create`/`dispatch`'s write-set conflict check no
   longer compares against missions in the shared, cross-repo global
   mission tree, but still detects an un-migrated mission genuinely
-  belonging to the current repo.** A two-tree Store (any invocation run
-  inside a repo checkout) scopes the scan to the repo's own mission tree
-  plus any open global-tree mission the repo's own session audit trail
-  references (the same ownership signal `ethos mission migrate` already
-  uses) — the global tree cannot be attributed to a repo by its `repo:`
-  field (measured: zero of 841 on-disk contracts carry one), so
-  unconditionally scanning it produced false conflicts against unrelated
-  repos' open missions (ethos-6adb), while unconditionally excluding it
-  made a same-repo, pre-migration mission invisible to admission control
-  (round 2 finding). See DES-075 in DESIGN.md for the full storage-layer
+  belonging to the current repo — including one referenced only from a
+  SEALED audit chunk.** A two-tree Store (any invocation run inside a
+  repo checkout) scopes the scan to the repo's own mission tree plus any
+  open global-tree mission the repo's own session audit trail references
+  (the same ownership signal `ethos mission migrate` uses) — the global
+  tree cannot be attributed to a repo by its `repo:` field (measured:
+  zero of 841 on-disk contracts carry one), so unconditionally scanning
+  it produced false conflicts against unrelated repos' open missions
+  (ethos-6adb), while unconditionally excluding it made a same-repo,
+  pre-migration mission invisible to admission control. The audit-trail
+  scan itself originally read only the frozen pre-DES-058 legacy audit
+  file, missing every session whose trail had been sealed by `ethos
+  audit seal` — the normal state for an actively-committed repo, not an
+  edge case — so it now also reads sealed chunks and the live (not yet
+  sealed) tail. See DES-075 in DESIGN.md for the full storage-layer
   decision.
 - **`ethos mission create`/`dispatch` no longer reports success for a
-  contract that was not durably persisted.** The contract writer now
-  syncs the file before rename AND syncs the containing directory after
-  it (a rename is a directory-metadata change with its own durability
-  requirement, distinct from the file's own contents), removes its temp
-  file on every error path (matching `session.Store.writeRoster`'s
-  existing discipline), and `Create` reads the just-written contract
-  back before returning — closing the gap where a torn write or crash
-  around the rename could leave `mission create` printing
+  contract that was not durably persisted, and no longer reports FAILURE
+  for one that durably was.** The contract writer syncs the file before
+  rename AND syncs the containing directory after it (a rename is a
+  directory-metadata change with its own durability requirement,
+  distinct from the file's own contents) and removes its temp file on
+  every error path (matching `session.Store.writeRoster`'s existing
+  discipline); `Create` reads the just-written contract back before
+  returning. The rename is the commit point: a failure to confirm the
+  directory sync afterward is now a warning, not an error, since the
+  contract is already correctly on disk at that point and turning an
+  unconfirmed durability signal into a hard failure produced the exact
+  inverse of the original bug — `mission create` reporting failure for a
+  mission that existed, with a retry hitting "already exists" and no
+  clean path forward. Together these close the gap where a torn write or
+  crash around the rename could leave `mission create` printing
   `created: m-...` for an ID no later `mission show`/`result submit`
   could find (ethos-ouy9).
 - **`ethos mission abandon` no longer races a concurrent worker spawn,

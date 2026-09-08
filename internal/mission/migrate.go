@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // maxAuditLineBytes is the per-line ceiling for collectContractIDs.
@@ -136,31 +138,100 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 }
 
 // repoMissionIDs returns the set of mission IDs referenced as
-// contract_id in any <repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl file.
-// Missing sessions tree is treated as empty — a fresh repo has no
-// audit history and therefore no migration candidates.
+// contract_id anywhere in this repo's own session audit trail: sealed
+// chunks (git-tracked, `audit-<first>-<last>.jsonl` under
+// `<repoRoot>/.punt-labs/ethos/sessions/<dir>/`), the frozen
+// pre-DES-058 legacy file (`audit.jsonl`, read directly if a session
+// directory still carries one), and the live tail of a session that
+// has not sealed yet (`<repoRoot>/.punt-labs/local/ethos/sessions/
+// <id>.audit.jsonl`, gitignored). Missing sessions trees are treated
+// as empty — a fresh repo has no audit history and therefore no
+// migration candidates.
 //
-// The scan is best-effort: a malformed audit line is skipped (the
-// permissive reader contract in audit_reader.go), not an error.
+// PR #508 round 3, finding G1: the original version of this function
+// read ONLY the frozen legacy `audit.jsonl` path — correct before
+// DES-058 introduced the live/sealed split, but `ethos audit seal`
+// runs at every pre-commit in an ethos-enabled repo (the sealed chunks
+// travel in the same commit as the work), which moves content OUT of
+// that flat file and into dated chunks on essentially every commit. A
+// session whose audit trail has ever been sealed — the NORMAL state
+// for an actively-committed repo, not an edge case — was invisible to
+// this scan, which silently reopened the exact gap this function
+// exists to close for `Store.conflictScanIDs` (F4) and for
+// `MigrateMission` alike.
+//
+// The scan is best-effort at the SEALED-CHUNK level: a malformed
+// individual line is skipped (the permissive reader contract in
+// collectContractIDs), and a session directory whose chunk names fail
+// to classify is warned to stderr and skipped rather than failing the
+// whole scan — this result feeds Store.Create's admission control on
+// every call, and a single damaged historical chunk (the concern
+// `ethos audit quarantine` exists to fix, asynchronously) must not
+// block every future mission create in the repo. The frozen legacy
+// file and the live tail keep their pre-existing, stricter contract: a
+// genuine read error there still propagates, since each is a single,
+// currently-relevant file rather than an unbounded pool of historical
+// chunks.
 func repoMissionIDs(repoRoot string) (map[string]struct{}, error) {
 	out := make(map[string]struct{})
+
 	sessionsBase := RepoStatePath(repoRoot, "sessions")
 	dirs, err := os.ReadDir(sessionsBase)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return out, nil
+	switch {
+	case err == nil:
+		for _, d := range dirs {
+			if !d.IsDir() {
+				continue
+			}
+			sealedDir := filepath.Join(sessionsBase, d.Name())
+
+			sc, scErr := audit.ScanSealedDir(sealedDir, audit.SessionNS, "")
+			if scErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: mission migrate: scanning sealed chunks in %s: %v\n", sealedDir, scErr)
+			} else {
+				for _, c := range sc.Chunks {
+					chunkPath := filepath.Join(sealedDir, c.ChunkFile())
+					if cErr := collectContractIDs(chunkPath, out); cErr != nil {
+						fmt.Fprintf(os.Stderr, "ethos: mission migrate: %s: %v\n", chunkPath, cErr)
+					}
+				}
+			}
+
+			legacyPath := filepath.Join(sealedDir, "audit.jsonl")
+			if err := collectContractIDs(legacyPath, out); err != nil {
+				return nil, fmt.Errorf("scanning %s: %w", legacyPath, err)
+			}
 		}
+	case errors.Is(err, fs.ErrNotExist):
+		// No sealed sessions tree yet — fall through to the live check.
+	default:
 		return nil, fmt.Errorf("reading %s: %w", sessionsBase, err)
 	}
-	for _, d := range dirs {
-		if !d.IsDir() {
-			continue
+
+	liveDirs, err := os.ReadDir(audit.LiveSessionsDir(repoRoot))
+	switch {
+	case err == nil:
+		for _, f := range liveDirs {
+			if f.IsDir() {
+				continue
+			}
+			id, ok := strings.CutSuffix(f.Name(), ".audit.jsonl")
+			if !ok {
+				continue
+			}
+			livePath := audit.LiveAuditPath(repoRoot, id)
+			if err := collectContractIDs(livePath, out); err != nil {
+				return nil, fmt.Errorf("scanning %s: %w", livePath, err)
+			}
 		}
-		path := filepath.Join(sessionsBase, d.Name(), "audit.jsonl")
-		if err := collectContractIDs(path, out); err != nil {
-			return nil, fmt.Errorf("scanning %s: %w", path, err)
-		}
+	case errors.Is(err, fs.ErrNotExist):
+		// No live sessions yet — every session in scope has either
+		// sealed or never started.
+	default:
+		return nil, fmt.Errorf("reading %s: %w", audit.LiveSessionsDir(repoRoot), err)
 	}
+
 	return out, nil
 }
 
