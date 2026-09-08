@@ -10981,3 +10981,58 @@ wiring (`mcp.WithSessionStore(sessionStore())`); the eight existing tests
 that exercise the create-then-bind path now seed a roster via a new
 `seedSessionRoster` helper before calling create, mirroring
 `cmd/ethos/mission_test.go`'s own `seedRosterForSession`.
+
+### Amendment 2026-09-08: `RefuseIfSessionGone` was refusing on ANY Load error, not only genuine absence (PR #509 tail round 7, G1)
+
+Review finding G1 on the previous amendment's own fix: `RefuseIfSessionGone`
+treated every error `session.Store.Load` could return as proof the
+session had ended, and refused the write in all of them. But
+`Store.Load` fails for two structurally different reasons — `os.ReadFile`
+returning `os.ErrNotExist` (no roster file at all), or `yaml.Unmarshal`
+failing on a roster that IS present but does not parse (corrupt on disk,
+or a transient partial write) — and only the first is evidence of
+anything. A corrupt-but-present roster is exactly the file
+`List()`/`Purge()` would still find on their next pass; it is not the
+undiscoverable-sidecar shape this check exists to prevent. Refusing on it
+blocked a live session's legitimate `claim`/`dispatch` write on an error
+that proved nothing about whether the session had ended.
+
+**This is the same doctrine the round-3 fix already applies to a
+different Load.** `staleBindingReason`'s own doc comment calls a
+contract that fails to load "unresolvable," explicitly not "stale," and
+hands it to `dispatchTierB` to refuse the SPAWN with a named reason
+rather than silently treating the binding as gone — a Load failure there
+is evidence of nothing except that this one Load failed. The pre-fix
+`RefuseIfSessionGone` violated that same principle for the roster's own
+Load, and G1 corrects it to match: `errors.Is(err, fs.ErrNotExist)`
+gates the refusal, since `Store.Load` wraps `os.ReadFile`'s underlying
+`*PathError` with a plain `%w`, so the sentinel survives the wrap and
+`errors.Is` finds it. Every other error — corrupt YAML, `EACCES`, or any
+other read fault — warns to stderr (naming the session and the
+underlying error) and returns `nil`, letting the write proceed.
+
+**Why warn-and-allow, not warn-and-still-refuse.** The two rejected
+alternatives were: (a) keep refusing on any error, accepting the false
+positive as a rare cost of a strict gate; and (b) refuse only louder,
+with a clearer message. Both were rejected for the same reason —
+refusing requires proof the session cannot be found again, and neither
+alternative supplies that proof for a corrupt-but-present roster. The
+failure this whole check exists to prevent (`deleteFiles` removing the
+roster out from under a queued writer) manifests as `os.ErrNotExist`,
+not as a parse error; a parse error means the file was never removed at
+all, so the hazard this check guards against did not occur. Warn-and-
+allow keeps the operator informed without blocking legitimate work on
+unproven evidence — matching `staleBindingReason`'s own choice to fall
+through rather than block on an unresolvable contract.
+
+**Confirmed failing against the pre-fix code.**
+`TestHandleMission_CreateBindsPastCorruptRoster`
+(`internal/mcp/mission_tools_test.go`) seeds a live roster, overwrites it
+in place with invalid YAML (present on disk, not valid), then calls
+`mission create`. Against the pre-fix `RefuseIfSessionGone`, the
+pending-dispatch write was refused, no entry landed under `globalRoot`'s
+pending-dispatch directory, and the sole warning read "no longer exists"
+for a roster that had never been removed — only corrupted. Against the
+fix, the write proceeds, the pending-dispatch entry is written, and the
+returned warning is the ordinary fresh-bind message naming the mission
+and worker, not a refusal.

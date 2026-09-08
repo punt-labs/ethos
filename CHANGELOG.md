@@ -298,6 +298,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   roster refuses with an actionable message instead of silently binding.
   A legitimate new session reusing the same ID is unaffected: its roster
   is always created before any mission command can run against it.
+- **The session-liveness check above no longer refuses a `mission
+  claim`/`dispatch` write for a roster that is merely corrupt, not
+  absent.** `RefuseIfSessionGone` treated every `session.Store.Load`
+  error identically — a missing roster and a present-but-unparseable
+  one both refused the write with "no longer exists." Only a missing
+  roster (`os.ErrNotExist`) is evidence the session ended; a roster that
+  exists but fails to decode is exactly what `List()`/`Purge()` would
+  still find on their next pass, so refusing on it blocked a live
+  session's legitimate write on unproven evidence — the same
+  "unresolvable is not stale" distinction `staleBindingReason` already
+  applies to a contract that fails to load. Every non-`ErrNotExist`
+  error now warns to stderr (naming the session and the underlying
+  error) and lets the write proceed.
 - **A mission event-log append that fails because `fsync` failed AFTER
   a fully successful write no longer leaves the line on disk.** Every
   caller of the append primitive (`Store.DisclaimDelegation` among

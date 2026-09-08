@@ -396,6 +396,62 @@ func TestHandleMission_CreateRefusesSessionRosterGone(t *testing.T) {
 	assert.Empty(t, pending, "no pending-dispatch entry must be written for a session with no roster")
 }
 
+// TestHandleMission_CreateBindsPastCorruptRoster is review finding G1
+// (PR #509 tail round 7): hook.RefuseIfSessionGone must refuse only
+// when the roster is genuinely absent, not on every error Store.Load
+// can return. A roster that exists but fails to PARSE is exactly the
+// shape List()/Purge() would still discover on disk -- it is not the
+// undiscoverable-sidecar hazard the check exists to prevent, so
+// refusing on it blocks a live session's legitimate write on unproven
+// evidence.
+//
+// Confirmed failing against the pre-fix code (RefuseIfSessionGone
+// refused on ANY Store.Load error): create's pending-dispatch write
+// was refused, no entry landed in globalRoot's pending-dispatch dir,
+// and the sole warning read "no longer exists" for a roster that was
+// on disk the entire time -- just not valid YAML.
+func TestHandleMission_CreateBindsPastCorruptRoster(t *testing.T) {
+	const sess = "sess-mcp-roster-corrupt"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	// Corrupt the roster in place -- present on disk, but not valid
+	// YAML, so Store.Load fails on Unmarshal rather than on ReadFile.
+	rosterPath := filepath.Join(globalRoot, "sessions", sess+".yaml")
+	require.NoError(t, os.WriteFile(rosterPath, []byte("not: valid: yaml: [["), 0o600))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "the mission contract itself must still be created")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	missionID, _ := payload["mission_id"].(string)
+	require.NotEmpty(t, missionID)
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "a fresh bind must still be reported; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	warning, _ := warnings[0].(string)
+	assert.NotContains(t, warning, "no longer exists",
+		"a corrupt-but-present roster must not be treated as a torn-down session")
+	assert.Contains(t, warning, missionID)
+	assert.Contains(t, warning, "bwk", "the fresh-bind line must name the worker the binding is scoped to")
+
+	pending, _, err := mission.ReadDispatchPending(globalRoot, sess)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "the pending-dispatch entry must still be written past an unparseable roster")
+	assert.Equal(t, missionID, pending[0].MissionID)
+}
+
 // TestHandleMission_CreateNoSessionWarns asserts the advisory
 // contract: an MCP call with no session store wired must not fail the
 // create — mirrors the CLI's bindDispatchedMission, which proceeds

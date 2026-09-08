@@ -474,12 +474,37 @@ func DispatchBoundMessage(store *mission.Store, globalRoot, sessionID, missionID
 // `ethos mission claim`/`dispatch`/`create` command can run against it,
 // so the roster already exists by the time this check runs -- refusal
 // only fires for a session that has genuinely ended.
+//
+// Only a missing roster file counts as "gone." Store.Load also returns
+// an error for a roster that exists but fails to parse (corrupt YAML),
+// or one the caller lacks permission to read -- neither is proof the
+// session ended, only that this one read attempt didn't work. Review
+// finding G1 (PR #509 tail round 7): a corrupt-but-present roster is
+// exactly what List() and Purge() would still discover, so it is not
+// the undiscoverable-sidecar shape this check exists to prevent, and
+// refusing on it blocks a live session's legitimate write on unproven
+// evidence. This is the same doctrine staleBindingReason/
+// matchDispatchPending already apply to a contract that fails to load
+// (their doc comments call it "unresolvable," never "stale," and
+// deliberately do not refuse on it): a Load failure is evidence of
+// nothing except that this Load failed, so only the one failure mode
+// Load reports unambiguously -- os.ErrNotExist, unwrapped from
+// os.ReadFile's *PathError through Load's own %w -- refuses. Every
+// other error warns to stderr and allows the write.
 func RefuseIfSessionGone(ss *session.Store, sessionID string) error {
-	if _, err := ss.Load(sessionID); err != nil {
-		return fmt.Errorf("session %s no longer exists, so this binding was not recorded "+
-			"(it may have ended or been purged; re-run the command from a live session): %w", sessionID, err)
+	_, err := ss.Load(sessionID)
+	if err == nil {
+		return nil
 	}
-	return nil
+	if !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: dispatch-pending: session %s roster failed to load (%v); "+
+				"this is not proof the session ended, so the binding is proceeding anyway\n",
+			sessionID, err)
+		return nil
+	}
+	return fmt.Errorf("session %s no longer exists, so this binding was not recorded "+
+		"(it may have ended or been purged; re-run the command from a live session): %w", sessionID, err)
 }
 
 // consumeDispatchBinding removes missionID's pending-dispatch entry
