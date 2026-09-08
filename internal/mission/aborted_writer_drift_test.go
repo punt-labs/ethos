@@ -102,11 +102,14 @@ func TestAbortedVerdictWriteSites_MatchKnownThree(t *testing.T) {
 }
 
 // scanTreeForAbortedWriteSites walks every non-test .go file under
-// root/internal and root/cmd and returns the sorted, deduplicated set
-// of "relative/path.go:site" strings naming every WRITE-position
+// root/internal and root/cmd and returns the deduplicated set of
+// "relative/path.go:site" strings naming every WRITE-position
 // occurrence of DelegationVerdictAborted, where site is the enclosing
 // function name, or "var <name>" for a package-level var/const
-// initializer outside any function.
+// initializer outside any function. The result is in filepath.WalkDir
+// order (all of internal/ before all of cmd/, lexical within each) —
+// NOT sorted; TestAbortedVerdictWriteSites_MatchKnownThree, this
+// function's only caller, sorts before comparing against wantSites.
 func scanTreeForAbortedWriteSites(t *testing.T, root string) ([]string, error) {
 	t.Helper()
 	var sites []string
