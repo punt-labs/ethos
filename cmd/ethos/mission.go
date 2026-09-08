@@ -984,7 +984,15 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 	if !missionMigrateVerbose {
 		sink = io.Discard
 	}
-	if err := mission.MigrateMission(globalRoot, repoRoot, missionID, missionMigrateDryRun, sink); err != nil {
+	// checkoutRoot: the same repoRoot-vs-checkout distinction
+	// missionStore() already threads via WithCheckoutRoot, so the
+	// migrate command's ownership scan also sees a linked worktree's
+	// own live (not-yet-sealed) session audit files (PR #508 round 4,
+	// finding H1) — sealed chunks are git-tracked and reach repoRoot
+	// (the main tree) regardless of which checkout committed them, but
+	// the live tail is per-checkout and repoRoot alone cannot see it.
+	checkoutRoot := missionCheckoutRoot(repoRoot)
+	if err := mission.MigrateMission(globalRoot, repoRoot, checkoutRoot, missionID, missionMigrateDryRun, sink); err != nil {
 		return fmt.Errorf("mission migrate: %w", err)
 	}
 	if !missionMigrateVerbose {

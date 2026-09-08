@@ -9273,3 +9273,64 @@ round 2's `..._SyncDirFailurePropagates`, which asserted the now-rejected
 contract) covers this: confirmed failing against the round-2 code (an
 error was returned) before this fix, passing after (a warning on stderr,
 `nil` returned, contract intact and readable).
+
+### Amendment 2026-09-08: PR #508 review round 4 — H1 is the third instance of the same worktree question, H2 is a misleading warning prefix
+
+**H1 (Medium) — `repoMissionIDs`'s live-tail scan resolved live audit
+files against `repoRoot` (the store root — the main work tree), but a
+session running inside a LINKED WORKTREE writes its live, not-yet-sealed
+audit file under that worktree's own gitignored local zone
+(`<worktree>/.punt-labs/local/ethos/sessions/`), never under the main
+tree.** Sealed chunks are unaffected — they are git-tracked and land in
+the main tree's `.punt-labs/ethos/sessions/` regardless of which checkout
+committed them — so G1's fix is correct for the sealed half. It is only
+the live tail that is per-checkout, and the round-3 fix resolved it
+against `repoRoot` alone. The leader's own report made the practical
+weight of this concrete: every mission that produced this PR ran from a
+linked worktree, so the round-3 fix was blind to precisely the most
+recent, most likely-to-be-open sessions — not a hypothetical edge case.
+
+This is the THIRD distinct bug this repo has had on the exact question of
+where live, per-checkout state lives relative to the shared store root:
+ethos-yofr/ethos-5yej for identity/team/role resolution (Decision 5,
+above); PR #370's Bugbot finding for the DES-058 audit-zone split
+(`Store.checkoutRoot`/`auditRoot()` in `store.go` exist because of it);
+and now this. The pattern recurring a third time is itself the finding —
+every new piece of per-repo state this codebase adds needs to ask "does
+this live in the checkout or the shared store" as a first-class design
+question, not something a reviewer catches after the fact per feature.
+
+Fixed by threading a second root through the live-tail half of the scan:
+`repoMissionIDs(repoRoot, checkoutRoot string)` now scans the live zone
+under BOTH roots (skipping the second when empty or equal to the first,
+so nothing changes for a caller with no separate checkout). `Store`
+already carries exactly this distinction — `s.auditRoot()` returns
+`checkoutRoot` when set, else `repoRoot` — so `conflictScanIDs` passes
+`s.repoRoot, s.auditRoot()`. `MigrateMission`'s exported signature gained
+the same second parameter (`globalRoot, repoRoot, checkoutRoot,
+missionID, dryRun, out`), and `runMissionMigrate` (`cmd/ethos/mission.go`)
+now resolves it via the same `missionCheckoutRoot` helper
+`missionStore()`/`missionStoreForCreate()` already use — one helper, three
+call sites, instead of a fourth place inventing its own answer to "which
+root."
+
+`TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit` covers this
+directly: a mission referenced only from a live audit file under a
+SEPARATE directory standing in for a linked worktree (via
+`Store.WithCheckoutRoot`, the same mechanism the DES-058 audit path
+already uses — no real `git worktree` needed to exercise the code path).
+Confirmed failing against the round-3 code before this fix.
+
+**H2 (cosmetic) — `repoMissionIDs`/`collectContractIDs`'s stderr warnings
+were prefixed `"ethos: mission migrate:"`, but both functions are now
+called from `Store.conflictScanIDs` during ordinary `mission
+create`/`dispatch` admission control, not only from `mission migrate`.**
+An operator running `create` who sees a "mission migrate" warning could
+reasonably conclude a migration is running when none is. Same class of
+defect as `ethos-lldo` (the first bug in this whole cluster's original
+triage): a message describing something other than what is actually
+happening steers a reader away from the real cause. Fixed by neutralizing
+the prefix to `"ethos: mission:"` in the two functions genuinely shared
+between callers; `MigrateMission`'s own per-mission failure messages
+(which really are migrate-specific) keep their `"ethos: mission migrate:"`
+prefix unchanged.

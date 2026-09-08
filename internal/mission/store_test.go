@@ -1803,6 +1803,59 @@ func TestStore_CreateDetectsSameRepoConflictViaSealedAuditChunk(t *testing.T) {
 	assert.Contains(t, err.Error(), mine.MissionID)
 }
 
+// writeLiveAuditContractIDLine writes a LIVE (not-yet-sealed) session
+// audit file referencing contractID under root's gitignored local
+// zone (audit.LiveAuditPath) — the shape a running session's own
+// audit writer produces before its next pre-commit seal. Test helper
+// for the H1 regression (PR #508 round 4): a linked worktree's live
+// audit lives under the WORKTREE's own local zone, not the main
+// tree's, even though sealed chunks (git-tracked) always land in the
+// main tree regardless of which checkout committed them.
+func writeLiveAuditContractIDLine(t *testing.T, root, sessionID, contractID string) {
+	t.Helper()
+	path := audit.LiveAuditPath(root, sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	line := fmt.Sprintf(`{"ts":"2026-04-08T00:00:00Z","contract_id":%q}`+"\n", contractID)
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
+}
+
+// TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit is the
+// regression gate for PR #508 round 4 finding H1: a session running
+// inside a LINKED WORKTREE writes its live (not-yet-sealed) audit
+// file under that worktree's own gitignored local zone, never under
+// the main tree conflictScanIDs' repoRoot points at (StoreRepoRoot
+// always resolves to the main tree — DES-075 Decision 5). A
+// repoRoot-only live scan is therefore blind to exactly the most
+// recent sessions when the caller itself is running from a worktree —
+// which, per measured operator usage, is the common case, not an
+// edge one.
+//
+// Modeled with two separate temp dirs standing in for the main tree
+// (repoRoot) and a linked worktree (checkoutRoot) — this test does not
+// need a real git worktree, only the same directory split
+// Store.WithCheckoutRoot already threads through the DES-058 audit
+// path for exactly this reason.
+func TestStore_CreateDetectsSameRepoConflictViaWorktreeLiveAudit(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()     // stands in for the main work tree
+	worktreeRoot := t.TempDir() // stands in for a linked worktree
+
+	legacy := NewStore(globalRoot)
+	mine := withWriteSet("m-2026-04-08-930", "internal/worktree/")
+	require.NoError(t, legacy.Create(mine))
+	// The referencing session's live audit lives under the WORKTREE's
+	// own local zone, not the main tree's.
+	writeLiveAuditContractIDLine(t, worktreeRoot, "sess-in-worktree", mine.MissionID)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot).WithCheckoutRoot(worktreeRoot)
+	overlap := withWriteSet("m-2026-04-08-931", "internal/worktree/thing.go")
+	err := s.Create(overlap)
+	require.Error(t, err, "an un-migrated same-repo global mission referenced only from a "+
+		"WORKTREE's live audit file must still block an overlapping create")
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), mine.MissionID)
+}
+
 // TestStore_CreateMultiConflictReportsAllBlockers asserts that a new
 // mission overlapping two existing open missions surfaces both
 // blockers in the error message — one line per blocker.

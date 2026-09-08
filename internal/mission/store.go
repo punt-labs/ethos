@@ -1891,7 +1891,10 @@ func (s *Store) conflictScanIDs() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	owned, err := repoMissionIDs(s.repoRoot)
+	// auditRoot() (checkoutRoot when set, else repoRoot) covers the
+	// live-tail half of the ownership scan for a linked worktree (PR
+	// #508 round 4, finding H1) — see repoMissionIDs' doc comment.
+	owned, err := repoMissionIDs(s.repoRoot, s.auditRoot())
 	if err != nil {
 		return nil, fmt.Errorf("scanning repo sessions for mission ownership: %w", err)
 	}

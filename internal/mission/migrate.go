@@ -29,9 +29,19 @@ const maxAuditLineBytes = 16 * 1024 * 1024
 // results.yaml / reflections.yaml).
 //
 // When missionID is empty, every legacy mission whose contract_id is
-// referenced by an audit entry in this repo's
-// <repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl is migrated; missions with
-// no matching session are left alone (cross-repo policy).
+// referenced anywhere in this repo's session audit trail (sealed
+// chunks, the frozen legacy file, or a not-yet-sealed live tail — see
+// repoMissionIDs) is migrated; missions with no matching session are
+// left alone (cross-repo policy).
+//
+// checkoutRoot names the current work tree, distinct from repoRoot (the
+// store root — the main work tree) when the caller is running from a
+// linked worktree. It exists so the live-tail half of the ownership
+// scan also covers the worktree's own gitignored live zone, which
+// repoRoot alone cannot see (PR #508 round 4, finding H1). Pass "" (or
+// equal to repoRoot) when there is no separate checkout to offer, or
+// when the caller does not track one — the scan then covers repoRoot
+// only, unchanged from before this parameter existed.
 //
 // When missionID is non-empty, only that one mission is considered.
 // The cross-repo policy still applies — an explicit mission-id with
@@ -57,7 +67,7 @@ const maxAuditLineBytes = 16 * 1024 * 1024
 //	noop <mission-id>: already migrated
 //
 // A successful run with no candidates prints "nothing to migrate".
-func MigrateMission(globalRoot, repoRoot, missionID string, dryRun bool, out io.Writer) error {
+func MigrateMission(globalRoot, repoRoot, checkoutRoot, missionID string, dryRun bool, out io.Writer) error {
 	if repoRoot == "" {
 		return fmt.Errorf("migrate mission: repoRoot is empty")
 	}
@@ -77,7 +87,7 @@ func MigrateMission(globalRoot, repoRoot, missionID string, dryRun bool, out io.
 		return nil
 	}
 
-	repoMissions, repoErr := repoMissionIDs(repoRoot)
+	repoMissions, repoErr := repoMissionIDs(repoRoot, checkoutRoot)
 	if repoErr != nil {
 		return fmt.Errorf("scanning repo sessions for mission references: %w", repoErr)
 	}
@@ -172,7 +182,30 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // genuine read error there still propagates, since each is a single,
 // currently-relevant file rather than an unbounded pool of historical
 // chunks.
-func repoMissionIDs(repoRoot string) (map[string]struct{}, error) {
+// checkoutRoot names the current work tree (resolve.EnvRepoRoot /
+// FindRepoRoot) so the live-tail scan below also covers a linked
+// worktree's own gitignored live zone, distinct from repoRoot (the
+// store root — the main work tree — where sealed chunks and the
+// frozen legacy file live, since those are git-tracked and travel to
+// every checkout regardless of which one committed them). Pass ""
+// when the caller has no separate checkout root to offer (legacy
+// single-tree callers, or a caller already running from the main
+// tree) — the live scan then covers repoRoot only.
+//
+// PR #508 round 4, finding H1: a session running inside a linked
+// worktree writes its live (not-yet-sealed) audit file under THAT
+// worktree's own .punt-labs/local/ethos/sessions/, never under the
+// main tree StoreRepoRoot points at — so a repoRoot-only live scan
+// is blind to exactly the most recent, most likely-to-be-open
+// sessions when the caller (or `mission create`/`dispatch`) is
+// itself running from a worktree, which per the leader's own report
+// is the common case, not an edge one. This is the third bug this
+// repo has had on "where does live state live relative to the store
+// root" (ethos-yofr/ethos-5yej for identity/team/role resolution; PR
+// #370's Bugbot finding — store.go's checkoutRoot/auditRoot fields
+// exist to fix it — for the DES-058 live-audit-zone split; and now
+// this).
+func repoMissionIDs(repoRoot, checkoutRoot string) (map[string]struct{}, error) {
 	out := make(map[string]struct{})
 
 	sessionsBase := RepoStatePath(repoRoot, "sessions")
@@ -188,12 +221,12 @@ func repoMissionIDs(repoRoot string) (map[string]struct{}, error) {
 			sc, scErr := audit.ScanSealedDir(sealedDir, audit.SessionNS, "")
 			if scErr != nil {
 				fmt.Fprintf(os.Stderr,
-					"ethos: mission migrate: scanning sealed chunks in %s: %v\n", sealedDir, scErr)
+					"ethos: mission: scanning sealed audit chunks in %s: %v\n", sealedDir, scErr)
 			} else {
 				for _, c := range sc.Chunks {
 					chunkPath := filepath.Join(sealedDir, c.ChunkFile())
 					if cErr := collectContractIDs(chunkPath, out); cErr != nil {
-						fmt.Fprintf(os.Stderr, "ethos: mission migrate: %s: %v\n", chunkPath, cErr)
+						fmt.Fprintf(os.Stderr, "ethos: mission: %s: %v\n", chunkPath, cErr)
 					}
 				}
 			}
@@ -209,30 +242,45 @@ func repoMissionIDs(repoRoot string) (map[string]struct{}, error) {
 		return nil, fmt.Errorf("reading %s: %w", sessionsBase, err)
 	}
 
-	liveDirs, err := os.ReadDir(audit.LiveSessionsDir(repoRoot))
-	switch {
-	case err == nil:
-		for _, f := range liveDirs {
-			if f.IsDir() {
-				continue
-			}
-			id, ok := strings.CutSuffix(f.Name(), ".audit.jsonl")
-			if !ok {
-				continue
-			}
-			livePath := audit.LiveAuditPath(repoRoot, id)
-			if err := collectContractIDs(livePath, out); err != nil {
-				return nil, fmt.Errorf("scanning %s: %w", livePath, err)
-			}
+	if err := collectLiveContractIDs(repoRoot, out); err != nil {
+		return nil, err
+	}
+	if checkoutRoot != "" && checkoutRoot != repoRoot {
+		if err := collectLiveContractIDs(checkoutRoot, out); err != nil {
+			return nil, err
 		}
-	case errors.Is(err, fs.ErrNotExist):
-		// No live sessions yet — every session in scope has either
-		// sealed or never started.
-	default:
-		return nil, fmt.Errorf("reading %s: %w", audit.LiveSessionsDir(repoRoot), err)
 	}
 
 	return out, nil
+}
+
+// collectLiveContractIDs scans root's live (not-yet-sealed) session
+// audit files for contract_id references, adding them to dst. A
+// missing live-sessions directory is not an error — every session in
+// scope has either sealed or never started.
+func collectLiveContractIDs(root string, dst map[string]struct{}) error {
+	liveDirs, err := os.ReadDir(audit.LiveSessionsDir(root))
+	switch {
+	case err == nil:
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	default:
+		return fmt.Errorf("reading %s: %w", audit.LiveSessionsDir(root), err)
+	}
+	for _, f := range liveDirs {
+		if f.IsDir() {
+			continue
+		}
+		id, ok := strings.CutSuffix(f.Name(), ".audit.jsonl")
+		if !ok {
+			continue
+		}
+		livePath := audit.LiveAuditPath(root, id)
+		if err := collectContractIDs(livePath, dst); err != nil {
+			return fmt.Errorf("scanning %s: %w", livePath, err)
+		}
+	}
+	return nil
 }
 
 // collectContractIDs adds every distinct contract_id from a JSONL
@@ -244,6 +292,16 @@ func repoMissionIDs(repoRoot string) (map[string]struct{}, error) {
 // advance the underlying reader past a SyntaxError: a single bad
 // token would make the loop spin forever. The pattern mirrors
 // decodeAuditEntries in audit_reader.go.
+//
+// The warning is prefixed "ethos: mission:", not "ethos: mission
+// migrate:" (PR #508 round 4, finding H2): this function is shared by
+// repoMissionIDs, which now runs from Store.conflictScanIDs during
+// `mission create`/`dispatch` admission control, not only from
+// `mission migrate`. An operator running `create` who sees a "mission
+// migrate" warning would reasonably conclude a migration is running —
+// the same class of misdirection as a stale comment describing a code
+// path the function no longer takes, just aimed at an operator instead
+// of a reader.
 func collectContractIDs(path string, dst map[string]struct{}) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -268,7 +326,7 @@ func collectContractIDs(path string, dst map[string]struct{}) error {
 		}
 		if err := json.Unmarshal(line, &rec); err != nil {
 			fmt.Fprintf(os.Stderr,
-				"ethos: mission migrate: %s: line %d: skipping malformed line: %v\n",
+				"ethos: mission: %s: line %d: skipping malformed line: %v\n",
 				path, lineNo, err)
 			continue
 		}

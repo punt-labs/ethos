@@ -26,8 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file, missing every session whose trail had been sealed by `ethos
   audit seal` — the normal state for an actively-committed repo, not an
   edge case — so it now also reads sealed chunks and the live (not yet
-  sealed) tail. See DES-075 in DESIGN.md for the full storage-layer
-  decision.
+  sealed) tail. The live-tail read also now covers a linked worktree's
+  own gitignored local zone, not only the main work tree — a session
+  running in a worktree (the common case, not an edge one) previously
+  had its own not-yet-sealed audit content invisible to this scan. `ethos
+  mission migrate` shares this exact ownership-scan mechanism and gained
+  the same fixes, plus a `checkoutRoot` parameter mirroring the CLI's
+  existing worktree-aware store construction. See DES-075 in DESIGN.md
+  for the full storage-layer decision.
 - **`ethos mission create`/`dispatch` no longer reports success for a
   contract that was not durably persisted, and no longer reports FAILURE
   for one that durably was.** The contract writer syncs the file before
@@ -54,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lock when the repo-tree directory did not yet exist, or fell back to an
   unlocked check on a lock-acquisition failure, both of which reopened
   the race (ethos-lj4k).
+- **Stderr warnings from the mission-ownership audit scan no longer say
+  `mission migrate` when they can also fire during `mission
+  create`/`dispatch`.** That scan is now shared by both, and a
+  `mission migrate`-prefixed warning during an ordinary create could
+  read as a migration silently running.
 - **`ethos mission create`/`dispatch` now print the session binding
   they take, on every bind — not only when it overwrites a different
   mission's binding.** The binding stays in effect until an explicit
