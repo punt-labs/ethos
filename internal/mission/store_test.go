@@ -1760,6 +1760,51 @@ func TestStore_CreateDetectsSameRepoUnmigratedGlobalConflict(t *testing.T) {
 		"a global mission absent from THIS repo's audit trail must not block its create")
 }
 
+// TestStore_ConflictScanIDsAuditOwnedTailIsSorted is the regression
+// gate for the PR #508 round 5 Copilot finding: conflictScanIDs
+// appended the audit-owned tail (repoMissionIDs' map[string]struct{}
+// result) by ranging over it directly, and Go randomizes map
+// iteration order on every range. checkWriteSetConflicts feeds this
+// slice's order straight into formatConflictError, which joins one
+// line per conflict in slice order — so an operator hitting two or
+// more audit-owned conflicts saw the SAME conflicts reported in a
+// DIFFERENT order run to run, purely from map randomization, with no
+// underlying change to the conflict set.
+//
+// Five audit-owned IDs (not the theoretical minimum of two) gives
+// 5! = 120 possible orderings, making a false-pass from randomization
+// happening to pick the same order 50 times running vanishingly
+// unlikely — this is what makes the test reliably red pre-fix rather
+// than flaky-red.
+func TestStore_ConflictScanIDsAuditOwnedTailIsSorted(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	var owned []string
+	for i := 0; i < 5; i++ {
+		m := withWriteSet(fmt.Sprintf("m-2026-04-08-%03d", 940+i), fmt.Sprintf("internal/tail%d/", i))
+		require.NoError(t, legacy.Create(m))
+		writeAuditContractIDLine(t, repoRoot, fmt.Sprintf("sess-tail-%d", i), m.MissionID)
+		owned = append(owned, m.MissionID)
+	}
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	first, err := s.conflictScanIDs()
+	require.NoError(t, err)
+	for _, id := range owned {
+		assert.Contains(t, first, id)
+	}
+
+	for i := 0; i < 50; i++ {
+		got, err := s.conflictScanIDs()
+		require.NoError(t, err)
+		assert.Equal(t, first, got,
+			"conflictScanIDs must return the audit-owned tail in the same order every call")
+	}
+}
+
 // writeSealedAuditContractIDLine writes a SEALED session audit chunk
 // (audit-<first>-<last>.jsonl, the real on-disk shape `ethos audit
 // seal` produces — see internal/audit/names.go) referencing

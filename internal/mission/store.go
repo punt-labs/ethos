@@ -1898,6 +1898,13 @@ func (s *Store) conflictScanIDs() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scanning repo sessions for mission ownership: %w", err)
 	}
+	// owned is a map, so Go randomizes its iteration order. Collect the
+	// unseen IDs first and sort that tail before appending — the
+	// conflict list this feeds (checkWriteSetConflicts ->
+	// formatConflictError) reports conflicts in slice order, and an
+	// operator seeing the same conflicts reordered run to run reads as
+	// a bug even though the conflict set itself hasn't changed.
+	var tail []string
 	for id := range owned {
 		if _, dup := seen[id]; dup {
 			// Already migrated into the repo tree (or, defensively, a
@@ -1910,8 +1917,10 @@ func (s *Store) conflictScanIDs() ([]string, error) {
 		// already tolerates and skips an unloadable ID (stderr warning)
 		// and filters to Status == StatusOpen before comparing.
 		seen[id] = struct{}{}
-		ids = append(ids, id)
+		tail = append(tail, id)
 	}
+	sort.Strings(tail)
+	ids = append(ids, tail...)
 	return ids, nil
 }
 
