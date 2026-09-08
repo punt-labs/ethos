@@ -363,6 +363,53 @@ func TestHandleMission_CreateNoSessionInContextWarns(t *testing.T) {
 	assert.Contains(t, warnings[0], "not written")
 }
 
+// TestHandleMission_SecondCreateToSameWorkerNamesQueuePosition pins
+// review finding K8 (full-branch review, m-2026-09-08-004 round 3) on
+// the MCP surface: bindDispatchedMission's advisory line claimed
+// unconditionally that worker's NEXT matching Agent() spawn goes to the
+// mission just created — false the moment an OLDER pending dispatch for
+// the same worker is already queued. Two back-to-back mission creates
+// (both worker "bwk", disjoint write_sets) must have the SECOND
+// message name the first mission as ahead of it in queue.
+func TestHandleMission_SecondCreateToSameWorkerNamesQueuePosition(t *testing.T) {
+	const sess = "sess-mcp-queue-position"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+	h := testHandlerWithSessions(t)
+
+	first, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contractYAMLWithWriteSet("internal/alpha/store.go"),
+	}))
+	require.NoError(t, err)
+	require.False(t, first.IsError, "first create must succeed: %s", resultText(t, first))
+	var firstContract mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, first)), &firstContract))
+
+	second, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contractYAMLWithWriteSet("internal/beta/store.go"),
+	}))
+	require.NoError(t, err)
+	require.False(t, second.IsError, "second create must succeed: %s", resultText(t, second))
+	var secondContract mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, second)), &secondContract))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, second)), &payload))
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "the second create must carry a binding warning; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	warning, _ := warnings[0].(string)
+
+	assert.Contains(t, warning, firstContract.MissionID,
+		"the second create's message must name the OLDER pending dispatch ahead of it")
+	assert.Contains(t, warning, secondContract.MissionID)
+	assert.NotContains(t, warning, "will attribute worker",
+		"the second create is not first in queue, so it must not claim the next matching spawn for itself")
+}
+
 // TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode pins mission
 // 005 finding A at this site: a session that WAS expected (running under
 // Claude Code) but could not be resolved — e.g. a corrupt pointer file —

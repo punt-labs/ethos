@@ -4802,6 +4802,68 @@ func TestMissionDispatch_PrintsBindingOnFreshBind(t *testing.T) {
 		"the message must name the escape hatch for a leader who does not want the capture")
 }
 
+// TestMissionDispatch_SecondDispatchToSameWorkerNamesQueuePosition pins
+// review finding K8 (full-branch review, m-2026-09-08-004 round 3):
+// bindDispatchedMission's advisory line claimed unconditionally that
+// worker's NEXT matching Agent() spawn goes to the mission just
+// dispatched — false the moment an OLDER pending dispatch for the same
+// worker is already queued, since FIFO matches the older one first.
+// Two back-to-back `mission dispatch --worker bwk` calls to different
+// missions (this repo's own normal workflow) must have the SECOND
+// dispatch's message name the first mission as ahead of it in queue,
+// not claim the spawn for itself.
+func TestMissionDispatch_SecondDispatchToSameWorkerNamesQueuePosition(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-queue-position")
+	seedRosterForSession(t, "sess-queue-position")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	dispatchWriteSet = "internal/alpha/store.go"
+	captureStdoutE(t, func() error {
+		captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	ms := missionStore()
+	idsAfterFirst, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, idsAfterFirst, 1)
+	firstMission := idsAfterFirst[0]
+
+	dispatchWriteSet = "internal/beta/store.go"
+	var secondWarning string
+	captureStdoutE(t, func() error {
+		secondWarning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	idsAfterSecond, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, idsAfterSecond, 2)
+	var secondMission string
+	for _, id := range idsAfterSecond {
+		if id != firstMission {
+			secondMission = id
+		}
+	}
+	require.NotEmpty(t, secondMission)
+
+	assert.Contains(t, secondWarning, firstMission,
+		"the second dispatch's message must name the OLDER pending dispatch ahead of it")
+	assert.Contains(t, secondWarning, secondMission)
+	assert.NotContains(t, secondWarning, "will attribute worker",
+		"the second dispatch is not first in queue, so it must not claim the next matching spawn for itself")
+}
+
 // TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode pins
 // round 2, R5: a session that was expected (running under Claude Code)
 // but could not be identified is a REAL resolution failure, not the
