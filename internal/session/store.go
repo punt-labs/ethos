@@ -218,15 +218,14 @@ func (s *Store) Delete(sessionID string) error {
 // closes it for every deletion path at once, not just the clean
 // HandleSessionEnd one. Review finding K3 (full-branch review,
 // m-2026-09-08-004 round 3): before this, only the clean SessionEnd
-// path (internal/hook's clearSessionMissionBindings, which still runs
-// FIRST and is now a harmless no-op double-clear on the happy path)
-// cleared these sidecars — abnormal session death (SIGKILL, a closed
-// terminal, a crash) left them in place indefinitely, with no GC, no
-// purge, no tombstone path. `claude --resume` reusing the same session
-// ID then had the first matching spawn silently captured by a claim or
-// pending dispatch from before the death. Purge and PurgeTombstoned are
-// exactly the crash-recovery paths that needed this and did not have
-// it.
+// path cleared these sidecars, via a hook-local duplicate of this same
+// three-call list (since deleted — review finding J5, below) — abnormal
+// session death (SIGKILL, a closed terminal, a crash) left them in
+// place indefinitely, with no GC, no purge, no tombstone path. `claude
+// --resume` reusing the same session ID then had the first matching
+// spawn silently captured by a claim or pending dispatch from before
+// the death. Purge and PurgeTombstoned are exactly the crash-recovery
+// paths that needed this and did not have it.
 //
 // Review finding J3 (full-branch review, m-2026-09-08-004 round 3),
 // correcting K3: a sidecar-clear failure used to be advisory —
@@ -236,15 +235,21 @@ func (s *Store) Delete(sessionID string) error {
 // SINGLE sidecar-clear failure orphaned those files permanently, with
 // no GC path at all. Advisory-and-continue is the right discipline when
 // something else will eventually retry (every other Clear* call site in
-// this codebase — internal/hook/session_end.go,
-// cmd/ethos/mission.go's runMissionRelease — is a leaf action nothing
-// depends on afterward); here, nothing retries an orphaned sidecar once
-// its roster is gone, so the ONE thing that WOULD retry (a later
-// Purge/PurgeTombstoned pass) must not be denied its own retry token.
-// Sidecars are now cleared BEFORE the roster is removed, and a clear
-// failure returns an error without removing the roster — the roster's
-// continued presence in List() is exactly the retry token a later purge
-// needs.
+// this codebase — cmd/ethos/mission.go's runMissionRelease — is a leaf
+// action nothing depends on afterward); here, nothing retries an
+// orphaned sidecar once its roster is gone, so the ONE thing that WOULD
+// retry (a later Purge/PurgeTombstoned pass) must not be denied its own
+// retry token. Sidecars are now cleared BEFORE the roster is removed,
+// and a clear failure returns an error without removing the roster —
+// the roster's continued presence in List() is exactly the retry token
+// a later purge needs.
+//
+// Review finding J5 (full-branch review, m-2026-09-08-004 round 3):
+// internal/hook/session_end.go used to hand-maintain its own copy of
+// this same three-call list (clearSessionMissionBindings) — deleted
+// entirely once HandleSessionEnd could rely solely on Store.Delete for
+// the same effect, so a fourth sidecar type added here can no longer
+// drift silently out of sync with a second copy elsewhere.
 func (s *Store) deleteFiles(sessionID string) error {
 	if err := s.clearMissionSidecars(sessionID); err != nil {
 		return fmt.Errorf("clearing mission sidecars for %q: %w", sessionID, err)
@@ -296,27 +301,44 @@ func (s *Store) List() ([]string, error) {
 // agent's PID is still alive. The primary agent is the second participant
 // (index 1) — the first participant with a numeric agent_id whose
 // process is no longer running.
-func (s *Store) Purge() ([]string, error) {
+//
+// Review finding B (full-branch review, m-2026-09-08-004 round 3,
+// reviewing J3): deleteFiles now propagates a mission-sidecar-clear
+// failure as an error (J3), which this function used to silently
+// discard — `if s.deleteFiles(id) == nil { didPurge = true }` treated
+// any error identically to "not stale," so a sidecar-clear failure
+// left the session neither purged nor reported anywhere, with nothing
+// reaching stderr. That is strictly worse than pre-J3, which at least
+// logged a line per failed sidecar clear. Both sibling callers
+// (purgeOneTombstoned, the unreadable-roster branch below) already log
+// and report; Purge now does too, and returns a refused slice
+// mirroring PurgeTombstoned's own signature.
+func (s *Store) Purge() (purged, refused []string, err error) {
 	ids, err := s.List()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var purged []string
 	for _, id := range ids {
-		didPurge := false
+		didPurge, didRefuse := false, false
 		if lockErr := s.withLock(id, func() error {
 			roster, err := s.Load(id)
 			if err != nil {
 				// Corrupt roster — delete under lock.
-				if s.deleteFiles(id) == nil {
-					didPurge = true
+				if dErr := s.deleteFiles(id); dErr != nil {
+					fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", id, dErr)
+					didRefuse = true
+					return nil
 				}
+				didPurge = true
 				return nil
 			}
 			if isStale(roster) {
-				if s.deleteFiles(id) == nil {
-					didPurge = true
+				if dErr := s.deleteFiles(id); dErr != nil {
+					fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", id, dErr)
+					didRefuse = true
+					return nil
 				}
+				didPurge = true
 			}
 			return nil
 		}); lockErr != nil {
@@ -326,9 +348,12 @@ func (s *Store) Purge() ([]string, error) {
 			os.Remove(s.lockPath(id))
 			purged = append(purged, id)
 		}
+		if didRefuse {
+			refused = append(refused, id)
+		}
 	}
 
-	return purged, nil
+	return purged, refused, nil
 }
 
 // PurgeTombstoned is Purge with the DES-058 unsealed-lines guard. Before
@@ -373,6 +398,18 @@ func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, re
 				// refuse unless --force. Under --force delete it, but surface
 				// that no tombstone can be recorded (repo unknown).
 				if !force {
+					// Review finding E (full-branch review, m-2026-09-08-004
+					// round 3): the roster (and the unsealed audit lines it
+					// may be the only pointer to) is kept on refusal, but
+					// mission sidecars are NOT audit state — the tombstone
+					// guard protects unsealed lines specifically, and a
+					// SIGKILL'd session (this branch's canonical trigger) is
+					// exactly the shape most likely to leave a stale claim or
+					// pending dispatch behind too. Clearing them here does not
+					// touch what the guard exists to protect.
+					if cErr := s.clearMissionSidecars(id); cErr != nil {
+						fmt.Fprintf(os.Stderr, "ethos: purge: clearing mission sidecars for %s: %v\n", id, cErr)
+					}
 					fmt.Fprintf(os.Stderr,
 						"ethos: purge: refusing to purge %s: roster unreadable (%v); re-run with --force\n", id, lErr)
 					didRefuse = true
@@ -509,6 +546,18 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 				"run inside its checkout or re-run with --force\n", roster.Session)
 	}
 	if !force && (unsealed > 0 || probeFailed) {
+		// Review finding E (full-branch review, m-2026-09-08-004 round
+		// 3): the roster is kept on refusal so the tombstone guard's
+		// unsealed audit lines stay findable, but mission sidecars are
+		// NOT audit state -- clearing them here does not touch what the
+		// guard protects. A SIGKILL'd session (the canonical holder of
+		// unsealed lines) is exactly the CHANGELOG's headline scenario
+		// for a stale claim or pending dispatch surviving into a
+		// resumed session, so this refusal path is the one most likely
+		// to matter in practice, not an edge case.
+		if cErr := s.clearMissionSidecars(roster.Session); cErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: purge: clearing mission sidecars for %s: %v\n", roster.Session, cErr)
+		}
 		if probeFailed {
 			fmt.Fprintf(os.Stderr,
 				"ethos: purge: refusing to purge %s: could not verify unsealed state; re-run with --force to purge anyway\n",

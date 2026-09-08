@@ -104,9 +104,9 @@ func TestHandleSessionEnd_ClearsMissionBindings(t *testing.T) {
 	// (cmd/ethos/identity.go's sessionStore()), so the fixture must match
 	// that, not testStores(t)'s independently-rooted temp dir (which
 	// this test's mission.Write* calls below never wrote sidecars under,
-	// a mismatch invisible before this fix only because the pre-J5
-	// hook-local clearSessionMissionBindings resolved its own root via
-	// os.UserHomeDir() independently of ss).
+	// a mismatch invisible before J5 only because the sidecar-clearing
+	// code that ran before it resolved its own root via
+	// os.UserHomeDir() directly, independently of ss's own root).
 	ss := session.NewStore(globalRoot)
 
 	sessionID := "sess-end-clears"

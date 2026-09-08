@@ -4,6 +4,7 @@ package session
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -296,7 +297,7 @@ func TestStore_Purge(t *testing.T) {
 	primary := Participant{AgentID: "9999999", Persona: "agent", Parent: "user1"}
 	require.NoError(t, s.Create("sess-stale", root, primary, "", ""))
 
-	purged, err := s.Purge()
+	purged, _, err := s.Purge()
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-stale")
 
@@ -356,7 +357,7 @@ func TestStore_Purge_ClearsMissionSidecars(t *testing.T) {
 	require.NoError(t, mission.WriteActiveMission(s.root, "sess-stale-sidecars", "m-2026-09-08-722"))
 	require.NoError(t, mission.WriteDispatchPending(s.root, "sess-stale-sidecars", "m-2026-09-08-723", "bwk"))
 
-	purged, err := s.Purge()
+	purged, _, err := s.Purge()
 	require.NoError(t, err)
 	require.Contains(t, purged, "sess-stale-sidecars")
 
@@ -367,6 +368,53 @@ func TestStore_Purge_ClearsMissionSidecars(t *testing.T) {
 	pending, _, err := mission.ReadDispatchPending(s.root, "sess-stale-sidecars")
 	require.NoError(t, err)
 	assert.Empty(t, pending, "a dead session's pending dispatch must not survive to capture a resumed session's spawn")
+}
+
+// TestStore_Purge_SidecarClearFailureIsReportedAndRefused pins review
+// finding B (full-branch review, m-2026-09-08-004 round 3), a
+// regression J3 introduced: `if s.deleteFiles(id) == nil { didPurge =
+// true }` treated a sidecar-clear failure (now possible since J3 made
+// deleteFiles propagate one) identically to "not stale" -- the session
+// was neither purged nor reported anywhere, with nothing reaching
+// stderr. That is strictly worse than pre-J3, which at least logged a
+// line per failed sidecar clear. Purge must log the failure (matching
+// its sibling PurgeTombstoned) and report the session in a refused
+// slice, not silently do nothing.
+func TestStore_Purge_SidecarClearFailureIsReportedAndRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "9999999", Persona: "agent", Parent: "user1"}
+	sessionID := "sess-purge-sidecar-fails"
+	require.NoError(t, s.Create(sessionID, root, primary, "", ""))
+	require.NoError(t, mission.WriteActiveMission(s.root, sessionID, "m-2026-09-08-725"))
+
+	sidecarDir := filepath.Dir(mission.ActiveMissionPath(s.root, sessionID))
+	require.NoError(t, os.Chmod(sidecarDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(sidecarDir, 0o700) })
+
+	oldStderr := os.Stderr
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = pw
+
+	purged, refused, purgeErr := s.Purge()
+
+	require.NoError(t, pw.Close())
+	os.Stderr = oldStderr
+	stderrBytes, err := io.ReadAll(pr)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	require.NoError(t, purgeErr)
+	assert.NotContains(t, purged, sessionID, "a session whose sidecar clear failed must not be reported as purged")
+	assert.Contains(t, refused, sessionID, "a session whose sidecar clear failed must be reported as refused")
+	assert.Contains(t, stderrText, sessionID, "the failure must reach stderr, matching PurgeTombstoned's own discipline")
+
+	_, loadErr := s.Load(sessionID)
+	require.NoError(t, loadErr, "the roster must survive so a later purge can retry")
 }
 
 func TestStore_PurgeKeepsLive(t *testing.T) {
@@ -381,7 +429,7 @@ func TestStore_PurgeKeepsLive(t *testing.T) {
 	}
 	require.NoError(t, s.Create("sess-live", root, primary, "", ""))
 
-	purged, err := s.Purge()
+	purged, _, err := s.Purge()
 	require.NoError(t, err)
 	assert.Empty(t, purged)
 
@@ -523,7 +571,7 @@ func TestStore_PurgeCleansBothRostersAndPIDFiles(t *testing.T) {
 	// Write a PID file for the same dead PID.
 	require.NoError(t, s.WriteCurrentSession(deadPID, "sess-both"))
 
-	purged, err := s.Purge()
+	purged, _, err := s.Purge()
 	require.NoError(t, err)
 	assert.Contains(t, purged, "sess-both")
 

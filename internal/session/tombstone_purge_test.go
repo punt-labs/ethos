@@ -302,6 +302,11 @@ func TestPurgeTombstoned_CorruptRosterRefusesWithoutForce(t *testing.T) {
 	require.NoError(t, s.Create("sess-corrupt", root, primary, testRepoID, ""))
 	// Corrupt the roster so Load fails — a crash artifact.
 	require.NoError(t, os.WriteFile(s.rosterPath("sess-corrupt"), []byte("[unclosed"), 0o600))
+	// Review finding E (full-branch review, m-2026-09-08-004 round 3):
+	// mission sidecars are keyed on the session ID (the filename), not
+	// on the roster body being readable -- an unreadable roster must
+	// still have its sidecars cleared, since they are not audit state.
+	require.NoError(t, mission.WriteActiveMission(s.root, "sess-corrupt", "m-2026-09-08-728"))
 
 	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
 	require.NoError(t, err)
@@ -311,6 +316,10 @@ func TestPurgeTombstoned_CorruptRosterRefusesWithoutForce(t *testing.T) {
 	ids, err := s.List()
 	require.NoError(t, err)
 	assert.Contains(t, ids, "sess-corrupt")
+
+	claimed, err := mission.ReadActiveMission(s.root, "sess-corrupt")
+	require.NoError(t, err)
+	assert.Empty(t, claimed, "a claim must not survive a refused purge even when the roster is unreadable")
 }
 
 func TestPurgeTombstoned_CorruptRosterForcePurges(t *testing.T) {
@@ -344,6 +353,48 @@ func TestPurgeTombstoned_RefusesUnsealed(t *testing.T) {
 	ids, err := s.List()
 	require.NoError(t, err)
 	assert.Contains(t, ids, "sess-unsealed")
+}
+
+// TestPurgeTombstoned_ClearsSidecarsOnUnsealedRefusal pins review
+// finding E (full-branch review, m-2026-09-08-004 round 3): mission
+// sidecars are not audit state, so the tombstone guard's refusal
+// (unsealed audit lines, roster kept) must not also leave a stale claim
+// or pending dispatch behind. A SIGKILL'd session is the canonical
+// holder of unsealed lines AND the CHANGELOG's headline scenario for a
+// stale sidecar surviving into a resumed session — this is the CLI-
+// reachable path (`ethos session purge`), unlike the bare Purge()
+// TestStore_Purge_ClearsMissionSidecars already covers, which no CLI
+// command calls.
+func TestPurgeTombstoned_ClearsSidecarsOnUnsealedRefusal(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	sessionID := "sess-unsealed-sidecars"
+	require.NoError(t, s.Create(sessionID, root, primary, testRepoID, ""))
+	writeUnsealedLive(t, repoRoot, sessionID)
+	require.NoError(t, mission.WriteActiveMission(s.root, sessionID, "m-2026-09-08-726"))
+	require.NoError(t, mission.WriteDispatchPending(s.root, sessionID, "m-2026-09-08-727", "bwk"))
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, sessionID)
+
+	// The roster survives — refusal protects the unsealed audit lines,
+	// not the roster for its own sake.
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, sessionID)
+
+	// The mission sidecars do NOT survive — they are not audit state.
+	claimed, err := mission.ReadActiveMission(s.root, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, claimed, "a claim must not survive a refused purge -- it is not audit state")
+
+	pending, _, err := mission.ReadDispatchPending(s.root, sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a pending dispatch must not survive a refused purge -- it is not audit state")
 }
 
 func TestPurgeTombstoned_ForceLeavesTombstone(t *testing.T) {
