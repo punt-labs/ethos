@@ -244,6 +244,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ETHOS_SESSION` names a different, still-live session B must not tell
   the operator to clear B's only remaining discovery channel outside
   Claude Code.
+- **Writing or clearing a pending dispatch from `mission dispatch`/
+  `create`, `mission release`, a mission's own `close`/`abandon`, or
+  `ethos session purge` no longer races `dispatchAgent`'s own held
+  dispatch-pending lock.** `WriteDispatchPending` and
+  `ClearDispatchPending` are plain filesystem primitives with no
+  locking of their own — correct for the one caller that already holds
+  the per-session dispatch-pending lock across its whole match-through-
+  admit sequence (`internal/hook/pretooluse_dispatch.go`'s
+  `dispatchAgent`), but every OTHER caller ran as a separate process
+  with no such lock, so a `release`/`close`/`abandon`/purge clear could
+  remove a pending entry out from under an in-flight admission, or a
+  fresh `dispatch` write could land right after a concurrent cleanup
+  scan had already decided the session's pending-dispatch directory was
+  empty, leaving a released or purged session bound again. Every
+  external caller now runs its mutation through a new
+  `mission.WithDispatchPendingLock`, which acquires the same lock
+  `dispatchAgent` holds; the primitives themselves stay unlocked so
+  `dispatchAgent`'s own internal calls (already under its one
+  acquisition) do not self-deadlock against a real `flock`, which locks
+  an open file description, not a process, and has no re-entrant
+  exemption for a second acquisition from the same process.
 - **`GOOS=windows GOARCH=amd64 go build ./...` now succeeds.** Windows is
   still not a supported/shipped target (no release binary, no CI job), but
   the whole module now cross-compiles: `internal/process` gained a

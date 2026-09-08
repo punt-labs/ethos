@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -636,4 +638,107 @@ func TestReadDispatchPending_RefusesSymlink(t *testing.T) {
 	assert.Empty(t, entries, "a symlinked entry must not be returned as a live pending dispatch")
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "refusing to follow symlink")
+}
+
+// TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder
+// pins the DEFECT WithDispatchPendingLock exists to close: the raw,
+// unlocked WriteDispatchPending completes immediately even while a
+// separate goroutine holds AcquireDispatchPendingLock for the SAME
+// session -- exactly the shape internal/hook/pretooluse_dispatch.go's
+// dispatchAgent relies on being exclusive across its own
+// read-match-then-admit sequence. This is deliberately kept as a
+// pinned, permanent assertion of the primitive's OWN behavior (not a
+// call this codebase's production code paths make anymore -- see
+// WithDispatchPendingLock's doc comment for why every external caller
+// was moved off the raw primitive), so a future edit that makes
+// WriteDispatchPending self-locking (and silently reopens the
+// self-deadlock hazard WithDispatchPendingLock's own doc comment
+// warns about) is caught here rather than only in a slower, harder-to-
+// diagnose dispatchAgent hang.
+func TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-unlocked-write"
+
+	release, err := AcquireDispatchPendingLock(root, sess)
+	require.NoError(t, err)
+	defer release()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- WriteDispatchPending(root, sess, "m-2026-09-08-401", "bwk")
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "unlocked write must still succeed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("WriteDispatchPending unexpectedly blocked -- if this is intentional, " +
+			"WithDispatchPendingLock's callers must be re-audited for self-deadlock")
+	}
+}
+
+// TestWithDispatchPendingLock_BlocksUntilRelease is the fix this round
+// adds: a mutation run through WithDispatchPendingLock must block for
+// as long as another holder has the session's dispatch-pending lock
+// (the same lock internal/hook/pretooluse_dispatch.go's dispatchAgent
+// acquires and holds across its whole match-through-admit sequence),
+// and must observe the mutation's effect only after that holder
+// releases. Confirmed failing before WithDispatchPendingLock existed:
+// TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder
+// above reproduces the exact race this test would have hit had it
+// called the unlocked primitive directly -- the write completed
+// immediately instead of waiting, which is precisely the interleaving
+// hazard (a selected pending entry vanishing mid-admission, or a write
+// landing after a concurrent cleanup scan) the leader's review named.
+func TestWithDispatchPendingLock_BlocksUntilRelease(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-locked-write"
+
+	release, err := AcquireDispatchPendingLock(root, sess)
+	require.NoError(t, err)
+
+	var wroteWhileLockHeld atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		done <- WithDispatchPendingLock(root, sess, func() error {
+			wroteWhileLockHeld.Store(true)
+			return WriteDispatchPending(root, sess, "m-2026-09-08-402", "bwk")
+		})
+	}()
+
+	// Give the goroutine time to enter Flock and block -- mirrors
+	// TestAcquireDelegationLock_BlocksUntilRelease's own discipline: the
+	// assertion below is on observable order (nothing ran while the
+	// lock was held), not on the exact duration.
+	time.Sleep(150 * time.Millisecond)
+	assert.False(t, wroteWhileLockHeld.Load(),
+		"WithDispatchPendingLock's fn must not run while a sibling holds the lock")
+	entries, _, err := ReadDispatchPending(root, sess)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the write must not have landed while the lock was held elsewhere")
+
+	release()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		require.NoError(t, <-done)
+	}()
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WithDispatchPendingLock did not complete within 2s after the sibling released")
+	}
+
+	assert.True(t, wroteWhileLockHeld.Load(), "fn must have run after the lock became available")
+	entries, _, err = ReadDispatchPending(root, sess)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "m-2026-09-08-402", entries[0].MissionID)
 }

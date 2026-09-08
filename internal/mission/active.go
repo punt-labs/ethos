@@ -530,6 +530,67 @@ func AcquireDispatchPendingLock(globalRoot, sessionID string) (func(), error) {
 	return release, nil
 }
 
+// WithDispatchPendingLock acquires AcquireDispatchPendingLock for
+// sessionID, runs fn, and releases the lock before returning — the
+// locked-wrapper form of a single dispatch-pending mutation.
+//
+// WriteDispatchPending, ClearDispatchPending, and ConsumeDispatchPending
+// are themselves unlocked I/O primitives. That is deliberate, not an
+// oversight: internal/hook/pretooluse_dispatch.go's dispatchAgent
+// acquires AcquireDispatchPendingLock ONCE and holds it across its
+// entire read-match-then-admit-or-fall-back sequence, calling these
+// primitives directly several times within that single critical section
+// (matchDispatchPending's stale-entry clear, consumeDispatchBinding's
+// post-admission consume, the explicit-MISSION_ID branch's consume). A
+// self-locking primitive would make every one of those inner calls
+// re-acquire a lock the outer call already holds — and unlike a Go
+// mutex, this is a real flock: a second os.OpenFile+flock from the SAME
+// PROCESS on the SAME file blocks on itself, because flock locks an
+// open file description, not a process, so there is no re-entrant
+// exemption. Self-locking primitives would deadlock dispatchAgent on
+// its own first inner call.
+//
+// Every caller OUTSIDE that one critical section — `ethos mission
+// dispatch`/`create` staging a new pending entry (cmd/ethos/mission.go
+// and internal/mcp/mission_tools.go's bindDispatchedMission),
+// `ethos mission release` clearing every pending entry
+// (runMissionRelease), a mission's own close/abandon consuming its one
+// entry (ClearMissionBindings), and session cleanup clearing every
+// pending entry for a dying or purged session
+// (internal/session/store.go) — runs as a SEPARATE `ethos` process (or,
+// for the session-store case, a caller with no relationship to
+// dispatchAgent's in-process lock at all) with no way to already hold
+// dispatchAgent's lock, so it has nothing to deadlock against. Those
+// callers MUST go through this wrapper rather than calling the raw
+// primitives directly: without it, a `mission dispatch` write, a
+// `mission release`/`close`/`abandon` clear, or a session purge's clear
+// can interleave with dispatchAgent's own held-lock window — a selected
+// entry can vanish out from under an in-flight admission before the
+// delegation skeleton is written, or a write can land after a
+// concurrent cleanup scan has already decided the directory is empty,
+// leaving a released or purged session bound again.
+//
+// Lock-order note: this is the same lock AcquireDispatchPendingLock's
+// own doc comment requires to stay OUTERMOST relative to any mission or
+// delegation lock. fn here does a single, self-contained filesystem
+// mutation (write/consume/clear) with no nested mission or delegation
+// lock acquisition, so that invariant is trivially preserved by every
+// caller of this wrapper. internal/session/store.go's callers run this
+// wrapper from inside their OWN, unrelated roster flock
+// (Store.withLock) — a third lock class this function neither acquires
+// nor is acquired from within, so nesting it there introduces no
+// reversal of any existing pairing: no code path acquires the
+// dispatch-pending lock and then tries to acquire a session roster
+// lock, only the other direction, and only from that one caller.
+func WithDispatchPendingLock(globalRoot, sessionID string, fn func() error) error {
+	release, err := AcquireDispatchPendingLock(globalRoot, sessionID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn()
+}
+
 // DispatchPendingPath returns the path to the pending-dispatch file for
 // one mission. Returns "" when any argument is empty.
 func DispatchPendingPath(globalRoot, sessionID, missionID string) string {
@@ -840,7 +901,15 @@ func ClearMissionBindings(globalRoot, sessionID, missionID string) error {
 	// a stuck entry for a DIFFERENT mission is unaffected and still
 	// needs `ethos mission release` (review finding C9's follow-up,
 	// m-2026-09-08-004 round 2).
-	if err := ConsumeDispatchPending(globalRoot, sessionID, missionID); err != nil {
+	//
+	// ClearMissionBindings runs from `ethos mission close`/`abandon`, a
+	// separate process from dispatchAgent's own held dispatch-pending
+	// lock, so it must take that lock itself rather than call
+	// ConsumeDispatchPending unlocked (WithDispatchPendingLock's own doc
+	// comment).
+	if err := WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		return ConsumeDispatchPending(globalRoot, sessionID, missionID)
+	}); err != nil {
 		errs = append(errs, fmt.Errorf("clearing dispatch-pending: %w", err))
 	}
 	return errors.Join(errs...)

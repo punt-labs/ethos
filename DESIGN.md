@@ -10530,3 +10530,94 @@ answer "does this session still have mission-bound live logs to
 check." Reviewing a clearing decision by asking "is this state itself
 important" is necessary but not sufficient — the harder, necessary
 question is "what ELSE reads this to find something important."
+
+### Amendment 2026-09-08: `WriteDispatchPending`/`ClearDispatchPending` gained no lock of their own, and every external caller now takes one
+
+A leader review of the round-3 line of work on PR #509, after CI and the
+first bot round were already clean, named one HIGH-priority gap this
+document had not covered: `AcquireDispatchPendingLock` protects
+`dispatchAgent`'s OWN read-match-then-admit sequence
+(`internal/hook/pretooluse_dispatch.go`), but `WriteDispatchPending` and
+`ClearDispatchPending` (`internal/mission/active.go`) are plain
+filesystem primitives — nothing stopped a caller other than
+`dispatchAgent` from mutating the pending-dispatch store while
+`dispatchAgent` held its lock and was mid-decision.
+
+**The gap, concretely.** `ethos mission dispatch`/`create` staging a new
+pending entry (`cmd/ethos/mission.go` and
+`internal/mcp/mission_tools.go`'s `bindDispatchedMission`),
+`ethos mission release` clearing every entry (`runMissionRelease`), a
+mission's own `close`/`abandon` consuming its one entry
+(`ClearMissionBindings`), and `ethos session purge`/`PurgeTombstoned`
+clearing a dying or stale session's entries
+(`internal/session/store.go`) all called `WriteDispatchPending` or
+`ClearDispatchPending` directly, unlocked. Every one of those runs as
+its own OS process (a fresh `ethos` invocation, distinct from whichever
+process is running `dispatchAgent`'s PreToolUse hook), so nothing
+serialized it against `dispatchAgent`'s held lock. Two concrete
+failure shapes: a `release`/`close`/`abandon`/purge clear removing a
+pending entry `dispatchAgent` had already matched but not yet
+consumed — the delegation skeleton `dispatchTierB` is about to write
+loses its provenance, or the removal races the eventual consume and one
+of the two `os.Remove` calls silently no-ops on an already-gone file
+(harmless in isolation, but evidence the two operations were never
+actually mutually exclusive); or a fresh `dispatch` write landing right
+after a concurrent `release`/purge had already scanned the (at that
+instant, empty) directory, leaving a session the operator just
+"released" bound to a new entry again.
+
+**Decision — keep the primitives unlocked; move locking to the call
+sites that do not already hold the lock.** The tempting fix is to make
+`WriteDispatchPending`/`ClearDispatchPending` self-locking. Rejected: a
+real `flock` locks an open file description, not a process — a second
+`os.OpenFile`+`flock` from the SAME process blocks on itself, with no
+re-entrant exemption the way a `sync.Mutex` would need one. `matchDispatchPending`'s
+stale-entry clear, `consumeDispatchBinding`'s post-admission consume,
+and `dispatchAgent`'s own explicit-`MISSION_ID` branch all call
+`ConsumeDispatchPending`/`WriteDispatchPending` directly from INSIDE the
+one critical section `dispatchAgent` already holds the lock for; making
+those primitives self-locking would deadlock `dispatchAgent` on its own
+first inner call — a self-deadlock, not a fix.
+
+Instead, `internal/mission/active.go` gains `WithDispatchPendingLock(globalRoot,
+sessionID string, fn func() error) error`, a thin wrapper that acquires
+`AcquireDispatchPendingLock`, runs `fn`, and releases. Every external
+caller now runs its mutation through this wrapper: `bindDispatchedMission`
+(CLI and MCP), `runMissionRelease`, `ClearMissionBindings`'s
+dispatch-pending clear, and the three `session.Store` call sites
+(`clearMissionSidecars`, and `PurgeTombstoned`'s two refusal-path
+clears). `dispatchAgent`'s own internal calls are UNCHANGED — they
+continue to call the raw, unlocked primitives directly, because they
+are already running inside the one call that holds the lock.
+
+**Lock-order note.** `AcquireDispatchPendingLock`'s own doc comment
+requires this lock to stay OUTERMOST relative to any mission or
+delegation lock — `dispatchTierB` acquires both while the caller still
+holds this one. `WithDispatchPendingLock`'s `fn` argument is always a
+single, self-contained filesystem mutation with no nested mission or
+delegation lock acquisition, so every caller of the wrapper trivially
+preserves that invariant. `internal/session/store.go`'s three callers
+run the wrapper from inside `Store.withLock`'s own session roster
+flock — a THIRD lock class, distinct from both the dispatch-pending
+lock and the mission/delegation locks. This introduces a new pairing
+(roster lock outer, dispatch-pending lock inner) that did not exist
+before, but only in this one direction: `dispatchAgent`, the
+dispatch-pending lock's only other holder, never touches
+`session.Store` and never acquires a roster lock, so there is no code
+path that acquires the dispatch-pending lock and then tries to acquire
+a session's roster lock — the reversal that would actually risk
+deadlock. Named explicitly here, per this document's own standing rule,
+rather than left for a future reader to have to re-derive.
+
+**Tests.** `TestWriteDispatchPending_UnlockedDoesNotWaitForConcurrentLockHolder`
+pins the raw primitive's own behavior — it still completes immediately
+even while a sibling holds `AcquireDispatchPendingLock` for the same
+session, confirming the primitive itself was never made self-locking
+(which would silently reopen the deadlock hazard the decision above
+rejects) — and is the same scenario used to confirm this finding was
+real before the fix: run against the unlocked primitive directly, it
+demonstrated the write completing while the lock was held elsewhere,
+instead of waiting. `TestWithDispatchPendingLock_BlocksUntilRelease`
+pins the fix: a mutation run through the new wrapper blocks for as long
+as a sibling holds the lock, observes no effect until release, and
+completes with the mutation applied once the sibling releases.

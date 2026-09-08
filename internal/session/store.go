@@ -264,6 +264,18 @@ func (s *Store) deleteFiles(sessionID string) error {
 // (the same globalRoot mission.SessionBoundMissions already reads
 // above) — see deleteFiles's doc comment for why this lives here and
 // why its failure now propagates instead of only logging.
+//
+// The dispatch-pending clear runs under mission.WithDispatchPendingLock
+// rather than calling mission.ClearDispatchPending unlocked: this
+// function runs from inside Store.withLock's own session roster flock
+// (via Delete/Purge/PurgeTombstoned), a THIRD lock class distinct from
+// both the dispatch-pending lock and any mission/delegation lock. No
+// code path acquires the dispatch-pending lock and then tries to
+// acquire this session's roster lock — internal/hook/pretooluse_dispatch.go's
+// dispatchAgent, the dispatch-pending lock's only other holder, never
+// touches session.Store — so nesting the dispatch-pending lock inside
+// the roster lock here introduces no reversal of any existing pairing,
+// only a new one used in this single direction.
 func (s *Store) clearMissionSidecars(sessionID string) error {
 	var errs []error
 	if err := mission.ClearActiveMission(s.root, sessionID); err != nil {
@@ -272,7 +284,9 @@ func (s *Store) clearMissionSidecars(sessionID string) error {
 	if err := mission.ClearDelegationBinding(s.root, sessionID); err != nil {
 		errs = append(errs, fmt.Errorf("clearing delegation binding: %w", err))
 	}
-	if err := mission.ClearDispatchPending(s.root, sessionID); err != nil {
+	if err := mission.WithDispatchPendingLock(s.root, sessionID, func() error {
+		return mission.ClearDispatchPending(s.root, sessionID)
+	}); err != nil {
 		errs = append(errs, fmt.Errorf("clearing dispatch-pending: %w", err))
 	}
 	return errors.Join(errs...)
@@ -416,7 +430,15 @@ func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, re
 					// SessionBoundMissions) and the headline capture-on-
 					// resume hazard; the claim and the delegation-binding
 					// sidecar survive until a purge actually proceeds.
-					if cErr := mission.ClearDispatchPending(s.root, id); cErr != nil {
+					//
+					// Locked (mission.WithDispatchPendingLock) for the same
+					// reason clearMissionSidecars is, above: this runs inside
+					// Store.withLock's roster flock, a distinct lock class no
+					// other holder of the dispatch-pending lock ever nests
+					// the other way around.
+					if cErr := mission.WithDispatchPendingLock(s.root, id, func() error {
+						return mission.ClearDispatchPending(s.root, id)
+					}); cErr != nil {
 						fmt.Fprintf(os.Stderr, "ethos: purge: clearing dispatch-pending for %s: %v\n", id, cErr)
 					}
 					fmt.Fprintf(os.Stderr,
@@ -571,7 +593,13 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		// SessionBoundMissions) and the headline capture-on-resume
 		// hazard; the claim and the delegation-binding sidecar survive
 		// until a purge actually proceeds.
-		if cErr := mission.ClearDispatchPending(s.root, roster.Session); cErr != nil {
+		//
+		// Locked (mission.WithDispatchPendingLock), same reason as
+		// clearMissionSidecars above: purgeOneTombstoned runs inside
+		// Store.withLock's roster flock.
+		if cErr := mission.WithDispatchPendingLock(s.root, roster.Session, func() error {
+			return mission.ClearDispatchPending(s.root, roster.Session)
+		}); cErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: purge: clearing dispatch-pending for %s: %v\n", roster.Session, cErr)
 		}
 		if probeFailed {

@@ -2098,7 +2098,17 @@ func runMissionRelease() error {
 	// slot. Without this, a stuck pending dispatch from a persistent
 	// consume failure (review finding C9) would survive an operator's
 	// own release call, the one remedy meant to always work.
-	if err := mission.ClearDispatchPending(globalRoot, sessionID); err != nil {
+	//
+	// `mission release` runs as its own process, so it must take the
+	// dispatch-pending lock itself rather than call ClearDispatchPending
+	// unlocked — an unlocked clear could race a concurrent dispatchAgent
+	// invocation's own held-lock match-through-admit window, either
+	// removing an entry out from under an in-flight admission or leaving
+	// a "released" session bound again to a write that landed just after
+	// this scan (mission.WithDispatchPendingLock's own doc comment).
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		return mission.ClearDispatchPending(globalRoot, sessionID)
+	}); err != nil {
 		return fmt.Errorf("mission release: %w", err)
 	}
 
@@ -2160,7 +2170,15 @@ func bindDispatchedMission(op, missionID, worker string) {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	if err := mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker); err != nil {
+	// `mission dispatch`/`create` runs as its own process, so staging a
+	// new pending entry must take the dispatch-pending lock itself
+	// rather than write unlocked — an unlocked write could interleave
+	// with a concurrent dispatchAgent invocation's own held-lock read of
+	// the pending directory (mission.WithDispatchPendingLock's own doc
+	// comment).
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		return mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker)
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: recording dispatch for %s: %v\n", op, missionID, err)
 		return
 	}

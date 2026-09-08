@@ -257,7 +257,15 @@ func (h *Handler) bindDispatchedMission(missionID, worker string) []string {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	if err := mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker); err != nil {
+	// This MCP call runs as its own process, so staging a new pending
+	// entry must take the dispatch-pending lock itself rather than
+	// write unlocked — an unlocked write could interleave with a
+	// concurrent dispatchAgent invocation's own held-lock read of the
+	// pending directory (mission.WithDispatchPendingLock's own doc
+	// comment).
+	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
+		return mission.WriteDispatchPending(globalRoot, sessionID, missionID, worker)
+	}); err != nil {
 		return []string{fmt.Sprintf("binding mission: recording dispatch for %s: %v", missionID, err)}
 	}
 	// Reported unconditionally (ethos-7tqd triage suggestion #3), and
