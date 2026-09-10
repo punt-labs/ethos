@@ -4,10 +4,50 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
+	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestCodeArchetypeNames_ThirdArchetypeAutoDetected pins P2: a THIRD
+// archetype gaining require_delegated_worker: true must be picked up
+// automatically, the property a hardcoded list could never have — a
+// hardcoded ["implement", "test"] would silently never look at "refactor"
+// here, the exact ethos-e05k shape (enforcement lost with a green check)
+// recurring inside the check meant to catch it.
+func TestCodeArchetypeNames_ThirdArchetypeAutoDetected(t *testing.T) {
+	fsys := fstest.MapFS{
+		"sidecar/archetypes/implement.yaml": {Data: []byte("name: implement\nrequire_delegated_worker: true\n")},
+		"sidecar/archetypes/design.yaml":    {Data: []byte("name: design\n")}, // no flag — must not appear
+		"sidecar/archetypes/refactor.yaml":  {Data: []byte("name: refactor\nrequire_delegated_worker: true\n")},
+	}
+	names, err := codeArchetypeNames(fsys, "sidecar/archetypes")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"implement", "refactor"}, names,
+		"a third archetype with the flag set must be monitored automatically, and one without it must not appear")
+}
+
+// TestCodeArchetypeNames_ReadError pins the broken-embed FAIL path,
+// matching checklistAgentNames' precedent for the same failure shape.
+func TestCodeArchetypeNames_ReadError(t *testing.T) {
+	names, err := codeArchetypeNames(brokenFS{}, "sidecar/archetypes")
+	require.Error(t, err)
+	assert.Nil(t, names)
+}
+
+// TestCodeArchetypeNames_Real pins the production call site against the
+// actual embedded seed.Archetypes: today exactly "implement" and "test"
+// carry the flag. If a third archetype gains it, this test's expected
+// slice needs updating — that update IS the signal the monitored set
+// changed, which is the property P2 exists to guarantee doctor sees
+// automatically, not the property this specific test needs to predict.
+func TestCodeArchetypeNames_Real(t *testing.T) {
+	names, err := codeArchetypeNames(seed.Archetypes, "sidecar/archetypes")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"implement", "test"}, names)
+}
 
 // TestCheckDelegatedWorkerArchetypes pins ethos-e05k: an archetype missing
 // require_delegated_worker must FAIL and name the resolving layer, because
