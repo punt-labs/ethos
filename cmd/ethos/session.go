@@ -532,13 +532,6 @@ func runSessionStart(cmd *cobra.Command) error {
 	return printSessionStart(cmd, id, sessionStartPersona, true)
 }
 
-// printSessionStart writes the eval-able export line(s) to stdout and a
-// human-readable confirmation to stderr, so eval "$(ethos session start)"
-// captures only the exports. When persona is non-empty (--persona folded
-// the first iam), a second export sets ETHOS_AGENT_ID to it so the eval'd
-// shell resolves that persona — the primary participant is keyed on it. The
-// export line IS the contract, so a failed --json stdout write propagates
-// to a non-zero exit rather than exiting 0 having emitted nothing.
 // safeSessionID admits any opaque session ID (our 32-hex mints, Claude
 // Code's UUID session_ids, any sane identifier) while rejecting whitespace,
 // control characters, and shell metacharacters. Echoing is gated on it so a
@@ -547,6 +540,13 @@ func runSessionStart(cmd *cobra.Command) error {
 // opaque-ID contract (DES-061 R1/F7) to the mint shape.
 var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// printSessionStart writes the eval-able export line(s) to stdout and a
+// human-readable confirmation to stderr, so eval "$(ethos session start)"
+// captures only the exports. When persona is non-empty (--persona folded
+// the first iam), a second export sets ETHOS_AGENT_ID to it so the eval'd
+// shell resolves that persona — the primary participant is keyed on it. The
+// export line IS the contract, so a failed --json stdout write propagates
+// to a non-zero exit rather than exiting 0 having emitted nothing.
 func printSessionStart(cmd *cobra.Command, id, persona string, created bool) error {
 	if !safeSessionID.MatchString(id) {
 		return fmt.Errorf("session start: refusing to echo a session id with unsafe characters: %q", id)

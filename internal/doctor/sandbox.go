@@ -416,10 +416,6 @@ func gitInSandbox(ctx context.Context, dir string, env []string, args ...string)
 	return strings.TrimSpace(string(out)), nil
 }
 
-// shQuote wraps s in single quotes for embedding in a generated /bin/sh
-// script, escaping any single quote it contains. s is always doctor's own
-// temp path, never user input, but this is cheap insurance against a
-// TMPDIR whose name happens to contain one.
 // removeSandbox deletes dir, retrying once with every entry's permissions
 // forced open first. A bare os.RemoveAll silently gives up partway through
 // a tree containing an unreadable/unwritable entry — a hook that leaves
@@ -445,6 +441,10 @@ func removeSandbox(dir string) {
 	_ = os.RemoveAll(dir)
 }
 
+// shQuote wraps s in single quotes for embedding in a generated /bin/sh
+// script, escaping any single quote it contains. s is always doctor's own
+// temp path, never user input, but this is cheap insurance against a
+// TMPDIR whose name happens to contain one.
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
