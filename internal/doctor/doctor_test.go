@@ -1359,6 +1359,72 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 	})
 }
 
+// TestCheckOrphanedAgentFiles_ErrorPathsFail pins M3: four PASS-on-error
+// paths in CheckOrphanedAgentFiles read a real fault as "nothing to check",
+// leaving a green column over an invariant that was never actually verified
+// — the same shape ethos-e05k names. checklistAgentNames' own broken-embed
+// handling a few lines below (doctor.go's FAIL for a build-time defect) is
+// the precedent these four should have followed from the start.
+func TestCheckOrphanedAgentFiles_ErrorPathsFail(t *testing.T) {
+	t.Run("malformed glob pattern FAILs, not PASS nothing to check", func(t *testing.T) {
+		// An unterminated '[' character class makes filepath.Glob return
+		// ErrBadPattern for any pattern built under this root.
+		repoRoot := filepath.Join(t.TempDir(), "repo[unterminated")
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".claude", "agents"), 0o755))
+
+		res := CheckOrphanedAgentFiles(repoRoot, repoRoot, nil, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "could not glob agents")
+	})
+
+	t.Run("malformed repo config FAILs, not PASS nothing to check", func(t *testing.T) {
+		root := t.TempDir()
+		agentsDir := filepath.Join(root, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "bwk.md"), []byte("# bwk\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: [not a string"), 0o644))
+
+		res := CheckOrphanedAgentFiles(root, root, nil, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "could not load repo config")
+	})
+
+	t.Run("nil team store with a configured team FAILs, not PASS nothing to check", func(t *testing.T) {
+		root := t.TempDir()
+		agentsDir := filepath.Join(root, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "bwk.md"), []byte("# bwk\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+
+		res := CheckOrphanedAgentFiles(root, root, nil, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "no team store available")
+	})
+
+	t.Run("malformed team file FAILs, not PASS nothing to check", func(t *testing.T) {
+		root := t.TempDir()
+		agentsDir := filepath.Join(root, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "bwk.md"), []byte("# bwk\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+			[]byte("members: [not a string"), 0o644))
+		teams := team.NewLayeredStore(ethosDir, ethosDir)
+
+		res := CheckOrphanedAgentFiles(root, root, teams, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, `could not load team "solo"`)
+	})
+}
+
 // brokenFS.ReadDir always fails, simulating a build-broken embed.
 type brokenFS struct{}
 

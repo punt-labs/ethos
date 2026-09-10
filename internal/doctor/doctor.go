@@ -198,7 +198,12 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 	pattern := filepath.Join(repoRoot, ".claude", "agents", "*.md")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not glob agents: %s", err)}
+		// filepath.Glob only errors on a malformed pattern (ErrBadPattern) —
+		// a defect in this check's own code, not a runtime condition to
+		// swallow as "nothing to check". Reading it as PASS would hide an
+		// unchecked invariant behind a green column (M3, matching the
+		// checklistAgentNames precedent below).
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not glob agents: %s", err)}
 	}
 	if len(matches) == 0 {
 		return Result{Name: name, Status: "PASS", Detail: "no agent files"}
@@ -206,18 +211,24 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 
 	teamName, err := resolve.ResolveTeam(storeRoot)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not load repo config: %s", err)}
+		// ResolveTeam only errors when .punt-labs/ethos.yaml exists but is
+		// unreadable or malformed — a real misconfiguration the operator
+		// needs to see, not a "no team configured" no-op.
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", err)}
 	}
 	if teamName == "" {
 		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
 	}
 	if teams == nil {
-		return Result{Name: name, Status: "PASS", Detail: "no team store available"}
+		// Every production caller (RunAll) supplies a team store; reaching
+		// here with a configured team name but no store to check it against
+		// is an integration bug, not a legitimate "nothing to check" state.
+		return Result{Name: name, Status: "FAIL", Detail: "no team store available to verify agent files against"}
 	}
 
 	t, err := teams.Load(teamName)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not load team %q: %s", teamName, err)}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load team %q: %s", teamName, err)}
 	}
 
 	members := make(map[string]bool, len(t.Members))
