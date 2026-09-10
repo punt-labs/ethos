@@ -431,3 +431,65 @@ func TestArchetypeStore_NonYAMLIgnored(t *testing.T) {
 		t.Errorf("List = %v, want [design]", names)
 	}
 }
+
+// TestArchetypeStore_LoadLayer pins the layer-reporting Load builds on
+// (ethos-e05k): a caller that needs to tell an operator WHICH file to fix —
+// `ethos doctor`'s require_delegated_worker check, specifically — needs to
+// know whether repo-local or global resolved, not just what resolved.
+func TestArchetypeStore_LoadLayer(t *testing.T) {
+	repo := t.TempDir()
+	global := t.TempDir()
+	writeArchetypeFile(t, repo, "implement", implementYAML)
+	writeArchetypeFile(t, global, "implement", implementYAML)
+	writeArchetypeFile(t, global, "design", designYAML)
+	s := NewArchetypeStore(repo, global)
+
+	t.Run("repo-local shadows global and is reported as repo-local", func(t *testing.T) {
+		a, layer, err := s.LoadLayer("implement")
+		if err != nil {
+			t.Fatalf("LoadLayer: %v", err)
+		}
+		if layer != "repo-local" {
+			t.Errorf("layer = %q, want %q", layer, "repo-local")
+		}
+		if a.Name != "implement" {
+			t.Errorf("Name = %q, want %q", a.Name, "implement")
+		}
+	})
+
+	t.Run("global-only archetype is reported as global", func(t *testing.T) {
+		a, layer, err := s.LoadLayer("design")
+		if err != nil {
+			t.Fatalf("LoadLayer: %v", err)
+		}
+		if layer != "global" {
+			t.Errorf("layer = %q, want %q", layer, "global")
+		}
+		if a.Name != "design" {
+			t.Errorf("Name = %q, want %q", a.Name, "design")
+		}
+	})
+
+	t.Run("not found in either layer returns ErrArchetypeNotFound and no layer", func(t *testing.T) {
+		a, layer, err := s.LoadLayer("nope")
+		if !errors.Is(err, ErrArchetypeNotFound) {
+			t.Errorf("err = %v, want ErrArchetypeNotFound", err)
+		}
+		if layer != "" {
+			t.Errorf("layer = %q, want empty on not-found", layer)
+		}
+		if a != nil {
+			t.Errorf("archetype = %+v, want nil on not-found", a)
+		}
+	})
+
+	t.Run("Load still returns just the archetype, unaffected by the new layer return", func(t *testing.T) {
+		a, err := s.Load("implement")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if a.Name != "implement" {
+			t.Errorf("Name = %q, want %q", a.Name, "implement")
+		}
+	})
+}

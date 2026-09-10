@@ -405,7 +405,7 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
-			[]byte("#!/bin/sh\nbd hooks run pre-commit || exit 1\n"), 0o755))
+			[]byte("#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"), 0o755))
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 		assert.Equal(t, "not enabled here", r.Detail)
@@ -418,7 +418,7 @@ func TestCheckSealHook(t *testing.T) {
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
-		body := "#!/bin/sh\ncat <<'EOF'\n# --- BEGIN ETHOS DES-058 SEAL ---\nEOF\nbd hooks run pre-commit || exit 1\n"
+		body := "#!/bin/sh\ncat <<'EOF'\n# --- BEGIN ETHOS DES-058 SEAL ---\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
 		r := CheckSealHook(dir)
 		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
@@ -475,7 +475,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("chained seal section", func(t *testing.T) {
-		body := "#!/bin/sh\nbd hooks run pre-commit || exit 1\n" +
+		body := "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n" +
 			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n" +
 			"# --- END ETHOS DES-058 SEAL ---\n"
 		dir := writeEnabledHook(t, body)
@@ -595,7 +595,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("enabled foreign hook without seal → FAIL not chained", func(t *testing.T) {
-		dir := writeEnabledHook(t, "#!/bin/sh\nbd hooks run pre-commit || exit 1\n")
+		dir := writeEnabledHook(t, "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "not chained")
@@ -617,7 +617,7 @@ func TestCheckSealHook(t *testing.T) {
 		// A hook that only documents the seal in a heredoc body (usage/help
 		// text) never runs it — CheckSealHook must NOT return PASS, or the
 		// silent-absence bug this branch exists to close reopens.
-		body := "#!/bin/sh\ncat <<'EOF'\nethos audit seal\nEOF\nbd hooks run pre-commit || exit 1\n"
+		body := "#!/bin/sh\ncat <<'EOF'\nethos audit seal\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed(), "detail: %s", r.Detail)
@@ -735,6 +735,159 @@ func TestCheckSealHook(t *testing.T) {
 		r := CheckSealHook(repo)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
+}
+
+// TestCheckTrailerHook covers the trailer-specific shape of checkHookPresence
+// (ethos-bfml/ethos-hy40): the commit-msg file name, the "hook
+// commit-trailers" invocation, and NeedsMsgArg's dependency on a scratch
+// message file. checkHookPresence's shared control flow (dormant/WARN/FAIL
+// states, comment/heredoc/eval handling) is already exercised exhaustively
+// by TestCheckSealHook against the same function; this suite does not repeat
+// that ground.
+func TestCheckTrailerHook(t *testing.T) {
+	mark := func(t *testing.T, dir string) {
+		t.Helper()
+		zone := filepath.Join(dir, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(zone, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+	}
+	writeEnabledHook := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		hooksDir := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte(body), 0o755))
+		mark(t, dir)
+		return dir
+	}
+
+	t.Run("not in a repo", func(t *testing.T) {
+		r := CheckTrailerHook("")
+		assert.True(t, r.Passed())
+		assert.Equal(t, "not in a repo", r.Detail)
+	})
+
+	t.Run("dormant: no marker, no hook → PASS not enabled here", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
+	t.Run("enabled but no commit-msg hook → FAIL", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		mark(t, dir)
+		r := CheckTrailerHook(dir)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "no commit-msg hook")
+		assert.Contains(t, r.Detail, "ethos enable")
+	})
+
+	t.Run("enabled, real call needing $1 — active without a fixed message file arg baked in", func(t *testing.T) {
+		// The commit-msg hook itself refuses to call ethos without $1; the
+		// sandbox in hookInvocationObserved supplies that argument via
+		// spec.NeedsMsgArg, not the test fixture.
+		body := "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "standalone")
+	})
+
+	t.Run("chained trailer section active", func(t *testing.T) {
+		body := "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic\n" +
+			"# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
+			"[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n" +
+			"# --- END ETHOS DES-054 TRAILER ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained")
+	})
+
+	t.Run("stale section without an active call", func(t *testing.T) {
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
+			"echo placeholder\n# --- END ETHOS DES-054 TRAILER ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckTrailerHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
+		dir := t.TempDir()
+		hooksDir := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
+			"[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n" +
+			"# --- END ETHOS DES-054 TRAILER ---\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte(body), 0o755))
+		r := CheckTrailerHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "not enabled here")
+	})
+
+	t.Run("the real DES-054 hook (chained via githook.Chain) is PASS", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		_, err := githook.Chain(filepath.Join(dir, ".git", "hooks", "commit-msg"), hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent)
+		require.NoError(t, err)
+		mark(t, dir)
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained")
+	})
+}
+
+// TestCheckHookPresence_Bfml_Hy40Regression pins the actual ethos-bfml/
+// ethos-hy40 defect, reproduced against pre-fix source: an ENABLED repo
+// whose commit-msg hook has been hand-removed (a host-clobbered install,
+// per hy40's filed scenario) reported no FAIL anywhere. RunAll had no
+// trailer presence check at all before this change — only
+// "Trailer hook currency", which PASSes "no Trailer hook section installed"
+// by its own deliberate, documented design regardless of enablement.
+//
+// Confirmed against the pre-fix tree (commit 1d27319, this branch's base):
+// RunAll on exactly this fixture returned zero FAIL results — "Trailer hook
+// currency" read PASS "no Trailer hook section installed" and no other
+// check named the trailer hook at all. AllPassed was true.
+func TestCheckHookPresence_Bfml_Hy40Regression(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	repo := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755))
+	// The seal hook is installed and healthy — only the trailer side is
+	// missing, isolating the exact gap hy40 named.
+	_, err := githook.Chain(filepath.Join(repo, ".git", "hooks", "pre-commit"), hooks.PreCommit, hooks.SealTag, hooks.SealIdent)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+
+	results := RunAll(s, ss, repo, repo, nil)
+
+	var trailerPresence *Result
+	for i := range results {
+		if results[i].Name == "Audit trailer hook" {
+			trailerPresence = &results[i]
+		}
+	}
+	require.NotNil(t, trailerPresence, "results: %+v", results)
+	assert.Equal(t, "FAIL", trailerPresence.Status,
+		"an enabled repo with no commit-msg hook must FAIL the trailer presence check")
+	assert.Contains(t, trailerPresence.Detail, "no commit-msg hook")
+	assert.False(t, AllPassed(results),
+		"the aggregate must show at least one FAIL — this is exactly the false-all-green bfml/hy40 reported")
 }
 
 // currencyTestSpec is a HookSpec fixture independent of the real hooks.*
@@ -1155,6 +1308,55 @@ func TestCheckOrphanedAgentFiles_ChecklistAgents(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCheckOrphanedAgentFiles_Classification pins ethos-jw1z: the FAIL
+// detail must distinguish a handle with a resolvable identity (stale —
+// generated for a previous team scope, safe to delete) from a handle
+// matching no identity anywhere (a genuine orphan, worth investigating).
+// Pre-fix, both read identically as "orphaned agent files (not on any
+// team): <handles>", giving the operator no way to tell which is which
+// without reading source.
+func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	s := identity.NewStore(root)
+
+	// "retired" resolves to a real identity — it was clearly generated for
+	// some team at some point, just not the currently active one.
+	writeIdentity(t, root, "retired", "name: Retired\nhandle: retired\nkind: agent\n")
+
+	agentsDir := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "retired.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "phantom.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+
+	t.Run("with an identity store, stale and unresolved are distinguished", func(t *testing.T) {
+		res := CheckOrphanedAgentFiles(root, root, teams, s)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "stale", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "retired", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "safe to delete", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "unresolved", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "phantom", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "investigate", "detail: %s", res.Detail)
+	})
+
+	t.Run("without an identity store, the distinction is not guessed", func(t *testing.T) {
+		res := CheckOrphanedAgentFiles(root, root, teams, nil)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "retired")
+		assert.Contains(t, res.Detail, "phantom")
+		assert.NotContains(t, res.Detail, "stale", "no identity store means no basis to classify — must not guess")
+	})
 }
 
 // brokenFS.ReadDir always fails, simulating a build-broken embed.

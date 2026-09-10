@@ -15,8 +15,10 @@ import (
 // stops waiting for it. A real ethos-managed hook returns in well under a
 // second; this is generous headroom for a slow disk without letting a
 // pathological host hook chained alongside it (an infinite loop, a hung
-// network call) block `ethos doctor` indefinitely.
-const sandboxTimeout = 10 * time.Second
+// network call) block `ethos doctor` indefinitely. A var, not a const, so a
+// test can shrink it to prove the bound actually fires rather than trusting
+// the number in this comment.
+var sandboxTimeout = 10 * time.Second
 
 // errSandboxGitUnavailable is returned by hookInvocationObserved when git is
 // not on PATH. The sandboxed hook body cannot be exercised without it — the
