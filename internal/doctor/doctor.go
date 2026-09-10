@@ -427,6 +427,17 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
 	}
 
+	// A hook present but not executable is never run by git either — check
+	// this BEFORE any sandbox execution is attempted (qodo, PR #515). The
+	// sandbox writes its own copy of body at mode 0o755 regardless of the
+	// installed file's own permission bits, so without this early return
+	// doctor would execute untrusted shell content from an operator's
+	// checkout solely to diagnose a case (missing +x) that never needed
+	// running to answer.
+	if statErr == nil && info.Mode().Perm()&0o111 == 0 {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s hook present but not executable — run: chmod +x %s", spec.ShortName, hook)}
+	}
+
 	// Enabled: only a shell hook is ever attempted by execution — a
 	// non-shell body can never run the way git would run it (matches the
 	// shebang check below), and there is no interpreter-neutral way to
@@ -494,9 +505,6 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 				"%s section present but no active %q call (stale)", spec.Name, strings.Join(spec.InvokeArgs, " ")) + remedy}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but the %s hook is not chained", spec.ShortName) + remedy}
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s hook present but not executable — run: chmod +x %s", spec.ShortName, hook)}
 	}
 	if hasMarkerSection(body, spec.Tag) {
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("chained %s section active", spec.ShortName)}

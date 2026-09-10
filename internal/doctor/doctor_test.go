@@ -738,6 +738,32 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "chmod +x")
 	})
 
+	// qodo (PR #515): the sandbox writes its own copy of body at 0o755
+	// regardless of the installed file's own mode, so a non-executable hook
+	// — one git would never run — was still executed inside the sandbox to
+	// diagnose that same non-executable state. A witness file proves
+	// whether the body actually ran.
+	t.Run("non-executable hook is never executed by the sandbox", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		witness := filepath.Join(t.TempDir(), "witness")
+		body := "#!/bin/sh\ntouch " + shQuote(witness) + "\nethos audit seal || exit 2\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o644))
+		mark(t, dir)
+
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "not executable")
+
+		_, statErr := os.Stat(witness)
+		assert.True(t, os.IsNotExist(statErr),
+			"a non-executable hook must never run inside the sandbox — git would never run it either")
+	})
+
 	t.Run("enabled foreign hook without seal → FAIL not chained", func(t *testing.T) {
 		dir := writeEnabledHook(t, "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n")
 		r := CheckSealHook(dir)
