@@ -274,12 +274,21 @@ func classifyOrphans(orphaned []string, s identity.IdentityStore) string {
 	if s == nil {
 		return "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")
 	}
-	var stale, unresolved []string
+	var stale, unresolved, broken []string
 	for _, handle := range orphaned {
-		if _, err := s.Load(handle, identity.Reference(true)); err == nil {
+		_, err := s.Load(handle, identity.Reference(true))
+		switch {
+		case err == nil:
 			stale = append(stale, handle)
-		} else {
+		case errors.Is(err, fs.ErrNotExist):
 			unresolved = append(unresolved, handle)
+		default:
+			// A real I/O or parse error (permission denied, malformed YAML)
+			// is not the same as "no identity anywhere" (LOW) — a matching
+			// file exists at a path this store already knows, and telling
+			// the operator to "investigate a nonexistent identity" sends
+			// them looking for the wrong problem.
+			broken = append(broken, fmt.Sprintf("%s (%v)", handle, err))
 		}
 	}
 	var parts []string
@@ -292,6 +301,11 @@ func classifyOrphans(orphaned []string, s identity.IdentityStore) string {
 		parts = append(parts, fmt.Sprintf(
 			"unresolved (no matching identity anywhere — investigate before deleting): %s",
 			strings.Join(unresolved, ", ")))
+	}
+	if len(broken) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"could not resolve (a matching identity file exists but failed to load): %s",
+			strings.Join(broken, ", ")))
 	}
 	return "orphaned agent files — " + strings.Join(parts, "; ")
 }
@@ -353,7 +367,7 @@ func CheckTrailerHook(repoRoot string) Result { return checkHookPresence(repoRoo
 // what makes an enabled repo with no seal (or no trailer) hook installed
 // FAIL, where CheckHookCurrency alone — by its own deliberate, documented
 // design — PASSes "no section installed" regardless of enablement.
-func checkHookPresence(repoRoot string, spec HookSpec) Result {
+func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	name := "Audit " + spec.ShortName + " hook"
 	const remedy = " — run `ethos enable`"
 
@@ -371,7 +385,16 @@ func checkHookPresence(repoRoot string, spec HookSpec) Result {
 	} else if !os.IsNotExist(err) {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
 	}
-	dir, _ := githook.HooksDir(repoRoot)
+	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	// A diverted core.hooksPath (inside the work tree, or outside the repo
+	// entirely) is exactly the kind of surprise an operator running `ethos
+	// doctor` needs named, not silently discarded — doctor is the one place
+	// that already inspects hook state closely enough to say it (LOW).
+	if len(hooksDirWarnings) > 0 {
+		defer func() {
+			result.Detail += " (" + strings.Join(hooksDirWarnings, "; ") + ")"
+		}()
+	}
 	hook := filepath.Join(dir, spec.File)
 
 	info, statErr := os.Stat(hook)
@@ -586,14 +609,19 @@ func shortHex(sum [sha256.Size]byte) string {
 // check's concern (PASS, nothing installed); a section that exists is
 // checked for currency regardless of whether ethos is enabled in this repo
 // right now, because `ethos enable` is the remedy for both problems.
-func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
+func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	name := spec.Name + " currency"
 
 	if repoRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
-	dir, _ := githook.HooksDir(repoRoot)
+	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	if len(hooksDirWarnings) > 0 {
+		defer func() {
+			result.Detail += " (" + strings.Join(hooksDirWarnings, "; ") + ")"
+		}()
+	}
 	hookPath := filepath.Join(dir, spec.File)
 	data, err := os.ReadFile(hookPath)
 	if err != nil {

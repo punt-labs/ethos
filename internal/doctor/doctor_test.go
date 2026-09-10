@@ -798,6 +798,37 @@ func TestCheckSealHook(t *testing.T) {
 		r := CheckSealHook(repo)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
+
+	// LOW: a diverted core.hooksPath is exactly the kind of surprise an
+	// operator running `ethos doctor` needs named — doctor is the one
+	// surface that already inspects hook state closely enough to say it.
+	// githook.HooksDir's second return value carried this warning all
+	// along; checkHookPresence used to discard it with `dir, _ :=`.
+	t.Run("diverted core.hooksPath inside the work tree is named in Detail (LOW)", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		repo := t.TempDir()
+		cmd := exec.Command("git", "-C", repo, "init", "-q")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git init: %s", out)
+		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err = cmd.CombinedOutput()
+		require.NoError(t, err, "git config: %s", out)
+
+		husky := filepath.Join(repo, ".husky")
+		require.NoError(t, os.MkdirAll(husky, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(husky, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+		mark(t, repo)
+
+		r := CheckSealHook(repo)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "core.hooksPath places hooks at")
+		assert.Contains(t, r.Detail, "inside the work tree")
+	})
 }
 
 // TestCheckTrailerHook covers the trailer-specific shape of checkHookPresence
@@ -1108,6 +1139,36 @@ func TestCheckHookCurrency(t *testing.T) {
 	})
 }
 
+// TestCheckHookCurrencyHooksPathWarning pins the LOW finding paired with
+// checkHookPresence's: CheckHookCurrency also discarded githook.HooksDir's
+// diverted-core.hooksPath warning with `dir, _ :=`. Currency is the other
+// surface that already resolves the hooks dir closely enough to name the
+// divergence.
+func TestCheckHookCurrencyHooksPathWarning(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	cmd := exec.Command("git", "-C", repo, "init", "-q")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git init: %s", out)
+	cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "git config: %s", out)
+
+	husky := filepath.Join(repo, ".husky")
+	require.NoError(t, os.MkdirAll(husky, 0o755))
+	_, chainErr := githook.Chain(filepath.Join(husky, currencyTestSpec.File), currencyTestSpec.Canonical, currencyTestSpec.Tag, currencyTestSpec.Ident)
+	require.NoError(t, chainErr)
+
+	r := CheckHookCurrency(repo, currencyTestSpec)
+	assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+	assert.Contains(t, r.Detail, "core.hooksPath places hooks at")
+	assert.Contains(t, r.Detail, "inside the work tree")
+}
+
 // TestCheckHookCurrencyCRLFHostNotStale is the CRLF regression: Chain
 // rewrites a section's line endings to match a foreign CRLF host, so a
 // naive byte compare would misread that EOL rewrite as drift. The
@@ -1389,10 +1450,24 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 	// some team at some point, just not the currently active one.
 	writeIdentity(t, root, "retired", "name: Retired\nhandle: retired\nkind: agent\n")
 
+	// "wounded" has a matching identity file that exists but cannot be
+	// read (LOW) — a real I/O error, distinct from "phantom"'s genuine
+	// absence. Skipped as root, which bypasses permission bits.
+	haveWounded := os.Geteuid() != 0
+	if haveWounded {
+		writeIdentity(t, root, "wounded", "name: Wounded\nhandle: wounded\nkind: agent\n")
+		woundedPath := filepath.Join(root, "identities", "wounded.yaml")
+		require.NoError(t, os.Chmod(woundedPath, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(woundedPath, 0o600) })
+	}
+
 	agentsDir := filepath.Join(root, ".claude", "agents")
 	require.NoError(t, os.MkdirAll(agentsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "retired.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "phantom.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+	if haveWounded {
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "wounded.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+	}
 
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
@@ -1411,6 +1486,15 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 		assert.Contains(t, res.Detail, "unresolved", "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, "phantom", "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, "investigate", "detail: %s", res.Detail)
+		if haveWounded {
+			// LOW: a real I/O error reading a matching file must not read
+			// identically to "no matching identity anywhere" — it gets its
+			// own bucket, naming that a file DOES exist for this handle.
+			assert.Contains(t, res.Detail, "could not resolve", "detail: %s", res.Detail)
+			assert.Contains(t, res.Detail, "wounded", "detail: %s", res.Detail)
+			assert.NotContains(t, res.Detail, "unresolved (no matching identity anywhere — investigate before deleting): wounded",
+				"a broken-but-present identity file must not be folded into the genuine-absence bucket: %s", res.Detail)
+		}
 	})
 
 	t.Run("without an identity store, the distinction is not guessed", func(t *testing.T) {
