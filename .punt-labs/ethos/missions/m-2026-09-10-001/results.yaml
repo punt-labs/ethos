@@ -1,0 +1,94 @@
+results:
+    - mission: m-2026-09-10-001
+      round: 1
+      created_at: "2026-09-10T21:17:00Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/doctor/doctor.go
+          added: 351
+          removed: 113
+        - path: internal/doctor/doctor_test.go
+          added: 713
+          removed: 19
+        - path: internal/doctor/sandbox.go
+          added: 462
+          removed: 0
+        - path: internal/doctor/sandbox_test.go
+          added: 337
+          removed: 0
+        - path: internal/doctor/sandbox_removeall_test.go
+          added: 45
+          removed: 0
+        - path: internal/doctor/archetype_check.go
+          added: 178
+          removed: 0
+        - path: internal/doctor/archetype_check_test.go
+          added: 213
+          removed: 0
+        - path: internal/doctor/procgroup_unix.go
+          added: 71
+          removed: 0
+        - path: internal/doctor/procgroup_unix_test.go
+          added: 33
+          removed: 0
+        - path: internal/doctor/procgroup_windows.go
+          added: 46
+          removed: 0
+        - path: DESIGN.md
+          added: 894
+          removed: 0
+        - path: CHANGELOG.md
+          added: 120
+          removed: 0
+      evidence:
+        - name: make check (race enabled) — 28 ok, 0 FAIL
+          status: pass
+        - name: go build — darwin/arm64, darwin/amd64, linux/arm64, linux/amd64 (the four make dist targets)
+          status: pass
+        - name: go build + go vet — windows/amd64 (build-verification target, not shipped)
+          status: pass
+        - name: "PR #515 merged as 6f61406 — 6/6 CI checks green, 17 review threads resolved"
+          status: pass
+        - name: ethos-kcbv — hasActiveSealCall lexical scanner replaced with execution-based verification (DES-077)
+          status: pass
+        - name: ethos-bfml + ethos-hy40 — hook presence checked for both seal and trailer on an enabled repo
+          status: pass
+        - name: ethos-e05k — archetype guard derives its monitored set from embedded seed content
+          status: pass
+        - name: ethos-jw1z — orphaned-agent FAIL distinguishes stale generated file from genuine orphan
+          status: pass
+        - name: regression tests confirmed red against pre-fix code before each fix landed
+          status: pass
+      open_questions:
+        - 'Residual left open, documented in DES-077 addendum 3: a setsid-detached hook child escapes process-group cleanup. No portable, unprivileged containment exists across shipped targets (PR_SET_CHILD_SUBREAPER is Linux-only; darwin needs cgroups or ptrace). Lifetime containment was never the security boundary — hook execution is untrusted-code execution by design.'
+        - No Windows CI job. Three Windows-only defects reached review with every check green, one introduced by this branch. Every Windows guard here is verified by construction (build tag, seam override, or citation of Go's source), never by observation. Filed as ethos-ell5 (P1).
+        - tests/behavioral and internal/repomiss both report 0.0% coverage, and repomiss emits no ok line at all. May be intentional; indistinguishable from a package that stopped being tested. Filed as ethos-21v0 (P2).
+      prose: |
+        Cluster 3's unifying defect was a check that reports success without
+        having verified the thing it claims to check. That shape recurred
+        inside the fix itself more than once — an archetype guard that
+        swallowed load errors into a green PASS, a hardcoded list that could
+        only monitor what someone remembered to add, and a fallback treating
+        "I could not determine X" as "X is the default."
+
+        Seventeen review findings across Copilot, qodo, and Cursor Bugbot.
+        Two were verified misattributed and rejected with evidence: a claimed
+        plan9/js compile break that predates the branch at internal/process,
+        and one duplicate filed against a commit that had already been fixed.
+        Two more were initially classified as accepted trade-offs, and both
+        classifications were wrong — the documented rationale answered a
+        different question than the finding asked.
+
+        The most valuable finding was the last. Tying the sandbox's platform
+        guard to its build tag revealed that one variable had been standing in
+        for two different facts: whether FileMode carries execute bits
+        (Windows only) and whether the sandbox can run at all (non-unix). On
+        plan9 those disagree. Three previously-green tests went red on the
+        switch, proving the conflation rather than arguing it.
+
+        Also swept under fix-the-class rather than fixed as instances: two
+        misattached godoc comments found by a go/ast pass falsified against
+        known-bad code before its zero was trusted, and four Unix-only test
+        assumptions, two of which predate the branch.
