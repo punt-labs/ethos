@@ -54,7 +54,7 @@ func (r Result) Passed() bool {
 // needs it (Bugbot #370 class: resolving the active team from the worktree
 // while activation wrote it to the store produced false orphan reports).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot string, teams *team.LayeredStore) []Result {
-	results := make([]Result, 0, 6)
+	results := make([]Result, 0, 14) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
 	dir, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
 	results = append(results, passFail("Identity directory", dir, ok))

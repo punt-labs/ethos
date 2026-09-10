@@ -58,11 +58,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enabled Windows repo would FAIL a healthy hook; it now WARNs
   "cannot verify by execution on this platform" instead. A diverted
   `core.hooksPath` warning was discarded at two call sites; it now
-  rides along in the check's Detail. A real I/O error loading an
-  identity for orphan classification read identically to "no matching
-  identity anywhere"; it now gets its own "could not resolve" bucket.
-  Full defect list, fixes, and residual (what is still not closed) in
-  DES-077's addendum.
+  rides along in the check's Detail. Full defect list, fixes, and
+  residual (what is still not closed) in DES-077's addendum.
+- **A second review pass on the same doctor cluster found a critical
+  sandbox escape and several sharper or corrected findings, all fixed
+  in the same release.** The sandbox's `git init` inherited the
+  caller's process environment; a caller-set `GIT_DIR` or
+  `GIT_OBJECT_DIRECTORY` (an ordinary `git submodule foreach` or CI
+  wrapper) let a sandboxed hook execute inside the REAL repository
+  being checked instead of the disposable sandbox, silently. Fixed
+  with an allowlisted environment plus a containment self-test that
+  asks git directly whether the sandbox is the sandbox before running
+  anything untrusted in it. A hook that backgrounds a child outlived
+  both the check returning and the sandbox's own cleanup; it is now
+  killed via its whole process group, not just its direct PID.
+  `CheckOrphanedAgentFiles` was mutating identity files as a side
+  effect of classification (a legacy `voice:` migration triggered by a
+  read-only diagnostic); it now checks existence only. The
+  hand-maintained archetype list for the delegated-worker guard is now
+  derived from the same seed content `ethos seed` deploys, closing a
+  second instance of the exact silent-enforcement-loss shape the check
+  exists to catch. A host-section failure now WARNs instead of FAILing
+  "stale" when the installed ethos section is provably byte-current.
+  Full defect list, fixes, and residual in DES-077's second addendum.
 
 ## [4.18.0] - 2026-09-08
 

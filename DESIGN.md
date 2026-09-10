@@ -11309,14 +11309,19 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
   Rejected — for a hook with a real non-shell shebang, uniformly
   wrapping would misreport it as shell, defeating the
   interpreter-mismatch case `checkHookPresence`'s shebang check exists
-  to catch. **Correction (2026-09-10 review round, H2):** the premise
-  "git never invokes a hook that way" was wrong. git's own
-  `run-command` falls back to running a hook through the shell
-  specifically when a direct `execve` fails with `ENOEXEC` — the
-  kernel's answer for a script with no (or an unrecognized) shebang
-  line — and a shebang-less pre-commit does run, and block a commit,
-  under real git. `hookInvocationObserved` now matches that exact,
-  narrow fallback (see the addendum below); the part of this rejection
+  to catch. **Correction (2026-09-10 review round, H2, sharpened by
+  N2):** the premise "git never invokes a hook that way" was wrong,
+  though not for the reason first stated here. git spawns hooks via
+  libc's `execvp`, not the bare `execve` syscall Go's `os/exec` uses.
+  `execvp` (and `execlp`) carry a POSIX-mandated fallback: when
+  `execve` fails `ENOEXEC` — the kernel's answer for a script with no
+  (or an unrecognized) shebang line — `execvp` retries the file as an
+  argument to `sh`. This is not git's own C code; it is a property of
+  the C library git links against. The observable effect is the same
+  either way — a shebang-less pre-commit does run, and block a commit,
+  under real git — but the mechanism is libc's, not git's `run-command`
+  module's. `hookInvocationObserved` now matches that observable
+  fallback exactly (see the addendum below); the part of this rejection
   that still holds is not wrapping *uniformly* — execution is still
   attempted only for a body `textscan.IsShellHook` classifies as shell
   (which includes "no shebang", the same case git treats as shell), so
@@ -11374,18 +11379,28 @@ returns `layer=""` on the error path).
 
 **H1/H2 — the sandbox's execution fidelity to git had two gaps.**
 `hookInvocationObserved` executed the hook via a bare `execve`, so a
-shebang-less hook — which git runs fine via its own `ENOEXEC` shell
-fallback — read as unexecutable (H2; see the corrected rejected
-alternative above). And when the ethos stub was never reached, every
-cause collapsed into the same `(false, nil)` → "stale — run `ethos
-enable`", regardless of whether the hook could not be executed at all,
-timed out, or a host section exited before reaching the ethos call
-(H1) — the wrong remedy for the first two. `hookInvocationObserved` now
-retries through the shell on `ENOEXEC` exactly as git does, and
+shebang-less hook — which git runs fine via libc's `execvp` ENOEXEC
+fallback (N2: not git's own code, see the corrected rejected
+alternative above) — read as unexecutable (H2). And when the ethos
+stub was never reached, every cause collapsed into the same
+`(false, nil)` → "stale — run `ethos enable`", regardless of whether
+the hook could not be executed at all, timed out, or a host section
+exited before reaching the ethos call (H1) — the wrong remedy for the
+first two. `hookInvocationObserved` now retries through the shell on
+`ENOEXEC`, matching that same observable libc behavior, and
 `classifyMissedInvocation` distinguishes the three cases with their own
 messages. A hook that runs to completion and genuinely never calls
 ethos still returns `(false, nil)` unchanged — that is the one case the
 existing stale/not-chained messaging already gets right.
+
+**P4 — a host-section-exited failure FAILed "stale" even when the
+ethos section itself was provably current.** `sectionIsCurrent` (reusing
+`CheckHookCurrency`'s own digest comparison) now lets `checkHookPresence`
+WARN instead, naming it a host-section problem, exactly when the
+installed marker section is byte-identical to what this build would
+install — the one case where "run `ethos enable`" is a genuinely useless
+remedy, since re-chaining identical content reproduces the same failure.
+A hand-edited or otherwise non-matching section still FAILs.
 
 **H3 — the sandbox's empty, freshly `git init`'d temp repo can make a
 healthy host section fail for reasons that exist only in the sandbox**
@@ -11503,3 +11518,196 @@ happened to not exist; (3) the added `sh -c` subprocess spawn on the
 `ENOEXEC` retry path is bounded by the same `sandboxTimeout` context as
 the original attempt, so it cannot extend the worst-case latency beyond
 what a runaway hook already cost before this round.
+
+### Addendum 2 (2026-09-10): three independent review passes on the first addendum
+
+Three further reviewers (code review, invariant audit, security review)
+found one critical, one blocking security defect, and several sharper
+or corrected versions of findings above. All are fixed in the same PR.
+
+**S1 — CRITICAL, sandbox escape via an inherited git environment.**
+`hookInvocationObserved`'s `git init` call inherited the caller's full
+process environment while every other command in the function used a
+sanitized `cmd.Env`. A caller-set `GIT_DIR` or `GIT_OBJECT_DIRECTORY`
+(e.g. `git submodule foreach`, an ordinary CI wrapper) made `git init`
+exit 0 without creating a repository at the sandbox dir, and the
+hook's own `git rev-parse --show-toplevel` then resolved to the REAL
+repository — the untrusted hook body ran, and could write, inside the
+real checkout, with `hookInvocationObserved` still reporting a clean
+result. Confirmed on this machine: both vectors escaped to the repo's
+enclosing workspace directory, with this org's TMPDIR-inside-the-repo
+convention as the precondition (not an exotic one).
+
+Fixed structurally, not by enumerating dangerous variables (the
+ratified design decision — see below): `sandboxEnv` is now assigned,
+never appended, to every sandbox git invocation including `git init`
+— Go does not merge when `Env` is non-nil, so everything is absent
+unless listed. A containment self-test then asks git directly whether
+it agrees `dir` is the repository root (`rev-parse --show-toplevel`
+must equal `dir`, via `textscan.SamePath`) before anything executes;
+`GIT_CEILING_DIRECTORIES` bounds git's own upward search as an
+independent backstop; `--template=` defeats a caller's
+`init.templateDir`. The self-test is the property that makes the
+allowlist's completeness unnecessary to guarantee by enumeration —
+confirmed against a vector NOT in the original two (`GIT_CONFIG_COUNT`
+/ `GIT_CONFIG_KEY_0` / `GIT_CONFIG_VALUE_0`, which injects arbitrary
+git config through the environment): the allowlist closes it without
+ever having named it.
+
+**S2/P1 — execution was gated correctly in outcome but not
+structurally.** The dormant-repo return already lived behind
+`shellHook`'s `markerPresent` clause (M1, this session), but inside an
+AND expression one edit away from silently dropping the term. Moved
+the dormant verdict to return BEFORE the execution block exists in the
+function at all, using only `hasMarkerSection`'s lexical scan — the
+same ordering djb's security review independently recommended. This
+also makes the *class* of failure impossible, not merely improbable:
+any sandbox-infrastructure error unrelated to the hook (no git on
+PATH, an unwritable TMPDIR) can no longer leak through as a FAIL on a
+repo that was never enabled, because `hookInvocationObserved` is never
+reached in that path.
+
+**S3 — confirmed already fixed by H1 above**, reproduced against
+current source before any new code was written: a CRLF-terminated
+shebang (a hook edited on Windows, or checked out with
+`core.autocrlf`) now reports "the hook could not be executed at all"
+rather than a silent `(false, nil)`. Added a direct regression test
+pinning this specific fixture, since only the general mechanism (not
+this shape) had been covered.
+
+**S4 — a hook that backgrounds a child (`cmd &`, nohup) outlived
+both `hookInvocationObserved` returning and the sandbox's temp-dir
+cleanup**, running in a directory that no longer existed. `cmd.Cancel`
+alone cannot catch this: the direct child (the shell) exits quickly and
+normally after backgrounding, so the context never times out and
+Cancel never fires. Fixed with `procgroup_unix.go` /
+`procgroup_windows.go` (the Windows side is inert — `sandboxGOOS`
+already refuses before any command is constructed there): `cmd` gets
+its own process group, and the group is SIGKILLed unconditionally right
+after `Run()` returns, not only via `Cancel` on timeout.
+
+**N1 — CheckOrphanedAgentFiles mutated identity files as a side
+effect.** `classifyOrphans` called `s.Load`, which migrates a legacy
+`voice:` key to `ext/vox` and RE-SAVES the identity file. A read-only
+diagnostic must never write. Switched to `s.Exists` (a bare `os.Stat`,
+already on `IdentityStore`) — the only question this function actually
+needs answered. This also folds the earlier LOW "could not resolve"
+three-way split back into two: `os.Stat` succeeds regardless of the
+FILE's own permission bits (only the containing directory's search
+permission matters), so an unreadable-but-present identity now
+correctly reads as stale without needing a third bucket.
+
+**N2 — corrected H2's mechanism attribution**, not its fix: git spawns
+hooks via libc's `execvp`, and it is `execvp`'s POSIX-mandated
+ENOEXEC-retry-through-sh behavior that gives a shebang-less hook a
+real execution path — not git's own `run-command.c`. The rejected
+alternative and the H1/H2 finding above are corrected accordingly. The
+code's behavior (retry via `sh -c` on `ENOEXEC`) was already correct;
+only its doc comments' explanation of *why* was wrong.
+
+**N3 — the "Code archetype delegated-worker guard" check name (38
+chars) overflowed the doctor CLI's fixed `%-24s` table column**,
+pushing that row's Status/Detail out of alignment with every other
+row. The column width is now computed from the longest check name
+present, not a literal.
+
+**P2 — `codeArchetypeNames` was a hand-maintained `[]string{"implement",
+"test"}`, despite its own doc comment claiming the invariant is
+"data-driven from the deployed YAML."** It was correct by coincidence.
+A third archetype gaining `require_delegated_worker: true` in the seed
+content would have been silently unmonitored — ethos-e05k's failure
+mode recurring a SECOND time in the file written to close it (C1's
+error-swallow was the first). Fixed by deriving the list from
+`seed.Archetypes` at check time, the same embedded content `ethos
+seed` deploys from and the same pattern `checklistAgentNames` already
+uses a few functions below it in `doctor.go`.
+
+**P3 — the two "real hook" tests in `TestHookInvocationObserved`
+asserted against independent literals instead of the spec's own
+fields**, so a wrong edit to `sealHookSpec`/`trailerHookSpec` would
+pass the entire suite and only fail in the field. Now asserts against
+`spec.InvokeArgs`, `spec.NeedsMsgArg`, and `spec.Canonical` directly.
+
+**P4/P5 — see the H1/H2 entry above for P4 (the `sectionIsCurrent`
+WARN downgrade) and the M1 residual bullet below for P5 (the dormant
+trade-off, now pinned with a regression test rather than left
+implicit).**
+
+**P6 — this residual list was itself missing five items**, corrected
+below.
+
+**Design ruling, superseding an earlier reviewer suggestion: keep
+whole-file execution; do not switch to executing only the extracted
+BEGIN/END section.** Section-only was floated as a possible fix for
+H3/P4's sandbox-artifact class and explicitly withdrawn on review: the
+extraction boundary is delimiter-based, and the delimiters are
+attacker-controlled text in an attacker-controlled file — an attacker
+who can write the hook writes their payload between the markers.
+Section-only buys zero adversarial reduction; it converts a false FAIL
+into a false PASS, which is backwards for a branch whose entire purpose
+is eliminating false PASSes. What it would have bought — not executing
+legitimate third-party hooks (husky, pre-commit, lefthook) — is
+accident-avoidance, not attack-avoidance, and S2's enablement gate
+already collects most of that benefit: execution only ever happens in
+repos that are ethos-enabled or already carry an ethos section, where
+the operator opted in and that file already runs on every commit.
+
+**Residual, updated for this addendum (supersedes and extends the
+list above — P6):**
+
+- H3/P4 together are a mitigation, not a full fix, for the class
+  identified above — unchanged from the first addendum.
+- H2's fix is scoped to the one fallback condition proven by probe
+  (`ENOEXEC`), corrected by N2 to attribute the mechanism to libc's
+  `execvp` rather than git's own code, and still not verified against
+  glibc's source for every corner (other errno values, exact `$0`/`$@`
+  quoting on every platform).
+- **Sandbox-vs-reality divergence, named explicitly (P6): this is the
+  largest residual, and the one that inverts this ADR's own stated
+  failure class.** The sandbox is a synthetic environment — an empty,
+  freshly `git init`'d repo, an isolated `HOME`, a stubbed `ethos` — and
+  every divergence from a real commit's environment (H3/P4's staged-file
+  guard, but also branch state, remote configuration, ambient tool
+  availability, or anything else a host section's own logic might
+  condition on) is a potential false FAIL this design cannot
+  structurally close, only mitigate case by case as reviewers find them.
+- M1's trade — no execution in a dormant repo — is now DECIDED, not
+  merely judged: djb's S2 review weighed it explicitly ("executing
+  every foreign hook in every dormant repo on the planet to
+  distinguish a PASS from a WARN is not a trade I'd take") and P5 pins
+  the resulting behavior with a regression test, so a future change
+  cannot silently re-litigate it by accident.
+- **Windows (P6): `ethos doctor` cannot execution-verify a hook there
+  at all** — unchanged from the first addendum's M4 entry. `GOOS=windows
+  GOARCH=amd64 go build ./... && go vet ./internal/doctor/...` are
+  exercised as part of this addendum's gate too, but no Windows
+  *runtime* testing has been done for the process-group code
+  (`procgroup_windows.go`) either — it is inert by construction
+  (`sandboxGOOS` refuses first), not verified on a real Windows host.
+- **Exact-argv brittleness (P6) is closed**, not merely residual:
+  M2 fixed the prefix-match itself, and P3 closed the test-side gap
+  that let a spec/test drift pass silently.
+- **Runtime cost (P6): two hooks × up to `sandboxTimeout` (10s) each
+  is on the critical path of every `ethos doctor` invocation in an
+  enabled repo**, in the worst case (a hung host section on both the
+  seal and trailer hooks). The healthy-path cost is a handful of
+  milliseconds per hook (confirmed by this addendum's own test suite
+  running dozens of real sandbox invocations in low single-digit
+  seconds total); the worst case is bounded but not cheap. No caching,
+  parallelization, or opt-out has been added — an operator hitting this
+  in practice would be an early, useful signal that a host hook section
+  needs its own attention, not that doctor's timeout needs tuning.
+
+**What this addendum's fixes make worse:** nothing found beyond what
+the first addendum already checked. Additionally verified: (1) S1's
+`sandboxEnv` allowlist for `git init` does not change the hook's own
+execution environment, which was already allowlisted before this
+addendum — only the previously-inherited `git init` call's environment
+changed; (2) the containment self-test adds one `git rev-parse` call
+(milliseconds) to every sandboxed invocation, on the same
+`sandboxTimeout`-bounded context as everything else; (3) S4's
+process-group reap runs unconditionally after every `Run()`, including
+the healthy-path case where nothing needs reaping — confirmed
+inexpensive (`syscall.Kill` on an already-empty or already-exited group
+returns promptly) by the full suite's runtime staying in the same
+single-digit-second range as before this addendum.

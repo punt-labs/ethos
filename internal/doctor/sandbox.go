@@ -73,12 +73,17 @@ var sandboxGOOS = runtime.GOOS
 // separately); and a stub `ethos` executable placed first on PATH that
 // records its argv to a log file and exits 0 rather than doing any real
 // work. body is copied in verbatim and executed via its own file, respecting
-// whatever shebang it carries — matching how git runs a hook directly. If
-// that direct execve fails with ENOEXEC (no shebang, or one the kernel does
-// not recognize), git itself falls back to running the file through the
-// shell (`sh -c '"$0" "$@"' <path> <args>`), and this sandbox now matches
-// that fallback exactly (H2/ethos-kcbv follow-up) rather than reporting a
-// shebang-less hook as unexecutable. This is not a uniform `sh -c` wrap —
+// whatever shebang it carries — matching how git runs a hook directly. git
+// spawns hooks via libc's execvp, not the bare execve syscall Go's
+// os/exec uses; execvp (and execlp) carry a POSIX-mandated fallback:
+// when the target has no recognized shebang, execve fails ENOEXEC, and
+// execvp retries the file as an argument to `sh`. This is not git's own
+// code — it is a property of the C library git links against, which
+// happens to give a shebang-less hook a real, working execution path. This
+// sandbox now matches that observable fallback exactly (H2/ethos-kcbv
+// follow-up: `sh -c '"$0" "$@"' <path> <args>` on ENOEXEC) rather than
+// reporting a shebang-less hook as unexecutable, which os/exec's bare
+// execve otherwise makes it look like. This is not a uniform `sh -c` wrap —
 // checkHookPresence still only attempts execution at all for a body
 // textscan.IsShellHook already classifies as shell (including "no shebang",
 // which git also treats as shell), so a hook with a real non-shell shebang
@@ -242,12 +247,13 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// temp-dir cleanup below — a directory that is about to not exist (S4).
 	_ = reapProcessGroup(cmd)
 
-	// git falls back to running a hook through the shell when a direct
-	// execve fails with ENOEXEC — the kernel's answer for a script with no
-	// (or an unrecognized) shebang line. Match that exactly (H2): a
-	// shebang-less hook must be exercised the same way git actually runs
-	// it, not reported as unexecutable because this sandbox tried a bare
-	// execve and stopped there.
+	// libc's execvp (which git uses to spawn hooks) falls back to the shell
+	// when a direct execve fails with ENOEXEC — the kernel's answer for a
+	// script with no (or an unrecognized) shebang line. Match that
+	// observable behavior exactly (H2): a shebang-less hook must be
+	// exercised the same way git actually runs it, not reported as
+	// unexecutable because this sandbox tried a bare execve (what Go's
+	// os/exec does) and stopped there.
 	if errors.Is(runErr, syscall.ENOEXEC) && ctx.Err() == nil {
 		shCmd := exec.CommandContext(ctx, "sh", append([]string{"-c", `"$0" "$@"`, hookPath}, args...)...)
 		shCmd.Dir = dir
