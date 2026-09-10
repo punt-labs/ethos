@@ -11718,7 +11718,7 @@ inexpensive (`syscall.Kill` on an already-empty or already-exited group
 returns promptly) by the full suite's runtime staying in the same
 single-digit-second range as before this addendum.
 
-### Addendum 3 (2026-09-10): PR #515 review — 13 findings from Copilot and qodo, one verified misattributed (fixed anyway on its own merits), one left open as a documented platform-containment residual
+### Addendum 3 (2026-09-10): PR #515 review — 13 findings from Copilot and qodo plus one regression the round introduced and a later Bugbot pass caught, one verified misattributed (fixed anyway on its own merits), one left open as a documented platform-containment residual
 
 **Verified real, fixed:**
 
@@ -11741,7 +11741,9 @@ single-digit-second range as before this addendum.
   git would never run at all was still having its shell content executed
   to diagnose exactly that. The exec-bit check now runs immediately
   after `Stat`, before any execution is attempted; same FAIL message and
-  remedy as before.
+  remedy as before. This reordering introduced a Windows regression of
+  its own — see the follow-up round at the end of this addendum, which
+  restricts the check to platforms where the executable bit exists.
 - **#9 (qodo, `sandbox.go`) — the stub serialized argv with shell
   `"$*"`, collapsing distinct invocations to the same logged string.** A
   hook calling `ethos 'audit seal'` (one argument) and one calling
@@ -11888,13 +11890,58 @@ and here. Closing the escape itself is a platform-specific containment
 design decision for the operator to scope as a follow-up, not a
 same-shape fix to this file's existing pattern.
 
-**What this round's fixes make worse:** nothing found. Checked
+**Follow-up round — one regression this addendum's own #3 fix
+introduced, caught by a later review pass on the same PR:**
+
+- **(Cursor Bugbot, `doctor.go`) — moving the exec-bit check ahead of
+  the sandbox call made it run on Windows, where the executable bit does
+  not exist.** Go's `os.Stat` on Windows derives a regular file's
+  permission bits from the read-only attribute alone — `0o444` when
+  `FILE_ATTRIBUTE_READONLY` is set, `0o666` otherwise, with `0o111`
+  added only for a directory (go1.26 `os/types_windows.go`,
+  `fileStat.mode`; the pre-Go1.23 path is identical on this point, and
+  neither special-cases `.exe`/`.bat`/`.cmd`). `Perm()&0o111 == 0`
+  therefore held for EVERY hook file there. Two consequences, both
+  introduced by this branch: every enabled Windows install FAILed with
+  "present but not executable — run: `chmod +x`", a remedy that does not
+  exist on that platform; and #12's unsupported-platform FAIL/WARN split
+  became unreachable, because the exec-bit check returned before it.
+  Before this branch the exec-bit check sat *after* that split and was
+  unreachable on Windows, so nothing was wrong at the merge-base — the
+  reordering is what did it. CI did not catch it because the doctor
+  tests run on Linux; that gap is unchanged.
+
+  Fixed by gating the check on `sandboxGOOS != "windows"` — the seam the
+  package already uses for its other Windows guard (`sandbox.go`), and
+  what makes both arms testable from a Linux host. #3's property is
+  preserved exactly: on a platform where the bit is meaningful, the
+  check still returns before any hook content is executed; the fix is
+  not a move back to after the sandbox call. **Residual, stated
+  plainly**: `ethos doctor` cannot detect a genuinely non-runnable hook
+  on Windows at all — the bit it would have to read carries no execute
+  semantics, so no reading of it can distinguish a runnable hook from a
+  non-runnable one. And, as with both arms of #12, there is still no
+  Windows *runtime* testing: the guard is exercised only through the
+  unit-level `sandboxGOOS` override, never against a real Windows host.
+  Both arms are pinned by regression tests; the Windows arm was observed
+  failing against pre-fix code, reproducing the exact `chmod +x` FAIL,
+  and asserts which side of #12's split each case lands in, so it proves
+  that branch is reachable again rather than only that the wrong FAIL is
+  gone.
+
+**What this round's fixes make worse:** one regression, found by a later
+review pass and fixed in the follow-up round above — see it for the
+correction to what this paragraph originally claimed about #3. Checked
 specifically: (1) the #9/#2 nonce-and-line-encoding change preserves the
 M2 prefix-match property — `extra trailing argv words still count as the
 invocation (M2)` passes unchanged; (2) moving the exec-bit check earlier
-(#3) changes no FAIL/PASS verdict, only whether the sandbox runs first —
-confirmed by the full `TestCheckSealHook`/`TestCheckTrailerHook` suites,
-unchanged; (3) A's new FAIL path is reached only when
+(#3) changes no FAIL/PASS verdict on a platform whose `FileMode` carries
+execute bits, only whether the sandbox runs first — confirmed by the
+full `TestCheckSealHook`/`TestCheckTrailerHook` suites, unchanged. This
+originally read "changes no FAIL/PASS verdict" without qualification,
+which was wrong: on Windows it changed every enabled repo's verdict to
+FAIL, and the Linux-only suites that "confirmed" it could not have seen
+that; (3) A's new FAIL path is reached only when
 `os.UserHomeDir()` itself errors, which every existing
 `TestCheckDelegatedWorkerArchetypes` case pins `HOME` to a real temp dir
 specifically to avoid — none of those cases exercise the new path, and

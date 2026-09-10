@@ -89,7 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inspected when `os.UserHomeDir()` errored; it now FAILs loudly. A
   hook lacking the executable bit — one git would never run — was still
   executed inside the sandbox before its own exec-bit check; the check
-  now runs first, so a non-executable hook is never run at all. The
+  now runs first, so a non-executable hook is never run at all. That
+  check is skipped on Windows, where a regular file's permission bits
+  come from the read-only attribute alone and never carry an execute
+  bit: running it there would FAIL every enabled install with a
+  `chmod +x` remedy that does not exist on the platform, and would mask
+  the unverifiable-platform result below. `ethos doctor` consequently
+  cannot detect a non-runnable hook on Windows at all. The
   stub's argv log used a lossy, forgeable plain-text format (`"$*"`
   joining and no authentication), so a single-argument call could be
   mistaken for a two-argument one and a hook that never calls ethos
