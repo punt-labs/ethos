@@ -153,9 +153,10 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
-	// DES-072 added the "Mission file hand-edits" check, bumping the
-	// count from 11 to 12.
-	require.Len(t, results, 12)
+	// ethos-bfml/ethos-hy40 added "Audit trailer hook" and ethos-e05k
+	// added "Code archetype delegated-worker guard", bumping the count
+	// from 12 to 14.
+	require.Len(t, results, 14)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]

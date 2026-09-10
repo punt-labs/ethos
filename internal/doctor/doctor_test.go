@@ -545,8 +545,12 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("call after a separator is active", func(t *testing.T) {
-		// A genuine command-position call (after '&&') must still PASS.
-		body := "#!/bin/sh\nprecheck && ethos audit seal\n"
+		// A genuine command-position call (after '&&') must still PASS. The
+		// left side must actually succeed (`true`, not an undefined
+		// `precheck`) — CheckSealHook now proves activity by executing the
+		// hook (ethos-kcbv), and a real shell honors `&&` short-circuiting:
+		// a failing left side means the right side never runs.
+		body := "#!/bin/sh\ntrue && ethos audit seal\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -1009,7 +1013,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", "", nil)
-	require.Len(t, results, 12)
+	require.Len(t, results, 14)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1022,23 +1026,25 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Duplicate fields",
 		"Orphaned agent files",
 		"Audit seal hook",
+		"Audit trailer hook",
 		"Seal hook currency",
 		"Trailer hook currency",
 		"Repo-only completeness",
 		"Local extension files",
 		"Extension key names",
 		"Mission file hand-edits",
+		"Code archetype delegated-worker guard",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 12, PassedCount(results))
+	assert.Equal(t, 14, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", "", nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 11)
+	assert.Less(t, PassedCount(results), 13)
 
 	// At least one result should name the identity directory failure.
 	var found bool
@@ -1083,13 +1089,13 @@ func TestCheckOrphanedAgentFiles_ResolvesTeamFromStoreRoot(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	// Team resolved from the store (withbwk, has bwk) → bwk not orphaned.
-	res := CheckOrphanedAgentFiles(checkoutRoot, storeRoot, teams)
+	res := CheckOrphanedAgentFiles(checkoutRoot, storeRoot, teams, nil)
 	assert.Equal(t, "PASS", res.Status,
 		"bwk is on the store's active team; must not be flagged orphaned: %+v", res)
 
 	// Regression guard: resolving the team from the checkout (nobwk, lacks
 	// bwk) misclassifies bwk as orphaned — the bug this split fixes.
-	buggy := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams)
+	buggy := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams, nil)
 	assert.Equal(t, "FAIL", buggy.Status,
 		"resolving the team from the checkout root falsely flags bwk as orphaned")
 }
@@ -1142,7 +1148,7 @@ func TestCheckOrphanedAgentFiles_ChecklistAgents(t *testing.T) {
 				[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
 			teams := team.NewLayeredStore(ethosDir, ethosDir)
 
-			res := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams)
+			res := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams, nil)
 			assert.Equal(t, tc.wantStatus, res.Status, "detail: %s", res.Detail)
 			if tc.wantDetail != "" {
 				assert.Contains(t, res.Detail, tc.wantDetail)
