@@ -416,11 +416,19 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// worse — any sandbox-infrastructure failure unrelated to the hook at
 	// all (no git on PATH, an unwritable TMPDIR) would surface as a FAIL on
 	// a repo that was never enabled, contradicting the dormant state this
-	// function documents just below. hasMarkerSection's lexical scan is
-	// sufficient here; the dormant case only needs PASS-vs-WARN, and WARN
-	// is advisory regardless.
+	// function documents just below. Two lexical, non-executing scans are
+	// sufficient here — hasMarkerSection for a marked chained section, and
+	// looksLikeInvocation for an unmarked but textually-literal standalone
+	// call (qodo, PR #515: previously only the marked shape reached WARN,
+	// so a standalone `ethos audit seal` with no BEGIN/END markers
+	// silently collapsed into "not enabled here" alongside a genuinely
+	// absent hook) — the dormant case only needs PASS-vs-WARN, and WARN is
+	// advisory regardless. This narrows, but does not close, M1's
+	// documented residual below: a call assembled dynamically (`eval`, a
+	// variable holding the command) is invisible to both scans the same
+	// way it is invisible to every lexical scan, and still reads PASS.
 	if !markerPresent {
-		chained := statErr == nil && hasMarkerSection(body, spec.Tag)
+		chained := statErr == nil && (hasMarkerSection(body, spec.Tag) || looksLikeInvocation(body, spec.InvokeArgs))
 		if chained {
 			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
 		}
@@ -453,11 +461,29 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 			}
 			if errors.Is(err, errSandboxUnsupportedPlatform) {
 				// M4: this build cannot exercise the sandbox on this GOOS.
-				// FAILing here would be a false-positive on a perfectly
-				// healthy install — the pre-execution lexical scan was
-				// platform-neutral, so silently defaulting to FAIL on
-				// today's execution-based check is a regression in the
-				// dangerous direction. WARN, honestly, instead.
+				// FAILing unconditionally here would be a false-positive on
+				// a perfectly healthy install — the pre-execution lexical
+				// scan was platform-neutral, so silently defaulting to FAIL
+				// on today's execution-based check is a regression in the
+				// dangerous direction.
+				//
+				// Narrowed by qodo #12 (PR #515): before execution-based
+				// verification existed, this platform got a lexical check
+				// (looksLikeInvocation's predecessor) that could at least
+				// catch a hook with NO textual trace of the call at all —
+				// broken on every platform, not merely unverifiable on this
+				// one. Blanket-WARNing here regressed that case to "looks
+				// fine," a real loss of detection on the one platform that
+				// cannot fall back to execution. Consult the same lexical
+				// scan used elsewhere in this function: no textual evidence
+				// FAILs (this hook would not pass even the old check);
+				// textual evidence present keeps the honest WARN, since
+				// execution — the only thing that can PROVE the call is
+				// live, not merely present — still cannot run here.
+				if !looksLikeInvocation(body, spec.InvokeArgs) {
+					return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+						"the %s hook shows no textual evidence of the required call, and this platform cannot verify by execution", spec.ShortName) + remedy}
+				}
 				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
 					"cannot verify the %s hook by execution on this platform — inspect it manually", spec.ShortName)}
 			}

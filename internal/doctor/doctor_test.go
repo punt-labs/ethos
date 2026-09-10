@@ -455,35 +455,46 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Equal(t, "not enabled here", r.Detail)
 	})
 
-	// P5: a decided, deliberate trade-off, pinned rather than left implicit.
-	// Before M1, hookInvocationObserved ran even in a dormant repo, so a
-	// standalone (unmarked) hook that unconditionally calls `ethos audit
-	// seal` — no BEGIN/END markers, so hasMarkerSection cannot see it —
-	// still proved `active` by execution and correctly WARNed "chained but
-	// not enabled here": the hook WOULD actually invoke ethos on every real
-	// commit despite the operator believing ethos was disabled. After M1
-	// gates execution on markerPresent, this same repo now reads a plain
-	// PASS "not enabled here", silently losing that detection.
-	//
-	// This is intended, not a regression to fix: djb's review (S2) already
-	// weighed it explicitly — "executing every foreign hook in every
-	// dormant repo on the planet to distinguish a PASS from a WARN is not a
-	// trade I'd take" — and it is recorded as a named residual in DES-077's
-	// addendum. Pinned here so a future change cannot silently restore
-	// execution-in-dormant-repos to "fix" this without that trade-off being
-	// re-litigated on purpose.
-	t.Run("dormant: an unmarked standalone hook that WOULD call ethos still PASSes, not WARN (P5, decided trade-off)", func(t *testing.T) {
-		if _, err := exec.LookPath("git"); err != nil {
-			t.Skip("git not available")
-		}
+	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
+	// here because before M1, only EXECUTION (hookInvocationObserved) could
+	// see a standalone, unmarked call, and djb's review explicitly rejected
+	// executing every foreign hook in every dormant repo just to tell PASS
+	// from WARN. That reasoning was never about lexical detection — a
+	// literal, textually-visible `ethos audit seal` needs no execution to
+	// see. The dormant branch now also runs looksLikeInvocation (a pure
+	// regex scan, same as the "gated-but-unenabled" marked-section case
+	// already used), so this same fixture now WARNs. What P5's trade-off
+	// still protects — and TestCheckSealHook's eval case right below pins
+	// — is a call assembled dynamically (eval, a variable) that no lexical
+	// scan, marker-based or pattern-based, can see without executing it.
+	t.Run("dormant: a textually-literal unmarked standalone call now WARNs (qodo #5, supersedes P5)", func(t *testing.T) {
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		// No BEGIN/END markers — hasMarkerSection cannot see this call —
-		// but it is unconditional: a real commit in this real (dormant)
-		// repo would actually invoke ethos.
+		// but it is unconditional and textually literal: a real commit in
+		// this real (dormant) repo would actually invoke ethos, and the
+		// call is visible to a lexical scan without running anything.
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
 			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+
+		r := CheckSealHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained but ethos not enabled here")
+	})
+
+	// The narrower residual P5 leaves standing: a call built at runtime
+	// (eval, a variable) is invisible to looksLikeInvocation exactly the
+	// way it is invisible to hasMarkerSection — no lexical scan, only
+	// execution, can see through it, and the dormant branch still does not
+	// execute. This is the same djb-reviewed trade-off P5 named, narrowed
+	// to the one shape lexical detection genuinely cannot close.
+	t.Run("dormant: an eval-obscured standalone call still PASSes — the narrower residual lexical scanning cannot close", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\ncmd='ethos audit seal'\neval \"$cmd\"\n"), 0o755))
 
 		r := CheckSealHook(dir)
 		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
@@ -561,6 +572,27 @@ func TestCheckSealHook(t *testing.T) {
 		assert.True(t, r.Passed(), "an unverifiable platform must not gate doctor's exit status")
 		assert.Contains(t, r.Detail, "cannot verify")
 		assert.NotContains(t, r.Detail, "not chained")
+	})
+
+	// qodo #12 (PR #515): before execution-based verification, Windows
+	// still got SOME lexical check, which could catch a hook with zero
+	// textual trace of the required call. M4's blanket WARN regressed that
+	// specific case — one that would fail even the OLD check — to "looks
+	// fine." A hook with no textual evidence at all must still FAIL on
+	// this platform; only a hook WITH textual evidence (M4's actual case)
+	// gets the honest "cannot verify" WARN.
+	t.Run("unsupported platform, no textual evidence of the call at all → FAIL, not a false WARN (qodo #12)", func(t *testing.T) {
+		orig := sandboxGOOS
+		sandboxGOOS = "windows"
+		t.Cleanup(func() { sandboxGOOS = orig })
+
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"echo nothing to see here\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "no textual evidence")
 	})
 
 	// --- Enabled: seal-call detection (marker present) ---
