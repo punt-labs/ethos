@@ -11842,9 +11842,13 @@ single-digit-second range as before this addendum.
   more precise claim than "not Windows." Retagged to the Go 1.19+ `unix`
   build constraint (`procgroup_unix.go`: `//go:build unix`;
   `procgroup_windows.go`: `//go:build !unix`). Every target this project
-  actually ships (`darwin/arm64`, `darwin/amd64`, `linux/arm64`) plus the
+  actually ships — the four `make dist` builds (`darwin/arm64`,
+  `darwin/amd64`, `linux/arm64`, `linux/amd64`) — plus the
   build-verification-only `windows/amd64` target still build clean; no
-  behavior changed on any of them.
+  behavior changed on any of them. `windows/amd64` is exercised by this
+  round's gate but is not distributed: `make dist` produces no Windows
+  binary, which is the premise M4's WARN-is-the-ceiling rationale rests
+  on, so the distinction is load-bearing rather than pedantic.
 
 **Fixed — but the fix is to the claim, not the escape:**
 
