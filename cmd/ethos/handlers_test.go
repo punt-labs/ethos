@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -114,6 +115,38 @@ func TestRunDoctor_AllPass(t *testing.T) {
 	assert.Contains(t, stdout, "Duplicate fields")
 	assert.Contains(t, stdout, "PASS")
 	assert.NotContains(t, stdout, "FAIL")
+}
+
+// TestRunDoctor_TableColumnFitsLongestName pins N3: the text-table column
+// width is computed from the longest check name, not a fixed literal.
+// "Code archetype delegated-worker guard" (38 chars) overflowed the old
+// %-24s, pushing its Status/Detail into the name column instead of the
+// aligned Status column every other row uses.
+func TestRunDoctor_TableColumnFitsLongestName(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setInProcessEnv(t, se)
+
+	stdout, _, err := execHandler(t, "doctor")
+	require.NoError(t, err, "expected all doctor checks to pass")
+
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	require.NotEmpty(t, lines)
+	statusCol := -1
+	for _, line := range lines {
+		idx := strings.Index(line, "PASS")
+		if idx == -1 {
+			idx = strings.Index(line, "WARN")
+		}
+		if idx == -1 {
+			idx = strings.Index(line, "FAIL")
+		}
+		require.NotEqual(t, -1, idx, "line has no status token: %q", line)
+		if statusCol == -1 {
+			statusCol = idx
+		}
+		assert.Equal(t, statusCol, idx,
+			"every row's status must start in the same column — a name longer than the fixed width breaks alignment: %q", line)
+	}
 }
 
 func TestRunDoctor_Failure(t *testing.T) {

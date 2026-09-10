@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/punt-labs/ethos/v4/plugin/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,13 +69,19 @@ func TestHookInvocationObserved(t *testing.T) {
 	})
 
 	t.Run("the real DES-058 pre-commit hook is observed calling audit seal", func(t *testing.T) {
-		observed, err := hookInvocationObserved(hooks.PreCommit, []string{"audit", "seal"}, false)
+		// P3: assert against sealHookSpec's own fields, not independent
+		// literals — a literal ["audit", "seal"] passes this test even if
+		// sealHookSpec.InvokeArgs drifts from it, which is exactly the gap
+		// this test looks like it closes but does not. spec.Canonical is
+		// hooks.PreCommit; using the spec field keeps the body tied to the
+		// same source of truth as the argv it is checked against.
+		observed, err := hookInvocationObserved(sealHookSpec.Canonical, sealHookSpec.InvokeArgs, sealHookSpec.NeedsMsgArg)
 		require.NoError(t, err)
 		assert.True(t, observed, "the production hook body must be seen invoking ethos audit seal")
 	})
 
 	t.Run("the real DES-054 commit-msg hook is observed calling hook commit-trailers", func(t *testing.T) {
-		observed, err := hookInvocationObserved(hooks.CommitMsg, []string{"hook", "commit-trailers"}, true)
+		observed, err := hookInvocationObserved(trailerHookSpec.Canonical, trailerHookSpec.InvokeArgs, trailerHookSpec.NeedsMsgArg)
 		require.NoError(t, err)
 		assert.True(t, observed, "the production hook body must be seen invoking ethos hook commit-trailers")
 	})

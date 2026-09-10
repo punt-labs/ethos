@@ -294,8 +294,21 @@ func runDoctor(cmd *cobra.Command) error {
 			return err
 		}
 	} else {
+		// The column width is computed from the longest check name present
+		// (N3), not a fixed literal — a hardcoded width silently overflows
+		// the first time a check gets a name longer than it, exactly what
+		// happened to "Code archetype delegated-worker guard" against the
+		// old %-24s. Deriving it from the actual names is the same fix in
+		// spirit as this whole round's theme: verify the property, don't
+		// enumerate an instance that will eventually be wrong again.
+		width := 0
 		for _, r := range results {
-			fmt.Fprintf(out, "  %-24s %s  %s\n", r.Name, r.Status, r.Detail)
+			if len(r.Name) > width {
+				width = len(r.Name)
+			}
+		}
+		for _, r := range results {
+			fmt.Fprintf(out, "  %-*s %s  %s\n", width, r.Name, r.Status, r.Detail)
 		}
 	}
 
