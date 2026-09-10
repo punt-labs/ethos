@@ -11224,9 +11224,15 @@ is `checkHookPresence(repoRoot, trailerHookSpec)` — a one-line function.
 hook's exact bytes into a disposable, `git init`'d temp directory carrying
 a synthetic `.punt-labs/ethos/enabled` marker, places a stub `ethos`
 executable first on `PATH` that logs its argv and exits 0, executes the
-hook file directly (respecting its own shebang — never wrapped in
-`sh -c`, so a non-shell hook is exercised, or fails to run, exactly as git
-would run it), and reports whether the stub observed the expected argv
+hook file directly respecting its own shebang first (so a non-shell hook
+is exercised, or fails to run, exactly as git would run it) — with one
+narrow exception: a shebang-less hook, which a bare `execve` cannot run
+at all, is retried through `sh -c` on `ENOEXEC`, matching the same
+fallback libc's `execvp` gives it when git spawns it directly (H2,
+sharpened by N2, in the rejected alternatives just below). Every hook
+with a real, recognized shebang — shell or otherwise — is never routed
+through `sh -c`; only the shebang-less case is. `hookInvocationObserved`
+then reports whether the stub observed the expected argv
 (`{"audit", "seal"}` or `{"hook", "commit-trailers"}`).
 
 This closes every lexical corner by construction rather than by adding a
@@ -11711,3 +11717,129 @@ the healthy-path case where nothing needs reaping — confirmed
 inexpensive (`syscall.Kill` on an already-empty or already-exited group
 returns promptly) by the full suite's runtime staying in the same
 single-digit-second range as before this addendum.
+
+### Addendum 3 (2026-09-10): PR #515 review — 13 findings from Copilot and qodo, two verified misattributed or already-accepted, one left open as a platform-containment residual
+
+**Verified real, fixed:**
+
+- **A (Copilot/qodo, `archetype_check.go`) — `CheckDelegatedWorkerArchetypes`
+  silently dropped the global archetype layer when `os.UserHomeDir()`
+  errored**, building its `ArchetypeStore` with an empty global root and
+  reading PASS on an install it never actually inspected — the same
+  "could not determine" → "treat as verified" shape as C1 above,
+  recurring a third time in this file. Now FAILs loudly, naming the
+  resolution error.
+- **B (Copilot, `procgroup_unix.go`) — `reapProcessGroup` returned
+  `syscall.Kill`'s raw error**, including `ESRCH`, the expected result
+  on its unconditional post-`Run()` call: the process group has usually
+  already exited normally by the time it fires. Now swallowed
+  specifically; every other errno still surfaces.
+- **#3 (qodo, `doctor.go`) — a hook lacking the executable bit was still
+  executed inside the sandbox** before `checkHookPresence`'s later
+  exec-bit check, because the sandbox always writes its own copy at mode
+  `0o755` regardless of the installed file's own permissions — a hook
+  git would never run at all was still having its shell content executed
+  to diagnose exactly that. The exec-bit check now runs immediately
+  after `Stat`, before any execution is attempted; same FAIL message and
+  remedy as before.
+- **#9 (qodo, `sandbox.go`) — the stub serialized argv with shell
+  `"$*"`, collapsing distinct invocations to the same logged string.** A
+  hook calling `ethos 'audit seal'` (one argument) and one calling
+  `ethos audit seal` (two arguments) both logged `"audit seal"` and were
+  indistinguishable. The stub now writes each argument on its own line
+  (a `for` loop over `"$@"`, not `"$*"`), and the verifier compares argv
+  element-by-element instead of a joined string.
+- **#2 (qodo, `sandbox.go`) — the log file lived at a predictable path
+  with no authentication**, so a hook that never calls ethos at all
+  could satisfy the check by writing matching text directly
+  (`printf 'audit seal\n' > invocations.log`, the reviewer's PoC). Fixed
+  together with #9: each record now carries a fresh per-run nonce
+  (`crypto/rand`) the verifier requires as the record's first line. This
+  defeats the literal PoC; it does not defend against a hook that reads
+  the stub script at runtime to learn the nonce — see residual below.
+- **#6 (qodo, `DESIGN.md`) — this ADR's own "Decision — presence is
+  proven by execution" text still asserted the hook is "never wrapped
+  in `sh -c`"** as an unconditional fact, even though H2/N2 in the very
+  next section already documented the `ENOEXEC` retry exception. The
+  primary text now states the exception inline rather than relying on a
+  reader reaching the correction in the rejected-alternatives list below
+  it.
+- **#13 (qodo, `CHANGELOG.md`) — the Fixed entry attributed the
+  `ENOEXEC` shell fallback to "git['s] own `ENOEXEC` shell fallback,"**
+  the same misattribution N2 already corrected in this file's prose, but
+  that correction never propagated to the changelog. Now names libc's
+  `execvp`.
+- **#11 (qodo, `doctor.go` / deposited guides) — both the canonical
+  (`internal/enable/guide/CLAUDE.md`) and this repo's own deposited
+  (`.punt-labs/ethos/CLAUDE.md`) gotcha text still said "`ethos doctor`
+  checks seal-hook presence only,"** stale since `CheckTrailerHook`
+  shipped in this same PR. Both now say "seal and trailer hook
+  presence."
+
+**Verified misattributed — no code change:**
+
+- **#10 (qodo, `procgroup_unix.go`) — "some non-Windows builds no longer
+  compile."** `GOOS=plan9` and `GOOS=js` fail to build the whole module
+  at `internal/process` (`//go:build linux || darwin || windows`),
+  present at this branch's merge-base (commit `ec47a92`) well before
+  this PR touched anything. `procgroup_unix.go`'s `!windows` tag is
+  never reached on those targets — the module already refused to build
+  for them for an unrelated, pre-existing reason. Every target this
+  project actually ships (`darwin/arm64`, `darwin/amd64`, `linux/arm64`,
+  `windows/amd64`) builds clean.
+
+**Verified real, but already an accepted, documented trade-off — no
+change:**
+
+- **#5 (qodo, `doctor.go:422-427`) — "dormant repos hide active seal
+  hooks" when a hook is chained without the marker section wrapper
+  `hasMarkerSection` looks for** (e.g. an unmarked, `eval`-obscured
+  legacy call). This is exactly M1's residual, stated plainly in this
+  ADR's first addendum: gating execution on the enabled marker trades
+  away the WARN a lexical-scan-only dormant path used to produce, in
+  exchange for never running third-party shell for a repo that enforces
+  nothing regardless. Judged the right trade there; re-litigating it is
+  a design decision for the operator, not a review-round patch.
+- **#12 (qodo, `doctor.go:439-451`) — "inactive Windows hooks pass
+  doctor" because `errSandboxUnsupportedPlatform` downgrades to WARN,
+  and `Result.Passed()` treats WARN as success.** This is M4's residual,
+  stated plainly in the first addendum: "`ethos doctor` still cannot
+  execution-verify a hook on Windows at all — WARN … is the ceiling, not
+  a stopgap toward full coverage," on a target `make dist` does not
+  currently ship. Restoring FAIL-by-default would reproduce the exact
+  false-positive M4 was written to close on every healthy Windows
+  install. Unchanged.
+
+**Residual after this round — stated plainly:**
+
+- **#4 (qodo, `sandbox.go`/`procgroup_unix.go`, HIGH) — a hook child
+  that calls `setsid` before backgrounding escapes both the timeout and
+  the unconditional post-`Run()` reap.** S4 (first addendum) closed the
+  same-process-group case (`cmd &`, `nohup`); it does not close a child
+  that detaches into its own session, because
+  `kill(-pgid, SIGKILL)` cannot reach a process that is no longer in
+  that group by construction — that is what `setsid` exists to do.
+  Verified real: `setsid sh -c 'while :; do :; done' &` inside a
+  sandboxed hook outlives `hookInvocationObserved` returning. No
+  portable, unprivileged fix exists across every shipped target: Linux
+  has `PR_SET_CHILD_SUBREAPER` (a `prctl`, no cross-platform
+  equivalent); darwin has no comparable primitive without cgroups or
+  ptrace-level containment, neither available to an unprivileged process
+  in the general case. Left open rather than patched partially
+  (Linux-only, untested on darwin) in a mechanical review-fix round;
+  closing it is a platform-specific containment design decision for the
+  operator to scope, not a same-shape fix to this file's existing
+  pattern.
+
+**What this round's fixes make worse:** nothing found. Checked
+specifically: (1) the #9/#2 nonce-and-line-encoding change preserves the
+M2 prefix-match property — `extra trailing argv words still count as the
+invocation (M2)` passes unchanged; (2) moving the exec-bit check earlier
+(#3) changes no FAIL/PASS verdict, only whether the sandbox runs first —
+confirmed by the full `TestCheckSealHook`/`TestCheckTrailerHook` suites,
+unchanged; (3) A's new FAIL path is reached only when
+`os.UserHomeDir()` itself errors, which every existing
+`TestCheckDelegatedWorkerArchetypes` case pins `HOME` to a real temp dir
+specifically to avoid — none of those cases exercise the new path, and
+none regressed. Every regression test above was confirmed failing
+against pre-fix code before its fix landed.

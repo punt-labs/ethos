@@ -43,8 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error) silently PASSed as "nothing to enforce" instead of FAILing —
   ethos-e05k's failure mode recurring inside the check written to catch
   it. The sandbox executed the hook via a bare `execve`, so a
-  shebang-less hook (which git runs fine via its own `ENOEXEC` shell
-  fallback) read as unexecutable; it now matches that fallback exactly.
+  shebang-less hook (which git runs fine via libc's `execvp` and its
+  POSIX-mandated `ENOEXEC` retry through `sh` — not git's own code)
+  read as unexecutable; it now matches that fallback exactly.
   When the ethos stub was never reached, every cause (a missing
   interpreter, a sandbox timeout, a host section that exits before the
   ethos call) collapsed into the same misleading "stale — run `ethos
@@ -81,6 +82,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists to catch. A host-section failure now WARNs instead of FAILing
   "stale" when the installed ethos section is provably byte-current.
   Full defect list, fixes, and residual in DES-077's second addendum.
+- **A third review pass (PR #515, Copilot + qodo) found a security-relevant
+  execution-ordering gap and a verification-spoofing pair, both fixed in
+  the same release.** `CheckDelegatedWorkerArchetypes` silently dropped
+  the global archetype layer and read PASS on an install it never
+  inspected when `os.UserHomeDir()` errored; it now FAILs loudly. A
+  hook lacking the executable bit — one git would never run — was still
+  executed inside the sandbox before its own exec-bit check; the check
+  now runs first, so a non-executable hook is never run at all. The
+  stub's argv log used a lossy, forgeable plain-text format (`"$*"`
+  joining and no authentication), so a single-argument call could be
+  mistaken for a two-argument one and a hook that never calls ethos
+  could fabricate a matching log line directly; the log now carries
+  boundary-preserving, per-argument lines behind a fresh per-run nonce.
+  `reapProcessGroup` surfaced `ESRCH` (the expected result when nothing
+  is left to reap) as an error. Full defect list, fixes, and residual
+  (a `setsid`-detached hook child still escapes containment — no
+  portable, unprivileged fix exists across every shipped target) in
+  DES-077's third addendum.
 
 ## [4.18.0] - 2026-09-08
 
