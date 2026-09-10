@@ -307,9 +307,26 @@ func classifyMissedInvocation(ctx context.Context, runErr error) error {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(runErr, &exitErr) {
-		return fmt.Errorf("the hook exited %d before reaching the ethos call", exitErr.ExitCode())
+		return &hookExitedEarlyError{code: exitErr.ExitCode()}
 	}
 	return fmt.Errorf("running the sandboxed hook: %w", runErr)
+}
+
+// hookExitedEarlyError distinguishes classifyMissedInvocation's "exited
+// before reaching ethos" case from its siblings (P4): checkHookPresence
+// needs to tell this one apart from a missing interpreter or a timeout, so
+// it can downgrade to WARN when the installed marker section is provably
+// byte-current — a host section's own guard failed, not the ethos section,
+// and re-chaining identical content via `ethos enable` would reproduce the
+// exact same failure. A bare error string would need callers to parse
+// prose to make that distinction, which is fragile; a typed error lets
+// errors.As do it precisely.
+type hookExitedEarlyError struct {
+	code int
+}
+
+func (e *hookExitedEarlyError) Error() string {
+	return fmt.Sprintf("the hook exited %d before reaching the ethos call", e.code)
 }
 
 // gitInSandbox runs `git -C dir <args>` with env (never the caller's

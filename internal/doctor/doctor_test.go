@@ -455,6 +455,41 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Equal(t, "not enabled here", r.Detail)
 	})
 
+	// P5: a decided, deliberate trade-off, pinned rather than left implicit.
+	// Before M1, hookInvocationObserved ran even in a dormant repo, so a
+	// standalone (unmarked) hook that unconditionally calls `ethos audit
+	// seal` — no BEGIN/END markers, so hasMarkerSection cannot see it —
+	// still proved `active` by execution and correctly WARNed "chained but
+	// not enabled here": the hook WOULD actually invoke ethos on every real
+	// commit despite the operator believing ethos was disabled. After M1
+	// gates execution on markerPresent, this same repo now reads a plain
+	// PASS "not enabled here", silently losing that detection.
+	//
+	// This is intended, not a regression to fix: djb's review (S2) already
+	// weighed it explicitly — "executing every foreign hook in every
+	// dormant repo on the planet to distinguish a PASS from a WARN is not a
+	// trade I'd take" — and it is recorded as a named residual in DES-077's
+	// addendum. Pinned here so a future change cannot silently restore
+	// execution-in-dormant-repos to "fix" this without that trade-off being
+	// re-litigated on purpose.
+	t.Run("dormant: an unmarked standalone hook that WOULD call ethos still PASSes, not WARN (P5, decided trade-off)", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		// No BEGIN/END markers — hasMarkerSection cannot see this call —
+		// but it is unconditional: a real commit in this real (dormant)
+		// repo would actually invoke ethos.
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+
+		r := CheckSealHook(dir)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
 	t.Run("heredoc-quoted marker on a never-enabled repo → PASS not WARN", func(t *testing.T) {
 		// A foreign hook that only documents the marker text inside a heredoc,
 		// on a repo with no enabled marker, must not read as a chained section
@@ -645,6 +680,32 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "exited 1 before reaching the ethos call")
 		assert.NotContains(t, r.Detail, "stale — run",
 			"a host-section failure needs its own message, not the misleading 'stale, run ethos enable' remedy, which fixes nothing here")
+	})
+
+	// P4: when the installed marker section is BYTE-IDENTICAL to what this
+	// ethos build would install today, a host-section-exited failure must
+	// WARN, not FAIL "stale" — the ethos section is demonstrably not the
+	// problem, and `ethos enable` re-chaining identical content would
+	// reproduce this exact same failure, making that remedy useless.
+	// Unlike the H3 test above (a hand-written section that does not match
+	// what Chain would produce, so it correctly stays FAIL), this uses the
+	// real githook.Chain output.
+	t.Run("P4: a genuinely current section still WARNs, not FAILs, when the host section exits first", func(t *testing.T) {
+		dir := t.TempDir()
+		hooksDir := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+		hookPath := filepath.Join(hooksDir, "pre-commit")
+		guard := "#!/bin/sh\n[ -f /nonexistent-marker-ethos-doctor-p4-probe ] || exit 1\n"
+		require.NoError(t, os.WriteFile(hookPath, []byte(guard), 0o755))
+		_, err := githook.Chain(hookPath, sealHookSpec.Canonical, sealHookSpec.Tag, sealHookSpec.Ident)
+		require.NoError(t, err)
+		mark(t, dir)
+
+		r := CheckSealHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "exited (status 1) before reaching the ethos call")
+		assert.Contains(t, r.Detail, "not stale")
+		assert.Contains(t, r.Detail, "host-section problem")
 	})
 
 	t.Run("printf note inside a section is stale, not active", func(t *testing.T) {

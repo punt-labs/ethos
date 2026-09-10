@@ -450,6 +450,22 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
 					"cannot verify the %s hook by execution on this platform — inspect it manually", spec.ShortName)}
 			}
+			var earlyExit *hookExitedEarlyError
+			if errors.As(err, &earlyExit) && sectionIsCurrent(body, spec) {
+				// P4: the sandbox's empty, freshly git-init'd repo can make a
+				// perfectly healthy host section short-circuit before the
+				// chained ethos section ever runs (H3's residual). When the
+				// installed marker section is BYTE-IDENTICAL to what this
+				// build would install today, the ethos section itself is
+				// demonstrably not the problem — `ethos enable` would
+				// re-chain the same content and reproduce this exact
+				// failure. FAILing "stale" here is both wrong (the section
+				// is current) and useless (the prescribed remedy fixes
+				// nothing); WARN names what actually happened instead.
+				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+					"could not verify — a host section exited (status %d) before reaching the ethos call; the %s section itself matches this ethos build, not stale — this looks like a host-section problem, not an ethos one",
+					earlyExit.code, spec.ShortName)}
+			}
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 				"cannot verify the %s hook by execution: %v", spec.ShortName, err)}
 		}
@@ -501,6 +517,22 @@ func hasMarkerSection(body []byte, tag string) bool {
 		}
 	}
 	return false
+}
+
+// sectionIsCurrent reports whether body's installed spec.Tag section is
+// byte-identical (after line-terminator normalization) to what this ethos
+// build would install today — the same digest comparison CheckHookCurrency
+// runs, reused here so checkHookPresence's P4 WARN downgrade can ask "is
+// the ethos section itself the problem" without duplicating that logic. A
+// section that cannot be parsed at all (truncated, hand-duplicated, not
+// ethos-owned) is treated as not current — only a clean, matching section
+// justifies telling the operator the problem is elsewhere.
+func sectionIsCurrent(body []byte, spec HookSpec) bool {
+	installed, ok, err := githook.InstalledSection(body, spec.Tag, spec.Ident)
+	if err != nil || !ok {
+		return false
+	}
+	return digestSection(installed) == digestSection(githook.ExpectedSection(spec.Tag, spec.Canonical))
 }
 
 // invocationPattern matches an ethos subcommand call in command position:
