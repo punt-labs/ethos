@@ -107,6 +107,29 @@ func TestHookInvocationObserved(t *testing.T) {
 		assert.False(t, observed, "a longer subcommand sharing the prefix must not read as a match")
 	})
 
+	t.Run("a single quoted argument is not mistaken for two separate ones (qodo, PR #515)", func(t *testing.T) {
+		// A hook calling `ethos 'audit seal'` passes ONE argument, not the
+		// two-word `audit`, `seal` pair being probed for — argv's $*-joined
+		// serialization previously collapsed both shapes to the identical
+		// string "audit seal", so this single-argument call falsely matched.
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\nethos 'audit seal'\n"),
+			[]string{"audit", "seal"}, false)
+		require.NoError(t, err)
+		assert.False(t, observed, "a single argument 'audit seal' must not satisfy a search for the two-argument audit, seal pair")
+	})
+
+	t.Run("a static forged log line does not satisfy the observer (qodo, PR #515)", func(t *testing.T) {
+		// The qodo PoC: a hook that never calls ethos at all, but writes a
+		// line matching the OLD plain-text log format directly. Without the
+		// per-run nonce, this satisfied the observer.
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\nprintf 'audit seal\\n' >> invocations.log\nexit 0\n"),
+			[]string{"audit", "seal"}, false)
+		require.NoError(t, err)
+		assert.False(t, observed, "a hook that fabricates the old plain-text log line without ever calling ethos must not read as active")
+	})
+
 	t.Run("git unavailable is reported, not silently swallowed", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
 		_, err := hookInvocationObserved([]byte("#!/bin/sh\nethos audit seal\n"), []string{"audit", "seal"}, false)

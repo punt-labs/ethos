@@ -2,6 +2,8 @@ package doctor
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -192,7 +194,33 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		return false, fmt.Errorf("sandbox stub dir: %w", err)
 	}
 	logPath := filepath.Join(dir, "invocations.log")
-	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shQuote(logPath) + "\nexit 0\n"
+
+	// invocationNonce is a fresh, unpredictable-ahead-of-time value the stub
+	// writes as the first line of every record (qodo, PR #515): a hook
+	// body written or reviewed before this run has no way to know it, so a
+	// hook that merely writes plausible-looking text straight to
+	// "invocations.log" — the qodo PoC was `printf 'audit seal\n' >
+	// invocations.log` — no longer produces a record hookInvocationObserved
+	// will accept. This does not defend against a hook that actively reads
+	// its own sandbox at runtime (the stub script, containing this same
+	// nonce, is right there on disk) — that residual is the same
+	// no-full-OS-sandbox limitation DES-077 already documents for arbitrary
+	// code execution generally, not a gap specific to this check.
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return false, fmt.Errorf("sandbox nonce: %w", err)
+	}
+	nonce := hex.EncodeToString(nonceBytes)
+
+	// Each argument is written on its own line via a `for` loop over "$@",
+	// not `"$*"` (M2/qodo, PR #515): $* joins argv with IFS's first
+	// character, so a hook calling `ethos 'audit seal'` (one argument) and
+	// one calling `ethos audit seal` (two arguments) previously serialized
+	// to the identical string "audit seal" and were indistinguishable. A
+	// line-per-argument record, terminated by invocationRecordSep, lets the
+	// matcher below compare argv element-by-element instead of a lossy
+	// joined string.
+	stub := "#!/bin/sh\n{\nprintf '%s\\n' " + shQuote(nonce) + "\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\nprintf '" + invocationRecordSep + "'\n} >> " + shQuote(logPath) + "\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(stubDir, "ethos"), []byte(stub), 0o755); err != nil {
 		return false, fmt.Errorf("sandbox stub: %w", err)
 	}
@@ -272,18 +300,50 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		}
 		return false, fmt.Errorf("reading sandbox log: %w", err)
 	}
-	want := strings.Join(argv, " ")
-	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		// Prefix match, not exact equality: a real hook calling
-		// `ethos audit seal --quiet` logs "audit seal --quiet", which must
-		// still count as an observed "audit seal" invocation. The boundary
-		// check (word break or end of line) stops `ethos audit sealed` from
-		// falsely matching "audit seal".
-		if line == want || (strings.HasPrefix(line, want) && len(line) > len(want) && line[len(want)] == ' ') {
-			return true, nil
+	return matchesInvocation(string(data), nonce, argv), nil
+}
+
+// invocationRecordSep terminates one logged invocation record in the stub's
+// log file. \x1e (ASCII record separator) is vanishingly unlikely to appear
+// in a real hook's arguments and cannot collide with a newline the way a
+// bare line-per-record format would.
+const invocationRecordSep = "\x1e"
+
+// matchesInvocation reports whether data — the stub's raw log file — holds a
+// record for nonce whose leading lines equal argv exactly, element by
+// element. Each record is nonce followed by one line per logged argument
+// (see hookInvocationObserved's stub script); a record for the wrong nonce,
+// or one whose argv does not start with argv exactly, is not a match.
+//
+// A prefix match, not full-record equality: a real hook calling
+// `ethos audit seal --quiet` logs argument lines "audit" "seal" "--quiet",
+// which must still count as an observed "audit seal" invocation — the
+// trailing "--quiet" line is simply not compared.
+func matchesInvocation(data, nonce string, argv []string) bool {
+	for _, record := range strings.Split(data, invocationRecordSep) {
+		lines := strings.Split(record, "\n")
+		if len(lines) == 0 || lines[0] != nonce {
+			continue
+		}
+		got := lines[1:]
+		if len(got) > 0 && got[len(got)-1] == "" {
+			got = got[:len(got)-1] // trailing "" from the final arg line's "\n"
+		}
+		if len(got) < len(argv) {
+			continue
+		}
+		match := true
+		for i, w := range argv {
+			if got[i] != w {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 // classifyMissedInvocation explains why the ethos stub was never reached, so
