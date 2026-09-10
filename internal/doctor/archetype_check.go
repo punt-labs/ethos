@@ -90,10 +90,18 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not determine which archetypes require monitoring: %v", err)}
 	}
 
-	globalRoot := ""
-	if home, err := os.UserHomeDir(); err == nil {
-		globalRoot = filepath.Join(home, ".punt-labs", "ethos")
+	// An unresolvable HOME must FAIL, not silently drop the global layer
+	// (Copilot/qodo, PR #515): NewArchetypeStore treats an empty global root
+	// as "no global layer to check", so a repo with no repo-local archetype
+	// for a monitored name would read PASS — a positive statement about
+	// global archetypes this check never actually inspected. Same shape as
+	// C1 above and archetypeAttemptedPath below: "could not determine"
+	// silently collapsing into a specific, healthy-looking answer.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not determine the global archetype root: %v", err)}
 	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	store := mission.NewArchetypeStore(filepath.Join(storeRoot, ".punt-labs", "ethos"), globalRoot)
 
 	repoArchRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")

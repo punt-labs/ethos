@@ -172,6 +172,27 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		assert.NotContains(t, r.Detail, "(global,", "a permission error on the repo-local file must not be misreported as global: %s", r.Detail)
 	})
 
+	// Copilot/qodo (PR #515): CheckDelegatedWorkerArchetypes swallowed
+	// os.UserHomeDir()'s error and built the ArchetypeStore with an empty
+	// global root, so an unresolvable HOME silently dropped the global
+	// layer instead of failing loudly — the exact "could not determine" →
+	// "treat as verified" shape the file's own doc comments already name
+	// as C1's failure mode, recurring a third time in this same file.
+	t.Run("HOME unresolvable — cannot inspect the global layer, must FAIL not PASS silently", func(t *testing.T) {
+		t.Setenv("HOME", "") // os.UserHomeDir() errors on Unix when $HOME is empty
+		if runtime.GOOS == "windows" {
+			t.Setenv("USERPROFILE", "")
+			t.Setenv("HOMEDRIVE", "")
+			t.Setenv("HOMEPATH", "")
+		}
+		storeRoot := t.TempDir() // no repo-local archetypes either
+
+		r := CheckDelegatedWorkerArchetypes(storeRoot)
+		require.Equal(t, "FAIL", r.Status,
+			"an unresolvable HOME must FAIL loudly — silently skipping the global layer reads as a clean PASS on an install doctor never actually inspected: %+v", r)
+		assert.Contains(t, r.Detail, "global archetype root")
+	})
+
 	t.Run("repo-local shadows a fine global with a stale copy → FAIL still names repo-local", func(t *testing.T) {
 		// This is the "shadow" scenario the bead calls out by name: a fine
 		// global archetype does not help, because the repo-local file

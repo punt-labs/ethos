@@ -3,6 +3,7 @@
 package doctor
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 )
@@ -26,9 +27,19 @@ func setNewProcessGroup(cmd *exec.Cmd) {
 // after cmd.Run() returns, regardless of how it returned — a backgrounded
 // grandchild is orphaned by its parent's normal exit, not by a timeout, so
 // relying on Cancel alone misses it entirely.
+//
+// ESRCH ("no such process") is the expected result, not a failure: this is
+// called unconditionally after every Run(), and the common case is a group
+// that has already exited on its own with nothing left to reap (Copilot, PR
+// #515). Surfacing that as a sandbox error would read as a confusing
+// spurious failure on a perfectly healthy hook. Every other errno (EPERM, a
+// genuinely wedged process) is still returned.
 func reapProcessGroup(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
-	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
