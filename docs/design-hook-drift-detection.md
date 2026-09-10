@@ -49,7 +49,9 @@ hook on an enabled repo means trailers silently stop landing, forever,
 with `doctor` green. hy40's job is *presence and activity parity*: give
 commit-msg the same four-state check (`FAIL` missing/inactive on an
 enabled repo, `PASS` not-enabled, `WARN` gated-but-unenabled) that
-`CheckSealHook` already gives pre-commit. hy40 is not built yet.
+`CheckSealHook` already gives pre-commit. Built: `CheckTrailerHook` in
+`internal/doctor/doctor.go`, sharing `checkHookPresence` with the seal
+side via `HookSpec`. See DES-077.
 
 **`ethos-kcbv`** — `CheckSealHook`'s `hasActiveSealCall` is a lexical
 scanner over shell text, and it has needed four rounds of refinement

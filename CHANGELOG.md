@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos doctor` gained two checks.** "Audit trailer hook" mirrors the
+  existing "Audit seal hook": on an enabled repo it now FAILs when the
+  commit-msg hook is missing or inactive, closing a gap where a
+  hand-removed or host-clobbered trailer hook produced no FAIL anywhere
+  (ethos-bfml/ethos-hy40). "Code archetype delegated-worker guard" FAILs
+  when the deployed `implement` or `test` archetype is missing
+  `require_delegated_worker: true`, naming which layer (repo-local or
+  global) is stale (ethos-e05k). `ethos doctor` now runs 14 checks, up
+  from 12.
+
+### Changed
+
+- **`ethos doctor`'s seal-hook activity check is now proven by execution,
+  not by pattern-matching shell text.** The installed hook is run
+  verbatim in a disposable sandbox and the check observes whether it
+  actually invokes `ethos audit seal`/`ethos hook commit-trailers`,
+  closing the class of false-negative shapes (comments, heredocs, `eval`,
+  aliased wrappers) a lexical scanner can only special-case one at a time
+  (ethos-kcbv). `git` is a hard dependency of this specific check now; it
+  already was a hard dependency of the hooks themselves.
+- **The "Orphaned agent files" FAIL detail now distinguishes a stale
+  generated file (a resolvable identity, just not on the active team —
+  safe to delete) from a genuine orphan (no matching identity anywhere —
+  investigate before deleting)**, instead of one undifferentiated "not on
+  any team" message (ethos-jw1z).
+
 ## [4.18.0] - 2026-09-08
 
 ### Added

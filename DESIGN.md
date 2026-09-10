@@ -11149,3 +11149,195 @@ for a roster that had never been removed — only corrupted. Against the
 fix, the write proceeds, the pending-dispatch entry is written, and the
 returned warning is the ordinary fresh-bind message naming the mission
 and worker, not a refusal.
+
+## DES-077: Doctor hook verification by execution, and presence as a check distinct from currency (SETTLED)
+
+**Status**: Implemented. `internal/doctor/sandbox.go` (execution),
+`internal/doctor/doctor.go`'s `checkHookPresence` (presence),
+`internal/doctor/archetype_check.go` (ethos-e05k),
+`internal/doctor/doctor.go`'s `classifyOrphans` (ethos-jw1z). Closes
+ethos-kcbv, ethos-bfml, ethos-hy40, ethos-e05k, ethos-jw1z.
+
+### Problem
+
+Five `ethos doctor` checks shared one defect class: each reported a fact
+without having verified it, or without the context an operator needs to
+act on it.
+
+1. **ethos-kcbv.** `hasActiveSealCall` decided whether the seal hook was
+   "active" by pattern-matching shell text. Four documented rounds of
+   refinement — substring match, invocation position, inline comments,
+   separator boundaries, heredoc bodies — each closed one shape the
+   previous round missed, because a lexical scanner can only special-case
+   shapes someone has already found. A stop-loss was declared during
+   v4.1.1: the next lexical corner converts the check to execution.
+
+2. **ethos-bfml / ethos-hy40 (one defect, two filings).** An enabled repo
+   whose commit-msg hook had been hand-removed or host-clobbered showed
+   no FAIL anywhere. `CheckHookCurrency` answers "is what's installed
+   current," and PASSes "no section installed" on an absent section by
+   deliberate, documented design (`docs/design-hook-drift-detection.md`)
+   — correct for a dormant repo, wrong to be the only signal for an
+   enabled one. Seal PRESENCE on an enabled repo was checked
+   (`CheckSealHook`); trailer presence was not checked at all. hy40's
+   filed premise ("doctor checks only the seal hook") was already false
+   by the time this landed — `CheckHookCurrency` ran over both hooks —
+   but the underlying gap it named was real.
+
+3. **ethos-e05k.** The `implement`/`test` archetypes' delegated-worker
+   invariant is data-driven from deployed YAML
+   (`Archetype.RequireDelegatedWorker`). An operator who upgrades the
+   ethos binary without re-running `ethos seed` keeps whatever YAML is
+   already on disk; pre-field content parses the field as `false` and the
+   guard silently stops enforcing. No check surfaced this.
+
+4. **ethos-jw1z.** The orphaned-agent FAIL detail read "not on any team,"
+   which reads like data corruption. The common cause is a stale
+   generated file left over from a team-scope change — safe to delete —
+   indistinguishable in the old text from a genuine orphan, which is not.
+
+### Decision — presence is not currency
+
+Doctor now asks three separable questions about a hook, not two:
+
+- **Presence, given enablement**: if this repo is enabled, is a hook here
+  at all, and does it actually do the thing? (`checkHookPresence`, both
+  `CheckSealHook` and the new `CheckTrailerHook`.)
+- **Currency, independent of enablement**: if a hook IS here, does its
+  content match what this build would install today? (`CheckHookCurrency`,
+  unchanged.)
+- **Enablement itself**: is `.punt-labs/ethos/enabled` present at all?
+  (read by both of the above, asked by neither in isolation.)
+
+`CheckHookCurrency`'s PASS-on-absence is untouched — inverting it to FAIL
+on a dormant repo's absent section was explicitly rejected (see below).
+The fix is compositional: `checkHookPresence` is a new signal, gated on
+the enabled marker exactly the way the pre-existing `CheckSealHook`
+already was, generalized via `HookSpec` (`ShortName`, `InvokeArgs`,
+`NeedsMsgArg`) so the same function serves both hooks. `CheckTrailerHook`
+is `checkHookPresence(repoRoot, trailerHookSpec)` — a one-line function.
+
+### Decision — presence is proven by execution, not text
+
+`checkHookPresence`'s "active" determination is `hookInvocationObserved`
+(`internal/doctor/sandbox.go`), not a regex. It copies the installed
+hook's exact bytes into a disposable, `git init`'d temp directory carrying
+a synthetic `.punt-labs/ethos/enabled` marker, places a stub `ethos`
+executable first on `PATH` that logs its argv and exits 0, executes the
+hook file directly (respecting its own shebang — never wrapped in
+`sh -c`, so a non-shell hook is exercised, or fails to run, exactly as git
+would run it), and reports whether the stub observed the expected argv
+(`{"audit", "seal"}` or `{"hook", "commit-trailers"}`).
+
+This closes every lexical corner by construction rather than by adding a
+fifth patch: a heredoc body is never executed as a command because the
+shell that runs it never treats it as one; a comment is skipped because
+the shell skips it; `eval` and an aliased wrapper resolve correctly
+because the code actually runs. `TestHookInvocationObserved`'s
+`eval resolves correctly` case pins exactly the blind spot
+`hasActiveSealCall`'s own doc comment named as a documented, accepted
+limitation of the lexical approach — execution has no such limitation.
+
+The sandbox always synthesizes its own `enabled` marker, independent of
+whether the REAL repo being checked is enabled. The question
+`hookInvocationObserved` answers is "if this body runs, does it call
+ethos" — enablement is composed separately by `checkHookPresence` reading
+the real marker, matching the pre-existing `CheckSealHook`'s four-state
+shape (enabled/dormant/gated-but-unenabled/marker-error).
+
+### What this does NOT cover — the residual, stated plainly
+
+- **The sandbox executes untrusted hook content, including any foreign
+  host section chained alongside the ethos section.** This is
+  unavoidable — the question being answered is a statement about the
+  whole installed file — and the code says so in
+  `hookInvocationObserved`'s doc comment, not only in this ADR. The
+  sandbox bounds blast radius (an isolated temp directory, an isolated
+  `HOME`, a stubbed `ethos`, a `sandboxTimeout` of 10s) but is **not** a
+  full OS sandbox: no seccomp, no chroot, no network isolation. A
+  malicious or badly broken host hook can still do anything its own
+  process's OS permissions allow during the timeout window.
+- **git is now a hard dependency of this specific check.** The rest of
+  this codebase deliberately supports a git-less environment for
+  identity/team/session resolution (`internal/githook.HooksDir`'s manual
+  fallback, `internal/resolve.FindRepoRoot`'s `.git`-stat-only walk).
+  `hookInvocationObserved` cannot honor that: the hook body itself calls
+  `git rev-parse --show-toplevel`, so a git-less host could never run the
+  real hook either — this is not a new dependency introduced by the
+  sandbox. When `git` is absent, `checkHookPresence` FAILs loudly
+  ("cannot verify … by execution: git not found on PATH"), the safe
+  direction, rather than silently reusing the old lexical scanner as a
+  fallback (rejected below).
+- **A non-shell hook is never executed at all**, by design —
+  `checkHookPresence` only attempts `hookInvocationObserved` when
+  `textscan.IsShellHook` is true. For a non-shell body, a narrow,
+  explicitly non-authoritative text scan (`looksLikeInvocation`) picks
+  between two FAIL messages ("shebang is not a shell" vs "not chained");
+  it can never grant a PASS. This is the one place lexical text
+  inspection survives post-kcbv, deliberately scoped to wording, not
+  correctness.
+- **Timeout is a blunt instrument.** A runaway hook is killed at
+  `sandboxTimeout`, which reads as "not active" (FAIL), not as a distinct
+  "timed out — could not verify" state. `TestHookInvocationObserved`'s
+  runaway-hook case pins the kill; it does not pin a richer status for
+  this case, which is a plausible, deliberately deferred follow-up (no
+  operator has hit it yet).
+
+### Rejected alternatives
+
+- **Make `CheckHookCurrency` FAIL on an absent section.** Rejected —
+  bfml's own triage explicitly ruled this out: it is correct for a
+  currency check to be silent about something that was never installed,
+  and inverting it would tell every dormant, never-enabled repo that its
+  absent hooks are "stale," which is false. `checkHookPresence` closes
+  the real gap (nothing composed "enabled AND missing" into a failure)
+  without touching a semantic that was already correct.
+- **Add a fifth lexical patch for the newest corner (eval) instead of
+  converting.** Rejected per the standing stop-loss from v4.1.1 and the
+  explicit instruction in ethos-kcbv: each prior round bought one shape
+  and left the next one open by construction. `internal/textscan`'s own
+  package doc now states its lexical scope is frozen for exactly this
+  reason, naming execution-based doctor verification as the intended
+  durable safeguard instead.
+- **Fall back to the lexical scanner when `git` is unavailable**, so the
+  check degrades instead of FAILing. Rejected: a silent degrade back to
+  the discredited detector reintroduces the exact false-PASS risk this
+  ADR closes, on a machine that (per the git-less-environment note above)
+  could never run the real hook anyway — nothing of value would be
+  verified by that fallback path.
+- **Wrap the hook in `sh -c "$body"` for a uniform execution path.**
+  Rejected — git never invokes a hook that way; it execs the file and
+  lets the OS honor the shebang. Wrapping would make a non-shell hook
+  read as shell, misreporting exactly the interpreter-mismatch case
+  `checkHookPresence`'s shebang check exists to catch.
+- **For ethos-jw1z, classify by inspecting the agent file's generated
+  template shape** (front-matter markers, the "You are X (handle)"
+  opening line ethos always writes) rather than by identity resolution.
+  Rejected: it answers "did ethos write this file," not "was this handle
+  ever a legitimate team member" — the actual distinction an operator
+  needs (safe to delete vs investigate). Identity resolution
+  (`s.Load(handle, ...)`) answers the real question directly, and
+  degrades honestly (no distinction attempted) when no identity store is
+  in scope, rather than guessing from file shape.
+
+### Consequences
+
+- `RunAll` grew from 12 checks to 14: "Audit trailer hook" and "Code
+  archetype delegated-worker guard." Every literal check-count assertion
+  in the repo needed a matching bump —
+  `internal/mcp/tools_test.go`, `cmd/ethos/handlers_test.go`, and
+  `internal/doctor/doctor_test.go`'s `TestRunAllAndHelpers` — none of
+  which are inside this change's original write-set boundary but all of
+  which are mechanical, one-line consequences of the check count itself
+  changing; leaving them unfixed would have shipped a red `make check`.
+- `HookSpec` (shared by `checkHookPresence` and `CheckHookCurrency`) grew
+  three fields (`ShortName`, `InvokeArgs`, `NeedsMsgArg`) so one struct
+  serves both check families without duplicating the seal/trailer
+  distinction into two parallel spec types.
+- `ArchetypeStore.Load` now delegates to a new `LoadLayer`, which also
+  returns which layer answered. `Load`'s own return signature and
+  behavior are unchanged.
+- `CheckOrphanedAgentFiles` gained an `identity.IdentityStore` parameter,
+  threaded through from `RunAll`'s existing `s`. It may be `nil`; the
+  classification is then skipped rather than guessed, and the detail text
+  reads exactly as it did before this change.
