@@ -11890,8 +11890,27 @@ and here. Closing the escape itself is a platform-specific containment
 design decision for the operator to scope as a follow-up, not a
 same-shape fix to this file's existing pattern.
 
-**Follow-up round — one regression this addendum's own #3 fix
-introduced, caught by a later review pass on the same PR:**
+**Follow-up round — regressions this addendum's own fixes introduced,
+caught by later review passes on the same PR:**
+
+**Standing statement, and the common cause of every Windows defect
+below: this project has no Windows CI job.** Every workflow in
+`.github/workflows/` runs on `ubuntu-latest`, with one exception —
+`test.yml`'s "verify make tools" matrix adds `macos-latest`, and that
+leg runs `make tools` only, never the Go test suite. So the tests
+execute on Linux and nowhere else, and no runner is Windows at all.
+`make dist` builds four Unix targets; `windows/amd64` is
+build-verification only (`go build`, `go vet`), never executed. Nothing
+in the pipeline can observe Windows *runtime* behavior, so a
+Windows-only defect reaches review with every check green — which is
+exactly what happened three times on this PR (the exec-bit regression
+and the two test-portability findings below). Every Windows guard in this package is therefore
+verified by construction — a `sandboxGOOS`/`runtime.GOOS` override, a
+build tag, or a citation of Go's own Windows source — never by
+observation. Treat any claim about Windows behavior in this file as
+derived from the standard library's source, not measured. Adding a
+Windows CI job is a separate change with its own cost and is
+deliberately not made here.
 
 - **(Cursor Bugbot, `doctor.go`) — moving the exec-bit check ahead of
   the sandbox call made it run on Windows, where the executable bit does
@@ -11928,6 +11947,40 @@ introduced, caught by a later review pass on the same PR:**
   and asserts which side of #12's split each case lands in, so it proves
   that branch is reachable again rather than only that the wrong FAIL is
   gone.
+
+- **(Copilot, `sandbox_removeall_test.go`) — a Unix-only test with no
+  build tag.** `TestRemoveSandbox` chmods a directory to `0o000` and
+  asserts `require.Error(os.RemoveAll(dir))` as its fixture
+  precondition. On Windows `syscall.Chmod` reads only `S_IWRITE` and
+  toggles `FILE_ATTRIBUTE_READONLY` (go1.26
+  `syscall/syscall_windows.go`, `Chmod`); a read-only *directory* is
+  still traversable and removable, so `RemoveAll` succeeds and the
+  precondition fails. The `os.Geteuid() == 0` guard does not rescue it:
+  `Geteuid` returns `-1` on Windows (same file), never `0`, so the skip
+  never fires. New in this PR (`7450dd2`), so it is ours. Tagged
+  `//go:build unix`, matching `procgroup_unix_test.go` on this same
+  branch; the file holds only that one test, so tagging it whole is
+  clean. Verified by build-tag selection, not by running it: `GOOS=windows
+  go list` no longer lists the file, `GOOS=linux` still does.
+
+- **Swept from the same class — three more unguarded Unix-permission
+  assumptions in `doctor_test.go`.** Same root cause, found by sweeping
+  rather than waiting for a reviewer. Each now carries an explicit
+  `runtime.GOOS == "windows"` skip, the pattern
+  `archetype_check_test.go` already established on this branch for a
+  file that must still build on Windows (a whole-file build tag would
+  have removed the platform-split coverage added above, which is the
+  opposite of what is wanted). The three: "marker stat error is not read
+  as disabled" (chmods a directory to `0o000` expecting a child `Stat`
+  to fail — Windows does not deny traversal); "unreadable hook file"
+  (chmods a file to `0o000` expecting `ReadFile` to fail — a read-only
+  Windows file is still readable); and `TestCheckOrphanedAgentFiles_Classification`'s
+  `haveWounded` fixture, which gated on `os.Geteuid() != 0` alone and so
+  was *enabled* on Windows by the `-1` return, then asserted
+  `Perm() == 0o000` where Windows reports `0o444`. Only the third is
+  this branch's own (`0f8d015`); the other two predate it (`83e75ec`,
+  `4fb578c`) and were fixed under fix-the-class rather than left as
+  inherited.
 
 **What this round's fixes make worse:** one regression, found by a later
 review pass and fixed in the follow-up round above — see it for the
