@@ -435,6 +435,26 @@ func TestCheckSealHook(t *testing.T) {
 			"the foreign hook must never run when ethos is not enabled here — witness file was created")
 	})
 
+	// S2/P1: DES-077 documents the dormant state as an unconditional PASS —
+	// "a never-enabled or disabled repo must not fail." Pre-fix, the
+	// sandbox call ran before the marker gate, so ANY sandbox-infrastructure
+	// failure unrelated to the hook at all — no git on PATH, here — leaked
+	// through as a FAIL on a repo that was never enabled, contradicting
+	// that documented state. No `exec.LookPath("git")` skip: the whole
+	// point is that a dormant repo must PASS even when the sandbox
+	// couldn't have run at all.
+	t.Run("dormant: no git on PATH still PASSes — execution never attempted (S2/P1)", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\ntrue\n"), 0o755))
+
+		t.Setenv("PATH", t.TempDir()) // no git anywhere on PATH
+		r := CheckSealHook(dir)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
 	t.Run("heredoc-quoted marker on a never-enabled repo → PASS not WARN", func(t *testing.T) {
 		// A foreign hook that only documents the marker text inside a heredoc,
 		// on a repo with no enabled marker, must not read as a chained section

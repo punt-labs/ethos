@@ -407,18 +407,32 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		body = data
 	}
 
-	// Only a shell hook is ever attempted by execution — a non-shell body
-	// can never run the way git would run it (matches the shebang check
-	// below), and there is no interpreter-neutral way to "run" it safely.
-	//
-	// Execution is further gated on markerPresent (M1): a dormant repo's
-	// hook is read-only diagnostic input here, not something `ethos doctor`
-	// should ever run — a foreign pre-commit chained in a repo where ethos
-	// is switched off would otherwise execute third-party shell to answer a
-	// question ("is this repo enabled") that execution never needed to
-	// settle. hasMarkerSection's lexical fallback below is sufficient for
-	// the dormant-repo WARN case; it does not need proof by execution.
-	shellHook := statErr == nil && markerPresent && textscan.IsShellHook(body)
+	// Dormant: resolved BEFORE any execution is attempted, and structurally
+	// so — this branch returns, so nothing below it can run for a repo
+	// where ethos is not enabled here (S2/P1). A dormant repo's hook is
+	// read-only diagnostic input, not something `ethos doctor` should ever
+	// run: a foreign pre-commit chained in a not-enabled repo would
+	// otherwise have its third-party shell executed to answer a question
+	// ("is this repo enabled") that execution never needed to settle, and —
+	// worse — any sandbox-infrastructure failure unrelated to the hook at
+	// all (no git on PATH, an unwritable TMPDIR) would surface as a FAIL on
+	// a repo that was never enabled, contradicting the dormant state this
+	// function documents just below. hasMarkerSection's lexical scan is
+	// sufficient here; the dormant case only needs PASS-vs-WARN, and WARN
+	// is advisory regardless.
+	if !markerPresent {
+		chained := statErr == nil && hasMarkerSection(body, spec.Tag)
+		if chained {
+			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
+		}
+		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
+	}
+
+	// Enabled: only a shell hook is ever attempted by execution — a
+	// non-shell body can never run the way git would run it (matches the
+	// shebang check below), and there is no interpreter-neutral way to
+	// "run" it safely.
+	shellHook := statErr == nil && textscan.IsShellHook(body)
 	var active bool
 	if shellHook {
 		observed, err := hookInvocationObserved(body, spec.InvokeArgs, spec.NeedsMsgArg)
@@ -442,18 +456,8 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		}
 		active = observed
 	}
-	// "Chained" for the gate check is the section marker OR an active call —
-	// a stale section still counts as present.
-	chained := statErr == nil && (active || hasMarkerSection(body, spec.Tag))
 
-	if !markerPresent {
-		if chained {
-			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
-		}
-		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
-	}
-
-	// Enabled: the hook must be present and active.
+	// The hook must be present and active.
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but no %s hook", spec.File) + remedy}
