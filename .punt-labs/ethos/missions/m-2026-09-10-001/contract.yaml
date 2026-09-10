@@ -1,0 +1,71 @@
+mission_id: m-2026-09-10-001
+status: open
+type: implement
+created_at: "2026-09-10T18:08:58Z"
+updated_at: "2026-09-10T18:08:58Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-10T18:08:58Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    files:
+        - internal/doctor/doctor.go
+        - internal/doctor/doctor_test.go
+        - plugin/hooks/
+        - internal/githook/
+        - DESIGN.md
+write_set:
+    - internal/doctor/**
+    - internal/githook/**
+    - internal/textscan/**
+    - plugin/hooks/**
+    - internal/mission/archetype*.go
+    - cmd/ethos/doctor.go
+    - cmd/ethos/doctor_test.go
+    - DESIGN.md
+    - CHANGELOG.md
+success_criteria:
+    - READ THE TRIAGE NOTES FIRST. Run `bd show` on ethos-bfml, ethos-hy40, ethos-kcbv, ethos-e05k, ethos-jw1z. Each carries a triage note dated 2026-09-10 written after verifying the bead against 4.18.0 source. TWO of them are corrected by those notes — build to the note, not the original text.
+    - 'THE CENTRAL FINDING: ethos-bfml and ethos-hy40 are ONE defect, not two. bfml reports three PASSes on a repo with no hooks; hy40 is the same thing from the commit-msg side. Its filed premise (''doctor checks only the seal hook'') is FALSE as of 4.18.0 — trailerHookSpec exists and CheckHookCurrency runs over both. Fix them together.'
+    - 'DO NOT make CheckHookCurrency fail on an absent section. Its PASS-on-absence is deliberate and DOCUMENTED in its own doc comment (''a section that doesn''t exist is not this check''s concern''), and it is correct for a CURRENCY check — a dormant repo must not be told its absent hooks are stale. Inverting that breaks the dormant case. The real gap is PRESENCE, not currency: seal presence when enabled IS checked (the ''Audit seal hook'' check reads the enabled marker); trailer presence when enabled is NOT checked at all; and nothing composes ''this repo is enabled AND a required hook is missing'' into a failure. Fix the gap, not the semantic.'
+    - 'ethos-kcbv SHOULD LAND FIRST and the ordering is the point. hasActiveSealCall (internal/doctor/doctor.go:372) is still a lexical scan of shell source — SplitKeepEnds + HeredocMask + stripInlineComment + a sealInvocation regex — and all four documented patch rounds are visible in that code. A stop-loss was declared during v4.1.1: the next lexical corner converts it to execution-based verification. Building the new presence check on top of the current scanner adds a fifth consumer to the thing that keeps breaking. Convert it first, then build presence on the converted detector. If you conclude execution-based verification is infeasible here, STOP and report why with evidence rather than quietly adding a fifth lexical patch.'
+    - 'ethos-e05k: add a doctor check flagging code archetypes (implement, test) whose DEPLOYED YAML lacks require_delegated_worker. The invariant is data-driven from deployed archetype files, so an operator who upgrades the binary without re-running `ethos seed` silently gets ZERO enforcement, and a stale repo-local archetype shadows an updated global one. Verified 2026-09-10: no such check exists in internal/doctor/. Check both layers, and make the detail name which layer is stale.'
+    - 'ethos-jw1z: the orphaned-agent FAIL detail (internal/doctor/doctor.go:229) reads ''orphaned agent files (not on any team)'', which sounds like data corruption. The common real cause is stale generated files left over from a team-scope change. Distinguish the two so the operator learns what to DO — a stale generated file is safe to delete; a genuine orphan is not. Do not guess the classification; derive it from something checkable.'
+    - 'EVERY new or changed check needs a test that is verified FAILING against pre-fix code before the fix lands. State which you confirmed red and paste the pre-fix output. This is not boilerplate on this bead: the defect being fixed IS a check that reports success without verifying, and five tests on the immediately preceding branch were found guarding their own fixture rather than their stated property. A test for a health check that has never been observed failing is the exact bug you are fixing, one level up.'
+    - make check green before EVERY commit, race detector included. No suppressions.
+    - GOOS=windows GOARCH=amd64 go build ./... must exit 0.
+    - Run the detached test gate before reporting and give BOTH the ok count AND the FAIL count — a zero FAIL count alone cannot distinguish nothing-failed from nothing-ran.
+    - DESIGN.md ADR for the presence-vs-currency decision and for the execution-based conversion, including rejected alternatives. State explicitly what the new checks do NOT cover — an ADR that overstates what it closes is a defect on this repo; three defects survived a full review round on the last branch because an earlier draft understated its residuals.
+    - 'CHANGELOG under [Unreleased]. Doctor output is user-facing: new checks and changed detail text are Added/Changed, not Fixed. The previous release shipped two new capabilities miscategorized under Fixed and needed a follow-up PR to correct the release notes.'
+    - Commit incrementally — one commit per logical step. Each commit passes make check. Do not accumulate more than 30 minutes of uncommitted changes.
+    - Do NOT push. Report and the leader pushes.
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+context: |
+    Cluster 3 of the ethos bug triage: doctor / health-check correctness.
+    Five beads, all verified real against 4.18.0 source on 2026-09-10
+    before this contract was written.
+
+    The unifying theme, and the reason this cluster was picked next: every
+    one of these is a check that reports success without having verified
+    the thing it claims to check, or that reports a fact without the
+    context needed to act on it. That is the same defect class the last two
+    clusters kept producing — a release phase validating the file it had
+    just written, five tests guarding their own fixtures, a website check
+    blind to whether the deploy shipped. Here it is in the tool operators
+    run specifically to learn whether their install is sound, which makes
+    it the most expensive instance of it.
+
+    Concrete evidence this matters, from 2026-09-08: a stale install URL
+    downgraded the operator's binary and rewrote this repo's git hooks to
+    an older build. Doctor's currency check DID notice — the fingerprint
+    moved. So the machinery half-works, which is precisely why the false
+    PASS on absence is worth fixing rather than dismissing.
+
+    Read the triage notes on the beads before the original text. Two
+    filings are corrected there: hy40's premise is stale, and bfml's root
+    cause is narrower than its title.

@@ -65,19 +65,33 @@ func NewArchetypeStore(repoRoot, globalRoot string) *ArchetypeStore {
 // Load reads an archetype by name. The repo layer is checked first;
 // if not found, the global layer is checked.
 func (s *ArchetypeStore) Load(name string) (*Archetype, error) {
+	a, _, err := s.LoadLayer(name)
+	return a, err
+}
+
+// LoadLayer behaves like Load but also reports which layer answered:
+// "repo-local" or "global". A caller that needs to tell an operator WHERE a
+// stale or shadowing archetype lives (e.g. `ethos doctor`'s
+// require_delegated_worker check, ethos-e05k) needs this; Load alone only
+// says what resolved, not from where.
+func (s *ArchetypeStore) LoadLayer(name string) (*Archetype, string, error) {
 	if s.repo != "" {
 		a, err := loadArchetype(s.repo, name)
 		if err == nil {
-			return a, nil
+			return a, "repo-local", nil
 		}
 		if !errors.Is(err, ErrArchetypeNotFound) {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	if s.global != "" {
-		return loadArchetype(s.global, name)
+		a, err := loadArchetype(s.global, name)
+		if err == nil {
+			return a, "global", nil
+		}
+		return nil, "", err
 	}
-	return nil, fmt.Errorf("archetype %q: %w", name, ErrArchetypeNotFound)
+	return nil, "", fmt.Errorf("archetype %q: %w", name, ErrArchetypeNotFound)
 }
 
 // List returns the names of all discovered archetypes. Repo-local

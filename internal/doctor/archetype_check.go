@@ -1,0 +1,178 @@
+package doctor
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/seed"
+	"gopkg.in/yaml.v3"
+)
+
+// codeArchetypeNames derives the archetypes whose delegated-worker
+// invariant is data-driven from the deployed YAML
+// (Archetype.RequireDelegatedWorker) by reading the SAME embedded seed
+// content `ethos seed` deploys from (seed.Archetypes), rather than a
+// hand-maintained list.
+//
+// This is the fix for P2, ethos-e05k's failure mode recurring a second
+// time inside the very check written to catch it: a hardcoded list can
+// only ever monitor the archetypes someone remembered to add to it, so a
+// third archetype gaining require_delegated_worker: true in the seed
+// content would silently go unmonitored — the same "enforcement lost with
+// a green check" shape as e05k itself, and the same shape C1 (this file's
+// error-swallowing bug) already reproduced once. Deriving the list from
+// the embed, the same pattern checklistAgentNames already uses for the
+// seeded review-checklist agents (doctor.go), makes it structurally
+// impossible for the monitored set to drift from what `ethos seed` ships.
+//
+// fsys and root are parameterized (rather than reading seed.Archetypes
+// directly) so a test can inject a third archetype with the flag set and
+// prove it gets picked up automatically — the property a hardcoded list
+// could never demonstrate — without depending on the compile-time embed's
+// actual current contents.
+func codeArchetypeNames(fsys fs.FS, root string) ([]string, error) {
+	entries, err := fs.ReadDir(fsys, root)
+	if err != nil {
+		return nil, fmt.Errorf("reading embedded %s: %w", root, err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		data, err := fs.ReadFile(fsys, root+"/"+e.Name())
+		if err != nil {
+			return nil, fmt.Errorf("reading seeded archetype %s: %w", e.Name(), err)
+		}
+		var a mission.Archetype
+		if err := yaml.Unmarshal(data, &a); err != nil {
+			return nil, fmt.Errorf("parsing seeded archetype %s: %w", e.Name(), err)
+		}
+		if a.RequireDelegatedWorker {
+			names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// CheckDelegatedWorkerArchetypes flags a deployed archetype named by
+// codeArchetypeNames whose require_delegated_worker is not true. The
+// detail names the resolving layer — "repo-local" or "global" — because a
+// repo-local archetype that predates the field shadows an updated global
+// one and `ethos seed` alone will not touch it; the operator needs to know
+// which file to fix.
+//
+// An archetype that is not deployed in either layer is not this check's
+// concern: mission creation already refuses loudly with "archetype not
+// found" in that case (internal/mission.ErrArchetypeNotFound), so there is
+// no silent gap there for doctor to surface.
+func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
+	name := "Code archetype delegated-worker guard"
+
+	if storeRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+
+	monitored, err := codeArchetypeNames(seed.Archetypes, "sidecar/archetypes")
+	if err != nil {
+		// A broken embed is a build-time defect, not a runtime condition to
+		// swallow — reporting it as an ordinary FAIL-with-nothing-flagged
+		// would misread as "everything is fine" when this check could not
+		// even determine what to look at (matches checklistAgentNames'
+		// precedent for the same failure shape).
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not determine which archetypes require monitoring: %v", err)}
+	}
+
+	// An unresolvable HOME must FAIL, not silently drop the global layer
+	// (Copilot/qodo, PR #515): NewArchetypeStore treats an empty global root
+	// as "no global layer to check", so a repo with no repo-local archetype
+	// for a monitored name would read PASS — a positive statement about
+	// global archetypes this check never actually inspected. Same shape as
+	// C1 above and archetypeAttemptedPath below: "could not determine"
+	// silently collapsing into a specific, healthy-looking answer.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not determine the global archetype root: %v", err)}
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	store := mission.NewArchetypeStore(filepath.Join(storeRoot, ".punt-labs", "ethos"), globalRoot)
+
+	repoArchRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
+	var stale, broken []string
+	for _, n := range monitored {
+		a, layer, err := store.LoadLayer(n)
+		if err != nil {
+			if errors.Is(err, mission.ErrArchetypeNotFound) {
+				continue // not deployed anywhere — not this check's concern
+			}
+			// A YAML parse failure, a strict-decode rejection, a permission
+			// error, or any other non-not-found error means this archetype's
+			// require_delegated_worker invariant could not be read at all —
+			// treating that as "nothing to enforce" is exactly ethos-e05k's
+			// failure mode recurring one layer up, inside the check written
+			// to catch it. Report it loudly instead, naming the file this
+			// check tried to load.
+			archLayer, archPath := archetypeAttemptedPath(repoArchRoot, globalRoot, n)
+			broken = append(broken, fmt.Sprintf("%s (%s, %s): %v", n, archLayer, archPath, err))
+			continue
+		}
+		if !a.RequireDelegatedWorker {
+			stale = append(stale, fmt.Sprintf("%s (%s)", n, layer))
+		}
+	}
+	if len(stale) == 0 && len(broken) == 0 {
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf(
+			"%s archetypes all require a delegated worker", strings.Join(monitored, ", "))}
+	}
+	sort.Strings(stale)
+	sort.Strings(broken)
+	var parts []string
+	if len(stale) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"require_delegated_worker is not set on: %s — run `ethos seed` to refresh (a repo-local file must be hand-edited or deleted first)",
+			strings.Join(stale, ", ")))
+	}
+	if len(broken) > 0 {
+		parts = append(parts, "could not load: "+strings.Join(broken, "; "))
+	}
+	return Result{Name: name, Status: "FAIL", Detail: strings.Join(parts, "; ")}
+}
+
+// archetypeAttemptedPath reports which layer and file LoadLayer(name) was
+// reading when it returned a non-not-found error. LoadLayer tries the
+// repo-local file first and only falls through to global on a not-found
+// error, so a non-not-found error on a repo-local file never reaches the
+// global layer.
+//
+// The Stat here must distinguish "not there" from every other failure. A
+// prior version treated any Stat error as proof the file was absent and
+// reported "global" — but Stat fails for EACCES, EIO, and symlink loops
+// too, none of which mean absent. On a permission error the repo-local
+// file is exactly what LoadLayer tripped on (os.ReadFile would hit the
+// same EACCES), so reporting "global" sent the operator to fix a file
+// that was never the problem. This is the same shape as C1 one layer
+// down: treating "could not determine" as a specific answer instead of
+// naming it as indeterminate.
+func archetypeAttemptedPath(repoArchRoot, globalRoot, name string) (layer, path string) {
+	repoPath := filepath.Join(repoArchRoot, "archetypes", name+".yaml")
+	_, err := os.Stat(repoPath)
+	switch {
+	case err == nil:
+		return "repo-local", repoPath
+	case os.IsNotExist(err):
+		return "global", filepath.Join(globalRoot, "archetypes", name+".yaml")
+	default:
+		// Present but unreadable (or otherwise unstattable): the repo-local
+		// file is the one LoadLayer errored on, so name it — but say it
+		// could not be examined rather than implying content is stale, since
+		// that is what an operator actually needs to chmod.
+		return "repo-local (unreadable)", repoPath
+	}
+}

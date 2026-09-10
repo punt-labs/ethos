@@ -29,10 +29,14 @@ SessionStart; restart Claude Code to regenerate them after a team change.
 - `ethos mission close <id>` — close a passing mission (requires a
   submitted result for the current round).
 - `ethos mission abandon <id> --reason <text>` — retire a mission that
-  was created but never had a worker spawned against it (zero
-  delegations, zero results). Refuses if any delegation or result
-  exists — use `close` for those. Not a bypass of `close`'s result
-  gate; see `docs/mission-abandon.md`.
+  was created but never had a worker spawned against it. Refuses if any
+  *blocking* delegation or any result exists — use `close` for those.
+  A delegation refused before its worker ran (`verdict: aborted`) never
+  blocks, automatically. A delegation proven to be a dispatch-sidecar
+  misattribution (DES-076) can be named via repeatable
+  `--disclaim <delegation-id>` to unblock just that one. Neither is a
+  bypass of `close`'s result gate, which has no override; see
+  `docs/mission-abandon.md`.
 - `ethos mission pipeline list|show|instantiate <name>` — drive multi-stage
   work from a template.
 
@@ -74,6 +78,6 @@ Local review sequence, after `make check` passes:
 - Never run `make install` from inside Claude Code — the running binary
   cannot overwrite itself. Ask a human to run it from a shell.
 - Agent types are discovered at SessionStart; restart after adding one.
-- `ethos doctor` checks seal-hook presence only when ethos is enabled
-  here, but its hook currency checks run unconditionally, on dormant
-  repos too.
+- `ethos doctor` checks seal and trailer hook presence only when ethos
+  is enabled here, but its hook currency checks run unconditionally, on
+  dormant repos too.

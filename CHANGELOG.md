@@ -7,6 +7,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos doctor` gained two checks.** "Audit trailer hook" mirrors the
+  existing "Audit seal hook": on an enabled repo it now FAILs when the
+  commit-msg hook is missing or inactive, closing a gap where a
+  hand-removed or host-clobbered trailer hook produced no FAIL anywhere
+  (ethos-bfml/ethos-hy40). "Code archetype delegated-worker guard" FAILs
+  when the deployed `implement` or `test` archetype is missing
+  `require_delegated_worker: true`, naming which layer (repo-local or
+  global) is stale (ethos-e05k). `ethos doctor` now runs 14 checks, up
+  from 12.
+
+### Changed
+
+- **`ethos doctor`'s seal-hook activity check is now proven by execution,
+  not by pattern-matching shell text.** The installed hook is run
+  verbatim in a disposable sandbox and the check observes whether it
+  actually invokes `ethos audit seal`/`ethos hook commit-trailers`,
+  closing the class of false-negative shapes (comments, heredocs, `eval`,
+  aliased wrappers) a lexical scanner can only special-case one at a time
+  (ethos-kcbv). `git` is a hard dependency of this specific check now; it
+  already was a hard dependency of the hooks themselves.
+- **The "Orphaned agent files" FAIL detail now distinguishes a stale
+  generated file (a resolvable identity, just not on the active team —
+  safe to delete) from a genuine orphan (no matching identity anywhere —
+  investigate before deleting)**, instead of one undifferentiated "not on
+  any team" message (ethos-jw1z).
+
+### Fixed
+
+- **`ethos doctor`'s new hook-verification and archetype checks had a
+  review-round defect cluster, all fixed in this same release.** A
+  non-not-found archetype load error (malformed YAML, a permission
+  error) silently PASSed as "nothing to enforce" instead of FAILing —
+  ethos-e05k's failure mode recurring inside the check written to catch
+  it. The sandbox executed the hook via a bare `execve`, so a
+  shebang-less hook (which git runs fine via libc's `execvp` and its
+  POSIX-mandated `ENOEXEC` retry through `sh` — not git's own code)
+  read as unexecutable; it now matches that fallback exactly.
+  When the ethos stub was never reached, every cause (a missing
+  interpreter, a sandbox timeout, a host section that exits before the
+  ethos call) collapsed into the same misleading "stale — run `ethos
+  enable`"; each now gets its own message. Execution ran even in a
+  dormant, not-enabled repo — a foreign hook's shell no longer runs
+  there at all. The argv match required byte-exact equality, so a hook
+  calling `ethos audit seal --quiet` read as stale; now a prefix match.
+  Four `PASS`-on-error paths in "Orphaned agent files" (a malformed
+  glob, a broken repo config, a nil team store, a broken team file) now
+  FAIL. Nothing in `internal/doctor` guarded against Windows, so every
+  enabled Windows repo would FAIL a healthy hook; it now WARNs
+  "cannot verify by execution on this platform" instead. A diverted
+  `core.hooksPath` warning was discarded at two call sites; it now
+  rides along in the check's Detail. Full defect list, fixes, and
+  residual (what is still not closed) in DES-077's addendum.
+- **A second review pass on the same doctor cluster found a critical
+  sandbox escape and several sharper or corrected findings, all fixed
+  in the same release.** The sandbox's `git init` inherited the
+  caller's process environment; a caller-set `GIT_DIR` or
+  `GIT_OBJECT_DIRECTORY` (an ordinary `git submodule foreach` or CI
+  wrapper) let a sandboxed hook execute inside the REAL repository
+  being checked instead of the disposable sandbox, silently. Fixed
+  with an allowlisted environment plus a containment self-test that
+  asks git directly whether the sandbox is the sandbox before running
+  anything untrusted in it. A hook that backgrounds a child outlived
+  both the check returning and the sandbox's own cleanup; it is now
+  killed via its whole process group, not just its direct PID.
+  `CheckOrphanedAgentFiles` was mutating identity files as a side
+  effect of classification (a legacy `voice:` migration triggered by a
+  read-only diagnostic); it now checks existence only. The
+  hand-maintained archetype list for the delegated-worker guard is now
+  derived from the same seed content `ethos seed` deploys, closing a
+  second instance of the exact silent-enforcement-loss shape the check
+  exists to catch. A host-section failure now WARNs instead of FAILing
+  "stale" when the installed ethos section is provably byte-current.
+  Full defect list, fixes, and residual in DES-077's second addendum.
+- **A third review pass (PR #515, Copilot + qodo) found a security-relevant
+  execution-ordering gap and a verification-spoofing pair, both fixed in
+  the same release.** `CheckDelegatedWorkerArchetypes` silently dropped
+  the global archetype layer and read PASS on an install it never
+  inspected when `os.UserHomeDir()` errored; it now FAILs loudly. A
+  hook lacking the executable bit — one git would never run — was still
+  executed inside the sandbox before its own exec-bit check; the check
+  now runs first, so a non-executable hook is never run at all. That
+  check is skipped on Windows, where a regular file's permission bits
+  come from the read-only attribute alone and never carry an execute
+  bit: running it there would FAIL every enabled install with a
+  `chmod +x` remedy that does not exist on the platform, and would mask
+  the unverifiable-platform result below. `ethos doctor` consequently
+  cannot detect a non-runnable hook on Windows at all. The
+  stub's argv log used a lossy, forgeable plain-text format (`"$*"`
+  joining and no authentication), so a single-argument call could be
+  mistaken for a two-argument one and a hook that never calls ethos
+  could fabricate a matching log line directly; the log now carries
+  boundary-preserving, per-argument lines behind a fresh per-run nonce.
+  `reapProcessGroup` surfaced `ESRCH` (the expected result when nothing
+  is left to reap) as an error. A dormant repo's standalone, unmarked
+  hook that literally calls `ethos audit seal` — no BEGIN/END markers —
+  read as a plain PASS "not enabled here," the same as a genuinely
+  absent hook; the dormant check now also runs a lexical (non-executing)
+  scan for the literal call and WARNs "chained but not enabled here"
+  when it finds one. On the one platform this sandbox cannot
+  execution-verify at all (Windows), a hook with zero textual trace of
+  the required call downgraded all the way to an honest-sounding WARN
+  instead of FAILing; it now FAILs when there is no textual evidence at
+  all, and WARNs only when the call is present but unverifiable by
+  execution. `procgroup_unix.go`'s build constraint (`!windows`) claimed
+  every non-Windows target, including several (plan9, js/wasm) that
+  don't have the Unix process-group APIs it uses; narrowed to the
+  precise `unix` constraint (and the fallback widened to `!unix`) — this
+  project's four shipped targets were never affected, since the module
+  already fails to build for those targets for an unrelated,
+  pre-existing reason. A doc comment claimed process-group cleanup
+  kills "the whole tree a sandboxed hook spawns"; it does not — a
+  `setsid`-detached descendant escapes by construction, no portable
+  unprivileged containment closes that on every shipped target, and
+  this was never the sandbox's security boundary in the first place
+  (hook execution is untrusted-code execution by design). The comment
+  now says only what `kill(-pgid)` actually delivers. Full defect list,
+  fixes, and residual in DES-077's third addendum.
+
 ## [4.18.0] - 2026-09-08
 
 ### Added

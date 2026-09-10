@@ -1,7 +1,10 @@
 # Detecting stale git hooks: `ethos doctor` and content drift
 
-**Status**: Design. Bead `ethos-r2f9`. Mission `m-2026-08-09-012`.
-Design only — no implementation in this document or this mission.
+**Status**: Implemented. Bead `ethos-r2f9`. Mission `m-2026-08-09-012`.
+The recommendation below shipped as `CheckHookCurrency`
+(`internal/doctor/doctor.go`), wired into `RunAll` for both the seal and
+trailer specs. This document remains the design record — it
+carried no implementation itself, and its mission produced none.
 
 ## Problem
 
@@ -42,25 +45,39 @@ has drifted from what the current binary would install.
 
 ## Reading the adjacent beads
 
-**`ethos-hy40`** — doctor checks only the seal (pre-commit) hook today;
-`CheckSealHook` in `internal/doctor/doctor.go` has no counterpart for the
-commit-msg/trailer hook at all. A hand-removed or host-clobbered trailer
-hook on an enabled repo means trailers silently stop landing, forever,
-with `doctor` green. hy40's job is *presence and activity parity*: give
-commit-msg the same four-state check (`FAIL` missing/inactive on an
-enabled repo, `PASS` not-enabled, `WARN` gated-but-unenabled) that
-`CheckSealHook` already gives pre-commit. hy40 is not built yet.
+Both beads below have since been built (DES-077). They are described here
+as they stood when this design was written, because r2f9's argument is
+about how the three axes differ — but each paragraph now says what
+actually landed, so no reader has to guess whether the work is pending.
 
-**`ethos-kcbv`** — `CheckSealHook`'s `hasActiveSealCall` is a lexical
-scanner over shell text, and it has needed four rounds of refinement
-across two branches to close successive false-negative corners (substring
-match, inline comments, separator boundaries, heredocs). The leader
-declared a stop-loss: the next lexical corner converts the check from
-*"does the text look like a call"* to *"does the call actually happen"* —
-run the hook in a sandbox with a stub identity binding and env, and
-assert the stub observed the call. kcbv is about **reachability**: is the
-seal invocation really wired up and not trapped behind dead code,
-`eval`, or an aliased wrapper the lexical scanner can't see through.
+**`ethos-hy40`** — *the gap, as it stood:* doctor checked only the seal
+(pre-commit) hook; `CheckSealHook` had no counterpart for the
+commit-msg/trailer hook at all. A hand-removed or host-clobbered trailer
+hook on an enabled repo meant trailers silently stopped landing,
+forever, with `doctor` green. hy40's job was *presence and activity
+parity*: give commit-msg the same four-state check (`FAIL`
+missing/inactive on an enabled repo, `PASS` not-enabled, `WARN`
+gated-but-unenabled) `CheckSealHook` already gave pre-commit. **Built:**
+`CheckTrailerHook` in `internal/doctor/doctor.go`, sharing
+`checkHookPresence` with the seal side via `HookSpec`. See DES-077.
+
+**`ethos-kcbv`** — *the gap, as it stood:* `CheckSealHook`'s
+`hasActiveSealCall` was a lexical scanner over shell text, and it had
+needed four rounds of refinement across two branches to close successive
+false-negative corners (substring match, inline comments, separator
+boundaries, heredocs). The leader declared a stop-loss: the next lexical
+corner would convert the check from *"does the text look like a call"*
+to *"does the call actually happen"* — run the hook in a sandbox with a
+stub identity binding and env, and assert the stub observed the call.
+kcbv was about **reachability**: is the invocation really wired up, and
+not trapped behind dead code, `eval`, or an aliased wrapper the lexical
+scanner cannot see through. **Built:** `hasActiveSealCall` is gone,
+replaced by `hookInvocationObserved` in `internal/doctor/sandbox.go`,
+which runs the installed hook verbatim in a disposable git repo against
+a nonce-authenticated stub `ethos` on `PATH`. See DES-077 for the
+mechanism, its residuals (untrusted-content execution, `git` as a hard
+dependency, non-shell hooks never executed, Windows unverifiable by
+execution), and the rejected alternatives.
 
 **This mission (`ethos-r2f9`)** is neither. It is not about whether a
 hook is *present* (hy40) or whether its call is *reachable* (kcbv). It is
@@ -101,9 +118,11 @@ the script automatically, and is cheaper: an in-memory comparison on
 every `doctor` run, versus spawning a subprocess with a rigged
 environment. kcbv's execution-based mechanism should stay scoped to what
 it was proposed for — proving the invocation is reachable, not stale.
-Whatever kcbv's `hasActiveSealCall` replacement ends up looking like, the
-currency check below runs independently of it, before or after it lands,
-because it operates on raw section bytes, never on execution behavior.
+Whatever kcbv's `hasActiveSealCall` replacement ended up looking like,
+the currency check below runs independently of it, because it operates
+on raw section bytes, never on execution behavior. That held: both
+shipped, and `CheckHookCurrency` shares no mechanism with
+`hookInvocationObserved`.
 
 ### Why not version-stamp the hook at enable time
 

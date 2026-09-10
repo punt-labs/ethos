@@ -54,7 +54,7 @@ func (r Result) Passed() bool {
 // needs it (Bugbot #370 class: resolving the active team from the worktree
 // while activation wrote it to the store produced false orphan reports).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot string, teams *team.LayeredStore) []Result {
-	results := make([]Result, 0, 6)
+	results := make([]Result, 0, 14) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
 	dir, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
 	results = append(results, passFail("Identity directory", dir, ok))
@@ -72,11 +72,17 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	dup, ok := CheckDuplicateFields(s, ss)
 	results = append(results, passFail("Duplicate fields", dup, ok))
 
-	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams))
+	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))
 	results = append(results, CheckSealHook(repoRoot))
 
+	// ethos-bfml/ethos-hy40: the trailer hook gets the same presence check
+	// the seal hook already had — gated on the enabled marker, active
+	// determined by execution (checkHookPresence), not by whether a section
+	// merely exists. See the DES-hook-presence ADR in DESIGN.md.
+	results = append(results, CheckTrailerHook(repoRoot))
+
 	// DES-hook-drift-detection: content-currency checks, independent of the
-	// enabled marker and of CheckSealHook's presence/active states — see
+	// enabled marker and of the presence checks' active states — see
 	// docs/design-hook-drift-detection.md.
 	results = append(results, CheckHookCurrency(repoRoot, sealHookSpec))
 	results = append(results, CheckHookCurrency(repoRoot, trailerHookSpec))
@@ -94,6 +100,11 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	// failure mode `ethos mission correct` exists to replace. Reads
 	// storeRoot (the shared record), matching CheckRepoSetComplete.
 	results = append(results, CheckNoHandEditedMissionFiles(storeRoot))
+
+	// ethos-e05k: the delegated-worker invariant on the "implement" and
+	// "test" archetypes is data-driven from the deployed YAML, so a binary
+	// upgrade with no `ethos seed` re-run silently loses enforcement.
+	results = append(results, CheckDelegatedWorkerArchetypes(storeRoot))
 	return results
 }
 
@@ -168,7 +179,16 @@ func PassedCount(results []Result) int {
 // activation wrote it to the store would compute "expected" agents from the
 // wrong team and flag valid agents as orphaned (Bugbot #370 class). They
 // coincide outside a worktree.
-func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStore) Result {
+//
+// s classifies each flagged handle for the FAIL detail (ethos-jw1z): a
+// handle that resolves to a real identity somewhere in s is a STALE
+// generated file — the common case, left behind by a team-scope change,
+// safe to delete or regenerate — while a handle matching no identity at
+// all is a genuine orphan the operator should look at before deleting. s
+// may be nil (some callers have no identity store in scope); the
+// classification is then skipped and every handle reads as an
+// undifferentiated orphan, same as before this distinction existed.
+func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStore, s identity.IdentityStore) Result {
 	name := "Orphaned agent files"
 
 	if repoRoot == "" {
@@ -178,7 +198,12 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 	pattern := filepath.Join(repoRoot, ".claude", "agents", "*.md")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not glob agents: %s", err)}
+		// filepath.Glob only errors on a malformed pattern (ErrBadPattern) —
+		// a defect in this check's own code, not a runtime condition to
+		// swallow as "nothing to check". Reading it as PASS would hide an
+		// unchecked invariant behind a green column (M3, matching the
+		// checklistAgentNames precedent below).
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not glob agents: %s", err)}
 	}
 	if len(matches) == 0 {
 		return Result{Name: name, Status: "PASS", Detail: "no agent files"}
@@ -186,18 +211,24 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 
 	teamName, err := resolve.ResolveTeam(storeRoot)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not load repo config: %s", err)}
+		// ResolveTeam only errors when .punt-labs/ethos.yaml exists but is
+		// unreadable or malformed — a real misconfiguration the operator
+		// needs to see, not a "no team configured" no-op.
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", err)}
 	}
 	if teamName == "" {
 		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
 	}
 	if teams == nil {
-		return Result{Name: name, Status: "PASS", Detail: "no team store available"}
+		// Every production caller (RunAll) supplies a team store; reaching
+		// here with a configured team name but no store to check it against
+		// is an integration bug, not a legitimate "nothing to check" state.
+		return Result{Name: name, Status: "FAIL", Detail: "no team store available to verify agent files against"}
 	}
 
 	t, err := teams.Load(teamName)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not load team %q: %s", teamName, err)}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load team %q: %s", teamName, err)}
 	}
 
 	members := make(map[string]bool, len(t.Members))
@@ -226,7 +257,56 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 		return Result{Name: name, Status: "PASS", Detail: "no orphaned agent files"}
 	}
 	sort.Strings(orphaned)
-	return Result{Name: name, Status: "FAIL", Detail: "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")}
+	return Result{Name: name, Status: "FAIL", Detail: classifyOrphans(orphaned, s)}
+}
+
+// classifyOrphans builds the FAIL detail for CheckOrphanedAgentFiles,
+// splitting handle by whether an identity file exists anywhere in s
+// (ethos-jw1z). A handle with a file on disk is not on the active team
+// right now but was clearly generated for some team at some point —
+// "stale", safe to delete or fixed by re-running `ethos session start`
+// once the identity is back on a team. A handle with no file anywhere did
+// not come from a team-scope change this store can see; it is a genuine
+// orphan, worth looking at before deleting. s may be nil, in which case the
+// distinction cannot be made honestly and every handle reads as a plain,
+// undifferentiated orphan rather than guessing.
+//
+// This checks existence (s.Exists, a bare os.Stat), not Load (N1): Load
+// resolves attribute content and, for a legacy identity carrying a
+// pre-ext-migration `voice:` key, RE-SAVES the file to relocate it — a
+// mutation an operator running a read-only health check does not expect
+// and would not consent to. Existence alone already answers the question
+// this function needs answered; a malformed or unreadable file at the
+// handle's path still counts as "a file is there" (stale), which is both
+// the more useful signal for an operator (something WAS generated for this
+// handle) and avoids misattributing a real I/O or parse error to "no
+// identity anywhere", which Load's error alone cannot cleanly distinguish
+// from a genuine absence without deeper inspection this check does not
+// need.
+func classifyOrphans(orphaned []string, s identity.IdentityStore) string {
+	if s == nil {
+		return "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")
+	}
+	var stale, unresolved []string
+	for _, handle := range orphaned {
+		if s.Exists(handle) {
+			stale = append(stale, handle)
+		} else {
+			unresolved = append(unresolved, handle)
+		}
+	}
+	var parts []string
+	if len(stale) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"stale (known identity, not on the active team — generated for a previous team scope, safe to delete): %s",
+			strings.Join(stale, ", ")))
+	}
+	if len(unresolved) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"unresolved (no matching identity anywhere — investigate before deleting): %s",
+			strings.Join(unresolved, ", ")))
+	}
+	return "orphaned agent files — " + strings.Join(parts, "; ")
 }
 
 // checklistAgentNames returns the handles this check exempts as seeded
@@ -259,18 +339,35 @@ func checklistAgentNames(fsys fs.FS, root string) (map[string]bool, error) {
 	return names, nil
 }
 
-// CheckSealHook reports on the DES-058 audit-seal pre-commit hook, keyed on
-// the enabled marker (§2.11). Four states:
+// CheckSealHook reports on the DES-058 audit-seal pre-commit hook.
+func CheckSealHook(repoRoot string) Result { return checkHookPresence(repoRoot, sealHookSpec) }
+
+// CheckTrailerHook reports on the DES-054 Mission/Delegation commit-msg
+// hook (ethos-bfml/ethos-hy40): the same presence check CheckSealHook has
+// always run, extended to the trailer side, so a hand-removed or
+// host-clobbered commit-msg chain on an enabled repo no longer reads green
+// on every line.
+func CheckTrailerHook(repoRoot string) Result { return checkHookPresence(repoRoot, trailerHookSpec) }
+
+// checkHookPresence reports on spec's hook, keyed on the enabled marker
+// (§2.11). Four states:
 //
-//   - Enabled (marker present): FAIL when the seal hook is missing or
-//     inactive; PASS when it carries an active seal call.
+//   - Enabled (marker present): FAIL when the hook is missing or inactive;
+//     PASS when it carries an active call, proven by executing it
+//     (hookInvocationObserved, ethos-kcbv) rather than by pattern-matching
+//     its text.
 //   - Dormant / Absent (marker absent, no ethos hook): PASS "not enabled
 //     here" — a never-enabled or disabled repo must not fail.
 //   - Gated-but-unenabled (marker absent, hook chained): WARN — the chained
 //     hook is inert behind its own marker gate, so a PASS would hide it and a
 //     FAIL would over-report a repo awaiting convergence.
-func CheckSealHook(repoRoot string) Result {
-	name := "Audit seal hook"
+//
+// This is the composed presence check ethos-bfml/ethos-hy40 asked for: it is
+// what makes an enabled repo with no seal (or no trailer) hook installed
+// FAIL, where CheckHookCurrency alone — by its own deliberate, documented
+// design — PASSes "no section installed" regardless of enablement.
+func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
+	name := "Audit " + spec.ShortName + " hook"
 	const remedy = " — run `ethos enable`"
 
 	if repoRoot == "" {
@@ -287,152 +384,288 @@ func CheckSealHook(repoRoot string) Result {
 	} else if !os.IsNotExist(err) {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
 	}
-	dir, _ := githook.HooksDir(repoRoot)
-	hook := filepath.Join(dir, "pre-commit")
+	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	// A diverted core.hooksPath (inside the work tree, or outside the repo
+	// entirely) is exactly the kind of surprise an operator running `ethos
+	// doctor` needs named, not silently discarded — doctor is the one place
+	// that already inspects hook state closely enough to say it (LOW).
+	if len(hooksDirWarnings) > 0 {
+		defer func() {
+			result.Detail += " (" + strings.Join(hooksDirWarnings, "; ") + ")"
+		}()
+	}
+	hook := filepath.Join(dir, spec.File)
 
 	info, statErr := os.Stat(hook)
-	var body string
+	var body []byte
 	if statErr == nil {
 		data, err := os.ReadFile(hook)
 		if err != nil {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
 		}
-		body = string(data)
+		body = data
 	}
-	// A commented-out call, a string-literal mention, or a dead branch must
-	// not read as active, or the silent-absence state recurs behind a green
-	// check. "Chained" for the gate check is the section marker OR an active
-	// call — a stale section still counts as present.
-	active := statErr == nil && hasActiveSealCall(body)
-	chained := statErr == nil && (active || hasSealMarker(body))
 
+	// Dormant: resolved BEFORE any execution is attempted, and structurally
+	// so — this branch returns, so nothing below it can run for a repo
+	// where ethos is not enabled here (S2/P1). A dormant repo's hook is
+	// read-only diagnostic input, not something `ethos doctor` should ever
+	// run: a foreign pre-commit chained in a not-enabled repo would
+	// otherwise have its third-party shell executed to answer a question
+	// ("is this repo enabled") that execution never needed to settle, and —
+	// worse — any sandbox-infrastructure failure unrelated to the hook at
+	// all (no git on PATH, an unwritable TMPDIR) would surface as a FAIL on
+	// a repo that was never enabled, contradicting the dormant state this
+	// function documents just below. Two lexical, non-executing scans are
+	// sufficient here — hasMarkerSection for a marked chained section, and
+	// looksLikeInvocation for an unmarked but textually-literal standalone
+	// call (qodo, PR #515: previously only the marked shape reached WARN,
+	// so a standalone `ethos audit seal` with no BEGIN/END markers
+	// silently collapsed into "not enabled here" alongside a genuinely
+	// absent hook) — the dormant case only needs PASS-vs-WARN, and WARN is
+	// advisory regardless. This narrows, but does not close, M1's
+	// documented residual below: a call assembled dynamically (`eval`, a
+	// variable holding the command) is invisible to both scans the same
+	// way it is invisible to every lexical scan, and still reads PASS.
 	if !markerPresent {
+		chained := statErr == nil && (hasMarkerSection(body, spec.Tag) || looksLikeInvocation(body, spec.InvokeArgs))
 		if chained {
-			return Result{Name: name, Status: "WARN", Detail: "seal hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
+			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
 		}
 		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
 	}
 
-	// Enabled: the seal must be present and active.
+	// A hook present but not executable is never run by git either — check
+	// this BEFORE any sandbox execution is attempted (qodo, PR #515). The
+	// sandbox writes its own copy of body at mode 0o755 regardless of the
+	// installed file's own permission bits, so without this early return
+	// doctor would execute untrusted shell content from an operator's
+	// checkout solely to diagnose a case (missing +x) that never needed
+	// running to answer.
+	//
+	// Windows is excluded because the execute bit carries no execute
+	// semantics there. Go's os.Stat on Windows derives a regular file's
+	// permission bits from the read-only attribute alone — 0o444 when
+	// FILE_ATTRIBUTE_READONLY is set, 0o666 otherwise, with 0o111 added only
+	// for a directory (go1.26 os/types_windows.go, fileStat.mode; the
+	// pre-Go1.23 path is identical on this point, and neither special-cases
+	// .exe/.bat/.cmd). So Perm()&0o111 == 0 holds for EVERY hook file on
+	// Windows: the test cannot tell a runnable hook from a non-runnable one,
+	// and ungated it FAILs every enabled Windows install with a `chmod +x`
+	// remedy that does not exist there — and returns before the
+	// unsupported-platform branch below can run. Stated plainly: doctor
+	// cannot detect a genuinely non-runnable hook on Windows at all.
+	// sandboxGOOS, not runtime.GOOS, so a test can drive both arms.
+	if statErr == nil && sandboxGOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s hook present but not executable — run: chmod +x %s", spec.ShortName, hook)}
+	}
+
+	// Enabled: only a shell hook is ever attempted by execution — a
+	// non-shell body can never run the way git would run it (matches the
+	// shebang check below), and there is no interpreter-neutral way to
+	// "run" it safely.
+	shellHook := statErr == nil && textscan.IsShellHook(body)
+	var active bool
+	if shellHook {
+		observed, err := hookInvocationObserved(body, spec.InvokeArgs, spec.NeedsMsgArg)
+		if err != nil {
+			if errors.Is(err, errSandboxGitUnavailable) {
+				return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+					"cannot verify the %s hook by execution: %v — install git to run this check", spec.ShortName, err)}
+			}
+			if errors.Is(err, errSandboxUnsupportedPlatform) {
+				// M4: this build cannot exercise the sandbox on this GOOS.
+				// FAILing unconditionally here would be a false-positive on
+				// a perfectly healthy install — the pre-execution lexical
+				// scan was platform-neutral, so silently defaulting to FAIL
+				// on today's execution-based check is a regression in the
+				// dangerous direction.
+				//
+				// Narrowed by qodo #12 (PR #515): before execution-based
+				// verification existed, this platform got a lexical check
+				// (looksLikeInvocation's predecessor) that could at least
+				// catch a hook with NO textual trace of the call at all —
+				// broken on every platform, not merely unverifiable on this
+				// one. Blanket-WARNing here regressed that case to "looks
+				// fine," a real loss of detection on the one platform that
+				// cannot fall back to execution. Consult the same lexical
+				// scan used elsewhere in this function: no textual evidence
+				// FAILs (this hook would not pass even the old check);
+				// textual evidence present keeps the honest WARN, since
+				// execution — the only thing that can PROVE the call is
+				// live, not merely present — still cannot run here. This
+				// does not reopen M4: every hook with textual evidence
+				// still WARNs, never FAILs, so a healthy hook the OLD
+				// lexical scanner would have accepted still does not FAIL
+				// here either. Residual, stated plainly: an eval-obscured
+				// or otherwise dynamically-assembled call is exactly as
+				// invisible to looksLikeInvocation here as it is to the
+				// dormant branch above — that hook still WARNs,
+				// indistinguishable from one that never calls ethos at
+				// all, since only execution (unavailable on this
+				// platform) could tell them apart.
+				if !looksLikeInvocation(body, spec.InvokeArgs) {
+					return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+						"the %s hook shows no textual evidence of the required call, and this platform cannot verify by execution", spec.ShortName) + remedy}
+				}
+				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+					"cannot verify the %s hook by execution on this platform — inspect it manually", spec.ShortName)}
+			}
+			var earlyExit *hookExitedEarlyError
+			if errors.As(err, &earlyExit) && sectionIsCurrent(body, spec) {
+				// P4: the sandbox's empty, freshly git-init'd repo can make a
+				// perfectly healthy host section short-circuit before the
+				// chained ethos section ever runs (H3's residual). When the
+				// installed marker section is BYTE-IDENTICAL to what this
+				// build would install today, the ethos section itself is
+				// demonstrably not the problem — `ethos enable` would
+				// re-chain the same content and reproduce this exact
+				// failure. FAILing "stale" here is both wrong (the section
+				// is current) and useless (the prescribed remedy fixes
+				// nothing); WARN names what actually happened instead.
+				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+					"could not verify — a host section exited (status %d) before reaching the ethos call; the %s section itself matches this ethos build, not stale — this looks like a host-section problem, not an ethos one",
+					earlyExit.code, spec.ShortName)}
+			}
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+				"cannot verify the %s hook by execution: %v", spec.ShortName, err)}
+		}
+		active = observed
+	}
+
+	// The hook must be present and active.
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
-			return Result{Name: name, Status: "FAIL", Detail: "enabled here but no pre-commit hook" + remedy}
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but no %s hook", spec.File) + remedy}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, statErr, remedy)}
 	}
 	if !active {
-		if strings.Contains(body, hooks.SealTag) {
-			return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
+		// shellHook is false here only when the body could not be executed
+		// at all; the best-effort text scan then picks a more specific
+		// message (present-but-wrong-interpreter vs section-but-no-call)
+		// purely for wording — it never grants a PASS, which comes only
+		// from hookInvocationObserved above.
+		if !shellHook && looksLikeInvocation(body, spec.InvokeArgs) {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+				"%s call present but the hook's shebang is not a shell — git runs it under another interpreter", spec.ShortName) + remedy}
 		}
-		return Result{Name: name, Status: "FAIL", Detail: "enabled here but the seal hook is not chained" + remedy}
+		if bytes.Contains(body, []byte(spec.Tag)) {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+				"%s section present but no active %q call (stale)", spec.Name, strings.Join(spec.InvokeArgs, " ")) + remedy}
+		}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("enabled here but the %s hook is not chained", spec.ShortName) + remedy}
 	}
-	if !textscan.IsShellHook([]byte(body)) {
-		return Result{Name: name, Status: "FAIL", Detail: "seal call present but the hook's shebang is not a shell — git runs it under another interpreter" + remedy}
+	if hasMarkerSection(body, spec.Tag) {
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("chained %s section active", spec.ShortName)}
 	}
-	if info.Mode().Perm()&0o111 == 0 {
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("seal hook present but not executable — run: chmod +x %s", hook)}
-	}
-	if hasSealMarker(body) {
-		return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
-	}
-	return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
+	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("standalone %s hook active", spec.ShortName)}
 }
 
-// hasSealMarker reports whether body carries the DES-058 seal BEGIN marker on
-// a real (non-heredoc) line. It consults the same textscan heredoc mask as
-// hasActiveSealCall and githook, so a foreign hook that merely documents the
-// marker text inside a heredoc is not misread as a chained section.
-func hasSealMarker(body string) bool {
-	data := []byte(body)
-	lines := textscan.SplitKeepEnds(data)
-	mask := textscan.HeredocMask(data)
+// hasMarkerSection reports whether body carries tag's BEGIN marker on a real
+// (non-heredoc) line. It consults the same textscan heredoc mask as githook,
+// so a foreign hook that merely documents the marker text inside a heredoc
+// is not misread as a chained section.
+func hasMarkerSection(body []byte, tag string) bool {
+	lines := textscan.SplitKeepEnds(body)
+	mask := textscan.HeredocMask(body)
 	for i, raw := range lines {
-		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN "+hooks.SealTag) {
+		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN "+tag) {
 			return true
 		}
 	}
 	return false
 }
 
-// sealInvocation matches an `audit seal` call in command position: the ethos
-// binary (bare `ethos` or the hook's "$ethos_bin" variable) followed by
-// `audit seal`. Command position means the token begins the line (after only
-// indentation) or follows a statement separator (`;`, `&`, `|`, `(`, `!`) and
-// optional whitespace — not merely any whitespace, so the phrase passed as
-// ARGUMENTS to another command (`echo ethos audit seal`) does not match, and
-// neither does a string-literal mention (`echo "audit seal"`).
-var sealInvocation = regexp.MustCompile(`(^[\t ]*|[;&|(!][\t ]*)("?\$\{?ethos_bin\}?"?|ethos)[\t ]+audit[\t ]+seal([\s;&|)]|$)`)
+// sectionIsCurrent reports whether body's installed spec.Tag section is
+// byte-identical (after line-terminator normalization) to what this ethos
+// build would install today — the same digest comparison CheckHookCurrency
+// runs, reused here so checkHookPresence's P4 WARN downgrade can ask "is
+// the ethos section itself the problem" without duplicating that logic. A
+// section that cannot be parsed at all (truncated, hand-duplicated, not
+// ethos-owned) is treated as not current — only a clean, matching section
+// justifies telling the operator the problem is elsewhere.
+func sectionIsCurrent(body []byte, spec HookSpec) bool {
+	installed, ok, err := githook.InstalledSection(body, spec.Tag, spec.Ident)
+	if err != nil || !ok {
+		return false
+	}
+	return digestSection(installed) == digestSection(githook.ExpectedSection(spec.Tag, spec.Canonical))
+}
 
-// hasActiveSealCall reports whether body invokes `ethos audit seal` on a
-// non-comment, non-heredoc line. The check is lexical, not a shell parser: it
-// drops full-line and inline comments and skips here-document bodies (so a
-// seal mention in usage text quoted via `cat <<EOF ... EOF` is not read as a
-// real call), but it cannot see through dynamic dispatch (eval, an aliased
-// wrapper) — such a hook FAILs the check, the safe direction.
-func hasActiveSealCall(body string) bool {
-	data := []byte(body)
-	lines := textscan.SplitKeepEnds(data)
-	mask := textscan.HeredocMask(data)
-	for i, raw := range lines {
-		if mask[i] {
-			continue // heredoc body — opaque, never a command position
-		}
-		code := stripInlineComment(textscan.StripTerminator(raw))
-		if strings.TrimSpace(code) == "" {
-			continue
-		}
-		if sealInvocation.MatchString(code) {
+// invocationPattern matches an ethos subcommand call in command position:
+// the ethos binary (bare `ethos` or the hook's "$ethos_bin" variable)
+// followed by argv's words in order. Command position means the token
+// begins the line (after only indentation) or follows a statement
+// separator (`;`, `&`, `|`, `(`, `!`) and optional whitespace — not merely
+// any whitespace, so the phrase passed as ARGUMENTS to another command
+// (`echo ethos audit seal`) does not match, and neither does a
+// string-literal mention (`echo "audit seal"`).
+//
+// This is diagnostic only (see looksLikeInvocation) — it does not decide
+// PASS/FAIL, only which FAIL message to show for a hook that could not be
+// executed. The authoritative active/inactive determination is
+// hookInvocationObserved, by execution (ethos-kcbv).
+func invocationPattern(argv []string) *regexp.Regexp {
+	words := make([]string, len(argv))
+	for i, w := range argv {
+		words[i] = regexp.QuoteMeta(w)
+	}
+	return regexp.MustCompile(`(^[\t ]*|[;&|(!][\t ]*)("?\$\{?ethos_bin\}?"?|ethos)[\t ]+` + strings.Join(words, `[\t ]+`) + `([\s;&|)]|$)`)
+}
+
+// looksLikeInvocation is a best-effort, non-authoritative text scan used
+// only to choose a more specific FAIL message when a hook's shebang means
+// it was never executed (checkHookPresence attempts execution only for a
+// shell hook). A false positive or negative here changes only which FAIL
+// detail string is shown, never the PASS/FAIL verdict.
+func looksLikeInvocation(body []byte, argv []string) bool {
+	pat := invocationPattern(argv)
+	for _, line := range strings.Split(string(body), "\n") {
+		if pat.MatchString(line) {
 			return true
 		}
 	}
 	return false
 }
 
-// stripInlineComment drops a shell comment from a line: everything from a '#'
-// that starts the line or follows a word-break character. Shell begins a
-// comment wherever a word could begin, so `;`, `&`, `|`, and `(` start one
-// just as whitespace does (`cmd;# note`). It does not track quoting, so a '#'
-// inside a string literal is also cut — acceptable for this lexical check,
-// which errs toward FAIL.
-func stripInlineComment(line string) string {
-	for i := 0; i < len(line); i++ {
-		if line[i] != '#' {
-			continue
-		}
-		if i == 0 {
-			return line[:i]
-		}
-		switch line[i-1] {
-		case ' ', '\t', ';', '&', '|', '(':
-			return line[:i]
-		}
-	}
-	return line
-}
-
-// HookSpec names one ethos-managed git hook for CheckHookCurrency.
+// HookSpec names one ethos-managed git hook, shared by checkHookPresence
+// (presence, execution-verified) and CheckHookCurrency (content drift).
 type HookSpec struct {
 	Name      string // report label, e.g. "Seal hook"
+	ShortName string // lowercase, no "hook" suffix: "seal" / "trailer"
 	File      string // hook filename inside the hooks dir: "pre-commit"
 	Tag       string // hooks.SealTag / hooks.TrailerTag
 	Ident     string // hooks.SealIdent / hooks.TrailerIdent
 	Canonical []byte // hooks.PreCommit / hooks.CommitMsg
+	// InvokeArgs is the ethos subcommand checkHookPresence looks for by
+	// executing the hook, e.g. []string{"audit", "seal"}.
+	InvokeArgs []string
+	// NeedsMsgArg requests a scratch commit-message file be created and
+	// passed as $1 in the sandbox — the commit-msg hook refuses to do
+	// anything without one.
+	NeedsMsgArg bool
 }
 
 var sealHookSpec = HookSpec{
-	Name:      "Seal hook",
-	File:      "pre-commit",
-	Tag:       hooks.SealTag,
-	Ident:     hooks.SealIdent,
-	Canonical: hooks.PreCommit,
+	Name:       "Seal hook",
+	ShortName:  "seal",
+	File:       "pre-commit",
+	Tag:        hooks.SealTag,
+	Ident:      hooks.SealIdent,
+	Canonical:  hooks.PreCommit,
+	InvokeArgs: []string{"audit", "seal"},
 }
 
 var trailerHookSpec = HookSpec{
-	Name:      "Trailer hook",
-	File:      "commit-msg",
-	Tag:       hooks.TrailerTag,
-	Ident:     hooks.TrailerIdent,
-	Canonical: hooks.CommitMsg,
+	Name:        "Trailer hook",
+	ShortName:   "trailer",
+	File:        "commit-msg",
+	Tag:         hooks.TrailerTag,
+	Ident:       hooks.TrailerIdent,
+	Canonical:   hooks.CommitMsg,
+	InvokeArgs:  []string{"hook", "commit-trailers"},
+	NeedsMsgArg: true,
 }
 
 // hashPrefixLen truncates a sha256 hex digest for Detail so a currency
@@ -469,14 +702,19 @@ func shortHex(sum [sha256.Size]byte) string {
 // check's concern (PASS, nothing installed); a section that exists is
 // checked for currency regardless of whether ethos is enabled in this repo
 // right now, because `ethos enable` is the remedy for both problems.
-func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
+func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	name := spec.Name + " currency"
 
 	if repoRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
-	dir, _ := githook.HooksDir(repoRoot)
+	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	if len(hooksDirWarnings) > 0 {
+		defer func() {
+			result.Detail += " (" + strings.Join(hooksDirWarnings, "; ") + ")"
+		}()
+	}
 	hookPath := filepath.Join(dir, spec.File)
 	data, err := os.ReadFile(hookPath)
 	if err != nil {

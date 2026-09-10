@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -365,6 +366,19 @@ func TestCheckDuplicateFields(t *testing.T) {
 	})
 }
 
+// simulateWindows points BOTH platform seams at Windows for the duration of
+// t: sandboxGOOS (does FileMode carry execute bits?) and sandboxSupported
+// (can the execution sandbox run at all?). They are separate facts about
+// different platform sets — see sandboxGOOS's doc comment — but on Windows
+// both hold, so a test that moves only one models a platform that does not
+// exist. Setting them through one helper is what keeps that impossible.
+func simulateWindows(t *testing.T) {
+	t.Helper()
+	origGOOS, origSupported := sandboxGOOS, sandboxSupported
+	sandboxGOOS, sandboxSupported = "windows", false
+	t.Cleanup(func() { sandboxGOOS, sandboxSupported = origGOOS, origSupported })
+}
+
 func TestCheckSealHook(t *testing.T) {
 	// mark writes the enabled marker so a repo reads as "enabled here".
 	mark := func(t *testing.T, dir string) {
@@ -405,9 +419,99 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
-			[]byte("#!/bin/sh\nbd hooks run pre-commit || exit 1\n"), 0o755))
+			[]byte("#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"), 0o755))
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
+	// M1: a diagnostic read must not execute untrusted third-party shell to
+	// reach a verdict that does not depend on the execution's outcome. In a
+	// dormant repo (no enabled marker) the presence check answers from
+	// hasMarkerSection's lexical scan alone; hookInvocationObserved must
+	// never run.
+	t.Run("dormant: no marker, foreign hook is never executed (M1)", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		witness := filepath.Join(dir, "witness")
+		body := "#!/bin/sh\ntouch " + shQuote(witness) + "\ntrue\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
+
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+		_, err := os.Stat(witness)
+		assert.True(t, os.IsNotExist(err),
+			"the foreign hook must never run when ethos is not enabled here — witness file was created")
+	})
+
+	// S2/P1: DES-077 documents the dormant state as an unconditional PASS —
+	// "a never-enabled or disabled repo must not fail." Pre-fix, the
+	// sandbox call ran before the marker gate, so ANY sandbox-infrastructure
+	// failure unrelated to the hook at all — no git on PATH, here — leaked
+	// through as a FAIL on a repo that was never enabled, contradicting
+	// that documented state. No `exec.LookPath("git")` skip: the whole
+	// point is that a dormant repo must PASS even when the sandbox
+	// couldn't have run at all.
+	t.Run("dormant: no git on PATH still PASSes — execution never attempted (S2/P1)", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\ntrue\n"), 0o755))
+
+		t.Setenv("PATH", t.TempDir()) // no git anywhere on PATH
+		r := CheckSealHook(dir)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
+	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
+	// here because before M1, only EXECUTION (hookInvocationObserved) could
+	// see a standalone, unmarked call, and djb's review explicitly rejected
+	// executing every foreign hook in every dormant repo just to tell PASS
+	// from WARN. That reasoning was never about lexical detection — a
+	// literal, textually-visible `ethos audit seal` needs no execution to
+	// see. The dormant branch now also runs looksLikeInvocation (a pure
+	// regex scan, same as the "gated-but-unenabled" marked-section case
+	// already used), so this same fixture now WARNs. What P5's trade-off
+	// still protects — and TestCheckSealHook's eval case right below pins
+	// — is a call assembled dynamically (eval, a variable) that no lexical
+	// scan, marker-based or pattern-based, can see without executing it.
+	t.Run("dormant: a textually-literal unmarked standalone call now WARNs (qodo #5, supersedes P5)", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		// No BEGIN/END markers — hasMarkerSection cannot see this call —
+		// but it is unconditional and textually literal: a real commit in
+		// this real (dormant) repo would actually invoke ethos, and the
+		// call is visible to a lexical scan without running anything.
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+
+		r := CheckSealHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained but ethos not enabled here")
+	})
+
+	// The narrower residual P5 leaves standing: a call built at runtime
+	// (eval, a variable) is invisible to looksLikeInvocation exactly the
+	// way it is invisible to hasMarkerSection — no lexical scan, only
+	// execution, can see through it, and the dormant branch still does not
+	// execute. This is the same djb-reviewed trade-off P5 named, narrowed
+	// to the one shape lexical detection genuinely cannot close.
+	t.Run("dormant: an eval-obscured standalone call still PASSes — the narrower residual lexical scanning cannot close", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\ncmd='ethos audit seal'\neval \"$cmd\"\n"), 0o755))
+
+		r := CheckSealHook(dir)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
 		assert.Equal(t, "not enabled here", r.Detail)
 	})
 
@@ -418,7 +522,7 @@ func TestCheckSealHook(t *testing.T) {
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
-		body := "#!/bin/sh\ncat <<'EOF'\n# --- BEGIN ETHOS DES-058 SEAL ---\nEOF\nbd hooks run pre-commit || exit 1\n"
+		body := "#!/bin/sh\ncat <<'EOF'\n# --- BEGIN ETHOS DES-058 SEAL ---\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
 		r := CheckSealHook(dir)
 		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
@@ -448,6 +552,9 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("marker stat error is not read as disabled → FAIL", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod 0o000 does not deny directory search on Windows; this failure mode is Unix-specific")
+		}
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses directory permissions")
 		}
@@ -465,6 +572,42 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "cannot determine enablement")
 	})
 
+	// M4: on a platform this sandbox cannot exercise, an enabled repo with a
+	// perfectly healthy chained hook must not read as FAIL "not chained" —
+	// that would be a silently wrong answer in the dangerous direction on
+	// every Windows install. WARN, honestly, instead.
+	t.Run("unsupported platform → WARN cannot verify, not a false FAIL (M4)", func(t *testing.T) {
+		simulateWindows(t)
+
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"ethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.True(t, r.Passed(), "an unverifiable platform must not gate doctor's exit status")
+		assert.Contains(t, r.Detail, "cannot verify")
+		assert.NotContains(t, r.Detail, "not chained")
+	})
+
+	// qodo #12 (PR #515): before execution-based verification, Windows
+	// still got SOME lexical check, which could catch a hook with zero
+	// textual trace of the required call. M4's blanket WARN regressed that
+	// specific case — one that would fail even the OLD check — to "looks
+	// fine." A hook with no textual evidence at all must still FAIL on
+	// this platform; only a hook WITH textual evidence (M4's actual case)
+	// gets the honest "cannot verify" WARN.
+	t.Run("unsupported platform, no textual evidence of the call at all → FAIL, not a false WARN (qodo #12)", func(t *testing.T) {
+		simulateWindows(t)
+
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"echo nothing to see here\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "no textual evidence")
+	})
+
 	// --- Enabled: seal-call detection (marker present) ---
 
 	t.Run("standalone seal hook", func(t *testing.T) {
@@ -475,7 +618,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("chained seal section", func(t *testing.T) {
-		body := "#!/bin/sh\nbd hooks run pre-commit || exit 1\n" +
+		body := "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n" +
 			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n" +
 			"# --- END ETHOS DES-058 SEAL ---\n"
 		dir := writeEnabledHook(t, body)
@@ -506,7 +649,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("mention in a foreign comment is not active", func(t *testing.T) {
-		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\nrun_lint\n"
+		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -515,7 +658,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("inline trailing comment mention is not active", func(t *testing.T) {
 		// The phrase in an inline comment after code must not read as a call.
-		body := "#!/bin/sh\necho ok # ethos audit seal\nrun_lint\n"
+		body := "#!/bin/sh\necho ok # ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -524,7 +667,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("phrase as arguments to another command is not active", func(t *testing.T) {
 		// `ethos audit seal` passed as args to echo is not a call (C1).
-		body := "#!/bin/sh\necho ethos audit seal\nrun_lint\n"
+		body := "#!/bin/sh\necho ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -534,8 +677,8 @@ func TestCheckSealHook(t *testing.T) {
 	t.Run("comment after a word-break char is not active", func(t *testing.T) {
 		// Shell starts a comment after ';' or '&', not just whitespace (C2).
 		for _, body := range []string{
-			"#!/bin/sh\ncmd;# ethos audit seal\nrun_lint\n",
-			"#!/bin/sh\ncmd &# ethos audit seal\nrun_lint\n",
+			"#!/bin/sh\ntrue;# ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
+			"#!/bin/sh\ntrue &# ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
 		} {
 			dir := writeEnabledHook(t, body)
 			r := CheckSealHook(dir)
@@ -545,8 +688,12 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("call after a separator is active", func(t *testing.T) {
-		// A genuine command-position call (after '&&') must still PASS.
-		body := "#!/bin/sh\nprecheck && ethos audit seal\n"
+		// A genuine command-position call (after '&&') must still PASS. The
+		// left side must actually succeed (`true`, not an undefined
+		// `precheck`) — CheckSealHook now proves activity by executing the
+		// hook (ethos-kcbv), and a real shell honors `&&` short-circuiting:
+		// a failing left side means the right side never runs.
+		body := "#!/bin/sh\ntrue && ethos audit seal\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -554,10 +701,56 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("string-literal mention is not an active call", func(t *testing.T) {
 		// echo/printf text containing the phrase must not read as a call.
-		dir := writeEnabledHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
+		dir := writeEnabledHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "not chained")
+	})
+
+	// H3: the sandbox is an empty, freshly `git init`'d temp repo — no
+	// commits, nothing staged. A host section guarding on that state (an
+	// ordinary "only run if files are staged" check, which is healthy in a
+	// real commit) short-circuits inside the sandbox for reasons that exist
+	// only there, and the chained ethos section never runs. Pre-H1 this
+	// collapsed to the same "stale — run `ethos enable`" FAIL as a genuinely
+	// disabled seal call, which is the wrong remedy: re-running `ethos
+	// enable` fixes nothing here. The message must name what actually
+	// happened instead.
+	t.Run("H3: a host section that exits before the chained ethos call gets a specific message, not a bare stale", func(t *testing.T) {
+		body := "#!/bin/sh\n[ -f /nonexistent-marker-ethos-doctor-h3-probe ] || exit 1\n" +
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "exited 1 before reaching the ethos call")
+		assert.NotContains(t, r.Detail, "stale — run",
+			"a host-section failure needs its own message, not the misleading 'stale, run ethos enable' remedy, which fixes nothing here")
+	})
+
+	// P4: when the installed marker section is BYTE-IDENTICAL to what this
+	// ethos build would install today, a host-section-exited failure must
+	// WARN, not FAIL "stale" — the ethos section is demonstrably not the
+	// problem, and `ethos enable` re-chaining identical content would
+	// reproduce this exact same failure, making that remedy useless.
+	// Unlike the H3 test above (a hand-written section that does not match
+	// what Chain would produce, so it correctly stays FAIL), this uses the
+	// real githook.Chain output.
+	t.Run("P4: a genuinely current section still WARNs, not FAILs, when the host section exits first", func(t *testing.T) {
+		dir := t.TempDir()
+		hooksDir := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+		hookPath := filepath.Join(hooksDir, "pre-commit")
+		guard := "#!/bin/sh\n[ -f /nonexistent-marker-ethos-doctor-p4-probe ] || exit 1\n"
+		require.NoError(t, os.WriteFile(hookPath, []byte(guard), 0o755))
+		_, err := githook.Chain(hookPath, sealHookSpec.Canonical, sealHookSpec.Tag, sealHookSpec.Ident)
+		require.NoError(t, err)
+		mark(t, dir)
+
+		r := CheckSealHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "exited (status 1) before reaching the ethos call")
+		assert.Contains(t, r.Detail, "not stale")
+		assert.Contains(t, r.Detail, "host-section problem")
 	})
 
 	t.Run("printf note inside a section is stale, not active", func(t *testing.T) {
@@ -577,7 +770,17 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "not a shell")
 	})
 
+	// The executable-bit check has two arms, pinned explicitly here rather
+	// than inherited from the test host, so both are exercised wherever the
+	// suite runs. Unix: the bit means what it says, so a hook without it
+	// FAILs with the chmod remedy. Windows: os.Stat derives permission bits
+	// from the read-only attribute alone, so no regular file ever carries
+	// 0o111 and the check must not run at all.
 	t.Run("non-executable hook fails with chmod remedy", func(t *testing.T) {
+		orig := sandboxGOOS
+		sandboxGOOS = "linux"
+		t.Cleanup(func() { sandboxGOOS = orig })
+
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
@@ -590,8 +793,91 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "chmod +x")
 	})
 
+	// qodo (PR #515): the sandbox writes its own copy of body at 0o755
+	// regardless of the installed file's own mode, so a non-executable hook
+	// — one git would never run — was still executed inside the sandbox to
+	// diagnose that same non-executable state. A witness file proves
+	// whether the body actually ran.
+	t.Run("non-executable hook is never executed by the sandbox", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		orig := sandboxGOOS
+		sandboxGOOS = "linux"
+		t.Cleanup(func() { sandboxGOOS = orig })
+
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		witness := filepath.Join(t.TempDir(), "witness")
+		body := "#!/bin/sh\ntouch " + shQuote(witness) + "\nethos audit seal || exit 2\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o644))
+		mark(t, dir)
+
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "not executable")
+
+		_, statErr := os.Stat(witness)
+		assert.True(t, os.IsNotExist(statErr),
+			"a non-executable hook must never run inside the sandbox — git would never run it either")
+	})
+
+	// Bugbot (PR #515): moving the executable-bit check ahead of the sandbox
+	// call fixed qodo #3 on Unix but made it run on Windows too, where
+	// os.Stat derives a regular file's permission bits from the read-only
+	// attribute alone — 0o444 or 0o666, never 0o111. Every hook on Windows
+	// therefore looked non-executable: every enabled install FAILed with an
+	// unactionable `chmod +x`, and the qodo #12 FAIL/WARN split below it
+	// became unreachable. Both cases of that split are asserted here, so the
+	// test proves the branch is reachable again rather than only proving the
+	// wrong FAIL is gone.
+	t.Run("Windows: the executable-bit check does not run and the platform split is reachable", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			section    string
+			wantStatus string
+			wantDetail string
+		}{
+			{
+				name:       "textual evidence of the call → WARN cannot verify",
+				section:    "ethos audit seal || exit 2\n",
+				wantStatus: "WARN",
+				wantDetail: "cannot verify",
+			},
+			{
+				name:       "no textual evidence of the call → FAIL",
+				section:    "echo nothing to see here\n",
+				wantStatus: "FAIL",
+				wantDetail: "no textual evidence",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				simulateWindows(t)
+
+				dir := t.TempDir()
+				hooks := filepath.Join(dir, ".git", "hooks")
+				require.NoError(t, os.MkdirAll(hooks, 0o755))
+				body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+					tc.section + "# --- END ETHOS DES-058 SEAL ---\n"
+				// 0o644 — no execute bits, the mode every regular file
+				// reports on Windows.
+				require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o644))
+				mark(t, dir)
+
+				r := CheckSealHook(dir)
+				assert.Equal(t, tc.wantStatus, r.Status, "detail: %s", r.Detail)
+				assert.Contains(t, r.Detail, tc.wantDetail)
+				assert.NotContains(t, r.Detail, "not executable",
+					"the executable bit has no execute semantics on Windows — this check must not run there")
+				assert.NotContains(t, r.Detail, "chmod +x",
+					"chmod is not a remedy an operator can apply on Windows")
+			})
+		}
+	})
+
 	t.Run("enabled foreign hook without seal → FAIL not chained", func(t *testing.T) {
-		dir := writeEnabledHook(t, "#!/bin/sh\nbd hooks run pre-commit || exit 1\n")
+		dir := writeEnabledHook(t, "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "not chained")
@@ -613,7 +899,7 @@ func TestCheckSealHook(t *testing.T) {
 		// A hook that only documents the seal in a heredoc body (usage/help
 		// text) never runs it — CheckSealHook must NOT return PASS, or the
 		// silent-absence bug this branch exists to close reopens.
-		body := "#!/bin/sh\ncat <<'EOF'\nethos audit seal\nEOF\nbd hooks run pre-commit || exit 1\n"
+		body := "#!/bin/sh\ncat <<'EOF'\nethos audit seal\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed(), "detail: %s", r.Detail)
@@ -731,6 +1017,190 @@ func TestCheckSealHook(t *testing.T) {
 		r := CheckSealHook(repo)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
+
+	// LOW: a diverted core.hooksPath is exactly the kind of surprise an
+	// operator running `ethos doctor` needs named — doctor is the one
+	// surface that already inspects hook state closely enough to say it.
+	// githook.HooksDir's second return value carried this warning all
+	// along; checkHookPresence used to discard it with `dir, _ :=`.
+	t.Run("diverted core.hooksPath inside the work tree is named in Detail (LOW)", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		repo := t.TempDir()
+		cmd := exec.Command("git", "-C", repo, "init", "-q")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git init: %s", out)
+		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err = cmd.CombinedOutput()
+		require.NoError(t, err, "git config: %s", out)
+
+		husky := filepath.Join(repo, ".husky")
+		require.NoError(t, os.MkdirAll(husky, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(husky, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+		mark(t, repo)
+
+		r := CheckSealHook(repo)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "core.hooksPath places hooks at")
+		assert.Contains(t, r.Detail, "inside the work tree")
+	})
+}
+
+// TestCheckTrailerHook covers the trailer-specific shape of checkHookPresence
+// (ethos-bfml/ethos-hy40): the commit-msg file name, the "hook
+// commit-trailers" invocation, and NeedsMsgArg's dependency on a scratch
+// message file. checkHookPresence's shared control flow (dormant/WARN/FAIL
+// states, comment/heredoc/eval handling) is already exercised exhaustively
+// by TestCheckSealHook against the same function; this suite does not repeat
+// that ground.
+func TestCheckTrailerHook(t *testing.T) {
+	mark := func(t *testing.T, dir string) {
+		t.Helper()
+		zone := filepath.Join(dir, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(zone, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+	}
+	writeEnabledHook := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		hooksDir := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte(body), 0o755))
+		mark(t, dir)
+		return dir
+	}
+
+	t.Run("not in a repo", func(t *testing.T) {
+		r := CheckTrailerHook("")
+		assert.True(t, r.Passed())
+		assert.Equal(t, "not in a repo", r.Detail)
+	})
+
+	t.Run("dormant: no marker, no hook → PASS not enabled here", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
+	t.Run("enabled but no commit-msg hook → FAIL", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		mark(t, dir)
+		r := CheckTrailerHook(dir)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "no commit-msg hook")
+		assert.Contains(t, r.Detail, "ethos enable")
+	})
+
+	t.Run("enabled, real call needing $1 — active without a fixed message file arg baked in", func(t *testing.T) {
+		// The commit-msg hook itself refuses to call ethos without $1; the
+		// sandbox in hookInvocationObserved supplies that argument via
+		// spec.NeedsMsgArg, not the test fixture.
+		body := "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "standalone")
+	})
+
+	t.Run("chained trailer section active", func(t *testing.T) {
+		body := "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic\n" +
+			"# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
+			"[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n" +
+			"# --- END ETHOS DES-054 TRAILER ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained")
+	})
+
+	t.Run("stale section without an active call", func(t *testing.T) {
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
+			"echo placeholder\n# --- END ETHOS DES-054 TRAILER ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckTrailerHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
+		dir := t.TempDir()
+		hooksDir := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
+			"[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n" +
+			"# --- END ETHOS DES-054 TRAILER ---\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte(body), 0o755))
+		r := CheckTrailerHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "not enabled here")
+	})
+
+	t.Run("the real DES-054 hook (chained via githook.Chain) is PASS", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		_, err := githook.Chain(filepath.Join(dir, ".git", "hooks", "commit-msg"), hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent)
+		require.NoError(t, err)
+		mark(t, dir)
+		r := CheckTrailerHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained")
+	})
+}
+
+// TestCheckHookPresence_Bfml_Hy40Regression pins the actual ethos-bfml/
+// ethos-hy40 defect, reproduced against pre-fix source: an ENABLED repo
+// whose commit-msg hook has been hand-removed (a host-clobbered install,
+// per hy40's filed scenario) reported no FAIL anywhere. RunAll had no
+// trailer presence check at all before this change — only
+// "Trailer hook currency", which PASSes "no Trailer hook section installed"
+// by its own deliberate, documented design regardless of enablement.
+//
+// Confirmed against the pre-fix tree (commit 1d27319, this branch's base):
+// RunAll on exactly this fixture returned zero FAIL results — "Trailer hook
+// currency" read PASS "no Trailer hook section installed" and no other
+// check named the trailer hook at all. AllPassed was true.
+func TestCheckHookPresence_Bfml_Hy40Regression(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	repo := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755))
+	// The seal hook is installed and healthy — only the trailer side is
+	// missing, isolating the exact gap hy40 named.
+	_, err := githook.Chain(filepath.Join(repo, ".git", "hooks", "pre-commit"), hooks.PreCommit, hooks.SealTag, hooks.SealIdent)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+
+	results := RunAll(s, ss, repo, repo, nil)
+
+	var trailerPresence *Result
+	for i := range results {
+		if results[i].Name == "Audit trailer hook" {
+			trailerPresence = &results[i]
+		}
+	}
+	require.NotNil(t, trailerPresence, "results: %+v", results)
+	assert.Equal(t, "FAIL", trailerPresence.Status,
+		"an enabled repo with no commit-msg hook must FAIL the trailer presence check")
+	assert.Contains(t, trailerPresence.Detail, "no commit-msg hook")
+	assert.False(t, AllPassed(results),
+		"the aggregate must show at least one FAIL — this is exactly the false-all-green bfml/hy40 reported")
 }
 
 // currencyTestSpec is a HookSpec fixture independent of the real hooks.*
@@ -858,6 +1328,9 @@ func TestCheckHookCurrency(t *testing.T) {
 	})
 
 	t.Run("unreadable hook file -> FAIL with permission remedy", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod 0o000 leaves a file readable on Windows (it only sets the read-only attribute); this failure mode is Unix-specific")
+		}
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses file permissions")
 		}
@@ -886,6 +1359,36 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Contains(t, r.Detail, "inspect the file manually")
 		assert.NotContains(t, r.Detail, "check file permissions")
 	})
+}
+
+// TestCheckHookCurrencyHooksPathWarning pins the LOW finding paired with
+// checkHookPresence's: CheckHookCurrency also discarded githook.HooksDir's
+// diverted-core.hooksPath warning with `dir, _ :=`. Currency is the other
+// surface that already resolves the hooks dir closely enough to name the
+// divergence.
+func TestCheckHookCurrencyHooksPathWarning(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	cmd := exec.Command("git", "-C", repo, "init", "-q")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git init: %s", out)
+	cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "git config: %s", out)
+
+	husky := filepath.Join(repo, ".husky")
+	require.NoError(t, os.MkdirAll(husky, 0o755))
+	_, chainErr := githook.Chain(filepath.Join(husky, currencyTestSpec.File), currencyTestSpec.Canonical, currencyTestSpec.Tag, currencyTestSpec.Ident)
+	require.NoError(t, chainErr)
+
+	r := CheckHookCurrency(repo, currencyTestSpec)
+	assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+	assert.Contains(t, r.Detail, "core.hooksPath places hooks at")
+	assert.Contains(t, r.Detail, "inside the work tree")
 }
 
 // TestCheckHookCurrencyCRLFHostNotStale is the CRLF regression: Chain
@@ -1009,7 +1512,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", "", nil)
-	require.Len(t, results, 12)
+	require.Len(t, results, 14)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1022,23 +1525,25 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Duplicate fields",
 		"Orphaned agent files",
 		"Audit seal hook",
+		"Audit trailer hook",
 		"Seal hook currency",
 		"Trailer hook currency",
 		"Repo-only completeness",
 		"Local extension files",
 		"Extension key names",
 		"Mission file hand-edits",
+		"Code archetype delegated-worker guard",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 12, PassedCount(results))
+	assert.Equal(t, 14, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", "", nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 11)
+	assert.Less(t, PassedCount(results), 13)
 
 	// At least one result should name the identity directory failure.
 	var found bool
@@ -1083,13 +1588,13 @@ func TestCheckOrphanedAgentFiles_ResolvesTeamFromStoreRoot(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	// Team resolved from the store (withbwk, has bwk) → bwk not orphaned.
-	res := CheckOrphanedAgentFiles(checkoutRoot, storeRoot, teams)
+	res := CheckOrphanedAgentFiles(checkoutRoot, storeRoot, teams, nil)
 	assert.Equal(t, "PASS", res.Status,
 		"bwk is on the store's active team; must not be flagged orphaned: %+v", res)
 
 	// Regression guard: resolving the team from the checkout (nobwk, lacks
 	// bwk) misclassifies bwk as orphaned — the bug this split fixes.
-	buggy := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams)
+	buggy := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams, nil)
 	assert.Equal(t, "FAIL", buggy.Status,
 		"resolving the team from the checkout root falsely flags bwk as orphaned")
 }
@@ -1142,13 +1647,202 @@ func TestCheckOrphanedAgentFiles_ChecklistAgents(t *testing.T) {
 				[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
 			teams := team.NewLayeredStore(ethosDir, ethosDir)
 
-			res := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams)
+			res := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams, nil)
 			assert.Equal(t, tc.wantStatus, res.Status, "detail: %s", res.Detail)
 			if tc.wantDetail != "" {
 				assert.Contains(t, res.Detail, tc.wantDetail)
 			}
 		})
 	}
+}
+
+// TestCheckOrphanedAgentFiles_Classification pins ethos-jw1z: the FAIL
+// detail must distinguish a handle with a resolvable identity (stale —
+// generated for a previous team scope, safe to delete) from a handle
+// matching no identity anywhere (a genuine orphan, worth investigating).
+// Pre-fix, both read identically as "orphaned agent files (not on any
+// team): <handles>", giving the operator no way to tell which is which
+// without reading source.
+func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	s := identity.NewStore(root)
+
+	// "retired" resolves to a real identity — it was clearly generated for
+	// some team at some point, just not the currently active one.
+	writeIdentity(t, root, "retired", "name: Retired\nhandle: retired\nkind: agent\n")
+
+	// "wounded" has a matching identity file that exists but is unreadable
+	// (N1): classification must still call it "stale", not fall into a
+	// third bucket or crash trying to parse it — s.Exists is a bare
+	// os.Stat, unaffected by the FILE's own permission bits (only the
+	// containing directory's search permission matters), and deliberately
+	// never calls s.Load here, which would both fail on this file AND, for
+	// an ordinary readable legacy identity, silently RE-SAVE it via
+	// migrateVoice — a write this read-only health check must never cause.
+	// Skipped as root, which bypasses permission bits, and on Windows, where
+	// chmod 0o000 only sets the read-only attribute: the file stays readable,
+	// so the "unreadable" premise never holds, and the Perm() assertion below
+	// would read 0o444 rather than 0o000. os.Geteuid alone does not cover
+	// that — it returns -1 on Windows, never 0.
+	haveWounded := os.Geteuid() != 0 && runtime.GOOS != "windows"
+	if haveWounded {
+		writeIdentity(t, root, "wounded", "name: Wounded\nhandle: wounded\nkind: agent\n")
+		woundedPath := filepath.Join(root, "identities", "wounded.yaml")
+		require.NoError(t, os.Chmod(woundedPath, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(woundedPath, 0o600) })
+	}
+
+	agentsDir := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "retired.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "phantom.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+	if haveWounded {
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "wounded.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+	}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+
+	t.Run("with an identity store, stale and unresolved are distinguished", func(t *testing.T) {
+		res := CheckOrphanedAgentFiles(root, root, teams, s)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "stale", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "retired", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "safe to delete", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "unresolved", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "phantom", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "investigate", "detail: %s", res.Detail)
+		if haveWounded {
+			// N1: an unreadable-but-present identity file still classifies
+			// as stale (a file IS there), never crashing into an error path
+			// and never landing in the genuine-absence bucket.
+			assert.Contains(t, res.Detail, "stale (known identity, not on the active team", "detail: %s", res.Detail)
+			assert.Contains(t, res.Detail, "wounded", "detail: %s", res.Detail)
+			assert.NotContains(t, res.Detail, "unresolved (no matching identity anywhere — investigate before deleting): wounded",
+				"an unreadable-but-present identity file must not be folded into the genuine-absence bucket: %s", res.Detail)
+			woundedPath := filepath.Join(root, "identities", "wounded.yaml")
+			info, statErr := os.Stat(woundedPath)
+			require.NoError(t, statErr)
+			assert.Equal(t, os.FileMode(0o000), info.Mode().Perm(),
+				"classification must not have touched the file's permissions or content")
+		}
+	})
+
+	// N1: CheckOrphanedAgentFiles is a read-only health check. Pre-fix, its
+	// classification called s.Load, which — for an identity carrying a
+	// legacy voice: key — migrates it to ext/vox and RE-SAVES the identity
+	// file, mutating the file an operator asked doctor to merely inspect.
+	t.Run("classification never rewrites a legacy identity file (N1)", func(t *testing.T) {
+		legacyRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(legacyRoot, "identities"), 0o700))
+		legacyS := identity.NewStore(legacyRoot)
+		legacyBody := "name: Legacy\nhandle: legacy\nkind: agent\nvoice:\n  provider: elevenlabs\n  voice_id: abc123\n"
+		writeIdentity(t, legacyRoot, "legacy", legacyBody)
+
+		agentsDir := filepath.Join(legacyRoot, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "legacy.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(legacyRoot, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(legacyRoot, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		legacyEthosDir := filepath.Join(legacyRoot, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(legacyEthosDir, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(legacyEthosDir, "teams", "solo.yaml"),
+			[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+		legacyTeams := team.NewLayeredStore(legacyEthosDir, legacyEthosDir)
+
+		res := CheckOrphanedAgentFiles(legacyRoot, legacyRoot, legacyTeams, legacyS)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "stale", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "legacy", "detail: %s", res.Detail)
+
+		after, err := os.ReadFile(filepath.Join(legacyRoot, "identities", "legacy.yaml"))
+		require.NoError(t, err)
+		assert.Equal(t, legacyBody, string(after),
+			"CheckOrphanedAgentFiles must never rewrite an identity file — it is a diagnostic, not a migration")
+		_, extErr := os.Stat(filepath.Join(legacyRoot, "identities", "legacy.ext", "vox.yaml"))
+		assert.True(t, os.IsNotExist(extErr),
+			"classification must not trigger the voice-to-ext migration as a side effect")
+	})
+
+	t.Run("without an identity store, the distinction is not guessed", func(t *testing.T) {
+		res := CheckOrphanedAgentFiles(root, root, teams, nil)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "retired")
+		assert.Contains(t, res.Detail, "phantom")
+		assert.NotContains(t, res.Detail, "stale", "no identity store means no basis to classify — must not guess")
+	})
+}
+
+// TestCheckOrphanedAgentFiles_ErrorPathsFail pins M3: four PASS-on-error
+// paths in CheckOrphanedAgentFiles read a real fault as "nothing to check",
+// leaving a green column over an invariant that was never actually verified
+// — the same shape ethos-e05k names. checklistAgentNames' own broken-embed
+// handling a few lines below (doctor.go's FAIL for a build-time defect) is
+// the precedent these four should have followed from the start.
+func TestCheckOrphanedAgentFiles_ErrorPathsFail(t *testing.T) {
+	t.Run("malformed glob pattern FAILs, not PASS nothing to check", func(t *testing.T) {
+		// An unterminated '[' character class makes filepath.Glob return
+		// ErrBadPattern for any pattern built under this root.
+		repoRoot := filepath.Join(t.TempDir(), "repo[unterminated")
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".claude", "agents"), 0o755))
+
+		res := CheckOrphanedAgentFiles(repoRoot, repoRoot, nil, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "could not glob agents")
+	})
+
+	t.Run("malformed repo config FAILs, not PASS nothing to check", func(t *testing.T) {
+		root := t.TempDir()
+		agentsDir := filepath.Join(root, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "bwk.md"), []byte("# bwk\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: [not a string"), 0o644))
+
+		res := CheckOrphanedAgentFiles(root, root, nil, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "could not load repo config")
+	})
+
+	t.Run("nil team store with a configured team FAILs, not PASS nothing to check", func(t *testing.T) {
+		root := t.TempDir()
+		agentsDir := filepath.Join(root, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "bwk.md"), []byte("# bwk\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+
+		res := CheckOrphanedAgentFiles(root, root, nil, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "no team store available")
+	})
+
+	t.Run("malformed team file FAILs, not PASS nothing to check", func(t *testing.T) {
+		root := t.TempDir()
+		agentsDir := filepath.Join(root, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "bwk.md"), []byte("# bwk\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+			[]byte("members: [not a string"), 0o644))
+		teams := team.NewLayeredStore(ethosDir, ethosDir)
+
+		res := CheckOrphanedAgentFiles(root, root, teams, nil)
+		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, `could not load team "solo"`)
+	})
 }
 
 // brokenFS.ReadDir always fails, simulating a build-broken embed.

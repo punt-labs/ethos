@@ -817,9 +817,10 @@ func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 	assert.False(t, result.IsError)
 
 	text := resultText(t, result)
-	// Summary line should contain check count. DES-072 added the
-	// "Mission file hand-edits" check, bumping the count from 11 to 12.
-	assert.Contains(t, text, "12 checks")
+	// Summary line should contain check count. ethos-bfml/ethos-hy40 added
+	// "Audit trailer hook" and ethos-e05k added "Code archetype
+	// delegated-worker guard", bumping the count from 12 to 14.
+	assert.Contains(t, text, "14 checks")
 	// Table should contain check names.
 	assert.Contains(t, text, "Identity directory")
 	assert.Contains(t, text, "Human identity")
