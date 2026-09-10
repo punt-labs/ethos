@@ -387,7 +387,15 @@ func checkHookPresence(repoRoot string, spec HookSpec) Result {
 	// Only a shell hook is ever attempted by execution — a non-shell body
 	// can never run the way git would run it (matches the shebang check
 	// below), and there is no interpreter-neutral way to "run" it safely.
-	shellHook := statErr == nil && textscan.IsShellHook(body)
+	//
+	// Execution is further gated on markerPresent (M1): a dormant repo's
+	// hook is read-only diagnostic input here, not something `ethos doctor`
+	// should ever run — a foreign pre-commit chained in a repo where ethos
+	// is switched off would otherwise execute third-party shell to answer a
+	// question ("is this repo enabled") that execution never needed to
+	// settle. hasMarkerSection's lexical fallback below is sufficient for
+	// the dormant-repo WARN case; it does not need proof by execution.
+	shellHook := statErr == nil && markerPresent && textscan.IsShellHook(body)
 	var active bool
 	if shellHook {
 		observed, err := hookInvocationObserved(body, spec.InvokeArgs, spec.NeedsMsgArg)

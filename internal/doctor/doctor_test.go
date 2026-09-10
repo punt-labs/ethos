@@ -411,6 +411,30 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Equal(t, "not enabled here", r.Detail)
 	})
 
+	// M1: a diagnostic read must not execute untrusted third-party shell to
+	// reach a verdict that does not depend on the execution's outcome. In a
+	// dormant repo (no enabled marker) the presence check answers from
+	// hasMarkerSection's lexical scan alone; hookInvocationObserved must
+	// never run.
+	t.Run("dormant: no marker, foreign hook is never executed (M1)", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		witness := filepath.Join(dir, "witness")
+		body := "#!/bin/sh\ntouch " + shQuote(witness) + "\ntrue\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
+
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+		_, err := os.Stat(witness)
+		assert.True(t, os.IsNotExist(err),
+			"the foreign hook must never run when ethos is not enabled here — witness file was created")
+	})
+
 	t.Run("heredoc-quoted marker on a never-enabled repo → PASS not WARN", func(t *testing.T) {
 		// A foreign hook that only documents the marker text inside a heredoc,
 		// on a repo with no enabled marker, must not read as a chained section

@@ -78,6 +78,27 @@ func TestHookInvocationObserved(t *testing.T) {
 		assert.True(t, observed, "the production hook body must be seen invoking ethos hook commit-trailers")
 	})
 
+	t.Run("extra trailing argv words still count as the invocation (M2)", func(t *testing.T) {
+		// A hook calling `ethos audit seal --quiet` logs "audit seal --quiet"
+		// to the stub — checkHookPresence is only looking for the leading
+		// "audit seal" subcommand, not an exact-argv match.
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\nethos audit seal --quiet || exit 2\n"),
+			[]string{"audit", "seal"}, false)
+		require.NoError(t, err)
+		assert.True(t, observed, "a trailing flag after the matched subcommand must not defeat detection")
+	})
+
+	t.Run("a word that merely starts with the argv words is not a match", func(t *testing.T) {
+		// "audit sealed" must not satisfy a search for "audit seal" — the
+		// prefix match needs a boundary, not a bare strings.HasPrefix.
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\nethos audit sealed\n"),
+			[]string{"audit", "seal"}, false)
+		require.NoError(t, err)
+		assert.False(t, observed, "a longer subcommand sharing the prefix must not read as a match")
+	})
+
 	t.Run("git unavailable is reported, not silently swallowed", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
 		_, err := hookInvocationObserved([]byte("#!/bin/sh\nethos audit seal\n"), []string{"audit", "seal"}, false)

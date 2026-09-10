@@ -150,7 +150,12 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	}
 	want := strings.Join(argv, " ")
 	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		if line == want {
+		// Prefix match, not exact equality: a real hook calling
+		// `ethos audit seal --quiet` logs "audit seal --quiet", which must
+		// still count as an observed "audit seal" invocation. The boundary
+		// check (word break or end of line) stops `ethos audit sealed` from
+		// falsely matching "audit seal".
+		if line == want || (strings.HasPrefix(line, want) && len(line) > len(want) && line[len(want)] == ' ') {
 			return true, nil
 		}
 	}
