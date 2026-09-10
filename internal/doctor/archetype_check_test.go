@@ -78,6 +78,29 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		assert.Contains(t, r.Detail, "implement (global)")
 	})
 
+	// C1: a load error that is NOT "not found" (malformed YAML, here) must
+	// not be swallowed as "not deployed — not this check's concern". Pre-fix,
+	// CheckDelegatedWorkerArchetypes's loop did `continue` on ANY LoadLayer
+	// error, so a broken archetype file produced zero entries in `stale` and
+	// the check PASSed "implement and test archetypes both require a
+	// delegated worker" — a positive assertion about a file it never
+	// actually read, byte-identical to the healthy control. This is
+	// ethos-e05k's silent-enforcement-loss failure mode, recurring one layer
+	// up inside the check written to catch it.
+	t.Run("malformed repo-local archetype FAILs instead of reading as healthy", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		storeRoot := t.TempDir()
+		writeArchetype(t, repoArchDir(storeRoot), "implement", "not: [valid: yaml")
+		writeArchetype(t, repoArchDir(storeRoot), "test", "name: test\nrequire_delegated_worker: true\n")
+
+		r := CheckDelegatedWorkerArchetypes(storeRoot)
+		require.Equal(t, "FAIL", r.Status,
+			"a malformed archetype file must FAIL, not PASS as if nothing were deployed: %+v", r)
+		assert.Contains(t, r.Detail, "implement")
+		assert.NotContains(t, r.Detail, "delegated worker",
+			"must not emit the healthy-control PASS sentence text alongside a load failure")
+	})
+
 	t.Run("repo-local shadows a fine global with a stale copy → FAIL still names repo-local", func(t *testing.T) {
 		// This is the "shadow" scenario the bead calls out by name: a fine
 		// global archetype does not help, because the repo-local file
