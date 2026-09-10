@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
 // sandboxTimeout bounds how long a sandboxed hook may run before doctor
@@ -115,8 +117,61 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	ctx, cancel := context.WithTimeout(context.Background(), sandboxTimeout)
 	defer cancel()
 
-	if out, err := exec.CommandContext(ctx, "git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+	// sandboxEnv is the ONLY environment every sandbox git invocation and
+	// the hook execution itself see — assigning cmd.Env (never appending to
+	// os.Environ()) means everything is absent by default and only what is
+	// listed here comes back. This is load-bearing (S1): the CALLER's
+	// process environment can carry git state — GIT_DIR, GIT_WORK_TREE,
+	// GIT_OBJECT_DIRECTORY, GIT_CONFIG_COUNT/KEY_N/VALUE_N, and others not
+	// named here — that would otherwise redirect `git init`, or the hook's
+	// own `git rev-parse --show-toplevel`, at the REAL repository instead
+	// of this disposable one. Proven: with an inherited GIT_DIR pointing at
+	// a real repo, `git init` here returned exit 0 while creating no
+	// repository at dir, and the hook's own rev-parse silently resolved to
+	// the real repo's toplevel — the untrusted hook body then ran, and
+	// wrote, INSIDE the real checkout, with hookInvocationObserved still
+	// reporting a clean result. The self-test below closes this without
+	// needing the enumeration to be exhaustive; GIT_CEILING_DIRECTORIES is
+	// a second, independent backstop bounding git's own upward directory
+	// search to dir's immediate parent, so even a sandbox whose `.git`
+	// failed to materialize for a reason neither of those anticipates
+	// cannot resolve to an ancestor repository — which the real repo being
+	// checked usually is, since this org's TMPDIR convention places .tmp/
+	// inside the repo itself.
+	sandboxEnv := []string{
+		"PATH=" + filepath.Join(dir, "stubbin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + dir,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CEILING_DIRECTORIES=" + filepath.Dir(dir),
+		"GIT_AUTHOR_NAME=ethos-doctor", "GIT_AUTHOR_EMAIL=doctor@ethos.invalid",
+		"GIT_COMMITTER_NAME=ethos-doctor", "GIT_COMMITTER_EMAIL=doctor@ethos.invalid",
+	}
+
+	// --template= defeats a caller's init.templateDir/GIT_TEMPLATE_DIR,
+	// which could otherwise seed the "sandbox" with attacker- or
+	// operator-controlled hooks of its own before ours ever runs.
+	initCmd := exec.CommandContext(ctx, "git", "-C", dir, "init", "-q", "--template=")
+	initCmd.Env = sandboxEnv
+	if out, err := initCmd.CombinedOutput(); err != nil {
 		return false, fmt.Errorf("sandbox git init: %w: %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return false, fmt.Errorf("sandbox git init did not create a repository: %w", err)
+	}
+
+	// Containment self-test (S1): `git init` exiting 0 and a `.git` entry
+	// existing are both necessary but not sufficient — ask git directly
+	// whether IT thinks dir is the repository root, rather than trusting
+	// init's exit code. A caller environment that redirected git's state
+	// out from under us produces exactly this shape: init reports success,
+	// but git's own answer to "where is the repo root" is somewhere else
+	// entirely. Refuse to execute anything if the sandbox cannot vouch for
+	// itself — this is the property that makes the exact enumeration above
+	// unnecessary to keep complete.
+	top, topErr := gitInSandbox(ctx, dir, sandboxEnv, "rev-parse", "--show-toplevel")
+	if topErr != nil || !textscan.SamePath(top, dir) {
+		return false, fmt.Errorf("sandbox containment self-test failed (resolved toplevel %q, want %q): %v", top, dir, topErr)
 	}
 
 	markerDir := filepath.Join(dir, ".punt-labs", "ethos")
@@ -151,18 +206,9 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		args = append(args, msgPath)
 	}
 
-	env := []string{
-		"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"HOME=" + dir,
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
-		"GIT_AUTHOR_NAME=ethos-doctor", "GIT_AUTHOR_EMAIL=doctor@ethos.invalid",
-		"GIT_COMMITTER_NAME=ethos-doctor", "GIT_COMMITTER_EMAIL=doctor@ethos.invalid",
-	}
-
 	cmd := exec.CommandContext(ctx, hookPath, args...)
 	cmd.Dir = dir
-	cmd.Env = env
+	cmd.Env = sandboxEnv
 	// The hook's own exit status is not doctor's concern when the stub log
 	// below shows the call happened — a hook that fails for reasons
 	// unrelated to the ethos call (a chained foreign section erroring, a
@@ -182,7 +228,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	if errors.Is(runErr, syscall.ENOEXEC) && ctx.Err() == nil {
 		shCmd := exec.CommandContext(ctx, "sh", append([]string{"-c", `"$0" "$@"`, hookPath}, args...)...)
 		shCmd.Dir = dir
-		shCmd.Env = env
+		shCmd.Env = sandboxEnv
 		runErr = shCmd.Run()
 	}
 
@@ -237,6 +283,25 @@ func classifyMissedInvocation(ctx context.Context, runErr error) error {
 		return fmt.Errorf("the hook exited %d before reaching the ethos call", exitErr.ExitCode())
 	}
 	return fmt.Errorf("running the sandboxed hook: %w", runErr)
+}
+
+// gitInSandbox runs `git -C dir <args>` with env (never the caller's
+// environment) and returns trimmed stdout. Used for the containment
+// self-test (S1) — a targeted, read-only git query, not a general-purpose
+// runner, which is why it always attaches Output()'s stderr on failure
+// rather than exposing a broader interface.
+func gitInSandbox(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("%w: %s", err, exitErr.Stderr)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // shQuote wraps s in single quotes for embedding in a generated /bin/sh

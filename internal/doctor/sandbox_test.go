@@ -2,7 +2,10 @@ package doctor
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,6 +164,68 @@ func TestHookInvocationObserved(t *testing.T) {
 		assert.False(t, observed)
 		assert.Less(t, elapsed, 5*time.Second, "the infinite loop must be killed near the shortened timeout, not run to the test's own timeout")
 	})
+}
+
+// realGitRepo git-inits dir and returns it, standing in for whatever real
+// repo `ethos doctor` is actually checking — the sandbox must never resolve
+// into it, no matter what the caller's environment points at.
+func realGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	cmd := exec.Command("git", "-C", dir, "init", "-q")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git init: %s", out)
+	return dir
+}
+
+// TestHookInvocationObserved_SandboxEscape pins S1: a caller-inherited git
+// environment variable must never redirect the sandbox's own `git init` or
+// the hook's own `git rev-parse --show-toplevel` at the real repository
+// being checked. Proven pre-fix with GIT_DIR: `git init` inside the sandbox
+// returned exit 0 while creating no repository at dir, and the hook's own
+// rev-parse silently resolved to the real repo — the untrusted hook body
+// then ran, and wrote, inside the real checkout, with
+// hookInvocationObserved still reporting a clean (true, nil) result.
+func TestHookInvocationObserved_SandboxEscape(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	cases := []struct {
+		name   string
+		envVar string
+		value  func(realRepo string) string
+	}{
+		{"GIT_DIR points at the real repo", "GIT_DIR", func(r string) string { return filepath.Join(r, ".git") }},
+		{"GIT_OBJECT_DIRECTORY points at the real repo", "GIT_OBJECT_DIRECTORY", func(r string) string { return filepath.Join(r, ".git", "objects") }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			realRepo := realGitRepo(t)
+			witness := filepath.Join(t.TempDir(), "witness")
+			body := []byte("#!/bin/sh\ntop=$(git rev-parse --show-toplevel 2>&1)\n" +
+				"printf '%s' \"$top\" > " + shQuote(witness) + "\n" +
+				"ethos audit seal\n")
+
+			t.Setenv(tc.envVar, tc.value(realRepo))
+			observed, err := hookInvocationObserved(body, []string{"audit", "seal"}, false)
+			// The sandbox must keep functioning under a hostile-looking
+			// caller environment (it is not; this is a legitimate
+			// inherited variable) — it must just not leak into it.
+			require.NoError(t, err, "sandbox must still function under an inherited %s, not merely refuse", tc.envVar)
+			assert.True(t, observed)
+
+			data, rerr := os.ReadFile(witness)
+			require.NoError(t, rerr)
+			top := strings.TrimSpace(string(data))
+			assert.NotEqual(t, realRepo, top,
+				"the sandboxed hook's own `git rev-parse --show-toplevel` resolved to the REAL repo under an inherited %s — sandbox escape (S1)", tc.envVar)
+			assert.False(t, strings.HasPrefix(realRepo, top) || strings.HasPrefix(top, realRepo),
+				"toplevel %q must not be the real repo %q or contain/be contained by it", top, realRepo)
+		})
+	}
 }
 
 // TestHookInvocationObserved_UnsupportedPlatform pins M4: this sandbox
