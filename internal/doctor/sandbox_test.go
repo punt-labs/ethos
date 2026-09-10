@@ -150,6 +150,24 @@ func TestHookInvocationObserved(t *testing.T) {
 		assert.False(t, observed)
 	})
 
+	t.Run("a CRLF-terminated shebang line reports unexecutable, not a plain silent miss (S3)", func(t *testing.T) {
+		// textscan.IsShellHook strips \r for classification and reads
+		// "#!/bin/sh\r\n" as shell — matching how such a hook is edited on
+		// Windows or checked out with core.autocrlf. The kernel does not
+		// strip it: the interpreter path becomes "/bin/sh\r", execve fails
+		// (ENOENT — no such interpreter), and this must surface as
+		// "could not be executed at all", the same bucket a missing
+		// interpreter already gets, not a silent (false, nil) that reads
+		// identically to a hook that ran fine and genuinely never calls
+		// ethos.
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\r\nethos audit seal\r\n"),
+			[]string{"audit", "seal"}, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "could not be executed at all")
+		assert.False(t, observed)
+	})
+
 	t.Run("a runaway hook is killed at the timeout, and reports a distinct timeout error (H1)", func(t *testing.T) {
 		orig := sandboxTimeout
 		sandboxTimeout = 200 * time.Millisecond
@@ -242,4 +260,51 @@ func TestHookInvocationObserved_UnsupportedPlatform(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errSandboxUnsupportedPlatform), "err = %v, want errSandboxUnsupportedPlatform", err)
 	assert.False(t, observed)
+}
+
+// TestHookInvocationObserved_ProcessGroupCleanup pins S4: a hook that
+// backgrounds a child must not leave it running (and writing into a
+// directory that is about to be removed) after hookInvocationObserved
+// returns. cmd.Cancel alone cannot catch this — the direct child (the
+// shell) exits quickly and normally after backgrounding, so the sandbox
+// context never times out and Cancel never fires; the fix has to reap the
+// process group unconditionally after Run, not only on cancellation.
+func TestHookInvocationObserved_ProcessGroupCleanup(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	cases := []struct {
+		name string
+		body func(witness string) []byte
+	}{
+		{
+			name: "backgrounded subshell",
+			body: func(w string) []byte {
+				return []byte("#!/bin/sh\n(sleep 2; touch " + shQuote(w) + ") &\nexit 0\n")
+			},
+		},
+		{
+			name: "nohup'd daemon",
+			body: func(w string) []byte {
+				return []byte("#!/bin/sh\nnohup sh -c 'sleep 2; touch " + shQuote(w) + "' >/dev/null 2>&1 &\nexit 0\n")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			witnessDir := t.TempDir()
+			witness := filepath.Join(witnessDir, "survived")
+
+			observed, err := hookInvocationObserved(tc.body(witness), []string{"audit", "seal"}, false)
+			require.NoError(t, err)
+			assert.False(t, observed, "the direct child never calls ethos in this fixture")
+
+			time.Sleep(2500 * time.Millisecond)
+			_, statErr := os.Stat(witness)
+			assert.True(t, os.IsNotExist(statErr),
+				"a backgrounded child survived hookInvocationObserved returning — process-group cleanup failed (S4)")
+		})
+	}
 }

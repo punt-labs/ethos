@@ -112,7 +112,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	if err != nil {
 		return false, fmt.Errorf("creating sandbox: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	defer removeSandbox(dir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), sandboxTimeout)
 	defer cancel()
@@ -209,6 +209,21 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	cmd := exec.CommandContext(ctx, hookPath, args...)
 	cmd.Dir = dir
 	cmd.Env = sandboxEnv
+	// cmd.Stdout and cmd.Stderr are deliberately left nil, wiring them to
+	// /dev/null rather than an os.Pipe. A hook that backgrounds a
+	// long-running child inherits its parent's file descriptors by
+	// default; with a pipe, that child holds the write end open long after
+	// the parent exits, and Cmd.Wait blocks until EVERY holder of the pipe
+	// closes it — the classic os/exec deadlock trap. Capturing hook output
+	// here (for a better error message, say) needs cmd.WaitDelay set
+	// alongside it, or this exact hang reappears.
+	// The default cmd.Cancel (called on a context timeout) only signals
+	// cmd's direct PID; giving cmd its own process group lets Cancel kill
+	// the whole group instead (S4, partial — see the unconditional reap
+	// below for the rest of the fix).
+	setNewProcessGroup(cmd)
+	cmd.Cancel = func() error { return reapProcessGroup(cmd) }
+	cmd.WaitDelay = sandboxTimeout // bound Wait() even if Cancel's kill somehow doesn't land
 	// The hook's own exit status is not doctor's concern when the stub log
 	// below shows the call happened — a hook that fails for reasons
 	// unrelated to the ethos call (a chained foreign section erroring, a
@@ -218,6 +233,14 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// "never got the chance to call ethos" apart from "ran fine and
 	// genuinely never calls ethos" (H1).
 	runErr := cmd.Run()
+	// A hook may background a child (`cmd &`, nohup) that outlives the
+	// hook's OWN quick, normal exit — cmd.Cancel above only fires on a
+	// context timeout, which never happens in that case, since Run()
+	// already returned once the direct child (the shell) exited. Reap the
+	// whole process group unconditionally here too, regardless of how Run
+	// returned, so no orphaned grandchild survives into the sandbox's
+	// temp-dir cleanup below — a directory that is about to not exist (S4).
+	_ = reapProcessGroup(cmd)
 
 	// git falls back to running a hook through the shell when a direct
 	// execve fails with ENOEXEC — the kernel's answer for a script with no
@@ -229,7 +252,11 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		shCmd := exec.CommandContext(ctx, "sh", append([]string{"-c", `"$0" "$@"`, hookPath}, args...)...)
 		shCmd.Dir = dir
 		shCmd.Env = sandboxEnv
+		setNewProcessGroup(shCmd)
+		shCmd.Cancel = func() error { return reapProcessGroup(shCmd) }
+		shCmd.WaitDelay = sandboxTimeout
 		runErr = shCmd.Run()
+		_ = reapProcessGroup(shCmd)
 	}
 
 	data, err := os.ReadFile(logPath)
@@ -308,6 +335,31 @@ func gitInSandbox(ctx context.Context, dir string, env []string, args ...string)
 // script, escaping any single quote it contains. s is always doctor's own
 // temp path, never user input, but this is cheap insurance against a
 // TMPDIR whose name happens to contain one.
+// removeSandbox deletes dir, retrying once with every entry's permissions
+// forced open first. A bare os.RemoveAll silently gives up partway through
+// a tree containing an unreadable/unwritable entry — a hook that leaves
+// behind a 0o000 subdirectory (deliberately or not) leaks the sandbox's
+// temp dir with no signal that it happened. Best-effort: if the retry also
+// fails, the leak is a disk-usage nit, not a correctness problem — S1's
+// containment guarantees already bound what could happen inside dir in the
+// first place.
+func removeSandbox(dir string) {
+	if err := os.RemoveAll(dir); err == nil {
+		return
+	}
+	// filepath.Walk passes a directory's own readdir failure to walkFn AS
+	// walkErr for that same path (it attempts to list the directory before
+	// invoking walkFn, not after) — so an unwritable directory is exactly
+	// the case where walkErr is non-nil here, not nil. Chmod unconditionally
+	// and keep walking best-effort; a path Walk cannot even Lstat has
+	// nothing to chmod, but every other permission failure is fixable.
+	_ = filepath.Walk(dir, func(p string, info os.FileInfo, walkErr error) error {
+		_ = os.Chmod(p, 0o700)
+		return nil
+	})
+	_ = os.RemoveAll(dir)
+}
+
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
