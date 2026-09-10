@@ -11306,10 +11306,22 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
   could never run the real hook anyway — nothing of value would be
   verified by that fallback path.
 - **Wrap the hook in `sh -c "$body"` for a uniform execution path.**
-  Rejected — git never invokes a hook that way; it execs the file and
-  lets the OS honor the shebang. Wrapping would make a non-shell hook
-  read as shell, misreporting exactly the interpreter-mismatch case
-  `checkHookPresence`'s shebang check exists to catch.
+  Rejected — for a hook with a real non-shell shebang, uniformly
+  wrapping would misreport it as shell, defeating the
+  interpreter-mismatch case `checkHookPresence`'s shebang check exists
+  to catch. **Correction (2026-09-10 review round, H2):** the premise
+  "git never invokes a hook that way" was wrong. git's own
+  `run-command` falls back to running a hook through the shell
+  specifically when a direct `execve` fails with `ENOEXEC` — the
+  kernel's answer for a script with no (or an unrecognized) shebang
+  line — and a shebang-less pre-commit does run, and block a commit,
+  under real git. `hookInvocationObserved` now matches that exact,
+  narrow fallback (see the addendum below); the part of this rejection
+  that still holds is not wrapping *uniformly* — execution is still
+  attempted only for a body `textscan.IsShellHook` classifies as shell
+  (which includes "no shebang", the same case git treats as shell), so
+  a hook with a genuine non-shell shebang is still never routed
+  through either path.
 - **For ethos-jw1z, classify by inspecting the agent file's generated
   template shape** (front-matter markers, the "You are X (handle)"
   opening line ethos always writes) rather than by identity resolution.
@@ -11341,3 +11353,153 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
   threaded through from `RunAll`'s existing `s`. It may be `nil`; the
   classification is then skipped rather than guessed, and the detail text
   reads exactly as it did before this change.
+
+### Addendum (2026-09-10): review-round findings on the first cut
+
+A local review pass (silent-failure-hunter, reproduced against source
+by the leader) found one critical and several high/medium defects in
+the initial implementation above. All are fixed in the same PR;
+recorded here rather than folded silently into the sections above so
+the trail of what was wrong and why stays legible.
+
+**C1 — `CheckDelegatedWorkerArchetypes` swallowed every `LoadLayer`
+error, not just not-found.** A YAML parse failure, a strict-decode
+rejection, or a permission error on a deployed archetype file produced
+zero entries in `stale`, so the check emitted a bare PASS — ethos-e05k's
+failure mode recurring one layer up, inside the check written to catch
+it. Fixed: only `errors.Is(err, mission.ErrArchetypeNotFound)` is "not
+this check's concern"; every other error FAILs, naming the archetype,
+the layer, and the file path (derived directly, since `LoadLayer`
+returns `layer=""` on the error path).
+
+**H1/H2 — the sandbox's execution fidelity to git had two gaps.**
+`hookInvocationObserved` executed the hook via a bare `execve`, so a
+shebang-less hook — which git runs fine via its own `ENOEXEC` shell
+fallback — read as unexecutable (H2; see the corrected rejected
+alternative above). And when the ethos stub was never reached, every
+cause collapsed into the same `(false, nil)` → "stale — run `ethos
+enable`", regardless of whether the hook could not be executed at all,
+timed out, or a host section exited before reaching the ethos call
+(H1) — the wrong remedy for the first two. `hookInvocationObserved` now
+retries through the shell on `ENOEXEC` exactly as git does, and
+`classifyMissedInvocation` distinguishes the three cases with their own
+messages. A hook that runs to completion and genuinely never calls
+ethos still returns `(false, nil)` unchanged — that is the one case the
+existing stale/not-chained messaging already gets right.
+
+**H3 — the sandbox's empty, freshly `git init`'d temp repo can make a
+healthy host section fail for reasons that exist only in the sandbox**
+(e.g. an ordinary "only run if files are staged" guard, healthy in a
+real commit, sees nothing staged here and exits before the chained
+ethos section runs). This is **not fully closed** — see residual below
+— but H1's message fix means it now reads "the hook exited N before
+reaching the ethos call" instead of the misleading "stale — run `ethos
+enable`," which fixed nothing. Five `doctor_test.go` fixtures that had
+silently worked around this exact defect (an undefined `run_lint`
+command exiting 127, discovered only once H1's stricter classification
+made the workaround itself start failing) are now pinned with the
+established `true` stand-in convention instead.
+
+**M1 — execution ran even when the repo is not enabled here.** A
+dormant repo with a foreign, unrelated pre-commit hook had that hook's
+shell executed by `ethos doctor` to answer "not enabled here" — a
+verdict that never depended on running it. Execution is now gated on
+`markerPresent`; see the residual below for what this costs.
+
+**M2 — the stub-log match required byte-exact argv equality**, so
+`ethos audit seal --quiet` never matched a search for `audit seal` and
+a working hook read as stale. Now a prefix match with a word boundary.
+
+**M3 — four `PASS`-on-error paths in `CheckOrphanedAgentFiles`**
+(a malformed glob pattern, an unreadable/malformed
+`.punt-labs/ethos.yaml`, a nil team store with a configured team name,
+an unreadable/malformed team file) read a real fault as "nothing to
+check." All four now FAIL, following the precedent
+`checklistAgentNames`'s own broken-embed handling already set two
+paragraphs above this addendum.
+
+**M4 — no platform guard.** Nothing in `internal/doctor` was
+build-tagged, and the sandbox's stub is `#!/bin/sh` with no `.exe` —
+every enabled repo would FAIL "not chained" on Windows regardless of
+whether the real hook is healthy. `hookInvocationObserved` now guards
+on GOOS (via an overridable `sandboxGOOS` var, same pattern as
+`sandboxTimeout`) and returns before touching git or sh;
+`checkHookPresence` turns that into an honest WARN "cannot verify by
+execution on this platform" instead.
+
+**LOW — two silent-narrowing findings.** `githook.HooksDir`'s second
+return value (a warning when `core.hooksPath` diverts hooks inside the
+tracked work tree, or outside the repo entirely) was discarded with
+`dir, _ :=` at both `checkHookPresence` and `CheckHookCurrency` — now
+appended to `Detail`. `classifyOrphans` treated every `identity.Load`
+error identically to `fs.ErrNotExist` — now a three-way split (stale /
+genuinely unresolved / "could not resolve," naming that a file exists
+but failed to load), so a permission or parse error on a real file no
+longer reads as "no matching identity anywhere."
+
+**Residual after this round — stated plainly, per the pattern this ADR
+already established above:**
+
+- **H3 is a mitigation, not a fix.** The sandbox is still an empty
+  repo with nothing staged; a host section whose guard genuinely
+  depends on that state will still short-circuit before the chained
+  ethos section runs, and doctor still cannot distinguish "this host
+  section is broken" from "this host section is healthy but the
+  sandbox doesn't look like a real commit." The message is now honest
+  about *what* happened (exited before reaching ethos) instead of
+  misdirecting the operator toward `ethos enable`, but the operator
+  still has to know their own host section to know whether the FAIL is
+  real. Staging a synthetic file in the sandbox before running the hook
+  was considered and deferred: it would satisfy a `git diff --cached`
+  guard but not a guard on branch name, remote state, or any
+  project-specific precondition, so it trades one narrow false-positive
+  shape for another without closing the class.
+- **H2's fix is scoped to the one fallback condition the reviewer's
+  probe proved (`ENOEXEC`), not verified against git's C source for
+  every corner.** `hookInvocationObserved` has not been checked against
+  `run-command.c` for whether git retries on any other errno, whether
+  its shell resolution differs from a bare `sh` PATH lookup on some
+  platform, or whether quoting of `$0`/`$@` matches byte-for-byte in
+  every edge case (an argument containing a literal `$@`, for
+  instance). The fix closes the specific, empirically-demonstrated gap;
+  it is not a from-source reimplementation of git's hook invocation.
+- **M1 trades execution-proven accuracy for not executing untrusted
+  code when doctor has no reason to.** Before M1, a dormant repo's
+  `active` bool could still become `true` by executing an
+  `eval`-obscured legacy chained call that `hasMarkerSection`'s lexical
+  scan cannot see through, correctly WARNing "chained but not enabled
+  here." After M1, that same repo now reads PASS "not enabled here" —
+  the WARN is lost for exactly the shapes ethos-kcbv's execution-based
+  approach was built to catch. This is judged the right trade (WARN is
+  advisory, a dormant repo enforces nothing regardless, and the
+  alternative is running third-party shell for no operational reason)
+  but it is a real regression in detection completeness for one
+  specific, narrow, already-non-enforcing state — named here rather
+  than left implicit.
+- **M4 restores honesty, not capability.** `ethos doctor` still cannot
+  execution-verify a hook on Windows at all — WARN "cannot verify by
+  execution on this platform" is the ceiling, not a stopgap toward full
+  coverage. This capability gap predates this addendum (it was
+  introduced when presence detection moved from the platform-neutral
+  lexical scanner to execution in the base ADR above); M4 only closes
+  the *false FAIL* that gap was producing, on a target this build does
+  not currently ship (`make dist` covers darwin/linux only).
+  `GOOS=windows GOARCH=amd64 go build ./...` is exercised as part of
+  this round's gate, but no Windows *runtime* testing has been done —
+  the guard is unit-tested via the overridable `sandboxGOOS` var, not
+  against a real Windows host.
+
+**What this round's fixes make worse:** nothing found. Checked
+specifically: (1) M1's execution gating could not regress the
+enabled-repo PASS/FAIL path, which is the one ethos-kcbv exists to
+protect — confirmed by the full `TestCheckSealHook`/`TestCheckTrailerHook`
+suites, unchanged in the enabled branch, still passing; (2) H1's
+stricter classification surfaced five pre-existing test fixtures
+relying on the old silent-collapse behavior (the `run_lint`/`cmd`
+placeholders) — these were fixture bugs the new classification exposed,
+not new failures the fix introduced, and all five are now pinned
+against real shell primitives (`true`) instead of a command that
+happened to not exist; (3) the added `sh -c` subprocess spawn on the
+`ENOEXEC` retry path is bounded by the same `sandboxTimeout` context as
+the original attempt, so it cannot extend the worst-case latency beyond
+what a runaway hook already cost before this round.

@@ -35,6 +35,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   investigate before deleting)**, instead of one undifferentiated "not on
   any team" message (ethos-jw1z).
 
+### Fixed
+
+- **`ethos doctor`'s new hook-verification and archetype checks had a
+  review-round defect cluster, all fixed in this same release.** A
+  non-not-found archetype load error (malformed YAML, a permission
+  error) silently PASSed as "nothing to enforce" instead of FAILing —
+  ethos-e05k's failure mode recurring inside the check written to catch
+  it. The sandbox executed the hook via a bare `execve`, so a
+  shebang-less hook (which git runs fine via its own `ENOEXEC` shell
+  fallback) read as unexecutable; it now matches that fallback exactly.
+  When the ethos stub was never reached, every cause (a missing
+  interpreter, a sandbox timeout, a host section that exits before the
+  ethos call) collapsed into the same misleading "stale — run `ethos
+  enable`"; each now gets its own message. Execution ran even in a
+  dormant, not-enabled repo — a foreign hook's shell no longer runs
+  there at all. The argv match required byte-exact equality, so a hook
+  calling `ethos audit seal --quiet` read as stale; now a prefix match.
+  Four `PASS`-on-error paths in "Orphaned agent files" (a malformed
+  glob, a broken repo config, a nil team store, a broken team file) now
+  FAIL. Nothing in `internal/doctor` guarded against Windows, so every
+  enabled Windows repo would FAIL a healthy hook; it now WARNs
+  "cannot verify by execution on this platform" instead. A diverted
+  `core.hooksPath` warning was discarded at two call sites; it now
+  rides along in the check's Detail. A real I/O error loading an
+  identity for orphan classification read identically to "no matching
+  identity anywhere"; it now gets its own "could not resolve" bucket.
+  Full defect list, fixes, and residual (what is still not closed) in
+  DES-077's addendum.
+
 ## [4.18.0] - 2026-09-08
 
 ### Added
