@@ -3,6 +3,7 @@ package doctor
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"testing/fstest"
 
@@ -139,6 +140,36 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		assert.Contains(t, r.Detail, "implement")
 		assert.NotContains(t, r.Detail, "delegated worker",
 			"must not emit the healthy-control PASS sentence text alongside a load failure")
+	})
+
+	// archetypeAttemptedPath's Stat call used to treat ANY error — not just
+	// not-exist — as proof the repo-local file was absent, so a permission
+	// error reported "global" and sent the operator to chmod or edit the
+	// wrong file. Deny search permission on the repo-local archetypes
+	// directory so os.ReadFile (inside LoadLayer) and os.Stat (inside
+	// archetypeAttemptedPath) both fail with EACCES, not ENOENT — the exact
+	// failure this check must not mistake for absence.
+	t.Run("repo-local archetype unreadable (permission denied) names repo-local, not global", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod 0o000 does not deny directory search on Windows; this failure mode is Unix-specific")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores permission bits — cannot reproduce EACCES as root")
+		}
+
+		t.Setenv("HOME", t.TempDir())
+		storeRoot := t.TempDir()
+		archDir := repoArchDir(storeRoot)
+		writeArchetype(t, archDir, "implement", "name: implement\nrequire_delegated_worker: true\n")
+		writeArchetype(t, archDir, "test", "name: test\nrequire_delegated_worker: true\n")
+
+		require.NoError(t, os.Chmod(archDir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(archDir, 0o755) }) // restore before TempDir cleanup removes it
+
+		r := CheckDelegatedWorkerArchetypes(storeRoot)
+		require.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "(repo-local", "an unreadable repo-local file must be named as repo-local: %s", r.Detail)
+		assert.NotContains(t, r.Detail, "(global,", "a permission error on the repo-local file must not be misreported as global: %s", r.Detail)
 	})
 
 	t.Run("repo-local shadows a fine global with a stale copy → FAIL still names repo-local", func(t *testing.T) {

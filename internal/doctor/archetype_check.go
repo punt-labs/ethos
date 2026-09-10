@@ -141,12 +141,30 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 // reading when it returned a non-not-found error. LoadLayer tries the
 // repo-local file first and only falls through to global on a not-found
 // error, so a non-not-found error on a repo-local file never reaches the
-// global layer — the repo-local file existing on disk is proof the error
-// came from there.
+// global layer.
+//
+// The Stat here must distinguish "not there" from every other failure. A
+// prior version treated any Stat error as proof the file was absent and
+// reported "global" — but Stat fails for EACCES, EIO, and symlink loops
+// too, none of which mean absent. On a permission error the repo-local
+// file is exactly what LoadLayer tripped on (os.ReadFile would hit the
+// same EACCES), so reporting "global" sent the operator to fix a file
+// that was never the problem. This is the same shape as C1 one layer
+// down: treating "could not determine" as a specific answer instead of
+// naming it as indeterminate.
 func archetypeAttemptedPath(repoArchRoot, globalRoot, name string) (layer, path string) {
 	repoPath := filepath.Join(repoArchRoot, "archetypes", name+".yaml")
-	if _, err := os.Stat(repoPath); err == nil {
+	_, err := os.Stat(repoPath)
+	switch {
+	case err == nil:
 		return "repo-local", repoPath
+	case os.IsNotExist(err):
+		return "global", filepath.Join(globalRoot, "archetypes", name+".yaml")
+	default:
+		// Present but unreadable (or otherwise unstattable): the repo-local
+		// file is the one LoadLayer errored on, so name it — but say it
+		// could not be examined rather than implying content is stale, since
+		// that is what an operator actually needs to chmod.
+		return "repo-local (unreadable)", repoPath
 	}
-	return "global", filepath.Join(globalRoot, "archetypes", name+".yaml")
 }
