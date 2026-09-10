@@ -11718,7 +11718,7 @@ inexpensive (`syscall.Kill` on an already-empty or already-exited group
 returns promptly) by the full suite's runtime staying in the same
 single-digit-second range as before this addendum.
 
-### Addendum 3 (2026-09-10): PR #515 review — 13 findings from Copilot and qodo, two verified misattributed or already-accepted, one left open as a platform-containment residual
+### Addendum 3 (2026-09-10): PR #515 review — 13 findings from Copilot and qodo, one verified misattributed (fixed anyway on its own merits), one left open as a documented platform-containment residual
 
 **Verified real, fixed:**
 
@@ -11774,41 +11774,77 @@ single-digit-second range as before this addendum.
   (`.punt-labs/ethos/CLAUDE.md`) gotcha text still said "`ethos doctor`
   checks seal-hook presence only,"** stale since `CheckTrailerHook`
   shipped in this same PR. Both now say "seal and trailer hook
-  presence."
+  presence." (At the pushed HEAD this branch reviewed, both files
+  genuinely still had the stale text; this fix predates, and is
+  unaffected by, the later confusion below about whether it had already
+  landed.)
+- **#5 (qodo, `doctor.go:422-427`) — a dormant repo's standalone,
+  unmarked `ethos audit seal` call read a plain PASS "not enabled
+  here," the same as a genuinely absent hook.** The dormant branch's
+  `chained` determination now ORs `looksLikeInvocation(body,
+  spec.InvokeArgs)` alongside `hasMarkerSection`: both are pure lexical
+  scans that execute nothing, so this stays inside the dormant branch's
+  own documented rationale ("lexical is sufficient here, the dormant
+  case only needs PASS-vs-WARN"), and does not touch M1's decision to
+  gate *execution* on the enabled marker — that decision is untouched
+  and still correct. This narrows M1's residual; it does not close it.
+  M1's residual specifically named an `eval`-obscured or otherwise
+  dynamically-assembled call as invisible to lexical scanning — that
+  shape is exactly as invisible to `looksLikeInvocation` as it is to
+  `hasMarkerSection`, and still reads PASS "not enabled here," pinned
+  in its own regression test (`doctor_test.go`,
+  "dormant: an eval-obscured standalone call still PASSes"). Monotone
+  in the safe direction: no fixture that previously WARNed can now PASS,
+  and no fixture requiring execution to prove active can now WARN or
+  FAIL from a false lexical match — `looksLikeInvocation` only ever
+  broadens the WARN, never narrows the PASS below what it already was.
+- **#12 (qodo, `doctor.go:439-451`) — a hook with zero textual trace of
+  the required call, on the one platform this sandbox cannot
+  execution-verify at all (Windows), downgraded all the way to an
+  honest-sounding WARN "cannot verify … inspect it manually" — a real
+  loss of detection relative to the pre-execution lexical scanner,
+  which could at least catch that shape.** The `errSandboxUnsupportedPlatform`
+  branch now also runs `looksLikeInvocation`: no textual evidence FAILs;
+  textual evidence present keeps the WARN, worded the same as before.
+  This does not reopen M4's false positive: M4 closed the case of a
+  *healthy* hook FAILing solely because execution is unavailable on this
+  platform, and every hook with textual evidence of the call — which is
+  every hook the pre-execution lexical scanner would itself have
+  accepted — still WARNs, never FAILs, on this branch. The only hooks
+  that now FAIL are ones that would not have passed the OLD, pre-ADR
+  lexical check either: a strict detection gain against the prior state
+  of the world, not a regression against it. **What this narrowing does
+  NOT close, stated plainly**: an `eval`-obscured or otherwise
+  dynamically-assembled call is exactly as invisible to
+  `looksLikeInvocation` on Windows as it is in the dormant branch above
+  (#5) — that hook still WARNs "cannot verify," indistinguishable from
+  one that never calls ethos at all, because no lexical scan, only
+  execution, can tell them apart, and execution still cannot run on
+  this platform. No Windows *runtime* testing exists for either arm of
+  this branch — both are exercised only through the unit-level
+  `sandboxGOOS` override, the same limitation M4's addendum already
+  named for the platform generally.
 
-**Verified misattributed — no code change:**
+**Verified misattributed, fixed anyway for precision:**
 
 - **#10 (qodo, `procgroup_unix.go`) — "some non-Windows builds no longer
   compile."** `GOOS=plan9` and `GOOS=js` fail to build the whole module
   at `internal/process` (`//go:build linux || darwin || windows`),
   present at this branch's merge-base (commit `ec47a92`) well before
-  this PR touched anything. `procgroup_unix.go`'s `!windows` tag is
-  never reached on those targets — the module already refused to build
-  for them for an unrelated, pre-existing reason. Every target this
-  project actually ships (`darwin/arm64`, `darwin/amd64`, `linux/arm64`,
-  `windows/amd64`) builds clean.
-
-**Verified real, but already an accepted, documented trade-off — no
-change:**
-
-- **#5 (qodo, `doctor.go:422-427`) — "dormant repos hide active seal
-  hooks" when a hook is chained without the marker section wrapper
-  `hasMarkerSection` looks for** (e.g. an unmarked, `eval`-obscured
-  legacy call). This is exactly M1's residual, stated plainly in this
-  ADR's first addendum: gating execution on the enabled marker trades
-  away the WARN a lexical-scan-only dormant path used to produce, in
-  exchange for never running third-party shell for a repo that enforces
-  nothing regardless. Judged the right trade there; re-litigating it is
-  a design decision for the operator, not a review-round patch.
-- **#12 (qodo, `doctor.go:439-451`) — "inactive Windows hooks pass
-  doctor" because `errSandboxUnsupportedPlatform` downgrades to WARN,
-  and `Result.Passed()` treats WARN as success.** This is M4's residual,
-  stated plainly in the first addendum: "`ethos doctor` still cannot
-  execution-verify a hook on Windows at all — WARN … is the ceiling, not
-  a stopgap toward full coverage," on a target `make dist` does not
-  currently ship. Restoring FAIL-by-default would reproduce the exact
-  false-positive M4 was written to close on every healthy Windows
-  install. Unchanged.
+  this PR touched anything. `procgroup_unix.go`'s prior `!windows` tag
+  was never reached on those targets — the module already refused to
+  build for them for an unrelated, pre-existing reason, and this finding's
+  own stated premise (this branch breaks those builds) does not hold.
+  Changed the constraint anyway, on its own merits rather than qodo's
+  reasoning: `!windows` claims every non-Windows target, but the file
+  actually requires POSIX process-group semantics
+  (`SysProcAttr.Setpgid`, negative-PID `Kill`), which is a narrower and
+  more precise claim than "not Windows." Retagged to the Go 1.19+ `unix`
+  build constraint (`procgroup_unix.go`: `//go:build unix`;
+  `procgroup_windows.go`: `//go:build !unix`). Every target this project
+  actually ships (`darwin/arm64`, `darwin/amd64`, `linux/arm64`) plus the
+  build-verification-only `windows/amd64` target still build clean; no
+  behavior changed on any of them.
 
 **Fixed — but the fix is to the claim, not the escape:**
 

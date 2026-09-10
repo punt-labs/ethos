@@ -479,7 +479,17 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 				// FAILs (this hook would not pass even the old check);
 				// textual evidence present keeps the honest WARN, since
 				// execution — the only thing that can PROVE the call is
-				// live, not merely present — still cannot run here.
+				// live, not merely present — still cannot run here. This
+				// does not reopen M4: every hook with textual evidence
+				// still WARNs, never FAILs, so a healthy hook the OLD
+				// lexical scanner would have accepted still does not FAIL
+				// here either. Residual, stated plainly: an eval-obscured
+				// or otherwise dynamically-assembled call is exactly as
+				// invisible to looksLikeInvocation here as it is to the
+				// dormant branch above — that hook still WARNs,
+				// indistinguishable from one that never calls ethos at
+				// all, since only execution (unavailable on this
+				// platform) could tell them apart.
 				if !looksLikeInvocation(body, spec.InvokeArgs) {
 					return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 						"the %s hook shows no textual evidence of the required call, and this platform cannot verify by execution", spec.ShortName) + remedy}
