@@ -261,34 +261,38 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 }
 
 // classifyOrphans builds the FAIL detail for CheckOrphanedAgentFiles,
-// splitting handle by whether it resolves to a known identity anywhere in s
-// (ethos-jw1z). A resolvable handle is not on the active team right now but
-// was clearly generated for some team at some point — "stale", safe to
-// delete or fixed by re-running `ethos session start` once the identity is
-// back on a team. A handle matching no identity at all did not come from a
-// team-scope change this store can see; it is a genuine orphan, worth
-// looking at before deleting. s may be nil, in which case the distinction
-// cannot be made honestly and every handle reads as a plain, undifferentiated
-// orphan rather than guessing.
+// splitting handle by whether an identity file exists anywhere in s
+// (ethos-jw1z). A handle with a file on disk is not on the active team
+// right now but was clearly generated for some team at some point —
+// "stale", safe to delete or fixed by re-running `ethos session start`
+// once the identity is back on a team. A handle with no file anywhere did
+// not come from a team-scope change this store can see; it is a genuine
+// orphan, worth looking at before deleting. s may be nil, in which case the
+// distinction cannot be made honestly and every handle reads as a plain,
+// undifferentiated orphan rather than guessing.
+//
+// This checks existence (s.Exists, a bare os.Stat), not Load (N1): Load
+// resolves attribute content and, for a legacy identity carrying a
+// pre-ext-migration `voice:` key, RE-SAVES the file to relocate it — a
+// mutation an operator running a read-only health check does not expect
+// and would not consent to. Existence alone already answers the question
+// this function needs answered; a malformed or unreadable file at the
+// handle's path still counts as "a file is there" (stale), which is both
+// the more useful signal for an operator (something WAS generated for this
+// handle) and avoids misattributing a real I/O or parse error to "no
+// identity anywhere", which Load's error alone cannot cleanly distinguish
+// from a genuine absence without deeper inspection this check does not
+// need.
 func classifyOrphans(orphaned []string, s identity.IdentityStore) string {
 	if s == nil {
 		return "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")
 	}
-	var stale, unresolved, broken []string
+	var stale, unresolved []string
 	for _, handle := range orphaned {
-		_, err := s.Load(handle, identity.Reference(true))
-		switch {
-		case err == nil:
+		if s.Exists(handle) {
 			stale = append(stale, handle)
-		case errors.Is(err, fs.ErrNotExist):
+		} else {
 			unresolved = append(unresolved, handle)
-		default:
-			// A real I/O or parse error (permission denied, malformed YAML)
-			// is not the same as "no identity anywhere" (LOW) — a matching
-			// file exists at a path this store already knows, and telling
-			// the operator to "investigate a nonexistent identity" sends
-			// them looking for the wrong problem.
-			broken = append(broken, fmt.Sprintf("%s (%v)", handle, err))
 		}
 	}
 	var parts []string
@@ -301,11 +305,6 @@ func classifyOrphans(orphaned []string, s identity.IdentityStore) string {
 		parts = append(parts, fmt.Sprintf(
 			"unresolved (no matching identity anywhere — investigate before deleting): %s",
 			strings.Join(unresolved, ", ")))
-	}
-	if len(broken) > 0 {
-		parts = append(parts, fmt.Sprintf(
-			"could not resolve (a matching identity file exists but failed to load): %s",
-			strings.Join(broken, ", ")))
 	}
 	return "orphaned agent files — " + strings.Join(parts, "; ")
 }

@@ -1470,9 +1470,15 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 	// some team at some point, just not the currently active one.
 	writeIdentity(t, root, "retired", "name: Retired\nhandle: retired\nkind: agent\n")
 
-	// "wounded" has a matching identity file that exists but cannot be
-	// read (LOW) — a real I/O error, distinct from "phantom"'s genuine
-	// absence. Skipped as root, which bypasses permission bits.
+	// "wounded" has a matching identity file that exists but is unreadable
+	// (N1): classification must still call it "stale", not fall into a
+	// third bucket or crash trying to parse it — s.Exists is a bare
+	// os.Stat, unaffected by the FILE's own permission bits (only the
+	// containing directory's search permission matters), and deliberately
+	// never calls s.Load here, which would both fail on this file AND, for
+	// an ordinary readable legacy identity, silently RE-SAVE it via
+	// migrateVoice — a write this read-only health check must never cause.
+	// Skipped as root, which bypasses permission bits.
 	haveWounded := os.Geteuid() != 0
 	if haveWounded {
 		writeIdentity(t, root, "wounded", "name: Wounded\nhandle: wounded\nkind: agent\n")
@@ -1507,14 +1513,55 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 		assert.Contains(t, res.Detail, "phantom", "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, "investigate", "detail: %s", res.Detail)
 		if haveWounded {
-			// LOW: a real I/O error reading a matching file must not read
-			// identically to "no matching identity anywhere" — it gets its
-			// own bucket, naming that a file DOES exist for this handle.
-			assert.Contains(t, res.Detail, "could not resolve", "detail: %s", res.Detail)
+			// N1: an unreadable-but-present identity file still classifies
+			// as stale (a file IS there), never crashing into an error path
+			// and never landing in the genuine-absence bucket.
+			assert.Contains(t, res.Detail, "stale (known identity, not on the active team", "detail: %s", res.Detail)
 			assert.Contains(t, res.Detail, "wounded", "detail: %s", res.Detail)
 			assert.NotContains(t, res.Detail, "unresolved (no matching identity anywhere — investigate before deleting): wounded",
-				"a broken-but-present identity file must not be folded into the genuine-absence bucket: %s", res.Detail)
+				"an unreadable-but-present identity file must not be folded into the genuine-absence bucket: %s", res.Detail)
+			woundedPath := filepath.Join(root, "identities", "wounded.yaml")
+			info, statErr := os.Stat(woundedPath)
+			require.NoError(t, statErr)
+			assert.Equal(t, os.FileMode(0o000), info.Mode().Perm(),
+				"classification must not have touched the file's permissions or content")
 		}
+	})
+
+	// N1: CheckOrphanedAgentFiles is a read-only health check. Pre-fix, its
+	// classification called s.Load, which — for an identity carrying a
+	// legacy voice: key — migrates it to ext/vox and RE-SAVES the identity
+	// file, mutating the file an operator asked doctor to merely inspect.
+	t.Run("classification never rewrites a legacy identity file (N1)", func(t *testing.T) {
+		legacyRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(legacyRoot, "identities"), 0o700))
+		legacyS := identity.NewStore(legacyRoot)
+		legacyBody := "name: Legacy\nhandle: legacy\nkind: agent\nvoice:\n  provider: elevenlabs\n  voice_id: abc123\n"
+		writeIdentity(t, legacyRoot, "legacy", legacyBody)
+
+		agentsDir := filepath.Join(legacyRoot, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "legacy.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(legacyRoot, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(legacyRoot, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		legacyEthosDir := filepath.Join(legacyRoot, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(legacyEthosDir, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(legacyEthosDir, "teams", "solo.yaml"),
+			[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+		legacyTeams := team.NewLayeredStore(legacyEthosDir, legacyEthosDir)
+
+		res := CheckOrphanedAgentFiles(legacyRoot, legacyRoot, legacyTeams, legacyS)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "stale", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "legacy", "detail: %s", res.Detail)
+
+		after, err := os.ReadFile(filepath.Join(legacyRoot, "identities", "legacy.yaml"))
+		require.NoError(t, err)
+		assert.Equal(t, legacyBody, string(after),
+			"CheckOrphanedAgentFiles must never rewrite an identity file — it is a diagnostic, not a migration")
+		_, extErr := os.Stat(filepath.Join(legacyRoot, "identities", "legacy.ext", "vox.yaml"))
+		assert.True(t, os.IsNotExist(extErr),
+			"classification must not trigger the voice-to-ext migration as a side effect")
 	})
 
 	t.Run("without an identity store, the distinction is not guessed", func(t *testing.T) {
