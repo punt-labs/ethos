@@ -11810,26 +11810,43 @@ change:**
   false-positive M4 was written to close on every healthy Windows
   install. Unchanged.
 
-**Residual after this round — stated plainly:**
+**Fixed — but the fix is to the claim, not the escape:**
 
-- **#4 (qodo, `sandbox.go`/`procgroup_unix.go`, HIGH) — a hook child
-  that calls `setsid` before backgrounding escapes both the timeout and
-  the unconditional post-`Run()` reap.** S4 (first addendum) closed the
-  same-process-group case (`cmd &`, `nohup`); it does not close a child
-  that detaches into its own session, because
-  `kill(-pgid, SIGKILL)` cannot reach a process that is no longer in
-  that group by construction — that is what `setsid` exists to do.
-  Verified real: `setsid sh -c 'while :; do :; done' &` inside a
-  sandboxed hook outlives `hookInvocationObserved` returning. No
-  portable, unprivileged fix exists across every shipped target: Linux
-  has `PR_SET_CHILD_SUBREAPER` (a `prctl`, no cross-platform
-  equivalent); darwin has no comparable primitive without cgroups or
-  ptrace-level containment, neither available to an unprivileged process
-  in the general case. Left open rather than patched partially
-  (Linux-only, untested on darwin) in a mechanical review-fix round;
-  closing it is a platform-specific containment design decision for the
-  operator to scope, not a same-shape fix to this file's existing
-  pattern.
+**#4 (qodo, `sandbox.go`/`procgroup_unix.go`, HIGH) — the escape is real,
+but the defect qodo actually found was an overclaiming doc comment, not
+a missing containment mechanism.** `setNewProcessGroup`'s comment said
+`reapProcessGroup` "kill[s] the whole tree a sandboxed hook spawns" — it
+does not, and an overclaiming comment about what a security-relevant
+function guarantees is exactly the defect class this entire cluster
+exists to kill. Verified the escape itself is real: a hook child that
+calls `setsid` before backgrounding leaves the process group entirely by
+construction — that is what `setsid` exists to do — so
+`kill(-pgid, SIGKILL)` cannot reach it by any signal number. S4 (first
+addendum) only ever closed the same-process-group case (`cmd &`,
+`nohup`); `setsid sh -c 'while :; do :; done' &` inside a sandboxed hook
+demonstrably outlives `hookInvocationObserved` returning and both
+timeout paths.
+
+qodo's recommended remedy — an OS-level containment boundary — is
+rejected as out of scope: no portable, unprivileged mechanism exists
+across every shipped target. Linux has `PR_SET_CHILD_SUBREAPER` (a
+`prctl`, no cross-platform equivalent); darwin has nothing comparable
+without cgroups or ptrace-level containment, neither available to an
+unprivileged process in the general case. More fundamentally, lifetime
+containment (bounding how long a spawned process can run) was never
+doing the job of a SECURITY boundary here: this sandbox executes
+untrusted hook content by design — DES-077's base ADR already states
+"no seccomp, no chroot, no network isolation… a malicious or badly
+broken host hook can still do anything its own process's OS permissions
+allow." Capability containment never existed for the duration a hook
+runs; process-group cleanup only ever bounded how long a WELL-BEHAVED
+escape (a plain background job) could outlive the check. A `setsid`
+child extends that same already-uncontained blast radius in time, not
+in kind. Fixed the comment to state only what `kill(-pgid)` actually
+delivers and to name this residual explicitly, in both the doc comment
+and here. Closing the escape itself is a platform-specific containment
+design decision for the operator to scope as a follow-up, not a
+same-shape fix to this file's existing pattern.
 
 **What this round's fixes make worse:** nothing found. Checked
 specifically: (1) the #9/#2 nonce-and-line-encoding change preserves the

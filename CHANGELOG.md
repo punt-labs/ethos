@@ -96,10 +96,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could fabricate a matching log line directly; the log now carries
   boundary-preserving, per-argument lines behind a fresh per-run nonce.
   `reapProcessGroup` surfaced `ESRCH` (the expected result when nothing
-  is left to reap) as an error. Full defect list, fixes, and residual
-  (a `setsid`-detached hook child still escapes containment — no
-  portable, unprivileged fix exists across every shipped target) in
-  DES-077's third addendum.
+  is left to reap) as an error. A dormant repo's standalone, unmarked
+  hook that literally calls `ethos audit seal` — no BEGIN/END markers —
+  read as a plain PASS "not enabled here," the same as a genuinely
+  absent hook; the dormant check now also runs a lexical (non-executing)
+  scan for the literal call and WARNs "chained but not enabled here"
+  when it finds one. On the one platform this sandbox cannot
+  execution-verify at all (Windows), a hook with zero textual trace of
+  the required call downgraded all the way to an honest-sounding WARN
+  instead of FAILing; it now FAILs when there is no textual evidence at
+  all, and WARNs only when the call is present but unverifiable by
+  execution. `procgroup_unix.go`'s build constraint (`!windows`) claimed
+  every non-Windows target, including several (plan9, js/wasm) that
+  don't have the Unix process-group APIs it uses; narrowed to the
+  precise `unix` constraint (and the fallback widened to `!unix`) — this
+  project's four shipped targets were never affected, since the module
+  already fails to build for those targets for an unrelated,
+  pre-existing reason. A doc comment claimed process-group cleanup
+  kills "the whole tree a sandboxed hook spawns"; it does not — a
+  `setsid`-detached descendant escapes by construction, no portable
+  unprivileged containment closes that on every shipped target, and
+  this was never the sandbox's security boundary in the first place
+  (hook execution is untrusted-code execution by design). The comment
+  now says only what `kill(-pgid)` actually delivers. Full defect list,
+  fixes, and residual in DES-077's third addendum.
 
 ## [4.18.0] - 2026-09-08
 
