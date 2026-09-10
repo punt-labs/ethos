@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -538,6 +539,9 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("marker stat error is not read as disabled → FAIL", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod 0o000 does not deny directory search on Windows; this failure mode is Unix-specific")
+		}
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses directory permissions")
 		}
@@ -1317,6 +1321,9 @@ func TestCheckHookCurrency(t *testing.T) {
 	})
 
 	t.Run("unreadable hook file -> FAIL with permission remedy", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod 0o000 leaves a file readable on Windows (it only sets the read-only attribute); this failure mode is Unix-specific")
+		}
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses file permissions")
 		}
@@ -1666,8 +1673,12 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 	// never calls s.Load here, which would both fail on this file AND, for
 	// an ordinary readable legacy identity, silently RE-SAVE it via
 	// migrateVoice — a write this read-only health check must never cause.
-	// Skipped as root, which bypasses permission bits.
-	haveWounded := os.Geteuid() != 0
+	// Skipped as root, which bypasses permission bits, and on Windows, where
+	// chmod 0o000 only sets the read-only attribute: the file stays readable,
+	// so the "unreadable" premise never holds, and the Perm() assertion below
+	// would read 0o444 rather than 0o000. os.Geteuid alone does not cover
+	// that — it returns -1 on Windows, never 0.
+	haveWounded := os.Geteuid() != 0 && runtime.GOOS != "windows"
 	if haveWounded {
 		writeIdentity(t, root, "wounded", "name: Wounded\nhandle: wounded\nkind: agent\n")
 		woundedPath := filepath.Join(root, "identities", "wounded.yaml")

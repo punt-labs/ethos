@@ -1,3 +1,14 @@
+// This test needs POSIX permission semantics, so it does not build on
+// Windows — the same reason procgroup_unix_test.go carries this tag.
+// os.Chmod there reads only S_IWRITE and toggles FILE_ATTRIBUTE_READONLY
+// (go1.26 syscall/syscall_windows.go, Chmod), which does not make a
+// directory non-traversable, so the fixture's `require.Error(RemoveAll)`
+// precondition would not hold. The os.Geteuid guard below does not cover
+// this: Geteuid returns -1 on Windows (same file), never 0, so the skip
+// would not fire either.
+
+//go:build unix
+
 package doctor
 
 import (
