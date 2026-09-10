@@ -442,7 +442,21 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// doctor would execute untrusted shell content from an operator's
 	// checkout solely to diagnose a case (missing +x) that never needed
 	// running to answer.
-	if statErr == nil && info.Mode().Perm()&0o111 == 0 {
+	//
+	// Windows is excluded because the execute bit carries no execute
+	// semantics there. Go's os.Stat on Windows derives a regular file's
+	// permission bits from the read-only attribute alone — 0o444 when
+	// FILE_ATTRIBUTE_READONLY is set, 0o666 otherwise, with 0o111 added only
+	// for a directory (go1.26 os/types_windows.go, fileStat.mode; the
+	// pre-Go1.23 path is identical on this point, and neither special-cases
+	// .exe/.bat/.cmd). So Perm()&0o111 == 0 holds for EVERY hook file on
+	// Windows: the test cannot tell a runnable hook from a non-runnable one,
+	// and ungated it FAILs every enabled Windows install with a `chmod +x`
+	// remedy that does not exist there — and returns before the
+	// unsupported-platform branch below can run. Stated plainly: doctor
+	// cannot detect a genuinely non-runnable hook on Windows at all.
+	// sandboxGOOS, not runtime.GOOS, so a test can drive both arms.
+	if statErr == nil && sandboxGOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s hook present but not executable — run: chmod +x %s", spec.ShortName, hook)}
 	}
 

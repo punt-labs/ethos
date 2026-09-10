@@ -43,9 +43,11 @@ var errSandboxGitUnavailable = errors.New("git not found on PATH")
 var errSandboxUnsupportedPlatform = errors.New("hook execution verification is not supported on this platform")
 
 // sandboxGOOS is runtime.GOOS, held in a var (not read inline) so a test can
-// override it and exercise the Windows guard below without needing an
+// override it and exercise the package's Windows guards without needing an
 // actual Windows build — the same pattern sandboxTimeout already uses for
-// the same reason.
+// the same reason. Two guards read it: the sandbox's own unsupported-platform
+// return below, and checkHookPresence's executable-bit check, which is
+// meaningless on a platform whose FileMode carries no execute bits.
 var sandboxGOOS = runtime.GOOS
 
 // hookInvocationObserved runs body — the exact bytes installed at a git hook

@@ -757,7 +757,17 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "not a shell")
 	})
 
+	// The executable-bit check has two arms, pinned explicitly here rather
+	// than inherited from the test host, so both are exercised wherever the
+	// suite runs. Unix: the bit means what it says, so a hook without it
+	// FAILs with the chmod remedy. Windows: os.Stat derives permission bits
+	// from the read-only attribute alone, so no regular file ever carries
+	// 0o111 and the check must not run at all.
 	t.Run("non-executable hook fails with chmod remedy", func(t *testing.T) {
+		orig := sandboxGOOS
+		sandboxGOOS = "linux"
+		t.Cleanup(func() { sandboxGOOS = orig })
+
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
@@ -779,6 +789,10 @@ func TestCheckSealHook(t *testing.T) {
 		if _, err := exec.LookPath("git"); err != nil {
 			t.Skip("git not available")
 		}
+		orig := sandboxGOOS
+		sandboxGOOS = "linux"
+		t.Cleanup(func() { sandboxGOOS = orig })
+
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
@@ -794,6 +808,61 @@ func TestCheckSealHook(t *testing.T) {
 		_, statErr := os.Stat(witness)
 		assert.True(t, os.IsNotExist(statErr),
 			"a non-executable hook must never run inside the sandbox — git would never run it either")
+	})
+
+	// Bugbot (PR #515): moving the executable-bit check ahead of the sandbox
+	// call fixed qodo #3 on Unix but made it run on Windows too, where
+	// os.Stat derives a regular file's permission bits from the read-only
+	// attribute alone — 0o444 or 0o666, never 0o111. Every hook on Windows
+	// therefore looked non-executable: every enabled install FAILed with an
+	// unactionable `chmod +x`, and the qodo #12 FAIL/WARN split below it
+	// became unreachable. Both cases of that split are asserted here, so the
+	// test proves the branch is reachable again rather than only proving the
+	// wrong FAIL is gone.
+	t.Run("Windows: the executable-bit check does not run and the platform split is reachable", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			section    string
+			wantStatus string
+			wantDetail string
+		}{
+			{
+				name:       "textual evidence of the call → WARN cannot verify",
+				section:    "ethos audit seal || exit 2\n",
+				wantStatus: "WARN",
+				wantDetail: "cannot verify",
+			},
+			{
+				name:       "no textual evidence of the call → FAIL",
+				section:    "echo nothing to see here\n",
+				wantStatus: "FAIL",
+				wantDetail: "no textual evidence",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				orig := sandboxGOOS
+				sandboxGOOS = "windows"
+				t.Cleanup(func() { sandboxGOOS = orig })
+
+				dir := t.TempDir()
+				hooks := filepath.Join(dir, ".git", "hooks")
+				require.NoError(t, os.MkdirAll(hooks, 0o755))
+				body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+					tc.section + "# --- END ETHOS DES-058 SEAL ---\n"
+				// 0o644 — no execute bits, the mode every regular file
+				// reports on Windows.
+				require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o644))
+				mark(t, dir)
+
+				r := CheckSealHook(dir)
+				assert.Equal(t, tc.wantStatus, r.Status, "detail: %s", r.Detail)
+				assert.Contains(t, r.Detail, tc.wantDetail)
+				assert.NotContains(t, r.Detail, "not executable",
+					"the executable bit has no execute semantics on Windows — this check must not run there")
+				assert.NotContains(t, r.Detail, "chmod +x",
+					"chmod is not a remedy an operator can apply on Windows")
+			})
+		}
 	})
 
 	t.Run("enabled foreign hook without seal → FAIL not chained", func(t *testing.T) {
