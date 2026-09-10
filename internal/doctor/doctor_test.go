@@ -489,6 +489,25 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "cannot determine enablement")
 	})
 
+	// M4: on a platform this sandbox cannot exercise, an enabled repo with a
+	// perfectly healthy chained hook must not read as FAIL "not chained" —
+	// that would be a silently wrong answer in the dangerous direction on
+	// every Windows install. WARN, honestly, instead.
+	t.Run("unsupported platform → WARN cannot verify, not a false FAIL (M4)", func(t *testing.T) {
+		orig := sandboxGOOS
+		sandboxGOOS = "windows"
+		t.Cleanup(func() { sandboxGOOS = orig })
+
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"ethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.True(t, r.Passed(), "an unverifiable platform must not gate doctor's exit status")
+		assert.Contains(t, r.Detail, "cannot verify")
+		assert.NotContains(t, r.Detail, "not chained")
+	})
+
 	// --- Enabled: seal-call detection (marker present) ---
 
 	t.Run("standalone seal hook", func(t *testing.T) {
@@ -530,7 +549,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("mention in a foreign comment is not active", func(t *testing.T) {
-		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\nrun_lint\n"
+		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -539,7 +558,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("inline trailing comment mention is not active", func(t *testing.T) {
 		// The phrase in an inline comment after code must not read as a call.
-		body := "#!/bin/sh\necho ok # ethos audit seal\nrun_lint\n"
+		body := "#!/bin/sh\necho ok # ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -548,7 +567,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("phrase as arguments to another command is not active", func(t *testing.T) {
 		// `ethos audit seal` passed as args to echo is not a call (C1).
-		body := "#!/bin/sh\necho ethos audit seal\nrun_lint\n"
+		body := "#!/bin/sh\necho ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -558,8 +577,8 @@ func TestCheckSealHook(t *testing.T) {
 	t.Run("comment after a word-break char is not active", func(t *testing.T) {
 		// Shell starts a comment after ';' or '&', not just whitespace (C2).
 		for _, body := range []string{
-			"#!/bin/sh\ncmd;# ethos audit seal\nrun_lint\n",
-			"#!/bin/sh\ncmd &# ethos audit seal\nrun_lint\n",
+			"#!/bin/sh\ntrue;# ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
+			"#!/bin/sh\ntrue &# ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
 		} {
 			dir := writeEnabledHook(t, body)
 			r := CheckSealHook(dir)
@@ -582,10 +601,30 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("string-literal mention is not an active call", func(t *testing.T) {
 		// echo/printf text containing the phrase must not read as a call.
-		dir := writeEnabledHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
+		dir := writeEnabledHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "not chained")
+	})
+
+	// H3: the sandbox is an empty, freshly `git init`'d temp repo — no
+	// commits, nothing staged. A host section guarding on that state (an
+	// ordinary "only run if files are staged" check, which is healthy in a
+	// real commit) short-circuits inside the sandbox for reasons that exist
+	// only there, and the chained ethos section never runs. Pre-H1 this
+	// collapsed to the same "stale — run `ethos enable`" FAIL as a genuinely
+	// disabled seal call, which is the wrong remedy: re-running `ethos
+	// enable` fixes nothing here. The message must name what actually
+	// happened instead.
+	t.Run("H3: a host section that exits before the chained ethos call gets a specific message, not a bare stale", func(t *testing.T) {
+		body := "#!/bin/sh\n[ -f /nonexistent-marker-ethos-doctor-h3-probe ] || exit 1\n" +
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "exited 1 before reaching the ethos call")
+		assert.NotContains(t, r.Detail, "stale — run",
+			"a host-section failure needs its own message, not the misleading 'stale, run ethos enable' remedy, which fixes nothing here")
 	})
 
 	t.Run("printf note inside a section is stale, not active", func(t *testing.T) {

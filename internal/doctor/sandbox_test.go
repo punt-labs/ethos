@@ -106,7 +106,48 @@ func TestHookInvocationObserved(t *testing.T) {
 		assert.True(t, errors.Is(err, errSandboxGitUnavailable), "err = %v, want errSandboxGitUnavailable", err)
 	})
 
-	t.Run("a runaway hook is killed at the timeout, not left to hang", func(t *testing.T) {
+	t.Run("shebang-less hook runs via git's ENOEXEC shell fallback (H2)", func(t *testing.T) {
+		// No "#!" line at all. A bare execve of this file fails with
+		// ENOEXEC; git's own run-command falls back to `sh -c '"$0" "$@"'`
+		// in exactly this case, so this sandbox must too, or a real
+		// shebang-less pre-commit that git runs fine reads as unexecutable.
+		observed, err := hookInvocationObserved(
+			[]byte("ethos audit seal || exit 2\n"),
+			[]string{"audit", "seal"}, false)
+		require.NoError(t, err)
+		assert.True(t, observed, "a shebang-less hook must still be exercised via the shell fallback")
+	})
+
+	t.Run("a shebang naming a missing interpreter is reported as unexecutable, not a plain miss (H1)", func(t *testing.T) {
+		observed, err := hookInvocationObserved(
+			[]byte("#!/nonexistent/path/bash\nethos audit seal\n"),
+			[]string{"audit", "seal"}, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "could not be executed at all")
+		assert.False(t, observed)
+	})
+
+	t.Run("a host section that exits before reaching ethos reports why, not a plain miss (H1)", func(t *testing.T) {
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\nexit 3\nethos audit seal\n"),
+			[]string{"audit", "seal"}, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exited 3 before reaching the ethos call")
+		assert.False(t, observed)
+	})
+
+	t.Run("a hook that runs to completion and simply never calls ethos stays a plain miss", func(t *testing.T) {
+		// runErr == nil must stay (false, nil) — this is the one case
+		// doctor's existing "stale"/"not chained" messaging already covers,
+		// and it must not gain a redundant classification error.
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\necho nothing to see here\nexit 0\n"),
+			[]string{"audit", "seal"}, false)
+		require.NoError(t, err)
+		assert.False(t, observed)
+	})
+
+	t.Run("a runaway hook is killed at the timeout, and reports a distinct timeout error (H1)", func(t *testing.T) {
 		orig := sandboxTimeout
 		sandboxTimeout = 200 * time.Millisecond
 		t.Cleanup(func() { sandboxTimeout = orig })
@@ -114,8 +155,26 @@ func TestHookInvocationObserved(t *testing.T) {
 		start := time.Now()
 		observed, err := hookInvocationObserved([]byte("#!/bin/sh\nwhile :; do :; done\n"), []string{"audit", "seal"}, false)
 		elapsed := time.Since(start)
-		require.NoError(t, err)
+		require.Error(t, err, "a timed-out hook must report why the stub was never reached, not read as a plain inactive hook")
+		assert.Contains(t, err.Error(), "did not finish within")
+		assert.Contains(t, err.Error(), "hanging")
 		assert.False(t, observed)
 		assert.Less(t, elapsed, 5*time.Second, "the infinite loop must be killed near the shortened timeout, not run to the test's own timeout")
 	})
+}
+
+// TestHookInvocationObserved_UnsupportedPlatform pins M4: this sandbox
+// cannot be exercised on Windows, and must say so honestly rather than
+// silently degrading to a wrong FAIL. Outside the git-availability skip of
+// TestHookInvocationObserved above — the Windows guard fires before git is
+// ever consulted, so this must run unconditionally.
+func TestHookInvocationObserved_UnsupportedPlatform(t *testing.T) {
+	orig := sandboxGOOS
+	sandboxGOOS = "windows"
+	t.Cleanup(func() { sandboxGOOS = orig })
+
+	observed, err := hookInvocationObserved([]byte("ethos audit seal\n"), []string{"audit", "seal"}, false)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errSandboxUnsupportedPlatform), "err = %v, want errSandboxUnsupportedPlatform", err)
+	assert.False(t, observed)
 }

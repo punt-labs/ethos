@@ -404,6 +404,16 @@ func checkHookPresence(repoRoot string, spec HookSpec) Result {
 				return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 					"cannot verify the %s hook by execution: %v — install git to run this check", spec.ShortName, err)}
 			}
+			if errors.Is(err, errSandboxUnsupportedPlatform) {
+				// M4: this build cannot exercise the sandbox on this GOOS.
+				// FAILing here would be a false-positive on a perfectly
+				// healthy install — the pre-execution lexical scan was
+				// platform-neutral, so silently defaulting to FAIL on
+				// today's execution-based check is a regression in the
+				// dangerous direction. WARN, honestly, instead.
+				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+					"cannot verify the %s hook by execution on this platform — inspect it manually", spec.ShortName)}
+			}
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 				"cannot verify the %s hook by execution: %v", spec.ShortName, err)}
 		}

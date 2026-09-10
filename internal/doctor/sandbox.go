@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -27,6 +29,21 @@ var sandboxTimeout = 10 * time.Second
 // dependency the sandbox introduces.
 var errSandboxGitUnavailable = errors.New("git not found on PATH")
 
+// errSandboxUnsupportedPlatform is returned by hookInvocationObserved on a
+// GOOS this sandbox cannot exercise: it shells out to git, and (per the
+// ENOEXEC fallback below) to sh, neither of which this package can assume on
+// Windows the way it can on a Unix host. checkHookPresence turns this into
+// an honest "cannot verify by execution on this platform" rather than
+// letting every enabled Windows install FAIL against a hook that may be
+// perfectly healthy — see DES-077's residual section, M4.
+var errSandboxUnsupportedPlatform = errors.New("hook execution verification is not supported on this platform")
+
+// sandboxGOOS is runtime.GOOS, held in a var (not read inline) so a test can
+// override it and exercise the Windows guard below without needing an
+// actual Windows build — the same pattern sandboxTimeout already uses for
+// the same reason.
+var sandboxGOOS = runtime.GOOS
+
 // hookInvocationObserved runs body — the exact bytes installed at a git hook
 // path, host content and any chained ethos section together — inside a
 // disposable, throwaway git repository, and reports whether it invoked the
@@ -42,8 +59,8 @@ var errSandboxGitUnavailable = errors.New("git not found on PATH")
 // found. Executing the hook has no such corners: a heredoc body is never
 // executed as a command because the shell that runs it never treats it as
 // one; a comment is skipped because the shell skips it; `eval` and an
-// aliased wrapper resolve correctly because the code actually runs. The one
-// documented limitation this method trades in return is described below.
+// aliased wrapper resolve correctly because the code actually runs. The
+// documented limitations this method trades in return are described below.
 //
 // The sandbox: a fresh temp directory, `git init`'d so the hook's own
 // `git rev-parse --show-toplevel` gate succeeds; a `.punt-labs/ethos/enabled`
@@ -53,10 +70,17 @@ var errSandboxGitUnavailable = errors.New("git not found on PATH")
 // state — checkHookPresence composes that answer with the real marker
 // separately); and a stub `ethos` executable placed first on PATH that
 // records its argv to a log file and exits 0 rather than doing any real
-// work. body is copied in verbatim and executed via its own file (respecting
-// whatever shebang it carries, exactly how git itself runs a hook) — it is
-// never wrapped in a `sh -c` invocation, so a non-shell hook is exercised
-// (or fails to run at all) the same way git would run it.
+// work. body is copied in verbatim and executed via its own file, respecting
+// whatever shebang it carries — matching how git runs a hook directly. If
+// that direct execve fails with ENOEXEC (no shebang, or one the kernel does
+// not recognize), git itself falls back to running the file through the
+// shell (`sh -c '"$0" "$@"' <path> <args>`), and this sandbox now matches
+// that fallback exactly (H2/ethos-kcbv follow-up) rather than reporting a
+// shebang-less hook as unexecutable. This is not a uniform `sh -c` wrap —
+// checkHookPresence still only attempts execution at all for a body
+// textscan.IsShellHook already classifies as shell (including "no shebang",
+// which git also treats as shell), so a hook with a real non-shell shebang
+// (`#!/usr/bin/env python3`) is never routed through either path.
 //
 // This executes untrusted hook content, including any foreign host section
 // chained alongside the ethos section — that is unavoidable, since the
@@ -75,6 +99,9 @@ var errSandboxGitUnavailable = errors.New("git not found on PATH")
 // file be created and passed as $1, which the commit-msg hook requires
 // before it will do anything.
 func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool, error) {
+	if sandboxGOOS == "windows" {
+		return false, errSandboxUnsupportedPlatform
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		return false, errSandboxGitUnavailable
 	}
@@ -124,9 +151,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		args = append(args, msgPath)
 	}
 
-	cmd := exec.CommandContext(ctx, hookPath, args...)
-	cmd.Dir = dir
-	cmd.Env = []string{
+	env := []string{
 		"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"HOME=" + dir,
 		"GIT_CONFIG_GLOBAL=/dev/null",
@@ -134,17 +159,37 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		"GIT_AUTHOR_NAME=ethos-doctor", "GIT_AUTHOR_EMAIL=doctor@ethos.invalid",
 		"GIT_COMMITTER_NAME=ethos-doctor", "GIT_COMMITTER_EMAIL=doctor@ethos.invalid",
 	}
-	// The hook's own exit status is not doctor's concern here — a hook that
-	// fails for reasons unrelated to the ethos call (a chained foreign
-	// section erroring, a missing unrelated tool) still tells us whether the
-	// stub was reached before that failure. Only the stub log answers the
-	// question this function exists to answer.
-	_ = cmd.Run()
+
+	cmd := exec.CommandContext(ctx, hookPath, args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	// The hook's own exit status is not doctor's concern when the stub log
+	// below shows the call happened — a hook that fails for reasons
+	// unrelated to the ethos call (a chained foreign section erroring, a
+	// missing unrelated tool) still tells us whether the stub was reached
+	// before that failure. runErr becomes the ONLY signal, though, when the
+	// log is absent: classifyMissedInvocation below examines it to tell
+	// "never got the chance to call ethos" apart from "ran fine and
+	// genuinely never calls ethos" (H1).
+	runErr := cmd.Run()
+
+	// git falls back to running a hook through the shell when a direct
+	// execve fails with ENOEXEC — the kernel's answer for a script with no
+	// (or an unrecognized) shebang line. Match that exactly (H2): a
+	// shebang-less hook must be exercised the same way git actually runs
+	// it, not reported as unexecutable because this sandbox tried a bare
+	// execve and stopped there.
+	if errors.Is(runErr, syscall.ENOEXEC) && ctx.Err() == nil {
+		shCmd := exec.CommandContext(ctx, "sh", append([]string{"-c", `"$0" "$@"`, hookPath}, args...)...)
+		shCmd.Dir = dir
+		shCmd.Env = env
+		runErr = shCmd.Run()
+	}
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil // the stub never ran — no invocation observed
+			return false, classifyMissedInvocation(ctx, runErr)
 		}
 		return false, fmt.Errorf("reading sandbox log: %w", err)
 	}
@@ -160,6 +205,38 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		}
 	}
 	return false, nil
+}
+
+// classifyMissedInvocation explains why the ethos stub was never reached, so
+// checkHookPresence can give an accurate FAIL message instead of a blanket
+// "stale — run `ethos enable`", which is the wrong remedy for a missing
+// interpreter or a hung host section (H1). Three conditions previously
+// collapsed into an indistinguishable (false, nil): a hook that could never
+// be executed at all (ENOEXEC/ENOENT — no usable shebang, or one naming a
+// missing interpreter), one killed at the sandbox timeout (a chained section
+// may be hanging), and one that exited before reaching the ethos call at all
+// (a host section's own guard, not the ethos section, is what failed).
+//
+// runErr == nil — the hook ran to completion and simply never called
+// ethos — is deliberately left as (nil, nil): that is the one case doctor's
+// existing "stale"/"not chained" messaging already describes correctly, and
+// converting it to an error here would just re-derive the same FAIL text
+// through a different path.
+func classifyMissedInvocation(ctx context.Context, runErr error) error {
+	if runErr == nil {
+		return nil
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("the hook did not finish within %s — a chained section may be hanging", sandboxTimeout)
+	}
+	if errors.Is(runErr, syscall.ENOEXEC) || errors.Is(runErr, syscall.ENOENT) {
+		return fmt.Errorf("the hook could not be executed at all: %v", runErr)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		return fmt.Errorf("the hook exited %d before reaching the ethos call", exitErr.ExitCode())
+	}
+	return fmt.Errorf("running the sandboxed hook: %w", runErr)
 }
 
 // shQuote wraps s in single quotes for embedding in a generated /bin/sh
