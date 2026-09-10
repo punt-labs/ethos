@@ -11982,6 +11982,49 @@ deliberately not made here.
   `4fb578c`) and were fixed under fix-the-class rather than left as
   inherited.
 
+- **(Copilot, `procgroup_windows.go`) — the no-op comment overclaimed, and
+  the execution guard did not match the build tag it was paired with.** The
+  comment said `hookInvocationObserved` "returns via
+  `errSandboxUnsupportedPlatform` before ever constructing a command on any
+  GOOS reaching this file." The guard was `sandboxGOOS == "windows"`, but
+  the file is tagged `!unix` — so the sentence was false for plan9 and
+  js/wasm, where execution would proceed with process-group cleanup
+  silently a no-op. Same overclaiming-comment class as qodo #4 above.
+
+  Verified before fixing, and it changes the severity: `internal/doctor`
+  does not build for plan9 or js/wasm today at all. Both fail via
+  `internal/enable` → `internal/resolve` → `internal/process`, whose
+  `tree.go` carries `//go:build linux || darwin || windows`. So no
+  non-Windows GOOS reaches that file, and the claim was vacuously true in
+  practice while being wrong about the mechanism — the kind of comment that
+  becomes an outright lie the moment a transitive constraint in another
+  package widens, with nothing to catch it.
+
+  Fixed structurally rather than by correcting the sentence. A
+  `sandboxSupported` boolean is now declared in the same tagged file pair
+  that already decides whether the process-group primitives are real
+  (`true` in `procgroup_unix.go`, `false` in `procgroup_windows.go`), and
+  `hookInvocationObserved` gates on it. The guard and the build tag are now
+  the same fact declared once, so they cannot drift: adding a platform to
+  one side necessarily means editing the declaration on the other. Same
+  lesson as S1's containment self-test earlier in this branch — assert the
+  property, do not enumerate the cases you happened to remember.
+
+  This surfaced that one variable had been standing in for two different
+  facts. `sandboxGOOS` is kept, narrowed to the only question it actually
+  answers: does this platform's `FileMode` carry execute bits? That is
+  Windows-specific and is read solely by the exec-bit check. "Can the
+  sandbox run at all" is `sandboxSupported`, which is unix-vs-not. The two
+  platform sets differ — on plan9 the exec bit is meaningful but the
+  sandbox cannot run — so collapsing them would make one guard wrong; both
+  doc comments now say so explicitly, to stop a later "simplification"
+  merging them. The test seam is preserved and made harder to misuse: a
+  `simulateWindows(t)` helper moves BOTH, because a test that moves only
+  one models a platform that does not exist. Confirmed by observation, not
+  assumption — switching the guard made three previously-green tests fail
+  (they set only `sandboxGOOS`), which is precisely the conflation the
+  change fixes; they pass again through the helper.
+
 **What this round's fixes make worse:** one regression, found by a later
 review pass and fixed in the follow-up round above — see it for the
 correction to what this paragraph originally claimed about #3. Checked

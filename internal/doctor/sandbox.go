@@ -34,20 +34,32 @@ var sandboxTimeout = 10 * time.Second
 var errSandboxGitUnavailable = errors.New("git not found on PATH")
 
 // errSandboxUnsupportedPlatform is returned by hookInvocationObserved on a
-// GOOS this sandbox cannot exercise: it shells out to git, and (per the
-// ENOEXEC fallback below) to sh, neither of which this package can assume on
-// Windows the way it can on a Unix host. checkHookPresence turns this into
-// an honest "cannot verify by execution on this platform" rather than
-// letting every enabled Windows install FAIL against a hook that may be
-// perfectly healthy — see DES-077's residual section, M4.
+// platform this sandbox cannot exercise: it shells out to git, and (per the
+// ENOEXEC fallback below) to sh, and it relies on process-group cleanup to
+// bound what a hook's backgrounded children outlive — none of which this
+// package can assume off a unix host. checkHookPresence turns this into an
+// honest "cannot verify by execution on this platform" rather than letting
+// every enabled Windows install FAIL against a hook that may be perfectly
+// healthy — see DES-077's residual section, M4.
 var errSandboxUnsupportedPlatform = errors.New("hook execution verification is not supported on this platform")
 
 // sandboxGOOS is runtime.GOOS, held in a var (not read inline) so a test can
-// override it and exercise the package's Windows guards without needing an
-// actual Windows build — the same pattern sandboxTimeout already uses for
-// the same reason. Two guards read it: the sandbox's own unsupported-platform
-// return below, and checkHookPresence's executable-bit check, which is
-// meaningless on a platform whose FileMode carries no execute bits.
+// override it without needing an actual Windows build — the same pattern
+// sandboxTimeout already uses for the same reason.
+//
+// It answers exactly one question, and it is NOT "can the sandbox run
+// here": does this platform's FileMode carry execute bits? Only
+// checkHookPresence's executable-bit check reads it, because that check is
+// meaningless on Windows specifically (os.Stat derives permission bits from
+// the read-only attribute alone) and perfectly meaningful on, say, plan9.
+//
+// "Can the sandbox run here" is the separate sandboxSupported flag, declared
+// in the procgroup_unix.go / procgroup_windows.go pair. The two are
+// deliberately not one variable: they are different facts about different
+// platform sets — Windows-only versus non-unix — and collapsing them would
+// make one of the two guards wrong on any platform where they disagree. Do
+// not "simplify" either into the other. A test simulating Windows must move
+// BOTH, which is what the simulateWindows helper in doctor_test.go is for.
 var sandboxGOOS = runtime.GOOS
 
 // hookInvocationObserved runs body — the exact bytes installed at a git hook
@@ -110,7 +122,7 @@ var sandboxGOOS = runtime.GOOS
 // file be created and passed as $1, which the commit-msg hook requires
 // before it will do anything.
 func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool, error) {
-	if sandboxGOOS == "windows" {
+	if !sandboxSupported {
 		return false, errSandboxUnsupportedPlatform
 	}
 	if _, err := exec.LookPath("git"); err != nil {

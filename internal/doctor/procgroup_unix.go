@@ -8,6 +8,14 @@ import (
 	"syscall"
 )
 
+// sandboxSupported is true here: the process-group primitives below are
+// real on a unix host, and hookInvocationObserved's other assumptions (a
+// POSIX `sh` for the ENOEXEC fallback, POSIX exec semantics) hold. See the
+// declaration in procgroup_windows.go for why this fact lives in the same
+// tagged file pair as the primitives themselves rather than in a GOOS
+// comparison that could drift from the build tag.
+var sandboxSupported = true
+
 // setNewProcessGroup makes cmd the leader of a new process group, so
 // reapProcessGroup below can kill every descendant that STAYS in that
 // group — not just the direct child exec.CommandContext tracks (S4). A

@@ -275,14 +275,13 @@ func TestHookInvocationObserved_SandboxEscape(t *testing.T) {
 }
 
 // TestHookInvocationObserved_UnsupportedPlatform pins M4: this sandbox
-// cannot be exercised on Windows, and must say so honestly rather than
+// cannot be exercised on a platform without the process-group primitives
+// and POSIX shell it depends on, and must say so honestly rather than
 // silently degrading to a wrong FAIL. Outside the git-availability skip of
-// TestHookInvocationObserved above — the Windows guard fires before git is
-// ever consulted, so this must run unconditionally.
+// TestHookInvocationObserved above — the sandboxSupported guard fires
+// before git is ever consulted, so this must run unconditionally.
 func TestHookInvocationObserved_UnsupportedPlatform(t *testing.T) {
-	orig := sandboxGOOS
-	sandboxGOOS = "windows"
-	t.Cleanup(func() { sandboxGOOS = orig })
+	simulateWindows(t)
 
 	observed, err := hookInvocationObserved([]byte("ethos audit seal\n"), []string{"audit", "seal"}, false)
 	require.Error(t, err)

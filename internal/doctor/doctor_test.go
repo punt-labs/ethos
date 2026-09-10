@@ -366,6 +366,19 @@ func TestCheckDuplicateFields(t *testing.T) {
 	})
 }
 
+// simulateWindows points BOTH platform seams at Windows for the duration of
+// t: sandboxGOOS (does FileMode carry execute bits?) and sandboxSupported
+// (can the execution sandbox run at all?). They are separate facts about
+// different platform sets — see sandboxGOOS's doc comment — but on Windows
+// both hold, so a test that moves only one models a platform that does not
+// exist. Setting them through one helper is what keeps that impossible.
+func simulateWindows(t *testing.T) {
+	t.Helper()
+	origGOOS, origSupported := sandboxGOOS, sandboxSupported
+	sandboxGOOS, sandboxSupported = "windows", false
+	t.Cleanup(func() { sandboxGOOS, sandboxSupported = origGOOS, origSupported })
+}
+
 func TestCheckSealHook(t *testing.T) {
 	// mark writes the enabled marker so a repo reads as "enabled here".
 	mark := func(t *testing.T, dir string) {
@@ -564,9 +577,7 @@ func TestCheckSealHook(t *testing.T) {
 	// that would be a silently wrong answer in the dangerous direction on
 	// every Windows install. WARN, honestly, instead.
 	t.Run("unsupported platform → WARN cannot verify, not a false FAIL (M4)", func(t *testing.T) {
-		orig := sandboxGOOS
-		sandboxGOOS = "windows"
-		t.Cleanup(func() { sandboxGOOS = orig })
+		simulateWindows(t)
 
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
 			"ethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
@@ -586,9 +597,7 @@ func TestCheckSealHook(t *testing.T) {
 	// this platform; only a hook WITH textual evidence (M4's actual case)
 	// gets the honest "cannot verify" WARN.
 	t.Run("unsupported platform, no textual evidence of the call at all → FAIL, not a false WARN (qodo #12)", func(t *testing.T) {
-		orig := sandboxGOOS
-		sandboxGOOS = "windows"
-		t.Cleanup(func() { sandboxGOOS = orig })
+		simulateWindows(t)
 
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
 			"echo nothing to see here\n# --- END ETHOS DES-058 SEAL ---\n"
@@ -844,9 +853,7 @@ func TestCheckSealHook(t *testing.T) {
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				orig := sandboxGOOS
-				sandboxGOOS = "windows"
-				t.Cleanup(func() { sandboxGOOS = orig })
+				simulateWindows(t)
 
 				dir := t.TempDir()
 				hooks := filepath.Join(dir, ".git", "hooks")
