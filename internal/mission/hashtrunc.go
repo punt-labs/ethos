@@ -2,13 +2,12 @@ package mission
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Free-text scalars YAML silently truncated at an unquoted '#'.
+// Values YAML silently truncated at an unquoted '#'.
 //
 // YAML opens a comment at a '#' that follows whitespace, so
 //
@@ -38,50 +37,94 @@ import (
 // rejects legitimate short names ("make check") and misses long
 // truncations ("PR #515 ..." truncated to a 40-character prefix).
 //
-// Only free-text fields are checked — the ones where a '#' is ordinary
-// content and its loss changes meaning. Enum, pattern, numeric, handle,
-// and path fields already constrain their parsed value, so a trailing
-// comment there cannot corrupt it, and flagging one would reject the
-// scaffolds ethos itself ships: ScaffoldResultYAML and
-// ScaffoldContractYAML annotate mission, round, author, verdict,
-// confidence, and the files_changed path and counts exactly that way.
+// Which fields are checked follows from one property: whether the
+// field's grammar admits whitespace. A handle, an enum, a mission ID, a
+// timestamp, and a number cannot contain " #", so a trailing comment
+// there discards nothing and flagging it would be a false report — and
+// would reject the scaffolds ethos itself ships, which annotate exactly
+// those fields. Free text and paths both admit whitespace, so both are
+// checked.
 
-// hashScope names the free-text scalars of one document schema by the
-// shape they take in the YAML: a bare scalar, a list of scalars, or a
-// field of each record in a list.
-type hashScope struct {
-	scalar []string          // key → free-text scalar
-	list   []string          // key → list of free-text scalars
-	record map[string]string // key → field of each record that is free text
+// seq is the fieldPath step that iterates a sequence.
+const seq = "[]"
+
+// fieldPath is the route from the document root to one or more
+// scalars: a plain step enters a mapping key, seq iterates a sequence.
+//
+//	{"prose"}                        → prose
+//	{"success_criteria", seq}        → success_criteria[*]
+//	{"evidence", seq, "name"}        → evidence[*].name
+//	{"inputs", "trigger", "subject"} → inputs.trigger.subject
+type fieldPath []string
+
+// String renders the path the way the error message and the test names
+// refer to it, with [] standing in for the index.
+func (p fieldPath) String() string {
+	var b strings.Builder
+	for _, step := range p {
+		if step == seq {
+			b.WriteString(seq)
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString(".")
+		}
+		b.WriteString(step)
+	}
+	return b.String()
 }
 
-var resultHashScope = hashScope{
-	scalar: []string{"prose"},
-	list:   []string{"open_questions"},
-	record: map[string]string{"evidence": "name"},
+// Paths are checked alongside free text because a path is not a
+// constrained value: validateWriteSetEntry rejects null bytes, colons,
+// drive letters, traversal, and control characters, but not a space.
+// `reports/PR #515.txt` therefore becomes `reports/PR`, which can still
+// satisfy write-set containment — persisting a different file than the
+// worker declared.
+var resultHashScope = []fieldPath{
+	{"prose"},
+	{"open_questions", seq},
+	{"evidence", seq, "name"},
+	{"files_changed", seq, "path"},
 }
 
-var reflectionHashScope = hashScope{
-	scalar: []string{"reason"},
-	list:   []string{"signals"},
+var reflectionHashScope = []fieldPath{
+	{"reason"},
+	{"signals", seq},
 }
 
 // A correction is the artifact for retracting a false claim, so claim
 // and corrected are the two values in the whole schema most likely to
 // cite the PR or bead number that exposed it.
-var correctionHashScope = hashScope{
-	scalar: []string{"claim", "corrected"},
-	record: map[string]string{"evidence": "name"},
+var correctionHashScope = []fieldPath{
+	{"claim"},
+	{"corrected"},
+	{"evidence", seq, "name"},
 }
 
-var contractHashScope = hashScope{
-	scalar: []string{"context"},
-	list:   []string{"success_criteria"},
-	record: map[string]string{"delegations": "message"},
+// preconditions[].message is the reason a blocked worker is shown when
+// a gate denies a tool call. Validate rejects an empty one so a failed
+// gate is never silently named — a truncated one is the same harm with
+// none of the noise.
+//
+// spawn_pattern is a regular expression, and a regex admits
+// whitespace, so it belongs here on the same rule as the rest even
+// though a pattern containing " #" would be unusual.
+var contractHashScope = []fieldPath{
+	{"context"},
+	{"success_criteria", seq},
+	{"write_set", seq},
+	{"extract_into", seq},
+	{"inputs", "files", seq},
+	{"inputs", "references", seq},
+	{"inputs", "trigger", "subject"},
+	{"preconditions", seq, "message"},
+	{"preconditions", seq, "require_read", seq},
+	{"delegations", seq, "spawn_pattern"},
+	{"delegations", seq, "extract_into", seq},
 }
 
-// CheckContractHashTruncation reports the first free-text contract
-// field that YAML truncated at an unquoted '#'.
+// CheckContractHashTruncation reports the first contract value that
+// YAML cut short at an unquoted '#'.
 //
 // Results, reflections, and corrections fold the check into their own
 // strict decoder, because nothing but a submitted file reaches those.
@@ -98,9 +141,9 @@ func CheckContractHashTruncation(data []byte, label string) error {
 	return nil
 }
 
-// checkHashTruncation returns an error naming the first free-text
-// scalar in data whose value YAML cut short at an unquoted '#'.
-func checkHashTruncation(data []byte, scope hashScope) error {
+// checkHashTruncation returns an error naming the first scalar in data
+// that YAML cut short at an unquoted '#'.
+func checkHashTruncation(data []byte, scope []fieldPath) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		// Every caller decodes these same bytes into a typed struct
@@ -114,41 +157,97 @@ func checkHashTruncation(data []byte, scope hashScope) error {
 	if root == nil {
 		return nil
 	}
-	lines := strings.Split(string(data), "\n")
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		key, val := root.Content[i].Value, root.Content[i+1]
-		switch {
-		case slices.Contains(scope.scalar, key):
-			if err := hashTruncated(key, val, lines); err != nil {
-				return err
-			}
-		case slices.Contains(scope.list, key):
-			for j, item := range sequence(val) {
-				if err := hashTruncated(fmt.Sprintf("%s[%d]", key, j), item, lines); err != nil {
-					return err
-				}
-			}
-		default:
-			field, ok := scope.record[key]
-			if !ok {
-				continue
-			}
-			for j, item := range sequence(val) {
-				label := fmt.Sprintf("%s[%d].%s", key, j, field)
-				if err := hashTruncated(label, mapValue(item, field), lines); err != nil {
-					return err
-				}
-			}
+	if err := rejectIndirection(root); err != nil {
+		return err
+	}
+	for _, path := range scope {
+		if err := walkField(root, path, "", hashTruncated); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+// rejectIndirection refuses YAML aliases and merge keys anywhere in a
+// submitted artifact.
+//
+// They defeat the check by construction: it reads the node tree, but
+// typed decoding resolves indirection first, so an anchored scalar
+// truncated at its '#' arrives in a checked field as an alias node with
+// no value and no comment of its own to inspect. Verified reachable —
+// an anchor on `author` feeding `evidence[0].name` decodes to the
+// truncated "PR" with nothing at the name for the walk to see.
+//
+// Refusing is the whole fix; resolving would be the wrong one. A
+// mission artifact is an audit record, one that needs alias resolution
+// to read is a poor audit record, and a resolver subtly wrong about
+// nested or recursive merges would reopen the same bypass while looking
+// closed. An anchor nothing refers to moves no text and stays legal.
+func rejectIndirection(n *yaml.Node) error {
+	if n == nil {
+		return nil
+	}
+	// The merge key is checked first because its value is an alias: a
+	// bare alias message would name the mechanism and not the syntax
+	// the operator typed.
+	if n.Tag == mergeTag {
+		return fmt.Errorf("line %d: a YAML merge key (<<) is not allowed in a mission artifact; write the fields out in full", n.Line)
+	}
+	if n.Kind == yaml.AliasNode {
+		return fmt.Errorf("line %d: a YAML alias (*%s) is not allowed in a mission artifact; write the value out in full", n.Line, n.Value)
+	}
+	for _, c := range n.Content {
+		if err := rejectIndirection(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// walkField follows path from n, calling visit on every node it names.
+// A step whose shape does not match the document is not an error here:
+// a field of the wrong type is the typed decoder's to report.
+func walkField(n *yaml.Node, path fieldPath, label string, visit func(string, *yaml.Node) error) error {
+	if n == nil {
+		return nil
+	}
+	if len(path) == 0 {
+		return visit(label, n)
+	}
+	step, rest := path[0], path[1:]
+	if step == seq {
+		if n.Kind != yaml.SequenceNode {
+			return nil
+		}
+		for i, item := range n.Content {
+			if err := walkField(item, rest, fmt.Sprintf("%s[%d]", label, i), visit); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	next := label + "." + step
+	if label == "" {
+		next = step
+	}
+	return walkField(mapValue(n, step), rest, next, visit)
+}
+
+// mergeTag is the resolved tag yaml.v3 gives the `<<` key.
+const mergeTag = "!!merge"
+
 // hashTruncated reports an error when n is a plain scalar carrying a
-// line comment — the text YAML took out of its value. The message shows
-// what survived beside the line it came from, so the loss is visible
-// without opening the file.
-func hashTruncated(label string, n *yaml.Node, lines []string) error {
+// line comment — text that YAML took off the end of the line and did
+// not put in the value.
+//
+// The message states only what is certain: where YAML ended the value,
+// what it kept, and what it dropped. Whether the dropped text was meant
+// as part of the value or as a comment is the operator's to say, and
+// both remedies are offered. Claiming "truncated" outright would be
+// wrong for the legitimate case — a `path/to/file.go   # note` line
+// loses nothing — and a guard that overstates what it found is the same
+// defect it exists to catch.
+func hashTruncated(label string, n *yaml.Node) error {
 	if n == nil || n.Kind != yaml.ScalarNode || n.LineComment == "" {
 		return nil
 	}
@@ -156,8 +255,8 @@ func hashTruncated(label string, n *yaml.Node, lines []string) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"%s: value truncated at an unquoted '#': YAML kept %q from line %d (%s); quote the value, or move the comment to its own line",
-		label, n.Value, n.Line, strings.TrimSpace(sourceLine(lines, n.Line)))
+		"%s: line %d ends at an unquoted '#' — YAML kept %q and dropped %q; quote the value if the dropped text belongs to it, or move the comment to its own line",
+		label, n.Line, n.Value, n.LineComment)
 }
 
 // documentRoot returns the mapping at the top of a decoded document, or
@@ -176,16 +275,6 @@ func documentRoot(doc *yaml.Node) *yaml.Node {
 	return n
 }
 
-// sequence returns the items of a sequence node, or nil for any other
-// node. A field of the wrong shape is the typed decoder's error to
-// report, not this check's.
-func sequence(n *yaml.Node) []*yaml.Node {
-	if n == nil || n.Kind != yaml.SequenceNode {
-		return nil
-	}
-	return n.Content
-}
-
 // mapValue returns the value node stored under key in a mapping node,
 // or nil when the node is not a mapping or has no such key.
 func mapValue(n *yaml.Node, key string) *yaml.Node {
@@ -198,13 +287,4 @@ func mapValue(n *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
-}
-
-// sourceLine returns the 1-indexed line of the submitted file, or "" if
-// the node's line is out of range.
-func sourceLine(lines []string, line int) string {
-	if line < 1 || line > len(lines) {
-		return ""
-	}
-	return lines[line-1]
 }

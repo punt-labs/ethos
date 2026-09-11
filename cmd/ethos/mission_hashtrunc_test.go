@@ -91,8 +91,12 @@ evidence:
 	assert.Contains(t, err.Error(), "evidence[0].name")
 	assert.Contains(t, err.Error(), `"PR"`)
 
+	// LoadResult returns (nil, nil) when no result exists for the round
+	// and propagates every real failure, so the load must succeed and
+	// the result must be absent. Asserting only when the load happens to
+	// succeed would let an implementation that writes an unreadable
+	// result satisfy this test.
 	loaded, loadErr := ms.LoadResult(id, 1)
-	if loadErr == nil {
-		assert.Nil(t, loaded, "a refused result must not be persisted")
-	}
+	require.NoError(t, loadErr)
+	assert.Nil(t, loaded, "a refused result must not be persisted")
 }

@@ -221,11 +221,17 @@ Unknown fields are rejected (KnownFields strict decode), and
 multi-document YAML or trailing content after the first document is
 also rejected. Validation runs before the contract is persisted.
 
-Quote the free-text values — success_criteria entries and context.
-YAML starts a comment at an unquoted '#', so a criterion reading
-` + "`- PR #515 must merge green`" + ` is recorded as ` + "`PR`" + ` and the rest is
-discarded. Creation refuses a value truncated that way and names the
-line.
+Quote any value that can contain a space: success_criteria entries,
+context, preconditions[].message, inputs.trigger.subject, and every
+path (write_set, extract_into, inputs.files, inputs.references,
+preconditions[].require_read). YAML starts a comment at an unquoted
+'#', so a criterion reading ` + "`- PR #515 must merge green`" + ` is
+recorded as ` + "`PR`" + ` and the rest is discarded. Creation refuses a value
+cut short that way and names the line. Handles, enums, and numbers
+cannot contain a space, so a trailing comment on those is fine.
+
+YAML anchors are fine; aliases (*name) and merge keys (<<) are
+refused — a contract is an audit record, so it spells its values out.
 
 Creation also fails if the new contract's write_set overlaps any
 currently-open mission's write_set; the error names the blocking
@@ -450,10 +456,15 @@ Examples:
   #     - name: PR #515 merged, 6/6 checks green
   #
   # records the name "PR" and discards the rest — which is exactly what
-  # you want to cite. Submission refuses a value truncated this way and
-  # names the line. The same applies to open_questions entries and to
-  # single-line prose; a prose block (prose: |) needs no quoting,
-  # because a block scalar has no comment syntax.
+  # you want to cite. Submission refuses a value cut short this way and
+  # names the line. The same applies to open_questions entries, to
+  # single-line prose, and to files_changed paths (a path admits spaces,
+  # so "reports/PR #515.txt" would otherwise land as "reports/PR"). A
+  # prose block (prose: |) needs no quoting — a block scalar has no
+  # comment syntax.
+  #
+  # YAML anchors are fine; aliases (*name) and merge keys (<<) are
+  # refused. A result is an audit record, so it spells its values out.
 
   # Cross-check the declared counts against the real diff before
   # submitting:
