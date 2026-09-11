@@ -521,6 +521,62 @@ prose: # no narrative this round
 	}
 }
 
+// TestDecodeAcceptsEmptySequenceItemWithComment pins the sequence
+// counterpart of the omitted-field case, in the list-shaped paths the
+// check now walks. Two reviewers have independently suspected that
+// `- # placeholder` is flagged; it is not, and this is the answer to
+// the next one who asks.
+//
+// The reason is not the one either suspected. A valueless item does not
+// hang its comment on the null value node — yaml.v3 moves it to the
+// HeadComment of the *next* item, and hashTruncated reads LineComment
+// only. Probed directly:
+//
+//	/0/1/0  scalar  tag=!!null  value=""      line_comment=""
+//	/0/1/1  scalar  tag=!!str   value="a.go"  line_comment="# note"  head="# placeholder"
+//
+// So the null item returns at hashTruncated's first condition, the
+// value-bearing item is flagged on its own text, and a head comment is
+// never flagged anywhere — which is the same mechanism that keeps a
+// comment on its own line legal.
+func TestDecodeAcceptsEmptySequenceItemWithComment(t *testing.T) {
+	t.Run("result open_questions", func(t *testing.T) {
+		body := []byte(`mission: m-2026-09-10-001
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+evidence:
+  - name: "make check"
+    status: pass
+open_questions:
+  - # nothing outstanding
+`)
+		if _, err := DecodeResultStrict(body, "result.yaml"); err != nil {
+			t.Fatalf("DecodeResultStrict: %v", err)
+		}
+	})
+
+	t.Run("contract write_set", func(t *testing.T) {
+		body := []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: rsc
+write_set:
+  - # to be filled in
+  - "internal/mission/"
+success_criteria:
+  - "make check passes"
+budget:
+  rounds: 2
+  reflection_after_each: true
+`)
+		if err := CheckContractHashTruncation(body, "contract.yaml"); err != nil {
+			t.Fatalf("CheckContractHashTruncation: %v", err)
+		}
+	})
+}
+
 // TestDecodeResultRejectsRequiredFieldLeftEmpty is the other half: when
 // the omitted field is required, the schema validator — not the
 // truncation check — is what refuses it, and it says something true.
