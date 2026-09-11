@@ -221,6 +221,12 @@ Unknown fields are rejected (KnownFields strict decode), and
 multi-document YAML or trailing content after the first document is
 also rejected. Validation runs before the contract is persisted.
 
+Quote the free-text values — success_criteria entries and context.
+YAML starts a comment at an unquoted '#', so a criterion reading
+` + "`- PR #515 must merge green`" + ` is recorded as ` + "`PR`" + ` and the rest is
+discarded. Creation refuses a value truncated that way and names the
+line.
+
 Creation also fails if the new contract's write_set overlaps any
 currently-open mission's write_set; the error names the blocking
 mission(s) and the overlapping path(s).
@@ -430,13 +436,24 @@ Examples:
   #       added: 120
   #       removed: 0
   #   evidence:
-  #     - name: go test ./internal/mission/... -race
+  #     - name: "go test ./internal/mission/... -race"
   #       status: pass
-  #     - name: make check
+  #     - name: "PR #515 merged, 6/6 checks green"
   #       status: pass
   #
   # Then:
   #   ethos mission result m-2026-04-08-005 --file result.yaml
+
+  # Quote every free-text value. YAML starts a comment at an unquoted
+  # '#', so
+  #
+  #     - name: PR #515 merged, 6/6 checks green
+  #
+  # records the name "PR" and discards the rest — which is exactly what
+  # you want to cite. Submission refuses a value truncated this way and
+  # names the line. The same applies to open_questions entries and to
+  # single-line prose; a prose block (prose: |) needs no quoting,
+  # because a block scalar has no comment syntax.
 
   # Cross-check the declared counts against the real diff before
   # submitting:
@@ -455,7 +472,7 @@ Examples:
   #   confidence: 1.0
   #   files_changed: []
   #   evidence:
-  #     - name: audit — enumerated call sites
+  #     - name: "audit — enumerated call sites"
   #       status: pass
   #   open_questions:
   #     - "Request write_set expansion: session_test.go needs updating"
@@ -502,13 +519,17 @@ Examples:
   #   author: claude
   #   converging: true
   #   signals:
-  #     - tests passing
-  #     - no new lint findings
+  #     - "tests passing"
+  #     - "no new lint findings"
   #   recommendation: continue
-  #   reason: round 1 finished cleanly; round 2 will tackle edge cases
+  #   reason: "round 1 finished cleanly; round 2 tackles PR #515's edges"
   #
   # Then:
-  #   ethos mission reflect m-2026-04-08-005 --file reflection.yaml`,
+  #   ethos mission reflect m-2026-04-08-005 --file reflection.yaml
+
+  # Quote signals and reason. YAML starts a comment at an unquoted '#',
+  # so an unquoted reason citing a PR or bead number is recorded
+  # truncated at the '#'. Submission refuses that and names the line.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runMissionReflect(args[0], missionReflectFile)
@@ -1053,6 +1074,13 @@ func runMissionCreate() error {
 	// identically regardless of how the YAML reached the store.
 	parsed, err := mission.DecodeContractStrict(data, missionCreateFile)
 	if err != nil {
+		return fmt.Errorf("mission create: %w", err)
+	}
+	// A success criterion or context citing a PR or bead number decodes
+	// to a silently shortened string when it is unquoted; only the raw
+	// file can show it. Checked here rather than inside the decoder,
+	// which also reads ethos's own marshalled contracts back off disk.
+	if err := mission.CheckContractHashTruncation(data, missionCreateFile); err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
 	// DES-049: warn only about the contract the user submitted, not the
@@ -2328,6 +2356,11 @@ func runMissionLint(file string) error {
 	}
 	c, err := mission.DecodeContractStrict(data, file)
 	if err != nil {
+		return fmt.Errorf("mission lint: %w", err)
+	}
+	// Lint is where an operator looks before create, so it has to see
+	// the same truncation create would refuse.
+	if err := mission.CheckContractHashTruncation(data, file); err != nil {
 		return fmt.Errorf("mission lint: %w", err)
 	}
 	// DES-049: the linted file is user-submitted, so a legacy inputs.bead

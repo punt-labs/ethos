@@ -319,5 +319,11 @@ func DecodeResultStrict(data []byte, label string) (*Result, error) {
 		}
 		return nil, fmt.Errorf("invalid result %s: trailing content after first document: %w", label, err)
 	}
+	// A free-text scalar YAML cut short at an unquoted '#' still decodes
+	// to a non-empty string, so Validate cannot see the loss. Only the
+	// raw bytes can — see hashtrunc.go.
+	if err := checkHashTruncation(data, resultHashScope); err != nil {
+		return nil, fmt.Errorf("invalid result %s: %w", label, err)
+	}
 	return &r, nil
 }

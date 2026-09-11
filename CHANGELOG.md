@@ -37,6 +37,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A free-text value YAML truncated at an unquoted `#` is now refused
+  instead of persisted.** `- name: PR #515 merged, 6/6 checks green`
+  parses as the two-character name `PR`, and every validator passed it
+  because `PR` is non-empty — so on PR #516 a result asserting a merge,
+  a CI count, and a review-thread count was written to `results.yaml`
+  and round-tripped through `ethos mission close` with `status: pass`,
+  describing nothing. `ethos mission result` and `ethos mission reflect`
+  now reject a truncated `evidence[].name`, `open_questions` entry,
+  single-line `prose`, `reason`, or `signals` entry;
+  `ethos mission create` and `ethos mission lint` reject a truncated
+  `success_criteria` entry, `context`, or `delegations[].message`; and
+  `ethos mission correct --file` rejects a truncated `claim` or
+  `corrected` — the costliest instance of the class, since a correction
+  retracting a false claim about a PR would itself be cut at that PR's
+  number. The
+  error names the field, shows the value YAML kept beside the line it
+  came from, and says to quote it. Detection is exact rather than a
+  length heuristic: the parser reports the text it discarded, so a
+  quoted value, a `prose: |` block (where `#` is literal), a `#` with no
+  leading space (`ethos-56a#2`), and a comment on its own line are all
+  still accepted — as are trailing comments on the enum, pattern, and
+  numeric fields that `ethos mission create --scaffold` annotates.
 - **`ethos doctor`'s new hook-verification and archetype checks had a
   review-round defect cluster, all fixed in this same release.** A
   non-not-found archetype load error (malformed YAML, a permission
