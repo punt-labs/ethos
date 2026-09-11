@@ -196,5 +196,10 @@ func DecodeReflectionStrict(data []byte, label string) (*Reflection, error) {
 		}
 		return nil, fmt.Errorf("invalid reflection %s: trailing content after first document: %w", label, err)
 	}
+	// Same trap as the result path: reason and signals are free text, so
+	// an unquoted '#' silently shortens them — see hashtrunc.go.
+	if err := checkHashTruncation(data, reflectionHashScope); err != nil {
+		return nil, fmt.Errorf("invalid reflection %s: %w", label, err)
+	}
 	return &r, nil
 }

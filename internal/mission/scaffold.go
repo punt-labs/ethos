@@ -43,7 +43,7 @@ evaluator:
   handle: CHANGE_ME_EVAL    # string, required — reviewer handle; must differ from worker
 
 write_set:                  # list of strings, required — at least one entry;
-  - path/to/file.go         #   relative path (file or directory) this mission may create/modify
+  - "path/to/file.go"       #   relative path (file or directory) this mission may create/modify
 
 success_criteria:                          # list of strings, required — at least one entry
   - "CHANGE_ME — e.g. make check passes"
@@ -92,7 +92,7 @@ verdict: pass                # string, required — one of: pass, fail, escalate
 confidence: 0.9              # float, required — calibrated confidence in [0.0, 1.0]
 
 files_changed:                 # list, optional — omit or leave empty when the round changed no files
-  - path: path/to/file.go     #   string, required — must live inside the contract's write_set
+  - path: "path/to/file.go"   #   string, required — must live inside the contract's write_set
     added: 0                  #   int, required — lines added (non-negative)
     removed: 0                #   int, required — lines removed (non-negative)
 

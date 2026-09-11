@@ -78,8 +78,14 @@ may be repeated.
   claim: "make check (full suite): fail — pre-existing, unrelated"
   corrected: "make check failed because of a stale worktree base"
   evidence:
-    - name: re-ran make check on a fresh worktree
+    - name: "re-ran make check on a fresh worktree"
       status: pass
+
+Quote the free-text values in that file — claim, corrected, and each
+evidence name. YAML starts a comment at an unquoted '#', so a
+correction citing the PR number that exposed the false claim would
+itself be recorded truncated at that number. Submission refuses a
+value truncated that way and names the line.
 
 --file and the individual flags are mutually exclusive.
 

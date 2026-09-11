@@ -37,6 +37,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A submitted value YAML cut short at an unquoted `#` is now refused
+  instead of persisted.** `- name: PR #515 merged, 6/6 checks green`
+  parses as the two-character name `PR`, and every validator passed it
+  because `PR` is non-empty — so on PR #516 a result asserting a merge,
+  a CI count, and a review-thread count was written to `results.yaml`
+  and round-tripped through `ethos mission close` with `status: pass`,
+  describing nothing. Covered fields, by command:
+  - `mission result` — `evidence[].name`, `open_questions[]`,
+    single-line `prose`, `files_changed[].path`
+  - `mission reflect` — `reason`, `signals[]`
+  - `mission correct --file` — `claim`, `corrected`,
+    `evidence[].name`. The costliest of the four: a correction
+    retracting a false claim about a PR would itself be cut at that
+    PR's number.
+  - `mission create` and `mission lint` — `success_criteria[]`,
+    `context`, `write_set[]`, `extract_into[]`, `inputs.files[]`,
+    `inputs.references[]`, `inputs.trigger.subject`,
+    `preconditions[].message`, `preconditions[].require_read[]`,
+    `delegations[].spawn_pattern`, `delegations[].extract_into[]`
+
+  Which fields are covered follows from one property: whether the
+  field's grammar admits whitespace. A handle, an enum, a mission ID, a
+  timestamp, and a number cannot contain `" #"`, so a trailing comment
+  on one discards nothing and is still accepted — including on the
+  fields `mission create --scaffold` annotates. Free text and paths both
+  admit whitespace and are both checked; `validateWriteSetEntry` rejects
+  null bytes, colons, drive letters, and traversal but not spaces, so
+  `path: reports/PR #515.txt` would otherwise persist as `reports/PR`
+  and still satisfy write-set containment. Detection is exact rather
+  than a length heuristic — the parser reports the text it dropped — so
+  a quoted value, a `prose: |` block (where `#` is literal), a `#` with
+  no leading space (`ethos-56a#2`), and a comment on its own line are
+  all accepted. The error names the field and shows what YAML kept
+  beside what it dropped, without claiming which of the two the author
+  meant.
+- **YAML aliases and merge keys are refused in submitted mission
+  artifacts.** They defeated the check above by construction: decoding
+  resolves indirection, so a truncated scalar anchored on one field
+  arrived in a checked field as an alias node with no value of its own
+  to inspect. A mission artifact is an audit record, and one that needs
+  alias resolution to read is a poor audit record, so both are refused
+  rather than resolved. An anchor nothing refers to moves no text and
+  stays legal.
 - **`ethos doctor`'s new hook-verification and archetype checks had a
   review-round defect cluster, all fixed in this same release.** A
   non-not-found archetype load error (malformed YAML, a permission

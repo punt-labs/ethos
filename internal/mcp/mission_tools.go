@@ -127,6 +127,13 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
+	// A success criterion or context citing a PR or bead number decodes
+	// to a silently shortened string when it is unquoted; only the raw
+	// body can show it. Checked here rather than inside the decoder,
+	// which also reads ethos's own marshalled contracts back off disk.
+	if err := mission.CheckContractHashTruncation([]byte(body), "mcp create request"); err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	// DES-049: warn about the deprecated inputs.bead only for the
 	// contract the user submitted here, not for the old missions the
 	// store scans during conflict checking (ethos-c0yp).

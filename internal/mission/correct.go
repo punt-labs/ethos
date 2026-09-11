@@ -317,6 +317,12 @@ func DecodeCorrectionStrict(data []byte, label string) (*Correction, error) {
 		}
 		return nil, fmt.Errorf("invalid correction %s: trailing content after first document: %w", label, err)
 	}
+	// Same trap as the result path, and the costliest place to hit it: a
+	// correction retracting a claim about a PR is itself truncated at
+	// that PR's number — see hashtrunc.go.
+	if err := checkHashTruncation(data, correctionHashScope); err != nil {
+		return nil, fmt.Errorf("invalid correction %s: %w", label, err)
+	}
 	return &c, nil
 }
 
