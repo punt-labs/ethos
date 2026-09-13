@@ -37,6 +37,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The audit PII sweep now covers Bash's `command`, the largest
+  free-text surface in the system.** `promptBearingKeys` named twelve
+  keys and not that one, so an address inside `bd update -d "…"` or
+  `git config user.email` sealed verbatim into a git-tracked audit
+  chunk — twice per line, in `tool_input.command` and again in
+  `tool_input_preview`. The inconsistency is what made it a defect
+  rather than a gap: `send_email`'s body was already reduced by this
+  policy, so the system stated a protection for address-shaped content
+  and then missed it on the tool carrying the most model-authored text
+  of any on the surface (5,293 of the `tool_input` keys in this repo's
+  sealed chunks, more than every other tool combined).
+
+  Six further keys join it, each earned by a tool actually writing prose
+  under it rather than by the name sounding prose-like. `old_string` and
+  `new_string` (Edit) are file content, and `content` was already swept
+  for Write — the same bytes to the same file under a different key.
+  `args` (Skill) carries a whole `/loop` poll prompt. `title`,
+  `commit_title`, and `commit_message` (the github PR tools) are
+  authored prose whose sibling `body` was already covered, and a merge
+  commit message is where a `Co-Authored-By` trailer address lands. A
+  survey of 224 sealed chunks found four of these seven keys already
+  holding real addresses; the remaining three were absent only because
+  the leak had not happened yet.
+
+  **This is forward-looking: chunks already sealed are not rewritten.**
+  A sealed chunk cannot be hand-edited without breaking its seal, and
+  `ethos audit quarantine` is the documented path if one ever must be.
+  Future chunks are clean; existing ones are unchanged.
+
+  The widening is not free, and the cost is now measured rather than
+  assumed. `emailPattern` accepts two legitimate non-prose shell tokens:
+  `git@github.com` in a clone line, and a Go toolchain module path
+  (`golang.org/toolchain@v0.0.1-go1.26.5.linux-amd64`), which satisfies
+  the lettered-TLD anchor at `.linux` where the shorter
+  `gopkg.in/yaml.v3@v3.0.1` does not. Both are now rewritten in the log.
+  The pattern is deliberately not narrowed to exempt them — one pattern
+  serves every key, so a carve-out keeping a clone line legible would
+  open the same hole in a mail subject. Both shapes are pinned in a test
+  so the redaction is a known property, not a future bug report.
 - **A submitted value YAML cut short at an unquoted `#` is now refused
   instead of persisted.** `- name: PR #515 merged, 6/6 checks green`
   parses as the two-character name `PR`, and every validator passed it

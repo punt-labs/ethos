@@ -114,34 +114,83 @@ var recipientKeys = map[string]bool{
 // or a Glob's pattern is untouched and its audit line is unchanged.
 //
 // Add a key here when a tool starts carrying model-authored text under
-// a new name. Widening the set can only redact more; it cannot leak.
+// a new name. Widening the set can only redact more; it cannot leak —
+// but it is not free, and command is the key that proved it. See
+// TestEmailPattern_AddressShapedNonAddresses: `git@github.com` in a
+// clone line and the `.linux` in a Go toolchain module path are both
+// address-shaped, and both are now rewritten. That is a legibility
+// cost in the log, paid to stop committing operator addresses; the
+// pattern is not narrowed to dodge it, because emailPattern is shared
+// with the send_email sweep and a carve-out here opens a hole there.
 //
-// query earns its place from find_contact, which looks a person up by
-// "name, email, or alias" — an operator asking for a contact by address
-// wrote that address into the log under a key no other pass covered.
+// A key earns its place by a tool actually writing prose under it, not
+// by the name sounding prose-like. query earns its place from
+// find_contact, which looks a person up by "name, email, or alias" — an
+// operator asking for a contact by address wrote that address into the
+// log under a key no other pass covered.
+//
+// command is Bash's, and it is the largest free-text surface in the
+// system: 5,293 of the tool_input keys in this repo's sealed chunks,
+// more than every other tool combined. Leaving it out was an
+// inconsistency, not a gap — send_email's body was reduced while the
+// same address inside `bd update -d "…"` or `git config user.email`
+// sealed verbatim into a git-tracked chunk, and a heredoc redirect is
+// Write's content by another route.
+//
+// old_string and new_string are Edit's, and they are content by the
+// same argument: content is already here for Write, and an Edit writes
+// the same bytes to the same file under a different key — the
+// reply_message defect one name over again.
+//
+// args is Skill's, which carries a whole /loop poll prompt.
+//
+// title, commit_title, and commit_message are the github PR tools'.
+// body is already here for the same tools, so their authored prose was
+// half-covered; a merge commit message is also where a Co-Authored-By
+// trailer lands, an address observed 9 times in this repo's chunks by
+// way of a `git commit -m` heredoc under command.
 var promptBearingKeys = map[string]bool{
-	"body":         true,
-	"content":      true,
-	"description":  true,
-	"instructions": true,
-	"message":      true,
-	"notes":        true,
-	"prompt":       true,
-	"query":        true,
-	"reason":       true,
-	"subject":      true,
-	"summary":      true,
-	"text":         true,
+	"args":           true,
+	"body":           true,
+	"command":        true,
+	"commit_message": true,
+	"commit_title":   true,
+	"content":        true,
+	"description":    true,
+	"instructions":   true,
+	"message":        true,
+	"new_string":     true,
+	"notes":          true,
+	"old_string":     true,
+	"prompt":         true,
+	"query":          true,
+	"reason":         true,
+	"subject":        true,
+	"summary":        true,
+	"text":           true,
+	"title":          true,
 }
 
 // emailPattern matches an address with a lettered top-level domain.
-// Requiring the TLD keeps the common false positives out: a Go module
-// version (gopkg.in/yaml.v3@v3.0.1), a digest (image@sha256:...), and
-// a bare user@host all fail the final \.[A-Za-z]{2,} anchor.
+// Requiring the TLD keeps some common false positives out: a short Go
+// module version (gopkg.in/yaml.v3@v3.0.1), a digest (image@sha256:...),
+// and a bare user@host all fail the final \.[A-Za-z]{2,} anchor.
 //
-// Deliberately not RFC 5322. An address-shaped run of characters is
-// what leaks; a parser that accepts every legal address and nothing
-// else would be larger, slower, and no better at this job.
+// It does not keep all of them out, and the two that get through are
+// pinned in TestEmailPattern_AddressShapedNonAddresses rather than left
+// for a reader to rediscover: `git@github.com` is a legal address by
+// shape, and a Go toolchain module path
+// (golang.org/toolchain@v0.0.1-go1.26.5.linux-amd64) satisfies the
+// anchor at `.linux`, where the shorter yaml.v3@v3.0.1 does not. Both
+// now get rewritten wherever a swept key holds them, which since
+// command joined promptBearingKeys means ordinary shell lines.
+//
+// Deliberately not RFC 5322, and deliberately not narrowed to exempt
+// those two. An address-shaped run of characters is what leaks; a parser
+// that accepts every legal address and nothing else would be larger,
+// slower, and no better at this job. A carve-out is worse than larger:
+// one pattern serves every key, so an exemption that keeps a clone line
+// legible also lets the same run through a mail subject.
 var emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 
 // redactSensitiveContent applies the policy to one tool call's
