@@ -75,8 +75,12 @@ Local review sequence, after `make check` passes:
 
 ## Gotchas
 
-- Never run `make install` from inside Claude Code — the running binary
-  cannot overwrite itself. Ask a human to run it from a shell.
+- Reinstalling ethos does not restart a running MCP server. An `ethos
+  serve` started before the install keeps answering from the old binary
+  — reconnect the ethos server afterwards, or the new code stays inert.
+  Installing mid-session is itself safe: every supported install path
+  unlinks or renames over the old file rather than writing into it, so a
+  running process keeps its own image and never hits `ETXTBSY`.
 - Agent types are discovered at SessionStart; restart after adding one.
 - `ethos doctor` checks seal and trailer hook presence only when ethos
   is enabled here, but its hook currency checks run unconditionally, on
