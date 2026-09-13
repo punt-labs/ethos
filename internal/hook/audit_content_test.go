@@ -311,11 +311,63 @@ func TestRedactSensitiveContent(t *testing.T) {
 			wantChanged: false,
 		},
 		{
-			name:        "a structured field is not swept",
+			// The command string is where the most model-authored text
+			// on the whole surface lives, and it was the one carrying it
+			// that no pass covered.
+			name:        "a Bash command loses an address",
 			tool:        "Bash",
 			input:       map[string]any{"command": "git log --author=jim@punt-labs.com"},
-			want:        map[string]any{"command": "git log --author=jim@punt-labs.com"},
+			want:        map[string]any{"command": "git log --author=[redacted-email]"},
+			wantChanged: true,
+		},
+		{
+			// Prose reaches the log inside a command more often than
+			// beside one: a bead body, a commit message, a PR comment.
+			name: "an address in prose quoted inside a command goes too",
+			tool: "Bash",
+			input: map[string]any{
+				"command": `bd update ethos-6tuz -d "recap mail to jim@punt-labs.com is unsent"`,
+			},
+			want: map[string]any{
+				"command": `bd update ethos-6tuz -d "recap mail to [redacted-email] is unsent"`,
+			},
+			wantChanged: true,
+		},
+		{
+			// The negative that keeps the sweep from rewriting ordinary
+			// shell. Most Bash lines hold no address and must come back
+			// byte-identical, or every audit line in the repo churns.
+			name:        "an ordinary shell line is untouched",
+			tool:        "Bash",
+			input:       map[string]any{"command": "make check 2>&1 | tee .tmp/check.log"},
+			want:        map[string]any{"command": "make check 2>&1 | tee .tmp/check.log"},
 			wantChanged: false,
+		},
+		{
+			// The cost of sweeping command, measured rather than
+			// assumed. Both shapes are legitimate non-prose shell tokens
+			// that the address pattern accepts; see
+			// TestEmailPattern_AddressShapedNonAddresses.
+			name: "an ssh remote is address-shaped and is reduced with the rest",
+			tool: "Bash",
+			input: map[string]any{
+				"command": "git clone git@github.com:punt-labs/vox.git .tmp/vox",
+			},
+			want: map[string]any{
+				"command": "git clone [redacted-email]:punt-labs/vox.git .tmp/vox",
+			},
+			wantChanged: true,
+		},
+		{
+			name: "a toolchain module path is address-shaped too",
+			tool: "Bash",
+			input: map[string]any{
+				"command": "grep -n chmod ~/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.linux-amd64/src/os/file_posix.go",
+			},
+			want: map[string]any{
+				"command": "grep -n chmod ~/go/pkg/mod/golang.org/[redacted-email]-amd64/src/os/file_posix.go",
+			},
+			wantChanged: true,
 		},
 		{
 			name:        "a module version is not mistaken for an address",
@@ -323,6 +375,73 @@ func TestRedactSensitiveContent(t *testing.T) {
 			input:       map[string]any{"description": "go get gopkg.in/yaml.v3@v3.0.1"},
 			want:        map[string]any{"description": "go get gopkg.in/yaml.v3@v3.0.1"},
 			wantChanged: false,
+		},
+		{
+			// Write's content is already swept. An Edit writes the same
+			// bytes to the same file under a different key, so leaving
+			// these out was the same defect one name over.
+			name: "an Edit's replacement text loses an address",
+			tool: "Edit",
+			input: map[string]any{
+				"file_path":  "<repo>/docs/ETHOS-SETUP.md",
+				"old_string": "mail: you@example.com",
+				"new_string": "mail: hello@punt-labs.com",
+			},
+			want: map[string]any{
+				"file_path":  "<repo>/docs/ETHOS-SETUP.md",
+				"old_string": "mail: [redacted-email]",
+				"new_string": "mail: [redacted-email]",
+			},
+			wantChanged: true,
+		},
+		{
+			// Skill args carry a whole /loop poll prompt.
+			name: "a skill's args are prose",
+			tool: "Skill",
+			input: map[string]any{
+				"skill": "loop",
+				"args":  "3m Poll PR 509 and mail jim@punt-labs.com on merge",
+			},
+			want: map[string]any{
+				"skill": "loop",
+				"args":  "3m Poll PR 509 and mail [redacted-email] on merge",
+			},
+			wantChanged: true,
+		},
+		{
+			// A merge commit message is where a Co-Authored-By trailer
+			// lands. body is already swept for the sibling PR tools;
+			// the commit prose is the same content one key over.
+			name: "a merge commit message loses a trailer address",
+			tool: "mcp__github__merge_pull_request",
+			input: map[string]any{
+				"pullNumber":   float64(518),
+				"merge_method": "squash",
+				"commit_title": "fix(audit): sweep Bash command (#518)",
+				"commit_message": "Adds command to the PII sweep.\n\n" +
+					"Co-Authored-By: Claude <noreply@anthropic.com>",
+			},
+			want: map[string]any{
+				"pullNumber":   float64(518),
+				"merge_method": "squash",
+				"commit_title": "fix(audit): sweep Bash command (#518)",
+				"commit_message": "Adds command to the PII sweep.\n\n" +
+					"Co-Authored-By: Claude <[redacted-email]>",
+			},
+			wantChanged: true,
+		},
+		{
+			name: "a pull request title is prose",
+			tool: "mcp__github__create_pull_request",
+			input: map[string]any{
+				"base":  "main",
+				"title": "chore: stop mailing jim@punt-labs.com from CI",
+			},
+			want: map[string]any{
+				"base":  "main",
+				"title": "chore: stop mailing [redacted-email] from CI",
+			},
+			wantChanged: true,
 		},
 	}
 
@@ -545,4 +664,125 @@ func TestBuildAuditEntry_CronPromptPII(t *testing.T) {
 		entry.ToolInput["prompt"])
 	assert.NotContains(t, entry.ToolInputPreview, "jim@punt-labs.com",
 		"the preview is derived from the redacted form")
+}
+
+// TestBuildAuditEntry_BashCommandPII covers the third committed leak, and
+// the largest: Bash carries more model-authored text than every other
+// tool on the surface combined (5,293 of 9,000-odd tool_input keys in
+// this repo's sealed chunks), and command was absent from
+// promptBearingKeys. An address in a `bd update -d` body sealed verbatim
+// into a git-tracked chunk while send_email's body — the same class of
+// content — was reduced, which is the inconsistency that makes it a
+// defect rather than a gap.
+//
+// Both copies are asserted. A single line carries the address twice, in
+// tool_input.command and again in the 200-char tool_input_preview, and
+// the preview is what a grep over the log actually finds.
+func TestBuildAuditEntry_BashCommandPII(t *testing.T) {
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	input := map[string]any{
+		"tool_name": "Bash",
+		"tool_input": map[string]any{
+			"command":     `bd update ethos-6tuz -d "recap mail to jim@punt-labs.com is unsent"`,
+			"description": "Record the mail spool location",
+		},
+	}
+
+	entry := buildAuditEntry(input, "sess-1", "", now)
+
+	assert.True(t, entry.Redacted, "a swept line must carry the marker")
+	assert.Equal(t, `bd update ethos-6tuz -d "recap mail to [redacted-email] is unsent"`,
+		entry.ToolInput["command"])
+	assert.Equal(t, "Record the mail spool location", entry.ToolInput["description"],
+		"a sibling prose field with no address survives verbatim")
+
+	require.Contains(t, entry.ToolInputPreview, "bd update ethos-6tuz",
+		"the address must fall inside the 200-char window, or the preview assertion proves nothing")
+	assert.NotContains(t, entry.ToolInputPreview, "jim@punt-labs.com",
+		"the preview is a second copy of the same bytes on the same line")
+
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(line), "jim@punt-labs.com",
+		"the assertion written the way the defect was found: grep the line as it lands on disk")
+
+	wantHash := hashToolInput(map[string]any{"tool_input": entry.ToolInput})
+	assert.Equal(t, wantHash, entry.ToolInputHash,
+		"the hash must be over the stored form (DES-054)")
+}
+
+// TestBuildAuditEntry_BashCommandNoAddressUnchanged is the negative half,
+// and the one that matters for the other 5,267 commands: widening the
+// sweep must not start rewriting ordinary shell. A command with no
+// address produces the same line it did before, marker absent from the
+// JSON entirely.
+func TestBuildAuditEntry_BashCommandNoAddressUnchanged(t *testing.T) {
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	cmd := "make check 2>&1 | tee .tmp/check.log && git commit -m 'fix(audit): sweep command'"
+	input := map[string]any{
+		"tool_name":  "Bash",
+		"tool_input": map[string]any{"command": cmd},
+	}
+
+	entry := buildAuditEntry(input, "sess-1", "", now)
+
+	assert.False(t, entry.Redacted)
+	assert.Equal(t, cmd, entry.ToolInput["command"],
+		"byte-identical: the sweep must not touch a command holding no address")
+
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.False(t, strings.Contains(string(line), `"redacted"`),
+		"the marker must be omitted so an unaffected line keeps its bytes")
+}
+
+// TestEmailPattern_AddressShapedNonAddresses records the measured cost of
+// sweeping command, because the claim in promptBearingKeys' doc comment —
+// "widening the set can only redact more; it cannot leak" — is true about
+// leaking and silent about legibility.
+//
+// Both shapes below are legitimate, common, non-prose shell tokens that
+// the pattern accepts, and both appear in this repo's sealed chunks (13
+// matches between them, against 15 real addresses). They are pinned here
+// so the redaction they now receive is a known property rather than a
+// surprise a future reader diagnoses as a bug.
+//
+// The pattern is deliberately not narrowed to exclude them: emailPattern
+// is shared by every key and by the send_email keep-list sweep, so a
+// carve-out to keep `git@github.com` legible in a Bash line would open
+// the same hole in a mail subject. One over-eager pattern in a log beats
+// a clever one in a redactor.
+func TestEmailPattern_AddressShapedNonAddresses(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "an ssh remote",
+			in:   "git@github.com",
+			want: "[redacted-email]",
+		},
+		{
+			name: "a go toolchain module path",
+			in:   "golang.org/toolchain@v0.0.1-go1.26.5.linux-amd64/src/os/file_posix.go",
+			// .linux satisfies the lettered-TLD anchor the doc comment
+			// relies on to reject a module version. gopkg.in/yaml.v3@v3.0.1
+			// fails it; this sibling shape does not.
+			want: "golang.org/[redacted-email]-amd64/src/os/file_posix.go",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := sweepString(tt.in, sweepPrompt)
+			assert.Equal(t, tt.want, got)
+			assert.True(t, changed)
+		})
+	}
+
+	t.Run("a module version still fails the anchor", func(t *testing.T) {
+		got, changed := sweepString("gopkg.in/yaml.v3@v3.0.1", sweepPrompt)
+		assert.Equal(t, "gopkg.in/yaml.v3@v3.0.1", got)
+		assert.False(t, changed)
+	})
 }
