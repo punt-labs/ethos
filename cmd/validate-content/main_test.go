@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,7 @@ func minimalRepo(t *testing.T, resolution string) (repoRoot, ethosRoot string) {
 	}
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "docs"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "docs", "ETHOS-SETUP.md"), enable.Setup, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosRoot, "CLAUDE.md"), enable.Guide, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(ethosRoot, "identities", "alice.yaml"), []byte(
 		"name: Alice\nhandle: alice\nkind: human\n"), 0o644))
 
@@ -98,6 +100,56 @@ func TestValidateContent_LayeredModeConsultsGlobal(t *testing.T) {
 	out, err := runValidateContent(t, bin, repoRoot, ethosRoot, globalRoot)
 	require.Error(t, err, "layered mode must still consult global, so the bad global identity should fail the run")
 	require.Contains(t, out, "ghost")
+}
+
+// TestCheckGuideSync covers the deposited guide against the embedded copy.
+// The invariant is otherwise held by hand: this repo dogfoods `ethos enable`,
+// so .punt-labs/ethos/CLAUDE.md is enable's own output, and nothing but
+// discipline kept it equal to internal/enable/guide/CLAUDE.md before this
+// check existed. A sync check never observed failing is worth little, so the
+// drift and missing cases are exercised explicitly.
+func TestCheckGuideSync(t *testing.T) {
+	cases := []struct {
+		name     string
+		deposit  []byte // nil means write no file at all
+		wantPass bool
+		wantWord string // substring the failure detail must name
+	}{
+		{
+			name:     "in sync",
+			deposit:  enable.Guide,
+			wantPass: true,
+		},
+		{
+			name:     "one byte of drift",
+			deposit:  append(bytes.Clone(enable.Guide), '!'),
+			wantPass: false,
+			wantWord: "run `ethos enable`",
+		},
+		{
+			name:     "never deposited",
+			deposit:  nil,
+			wantPass: false,
+			wantWord: ".punt-labs/ethos/CLAUDE.md",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
+			require.NoError(t, os.MkdirAll(ethosRoot, 0o755))
+			if tc.deposit != nil {
+				require.NoError(t, os.WriteFile(filepath.Join(ethosRoot, "CLAUDE.md"), tc.deposit, 0o644))
+			}
+
+			got := checkGuideSync(repoRoot)
+			require.Equal(t, tc.wantPass, got.pass, "detail: %s", got.detail)
+			if !tc.wantPass {
+				require.Contains(t, got.detail, tc.wantWord)
+			}
+		})
+	}
 }
 
 // writeRepoConfig writes .punt-labs/ethos.yaml under repoRoot with the

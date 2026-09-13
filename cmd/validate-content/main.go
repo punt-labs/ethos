@@ -71,6 +71,25 @@ func checkSetupSync(repoRoot string) result {
 	return pass(label)
 }
 
+// checkGuideSync compares this repo's deposited agent guide
+// (.punt-labs/ethos/CLAUDE.md) against the embedded copy that ships in the
+// binary (internal/enable/guide/CLAUDE.md, exposed as enable.Guide). Ethos
+// enables itself, so the deposited copy is `ethos enable`'s own output on this
+// repo: whenever the two differ, this repo is reading guidance no consumer
+// would receive. Re-running `ethos enable` closes any drift this check finds.
+func checkGuideSync(repoRoot string) result {
+	label := "enable: CLAUDE.md guide embed sync"
+	path := filepath.Join(repoRoot, ".punt-labs", "ethos", "CLAUDE.md")
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		return fail(label, fmt.Sprintf("reading %s: %v", path, err))
+	}
+	if !bytes.Equal(onDisk, enable.Guide) {
+		return fail(label, ".punt-labs/ethos/CLAUDE.md and internal/enable/guide/CLAUDE.md have drifted — run `ethos enable` to redeposit the guide")
+	}
+	return pass(label)
+}
+
 // tableBlock returns the contiguous run of markdown table rows in s: every
 // line whose first non-space rune is a pipe. The seeded READMEs carry one
 // such table (the fields block), so the run is unambiguous.
@@ -236,8 +255,12 @@ func run(ethosRoot, globalRoot string) (report, error) {
 		results = append(results, pass("identities: referential integrity"))
 	}
 
-	// Check 5: agent file path resolution.
+	// The two vendored documents `ethos enable` deposits must match the bytes
+	// this binary embeds, or the repo is dogfooding content no consumer gets.
 	results = append(results, checkSetupSync(repoRoot))
+	results = append(results, checkGuideSync(repoRoot))
+
+	// Check 5: agent file path resolution.
 	agentFails := 0
 	for _, idRef := range listResult.Identities {
 		if idRef.Agent == "" {
