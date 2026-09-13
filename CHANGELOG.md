@@ -37,6 +37,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The deposited guide no longer tells agents that installing ethos
+  mid-session is impossible, and now carries the caveat that actually
+  bites.** The old "never run `make install` — the running binary cannot
+  overwrite itself" rested on a premise that has not held since
+  2026-03-20, when `make install` gained the `rm -f` before its `cp`
+  (#55): unlinking replaces the directory entry while a running process
+  keeps its own inode, so no supported install path — the Makefile's
+  `rm -f`+`cp`, `go build -o`, or `install.sh`'s temp-file+`mv` — ever
+  writes into a running image or raises `ETXTBSY`. The prohibition cost
+  a needless human round trip every time an agent needed its own fix
+  activated. Replaced in the guide and in `docs/development.md` with the
+  real gotcha it had been crowding out: reinstalling does **not** restart
+  a running MCP server, so an `ethos serve` from before the install keeps
+  answering from the old binary until it is reconnected — the same
+  warning z-spec's guide already carries.
+
+- **`validate-content` now checks the deposited guide against the embedded
+  one, an invariant that was previously held by nothing.** This repo
+  dogfoods `ethos enable`, so `.punt-labs/ethos/CLAUDE.md` is enable's own
+  output and must equal `internal/enable/guide/CLAUDE.md` — the bytes every
+  consumer receives. `checkSetupSync` had covered `ETHOS-SETUP.md` since
+  DES-071, but the guide beside it was covered only by whoever remembered
+  to edit both copies; drift would have meant this repo reading guidance no
+  consumer gets. `make check` now fails with the remedy named (`ethos
+  enable`). Found while fixing the self-install text above, which depends on
+  exactly that byte-identity. `validate-content` runs 12 checks, up from 11.
+
 - **The audit PII sweep now covers Bash's `command`, the largest
   free-text surface in the system.** `promptBearingKeys` named twelve
   keys and not that one, so an address inside `bd update -d "…"` or
