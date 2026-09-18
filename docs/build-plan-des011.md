@@ -90,7 +90,7 @@ Machine state:
   $USER                 = jfreeman
 
 Identity store:
-  jfreeman.yaml:  handle=jfreeman, github=jmf-pobox, email=jim@punt-labs.com
+  jfreeman.yaml:  handle=jfreeman, github=jmf-pobox, email=user@example.org
   claude.yaml:    handle=claude, kind=agent
 
 Resolution:
@@ -99,7 +99,7 @@ Resolution:
 
   If step 1 had no match:
   Step 2: git user.email "jmf@example.com" → scan for email=="jmf@example.com"
-          → no match (jfreeman has email jim@punt-labs.com)
+          → no match (jfreeman has email user@example.org)
   Step 3: $USER "jfreeman" → scan for handle=="jfreeman"
           → match: jfreeman.yaml
 ```
