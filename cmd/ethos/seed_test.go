@@ -90,6 +90,41 @@ func TestSeed_NoRemedyWhenClean(t *testing.T) {
 	assert.NotContains(t, stdout, "look locally edited")
 }
 
+// TestSeed_AdditiveRepairOnStdoutAndCount pins the printer for the additive
+// repair path: no prior test covered it at all, so a regression that made
+// it print nothing (or drop out of the "Seeded N files" totals) would have
+// gone unnoticed — a repair that never appears on stdout or in the count is
+// worse than a merely mislabeled one, since an operator scanning the output
+// would see no sign anything happened to the file at all.
+func TestSeed_AdditiveRepairOnStdoutAndCount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// A pre-v4.19.0 implement.yaml missing require_delegated_worker: the
+	// exact upgrader shape GH #525 fixes.
+	archDir := filepath.Join(home, ".punt-labs", "ethos", "archetypes")
+	require.NoError(t, os.MkdirAll(archDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(archDir, "implement.yaml"), []byte(
+		"name: implement\n"+
+			"description: \"Implementation mission — output is code\"\n"+
+			"budget_default:\n  rounds: 3\n  reflection_after_each: true\n"+
+			"allow_empty_write_set: false\n"+
+			"required_fields: []\n"+
+			"write_set_constraints: []\n"+
+			"extract_into_constraints: []\n"), 0o644))
+
+	stdout, err := execSeed(t, "seed")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "repaired (missing fields added):")
+	assert.Contains(t, stdout, "implement.yaml")
+	assert.Contains(t, stdout, ", 1 repaired,",
+		"the one additive repair must be counted in the \"Seeded N files\" summary")
+
+	data, err := os.ReadFile(filepath.Join(archDir, "implement.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "require_delegated_worker: true")
+}
+
 // TestSeed_SkipReasonOnStdout pins the silent-failure fix: a skip that
 // additiveMerge actually evaluated and declined must say why, not just
 // "exists" — the same ambiguity GH #525's own doctor remedy hit ("run ethos
