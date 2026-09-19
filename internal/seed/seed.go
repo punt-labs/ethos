@@ -447,15 +447,18 @@ func (s *seeder) classifyExisting(scope, dest string, data []byte, cur string) b
 
 // decide handles a non-empty existing file. It reports a file already at the
 // current content as unchanged; upgrades a tracked file unchanged since seed
-// last wrote it; preserves a tracked file the user has edited; and keeps the
-// original no-clobber skip for an untracked file. Under force, every differing
+// last wrote it; preserves a tracked file the user has edited; and for an
+// untracked file, additively repairs it when the shipped content adds new
+// top-level keys the file lacks (see additiveMerge), falling back to the
+// original no-clobber skip for anything else. Under force, every differing
 // file is overwritten.
 func (s *seeder) decide(scope, dest string, data []byte, cur string) {
-	local, err := hashFile(dest)
+	onDisk, err := os.ReadFile(dest)
 	if err != nil {
-		s.r.Errors = append(s.r.Errors, fmt.Sprintf("hashing %s: %v", dest, err))
+		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", dest, err))
 		return
 	}
+	local := hashBytes(onDisk)
 	key := s.key(scope, dest)
 
 	if local == cur {
@@ -478,9 +481,13 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 	entry, tracked := s.mf.Entries[key]
 	switch {
 	case !tracked:
-		// An untracked existing file that differs is left untouched — the
-		// original no-clobber contract. It enters the manifest era only when
-		// seed writes it (a fresh deploy) or under a one-time `--force`.
+		if s.repairAdditive(scope, dest, onDisk, data) {
+			return
+		}
+		// An untracked existing file that differs, and is not a purely
+		// additive stale schema, is left untouched — the original
+		// no-clobber contract. It enters the manifest era only when seed
+		// writes it (a fresh deploy, a repair, or a one-time `--force`).
 		s.r.Skipped = append(s.r.Skipped, dest)
 	case local != entry.Hash:
 		// Tracked but changed since seed last wrote it — a user edit; preserve.
@@ -490,6 +497,27 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 		// something newer — upgrade.
 		s.write(scope, dest, data, cur, &s.r.Updated)
 	}
+}
+
+// repairAdditive attempts additiveMerge on an untracked, differing dest and,
+// on success, writes the merged content and records it as repaired. It
+// returns true when it handled dest — either by repairing it or by
+// recording a write error — so the caller must not also fall through to the
+// ordinary skip. It returns false when the diff is not purely additive, in
+// which case the caller's no-clobber skip still applies.
+func (s *seeder) repairAdditive(scope, dest string, onDisk, data []byte) bool {
+	merged, ok := additiveMerge(onDisk, data)
+	if !ok {
+		return false
+	}
+	cur := hashBytes(merged)
+	if err := atomicWrite(dest, merged); err != nil {
+		s.r.Errors = append(s.r.Errors, fmt.Sprintf("repairing %s: %v", dest, err))
+		return true
+	}
+	s.record(scope, dest, cur)
+	s.r.Repaired = append(s.r.Repaired, dest)
+	return true
 }
 
 // write overwrites dest with data, records the manifest entry, and appends dest
