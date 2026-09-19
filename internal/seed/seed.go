@@ -18,6 +18,17 @@ const (
 	scopeSkills = "skills"
 )
 
+// repairCandidate/notRepairCandidate name the bool every seedFS/place/
+// classifyExisting/decide call threads through, so a call site reads as
+// "archetypes ARE a repair candidate" rather than an unexplained `true`.
+// Only the archetypes category passes repairCandidate — see its seedFS
+// call site for why the additive-repair path (GH #525) is scoped this
+// narrowly rather than applying to every category decide() handles.
+const (
+	repairCandidate    = true
+	notRepairCandidate = false
+)
+
 // Result tracks what was seeded.
 type Result struct {
 	Deployed       []string // new files written (were absent)
@@ -110,28 +121,37 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 	}
 
 	// Roles (skip README.md — handled separately)
-	s.seedFS(Roles, "sidecar/roles", filepath.Join(destRoot, "roles"), ".yaml")
+	s.seedFS(Roles, "sidecar/roles", filepath.Join(destRoot, "roles"), ".yaml", notRepairCandidate)
 
 	// Talents (skip README.md — handled separately)
-	s.seedFS(Talents, "sidecar/talents", filepath.Join(destRoot, "talents"), ".md")
+	s.seedFS(Talents, "sidecar/talents", filepath.Join(destRoot, "talents"), ".md", notRepairCandidate)
 
 	// Personalities and writing-styles: the conventional attributes that
 	// setup-created identities reference, plus starter sidecar content.
 	// A fresh machine resolves these from global when no bundle is active.
-	s.seedFS(Personalities, "sidecar/personalities", filepath.Join(destRoot, "personalities"), ".md")
-	s.seedFS(WritingStyles, "sidecar/writing-styles", filepath.Join(destRoot, "writing-styles"), ".md")
+	s.seedFS(Personalities, "sidecar/personalities", filepath.Join(destRoot, "personalities"), ".md", notRepairCandidate)
+	s.seedFS(WritingStyles, "sidecar/writing-styles", filepath.Join(destRoot, "writing-styles"), ".md", notRepairCandidate)
 
-	// Archetypes
-	s.seedFS(Archetypes, "sidecar/archetypes", filepath.Join(destRoot, "archetypes"), ".yaml")
+	// Archetypes — the ONLY category eligible for additive repair
+	// (2026-09-19 ruling, GH #525): the doctor guard, the operator ruling,
+	// and the #525 bug itself are all archetype-specific, so the code
+	// narrows to match rather than silently repairing every other
+	// category too. Without this, a user who deliberately deleted a
+	// shipped top-level key from an untracked role, pipeline, or
+	// bundle-scoped identity would find it silently re-added forever —
+	// additiveMerge cannot distinguish "the operator never touched this"
+	// from "the operator removed this on purpose," so scope is enforced
+	// one level up, by category, not by guessing from content shape.
+	s.seedFS(Archetypes, "sidecar/archetypes", filepath.Join(destRoot, "archetypes"), ".yaml", repairCandidate)
 
 	// Pipelines
-	s.seedFS(Pipelines, "sidecar/pipelines", filepath.Join(destRoot, "pipelines"), ".yaml")
+	s.seedFS(Pipelines, "sidecar/pipelines", filepath.Join(destRoot, "pipelines"), ".yaml", notRepairCandidate)
 
 	// Review-checklist agents (DES-070): personaless Claude Code subagent
 	// definitions, deployed to the caller's repo-local .claude/agents/
 	// rather than under destRoot — see SeedVersion's agentsRoot doc.
 	if s.agentsRoot != "" {
-		s.seedFS(Agents, "sidecar/agents", s.agentsRoot, ".md")
+		s.seedFS(Agents, "sidecar/agents", s.agentsRoot, ".md", notRepairCandidate)
 	}
 
 	// Skills
@@ -178,7 +198,7 @@ type seeder struct {
 	r               *Result
 }
 
-func (s *seeder) seedFS(fsys embed.FS, root, destDir, ext string) {
+func (s *seeder) seedFS(fsys embed.FS, root, destDir, ext string, repairCandidate bool) {
 	entries, err := fs.ReadDir(fsys, root)
 	if err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", root, err))
@@ -197,7 +217,7 @@ func (s *seeder) seedFS(fsys embed.FS, root, destDir, ext string) {
 			s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", e.Name(), err))
 			continue
 		}
-		s.place(scopeEthos, filepath.Join(destDir, e.Name()), data)
+		s.place(scopeEthos, filepath.Join(destDir, e.Name()), data, repairCandidate)
 	}
 }
 
@@ -207,7 +227,7 @@ func (s *seeder) seedFile(fsys embed.FS, src, dest string) {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", src, err))
 		return
 	}
-	s.place(scopeSkills, dest, data)
+	s.place(scopeSkills, dest, data, notRepairCandidate)
 }
 
 func (s *seeder) seedReadmes(fsys embed.FS, destRoot string) {
@@ -231,7 +251,7 @@ func (s *seeder) seedReadmes(fsys embed.FS, destRoot string) {
 			s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", path, readErr))
 			return nil
 		}
-		s.place(scopeEthos, filepath.Join(destRoot, rel), data)
+		s.place(scopeEthos, filepath.Join(destRoot, rel), data, notRepairCandidate)
 		return nil
 	})
 	if err != nil {
@@ -263,7 +283,11 @@ func (s *seeder) seedBundles(fsys embed.FS, destBundlesRoot string) {
 			s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", path, readErr))
 			return nil
 		}
-		s.place(scopeEthos, filepath.Join(destBundlesRoot, rel), data)
+		// Bundle content never includes archetypes today (no
+		// sidecar/bundles/*/archetypes/ exists), so notRepairCandidate is
+		// always correct here — not a special case, just what every
+		// bundle-shipped file actually is.
+		s.place(scopeEthos, filepath.Join(destBundlesRoot, rel), data, notRepairCandidate)
 		return nil
 	})
 	if err != nil {
@@ -346,7 +370,7 @@ func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName, bundleDir string) {
 			s.write(scopeSkills, dest, data, hashBytes(data), &s.r.Updated)
 			continue
 		}
-		s.place(scopeSkills, dest, data)
+		s.place(scopeSkills, dest, data, notRepairCandidate)
 	}
 }
 
@@ -389,14 +413,17 @@ func bundleSkillReader(fsys embed.FS, bundleName, bundleDir string) (slugs []str
 
 // place deploys data to dest under the given scope, deciding by content hash
 // and the install manifest whether to write, skip, or leave it unchanged.
-func (s *seeder) place(scope, dest string, data []byte) {
+// repairCandidate names whether dest's category is eligible for the
+// additive-repair exception (currently archetypes only) if it turns out to
+// be untracked and differing — see decide.
+func (s *seeder) place(scope, dest string, data []byte, repairCandidate bool) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("mkdir %s: %v", filepath.Dir(dest), err))
 		return
 	}
 
 	cur := hashBytes(data)
-	if handled := s.classifyExisting(scope, dest, data, cur); handled {
+	if handled := s.classifyExisting(scope, dest, data, cur, repairCandidate); handled {
 		return
 	}
 
@@ -408,7 +435,7 @@ func (s *seeder) place(scope, dest string, data []byte) {
 		s.r.Deployed = append(s.r.Deployed, dest)
 	case errors.Is(err, os.ErrExist):
 		// A file appeared in the race window. Re-decide against it once.
-		if handled := s.classifyExisting(scope, dest, data, cur); !handled {
+		if handled := s.classifyExisting(scope, dest, data, cur, repairCandidate); !handled {
 			s.r.Errors = append(s.r.Errors,
 				fmt.Sprintf("writing %s: file appeared and vanished during install", dest))
 		}
@@ -421,7 +448,7 @@ func (s *seeder) place(scope, dest string, data []byte) {
 // error, a zero-byte file is repaired, a non-empty file is passed to the
 // content-hash decision. It returns true when dest existed (action taken or
 // error recorded), false when dest is absent and the caller should create it.
-func (s *seeder) classifyExisting(scope, dest string, data []byte, cur string) bool {
+func (s *seeder) classifyExisting(scope, dest string, data []byte, cur string, repairCandidate bool) bool {
 	info, err := os.Stat(dest)
 	switch {
 	case err == nil && info.IsDir():
@@ -443,7 +470,7 @@ func (s *seeder) classifyExisting(scope, dest string, data []byte, cur string) b
 		s.r.Repaired = append(s.r.Repaired, dest)
 		return true
 	case err == nil:
-		s.decide(scope, dest, data, cur)
+		s.decide(scope, dest, data, cur, repairCandidate)
 		return true
 	case !os.IsNotExist(err):
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("stat %s: %v", dest, err))
@@ -455,11 +482,13 @@ func (s *seeder) classifyExisting(scope, dest string, data []byte, cur string) b
 // decide handles a non-empty existing file. It reports a file already at the
 // current content as unchanged; upgrades a tracked file unchanged since seed
 // last wrote it; preserves a tracked file the user has edited; and for an
-// untracked file, additively repairs it when the shipped content adds new
-// top-level keys the file lacks (see additiveMerge), falling back to the
-// original no-clobber skip for anything else. Under force, every differing
-// file is overwritten.
-func (s *seeder) decide(scope, dest string, data []byte, cur string) {
+// untracked file in a repair-candidate category, additively repairs it when
+// the shipped content adds new top-level keys the file lacks (see
+// additiveMerge), falling back to the original no-clobber skip for anything
+// else — including every untracked file OUTSIDE the repair-candidate
+// category, which never attempts a repair at all. Under force, every
+// differing file is overwritten.
+func (s *seeder) decide(scope, dest string, data []byte, cur string, repairCandidate bool) {
 	onDisk, err := os.ReadFile(dest)
 	if err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", dest, err))
@@ -488,16 +517,24 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 	entry, tracked := s.mf.Entries[key]
 	switch {
 	case !tracked:
-		handled, reason := s.repairAdditive(dest, onDisk, data)
+		var handled bool
+		var reason string
+		if repairCandidate {
+			handled, reason = s.repairAdditive(dest, onDisk, data)
+		}
 		if handled {
 			return
 		}
 		// An untracked existing file that differs, and is not a purely
-		// additive stale schema, is left untouched — the original
-		// no-clobber contract. It enters the manifest era only when seed
-		// writes it (a fresh deploy, a repair, or a one-time `--force`).
-		// reason names why additiveMerge declined, so the skip line can say
-		// more than "exists" — see SkipReasons.
+		// additive stale schema (or is outside the repair-candidate
+		// category entirely, e.g. a role or pipeline — GH #525's fix is
+		// archetype-scoped, not a general untracked-file upgrade path), is
+		// left untouched — the original no-clobber contract. It enters the
+		// manifest era only when seed writes it (a fresh deploy, a repair,
+		// or a one-time `--force`). reason names why additiveMerge
+		// declined, so the skip line can say more than "exists" — see
+		// SkipReasons. reason is always "" outside the repair-candidate
+		// category, since repairAdditive is never even attempted there.
 		s.r.Skipped = append(s.r.Skipped, dest)
 		if reason != "" {
 			if s.r.SkipReasons == nil {
@@ -540,6 +577,17 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 // generic no-clobber skip line) — the field is already there, so doctor
 // is satisfied, and the file's bytes are never touched again.
 func (s *seeder) repairAdditive(dest string, onDisk, data []byte) (handled bool, reason string) {
+	// os.Stat (used below for mode preservation, and by decide's earlier
+	// os.ReadFile) follows a symlink to its target — but atomicWriteMode's
+	// os.Rename operates on dest's own path, replacing whatever is there,
+	// symlink included. Renaming a regular file over a symlink destroys the
+	// link itself, not the file it pointed to — a destination the
+	// no-clobber path would otherwise never touch at all. Lstat, which does
+	// NOT follow the link, catches this before any read or write is even
+	// attempted; a symlink is never a repair candidate.
+	if info, err := os.Lstat(dest); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return false, ""
+	}
 	merged, reason, ok := additiveMerge(onDisk, data)
 	if !ok {
 		return false, reason

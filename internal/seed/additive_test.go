@@ -218,7 +218,7 @@ func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, stale, 0o644))
 
-	s.place(scopeEthos, path, shipped)
+	s.place(scopeEthos, path, shipped, repairCandidate)
 	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
 	assert.Contains(t, s.r.RepairedFields, path)
 	assert.Empty(t, s.r.Repaired, "an additive repair is not a zero-byte repair")
@@ -239,7 +239,7 @@ func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	// them.
 	s2 := testSeeder(dest, "", false)
 	s2.mf = s.mf
-	s2.place(scopeEthos, path, shipped)
+	s2.place(scopeEthos, path, shipped, repairCandidate)
 	require.Empty(t, s2.r.Errors, "errors: %v", s2.r.Errors)
 	assert.Contains(t, s2.r.Skipped, path)
 	assert.Contains(t, s2.r.SkipReasons[path], "all shipped keys present")
@@ -268,7 +268,7 @@ func TestPlace_AdditiveRepairPreservesFileMode(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, stale, 0o600))
 
-	s.place(scopeEthos, path, shipped)
+	s.place(scopeEthos, path, shipped, repairCandidate)
 	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
 	require.Contains(t, s.r.RepairedFields, path)
 
@@ -276,6 +276,78 @@ func TestPlace_AdditiveRepairPreservesFileMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
 		"an additive repair must preserve the destination's existing mode, not reset it to 0644")
+}
+
+// TestPlace_NonArchetypeCategoryNeverRepairs pins the Copilot finding that
+// scoped the additive-repair path to archetypes only: decide is shared by
+// every scopeEthos destination, so without a category gate, a user who
+// deliberately deleted a shipped top-level key from an untracked role or
+// pipeline would find it silently re-added forever. GH #525, the doctor
+// guard, and the operator ruling are all archetype-specific — the code
+// narrows to match. The content here is otherwise a textbook additive gap
+// (same shape as TestAdditiveMerge_StaleArchetypeRepaired), proving the
+// skip is caused by the category, not by additiveMerge declining on its
+// own — that path is exercised separately by every TestAdditiveMerge_* test.
+func TestPlace_NonArchetypeCategoryNeverRepairs(t *testing.T) {
+	stale := "name: implementer\ndescription: writes code\n"
+	shipped := "name: implementer\ndescription: writes code\nnew_field: true\n"
+	dest := t.TempDir()
+	s := testSeeder(dest, "", false)
+	path := filepath.Join(dest, "roles", "implementer.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(stale), 0o644))
+
+	s.place(scopeEthos, path, []byte(shipped), notRepairCandidate)
+	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
+	assert.Contains(t, s.r.Skipped, path)
+	assert.Empty(t, s.r.RepairedFields, "a role is not a repair candidate, regardless of content shape")
+	_, hasReason := s.r.SkipReasons[path]
+	assert.False(t, hasReason, "repairAdditive must never even be attempted outside the candidate category")
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, stale, string(got), "a deliberately-missing key outside the archetype category must never be re-added")
+}
+
+// TestPlace_SymlinkDestNeverRepaired pins the Copilot finding that
+// repairAdditive must Lstat, not Stat, before touching dest: os.Stat
+// follows a symlink to its target, but atomicWriteMode's os.Rename
+// operates on dest's own path — renaming a regular file over a symlink
+// destroys the link itself, not the file it pointed to. A symlinked
+// archetype must decline exactly like a never-was-a-candidate file (no
+// SkipReasons entry), and the link must survive intact.
+func TestPlace_SymlinkDestNeverRepaired(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require elevated privileges on Windows by default")
+	}
+	shipped, stale := oldImplementYAML(t)
+	dest := t.TempDir()
+	s := testSeeder(dest, "", false)
+
+	targetDir := filepath.Join(dest, "elsewhere")
+	require.NoError(t, os.MkdirAll(targetDir, 0o700))
+	target := filepath.Join(targetDir, "real-implement.yaml")
+	require.NoError(t, os.WriteFile(target, stale, 0o644))
+
+	archDir := filepath.Join(dest, "archetypes")
+	require.NoError(t, os.MkdirAll(archDir, 0o700))
+	link := filepath.Join(archDir, "implement.yaml")
+	require.NoError(t, os.Symlink(target, link))
+
+	s.place(scopeEthos, link, shipped, repairCandidate)
+	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
+	assert.Contains(t, s.r.Skipped, link)
+	assert.Empty(t, s.r.RepairedFields, "a symlink must never be repaired")
+	_, hasReason := s.r.SkipReasons[link]
+	assert.False(t, hasReason, "a symlink is never a candidate, same as any other never-a-candidate case")
+
+	info, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.True(t, info.Mode()&os.ModeSymlink != 0, "the symlink itself must survive — not be replaced by a regular file")
+
+	got, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, string(stale), string(got), "the symlink's target content must be untouched")
 }
 
 // TestPlace_UntrackedConflictingDiffStaysSkipped is the counterpart: a file
@@ -291,7 +363,7 @@ func TestPlace_UntrackedConflictingDiffStaysSkipped(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte(edited), 0o644))
 
-	s.place(scopeEthos, path, shipped)
+	s.place(scopeEthos, path, shipped, repairCandidate)
 	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
 	assert.Contains(t, s.r.Skipped, path)
 	assert.NotContains(t, s.r.Repaired, path)
@@ -341,7 +413,7 @@ func TestPlace_UntrackedNonCandidateStaysPlainSkip(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 			require.NoError(t, os.WriteFile(path, []byte(tc.existing), 0o644))
 
-			s.place(scopeEthos, path, []byte(tc.shipped))
+			s.place(scopeEthos, path, []byte(tc.shipped), repairCandidate)
 			require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
 			assert.Contains(t, s.r.Skipped, path)
 			_, hasReason := s.r.SkipReasons[path]

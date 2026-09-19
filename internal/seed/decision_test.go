@@ -117,7 +117,7 @@ func TestPlace_DecisionMatrix(t *testing.T) {
 				s.mf.Entries[key] = Entry{Scope: scopeEthos, Hash: tc.entryHash}
 			}
 
-			s.place(scopeEthos, path, []byte(shipped))
+			s.place(scopeEthos, path, []byte(shipped), notRepairCandidate)
 			require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
 
 			switch tc.want {

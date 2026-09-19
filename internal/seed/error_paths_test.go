@@ -57,7 +57,7 @@ func TestPlace_ForceCreateTempFails(t *testing.T) {
 	}
 
 	s := testSeeder(parent, "", true)
-	s.place(scopeEthos, filepath.Join(dir, "out.txt"), []byte("x"))
+	s.place(scopeEthos, filepath.Join(dir, "out.txt"), []byte("x"), notRepairCandidate)
 	require.NotEmpty(t, s.r.Errors)
 	assert.Contains(t, s.r.Errors[0], "writing")
 }
@@ -74,7 +74,7 @@ func TestPlace_NonForceCreateFails(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(dir, 0o700) })
 
 	s := testSeeder(parent, "", false)
-	s.place(scopeEthos, filepath.Join(dir, "out.txt"), []byte("x"))
+	s.place(scopeEthos, filepath.Join(dir, "out.txt"), []byte("x"), notRepairCandidate)
 	require.NotEmpty(t, s.r.Errors)
 }
 
@@ -86,7 +86,7 @@ func TestPlace_MkdirFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocker, []byte("not a dir"), 0o600))
 
 	s := testSeeder(parent, "", false)
-	s.place(scopeEthos, filepath.Join(blocker, "child", "out.txt"), []byte("x"))
+	s.place(scopeEthos, filepath.Join(blocker, "child", "out.txt"), []byte("x"), notRepairCandidate)
 	require.NotEmpty(t, s.r.Errors)
 	assert.Contains(t, s.r.Errors[0], "mkdir")
 }
@@ -97,7 +97,7 @@ func TestPlace_FreshDeploy(t *testing.T) {
 	dir := t.TempDir()
 	s := testSeeder(dir, "", false)
 	dest := filepath.Join(dir, "out.txt")
-	s.place(scopeEthos, dest, []byte("hello"))
+	s.place(scopeEthos, dest, []byte("hello"), notRepairCandidate)
 	require.Empty(t, s.r.Errors)
 	assert.Contains(t, s.r.Deployed, dest)
 
@@ -120,7 +120,7 @@ func TestPlace_UntrackedDifferingFileSkips(t *testing.T) {
 	require.NoError(t, os.WriteFile(dest, []byte("preexisting"), 0o600))
 
 	s := testSeeder(dir, "", false)
-	s.place(scopeEthos, dest, []byte("new"))
+	s.place(scopeEthos, dest, []byte("new"), notRepairCandidate)
 	require.Empty(t, s.r.Errors)
 	assert.Contains(t, s.r.Skipped, dest)
 
@@ -137,7 +137,7 @@ func TestPlace_UntrackedDifferingFileSkips(t *testing.T) {
 func TestSeedFS_SkipsDirAndWrongExtension(t *testing.T) {
 	dest := t.TempDir()
 	s := testSeeder(dest, "", false)
-	s.seedFS(mixedFS, "testdata/mixed", dest, ".md")
+	s.seedFS(mixedFS, "testdata/mixed", dest, ".md", notRepairCandidate)
 	require.Empty(t, s.r.Errors)
 	// keep.md was deployed.
 	assert.FileExists(t, filepath.Join(dest, "keep.md"))
@@ -151,7 +151,7 @@ func TestSeedFS_SkipsDirAndWrongExtension(t *testing.T) {
 func TestSeedFS_ReadDirError(t *testing.T) {
 	dir := t.TempDir()
 	s := testSeeder(dir, "", false)
-	s.seedFS(emptyFS, "nonexistent", dir, ".yaml")
+	s.seedFS(emptyFS, "nonexistent", dir, ".yaml", notRepairCandidate)
 	require.NotEmpty(t, s.r.Errors)
 	assert.Contains(t, s.r.Errors[0], "reading")
 	assert.Contains(t, s.r.Errors[0], "nonexistent")

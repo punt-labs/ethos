@@ -42,9 +42,11 @@ affected computers will be brought current by hand. So the software carries
 it is today for any file the manifest does not yet track, and the new
 upgrade behavior activates only once a file has a manifest entry. (A
 2026-09-19 amendment, below, adds one narrow exception to the untracked
-no-clobber skip itself — a strictly additive schema-gap repair — but
-otherwise this ruling stands exactly as written: no other pre-feature
-migration, no other untracked-file upgrade path.)
+no-clobber skip itself, scoped to the archetypes category only — a
+strictly additive schema-gap repair — but otherwise this ruling stands
+exactly as written: no other pre-feature migration, no other
+untracked-file upgrade path, and no exception at all for any other
+category.)
 
 ## Scope: seed manages library content, never user identities
 
@@ -113,22 +115,24 @@ Spelled out:
   `cur`).
 - tracked, `local != mf` → **user edit** → **skip + warn** (`--force`
   remedy).
-- untracked, `local != cur`, diff is purely additive (shipped content adds
-  top-level keys the file lacks entirely, with no conflicting shared value
-  and no local-only key) → **repair**: append the missing keys, byte-
-  preserving the file's existing lines. Not recorded (2026-09-19 ruling,
-  see below).
-- untracked, `local != cur`, any other diff → **skip** (today's
-  no-clobber, unchanged). No legacy lookup, no upgrade, no backup, no
-  entry recorded.
+- untracked, `local != cur`, **dest is an archetype** and the diff is
+  purely additive (shipped content adds top-level keys the file lacks
+  entirely, with no conflicting shared value and no local-only key) →
+  **repair**: append the missing keys, byte-preserving the file's existing
+  lines. Not recorded (2026-09-19 ruling, see below).
+- untracked, `local != cur`, any other diff, OR any diff at all outside
+  the archetypes category → **skip** (today's no-clobber, unchanged). No
+  legacy lookup, no upgrade, no backup, no entry recorded.
 
 The last line is the whole treatment of a pre-feature file carrying a
-genuine edit: leave it exactly as today's code leaves it. There is still
-no *general* bootstrap-upgrade branch in the software — the one narrow
-exception, added after this design shipped, is the additive schema-gap
-repair immediately above; see "2026-09-19 ruling" below for why, and note
-that the "Rejected alternatives" section's bootstrap-upgrade rejection
-still holds for every other untracked diff.
+genuine edit, and of every untracked file in every non-archetype category
+regardless of content shape: leave it exactly as today's code leaves it.
+There is still no *general* bootstrap-upgrade branch in the software — the
+one narrow exception, added after this design shipped, is the archetype-
+only additive schema-gap repair immediately above; see "2026-09-19 ruling"
+below for why it is scoped to one category, and note that the "Rejected
+alternatives" section's bootstrap-upgrade rejection still holds for every
+other untracked diff, in archetypes or any other category.
 
 ### Bringing the existing machines current
 
@@ -200,17 +204,18 @@ has an entry, not merely that the manifest file exists.
 | absent | deploy `cur`; record `cur` | deploy `cur`; record `cur` |
 | `== cur` | unchanged (no write) | unchanged (no write); record `cur` (adopt) |
 | `!= cur`, `== mf` | **upgrade** → write `cur`; record `cur` | n/a (`mf` undefined) |
-| `!= cur`, `!= mf` | **skip + warn** (user edit; `--force` remedy) | **skip** (today's no-clobber; no record) — unless the diff is purely additive, next row |
-| `!= cur`, additive schema gap only | n/a — a tracked file's diff is a proven edit; this branch exists only where no `mf` exists to prove one | **repair** → append the shipped content's missing top-level keys verbatim, byte-preserving every existing line; **not recorded** (2026-09-19 ruling, below) |
+| `!= cur`, `!= mf` | **skip + warn** (user edit; `--force` remedy) | **skip** (today's no-clobber; no record) — unless dest is an archetype and the diff is purely additive, next row |
+| `!= cur`, additive schema gap, **archetypes only** | n/a — a tracked file's diff is a proven edit; this branch exists only where no `mf` exists to prove one | **repair** → append the shipped content's missing top-level keys verbatim, byte-preserving every existing line; **not recorded** (2026-09-19 ruling, below). Every non-archetype category — roles, talents, personalities, writing-styles, pipelines, bundle-scoped identities — takes the plain no-clobber skip above instead, regardless of content shape. |
 | zero-byte file | repair → write `cur`; record `cur` | repair → write `cur`; record `cur` |
 
 The `untracked, != cur` cell is today's no-clobber skip (`decide`'s
 `!tracked` case, `internal/seed/seed.go`), left untouched for every diff
-EXCEPT a purely additive one — this is where the five pre-feature
-machines, and any other untracked file carrying a genuine edit, land until
+in every category EXCEPT one: an archetype whose diff is purely additive —
+this is where the five pre-feature machines, any archetype carrying a
+genuine edit, and every untracked file in every OTHER category land until
 the operator's one-time `--force`. The additive-schema-gap row below it is
-the one place this no-clobber skip does not apply; see "2026-09-19 ruling"
-for why.
+the one place, for the one category, this no-clobber skip does not apply;
+see "2026-09-19 ruling" for why it is scoped that narrowly.
 
 The zero-byte row preserves the current partial-write repair
 (`classifyExisting`'s zero-byte case, `internal/seed/seed.go`): a
@@ -222,8 +227,9 @@ a user edit.
 
 > **2026-09-19 operator ruling (GH #525 upgrade breakage):** a
 > strictly-additive schema-gap repair is permitted for untracked
-> skip-category files, superseding the blanket no-clobber for exactly this
-> case; all other untracked diffs keep the no-clobber skip.
+> **archetype** files, superseding the blanket no-clobber for exactly this
+> one category and this one diff shape; every other untracked diff, in
+> archetypes or any other category, keeps the no-clobber skip.
 
 **Why this design's original no-clobber-for-untracked ruling did not
 anticipate this case.** v4.19.0 added `require_delegated_worker: true` to
@@ -260,6 +266,34 @@ branch — the alternative this design rejected — has no such proof
 available; it cannot tell an unmodified-by-luck file from a hand-edited
 one, which is exactly why that branch stays rejected for every diff shape
 except this one narrow, provably-safe one.
+
+**Why "provably additive" content shape is not enough on its own — the
+category gate.** additiveMerge's checks prove a file's DIFF is additive;
+they cannot prove the file's ABSENCE of a key was unintentional. A role or
+pipeline missing a shipped top-level key could just as easily be an
+operator who deliberately deleted it — additiveMerge has no way to
+distinguish "never touched this" from "removed this on purpose," and
+silently re-adding a deletion the operator meant is exactly the kind of
+surprise this design exists to prevent. Archetypes are different by the
+operator's own framing ("no one hand-edits our files; only our releases
+rev them") and by the concrete evidence of GH #525 itself — the two stale
+archetypes were provably deployment artifacts, not edits. So the repair
+path is gated by CATEGORY as well as by content shape (`internal/seed/
+seed.go`'s `repairCandidate` bool, threaded from each `seedFS` call site
+through `place`/`classifyExisting`/`decide` to `repairAdditive`) — only
+the archetypes `seedFS` call passes it true. A role or pipeline with the
+exact same additive-looking diff still takes the plain no-clobber skip,
+content shape notwithstanding.
+
+**Why the repair declines a symlinked destination.** `repairAdditive`
+`Lstat`s dest before touching it: `os.Stat` (used elsewhere for reading
+content and for mode preservation) follows a symlink to its target, but
+the write path's `os.Rename` operates on dest's own path — renaming a
+regular file over a symlink destroys the link itself, not the file it
+pointed to. A symlinked archetype declines the same way a never-was-a-
+candidate file does (no `SkipReasons` entry): this is not a case
+additiveMerge could ever reason about safely, so it never gets the chance
+to try.
 
 **Why the repair is not recorded.** See `repairAdditive`'s doc comment
 (`internal/seed/seed.go`) for the full reasoning: the post-merge check is a
@@ -464,13 +498,16 @@ This runs entirely from the built binary against a scratch `HOME` — the
   computers are hand-cleaned with a one-time `--force`. The software keeps
   today's no-clobber skip for untracked files and carries zero pre-feature
   reasoning. **This rejection still holds for every untracked diff except
-  one narrow, later-added exception** (2026-09-19, GH #525): a strictly
-  additive schema gap — the shipped content only ever adds keys the file
-  provably lacks, verified before and after the write — is repaired in
-  place. That exception is unlike the general branch rejected here: it
-  never guesses whether a differing file is "probably unmodified," it
-  proves the specific keys it touches were never present to modify. See
-  the "2026-09-19 ruling" section above for the full reasoning.
+  one narrow, later-added exception, scoped to one category** (2026-09-19,
+  GH #525): an **archetype** whose diff is a strictly additive schema
+  gap — the shipped content only ever adds keys the file provably lacks,
+  verified before and after the write — is repaired in place. Every other
+  category (roles, talents, personalities, writing-styles, pipelines,
+  bundle-scoped identities) keeps this rejection's original no-clobber
+  skip regardless of content shape, because additiveMerge can prove a
+  diff is additive but not that an absent key was never deliberately
+  removed — see "Why 'provably additive' content shape is not enough on
+  its own" in the "2026-09-19 ruling" section above.
 - **A legacy hash catalog + history-walking generator.** An earlier draft
   embedded a frozen catalog of every pre-feature shipped hash, generated by
   walking git tags and hashing the sidecar at each. Rejected: fragile
@@ -554,12 +591,14 @@ This runs entirely from the built binary against a scratch `HOME` — the
 >   (record if untracked, to adopt). Tracked and `local == mf` and
 >   `cur != mf` → upgrade + record. Tracked and `local != mf` → skip + warn
 >   (user edit; `--force` remedy). **Untracked and `local != cur` → today's
->   no-clobber skip, unchanged** (amended 2026-09-19, GH #525: EXCEPT when
->   the diff is a strictly additive schema gap — shipped content adds keys
->   the file lacks entirely, with no conflicting shared value and no
->   local-only key — which is now repaired in place and left unrecorded;
->   see the ruling in `docs/seed-content-upgrade.md`). Zero-byte partials
->   are repaired to `cur` regardless.
+>   no-clobber skip, unchanged** (amended 2026-09-19, GH #525: EXCEPT for an
+>   **archetype** whose diff is a strictly additive schema gap — shipped
+>   content adds keys the file lacks entirely, with no conflicting shared
+>   value and no local-only key — which is now repaired in place and left
+>   unrecorded; every non-archetype category keeps the unamended rule
+>   regardless of content shape; see the ruling in
+>   `docs/seed-content-upgrade.md`). Zero-byte partials are repaired to
+>   `cur` regardless.
 > - **No pre-feature migration in the software.** The five existing machines
 >   are hand-cleaned once with `ethos seed --force`, which overwrites to
 >   `cur` and records every entry; thereafter they auto-upgrade.
@@ -578,11 +617,12 @@ This runs entirely from the built binary against a scratch `HOME` — the
 > - **No pre-feature migration** (operator). Few machines; a migration
 >   branch is clutter and debt. The software keeps the existing no-clobber
 >   skip for untracked files; the affected computers are hand-cleaned with a
->   one-time `--force`. (Amended 2026-09-19, GH #525: a strictly additive
->   schema-gap repair is now a narrow, provably-safe exception to this
->   no-clobber skip — see `docs/seed-content-upgrade.md`'s "2026-09-19
->   ruling" section. Every other untracked diff is still governed by this
->   ruling unchanged.)
+>   one-time `--force`. (Amended 2026-09-19, GH #525: an **archetype**
+>   whose diff is a strictly additive schema gap is now a narrow,
+>   provably-safe exception to this no-clobber skip — see
+>   `docs/seed-content-upgrade.md`'s "2026-09-19 ruling" section. Every
+>   other untracked diff, in archetypes or any other category, is still
+>   governed by this ruling unchanged.)
 > - **Content hash, not mtime or in-band version stamps.** mtimes are
 >   unreliable across clone/tar/package managers; stamps pollute content and
 >   are forgeable by an edit that keeps the stamp.
