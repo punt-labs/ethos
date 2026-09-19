@@ -46,7 +46,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			name: "send_email keeps subject and reduces the rest",
 			tool: "mcp__plugin_beadle_email__send_email",
 			input: map[string]any{
-				"to":      "jim@punt-labs.com",
+				"to":      "user@example.org",
 				"subject": "Recap: tool-state cleanup",
 				"body":    "Recap — ethos office hours, first issue handled end-to-end.",
 			},
@@ -78,7 +78,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			name: "send_email subject still loses an address",
 			tool: "send_email",
 			input: map[string]any{
-				"subject": "reply to jim@punt-labs.com about the recap",
+				"subject": "reply to user@example.org about the recap",
 				"body":    "…",
 			},
 			want: map[string]any{
@@ -94,7 +94,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 				"message_id": "42",
 				"subject":    "Re: recap",
 				"body":       "The full reply body that must not be committed.",
-				"to":         "jim@punt-labs.com",
+				"to":         "user@example.org",
 				"cc":         "bwk@punt-labs.com",
 			},
 			want: map[string]any{
@@ -112,7 +112,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			input: map[string]any{
 				"subject": "Draft recap",
 				"body":    "Draft body that must not be committed.",
-				"to":      "jim@punt-labs.com",
+				"to":      "user@example.org",
 				"bcc":     "someone@example.com",
 			},
 			want: map[string]any{
@@ -127,7 +127,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			name: "an unenrolled tool still cannot leak a recipient",
 			tool: "mcp__some_future_plugin__dispatch_notice",
 			input: map[string]any{
-				"to":   "jim@punt-labs.com",
+				"to":   "user@example.org",
 				"cc":   []any{"a@example.com", "b@example.com"},
 				"note": "unswept",
 			},
@@ -145,7 +145,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			name: "a display name beside an address goes with it",
 			tool: "mcp__some_future_plugin__dispatch_notice",
 			input: map[string]any{
-				"to":       "Jim Freeman <jim@punt-labs.com>",
+				"to":       "Jim Freeman <user@example.org>",
 				"reply_to": []any{"Brian K <bwk@punt-labs.com>"},
 			},
 			want: map[string]any{
@@ -161,8 +161,8 @@ func TestRedactSensitiveContent(t *testing.T) {
 			tool: "Agent",
 			input: map[string]any{
 				"prompt": map[string]any{
-					"to":   "Jim Freeman <jim@punt-labs.com>",
-					"step": "send the recap to jim@punt-labs.com",
+					"to":   "Jim Freeman <user@example.org>",
+					"step": "send the recap to user@example.org",
 				},
 			},
 			want: map[string]any{
@@ -181,7 +181,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			tool: "mcp__plugin_beadle_email__add_contact",
 			input: map[string]any{
 				"name":        "Jim Freeman",
-				"email":       "jim@punt-labs.com",
+				"email":       "user@example.org",
 				"aliases":     []any{"jim", "jmf"},
 				"notes":       "operator",
 				"permissions": "rwx",
@@ -208,7 +208,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			// other pass covered.
 			name:        "find_contact loses an address in its query",
 			tool:        "mcp__plugin_beadle_email__find_contact",
-			input:       map[string]any{"query": "jim@punt-labs.com"},
+			input:       map[string]any{"query": "user@example.org"},
 			want:        map[string]any{"query": "[redacted-email]"},
 			wantChanged: true,
 		},
@@ -265,7 +265,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			tool: "CronCreate",
 			input: map[string]any{
 				"cron":   "*/2 * * * *",
-				"prompt": "Poll PR 257 and email jim@punt-labs.com when it merges.",
+				"prompt": "Poll PR 257 and email user@example.org when it merges.",
 			},
 			want: map[string]any{
 				"cron":   "*/2 * * * *",
@@ -316,7 +316,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			// that no pass covered.
 			name:        "a Bash command loses an address",
 			tool:        "Bash",
-			input:       map[string]any{"command": "git log --author=jim@punt-labs.com"},
+			input:       map[string]any{"command": "git log --author=user@example.org"},
 			want:        map[string]any{"command": "git log --author=[redacted-email]"},
 			wantChanged: true,
 		},
@@ -326,7 +326,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			name: "an address in prose quoted inside a command goes too",
 			tool: "Bash",
 			input: map[string]any{
-				"command": `bd update ethos-6tuz -d "recap mail to jim@punt-labs.com is unsent"`,
+				"command": `bd update ethos-6tuz -d "recap mail to user@example.org is unsent"`,
 			},
 			want: map[string]any{
 				"command": `bd update ethos-6tuz -d "recap mail to [redacted-email] is unsent"`,
@@ -400,7 +400,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			tool: "Skill",
 			input: map[string]any{
 				"skill": "loop",
-				"args":  "3m Poll PR 509 and mail jim@punt-labs.com on merge",
+				"args":  "3m Poll PR 509 and mail user@example.org on merge",
 			},
 			want: map[string]any{
 				"skill": "loop",
@@ -435,7 +435,7 @@ func TestRedactSensitiveContent(t *testing.T) {
 			tool: "mcp__github__create_pull_request",
 			input: map[string]any{
 				"base":  "main",
-				"title": "chore: stop mailing jim@punt-labs.com from CI",
+				"title": "chore: stop mailing user@example.org from CI",
 			},
 			want: map[string]any{
 				"base":  "main",
@@ -526,7 +526,7 @@ func TestBuildAuditEntry_HashOverRedactedForm(t *testing.T) {
 	input := map[string]any{
 		"tool_name": "mcp__plugin_beadle_email__send_email",
 		"tool_input": map[string]any{
-			"to":      "jim@punt-labs.com",
+			"to":      "user@example.org",
 			"subject": "Recap",
 			"body":    "the full body that must not be committed",
 		},
@@ -551,7 +551,7 @@ func TestBuildAuditEntry_HashOverRedactedForm(t *testing.T) {
 	// recipient — the assertion written the way the defect was found.
 	line, err := json.Marshal(entry)
 	require.NoError(t, err)
-	assert.NotContains(t, string(line), "jim@punt-labs.com")
+	assert.NotContains(t, string(line), "user@example.org")
 	assert.NotContains(t, string(line), "the full body that must not be committed")
 }
 
@@ -568,7 +568,7 @@ func TestBuildAuditEntry_ReplyMessage(t *testing.T) {
 			"message_id": "4711",
 			"subject":    "Re: recap",
 			"body":       "the full reply that must not be committed",
-			"to":         "jim@punt-labs.com",
+			"to":         "user@example.org",
 			"cc":         []any{"bwk@punt-labs.com"},
 		},
 	}
@@ -588,7 +588,7 @@ func TestBuildAuditEntry_ReplyMessage(t *testing.T) {
 
 	line, err := json.Marshal(entry)
 	require.NoError(t, err)
-	assert.NotContains(t, string(line), "jim@punt-labs.com")
+	assert.NotContains(t, string(line), "user@example.org")
 	assert.NotContains(t, string(line), "bwk@punt-labs.com")
 	assert.NotContains(t, string(line), "the full reply that must not be committed")
 }
@@ -602,7 +602,7 @@ func TestBuildAuditEntry_AddContact(t *testing.T) {
 		"tool_name": "mcp__plugin_beadle_email__add_contact",
 		"tool_input": map[string]any{
 			"name":  "Jim Freeman",
-			"email": "jim@punt-labs.com",
+			"email": "user@example.org",
 		},
 	}, "sess-1", "", now)
 
@@ -614,7 +614,7 @@ func TestBuildAuditEntry_AddContact(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(line), "Jim Freeman",
 		"a contact's name is as identifying as the address beside it")
-	assert.NotContains(t, string(line), "jim@punt-labs.com")
+	assert.NotContains(t, string(line), "user@example.org")
 	assert.Contains(t, string(line), `"name"`,
 		"the keys stay so the line still shows a contact was added")
 }
@@ -651,7 +651,7 @@ func TestBuildAuditEntry_CronPromptPII(t *testing.T) {
 		"tool_name": "CronCreate",
 		"tool_input": map[string]any{
 			"cron":   "*/2 * * * *",
-			"prompt": "When PR 257 merges, email jim@punt-labs.com a recap.",
+			"prompt": "When PR 257 merges, email user@example.org a recap.",
 		},
 	}
 
@@ -662,7 +662,7 @@ func TestBuildAuditEntry_CronPromptPII(t *testing.T) {
 		"a structured sibling field must survive verbatim")
 	assert.Equal(t, "When PR 257 merges, email [redacted-email] a recap.",
 		entry.ToolInput["prompt"])
-	assert.NotContains(t, entry.ToolInputPreview, "jim@punt-labs.com",
+	assert.NotContains(t, entry.ToolInputPreview, "user@example.org",
 		"the preview is derived from the redacted form")
 }
 
@@ -683,7 +683,7 @@ func TestBuildAuditEntry_BashCommandPII(t *testing.T) {
 	input := map[string]any{
 		"tool_name": "Bash",
 		"tool_input": map[string]any{
-			"command":     `bd update ethos-6tuz -d "recap mail to jim@punt-labs.com is unsent"`,
+			"command":     `bd update ethos-6tuz -d "recap mail to user@example.org is unsent"`,
 			"description": "Record the mail spool location",
 		},
 	}
@@ -698,12 +698,12 @@ func TestBuildAuditEntry_BashCommandPII(t *testing.T) {
 
 	require.Contains(t, entry.ToolInputPreview, "bd update ethos-6tuz",
 		"the address must fall inside the 200-char window, or the preview assertion proves nothing")
-	assert.NotContains(t, entry.ToolInputPreview, "jim@punt-labs.com",
+	assert.NotContains(t, entry.ToolInputPreview, "user@example.org",
 		"the preview is a second copy of the same bytes on the same line")
 
 	line, err := json.Marshal(entry)
 	require.NoError(t, err)
-	assert.NotContains(t, string(line), "jim@punt-labs.com",
+	assert.NotContains(t, string(line), "user@example.org",
 		"the assertion written the way the defect was found: grep the line as it lands on disk")
 
 	wantHash := hashToolInput(map[string]any{"tool_input": entry.ToolInput})

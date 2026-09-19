@@ -27,7 +27,7 @@ is the contract.
 name: Jim Freeman
 handle: jfreeman
 kind: human                       # or "agent"
-email: jim@punt-labs.com
+email: user@example.org
 github: jmf-pobox
 agent: .claude/agents/jfreeman.md
 writing_style: concise-quantified

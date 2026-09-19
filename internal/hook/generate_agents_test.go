@@ -126,7 +126,7 @@ func setupTestRepo(t *testing.T) (string, identity.IdentityStore, *team.LayeredS
 		"name":   "Test Human",
 		"handle": "test-human",
 		"kind":   "human",
-		"email":  "jim@punt-labs.com",
+		"email":  "user@example.org",
 	})
 
 	// Personalities.
