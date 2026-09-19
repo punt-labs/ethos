@@ -488,7 +488,7 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 	entry, tracked := s.mf.Entries[key]
 	switch {
 	case !tracked:
-		handled, reason := s.repairAdditive(scope, dest, onDisk, data)
+		handled, reason := s.repairAdditive(dest, onDisk, data)
 		if handled {
 			return
 		}
@@ -522,17 +522,31 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 // through to the ordinary skip. It returns handled=false, with reason
 // naming why additiveMerge declined, when the diff is not purely additive;
 // the caller's no-clobber skip still applies, with reason to explain it.
-func (s *seeder) repairAdditive(scope, dest string, onDisk, data []byte) (handled bool, reason string) {
+//
+// Deliberately NOT recorded in the manifest (2026-09-19 operator ruling,
+// GH #525): additiveMerge's own safety net — decode the merge and require
+// DeepEqual against the shipped content — is blind to comments, key order,
+// and formatting by construction, since DeepEqual compares decoded Go
+// values, not bytes. Recording this write as "tracked, matches cur" would
+// make the very NEXT seed run see local == cur fail (repaired bytes ≠
+// canonical shipped bytes), read the repair as a user edit or an upgrade
+// candidate depending on entry state, and either re-marshal the file to
+// the canonical layout or drop it as "edited" — overwriting the exact
+// formatting the additive merge went out of its way to preserve, just one
+// run later than a naive re-marshal would have. Leaving dest untracked
+// keeps it in the same category it started in: a later seed re-evaluates
+// it fresh, finds every key already present (nothing left to add), and
+// reports a plain skip — the field is already there, so doctor is
+// satisfied, and the file's bytes are never touched again.
+func (s *seeder) repairAdditive(dest string, onDisk, data []byte) (handled bool, reason string) {
 	merged, reason, ok := additiveMerge(onDisk, data)
 	if !ok {
 		return false, reason
 	}
-	cur := hashBytes(merged)
 	if err := atomicWrite(dest, merged); err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("repairing %s: %v", dest, err))
 		return true, ""
 	}
-	s.record(scope, dest, cur)
 	s.r.RepairedFields = append(s.r.RepairedFields, dest)
 	return true, ""
 }

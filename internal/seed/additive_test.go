@@ -151,9 +151,19 @@ func TestAdditiveMerge_NoMissingKeysStaysUnmerged(t *testing.T) {
 // TestPlace_UntrackedAdditiveDiffIsRepaired drives the fix end to end
 // through place: an untracked, pre-v4.19.0 implement.yaml on disk gets
 // repaired in place, reported under Result.RepairedFields (not Repaired,
-// which stays reserved for the zero-byte case), and its manifest entry
-// recorded — so a second seed run reports it unchanged rather than
-// repairing it again.
+// which stays reserved for the zero-byte case).
+//
+// The repair is deliberately NOT recorded in the manifest (2026-09-19
+// operator ruling, GH #525) — see repairAdditive's doc comment for why:
+// additiveMerge's own DeepEqual-based verification is blind to comments,
+// key order, and formatting, so recording the write would make the very
+// next seed run treat the repaired file as tracked-but-differing-from-cur
+// and re-marshal it to the canonical shipped layout, discarding the exact
+// formatting the additive merge just preserved. A second seed run must
+// therefore leave the repaired file's bytes untouched: with every key now
+// present, additiveMerge has nothing left to add, so it declines
+// ("no missing keys explain the difference") and the file is reported as
+// an ordinary skip, not a repeat repair or a canonicalizing update.
 func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	shipped, stale := oldImplementYAML(t)
 	dest := t.TempDir()
@@ -174,25 +184,24 @@ func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	assert.Equal(t, want, string(got))
 
 	key := s.key(scopeEthos, path)
-	entry, ok := s.mf.Entries[key]
-	require.True(t, ok, "a repaired file must be recorded so a later seed sees it as unchanged")
-	assert.Equal(t, hashBytes([]byte(want)), entry.Hash)
+	_, tracked := s.mf.Entries[key]
+	assert.False(t, tracked, "a repair must not be recorded — see repairAdditive's doc comment")
 
-	// A second seed run must see the repaired file as tracked and
-	// unmodified since the repair — never treated as untracked again, and
-	// never re-entering the repair path. The appended key sits in a
-	// different position than the canonical shipped file, so the content
-	// hash still differs; that reads as a normal tracked upgrade to the
-	// canonical layout, not a repeat repair.
+	// A second seed run finds every key already present, declines the
+	// repair as having nothing left to add, and leaves the file's bytes —
+	// including its non-canonical key order — exactly as the repair left
+	// them.
 	s2 := testSeeder(dest, "", false)
 	s2.mf = s.mf
 	s2.place(scopeEthos, path, shipped)
 	require.Empty(t, s2.r.Errors, "errors: %v", s2.r.Errors)
-	assert.Contains(t, s2.r.Updated, path)
-	assert.Empty(t, s2.r.RepairedFields)
+	assert.Contains(t, s2.r.Skipped, path)
+	assert.Contains(t, s2.r.SkipReasons[path], "no missing keys")
+	assert.Empty(t, s2.r.RepairedFields, "nothing left to repair a second time")
+	assert.Empty(t, s2.r.Updated, "a repaired file must not be silently canonicalized on the next run")
 	got2, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, string(shipped), string(got2))
+	assert.Equal(t, want, string(got2), "the repaired file's bytes must survive a second seed run untouched")
 }
 
 // TestPlace_UntrackedConflictingDiffStaysSkipped is the counterpart: a file
