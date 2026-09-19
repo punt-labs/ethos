@@ -92,7 +92,8 @@ func TestAdditiveMerge_NoMissingKeysStaysUnmerged(t *testing.T) {
 
 // TestPlace_UntrackedAdditiveDiffIsRepaired drives the fix end to end
 // through place: an untracked, pre-v4.19.0 implement.yaml on disk gets
-// repaired in place, reported under Result.Repaired, and its manifest entry
+// repaired in place, reported under Result.RepairedFields (not Repaired,
+// which stays reserved for the zero-byte case), and its manifest entry
 // recorded — so a second seed run reports it unchanged rather than
 // repairing it again.
 func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
@@ -105,7 +106,8 @@ func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 
 	s.place(scopeEthos, path, shipped)
 	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
-	assert.Contains(t, s.r.Repaired, path)
+	assert.Contains(t, s.r.RepairedFields, path)
+	assert.Empty(t, s.r.Repaired, "an additive repair is not a zero-byte repair")
 	assert.NotContains(t, s.r.Skipped, path)
 
 	got, err := os.ReadFile(path)
@@ -129,7 +131,7 @@ func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	s2.place(scopeEthos, path, shipped)
 	require.Empty(t, s2.r.Errors, "errors: %v", s2.r.Errors)
 	assert.Contains(t, s2.r.Updated, path)
-	assert.Empty(t, s2.r.Repaired)
+	assert.Empty(t, s2.r.RepairedFields)
 	got2, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, string(shipped), string(got2))
@@ -152,6 +154,7 @@ func TestPlace_UntrackedConflictingDiffStaysSkipped(t *testing.T) {
 	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
 	assert.Contains(t, s.r.Skipped, path)
 	assert.NotContains(t, s.r.Repaired, path)
+	assert.NotContains(t, s.r.RepairedFields, path)
 
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)

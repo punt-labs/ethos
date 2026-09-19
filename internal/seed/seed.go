@@ -20,13 +20,14 @@ const (
 
 // Result tracks what was seeded.
 type Result struct {
-	Deployed  []string // new files written (were absent)
-	Updated   []string // tracked shipped files upgraded to this release's content
-	Unchanged []string // already at this release's content
-	Skipped   []string // untracked existing files left as-is (no-clobber)
-	Edited    []string // tracked and locally edited — differ from the manifest
-	Repaired  []string // zero-byte files overwritten (partial from an interrupted seed)
-	Errors    []string // files that failed
+	Deployed       []string // new files written (were absent)
+	Updated        []string // tracked shipped files upgraded to this release's content
+	Unchanged      []string // already at this release's content
+	Skipped        []string // untracked existing files left as-is (no-clobber)
+	Edited         []string // tracked and locally edited — differ from the manifest
+	Repaired       []string // zero-byte files overwritten (partial from an interrupted seed)
+	RepairedFields []string // untracked files with only seed-added keys appended (see additiveMerge)
+	Errors         []string // files that failed
 }
 
 // Seed deploys embedded sidecar content to the destination root, recording no
@@ -516,7 +517,7 @@ func (s *seeder) repairAdditive(scope, dest string, onDisk, data []byte) bool {
 		return true
 	}
 	s.record(scope, dest, cur)
-	s.r.Repaired = append(s.r.Repaired, dest)
+	s.r.RepairedFields = append(s.r.RepairedFields, dest)
 	return true
 }
 

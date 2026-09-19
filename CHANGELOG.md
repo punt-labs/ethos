@@ -23,11 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file's own lines are never touched) and the repair is reported and
   recorded like any other seeded write. A file with a genuinely
   conflicting value or a user-added key still skips exactly as before —
-  only a pure schema gap self-heals. The doctor check's remedy text now
-  also names the layer-correct action: a stale global file names `ethos
-  seed` (a real fix now), and a stale repo-local file — which `ethos
-  seed` never reaches, since it only writes the global layer — names the
-  actual path to hand-edit or delete.
+  only a pure schema gap self-heals. `ethos seed`'s own output now
+  reports the two repair kinds distinctly — `repaired (was empty)` for
+  the pre-existing zero-byte case, `repaired (missing fields added)` for
+  this one — rather than reusing a label that was only ever true for the
+  first. The doctor check's remedy text now also names the
+  layer-correct action: a stale global file names `ethos seed` (a real
+  fix now), and a stale repo-local file — which `ethos seed` never
+  reaches, since it only writes the global layer — names the actual path
+  to hand-edit or delete.
 
 ## [4.19.0] - 2026-09-19
 
