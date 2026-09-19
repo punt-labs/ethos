@@ -32,7 +32,7 @@ git pull
 # 8e. Send recap email.
 # Actual email sent via beadle:
 #
-#   To: jim@punt-labs.com
+#   To: user@example.org
 #   Subject: [ethos] PR #212 merged: consolidate verifier contract load (ethos-db7)
 #   Body:
 #     Bead: ethos-db7

@@ -12,13 +12,13 @@ import (
 // machines, and pass-through for a path under neither prefix.
 func TestRedactAbsolutePaths(t *testing.T) {
 	const (
-		home = "/Users/jdoe"
-		repo = "/Users/jdoe/Coding/punt-labs/ethos"
+		home = "/Users/user"
+		repo = "/Users/user/Coding/punt-labs/ethos"
 	)
 
 	t.Run("home path becomes tilde", func(t *testing.T) {
 		in := map[string]any{
-			"file_path": "/Users/jdoe/.claude/plugins/cache/x.json",
+			"file_path": "/Users/user/.claude/plugins/cache/x.json",
 		}
 		got := redactAbsolutePaths(in, home, "")
 		assert.Equal(t, "~/.claude/plugins/cache/x.json", got["file_path"])
@@ -26,7 +26,7 @@ func TestRedactAbsolutePaths(t *testing.T) {
 
 	t.Run("repo path becomes <repo>", func(t *testing.T) {
 		in := map[string]any{
-			"file_path": "/Users/jdoe/Coding/punt-labs/ethos/internal/hook/audit_entry.go",
+			"file_path": "/Users/user/Coding/punt-labs/ethos/internal/hook/audit_entry.go",
 		}
 		got := redactAbsolutePaths(in, "", repo)
 		assert.Equal(t, "<repo>/internal/hook/audit_entry.go", got["file_path"])
@@ -34,7 +34,7 @@ func TestRedactAbsolutePaths(t *testing.T) {
 
 	t.Run("repo wins over home when nested", func(t *testing.T) {
 		in := map[string]any{
-			"file_path": "/Users/jdoe/Coding/punt-labs/ethos/internal/hook/audit_entry.go",
+			"file_path": "/Users/user/Coding/punt-labs/ethos/internal/hook/audit_entry.go",
 		}
 		got := redactAbsolutePaths(in, home, repo)
 		assert.Equal(t, "<repo>/internal/hook/audit_entry.go", got["file_path"])
@@ -42,8 +42,8 @@ func TestRedactAbsolutePaths(t *testing.T) {
 
 	t.Run("bash command rewrites both prefixes", func(t *testing.T) {
 		in := map[string]any{
-			"command": "cp /Users/jdoe/.claude/config.json " +
-				"/Users/jdoe/Coding/punt-labs/ethos/.tmp/config.json",
+			"command": "cp /Users/user/.claude/config.json " +
+				"/Users/user/Coding/punt-labs/ethos/.tmp/config.json",
 		}
 		got := redactAbsolutePaths(in, home, repo)
 		assert.Equal(t,
@@ -55,10 +55,10 @@ func TestRedactAbsolutePaths(t *testing.T) {
 		in := map[string]any{
 			"tool_name": "Agent",
 			"tool_input": map[string]any{
-				"prompt":    "see /Users/jdoe/notes.md",
-				"file_path": "/Users/jdoe/Coding/punt-labs/ethos/main.go",
+				"prompt":    "see /Users/user/notes.md",
+				"file_path": "/Users/user/Coding/punt-labs/ethos/main.go",
 				"meta": map[string]any{
-					"cwd": "/Users/jdoe/Coding/punt-labs/ethos",
+					"cwd": "/Users/user/Coding/punt-labs/ethos",
 				},
 			},
 		}
@@ -79,8 +79,8 @@ func TestRedactAbsolutePaths(t *testing.T) {
 	t.Run("slice recurses", func(t *testing.T) {
 		in := map[string]any{
 			"args": []any{
-				"/Users/jdoe/a.txt",
-				"/Users/jdoe/Coding/punt-labs/ethos/b.txt",
+				"/Users/user/a.txt",
+				"/Users/user/Coding/punt-labs/ethos/b.txt",
 				"keep me",
 			},
 		}
@@ -109,9 +109,9 @@ func TestRedactAbsolutePaths(t *testing.T) {
 	})
 
 	t.Run("empty prefixes disable substitution", func(t *testing.T) {
-		in := map[string]any{"file_path": "/Users/jdoe/x"}
+		in := map[string]any{"file_path": "/Users/user/x"}
 		got := redactAbsolutePaths(in, "", "")
-		assert.Equal(t, "/Users/jdoe/x", got["file_path"])
+		assert.Equal(t, "/Users/user/x", got["file_path"])
 	})
 
 	t.Run("non-string scalars pass through", func(t *testing.T) {
@@ -128,13 +128,13 @@ func TestRedactAbsolutePaths(t *testing.T) {
 
 	t.Run("does not mutate input", func(t *testing.T) {
 		in := map[string]any{
-			"file_path": "/Users/jdoe/x.txt",
-			"nested":    map[string]any{"p": "/Users/jdoe/y.txt"},
+			"file_path": "/Users/user/x.txt",
+			"nested":    map[string]any{"p": "/Users/user/y.txt"},
 		}
 		_ = redactAbsolutePaths(in, home, repo)
-		assert.Equal(t, "/Users/jdoe/x.txt", in["file_path"])
+		assert.Equal(t, "/Users/user/x.txt", in["file_path"])
 		inner := in["nested"].(map[string]any)
-		assert.Equal(t, "/Users/jdoe/y.txt", inner["p"])
+		assert.Equal(t, "/Users/user/y.txt", inner["p"])
 	})
 }
 
@@ -158,8 +158,8 @@ func TestRedactAbsolutePaths_HashPortability(t *testing.T) {
 	}
 
 	const (
-		home1 = "/Users/jdoe"
-		repo1 = "/Users/jdoe/Coding/punt-labs/ethos"
+		home1 = "/Users/user"
+		repo1 = "/Users/user/Coding/punt-labs/ethos"
 		home2 = "/home/alice"
 		repo2 = "/home/alice/work/ethos"
 	)

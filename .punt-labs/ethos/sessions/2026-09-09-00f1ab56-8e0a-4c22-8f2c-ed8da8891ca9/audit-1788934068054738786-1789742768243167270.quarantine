@@ -1,0 +1,1 @@
+{"chunk":"audit-1788934068054738786-1789742768243167270","verified_last":1789742768243167270,"reason":"48 lines corrupted pre-seal by an external raw-regex privacy scrub (quarry-scrub-style) over the live tail: secret matches truncated lines mid-object, email matches consumed escape prefixes"}

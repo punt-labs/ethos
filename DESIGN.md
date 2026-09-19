@@ -1433,7 +1433,7 @@ session_context: |
   ## Email
 
   You have email via beadle. Your address is claude@punt-labs.com.
-  Send recap emails to jim@punt-labs.com after merging PRs.
+  Send recap emails to user@example.org after merging PRs.
   Check inbox: /inbox
   Send mail: /mail <recipient> <subject>
 ```

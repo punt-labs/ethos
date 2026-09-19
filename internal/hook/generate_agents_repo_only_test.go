@@ -57,7 +57,7 @@ func TestGenerateAgentFiles_IncompleteHumanDoesNotFailTheRun(t *testing.T) {
 		"name":        "Test Human",
 		"handle":      "test-human",
 		"kind":        "human",
-		"email":       "jim@punt-labs.com",
+		"email":       "user@example.org",
 		"personality": "not-vendored",
 	})
 

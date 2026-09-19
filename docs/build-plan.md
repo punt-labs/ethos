@@ -26,7 +26,7 @@ identity fields. No backward compatibility needed — no external users.
 name: Jim Freeman
 handle: jfreeman
 kind: human
-email: jim@punt-labs.com
+email: user@example.org
 github: jmf-pobox
 voice:
   provider: elevenlabs
@@ -51,7 +51,7 @@ two identities share a skill, the description is duplicated (or absent).
 name: Jim Freeman
 handle: jfreeman
 kind: human
-email: jim@punt-labs.com
+email: user@example.org
 github: jmf-pobox
 voice:
   provider: elevenlabs
