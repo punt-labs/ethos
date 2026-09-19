@@ -87,6 +87,57 @@ func TestAdditiveMerge_NonMappingContentStaysUnmerged(t *testing.T) {
 	assert.NotEmpty(t, reason)
 }
 
+// TestAdditiveMerge_FrontMatterMarkdownStaysUnmerged pins the critical fix:
+// a seeded agent/skill .md with YAML front matter is two YAML documents
+// ("---\n...\n---\n" then the body), and yaml.Unmarshal silently decodes
+// only the first. Treating that first document as if it described the
+// whole file let additiveMerge append the shipped file's ENTIRE remaining
+// text — closing "---", heading, and body — onto a user's customized
+// instructions, because keyBlocks' "end of file for the last key" is wrong
+// once there is a second document. This is the exact shape a reviewer
+// reproduced live (front-matter agent .md, one added front-matter key)
+// before the one-document requirement in topLevelMapping closed it.
+func TestAdditiveMerge_FrontMatterMarkdownStaysUnmerged(t *testing.T) {
+	existing := "---\nname: code-reviewer\ndescription: reviews code\ncolor: green\n---\n\n" +
+		"# Code Reviewer\n\nMy locally customized instructions.\n"
+	shipped := "---\nname: code-reviewer\ndescription: reviews code\ncolor: green\nmodel: opus\n---\n\n" +
+		"# Code Reviewer\n\nBrand new shipped body.\n"
+
+	merged, reason, ok := additiveMerge([]byte(existing), []byte(shipped))
+	assert.False(t, ok, "front matter is not a single YAML document and must never be merged")
+	assert.Nil(t, merged)
+	assert.NotEmpty(t, reason)
+	assert.NotContains(t, reason, "conflicting", "front matter must decline as multi-document, not misread as a value conflict")
+}
+
+// TestAdditiveMerge_FlowMappingStaysUnmerged pins the second half of the
+// critical fix: a flow-style mapping ("{name: x}") puts every key on the
+// SAME line, so keyBlocks' line-range slicing cannot separate them —
+// appending a "missing" key's block risks producing a result that silently
+// drops or corrupts a key on re-decode instead of erroring loudly. The
+// post-merge verification (re-decode and compare against the shipped
+// content's own decoded value) is what actually catches this; the merge
+// wrongly claims success upstream of that check, which is exactly why the
+// check is independent of the line-range logic it's guarding.
+func TestAdditiveMerge_FlowMappingStaysUnmerged(t *testing.T) {
+	_, reason, ok := additiveMerge([]byte("{name: x}\n"), []byte("name: x\nextra: 1\n"))
+	assert.False(t, ok, "a flow-style mapping must not be additively merged")
+	assert.Contains(t, reason, "merge verification failed")
+}
+
+// TestAdditiveMerge_PostMergeVerificationCatchesBadMerge exercises the
+// verification step directly and in isolation from any specific line-slicing
+// bug: even a merge that reached the point of returning true is re-decoded
+// and checked against the shipped content's own decoded value before it is
+// trusted. This is the same case as the flow-mapping test above, stated as
+// "the safety net itself does its job" rather than "this specific input
+// trips it".
+func TestAdditiveMerge_PostMergeVerificationCatchesBadMerge(t *testing.T) {
+	_, reason, ok := additiveMerge([]byte("{name: x}\n"), []byte("name: x\nextra: 1\n"))
+	require.False(t, ok)
+	assert.Contains(t, reason, "does not match the shipped content")
+}
+
 // TestAdditiveMerge_NoMissingKeysStaysUnmerged covers content whose hash
 // differs for a reason other than a missing top-level key (e.g. pure
 // formatting) — additiveMerge has nothing additive to explain the diff, so

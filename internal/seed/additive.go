@@ -1,6 +1,7 @@
 package seed
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"sort"
@@ -90,16 +91,65 @@ func additiveMerge(existing, data []byte) (merged []byte, reason string, ok bool
 	for _, k := range missing {
 		merged = append(merged, blocks[k]...)
 	}
+
+	// Post-merge verification: re-parse what was just assembled and confirm
+	// it decodes to exactly the values the shipped content defines — every
+	// key from seedVal, no more, no less. This is the second, independent
+	// half of the front-matter fix above: the one-document check closes the
+	// specific bug that repro found, but the line-based append is still a
+	// textual assumption, and a textual assumption that is never checked
+	// against what it actually produced is how a fix for one data-loss bug
+	// quietly ships a second one. A flow-style mapping ("{a: 1, b: 2}") is
+	// the other case this catches: every key's Node.Line is identical, so
+	// keyBlocks' line ranges do not separate keys at all, and the result
+	// silently drops a key on decode rather than erroring — DeepEqual
+	// against seedVal is blind to comments and key order but not to a
+	// missing or altered key, so it still catches this.
+	mergedRoot, mergedOK := topLevelMapping(merged)
+	if !mergedOK {
+		return nil, "merge verification failed: result is not a single-document YAML mapping", false
+	}
+	var mergedVal map[string]any
+	if err := mergedRoot.Decode(&mergedVal); err != nil {
+		return nil, "merge verification failed: could not decode the merged result", false
+	}
+	if !reflect.DeepEqual(mergedVal, seedVal) {
+		return nil, "merge verification failed: merged result does not match the shipped content", false
+	}
+
 	return merged, "", true
 }
 
-// topLevelMapping parses raw as YAML and returns its top-level mapping node.
-// It reports false for a parse error, an empty document, or content whose
-// root is not a mapping (most seeded content is Markdown, not YAML, and
-// even a YAML file can define a top-level sequence or scalar).
+// topLevelMapping parses raw as exactly one YAML document and returns its
+// top-level mapping node. It reports false for a parse error, an empty
+// document, content whose root is not a mapping (most seeded content is
+// Markdown, not YAML, and even a YAML file can define a top-level sequence
+// or scalar), or content that is MORE than one YAML document.
+//
+// The one-document requirement is load-bearing, not incidental: a
+// front-matter Markdown file — "---\nname: x\n---\n\n# body\n..." — is
+// itself two YAML documents by the `---` separator, and yaml.Unmarshal
+// silently decodes only the first. Treating that first document's mapping
+// as if it described the WHOLE file let a real bug through: keyBlocks (see
+// below) computes a key's line range using "the next key's line, or end of
+// file for the last key" — and for a front-matter file, the true end of
+// the mapping is the closing `---`, not end of file. The last front-matter
+// key's "block" then swallowed everything after it: the closing `---`, the
+// heading, and the entire body. additiveMerge appended that whole swallowed
+// tail onto the user's own customized file, silently corrupting it — found
+// live via a reviewer-built repro (front-matter agent .md, one added
+// front-matter key) before this fix landed, not a theoretical concern.
 func topLevelMapping(raw []byte) (*yaml.Node, bool) {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	var doc yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 {
+	if err := dec.Decode(&doc); err != nil {
+		return nil, false
+	}
+	var second yaml.Node
+	if err := dec.Decode(&second); err == nil {
+		return nil, false // more than one YAML document in the stream
+	}
+	if len(doc.Content) == 0 {
 		return nil, false
 	}
 	root := doc.Content[0]
