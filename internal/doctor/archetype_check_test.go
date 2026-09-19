@@ -210,4 +210,41 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		assert.Contains(t, r.Detail, "implement (repo-local)",
 			"the repo-local file resolves ahead of a fine global one and must be named, not the global layer")
 	})
+
+	// GH #525: the old remedy — "run `ethos seed` to refresh (a repo-local
+	// file must be hand-edited or deleted first)" — was a no-op for the
+	// actual failing layer (global) and only ever described the other one
+	// (repo-local). The remedy text must name the action that actually
+	// works for the layer it reports stale.
+	t.Run("remedy text: global stale names ethos seed as the working repair", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		storeRoot := t.TempDir() // no repo-local archetypes dir at all
+		writeArchetype(t, filepath.Join(os.Getenv("HOME"), ".punt-labs", "ethos", "archetypes"),
+			"implement", "name: implement\n")
+
+		r := CheckDelegatedWorkerArchetypes(storeRoot)
+		require.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "global (implement): run `ethos seed`",
+			"a stale global file's remedy must name ethos seed as the repair, not just mention it in passing: %s", r.Detail)
+		assert.Contains(t, r.Detail, "repairs a file",
+			"the remedy must say seed now fixes an additive gap automatically: %s", r.Detail)
+		assert.NotContains(t, r.Detail, "repo-local (",
+			"a purely global failure must not carry repo-local remedy text")
+	})
+
+	t.Run("remedy text: repo-local stale names the shadowing file, not ethos seed alone", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		storeRoot := t.TempDir()
+		writeArchetype(t, repoArchDir(storeRoot), "implement", "name: implement\n")
+
+		r := CheckDelegatedWorkerArchetypes(storeRoot)
+		require.Equal(t, "FAIL", r.Status)
+		wantPath := filepath.Join(repoArchDir(storeRoot))
+		assert.Contains(t, r.Detail, "repo-local (implement): `ethos seed` never writes a repo-local archetype",
+			"a stale repo-local file's remedy must say seed does not reach it: %s", r.Detail)
+		assert.Contains(t, r.Detail, wantPath,
+			"the remedy must name the actual repo-local archetypes directory to fix: %s", r.Detail)
+		assert.NotContains(t, r.Detail, "global (",
+			"a purely repo-local failure must not carry global remedy text")
+	})
 }

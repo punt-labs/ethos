@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **v4.19.0's upgrade path landed every upgrader on an immediate `ethos
+  doctor` FAIL with a remedy that did nothing.** `implement.yaml` and
+  `test.yaml` deployed before the seed manifest existed sit in the
+  seeder's untracked no-clobber skip category, so v4.19.0 adding
+  `require_delegated_worker: true` to those files never reached an
+  existing install — the new "Code archetype delegated-worker guard"
+  check then FAILed against the stale global file, and its own remedy,
+  "run `ethos seed`", re-ran the exact seed that had just skipped it
+  (GH #525). `ethos seed` now additively repairs a skip-category file
+  when the shipped content's only difference is top-level YAML keys the
+  file lacks entirely: the missing keys are appended verbatim (the
+  file's own lines are never touched) and the repair is reported on its
+  own line; unlike other seeded writes it is deliberately not recorded in
+  the manifest, so the repaired file's formatting survives every later
+  run. A file with a genuinely conflicting value or a user-added key
+  still skips exactly as before —
+  the repair applies only when there is no conflicting value and no
+  user-added key. `ethos seed`'s own output now
+  reports the two repair kinds distinctly — `repaired (was empty)` for
+  the pre-existing zero-byte case, `repaired (missing fields added)` for
+  this one — rather than reusing a label that was only ever true for the
+  first. A skip that additive repair actually evaluated and declined now
+  says why — `skipped (exists; beyond additive repair: conflicting value
+  for key "...")` or `... local key "..." is not in the shipped
+  content` — instead of a bare `skipped (exists)` that recreated the
+  same ambiguity one level down (no way to tell "seed will fix this on
+  its own" from "this needs a hand-edit"). `ethos seed` also now prints
+  everything it wrote even when a later file in the same run fails: it
+  mutates files in place as it goes, so a partial failure used to report
+  only the error and discard every Deployed/Repaired/Updated line from
+  earlier in the same run. The doctor check's remedy text now also names
+  the layer-correct action: a stale global file names `ethos seed` (a
+  real fix now), and a stale repo-local file — which `ethos seed` never
+  reaches, since it never writes a repo-local archetype — names the
+  actual path to hand-edit or delete.
+
 ## [4.19.0] - 2026-09-19
 
 ### Added

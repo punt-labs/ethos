@@ -71,6 +71,14 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// and a `go install`-built binary should stamp its real module
 	// version into the manifest it seeds, same as `ethos version` reports.
 	result, err := seed.SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, resolveVersion(), seedForce)
+	if result != nil {
+		// Printed whether or not the run errored: seed mutates files in
+		// place as it goes, so an error partway through still leaves real
+		// writes (deploys, repairs) on disk. Reporting only Errors on
+		// failure hid exactly what happened to every other file — the
+		// caller needs the full picture, not just the part that broke.
+		printSeedResult(result)
+	}
 	if err != nil {
 		if result != nil {
 			for _, e := range result.Errors {
@@ -79,7 +87,17 @@ func runSeed(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
+	if len(result.Edited) > 0 {
+		fmt.Printf("%d file(s) look locally edited; re-run 'ethos seed --force' to overwrite them.\n",
+			len(result.Edited))
+	}
+	return nil
+}
 
+// printSeedResult writes one line per file result plus a summary count.
+// Called on both the success and the error path of runSeed (see the
+// comment at its call site).
+func printSeedResult(result *seed.Result) {
 	for _, d := range result.Deployed {
 		fmt.Printf("  deployed:  %s\n", d)
 	}
@@ -90,6 +108,14 @@ func runSeed(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  unchanged: %s\n", u)
 	}
 	for _, s := range result.Skipped {
+		// A reason means additiveMerge actually looked at this file and
+		// declined for a specific cause — surfacing it closes the GH #525
+		// shape one level down, where a bare "skipped (exists)" left no way
+		// to tell "needs a hand-edit" from "seed is stuck".
+		if reason, ok := result.SkipReasons[s]; ok {
+			fmt.Printf("  skipped (exists; beyond additive repair: %s): %s\n", reason, s)
+			continue
+		}
 		fmt.Printf("  skipped (exists): %s\n", s)
 	}
 	for _, e := range result.Edited {
@@ -98,16 +124,16 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	for _, rp := range result.Repaired {
 		fmt.Printf("  repaired (was empty): %s\n", rp)
 	}
+	for _, rp := range result.RepairedFields {
+		fmt.Printf("  repaired (missing fields added): %s\n", rp)
+	}
 
 	// The "wrote" count is every file seed put on disk this run: new, updated,
-	// and repaired. Unchanged/skipped/edited files were not written.
+	// and repaired (either repair kind). Unchanged/skipped/edited files were
+	// not written.
+	repaired := len(result.Repaired) + len(result.RepairedFields)
 	fmt.Printf("\nSeeded %d files: %d new, %d updated, %d repaired, %d unchanged, %d skipped, %d local edit(s)\n",
-		len(result.Deployed)+len(result.Updated)+len(result.Repaired),
-		len(result.Deployed), len(result.Updated), len(result.Repaired),
+		len(result.Deployed)+len(result.Updated)+repaired,
+		len(result.Deployed), len(result.Updated), repaired,
 		len(result.Unchanged), len(result.Skipped), len(result.Edited))
-	if len(result.Edited) > 0 {
-		fmt.Printf("%d file(s) look locally edited; re-run 'ethos seed --force' to overwrite them.\n",
-			len(result.Edited))
-	}
-	return nil
 }

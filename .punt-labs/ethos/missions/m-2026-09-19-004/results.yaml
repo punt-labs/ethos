@@ -1,0 +1,159 @@
+results:
+    - mission: m-2026-09-19-004
+      round: 1
+      created_at: "2026-09-19T18:05:29Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: internal/seed/additive.go
+          added: 123
+          removed: 0
+        - path: internal/seed/additive_test.go
+          added: 163
+          removed: 0
+        - path: internal/seed/seed.go
+          added: 35
+          removed: 7
+        - path: internal/seed/manifest.go
+          added: 0
+          removed: 9
+        - path: internal/doctor/archetype_check.go
+          added: 24
+          removed: 3
+        - path: internal/doctor/archetype_check_test.go
+          added: 37
+          removed: 0
+        - path: CHANGELOG.md
+          added: 22
+          removed: 0
+      evidence:
+        - name: 'make check (full gate: vet/staticcheck/shellcheck/markdownlint/validate-content/go test -race ./...)'
+          status: pass
+        - name: go test ./internal/seed/... -run TestAdditiveMerge|TestPlace -v
+          status: pass
+        - name: go test ./internal/doctor/... -run TestCheckDelegatedWorkerArchetypes -v
+          status: pass
+        - name: 'Dogfood: built ethos binary, fake HOME reproducing GH #525 exactly (implement.yaml/test.yaml missing require_delegated_worker) — ethos seed prints repaired and appends the field, ethos doctor goes FAIL to PASS'
+          status: pass
+        - name: 'Dogfood: fake HOME with a genuinely hand-edited implement.yaml (allow_empty_write_set flipped) — stays skipped (exists), doctor still FAILs, remedy names global (implement) with the seed-repairs-additive-gaps text'
+          status: pass
+      open_questions:
+        - 'cmd/ethos/seed.go:99 prints every Result.Repaired entry as "repaired (was empty): %s" — outside this mission''s write_set, but that label is now inaccurate for an additive repair (the file was not empty). Flagged to the leader; recommend a one-line follow-up before v4.19.1 release messaging quotes seed''s own output.'
+      prose: |
+        Fix (1): decide()'s untracked/differing branch (the skip-if-exists
+        category archetypes fall into) now tries additiveMerge before
+        skipping. additiveMerge is textual: it parses both the on-disk file
+        and the shipped content as top-level YAML mappings, requires every
+        on-disk key to exist in the shipped content with an equal value (any
+        conflict or user-only key aborts the merge), and if the shipped
+        content defines keys the file lacks, appends each missing key's exact
+        line range from the shipped file's own text to the end of the
+        existing file, byte for byte. Existing lines are never rewritten, so
+        a user's formatting/comments/quoting on shared keys survive
+        untouched. The result lands in the existing Result.Repaired bucket
+        and gets a manifest entry, per the contract's "reuse/extend the
+        existing repaired mechanism" instruction — a later seed run sees it
+        as tracked and no longer touches it via the repair path.
+
+        Fix (2): CheckDelegatedWorkerArchetypes now buckets stale names by
+        layer (LoadLayer only ever returns "global" or "repo-local") and
+        appends a layer-specific remedy sentence: global names `ethos seed`
+        as the real fix (true now, per fix 1); repo-local explicitly says
+        seed never reaches it (ethos seed only ever writes
+        ~/.punt-labs/ethos/ per cmd/ethos/seed.go) and names the actual
+        repo-local archetypes directory to hand-edit or delete. All prior
+        FAIL/PASS assertions in the existing test suite still hold verbatim.
+
+        Verified live: a fake HOME with the exact pre-v4.19.0 archetype
+        shape (implement.yaml/test.yaml missing require_delegated_worker)
+        goes from a doctor FAIL with a no-op remedy to a doctor PASS after a
+        single `ethos seed` run, with the field appended and nothing else in
+        either file touched. A parallel fake HOME with a genuinely
+        hand-edited implement.yaml (a real conflict, not just a missing
+        field) correctly keeps its stale state and reports the accurate
+        manual remedy — proving the fix does not silently overwrite real user
+        edits.
+    - mission: m-2026-09-19-004
+      round: 2
+      created_at: "2026-09-19T18:17:22Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.94
+      files_changed:
+        - path: internal/seed/additive.go
+          added: 136
+          removed: 0
+        - path: internal/seed/additive_test.go
+          added: 175
+          removed: 0
+        - path: internal/seed/seed.go
+          added: 59
+          removed: 14
+        - path: internal/seed/manifest.go
+          added: 0
+          removed: 9
+        - path: internal/doctor/archetype_check.go
+          added: 24
+          removed: 3
+        - path: internal/doctor/archetype_check_test.go
+          added: 37
+          removed: 0
+        - path: cmd/ethos/seed.go
+          added: 34
+          removed: 8
+        - path: cmd/ethos/seed_test.go
+          added: 69
+          removed: 0
+        - path: CHANGELOG.md
+          added: 35
+          removed: 0
+      evidence:
+        - name: make check (full gate) green at every commit — 4 commits this branch
+          status: pass
+        - name: go test ./internal/seed/... ./internal/doctor/... ./cmd/ethos/... -v (all new and existing tests)
+          status: pass
+        - name: 'Dogfood: fake HOME reproducing GH #525 exactly — ethos seed repairs and appends the field with the truthful "repaired (missing fields added)" label, ethos doctor goes FAIL to PASS'
+          status: pass
+        - name: 'Dogfood: fake HOME with a genuinely conflicting implement.yaml — ethos seed prints "skipped (exists; beyond additive repair: conflicting value for key \"allow_empty_write_set\")", doctor still FAILs with the layer-correct remedy'
+          status: pass
+        - name: 'TestSeed_PrintsBucketsOnPartialFailure: a read-only roles dir makes every role file error while talents/personalities/etc. still succeed in the same run — stdout still reports the successful deployed: lines and the Seeded summary, not just the errors'
+          status: pass
+      prose: |
+        Round 2 folds in the leader's requested label fix plus two silent-failure
+        findings from local review, on top of round 1's two GH #525 fixes
+        (additive-merge repair in internal/seed/decide, per-layer remedy text in
+        CheckDelegatedWorkerArchetypes).
+
+        Label fix: Result gained RepairedFields (additive-merge repairs) so
+        Repaired keeps its original zero-byte-only meaning; cmd/ethos/seed.go
+        prints each under its own truthful label ("repaired (was empty)" vs
+        "repaired (missing fields added)"), folding both into the "N repaired"
+        summary count. This was the smallest-truthful-option path that did not
+        require touching TestSeed_RepairedLineOnStdout, which was outside the
+        originally-widened write-set and pins the zero-byte label byte-for-byte.
+
+        Finding 1 (decline reasons invisible): additiveMerge now returns
+        (merged, reason, ok) instead of (merged, ok). reason is populated for
+        every decline path — not a YAML mapping, decode failure, a local key the
+        shipped content lacks (named), a conflicting shared value (key named),
+        or "no missing keys explain the difference" — using a sorted key name
+        when more than one local-only key exists, for deterministic output.
+        decide()'s untracked/differing branch threads the reason into a new
+        Result.SkipReasons map (dest -> reason), populated only when
+        additiveMerge actually evaluated the file; cmd/ethos/seed.go's skip line
+        checks the map and prints "skipped (exists; beyond additive repair:
+        %s): %s" when present, the plain line otherwise (most skips are
+        Markdown, never candidates for additive repair, and get no extra text).
+
+        Finding 2 (buckets hidden on error): runSeed's error branch used to
+        print only result.Errors and return, discarding every
+        Deployed/Repaired/Updated line the same run had already written — no
+        longer acceptable once seed mutates files in place. Bucket printing
+        (extracted into a new printSeedResult helper) now runs unconditionally
+        whenever result != nil, before the error check.
+
+        All prior test assertions (TestCheckDelegatedWorkerArchetypes's FAIL/PASS
+        substrings, TestSeed_RepairedLineOnStdout's exact zero-byte label,
+        TestPlace_DecisionMatrix) hold verbatim; new tests cover both findings
+        at the internal/seed unit level and the cmd/ethos CLI-output level.

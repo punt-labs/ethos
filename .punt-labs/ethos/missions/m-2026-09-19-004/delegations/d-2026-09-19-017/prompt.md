@@ -1,0 +1,13 @@
+You are the worker on ethos mission m-2026-09-19-004 in <repo>. Run `ethos mission show m-2026-09-19-004` for the contract, and read GH issue #525 (`gh -R punt-labs/ethos issue view 525`) for the live failure this fixes — it broke the v4.19.0 upgrade for every existing user, and the fix ships as v4.19.1 today, so bias to the minimal correct change.
+
+Work on a fresh branch off main: `git checkout -b fix/seed-additive-repair main`.
+
+Context you'll need:
+- The seeder (internal/seed/) has categories: overwrite-if-changed ("unchanged"/"updated"), skip-if-exists ("skipped (exists)"), and an existing "repaired" outcome — find its current semantics first and extend rather than invent.
+- Archetypes are in the skip category; v4.19.0 added `require_delegated_worker: true` (and `extract_into_constraints: []`) to the shipped implement/test archetypes; a pre-existing deployed file never receives them, and the new doctor check `CheckDelegatedWorkerArchetypes` (internal/doctor/) then FAILs with remedy "run `ethos seed`" — which skips the file. Verified real diff on the operator's machine: the stale files differed ONLY by those two missing keys.
+- Fix (1): additive repair for skip-category files — when every top-level key in the deployed YAML matches the seed content and the seed has additional keys the file lacks, add the missing keys (preserve the user's file otherwise, including their key order; append seed's missing keys). Any conflicting value or user-added key = leave skipped as today. Count it under "repaired" in the summary.
+- Fix (2): the doctor check's FAIL detail must give the layer-correct working remedy (global: move/delete the named file under ~/.punt-labs/ethos/archetypes/ then `ethos seed`; repo-local: the repo path — or simply "will be auto-repaired by `ethos seed`" once fix 1 makes that true; make the text truthful against the actual post-fix behavior).
+- Tests per contract: stale-file-repaired, user-edited-stays-skipped, remedy text. Follow existing test styles in internal/seed and internal/doctor.
+- CHANGELOG.md `## [Unreleased]` → `### Fixed` entry describing the upgrade-path failure and the additive-repair behavior, in this changelog's established voice.
+
+`make check` green before every commit; commit per logical step; when done submit `ethos mission result m-2026-09-19-004 --file <yaml>` (round 1, author bwk, verdict/confidence/files_changed/evidence — note the new YAML strictness: quote any value containing " #"). Do NOT push or open a PR — report back and the leader handles ship. Report your branch, commits, and evidence.
