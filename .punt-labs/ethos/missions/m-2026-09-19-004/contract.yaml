@@ -1,0 +1,26 @@
+mission_id: m-2026-09-19-004
+status: closed
+type: implement
+created_at: "2026-09-19T17:54:35Z"
+updated_at: "2026-09-19T18:40:36Z"
+closed_at: "2026-09-19T18:40:36Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-19T17:54:35Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - internal/seed/**
+    - internal/doctor/**
+    - CHANGELOG.md
+    - cmd/ethos/seed.go
+    - cmd/ethos/seed_test.go
+    - docs/seed-content-upgrade.md
+success_criteria:
+    - 'Fix the v4.19.0 upgrade-path bug (GH #525): seed''s skip-if-exists category leaves stale global archetypes without require_delegated_worker, so the new doctor guard FAILs on every upgrade and its remedy (run ethos seed) is a no-op. Required: (1) seed repairs a skip-category file when its diff against seed content is purely additive — seed-side keys missing from the deployed file, with no conflicting or removed user keys — reusing/extending the existing ''repaired'' mechanism; a file with genuine user edits stays skipped. (2) doctor''s delegated-worker-guard remedy text states the working action for the layer it names (global vs repo-local). (3) Tests: stale-archetype-gets-repaired, user-edited-file-stays-skipped, remedy-text per layer. (4) CHANGELOG Unreleased entry under Fixed. make check green per commit; commit per logical step; max 30min uncommitted.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
