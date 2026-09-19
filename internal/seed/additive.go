@@ -19,16 +19,28 @@ import (
 // test.yaml, but those files predate the seed manifest and so sit in the
 // skip-if-exists category forever, with no path back to compliance).
 //
-// It returns false, with reason naming why, for anything else: a value
-// existing shares with data but disagrees on, a key existing has that data
-// does not, non-mapping content (most seeded files are Markdown, not YAML),
-// or a parse failure. Each of those means the difference is a real edit,
-// not a stale-schema gap, and decide's ordinary no-clobber skip must still
-// apply — but the reason rides along so the skip line can say why, instead
-// of recreating GH #525's own shape one level down: a bare "skipped
-// (exists)" gives an operator no way to tell "this needs a hand-edit" from
-// "seed is stuck," the exact ambiguity that made the original doctor
-// FAIL's remedy look like a no-op.
+// It returns false for anything else, with reason set ONLY when existing
+// was actually a repair candidate — a single-document YAML mapping, same
+// as the shipped content — and something specific about it made the
+// repair decline: a value existing shares with data but disagrees on, a
+// key existing has that data does not, or the benign post-repair steady
+// state. That reason rides along so the skip line can say why, instead of
+// recreating GH #525's own shape one level down: a bare "skipped (exists)"
+// gives an operator no way to tell "this needs a hand-edit" from "seed is
+// stuck," the exact ambiguity that made the original doctor FAIL's remedy
+// look like a no-op.
+//
+// reason is deliberately EMPTY, not "not a YAML mapping", when existing or
+// data was never a plausible repair candidate to begin with — most seeded
+// content is Markdown (talents, personalities, writing-styles, READMEs,
+// and now front-matter agent/skill .md files too, since the single-
+// document gate below declines those), and annotating every one of those
+// ordinary no-clobber skips with a YAML-shaped explanation would be noise
+// about a comparison that was never meaningful, not a reason an operator
+// asked for. Reserving the annotation for content that DID look like a
+// repair candidate keeps "beyond additive repair: ..." meaning what it
+// says: this specific file could plausibly have been repaired, and here
+// is why it was not (Bugbot finding on PR #526).
 //
 // The merge itself is textual, not a re-marshal: existing's bytes are kept
 // verbatim, and each missing key is appended as the literal line range it
@@ -38,11 +50,11 @@ import (
 func additiveMerge(existing, data []byte) (merged []byte, reason string, ok bool) {
 	exRoot, ok := topLevelMapping(existing)
 	if !ok {
-		return nil, "not a YAML mapping", false
+		return nil, "", false // never a candidate: existing isn't a single-document YAML mapping
 	}
 	seedRoot, ok := topLevelMapping(data)
 	if !ok {
-		return nil, "shipped content is not a YAML mapping", false
+		return nil, "", false // never a candidate: this destination's shipped content isn't YAML at all
 	}
 
 	var existingVal, seedVal map[string]any

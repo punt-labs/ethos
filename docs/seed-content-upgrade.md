@@ -298,7 +298,16 @@ byte-preserved content just gained a field) and, per that ruling, are
 never recorded in the manifest the same way — `Repaired` files are;
 `RepairedFields` files are not. `SkipReasons` explains a `Skipped` entry
 that `additiveMerge` actually evaluated and declined, keyed by the same
-path `Skipped` carries:
+path `Skipped` carries — a Markdown talent, personality, writing-style,
+or README, and now a front-matter agent/skill `.md` too (the single-
+document gate makes it, like any other Markdown file, never a repair
+candidate), gets NO `SkipReasons` entry at all: annotating every
+ordinary no-clobber skip with a YAML-shaped explanation would be noise
+about a comparison that was never meaningful (Bugbot finding, PR #526).
+An entry exists only when the file WAS a plausible candidate — a
+single-document YAML mapping, same as the shipped content — and
+something specific about it (a conflicting value, a local-only key, or
+the benign post-repair steady state) made the repair decline:
 
 ```go
 type Result struct {

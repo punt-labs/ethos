@@ -80,11 +80,16 @@ func TestAdditiveMerge_UserAddedKeyStaysUnmerged(t *testing.T) {
 
 // TestAdditiveMerge_NonMappingContentStaysUnmerged covers the common case:
 // most seeded content is Markdown (talents, personalities, writing styles),
-// not a YAML mapping at all, and must fall through untouched.
+// not a YAML mapping at all, and must fall through untouched. reason must
+// be empty — this content was never a repair candidate, so decide's plain
+// "skipped (exists)" applies with no "beyond additive repair" annotation
+// (Bugbot finding on PR #526: annotating every ordinary Markdown skip with
+// a YAML-shaped explanation is noise about a comparison that was never
+// meaningful).
 func TestAdditiveMerge_NonMappingContentStaysUnmerged(t *testing.T) {
 	_, reason, ok := additiveMerge([]byte("# Talent\nold body\n"), []byte("# Talent\nnew body\n"))
 	assert.False(t, ok)
-	assert.NotEmpty(t, reason)
+	assert.Empty(t, reason)
 }
 
 // TestAdditiveMerge_FrontMatterMarkdownStaysUnmerged pins the critical fix:
@@ -97,6 +102,13 @@ func TestAdditiveMerge_NonMappingContentStaysUnmerged(t *testing.T) {
 // once there is a second document. This is the exact shape a reviewer
 // reproduced live (front-matter agent .md, one added front-matter key)
 // before the one-document requirement in topLevelMapping closed it.
+//
+// reason must be empty: a front-matter file is, by the single-document
+// gate, never a repair candidate at all — the SAME as any other Markdown
+// file — so a user who customized one still gets a plain "skipped
+// (exists)" with no annotation, not a "beyond additive repair" line that
+// would misleadingly suggest additiveMerge evaluated and rejected their
+// specific edit (Bugbot finding on PR #526).
 func TestAdditiveMerge_FrontMatterMarkdownStaysUnmerged(t *testing.T) {
 	existing := "---\nname: code-reviewer\ndescription: reviews code\ncolor: green\n---\n\n" +
 		"# Code Reviewer\n\nMy locally customized instructions.\n"
@@ -106,8 +118,7 @@ func TestAdditiveMerge_FrontMatterMarkdownStaysUnmerged(t *testing.T) {
 	merged, reason, ok := additiveMerge([]byte(existing), []byte(shipped))
 	assert.False(t, ok, "front matter is not a single YAML document and must never be merged")
 	assert.Nil(t, merged)
-	assert.NotEmpty(t, reason)
-	assert.NotContains(t, reason, "conflicting", "front matter must decline as multi-document, not misread as a value conflict")
+	assert.Empty(t, reason, "front matter was never a repair candidate, so no reason should surface")
 }
 
 // TestAdditiveMerge_TrailingDocumentSeparatorStaysUnmerged pins a boundary
@@ -250,4 +261,51 @@ func TestPlace_UntrackedConflictingDiffStaysSkipped(t *testing.T) {
 	key := s.key(scopeEthos, path)
 	_, ok := s.mf.Entries[key]
 	assert.False(t, ok, "a skipped file must not enter the manifest")
+}
+
+// TestPlace_UntrackedNonCandidateStaysPlainSkip pins the Bugbot finding on
+// PR #526: an ordinary Markdown file — never a repair candidate at all —
+// must skip with NO SkipReasons entry, so cmd/ethos/seed.go prints the
+// plain "skipped (exists)" line, not a "beyond additive repair: ..."
+// annotation that would misleadingly imply additiveMerge evaluated and
+// rejected this specific file. Covers both a plain talent-shaped .md and a
+// front-matter agent-shaped .md — the latter a user genuinely customized,
+// which the single-document gate also makes a never-candidate case.
+func TestPlace_UntrackedNonCandidateStaysPlainSkip(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing string
+		shipped  string
+	}{
+		{
+			name:     "plain markdown",
+			existing: "# Talent\nMy customized body.\n",
+			shipped:  "# Talent\nNew shipped body.\n",
+		},
+		{
+			name:     "front-matter markdown",
+			existing: "---\nname: code-reviewer\ndescription: reviews code\n---\n\n# Code Reviewer\n\nMy customized instructions.\n",
+			shipped:  "---\nname: code-reviewer\ndescription: reviews code\nmodel: opus\n---\n\n# Code Reviewer\n\nNew shipped body.\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dest := t.TempDir()
+			s := testSeeder(dest, "", false)
+			path := filepath.Join(dest, "agents", "code-reviewer.md")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			require.NoError(t, os.WriteFile(path, []byte(tc.existing), 0o644))
+
+			s.place(scopeEthos, path, []byte(tc.shipped))
+			require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
+			assert.Contains(t, s.r.Skipped, path)
+			_, hasReason := s.r.SkipReasons[path]
+			assert.False(t, hasReason,
+				"a never-was-a-candidate file must carry no SkipReasons entry, not even an empty one")
+
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.existing, string(got), "a genuinely edited file must be left untouched")
+		})
+	}
 }
