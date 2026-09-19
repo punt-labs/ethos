@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file's own lines are never touched) and the repair is reported and
   recorded like any other seeded write. A file with a genuinely
   conflicting value or a user-added key still skips exactly as before —
-  only a pure schema gap self-heals. `ethos seed`'s own output now
+  the repair applies only when there is no conflicting value and no
+  user-added key. `ethos seed`'s own output now
   reports the two repair kinds distinctly — `repaired (was empty)` for
   the pre-existing zero-byte case, `repaired (missing fields added)` for
   this one — rather than reusing a label that was only ever true for the

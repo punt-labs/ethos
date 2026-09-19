@@ -99,12 +99,22 @@ Spelled out:
   `cur`).
 - tracked, `local != mf` → **user edit** → **skip + warn** (`--force`
   remedy).
-- untracked, `local != cur` → **skip** (today's no-clobber, unchanged). No
-  legacy lookup, no upgrade, no backup, no entry recorded.
+- untracked, `local != cur`, diff is purely additive (shipped content adds
+  top-level keys the file lacks entirely, with no conflicting shared value
+  and no local-only key) → **repair**: append the missing keys, byte-
+  preserving the file's existing lines. Not recorded (2026-09-19 ruling,
+  see below).
+- untracked, `local != cur`, any other diff → **skip** (today's
+  no-clobber, unchanged). No legacy lookup, no upgrade, no backup, no
+  entry recorded.
 
-The last line is the whole treatment of a pre-feature file: leave it
-exactly as today's code leaves it. There is no bootstrap branch in the
-software.
+The last line is the whole treatment of a pre-feature file carrying a
+genuine edit: leave it exactly as today's code leaves it. There is still
+no *general* bootstrap-upgrade branch in the software — the one narrow
+exception, added after this design shipped, is the additive schema-gap
+repair immediately above; see "2026-09-19 ruling" below for why, and note
+that the "Rejected alternatives" section's bootstrap-upgrade rejection
+still holds for every other untracked diff.
 
 ### Bringing the existing machines current
 
@@ -176,17 +186,75 @@ has an entry, not merely that the manifest file exists.
 | absent | deploy `cur`; record `cur` | deploy `cur`; record `cur` |
 | `== cur` | unchanged (no write) | unchanged (no write); record `cur` (adopt) |
 | `!= cur`, `== mf` | **upgrade** → write `cur`; record `cur` | n/a (`mf` undefined) |
-| `!= cur`, `!= mf` | **skip + warn** (user edit; `--force` remedy) | **skip** (today's no-clobber; no record) |
+| `!= cur`, `!= mf` | **skip + warn** (user edit; `--force` remedy) | **skip** (today's no-clobber; no record) — unless the diff is purely additive, next row |
+| `!= cur`, additive schema gap only | n/a — a tracked file's diff is a proven edit; this branch exists only where no `mf` exists to prove one | **repair** → append the shipped content's missing top-level keys verbatim, byte-preserving every existing line; **not recorded** (2026-09-19 ruling, below) |
 | zero-byte file | repair → write `cur`; record `cur` | repair → write `cur`; record `cur` |
 
 The `untracked, != cur` cell is today's `classifyExisting` no-clobber skip
-(`internal/seed/seed.go:221-224`), left untouched — this is where the five
-pre-feature machines land until the operator's one-time `--force`.
+(`internal/seed/seed.go:221-224`), left untouched for every diff EXCEPT a
+purely additive one — this is where the five pre-feature machines, and any
+other untracked file carrying a genuine edit, land until the operator's
+one-time `--force`. The additive-schema-gap row below it is the one place
+this no-clobber skip does not apply; see "2026-09-19 ruling" for why.
 
 The zero-byte row preserves the current partial-write repair
 (`internal/seed/seed.go:225-237`): a zero-byte file is a partial from an
 interrupted seed and is rewritten to `cur` regardless of manifest state,
 then recorded. It is never treated as a user edit.
+
+### 2026-09-19 ruling: a narrow additive-repair exception (GH #525)
+
+> **2026-09-19 operator ruling (GH #525 upgrade breakage):** a
+> strictly-additive schema-gap repair is permitted for untracked
+> skip-category files, superseding the blanket no-clobber for exactly this
+> case; all other untracked diffs keep the no-clobber skip.
+
+**Why this design's original no-clobber-for-untracked ruling did not
+anticipate this case.** v4.19.0 added `require_delegated_worker: true` to
+the shipped `implement.yaml`/`test.yaml` archetypes — a genuine improvement
+to a shipped file — but those archetypes had been deployed by a release
+that predates the seed manifest, so they are untracked forever under this
+design's original rule (no bootstrap branch, no per-file migration). The
+new `require_delegated_worker` doctor guard then FAILed on every upgrader,
+and its own printed remedy, "run `ethos seed`", was a no-op: `ethos seed`
+re-runs the exact untracked no-clobber skip that put the file in this state
+to begin with. The five-pre-feature-machines assumption in the original
+"Rejected alternatives" bootstrap-upgrade rejection held for the general
+case (arbitrary shipped-content differences on an untracked file), but a
+released schema addition to an archetype is not arbitrary: it is
+detectable, verifiable, and safe to apply without touching a single byte
+the user might have written, because it only ever ADDS keys the file
+provably lacks.
+
+**What makes it safe where a general bootstrap-upgrade would not be.** The
+repair (`additiveMerge`, `internal/seed/additive.go`) requires every
+top-level key the file has to also exist in the shipped content with an
+equal decoded value — any local-only key or any conflicting shared value
+aborts the repair and falls through to the ordinary skip, unchanged from
+this design's original ruling. Only when the shipped content's key set is
+a strict superset, with total agreement on every shared key, does it append
+the missing keys' exact shipped lines. A post-merge step re-decodes the
+result and requires it match the shipped content's own decoded value before
+trusting it — see `internal/seed/additive.go`'s doc comments for two real
+failure shapes this caught during development: a front-matter Markdown file
+(the frontmatter is not the whole file — appending past its boundary
+corrupted user prose) and a flow-style mapping (its line-based key
+boundaries collapse). A general "upgrade an untracked file to `cur`"
+branch — the alternative this design rejected — has no such proof
+available; it cannot tell an unmodified-by-luck file from a hand-edited
+one, which is exactly why that branch stays rejected for every diff shape
+except this one narrow, provably-safe one.
+
+**Why the repair is not recorded.** See `repairAdditive`'s doc comment
+(`internal/seed/seed.go`) for the full reasoning: the post-merge check is a
+`reflect.DeepEqual` on decoded Go values, which is blind to comment
+placement, key order, and formatting. Recording the repair's hash would
+make the very next seed run see the repaired file as "tracked but differs
+from `cur`" and re-marshal it to the canonical shipped layout on that next
+run — discarding the exact formatting this repair went out of its way to
+preserve, just one run later. Leaving it untracked means a later seed
+re-evaluates it fresh, finds nothing left to add, and reports a plain skip
+forever after — the file's bytes are never touched again.
 
 ### `--force` under the new model
 
@@ -215,20 +283,30 @@ seed is a **CLI command, not an MCP tool** — there is no MCP handler for it
 in `format_output.go`" does not add a formatter here. The output follows
 the CLI standard: aligned, lowercase, actionable.
 
-The `Result` struct (`internal/seed/seed.go:14-19`) gains an `Updated`
-category and keeps `Skipped` with its existing meaning (a no-clobber skip of
-an untracked file), plus an `Edited` category for a tracked file that
-differs from `mf`:
+The `Result` struct (`internal/seed/seed.go`) gains an `Updated` category
+and keeps `Skipped` with its existing meaning (a no-clobber skip of an
+untracked file), plus an `Edited` category for a tracked file that differs
+from `mf`. The 2026-09-19 additive-repair ruling above added two more
+fields: `RepairedFields` is deliberately its own bucket rather than folded
+into `Repaired`, because the two repairs mean different things to an
+operator (a zero-byte file was truly empty; an additive repair means real,
+byte-preserved content just gained a field) and, per that ruling, are
+never recorded in the manifest the same way — `Repaired` files are;
+`RepairedFields` files are not. `SkipReasons` explains a `Skipped` entry
+that `additiveMerge` actually evaluated and declined, keyed by the same
+path `Skipped` carries:
 
 ```go
 type Result struct {
-    Deployed  []string // new files written (were absent)
-    Updated   []string // tracked files upgraded to this release
-    Unchanged []string // already at this release's content
-    Skipped   []string // untracked, differs from cur — today's no-clobber
-    Edited    []string // tracked and locally edited — differs from mf
-    Repaired  []string // zero-byte partials overwritten
-    Errors    []string
+    Deployed       []string // new files written (were absent)
+    Updated        []string // tracked files upgraded to this release
+    Unchanged      []string // already at this release's content
+    Skipped        []string // untracked, differs from cur — today's no-clobber
+    Edited         []string // tracked and locally edited — differs from mf
+    Repaired       []string // zero-byte partials overwritten; recorded
+    RepairedFields []string // untracked additive schema-gap repair; NOT recorded
+    SkipReasons    map[string]string // dest -> why additiveMerge declined, for a Skipped entry
+    Errors         []string
 }
 ```
 
@@ -242,15 +320,26 @@ Command output (`cmd/ethos/seed.go`), one line per file, then a summary:
   updated:   writing-styles/concise-quantified.md
   unchanged: roles/architect.yaml
   skipped (exists): talents/go.md
+  skipped (exists; beyond additive repair: conflicting value for key "allow_empty_write_set"): archetypes/design.yaml
   skipped (local edit): personalities/principal-engineer.md
+  repaired (was empty): talents/engineering.md
+  repaired (missing fields added): archetypes/implement.yaml
 
-Seeded 42 files: 3 new, 5 updated, 31 unchanged, 2 skipped, 1 local edit.
-3 files were skipped; re-run 'ethos seed --force' to overwrite them.
+Seeded 4 files: 1 new, 1 updated, 2 repaired, 1 unchanged, 2 skipped, 1 local edit(s)
+1 file(s) look locally edited; re-run 'ethos seed --force' to overwrite them.
 ```
 
-The remedy line prints only when `len(Skipped)+len(Edited) > 0`. `updated`
-is the line that proves the feature works: it did not exist under the old
-model.
+("Seeded N files" counts only what was actually written this run —
+deployed + updated + repaired (both kinds) — not every line above; the
+unchanged/skipped/edited files were not touched.)
+
+The remedy line prints only when `len(Edited) > 0` — a plain no-clobber
+`Skipped` file (with or without a `SkipReasons` entry) prints no remedy of
+its own, since `--force` is not the fix for most skip shapes (it would
+also clobber the additive-repair case unnecessarily; a genuinely
+conflicting file needs a hand-edit or deletion, named directly in the skip
+reason, not a blanket `--force`). `updated` is the line that proves the
+feature works: it did not exist under the old model.
 
 ## Tests
 
@@ -273,6 +362,29 @@ model.
   untracked differing file are both overwritten to `cur` under `--force`,
   and both gain a manifest entry equal to `cur` — the one-time-migration
   path the operator runs by hand.
+
+### Additive-repair tests (2026-09-19 addition, GH #525)
+
+Added alongside the ruling above, in `internal/seed/additive_test.go`:
+
+- **Stale archetype gets repaired.** The real embedded `implement.yaml`
+  with `require_delegated_worker` stripped — the exact upgrader shape —
+  merges to the stale file's bytes plus that one field appended.
+- **User-edited file stays skipped, with a reason.** A conflicting shared
+  value, and a local-only key, both decline with a specific reason instead
+  of a bare skip; a second seed run leaves the bytes untouched and does not
+  add a manifest entry.
+- **Front-matter Markdown declines.** The critical-fix repro: a seeded
+  agent/skill `.md` with YAML front matter followed by a body is two YAML
+  documents, and must decline rather than treat the first document as the
+  whole file.
+- **Flow-style mapping declines.** Every key on one line defeats the
+  line-based key-boundary logic; the post-merge verification step (decode
+  the result, require it match the shipped content's own decoded value)
+  is what actually catches this one.
+- **A second seed run after a repair leaves the file untouched.** Pins the
+  not-recorded ruling: the repaired file is reported as an ordinary skip
+  on the next run, never re-repaired and never canonicalized.
 
 ## Dogfood plan (clean machine, ship v1 → install → ship v2 → re-seed)
 
@@ -322,7 +434,14 @@ This runs entirely from the built binary against a scratch `HOME` — the
   machines, a migration branch is clutter and debt, and the five affected
   computers are hand-cleaned with a one-time `--force`. The software keeps
   today's no-clobber skip for untracked files and carries zero pre-feature
-  reasoning.
+  reasoning. **This rejection still holds for every untracked diff except
+  one narrow, later-added exception** (2026-09-19, GH #525): a strictly
+  additive schema gap — the shipped content only ever adds keys the file
+  provably lacks, verified before and after the write — is repaired in
+  place. That exception is unlike the general branch rejected here: it
+  never guesses whether a differing file is "probably unmodified," it
+  proves the specific keys it touches were never present to modify. See
+  the "2026-09-19 ruling" section above for the full reasoning.
 - **A legacy hash catalog + history-walking generator.** An earlier draft
   embedded a frozen catalog of every pre-feature shipped hash, generated by
   walking git tags and hashing the sidecar at each. Rejected: fragile
@@ -404,8 +523,12 @@ This runs entirely from the built binary against a scratch `HOME` — the
 >   (record if untracked, to adopt). Tracked and `local == mf` and
 >   `cur != mf` → upgrade + record. Tracked and `local != mf` → skip + warn
 >   (user edit; `--force` remedy). **Untracked and `local != cur` → today's
->   no-clobber skip, unchanged.** Zero-byte partials are repaired to `cur`
->   regardless.
+>   no-clobber skip, unchanged** (amended 2026-09-19, GH #525: EXCEPT when
+>   the diff is a strictly additive schema gap — shipped content adds keys
+>   the file lacks entirely, with no conflicting shared value and no
+>   local-only key — which is now repaired in place and left unrecorded;
+>   see the ruling in `docs/seed-content-upgrade.md`). Zero-byte partials
+>   are repaired to `cur` regardless.
 > - **No pre-feature migration in the software.** The five existing machines
 >   are hand-cleaned once with `ethos seed --force`, which overwrites to
 >   `cur` and records every entry; thereafter they auto-upgrade.
@@ -424,7 +547,11 @@ This runs entirely from the built binary against a scratch `HOME` — the
 > - **No pre-feature migration** (operator). Few machines; a migration
 >   branch is clutter and debt. The software keeps the existing no-clobber
 >   skip for untracked files; the affected computers are hand-cleaned with a
->   one-time `--force`.
+>   one-time `--force`. (Amended 2026-09-19, GH #525: a strictly additive
+>   schema-gap repair is now a narrow, provably-safe exception to this
+>   no-clobber skip — see `docs/seed-content-upgrade.md`'s "2026-09-19
+>   ruling" section. Every other untracked diff is still governed by this
+>   ruling unchanged.)
 > - **Content hash, not mtime or in-band version stamps.** mtimes are
 >   unreliable across clone/tar/package managers; stamps pollute content and
 >   are forgeable by an edit that keeps the stamp.

@@ -142,13 +142,16 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 	if len(stale) > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"require_delegated_worker is not set on: %s", strings.Join(stale, ", ")))
-		// `ethos seed` only ever writes the global layer (cmd/ethos seed.go
-		// seeds ~/.punt-labs/ethos/), so the working remedy differs by which
-		// layer is stale: a global file gets re-run through seed, which now
-		// additively repairs it in place when the gap is just missing
-		// seed-added fields (GH #525); a repo-local file shadows the global
-		// layer and seed never reaches it at all, so it must be dealt with
-		// directly.
+		// `ethos seed` writes archetypes to exactly one place, the global
+		// archetype layer (cmd/ethos seed.go seeds ~/.punt-labs/ethos/) —
+		// it does write other categories to a repo-local destination too
+		// (the review-checklist agents under .claude/agents/), but never a
+		// repo-local archetype — so the working remedy for THIS check
+		// differs by which archetype layer is stale: a global file gets
+		// re-run through seed, which now additively repairs it in place
+		// when the gap is just missing seed-added fields (GH #525); a
+		// repo-local file shadows the global layer and seed never writes
+		// an archetype there at all, so it must be dealt with directly.
 		if len(staleGlobal) > 0 {
 			parts = append(parts, fmt.Sprintf(
 				"global (%s): run `ethos seed` — it now repairs a file whose only gap is missing seed-added fields in place; a file with a genuine conflicting edit still needs deleting or hand-editing under ~/.punt-labs/ethos/archetypes/ first, then reseed",
@@ -156,7 +159,7 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 		}
 		if len(staleRepoLocal) > 0 {
 			parts = append(parts, fmt.Sprintf(
-				"repo-local (%s): `ethos seed` only writes the global layer, so this shadowing copy is untouched — hand-edit or delete it under %s, then run `ethos seed`",
+				"repo-local (%s): `ethos seed` never writes a repo-local archetype, so this shadowing copy is untouched — hand-edit or delete it under %s, then run `ethos seed`",
 				strings.Join(staleRepoLocal, ", "), filepath.Join(repoArchRoot, "archetypes")))
 		}
 	}

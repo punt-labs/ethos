@@ -240,7 +240,7 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		r := CheckDelegatedWorkerArchetypes(storeRoot)
 		require.Equal(t, "FAIL", r.Status)
 		wantPath := filepath.Join(repoArchDir(storeRoot))
-		assert.Contains(t, r.Detail, "repo-local (implement): `ethos seed` only writes the global layer",
+		assert.Contains(t, r.Detail, "repo-local (implement): `ethos seed` never writes a repo-local archetype",
 			"a stale repo-local file's remedy must say seed does not reach it: %s", r.Detail)
 		assert.Contains(t, r.Detail, wantPath,
 			"the remedy must name the actual repo-local archetypes directory to fix: %s", r.Detail)
