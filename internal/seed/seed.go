@@ -535,9 +535,10 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 // formatting the additive merge went out of its way to preserve, just one
 // run later than a naive re-marshal would have. Leaving dest untracked
 // keeps it in the same category it started in: a later seed re-evaluates
-// it fresh, finds every key already present (nothing left to add), and
-// reports a plain skip — the field is already there, so doctor is
-// satisfied, and the file's bytes are never touched again.
+// it fresh, finds every key already present, and additiveMerge declines
+// with its deliberately benign "all shipped keys present" reason (not the
+// generic no-clobber skip line) — the field is already there, so doctor
+// is satisfied, and the file's bytes are never touched again.
 func (s *seeder) repairAdditive(dest string, onDisk, data []byte) (handled bool, reason string) {
 	merged, reason, ok := additiveMerge(onDisk, data)
 	if !ok {

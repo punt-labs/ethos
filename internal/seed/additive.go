@@ -76,7 +76,17 @@ func additiveMerge(existing, data []byte) (merged []byte, reason string, ok bool
 		missing = append(missing, k)
 	}
 	if len(missing) == 0 {
-		return nil, "no missing keys explain the difference", false
+		// Every top-level key existing has agrees with seedVal (checked
+		// above), existing has no key seedVal lacks (checked above), and
+		// now every key seedVal has is present in existing too: the two
+		// are value-equal, key for key. The only thing that can still
+		// differ is non-semantic — key order, quoting, comments — which is
+		// exactly the steady state a successful repair leaves behind on
+		// its next seed run. Unlike every other decline reason in this
+		// function, this one is never a sign of anything an operator needs
+		// to act on, so it reads as benign rather than as an unexplained
+		// gap.
+		return nil, "all shipped keys present; local formatting preserved", false
 	}
 
 	blocks, ok := keyBlocks(data, seedRoot)

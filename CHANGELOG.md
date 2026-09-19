@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GH #525). `ethos seed` now additively repairs a skip-category file
   when the shipped content's only difference is top-level YAML keys the
   file lacks entirely: the missing keys are appended verbatim (the
-  file's own lines are never touched) and the repair is reported and
-  recorded like any other seeded write. A file with a genuinely
-  conflicting value or a user-added key still skips exactly as before —
+  file's own lines are never touched) and the repair is reported on its
+  own line; unlike other seeded writes it is deliberately not recorded in
+  the manifest, so the repaired file's formatting survives every later
+  run. A file with a genuinely conflicting value or a user-added key
+  still skips exactly as before —
   the repair applies only when there is no conflicting value and no
   user-added key. `ethos seed`'s own output now
   reports the two repair kinds distinctly — `repaired (was empty)` for
@@ -40,8 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier in the same run. The doctor check's remedy text now also names
   the layer-correct action: a stale global file names `ethos seed` (a
   real fix now), and a stale repo-local file — which `ethos seed` never
-  reaches, since it only writes the global layer — names the actual path
-  to hand-edit or delete.
+  reaches, since it never writes a repo-local archetype — names the
+  actual path to hand-edit or delete.
 
 ## [4.19.0] - 2026-09-19
 

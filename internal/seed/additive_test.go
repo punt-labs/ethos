@@ -110,6 +110,18 @@ func TestAdditiveMerge_FrontMatterMarkdownStaysUnmerged(t *testing.T) {
 	assert.NotContains(t, reason, "conflicting", "front matter must decline as multi-document, not misread as a value conflict")
 }
 
+// TestAdditiveMerge_TrailingDocumentSeparatorStaysUnmerged pins a boundary
+// case of the single-document gate: a trailing "---" with nothing after it
+// is still a second YAML document — an empty one — not "no more
+// documents". yaml's Decoder succeeds on an empty document (it does not
+// return io.EOF until the stream is truly exhausted), so this must decline
+// the same as a real front-matter file, not slip through because the
+// second document happens to be blank.
+func TestAdditiveMerge_TrailingDocumentSeparatorStaysUnmerged(t *testing.T) {
+	_, ok := topLevelMapping([]byte("name: x\n---\n"))
+	assert.False(t, ok, "a trailing document separator is a second (empty) document, not end of stream")
+}
+
 // TestAdditiveMerge_FlowMappingStaysUnmerged pins the second half of the
 // critical fix: a flow-style mapping ("{name: x}") puts every key on the
 // SAME line, so keyBlocks' line-range slicing cannot separate them —
@@ -141,11 +153,15 @@ func TestAdditiveMerge_PostMergeVerificationCatchesBadMerge(t *testing.T) {
 // TestAdditiveMerge_NoMissingKeysStaysUnmerged covers content whose hash
 // differs for a reason other than a missing top-level key (e.g. pure
 // formatting) — additiveMerge has nothing additive to explain the diff, so
-// it declines rather than guessing.
+// it declines rather than guessing. The reason reads as benign, not as an
+// unexplained problem: every key and value already agree, so the only
+// possible cause is something non-semantic like this case's trailing
+// whitespace — exactly the steady state a successful repair leaves behind
+// on every later seed run.
 func TestAdditiveMerge_NoMissingKeysStaysUnmerged(t *testing.T) {
 	_, reason, ok := additiveMerge([]byte("name: x\n"), []byte("name: x  \n"))
 	assert.False(t, ok)
-	assert.NotEmpty(t, reason)
+	assert.Equal(t, "all shipped keys present; local formatting preserved", reason)
 }
 
 // TestPlace_UntrackedAdditiveDiffIsRepaired drives the fix end to end
@@ -161,9 +177,11 @@ func TestAdditiveMerge_NoMissingKeysStaysUnmerged(t *testing.T) {
 // and re-marshal it to the canonical shipped layout, discarding the exact
 // formatting the additive merge just preserved. A second seed run must
 // therefore leave the repaired file's bytes untouched: with every key now
-// present, additiveMerge has nothing left to add, so it declines
-// ("no missing keys explain the difference") and the file is reported as
-// an ordinary skip, not a repeat repair or a canonicalizing update.
+// present, additiveMerge has nothing left to add, so it declines with a
+// deliberately benign reason ("all shipped keys present; local formatting
+// preserved" — distinct from every other decline reason, which names an
+// actual problem) and the file is reported as an ordinary skip, not a
+// repeat repair or a canonicalizing update.
 func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	shipped, stale := oldImplementYAML(t)
 	dest := t.TempDir()
@@ -196,7 +214,7 @@ func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	s2.place(scopeEthos, path, shipped)
 	require.Empty(t, s2.r.Errors, "errors: %v", s2.r.Errors)
 	assert.Contains(t, s2.r.Skipped, path)
-	assert.Contains(t, s2.r.SkipReasons[path], "no missing keys")
+	assert.Contains(t, s2.r.SkipReasons[path], "all shipped keys present")
 	assert.Empty(t, s2.r.RepairedFields, "nothing left to repair a second time")
 	assert.Empty(t, s2.r.Updated, "a repaired file must not be silently canonicalized on the next run")
 	got2, err := os.ReadFile(path)

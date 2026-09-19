@@ -253,8 +253,12 @@ make the very next seed run see the repaired file as "tracked but differs
 from `cur`" and re-marshal it to the canonical shipped layout on that next
 run — discarding the exact formatting this repair went out of its way to
 preserve, just one run later. Leaving it untracked means a later seed
-re-evaluates it fresh, finds nothing left to add, and reports a plain skip
-forever after — the file's bytes are never touched again.
+re-evaluates it fresh, finds every shipped key already present with a
+matching value, and reports `skipped (exists; beyond additive repair: all
+shipped keys present; local formatting preserved)` on every subsequent
+run — a reason worded to read as benign rather than as an unexplained
+problem, since by construction it can only ever mean the repair already
+succeeded. The file's bytes are never touched again.
 
 ### `--force` under the new model
 
