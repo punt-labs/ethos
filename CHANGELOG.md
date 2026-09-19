@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **v4.19.0's upgrade path landed every upgrader on an immediate `ethos
+  doctor` FAIL with a remedy that did nothing.** `implement.yaml` and
+  `test.yaml` deployed before the seed manifest existed sit in the
+  seeder's untracked no-clobber skip category, so v4.19.0 adding
+  `require_delegated_worker: true` to those files never reached an
+  existing install — the new "Code archetype delegated-worker guard"
+  check then FAILed against the stale global file, and its own remedy,
+  "run `ethos seed`", re-ran the exact seed that had just skipped it
+  (GH #525). `ethos seed` now additively repairs a skip-category file
+  when the shipped content's only difference is top-level YAML keys the
+  file lacks entirely: the missing keys are appended verbatim (the
+  file's own lines are never touched) and the repair is reported and
+  recorded like any other seeded write. A file with a genuinely
+  conflicting value or a user-added key still skips exactly as before —
+  only a pure schema gap self-heals. The doctor check's remedy text now
+  also names the layer-correct action: a stale global file names `ethos
+  seed` (a real fix now), and a stale repo-local file — which `ethos
+  seed` never reaches, since it only writes the global layer — names the
+  actual path to hand-edit or delete.
+
 ## [4.19.0] - 2026-09-19
 
 ### Added
