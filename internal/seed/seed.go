@@ -544,7 +544,18 @@ func (s *seeder) repairAdditive(dest string, onDisk, data []byte) (handled bool,
 	if !ok {
 		return false, reason
 	}
-	if err := atomicWrite(dest, merged); err != nil {
+	// Preserve dest's own mode rather than atomicWrite's usual 0644: this
+	// is the one atomicWrite caller writing to a destination the
+	// no-clobber path would otherwise never touch AT ALL, so an operator's
+	// deliberately tightened permissions (e.g. a 0600 archetype) must not
+	// loosen just because a shipped key was missing. A missing or
+	// unstatable dest — should not happen, since decide already read it —
+	// falls back to the same 0644 every other atomicWrite caller uses.
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(dest); err == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := atomicWriteMode(dest, merged, mode); err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("repairing %s: %v", dest, err))
 		return true, ""
 	}
@@ -623,8 +634,16 @@ func linkInstall(dest string, data []byte) error {
 
 // atomicWrite writes data to a temp file in dest's directory, then renames
 // it over dest. A kill at any point leaves either the old file or the new
-// complete one — never a partial file at dest.
+// complete one — never a partial file at dest. The new file gets mode
+// 0644, the default for every seed-managed file.
 func atomicWrite(dest string, data []byte) error {
+	return atomicWriteMode(dest, data, 0o644)
+}
+
+// atomicWriteMode is atomicWrite with an explicit mode for the new file,
+// for the one caller (repairAdditive) that must not silently overwrite
+// dest's existing permissions with the 0644 default — see its call site.
+func atomicWriteMode(dest string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".seed.*.tmp")
 	if err != nil {
 		return err
@@ -639,7 +658,7 @@ func atomicWrite(dest string, data []byte) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
+	if err := os.Chmod(tmpPath, mode); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}

@@ -8,20 +8,24 @@ READMEs) to `~/.punt-labs/ethos/` and `~/.claude/skills/`. On a fresh
 machine every file is new and gets written. On a machine that already has
 the content, seed refuses to touch anything that exists.
 
-That refusal is a no-clobber guard. When a destination file exists and is
-non-empty, `classifyExisting` records it as skipped and returns without
-writing (`internal/seed/seed.go:221-224`). The command then prints
-`skipped (exists):` for each (`cmd/ethos/seed.go:50-52`). A confirmed live
-run: re-installing 4.6.0 deployed only genuinely-new files and printed
-"skipped (exists)" for 111 existing ones.
+That refusal is a no-clobber guard: when a destination file exists and is
+non-empty, `classifyExisting` delegates to `decide`, which records it as
+skipped and returns without writing (`internal/seed/seed.go`). The command
+then prints `skipped (exists):` for each (`cmd/ethos/seed.go`'s
+`printSeedResult`). A confirmed live run: re-installing 4.6.0 deployed only
+genuinely-new files and printed "skipped (exists)" for 111 existing ones.
+(This section describes the problem as it stood before this design; a
+2026-09-19 amendment carves one narrow, provably-safe exception into this
+guard — see "2026-09-19 ruling" below.)
 
 The consequence: **a released improvement to a shipped file never reaches a
 returning user.** If 4.7.0 ships a stronger `concise-quantified` writing
 style, a user who installed 4.6.0 keeps the 4.6.0 text forever. The only
 override is `ethos seed --force`, which overwrites *everything*
-unconditionally (`internal/seed/seed.go:170-176`, flag at
-`cmd/ethos/seed.go:24`) — it cannot tell an unmodified shipped file from
-one the user hand-edited, so it is unsafe as the default upgrade path.
+unconditionally (`decide`'s `if s.force` branch, `internal/seed/seed.go`;
+flag registered in `cmd/ethos/seed.go`) — it cannot tell an unmodified
+shipped file from one the user hand-edited, so it is unsafe as the default
+upgrade path.
 
 The installer calls plain `ethos seed` with no `--force`
 (`install.sh:321`), so a re-install upgrades nothing.
@@ -36,28 +40,36 @@ machines exist, migrations are clutter and debt for no reason, and the five
 affected computers will be brought current by hand. So the software carries
 **zero pre-feature reasoning**: the existing no-clobber skip stays exactly as
 it is today for any file the manifest does not yet track, and the new
-upgrade behavior activates only once a file has a manifest entry.
+upgrade behavior activates only once a file has a manifest entry. (A
+2026-09-19 amendment, below, adds one narrow exception to the untracked
+no-clobber skip itself — a strictly additive schema-gap repair — but
+otherwise this ruling stands exactly as written: no other pre-feature
+migration, no other untracked-file upgrade path.)
 
 ## Scope: seed manages library content, never user identities
 
-Grounded in `internal/seed/seed.go:25-66`, `Seed` deploys exactly these
-categories:
+`Seed`, `SeedVersion`, and friends (`internal/seed/seed.go`) deploy exactly
+these categories:
 
-| Category | Source | Destination | seed.go |
-|----------|--------|-------------|---------|
-| Roles | `sidecar/roles/*.yaml` | `<dest>/roles/` | :29 |
-| Talents | `sidecar/talents/*.md` | `<dest>/talents/` | :32 |
-| Personalities | `sidecar/personalities/*.md` | `<dest>/personalities/` | :37 |
-| Writing-styles | `sidecar/writing-styles/*.md` | `<dest>/writing-styles/` | :38 |
-| Archetypes | `sidecar/archetypes/*.yaml` | `<dest>/archetypes/` | :41 |
-| Pipelines | `sidecar/pipelines/*.yaml` | `<dest>/pipelines/` | :44 |
-| Skills | `sidecar/skills/*/SKILL.md` | `<skillsRoot>/*/` | :47-52 |
-| READMEs | `sidecar/**/README.md` | `<dest>/**/` | :55 |
-| Bundles | `sidecar/bundles/**` | `<dest>/bundles/<name>/` | :60 |
+| Category | Source | Destination | Deployed via |
+|----------|--------|-------------|--------------|
+| Roles | `sidecar/roles/*.yaml` | `<dest>/roles/` | `seedFS` |
+| Talents | `sidecar/talents/*.md` | `<dest>/talents/` | `seedFS` |
+| Personalities | `sidecar/personalities/*.md` | `<dest>/personalities/` | `seedFS` |
+| Writing-styles | `sidecar/writing-styles/*.md` | `<dest>/writing-styles/` | `seedFS` |
+| Archetypes | `sidecar/archetypes/*.yaml` | `<dest>/archetypes/` | `seedFS` |
+| Pipelines | `sidecar/pipelines/*.yaml` | `<dest>/pipelines/` | `seedFS` |
+| Skills | `sidecar/skills/*/SKILL.md` | `<skillsRoot>/*/` | `seedFile` |
+| READMEs | `sidecar/**/README.md` | `<dest>/**/` | `seedReadmes` |
+| Bundles | `sidecar/bundles/**` | `<dest>/bundles/<name>/` | `seedBundles` |
+
+(Deployed-via names function calls, not line numbers — every prior draft
+of this table pinned exact `seed.go` line numbers, which drifted stale
+within a few commits; a function name does not.)
 
 It does **not** deploy user identities. There is no `seedFS` call for
 `sidecar/identities/` or `sidecar/teams/`; those paths are not even in the
-embed set (`internal/seed/embed.go:5-30`). User identities are owned by
+embed set (`internal/seed/embed.go`). User identities are owned by
 `ethos setup`, which writes `~/.punt-labs/ethos/identities/<handle>.yaml`.
 Bundle-internal identities land in the read-only bundle layer
 (`<dest>/bundles/<name>/…`, DES-051), which is library content shipped as
@@ -88,7 +100,9 @@ something newer; otherwise, if the file differs from `mf`, it is a proven
 user edit and is skipped. For an **untracked** file the behavior is exactly
 today's no-clobber guard — deploy if absent, otherwise skip — with one
 addition: a file that already equals `cur` is recorded so it enters the
-tracked set for free.
+tracked set for free. (A 2026-09-19 amendment adds a second, narrower
+addition for the untracked case — see "Spelled out" immediately below and
+the full "2026-09-19 ruling" section later in this document.)
 
 Spelled out:
 
@@ -143,7 +157,7 @@ each embedded file it already has the bytes; `sha256.Sum256(data)` gives
 drift from what ships.
 
 **Local install manifest** — `~/.punt-labs/ethos/.seed-manifest.json`,
-written atomically (reuse `atomicWrite`, `internal/seed/seed.go:271`).
+written atomically (reuse `atomicWrite`, `internal/seed/seed.go`).
 Format:
 
 ```json
@@ -190,17 +204,19 @@ has an entry, not merely that the manifest file exists.
 | `!= cur`, additive schema gap only | n/a — a tracked file's diff is a proven edit; this branch exists only where no `mf` exists to prove one | **repair** → append the shipped content's missing top-level keys verbatim, byte-preserving every existing line; **not recorded** (2026-09-19 ruling, below) |
 | zero-byte file | repair → write `cur`; record `cur` | repair → write `cur`; record `cur` |
 
-The `untracked, != cur` cell is today's `classifyExisting` no-clobber skip
-(`internal/seed/seed.go:221-224`), left untouched for every diff EXCEPT a
-purely additive one — this is where the five pre-feature machines, and any
-other untracked file carrying a genuine edit, land until the operator's
-one-time `--force`. The additive-schema-gap row below it is the one place
-this no-clobber skip does not apply; see "2026-09-19 ruling" for why.
+The `untracked, != cur` cell is today's no-clobber skip (`decide`'s
+`!tracked` case, `internal/seed/seed.go`), left untouched for every diff
+EXCEPT a purely additive one — this is where the five pre-feature
+machines, and any other untracked file carrying a genuine edit, land until
+the operator's one-time `--force`. The additive-schema-gap row below it is
+the one place this no-clobber skip does not apply; see "2026-09-19 ruling"
+for why.
 
 The zero-byte row preserves the current partial-write repair
-(`internal/seed/seed.go:225-237`): a zero-byte file is a partial from an
-interrupted seed and is rewritten to `cur` regardless of manifest state,
-then recorded. It is never treated as a user edit.
+(`classifyExisting`'s zero-byte case, `internal/seed/seed.go`): a
+zero-byte file is a partial from an interrupted seed and is rewritten to
+`cur` regardless of manifest state, then recorded. It is never treated as
+a user edit.
 
 ### 2026-09-19 ruling: a narrow additive-repair exception (GH #525)
 
@@ -511,21 +527,23 @@ This runs entirely from the built binary against a scratch `HOME` — the
 > `ethos seed` deploys embedded library content (roles, talents,
 > personalities, writing-styles, archetypes, pipelines, bundles, skills,
 > READMEs — never user identities, which `ethos setup` owns). Its
-> no-clobber guard skips any existing non-empty file
-> (`internal/seed/seed.go:221-224`; printed at `cmd/ethos/seed.go:50-52`),
-> so a released improvement to a shipped file never reaches a returning
-> user — a live 4.6.0 re-install skipped 111 existing files. The only
-> override, `--force` (`internal/seed/seed.go:170-176`), overwrites
-> everything blindly and cannot tell an unmodified shipped file from a
-> hand-edited one, so it is unsafe as the upgrade path. The installer runs
-> plain `ethos seed` (`install.sh:321`), upgrading nothing.
+> no-clobber guard skips any existing non-empty file (`decide`'s
+> `!tracked` case, `internal/seed/seed.go`; printed via
+> `cmd/ethos/seed.go`'s `printSeedResult`), so a released improvement to a
+> shipped file never reaches a returning user — a live 4.6.0 re-install
+> skipped 111 existing files. The only override, `--force` (`decide`'s
+> `if s.force` branch, `internal/seed/seed.go`), overwrites everything
+> blindly and cannot tell an unmodified shipped file from a hand-edited
+> one, so it is unsafe as the upgrade path. The installer runs plain
+> `ethos seed` (`install.sh`), upgrading nothing.
 >
 > ### Decision
 >
 > Make plain seed **upgrade tracked shipped files and preserve proven user
 > edits**, decided by content hash. New behavior activates only for a file
 > the manifest already tracks; an untracked file keeps today's no-clobber
-> skip.
+> skip (amended 2026-09-19 with one narrow exception — see the "Decision"
+> bullet below and the full ruling in `docs/seed-content-upgrade.md`).
 >
 > - **Current shipped hash (`cur`)** is computed at runtime from the
 >   embedded bytes — no build step, no drift.

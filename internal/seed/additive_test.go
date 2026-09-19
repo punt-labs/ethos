@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -133,6 +134,19 @@ func TestAdditiveMerge_TrailingDocumentSeparatorStaysUnmerged(t *testing.T) {
 	assert.False(t, ok, "a trailing document separator is a second (empty) document, not end of stream")
 }
 
+// TestAdditiveMerge_MalformedTrailingContentStaysUnmerged pins the Copilot
+// finding on PR #526: the second Decode call used to treat ANY non-nil
+// error — not just true end-of-stream (io.EOF) — as "single document,
+// proceed". Garbage following a stray "---" separator produces a parse
+// error on that second Decode, not io.EOF, so this content is not cleanly
+// one document and must decline the same as a genuine multi-document
+// stream, not slip through because the malformed tail happened to error
+// instead of parsing.
+func TestAdditiveMerge_MalformedTrailingContentStaysUnmerged(t *testing.T) {
+	_, ok := topLevelMapping([]byte("name: x\n---\n[not valid: yaml, here\n"))
+	assert.False(t, ok, "malformed content after a document separator must not be read as a single valid document")
+}
+
 // TestAdditiveMerge_FlowMappingStaysUnmerged pins the second half of the
 // critical fix: a flow-style mapping ("{name: x}") puts every key on the
 // SAME line, so keyBlocks' line-range slicing cannot separate them —
@@ -149,16 +163,19 @@ func TestAdditiveMerge_FlowMappingStaysUnmerged(t *testing.T) {
 }
 
 // TestAdditiveMerge_PostMergeVerificationCatchesBadMerge exercises the
-// verification step directly and in isolation from any specific line-slicing
-// bug: even a merge that reached the point of returning true is re-decoded
-// and checked against the shipped content's own decoded value before it is
-// trusted. This is the same case as the flow-mapping test above, stated as
-// "the safety net itself does its job" rather than "this specific input
-// trips it".
+// verification step directly and in isolation from any specific line-
+// slicing bug: even a merge that reached the point of assembling result
+// bytes is re-parsed and checked before being trusted, rather than trusted
+// on the strength of the line-based append logic alone. This is the same
+// input as the flow-mapping test above — with the stricter single-document
+// gate (io.EOF-only), it is now the "merged result is not itself a valid
+// single-document mapping" half of verification that catches it, not the
+// DeepEqual-mismatch half, but it is still the verification step as a
+// whole doing its job independent of the append logic it guards.
 func TestAdditiveMerge_PostMergeVerificationCatchesBadMerge(t *testing.T) {
 	_, reason, ok := additiveMerge([]byte("{name: x}\n"), []byte("name: x\nextra: 1\n"))
 	require.False(t, ok)
-	assert.Contains(t, reason, "does not match the shipped content")
+	assert.Contains(t, reason, "merge verification failed")
 }
 
 // TestAdditiveMerge_NoMissingKeysStaysUnmerged covers content whose hash
@@ -231,6 +248,34 @@ func TestPlace_UntrackedAdditiveDiffIsRepaired(t *testing.T) {
 	got2, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, want, string(got2), "the repaired file's bytes must survive a second seed run untouched")
+}
+
+// TestPlace_AdditiveRepairPreservesFileMode pins the Copilot finding on PR
+// #526: repairAdditive writes through atomicWrite, which chmods every new
+// file to 0644 — fine for a fresh deploy, but wrong for a repair, since
+// the destination already exists and the no-clobber path would otherwise
+// never have touched it (or its permissions) at all. An operator's
+// deliberately tightened 0600 archetype must not become group/other-
+// readable merely because a shipped key was missing.
+func TestPlace_AdditiveRepairPreservesFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file mode bits are not meaningful on Windows")
+	}
+	shipped, stale := oldImplementYAML(t)
+	dest := t.TempDir()
+	s := testSeeder(dest, "", false)
+	path := filepath.Join(dest, "archetypes", "implement.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, stale, 0o600))
+
+	s.place(scopeEthos, path, shipped)
+	require.Empty(t, s.r.Errors, "errors: %v", s.r.Errors)
+	require.Contains(t, s.r.RepairedFields, path)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"an additive repair must preserve the destination's existing mode, not reset it to 0644")
 }
 
 // TestPlace_UntrackedConflictingDiffStaysSkipped is the counterpart: a file

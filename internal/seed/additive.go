@@ -2,7 +2,9 @@ package seed
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"sort"
 	"strings"
@@ -167,9 +169,16 @@ func topLevelMapping(raw []byte) (*yaml.Node, bool) {
 	if err := dec.Decode(&doc); err != nil {
 		return nil, false
 	}
+	// A second Decode returning io.EOF is the ONLY outcome that means
+	// "truly one document": nil means a real second document exists, and
+	// any other error means the stream is malformed AFTER what looked
+	// like a valid first document (e.g. garbage following a stray "---")
+	// — treating that as "single document, proceed" would let content
+	// that is not cleanly one document slip past this gate (Copilot
+	// finding on PR #526).
 	var second yaml.Node
-	if err := dec.Decode(&second); err == nil {
-		return nil, false // more than one YAML document in the stream
+	if err := dec.Decode(&second); !errors.Is(err, io.EOF) {
+		return nil, false
 	}
 	if len(doc.Content) == 0 {
 		return nil, false
