@@ -105,7 +105,7 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 	store := mission.NewArchetypeStore(filepath.Join(storeRoot, ".punt-labs", "ethos"), globalRoot)
 
 	repoArchRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
-	var stale, broken []string
+	var stale, broken, staleGlobal, staleRepoLocal []string
 	for _, n := range monitored {
 		a, layer, err := store.LoadLayer(n)
 		if err != nil {
@@ -125,6 +125,11 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 		}
 		if !a.RequireDelegatedWorker {
 			stale = append(stale, fmt.Sprintf("%s (%s)", n, layer))
+			if layer == "global" {
+				staleGlobal = append(staleGlobal, n)
+			} else {
+				staleRepoLocal = append(staleRepoLocal, n)
+			}
 		}
 	}
 	if len(stale) == 0 && len(broken) == 0 {
@@ -136,8 +141,24 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 	var parts []string
 	if len(stale) > 0 {
 		parts = append(parts, fmt.Sprintf(
-			"require_delegated_worker is not set on: %s — run `ethos seed` to refresh (a repo-local file must be hand-edited or deleted first)",
-			strings.Join(stale, ", ")))
+			"require_delegated_worker is not set on: %s", strings.Join(stale, ", ")))
+		// `ethos seed` only ever writes the global layer (cmd/ethos seed.go
+		// seeds ~/.punt-labs/ethos/), so the working remedy differs by which
+		// layer is stale: a global file gets re-run through seed, which now
+		// additively repairs it in place when the gap is just missing
+		// seed-added fields (GH #525); a repo-local file shadows the global
+		// layer and seed never reaches it at all, so it must be dealt with
+		// directly.
+		if len(staleGlobal) > 0 {
+			parts = append(parts, fmt.Sprintf(
+				"global (%s): run `ethos seed` — it now repairs a file whose only gap is missing seed-added fields in place; a file with a genuine conflicting edit still needs deleting or hand-editing under ~/.punt-labs/ethos/archetypes/ first, then reseed",
+				strings.Join(staleGlobal, ", ")))
+		}
+		if len(staleRepoLocal) > 0 {
+			parts = append(parts, fmt.Sprintf(
+				"repo-local (%s): `ethos seed` only writes the global layer, so this shadowing copy is untouched — hand-edit or delete it under %s, then run `ethos seed`",
+				strings.Join(staleRepoLocal, ", "), filepath.Join(repoArchRoot, "archetypes")))
+		}
 	}
 	if len(broken) > 0 {
 		parts = append(parts, "could not load: "+strings.Join(broken, "; "))
