@@ -35,8 +35,9 @@ func oldImplementYAML(t *testing.T) (shipped, stale []byte) {
 // and the appended line is the shipped line verbatim.
 func TestAdditiveMerge_StaleArchetypeRepaired(t *testing.T) {
 	shipped, stale := oldImplementYAML(t)
-	merged, ok := additiveMerge(stale, shipped)
+	merged, reason, ok := additiveMerge(stale, shipped)
 	require.True(t, ok)
+	assert.Empty(t, reason, "a successful merge carries no decline reason")
 	assert.Equal(t, string(stale)+"require_delegated_worker: true\n", string(merged))
 
 	// The repair result parses back into the same values the shipped file
@@ -54,31 +55,36 @@ func TestAdditiveMerge_StaleArchetypeRepaired(t *testing.T) {
 // TestAdditiveMerge_ConflictingValueStaysUnmerged proves a real user edit —
 // not just a missing field — is never folded in silently: existing has the
 // same fields but disagrees on one, so the shared key's value is a
-// conflict, not an addition.
+// conflict, not an addition. The reason names the offending key, so a skip
+// line built from it says more than "exists".
 func TestAdditiveMerge_ConflictingValueStaysUnmerged(t *testing.T) {
 	shipped, _ := oldImplementYAML(t)
 	edited := strings.Replace(string(shipped),
 		"allow_empty_write_set: false", "allow_empty_write_set: true", 1)
-	_, ok := additiveMerge([]byte(edited), shipped)
+	_, reason, ok := additiveMerge([]byte(edited), shipped)
 	assert.False(t, ok, "a conflicting shared value must not be merged")
+	assert.Contains(t, reason, `"allow_empty_write_set"`)
 }
 
 // TestAdditiveMerge_UserAddedKeyStaysUnmerged proves a file with a key the
 // seed content does not define — a genuine local addition — is left alone
-// rather than treated as purely additive on the seed's side.
+// rather than treated as purely additive on the seed's side. The reason
+// names the offending key.
 func TestAdditiveMerge_UserAddedKeyStaysUnmerged(t *testing.T) {
 	shipped, stale := oldImplementYAML(t)
 	edited := string(stale) + "my_custom_field: true\n"
-	_, ok := additiveMerge([]byte(edited), shipped)
+	_, reason, ok := additiveMerge([]byte(edited), shipped)
 	assert.False(t, ok, "a key the seed does not define must not be merged")
+	assert.Contains(t, reason, `"my_custom_field"`)
 }
 
 // TestAdditiveMerge_NonMappingContentStaysUnmerged covers the common case:
 // most seeded content is Markdown (talents, personalities, writing styles),
 // not a YAML mapping at all, and must fall through untouched.
 func TestAdditiveMerge_NonMappingContentStaysUnmerged(t *testing.T) {
-	_, ok := additiveMerge([]byte("# Talent\nold body\n"), []byte("# Talent\nnew body\n"))
+	_, reason, ok := additiveMerge([]byte("# Talent\nold body\n"), []byte("# Talent\nnew body\n"))
 	assert.False(t, ok)
+	assert.NotEmpty(t, reason)
 }
 
 // TestAdditiveMerge_NoMissingKeysStaysUnmerged covers content whose hash
@@ -86,8 +92,9 @@ func TestAdditiveMerge_NonMappingContentStaysUnmerged(t *testing.T) {
 // formatting) — additiveMerge has nothing additive to explain the diff, so
 // it declines rather than guessing.
 func TestAdditiveMerge_NoMissingKeysStaysUnmerged(t *testing.T) {
-	_, ok := additiveMerge([]byte("name: x\n"), []byte("name: x  \n"))
+	_, reason, ok := additiveMerge([]byte("name: x\n"), []byte("name: x  \n"))
 	assert.False(t, ok)
+	assert.NotEmpty(t, reason)
 }
 
 // TestPlace_UntrackedAdditiveDiffIsRepaired drives the fix end to end
@@ -155,6 +162,8 @@ func TestPlace_UntrackedConflictingDiffStaysSkipped(t *testing.T) {
 	assert.Contains(t, s.r.Skipped, path)
 	assert.NotContains(t, s.r.Repaired, path)
 	assert.NotContains(t, s.r.RepairedFields, path)
+	assert.Contains(t, s.r.SkipReasons[path], `"allow_empty_write_set"`,
+		"a skip additiveMerge actually evaluated must carry the reason it declined")
 
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)

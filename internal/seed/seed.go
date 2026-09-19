@@ -27,7 +27,13 @@ type Result struct {
 	Edited         []string // tracked and locally edited — differ from the manifest
 	Repaired       []string // zero-byte files overwritten (partial from an interrupted seed)
 	RepairedFields []string // untracked files with only seed-added keys appended (see additiveMerge)
-	Errors         []string // files that failed
+	// SkipReasons explains a Skipped entry that additiveMerge actually
+	// evaluated and declined — keyed by the same path Skipped carries, value
+	// is the reason (e.g. "conflicting value for key \"foo\""). A Skipped
+	// path with no entry here was never a candidate for additive repair
+	// (e.g. non-YAML content).
+	SkipReasons map[string]string
+	Errors      []string // files that failed
 }
 
 // Seed deploys embedded sidecar content to the destination root, recording no
@@ -482,14 +488,23 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 	entry, tracked := s.mf.Entries[key]
 	switch {
 	case !tracked:
-		if s.repairAdditive(scope, dest, onDisk, data) {
+		handled, reason := s.repairAdditive(scope, dest, onDisk, data)
+		if handled {
 			return
 		}
 		// An untracked existing file that differs, and is not a purely
 		// additive stale schema, is left untouched — the original
 		// no-clobber contract. It enters the manifest era only when seed
 		// writes it (a fresh deploy, a repair, or a one-time `--force`).
+		// reason names why additiveMerge declined, so the skip line can say
+		// more than "exists" — see SkipReasons.
 		s.r.Skipped = append(s.r.Skipped, dest)
+		if reason != "" {
+			if s.r.SkipReasons == nil {
+				s.r.SkipReasons = map[string]string{}
+			}
+			s.r.SkipReasons[dest] = reason
+		}
 	case local != entry.Hash:
 		// Tracked but changed since seed last wrote it — a user edit; preserve.
 		s.r.Edited = append(s.r.Edited, dest)
@@ -502,23 +517,24 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 
 // repairAdditive attempts additiveMerge on an untracked, differing dest and,
 // on success, writes the merged content and records it as repaired. It
-// returns true when it handled dest — either by repairing it or by
-// recording a write error — so the caller must not also fall through to the
-// ordinary skip. It returns false when the diff is not purely additive, in
-// which case the caller's no-clobber skip still applies.
-func (s *seeder) repairAdditive(scope, dest string, onDisk, data []byte) bool {
-	merged, ok := additiveMerge(onDisk, data)
+// returns handled=true when it dealt with dest itself — either by repairing
+// it or by recording a write error — so the caller must not also fall
+// through to the ordinary skip. It returns handled=false, with reason
+// naming why additiveMerge declined, when the diff is not purely additive;
+// the caller's no-clobber skip still applies, with reason to explain it.
+func (s *seeder) repairAdditive(scope, dest string, onDisk, data []byte) (handled bool, reason string) {
+	merged, reason, ok := additiveMerge(onDisk, data)
 	if !ok {
-		return false
+		return false, reason
 	}
 	cur := hashBytes(merged)
 	if err := atomicWrite(dest, merged); err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("repairing %s: %v", dest, err))
-		return true
+		return true, ""
 	}
 	s.record(scope, dest, cur)
 	s.r.RepairedFields = append(s.r.RepairedFields, dest)
-	return true
+	return true, ""
 }
 
 // write overwrites dest with data, records the manifest entry, and appends dest

@@ -1,7 +1,9 @@
 package seed
 
 import (
+	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -16,38 +18,49 @@ import (
 // test.yaml, but those files predate the seed manifest and so sit in the
 // skip-if-exists category forever, with no path back to compliance).
 //
-// It returns false for anything else: a value existing shares with data but
-// disagrees on, a key existing has that data does not, non-mapping content
-// (most seeded files are Markdown, not YAML), or a parse failure. Each of
-// those means the difference is a real edit, not a stale-schema gap, and
-// decide's ordinary no-clobber skip must still apply.
+// It returns false, with reason naming why, for anything else: a value
+// existing shares with data but disagrees on, a key existing has that data
+// does not, non-mapping content (most seeded files are Markdown, not YAML),
+// or a parse failure. Each of those means the difference is a real edit,
+// not a stale-schema gap, and decide's ordinary no-clobber skip must still
+// apply — but the reason rides along so the skip line can say why, instead
+// of recreating GH #525's own shape one level down: a bare "skipped
+// (exists)" gives an operator no way to tell "this needs a hand-edit" from
+// "seed is stuck," the exact ambiguity that made the original doctor
+// FAIL's remedy look like a no-op.
 //
-// The merge is textual, not a re-marshal: existing's bytes are kept
+// The merge itself is textual, not a re-marshal: existing's bytes are kept
 // verbatim, and each missing key is appended as the literal line range it
 // occupies in data, in the order data defines it. A structural re-marshal
 // would reformat every line to reflect its own quoting and indentation
 // choices, silently rewriting content the user never touched.
-func additiveMerge(existing, data []byte) ([]byte, bool) {
+func additiveMerge(existing, data []byte) (merged []byte, reason string, ok bool) {
 	exRoot, ok := topLevelMapping(existing)
 	if !ok {
-		return nil, false
+		return nil, "not a YAML mapping", false
 	}
 	seedRoot, ok := topLevelMapping(data)
 	if !ok {
-		return nil, false
+		return nil, "shipped content is not a YAML mapping", false
 	}
 
 	var existingVal, seedVal map[string]any
 	if exRoot.Decode(&existingVal) != nil || seedRoot.Decode(&seedVal) != nil {
-		return nil, false
+		return nil, "could not decode as key/value pairs", false
 	}
 
 	// A key existing has that data does not is a user addition, not a stale
-	// schema gap — leave it to the ordinary skip.
+	// schema gap — leave it to the ordinary skip. Sorted so the named key is
+	// deterministic when more than one qualifies.
+	var extra []string
 	for k := range existingVal {
 		if _, ok := seedVal[k]; !ok {
-			return nil, false
+			extra = append(extra, k)
 		}
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		return nil, fmt.Sprintf("local key %q is not in the shipped content", extra[0]), false
 	}
 
 	var missing []string
@@ -55,29 +68,29 @@ func additiveMerge(existing, data []byte) ([]byte, bool) {
 		k := seedRoot.Content[i].Value
 		if ev, ok := existingVal[k]; ok {
 			if !reflect.DeepEqual(ev, seedVal[k]) {
-				return nil, false // shared key, conflicting value
+				return nil, fmt.Sprintf("conflicting value for key %q", k), false
 			}
 			continue
 		}
 		missing = append(missing, k)
 	}
 	if len(missing) == 0 {
-		return nil, false // hashes differed, but nothing additive explains why
+		return nil, "no missing keys explain the difference", false
 	}
 
 	blocks, ok := keyBlocks(data, seedRoot)
 	if !ok {
-		return nil, false
+		return nil, "could not locate the shipped lines for a missing key", false
 	}
 
-	merged := existing
+	merged = existing
 	if len(merged) > 0 && merged[len(merged)-1] != '\n' {
 		merged = append(merged, '\n')
 	}
 	for _, k := range missing {
 		merged = append(merged, blocks[k]...)
 	}
-	return merged, true
+	return merged, "", true
 }
 
 // topLevelMapping parses raw as YAML and returns its top-level mapping node.

@@ -27,9 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports the two repair kinds distinctly — `repaired (was empty)` for
   the pre-existing zero-byte case, `repaired (missing fields added)` for
   this one — rather than reusing a label that was only ever true for the
-  first. The doctor check's remedy text now also names the
-  layer-correct action: a stale global file names `ethos seed` (a real
-  fix now), and a stale repo-local file — which `ethos seed` never
+  first. A skip that additive repair actually evaluated and declined now
+  says why — `skipped (exists; beyond additive repair: conflicting value
+  for key "...")` or `... local key "..." is not in the shipped
+  content` — instead of a bare `skipped (exists)` that recreated the
+  same ambiguity one level down (no way to tell "seed will fix this on
+  its own" from "this needs a hand-edit"). `ethos seed` also now prints
+  everything it wrote even when a later file in the same run fails: it
+  mutates files in place as it goes, so a partial failure used to report
+  only the error and discard every Deployed/Repaired/Updated line from
+  earlier in the same run. The doctor check's remedy text now also names
+  the layer-correct action: a stale global file names `ethos seed` (a
+  real fix now), and a stale repo-local file — which `ethos seed` never
   reaches, since it only writes the global layer — names the actual path
   to hand-edit or delete.
 
