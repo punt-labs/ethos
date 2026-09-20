@@ -16,6 +16,7 @@ Before specifying work, check the relevant standard:
 - **New slash command** → existing command files for pattern; both `name.md` and `name-dev.md` required
 - **Any Go code** → [go standard](https://github.com/punt-labs/punt-kit/blob/main/standards/go.md)
 - **Release work** → [release-process standard](https://github.com/punt-labs/punt-kit/blob/main/standards/release-process.md)
+- **`internal/mission` lifecycle logic** (status values, guards on `Create`/`Update`/`AppendResult`/`AppendReflection`/`AdvanceRound`/`Close`/`Abandon`/`DisclaimDelegation`, or a new status-machine operation) → amend `docs/spec-mission-lifecycle.tex` in the same PR, or state in the PR description why the change does not affect it
 
 ## Build & Run
 
