@@ -94,10 +94,14 @@ actually has --- \field{CommitInSiblingWorktree}'s effect does not depend on
     which lines are new since the last seal; this specification does not
     re-derive that logic, it assumes the aggregate count SealRepo would
     seal is known and models only what happens to that count.
-  \item \textbf{Chunk corruption and quarantine.} \field{ReadChunkVerified}'s
-    per-chunk hash check (audit\_seal.go:189--193) and the quarantine escape
-    it feeds are a data-integrity concern once a line is already sealed;
-    orthogonal to whether a line survives at all.
+  \item \textbf{Chunk corruption and quarantine.} \field{ReadChunkVerified}
+    (internal/audit/read.go:88--105) checks a chunk parses whole and that
+    its last line's timestamp matches the \field{<last>} field in its own
+    filename --- not a hash; SHA-256 appears only in quarantine/tombstone
+    naming, elsewhere in \fpath{internal/audit}. The check and the
+    quarantine escape it feeds (invoked from audit\_seal.go:189--193) are
+    a data-integrity concern once a line is already sealed; orthogonal to
+    whether a line survives at all.
   \item \textbf{Counting worktrees.} Following the modelling choice above, a
     boolean \field{writerExists} stands for ``the writer checkout is still
     present''; the model does not carry a count of how many other worktrees
@@ -373,7 +377,7 @@ lostUnwarned' = lostUnwarned
 \subsection{SessionPurgeRefuse}
 
 Models the unsealed-lines guard in \field{purgeOneTombstoned}
-(internal/session/store.go:534--627): with lines still pending and no
+(internal/session/store.go:534--697): with lines still pending and no
 \texttt{--force}, purge refuses outright and changes nothing. The guard
 itself is \texttt{if !force \&\& (unsealed > 0 || probeFailed)}
 (store.go:634--669); the caller that records the refusal is
@@ -434,10 +438,13 @@ violation --- expected, since \field{lostUnwarned} carries no invariant
 for probcli to check (\S\ref{sec:state}). Reachability is instead
 confirmed by a goal-directed search, \fpath{probcli ... -model\_check
 -goal "lostUnwarned=ztrue" -check\_goal}, which finds
-\field{lostUnwarned = ztrue} after exploring 7 states and 35 transitions,
-by the shortest possible route --- no actor need do anything but remove
-the writer checkout while lines are still spooled. This is probcli's own
-trace, verbatim:
+\field{lostUnwarned = ztrue} by the shortest possible route --- no actor
+need do anything but remove the writer checkout while lines are still
+spooled. (The state/transition count this particular run explored is
+recorded in \S\ref{sec:probrun} along with why it is not quoted a second
+time here: per that section, a goal search's count is not stable across
+reruns, unlike a full exploration's.) This is probcli's own trace,
+verbatim:
 
 \begin{verbatim}
 *** TRACE (length=3):
@@ -526,16 +533,27 @@ where
   -- against AuditLineD1.
 
 WorktreeRemoveD1
-  Xi AuditLineD1
+  Delta AuditLineD1
 where
   writerExists = ztrue
-  -- pure frame: removing A checkout has nothing left to take from
-  -- the per-machine spool.
+  writerExists' = zfalse
+  -- the removal itself IS modelled here, unlike WorktreeRemoveD2/D3's
+  -- carry-over of the current design's version: writerExists really
+  -- does flip. What does not follow it is the pool.
+  spooled' = spooled
+  sealed' = sealed
+  committed' = committed
+  hookInstalled' = hookInstalled
+  rosterKnown' = rosterKnown
+  lostUnwarned' = lostUnwarned
 
 -- EthosDisable, SessionEnd, SessionPurgeRefuse, SessionPurgeForce carry
--- over from the current design unchanged; none of them ever assigns
--- lostUnwarned' := ztrue, and CommitAnywhereD1/WorktreeRemoveD1 above
--- are the only two operations that could.
+-- over from the current design unchanged. CommitAnywhereD1 and
+-- WorktreeRemoveD1 above are the two operations that CHANGED relative
+-- to the current design's CommitInWritingCheckout/CommitInSiblingWorktree
+-- and WorktreeRemove; by their own definitions neither ever assigns
+-- lostUnwarned' := ztrue, which is the reachability claim S:probrun
+-- reports.
 \end{verbatim}
 
 \subsection{Design 2: worktree-aware seal}
@@ -590,7 +608,7 @@ WorktreeRemoveD2   -- IDENTICAL to WorktreeRemove (S:opworktreeremove):
 \label{sec:design3}
 
 \field{HandleSessionEnd} gains an unsealed-line probe mirroring
-\field{purgeOneTombstoned}'s (store.go:534--627), but seals rather than
+\field{purgeOneTombstoned}'s (store.go:534--697), but seals rather than
 refuses: \field{HandleSessionEnd} already documents its cleanup as
 best-effort with no retry path (session\_end.go:41--45), and a hook with
 no interactive caller to retry against cannot usefully \emph{refuse} the
@@ -675,7 +693,7 @@ Current design, goal search \field{lostUnwarned=ztrue} &
   \field{lostUnwarned = ztrue} reachable via \field{WorktreeRemove} from
   \field{Init} in one step (\S\ref{sec:counterexample}) \\
 Design 1 (\S\ref{sec:design1}): per-machine spool, full exploration &
-  9 & 42 &
+  17 & 74 &
   \emph{No counter example found. ALL states visited} ---
   \field{lostUnwarned = ztrue} \textbf{unreachable} \\
 Design 2 (\S\ref{sec:design2}): worktree-aware seal, full exploration &
@@ -702,7 +720,7 @@ Design 3, goal search \field{lostUnwarned=ztrue} $\land$
 fuzz's \texttt{/z-spec:check} reports 0 errors on this document and on
 each of the three scratch variants. Every run in this table was executed
 directly with \fpath{probcli}: the four full-exploration rows via
-\fpath{-model\_check}, the four reachability rows via
+\fpath{-model\_check}, the three reachability rows via
 \fpath{-model\_check -goal "<predicate>" -check\_goal}, which halts and
 prints a trace the first time it finds a state satisfying the goal (a
 smaller state/transition count than the corresponding full-exploration
@@ -799,7 +817,7 @@ made the underlying loss impossible.
 \field{EthosDisable} & \fpath{internal/enable/enable.go}: \field{unchainHooks}
   (line 193), info-only unsealed-count message (lines 197--198) & \\
 \field{SessionPurgeRefuse}, \field{SessionPurgeForce} &
-  \field{purgeOneTombstoned} (internal/session/store.go:534--627) &
+  \field{purgeOneTombstoned} (internal/session/store.go:534--697) &
   refuse-or-flagged-tombstone, never silent \\
 \field{AuditDurability} counter-example &
   ethos-015a & \field{lostUnwarned} reachable in one step from
