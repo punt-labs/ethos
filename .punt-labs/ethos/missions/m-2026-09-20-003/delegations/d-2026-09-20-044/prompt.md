@@ -1,0 +1,11 @@
+You are executing ethos mission m-2026-09-20-003 in <repo> on branch feat/z-spec-state-machines (already checked out — do not switch branches).
+
+First run: ethos mission show m-2026-09-20-003 — the contract is authoritative: write_set docs/spec-audit-durability.tex, success criteria, round budget 2, context with forensic file:line facts, inputs.files to read.
+
+Summary: write a Z specification (fuzz-clean, ProB-checked) of audit-line durability — states written-to-spool / sealed-into-chunk / committed — across the actor set: commit in the writing checkout, commit in a sibling worktree, git worktree remove, session end, ethos disable, session purge. Safety property: no transition destroys an unsealed line without sealing or refusing first. The current design must yield a recorded ProB counter-example reaching the ethos-015a loss state. Then evaluate three candidate designs as separate model variants against the same property — (1) per-machine spool outside any checkout, (2) worktree-aware seal, (3) sealing/refusing SessionEnd — and end with a written verdict section on which designs satisfy the property; that verdict is the formal input to bead ethos-ss2x. Follow docs/spec-mission-lifecycle.tex house style and its errata technique (decoupled variants; safety property outside the checked type). Bound counts (lines, worktrees) to 1-2 so ProB state spaces stay small.
+
+Tooling: z-spec MCP tools (check = fuzz; test / model_check = ProB); the file must be .tex. Run make check before each commit.
+
+Constraints: touch ONLY docs/spec-audit-durability.tex. No Go changes, no edits to bead ethos-ss2x. Commit incrementally on the current branch; do not push. Another agent is concurrently writing docs/spec-writeset-admission.tex — do not touch that file.
+
+When complete, submit a structured result for round 1 (ethos mission result --help). Format constraints that have cost agents a round: the result YAML must carry the mission: field naming m-2026-09-20-003; prose must avoid trailing whitespace and YAML-truncating free text. After submitting, stop — evaluator jra and the leader handle review and close.

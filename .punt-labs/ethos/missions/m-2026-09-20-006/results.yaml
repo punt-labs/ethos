@@ -1,0 +1,78 @@
+results:
+    - mission: m-2026-09-20-006
+      round: 1
+      created_at: "2026-09-20T15:35:25Z"
+      author: adb
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: Makefile
+          added: 60
+          removed: 2
+        - path: .github/workflows/test.yml
+          added: 34
+          removed: 0
+      evidence:
+        - name: detection rule is content-based, not a file list -- grep -l 'usepackage{fuzz}' docs/*.tex finds spec-mission-lifecycle.tex and teams.tex, no other docs/*.tex matches
+          status: pass
+        - name: make fuzz-check on unmodified docs/ -- both Z specs type-check clean, exit 0
+          status: pass
+        - name: 'make check (full gate: lint, docs, test, validate-content, fuzz-check) passes end-to-end, real time 15.016s total'
+          status: pass
+        - name: 'deliberately broken construct fails the gate -- fuzz .tmp/fuzz-fixture-broken.tex (an undeclared identifier y) exits 1 with a line-numbered error; make fuzz-check FUZZ_SPECS=.tmp/fuzz-fixture-broken.tex exits nonzero (make: *** [Makefile:138: fuzz-check] Error 1); fixture lived only under .tmp/, never under docs/'
+          status: pass
+        - name: gate passes again after the fixture is removed -- make fuzz-check re-run with docs/ untouched throughout, exit 0, no residue in git status .tmp/
+          status: pass
+        - name: 'CI-missing-fuzz is a hard failure, not a skip -- PATH stripped of fuzz plus CI=true: fuzz-check prints ''fuzz type-checker not found on PATH -- CI must have fuzz installed...'' to stderr and exits nonzero'
+          status: pass
+        - name: 'local-missing-fuzz is a graceful, loud skip -- PATH stripped of fuzz, no CI var: fuzz-check prints a one-line ''*** fuzz not installed -- SKIPPING ***'' notice and exits 0'
+          status: pass
+        - name: empty-glob path (no Z specs at all) reports and exits 0 -- make fuzz-check FUZZ_SPECS="" prints 'no docs/*.tex carries usepackage{fuzz}' and exits 0
+          status: pass
+        - name: CI install path measured from a clean clone -- git clone Spivoxity/fuzz at install.sh's pinned commit + configure + make + make install completed in 2.157s wall time on this machine; make fuzz-check itself then runs in 0.043s once fuzz is on PATH, so the CI-time delta is dominated by the one-time fuzz build, not the gate
+          status: pass
+        - name: .github/workflows/test.yml YAML parses cleanly (uv run python -c 'yaml.safe_load(...)') after the new steps were added
+          status: pass
+      prose: |
+        Added a fuzz-check Make target (Makefile) wired into `check`, detecting
+        Z specs by content (`usepackage{fuzz}` substring match over
+        docs/*.tex) rather than a hardcoded list, so spec-writeset-admission,
+        spec-audit-durability, spec-hook-gates, and any future edits to
+        spec-mission-lifecycle from the four sibling missions on this branch
+        are covered automatically once they land -- no Makefile edit needed
+        when they do.
+
+        Local vs CI treatment of a missing fuzz binary is asymmetric by
+        design: a developer machine without fuzz built degrades to a loud
+        one-line skip (fuzz has no distributed binary, only source, so this
+        is a real toolchain gap most edits never need to close); CI is
+        expected to have it and a missing binary there is a hard failure of
+        the gate, never silent, never a skip. .github/workflows/test.yml now
+        checks out punt-labs/z-spec at its published v0.20.5 tag and runs its
+        own documented `install.sh --fuzz-only` path (git clone the pinned
+        fuzz commit, configure/make/make install, no CLI package, no
+        probcli, no plugin), installing bison and flex explicitly first since
+        fuzz's own Makefile.in names them literally with no autoconf
+        fallback and ubuntu-latest's build-essential does not guarantee them.
+
+        Non-Z .tex docs (docs/agent-identity-spec.tex, docs/architecture.tex,
+        docs/testing-strategy.tex, prfaq.tex) get no compile gate. This is
+        recorded as a documented decision in the Makefile comment directly
+        above fuzz-check, not a silent omission: `make docs-pdf` already
+        documents why a LaTeX compile step stays opt-in rather than joining
+        `check` -- it needs a full TeX distribution CI does not otherwise
+        install -- and none of the four are executable specifications the
+        way the fuzz-typed docs are, so there is no analogous silent-drift
+        failure mode to close. Deferred under ethos-cy70 if a future need
+        (e.g. CI PDF regeneration checks) reopens it.
+
+        All demonstration work (the broken-construct fixture, the from-
+        scratch fuzz build used to measure CI-representative timing) ran
+        under .tmp/, never under docs/, per the mission's concurrent-editing
+        constraint; both were removed after use and git status confirms no
+        residue. Two commits, each preceded by a clean `make check`: the
+        Makefile gate (17c3283) and the CI wiring (eb74d40). No docs/ or Go
+        files were touched; the write set (Makefile,
+        .github/workflows/, scripts/) held -- scripts/ was not needed for
+        this mission's shape, per the leader's own note to keep the Makefile
+        change "one target, wired into check."

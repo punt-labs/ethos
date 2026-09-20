@@ -1,0 +1,130 @@
+results:
+    - mission: m-2026-09-20-002
+      round: 1
+      created_at: "2026-09-20T16:14:14Z"
+      author: jms
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/spec-writeset-admission.tex
+          added: 931
+          removed: 0
+      evidence:
+        - name: zspec check (fuzz) on docs/spec-writeset-admission.tex
+          status: pass
+        - name: make check (includes fuzz docs/spec-writeset-admission.tex)
+          status: pass
+        - name: zspec model_check, Init/AdmitMission/ReleaseMission isolated
+          status: pass
+        - name: zspec model_check, committed file as a whole (Store plus containment schemas)
+          status: pass
+        - name: zspec check + model_check, scratch ethos-vaib buggy pairing (.tmp, not committed)
+          status: pass
+        - name: zspec check + model_check, scratch ethos-vaib corrected pairing (.tmp, not committed)
+          status: pass
+        - name: zspec check + model_check, scratch ethos-8ady buggy pairing (.tmp, not committed)
+          status: pass
+        - name: zspec check + model_check, scratch ethos-8ady corrected pairing (.tmp, not committed)
+          status: pass
+      open_questions:
+        - The whole-file zspec model_check run (Store plus PathContainedByBuggy/Fixed together, 29064 states) is not reported certified complete by probcli, though raising the operation budget fivefold changed nothing; the isolated Init/AdmitMission/ReleaseMission run (7266 states) is certified complete with the same zero-violation result. Both are reported in the document. Evaluator may want to confirm this is an acceptable evidentiary basis for criterion (c) rather than requiring a certified-complete whole-file run.
+        - 'Section Non-goals documents one deliberate, minor scope simplification in the admission model''s Store invariant: it applies the wildcard-aware position rule symmetrically to both entries being compared, which is marginally more permissive than entryPairConflicts''s literal-file-side reading in the single edge case of a file-shaped entry whose own segment text is itself the literal string ** — a combination no entry in this codebase exhibits. Flagging for evaluator awareness rather than treating it as a defect.'
+      prose: |
+        docs/spec-writeset-admission.tex models CanonicalPath and
+        PathContainedBy as schemas (not free axdef functions) because a
+        free function or relation whose domain mentions seq X, confirmed
+        empirically before writing the committed model, makes probcli's
+        SETUP_CONSTANTS fail for the whole file even when the operations
+        under test never reference it. Paths are modelled as an
+        absoluteness flag plus a segment sequence (RAWSEG/CanonicalPathFixed);
+        write-set entries as segment patterns (PATSEG, ENTRY). The document
+        states and checks the three required properties: (a) canonicalization
+        preserves the absolute/relative distinction, exercised by the
+        ethos-vaib decoupled demonstration; (b) containment is path-semantic
+        rather than pattern-string-literal, exercised by the ethos-8ady
+        decoupled demonstration; (c) open-mission write-sets do not overlap,
+        modelled as Store's own invariant with AdmitMission's guard as its
+        calculated precondition, checked clean by ProB.
+
+        Both decoupled buggy-variant models reproduce their tickets as
+        recorded ProB deadlock traces, following spec-mission-lifecycle.tex's
+        errata technique exactly: neither is typed against ENTRY or Store,
+        so the safety property is not baked into the type the buggy
+        operation is checked against. ethos-vaib: 5 states, 21 transitions,
+        deadlock at an absolute path admitted by a relative glob entry;
+        corrected pairing, 20 states, 36 transitions, clean. ethos-8ady: 1
+        state, 5 transitions, deadlock at a semantically-covered file the
+        literal heuristic reports as uncovered; corrected pairing, 5 states,
+        9 transitions, clean.
+
+        The corrected admission model (Init, AdmitMission, ReleaseMission)
+        runs clean in isolation: 7266 states, 35915 transitions, certified
+        complete, zero violations. zspec check reports 0 errors on the
+        committed file, confirmed independently by make check's own fuzz
+        invocation over docs/*.tex.
+
+        Commits: one commit for the whole document (single logical step —
+        the model, its validation demonstrations, and its traceability
+        table were designed and verified together and do not decompose
+        into independently-reviewable slices without leaving intermediate
+        commits fuzz-broken).
+    - mission: m-2026-09-20-002
+      round: 2
+      created_at: "2026-09-20T16:37:00Z"
+      author: jms
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: docs/spec-writeset-admission.tex
+          added: 103
+          removed: 56
+      evidence:
+        - name: zspec check (fuzz) on docs/spec-writeset-admission.tex, round 2
+          status: pass
+        - name: make check (includes fuzz docs/spec-writeset-admission.tex), round 2
+          status: pass
+        - name: zspec model_check, committed file as a whole, after unwrap fix
+          status: pass
+        - name: zspec check + model_check, scratch ethos-vaib buggy pairing with unwrap fix, setsize 2 and 3
+          status: pass
+        - name: zspec check + model_check, scratch ethos-vaib corrected pairing with unwrap fix, setsize 2 and 3
+          status: pass
+        - name: zspec check + model_check, scratch ethos-8ady buggy pairing with HasSuffix guard
+          status: pass
+        - name: zspec check + model_check, scratch ethos-8ady corrected pairing with HasSuffix guard
+          status: pass
+      prose: |
+        All three required fixes applied.
+
+        Fix 1 (unwrap under-constraint): added dom unwrap = ran rsSeg to
+        both the committed document and the two ethos-vaib scratch files.
+        Re-ran every affected check. The whole-file model_check dropped
+        from 29064/172720 to 7266/43180 -- exactly the state count the
+        isolated Init/AdmitMission/ReleaseMission run already certified,
+        confirming the prior inflation came entirely from the
+        under-constrained unwrap witnesses and nothing else. The
+        vaib-buggy deadlock search itself is setsize-sensitive by nature
+        (it halts at the first violation), so I report both setsize 2 (1
+        state, 5 transitions) and setsize 3 (2 states, 6 transitions)
+        rather than picking one; the vaib-fixed clean run is now stable at
+        5 states, 9 transitions across both setsizes, down from the
+        previously-inflated 20/36. Replaced open_question 1 with what the
+        re-run actually shows, as instructed.
+
+        Fix 2 (8ady mechanism): retargeted the citation to lint.go:193 and
+        added witnessEntryIsDir, fixed to zfalse for the docs/** witness
+        (matching strings.HasSuffix("docs/**", "/") = false in Go), as a
+        leading conjunct of literalCovered. The guard now mirrors the real
+        code's short-circuit exactly: literalCovered is unconditionally
+        false for this witness because the trailing-slash check fails
+        before HasPrefix would ever run, not because a per-segment string
+        comparison was attempted and lost. Still deadlocks: 1 state, 5
+        transitions, unchanged. Rewrote the surrounding prose and the
+        Traceability table row to state this precisely rather than describe
+        a literal comparison that never actually executes for this entry.
+
+        Fix 3 (citation): conflict.go:360-378 -> 360-379 in both places it
+        appeared.
+
+        open_question 2 (symmetric wildcard permissiveness in the admission
+        model) is unchanged, per the evaluator's acceptance.

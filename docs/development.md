@@ -16,13 +16,14 @@ Before specifying work, check the relevant standard:
 - **New slash command** → existing command files for pattern; both `name.md` and `name-dev.md` required
 - **Any Go code** → [go standard](https://github.com/punt-labs/punt-kit/blob/main/standards/go.md)
 - **Release work** → [release-process standard](https://github.com/punt-labs/punt-kit/blob/main/standards/release-process.md)
+- **`internal/mission` lifecycle logic** (status or recommendation values, guards on `Create`/`Update`/`AppendResult`/`AppendReflection`/`AdvanceRound`/`Close`/`Abandon`/`DisclaimDelegation`, or a new status-machine operation) → amend `docs/spec-mission-lifecycle.tex` in the same PR, or state in the PR description why the change does not affect it
 
 ## Build & Run
 
 ```bash
 make build                              # Build ethos binary
 make install                            # Build and install to ~/.local/bin
-make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests)
+make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests, Z-spec fuzz type-check)
 ./ethos version                         # Print version
 ./ethos doctor                          # Check installation health
 ./ethos setup                           # Interactive repo setup wizard
@@ -124,10 +125,10 @@ is dropped from this repo.
 The Makefile is the source of truth (`make help`).
 
 ```bash
-make check                             # All gates: lint + docs + test
+make check                             # All gates: lint + docs + test + validate-content + fuzz-check
 ```
 
-Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`.
+Expands to `make lint docs test validate-content fuzz-check`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI).
 
 ## Architecture
 

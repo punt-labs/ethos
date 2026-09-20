@@ -1,0 +1,2 @@
+{"ts":"2026-09-20T15:35:25.597793472Z","event":"result","actor":"adb","details":{"confidence":0.92,"evidence_entries":10,"files_changed":2,"round":1,"verdict":"pass"}}
+{"ts":"2026-09-20T15:39:01.069091608Z","event":"close","actor":"claude","details":{"round":1,"status":"closed","verdict":"pass"}}

@@ -1,0 +1,834 @@
+%
+% spec-audit-durability.tex
+%
+% Audit Line Durability: A Z Specification
+% A formal model of the life of a sealed audit line across the actor set
+% that can touch a checkout's live audit zone: a commit in the writing
+% checkout, a commit in a sibling worktree, `git worktree remove`, session
+% end, `ethos disable`, and `ethos session purge`. Current as of the code
+% cited throughout (internal/hook/audit_seal.go, audit_vacuum.go,
+% session_end.go; internal/session/store.go; internal/enable/enable.go).
+%
+% Compile: pdflatex spec-audit-durability.tex
+%
+% Must be .tex, not .md -- see spec-mission-lifecycle.tex's own header note:
+% /z-spec:test and /z-spec:model_check glob for .tex specifically.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\fpath}[1]{\texttt{#1}}
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Audit Line Durability: A Z Specification}
+\author{Mike S, for Punt Labs}
+\date{September 2026}
+\hypersetup{
+  pdftitle={Audit Line Durability: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+\tableofcontents
+\newpage
+
+% ===================================================================
+\section{Scope}
+\label{sec:scope}
+% ===================================================================
+
+Every audit line an agent writes begins in a gitignored, per-checkout
+live file, \fpath{<repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl}
+(docs/audit-seal.md \S Two zones, lines 65--73). \field{SealRepo}
+(internal/hook/audit\_seal.go:49) moves a checkout's pending tail into a
+tracked chunk file, and only a git commit in \emph{that} checkout makes the
+chunk durable in history. Between those two events the line's only home is a
+plain file on a filesystem that git does not protect for gitignored content,
+and \fpath{git worktree remove} deletes exactly that filesystem without
+consulting ethos at all: no hook in this repository fires on worktree
+removal (a search of \fpath{internal/} confirms \fpath{internal/resolve}
+only \emph{reads} worktree layout, at resolve.go:757--827, to find which
+checkout owns a store; nothing reacts to one being torn down).
+
+This specification models one audit line's journey through three states
+--- spooled in the live zone, sealed into an untracked-but-tracked-path
+chunk, committed into git history --- and checks a single safety property
+against the actor set the mission brief names: a commit in the writing
+checkout, a commit in a sibling worktree, \fpath{git worktree remove},
+session end, \fpath{ethos disable}, and \fpath{ethos session purge}. It is a
+baseline, not a design proposal: \S\ref{sec:state}--\ref{sec:ops} model the
+system exactly as \fpath{internal/hook} and \fpath{internal/session}
+implement it today. \S\ref{sec:alternatives} then evaluates three amendments
+against the same property, each as an independent model variant.
+
+\subsection{Modelling choice: one line, one writer checkout}
+
+The real live file accumulates many lines over a session's life, and a repo
+may hold arbitrarily many worktrees. Neither multiplicity changes the shape
+of the property: \field{SealRepo} drains a checkout's \emph{entire} pending
+tail in one atomic write (audit\_seal.go:201--219, ``\emph{tail selection...
+write it whole to a new chunk}''), never line-by-line, so the state that
+matters is an aggregate count, not a sequence; and every actor in the brief
+acts on \emph{one} specific checkout at a time (the committing one, or the
+one a roster names as the writer) regardless of how many other checkouts
+exist. This licenses the model: \field{AuditLine} (\S\ref{sec:state})
+tracks one small pool of lines belonging to one writer checkout, and a
+second, unnamed checkout stands in for however many siblings the repo
+actually has --- \field{CommitInSiblingWorktree}'s effect does not depend on
+\emph{how many} siblings commit, only on whether one does.
+
+\subsection{Non-goals}
+\label{sec:nongoals}
+
+\begin{itemize}
+  \item \textbf{Per-line ordering and per-line watermarks.} \field{audit.SelectLiveTail}
+    and \field{audit.Watermark} (audit\_seal.go:194--201) resolve exactly
+    which lines are new since the last seal; this specification does not
+    re-derive that logic, it assumes the aggregate count SealRepo would
+    seal is known and models only what happens to that count.
+  \item \textbf{Chunk corruption and quarantine.} \field{ReadChunkVerified}
+    (internal/audit/read.go:88--105) checks a chunk parses whole and that
+    its last line's timestamp matches the \field{<last>} field in its own
+    filename --- not a hash; SHA-256 appears only in quarantine/tombstone
+    naming, elsewhere in \fpath{internal/audit}. The check and the
+    quarantine escape it feeds (invoked from audit\_seal.go:189--193) are
+    a data-integrity concern once a line is already sealed; orthogonal to
+    whether a line survives at all.
+  \item \textbf{Counting worktrees.} Following the modelling choice above, a
+    boolean \field{writerExists} stands for ``the writer checkout is still
+    present''; the model does not carry a count of how many other worktrees
+    exist, only that a sibling-worktree commit can happen.
+  \item \textbf{git's own dirty-worktree refusal, except where a design
+    variant depends on it.} Plain \fpath{git worktree remove} (no
+    \texttt{--force}) refuses when the worktree has modified or untracked
+    tracked-path content, but not when the only changes are to gitignored
+    paths --- which is exactly what the live zone is (docs/audit-seal.md
+    \S Two zones: \fpath{.punt-labs/local/} is gitignored). The current
+    design (\S\ref{sec:state}--\ref{sec:ops}) never leaves a
+    \emph{tracked}, uncommitted chunk sitting in the writer checkout long
+    enough for this to matter, because sealing only ever happens
+    immediately before a commit in the same checkout
+    (\S\ref{sec:opcommitwriting}); it becomes load-bearing only in Design~3
+    (\S\ref{sec:design3}), where it is modelled explicitly.
+  \item \textbf{Re-enabling ethos.} \fpath{ethos enable} after a disable is
+    the inverse of \field{EthosDisable} (\S\ref{sec:opdisable}) and is not
+    one of the six named actors; omitted for economy.
+\end{itemize}
+
+% ===================================================================
+\section{Free Types}
+\label{sec:freetypes}
+% ===================================================================
+
+\subsection{ZBOOL}
+
+fuzz has no built-in boolean, and \field{BOOL}/\field{true}/\field{false}
+collide with B keywords under ProB's translation:
+
+\begin{zed}
+ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+Four independent booleans ride this type in \field{AuditLine}
+(\S\ref{sec:state}): whether the writer checkout still exists on disk,
+whether its pre-commit seal hook is installed, whether some durable
+record (a live roster entry or a flagged purge tombstone) still names the
+session, and whether an unwarned, unsealed loss has ever occurred on this
+line's trajectory.
+
+% ===================================================================
+\section{Global Constants}
+\label{sec:constants}
+% ===================================================================
+
+The pool of lines tracked is bounded to keep ProB's state space finite, per
+the z-spec ProB-compatibility guidance on bounding numeric variables. The
+shape of every predicate below is independent of the concrete value.
+
+\begin{axdef}
+totalLines : \nat
+\where
+totalLines = 2
+\end{axdef}
+
+% ===================================================================
+\section{State}
+\label{sec:state}
+% ===================================================================
+
+\begin{schema}{AuditLine}
+spooled, sealed, committed : \nat \\
+writerExists, hookInstalled, rosterKnown, lostUnwarned : ZBOOL
+\where
+spooled + sealed + committed \leq totalLines \\
+writerExists = zfalse \implies (spooled = 0 \land sealed = 0)
+\end{schema}
+
+Two predicates:
+
+\begin{itemize}
+  \item \field{spooled + sealed + committed} $\leq$ \field{totalLines} is a
+    conservation bound, not a code invariant: it fixes a small pool of
+    lines and lets their location --- spool, chunk, or history --- account
+    for at most that many at once. The \emph{deficit},
+    \field{totalLines} $-$ (\field{spooled} $+$ \field{sealed} $+$
+    \field{committed}), is how many lines this trajectory has lost; there
+    is deliberately no separate counter for it; see
+    \S\ref{sec:opworktreeremove}.
+  \item \field{writerExists = zfalse} $\implies$
+    (\field{spooled = 0} $\land$ \field{sealed = 0}) is definitional, not
+    the safety property: it says what ``the writer checkout is gone''
+    \emph{means} for a live-zone file and an unstaged-or-staged chunk file
+    that both live only inside that checkout's working tree. It is not
+    baked into any operation's guard; every operation that clears
+    \field{writerExists} must independently clear \field{spooled} and
+    \field{sealed} to stay well-typed, and \S\ref{sec:opworktreeremove}
+    shows the real operation does so by \emph{destroying} them, not by
+    having sealed or reported them first.
+\end{itemize}
+
+\field{lostUnwarned} carries no invariant of its own. This is deliberate,
+and mirrors an errata already on record in spec-mission-lifecycle.tex
+\S Validation: a state invariant of the form
+$\field{lostUnwarned} = \field{zfalse}$ living inside \field{AuditLine}'s
+own \texttt{where}-clause would, under Z's schema calculus, make any
+$\Delta \field{AuditLine}$ operation that tries to set
+$\field{lostUnwarned}' = \field{ztrue}$ \emph{unsatisfiable} rather than
+\emph{caught} --- ProB would report no violation for exactly the reason
+there is nothing left to explore, which is a false negative, not a clean
+bill of health. \field{lostUnwarned} is instead a plain tracked witness:
+the safety property (\S\ref{sec:safety}) is that no reachable state has
+\field{lostUnwarned = ztrue}, checked by inspecting the state space
+ProB actually explores, not by an invariant that could silently swallow
+the case it exists to catch.
+
+% ===================================================================
+\section{Initialization}
+\label{sec:init}
+% ===================================================================
+
+\field{Init} starts with the whole small pool already sitting unsealed in
+the live zone of a fresh, present writer checkout with its seal hook
+installed and its session still known to the roster --- the state a session
+is in for most of its life, and the state every actor in \S\ref{sec:ops}
+must handle safely.
+
+\begin{schema}{Init}
+AuditLine'
+\where
+spooled' = totalLines \\
+sealed' = 0 \\
+committed' = 0 \\
+writerExists' = ztrue \\
+hookInstalled' = ztrue \\
+rosterKnown' = ztrue \\
+lostUnwarned' = zfalse
+\end{schema}
+
+% ===================================================================
+\section{Operations}
+\label{sec:ops}
+% ===================================================================
+
+\subsection{CommitInWritingCheckout}
+\label{sec:opcommitwriting}
+
+Models \field{SealRepo} (audit\_seal.go:49--64) running at pre-commit in
+the checkout that holds the line, immediately followed by the commit
+landing (docs/audit-seal.md: ``\emph{the freshly staged chunks land in the
+same commit as the work they document}''). Requires the hook still be
+installed: with no pre-commit hook there is nothing to invoke
+\field{SealRepo} at all (\S\ref{sec:opdisable}).
+
+\begin{schema}{CommitInWritingCheckout}
+\Delta AuditLine
+\where
+writerExists = ztrue \\
+hookInstalled = ztrue \\
+writerExists' = writerExists \\
+hookInstalled' = hookInstalled \\
+rosterKnown' = rosterKnown \\
+spooled' = 0 \\
+sealed' = 0 \\
+committed' = committed + spooled + sealed \\
+lostUnwarned' = lostUnwarned
+\end{schema}
+
+\subsection{CommitInWritingCheckoutNoHook}
+
+The companion case: a commit lands in the writer checkout, but its
+pre-commit hook was removed by an earlier \field{EthosDisable}
+(enable.go:193, \field{unchainHooks}), so \field{SealRepo} is never
+invoked. The commit happens; nothing about the audit line does.
+
+\begin{schema}{CommitInWritingCheckoutNoHook}
+\Xi AuditLine
+\where
+writerExists = ztrue \\
+hookInstalled = zfalse
+\end{schema}
+
+\subsection{CommitInSiblingWorktree}
+
+Models a commit in a \emph{different} checkout of the same repository.
+\field{SealRepo} is repo-wide only in the sense of visiting every session
+and mission directory \emph{inside the committing checkout}
+(\field{listRepoSessions(repoRoot)}, audit\_seal.go:68, where
+\field{repoRoot} is always the committing checkout ---
+audit\_seal.go:49--50). It has no way to reach another checkout's live
+zone, so this operation cannot touch \field{spooled} or \field{sealed} at
+all. It does run \field{VacuumCrossCheck} (audit\_vacuum.go:46), which
+warns on stderr when it can see the writer checkout is gone
+(audit\_vacuum.go:96--107) --- but that is a message emitted \emph{after}
+any loss already happened via a separate transition
+(\S\ref{sec:opworktreeremove}), not a state change, and not something that
+can retroactively make the destroying transition itself compliant with
+``sealed or warned \emph{first}''. It is therefore modelled as a pure
+query, changing nothing:
+
+\begin{schema}{CommitInSiblingWorktree}
+\Xi AuditLine
+\end{schema}
+
+\subsection{WorktreeRemove}
+\label{sec:opworktreeremove}
+
+Models \fpath{git worktree remove}. As \S\ref{sec:scope} establishes, no
+ethos hook fires on this event; the guard is only git's own precondition
+that there is a checkout there to remove. The operation deletes the
+checkout's working tree wholesale, so whatever was in the live zone or an
+uncommitted chunk file goes with it. \field{lostUnwarned} latches to
+\field{ztrue} exactly when this destroys a nonempty pool, and never
+resets --- there is no operation anywhere in this specification that turns
+\field{ztrue} back to \field{zfalse}, matching the fact that a destroyed
+line cannot un-destroy itself no matter what happens afterward.
+
+\begin{schema}{WorktreeRemove}
+\Delta AuditLine
+\where
+writerExists = ztrue \\
+writerExists' = zfalse \\
+spooled' = 0 \\
+sealed' = 0 \\
+committed' = committed \\
+hookInstalled' = hookInstalled \\
+rosterKnown' = rosterKnown \\
+(spooled > 0 \lor sealed > 0) \implies lostUnwarned' = ztrue \\
+(spooled = 0 \land sealed = 0) \implies lostUnwarned' = lostUnwarned
+\end{schema}
+
+\subsection{SessionEnd}
+
+Models \field{HandleSessionEnd} (session\_end.go:46--67): it clears the
+session's roster entry via \field{ss.Delete} (session\_end.go:57), which in
+turn only removes the roster file and mission sidecars
+(internal/session/store.go:278--301, \field{deleteFiles}) --- no seal, and,
+per \field{HandleSessionEnd}'s own doc comment, no unsealed-line probe,
+deliberately: ``\emph{failing the hook here would not improve on that
+guarantee... and would only make session end itself unreliable}''
+(session\_end.go:41--45). The live audit file and any uncommitted chunk are
+untouched; only the bookkeeping that a \emph{later} check could use to
+notice their loss disappears.
+
+\begin{schema}{SessionEnd}
+\Delta AuditLine
+\where
+spooled' = spooled \\
+sealed' = sealed \\
+committed' = committed \\
+writerExists' = writerExists \\
+hookInstalled' = hookInstalled \\
+rosterKnown' = zfalse \\
+lostUnwarned' = lostUnwarned
+\end{schema}
+
+\subsection{EthosDisable}
+\label{sec:opdisable}
+
+Models \fpath{ethos disable} (internal/enable/enable.go): it removes the
+pre-commit hook chain (\field{unchainHooks}, enable.go:193) and, if any
+lines are outstanding, prints an informational --- not a refusal ---
+line (enable.go:197--198: ``\emph{N unsealed audit lines remain in the
+local zone; re-enable to seal them}''). Nothing about the pool itself
+changes; only the hook that would otherwise drain it on the next commit in
+this checkout is gone.
+
+\begin{schema}{EthosDisable}
+\Delta AuditLine
+\where
+hookInstalled = ztrue \\
+hookInstalled' = zfalse \\
+spooled' = spooled \\
+sealed' = sealed \\
+committed' = committed \\
+writerExists' = writerExists \\
+rosterKnown' = rosterKnown \\
+lostUnwarned' = lostUnwarned
+\end{schema}
+
+\subsection{SessionPurgeRefuse}
+
+Models the unsealed-lines guard in \field{purgeOneTombstoned}
+(internal/session/store.go:534--697): with lines still pending and no
+\texttt{--force}, purge refuses outright and changes nothing. The guard
+itself is \texttt{if !force \&\& (unsealed > 0 || probeFailed)}
+(store.go:634--669); the caller that records the refusal is
+store.go:527--530, the \field{didRefuse} path.
+
+\begin{schema}{SessionPurgeRefuse}
+\Xi AuditLine
+\where
+spooled > 0 \lor sealed > 0
+\end{schema}
+
+\subsection{SessionPurgeForce}
+
+Models the same guard's \texttt{--force} branch: purge proceeds, but
+leaves a \emph{flagged} tombstone recording the unsealed-lines condition
+(docs/audit-seal.md \S Two zones, lines 96--105: an ``unsealed-lines
+flag... set either when it was forced past pending lines or''). A flagged
+tombstone is still a durable record a later \field{VacuumCrossCheck} pass
+can find (audit\_vacuum.go:53--56, the tombstone branch), so
+\field{rosterKnown} does \emph{not} drop to \field{zfalse} the way it does
+under plain \field{SessionEnd} --- purge trades a live roster entry for an
+equally discoverable tombstone, never for silence.
+
+\begin{schema}{SessionPurgeForce}
+\Delta AuditLine
+\where
+spooled' = spooled \\
+sealed' = sealed \\
+committed' = committed \\
+writerExists' = writerExists \\
+hookInstalled' = hookInstalled \\
+rosterKnown' = rosterKnown \\
+lostUnwarned' = lostUnwarned
+\end{schema}
+
+% ===================================================================
+\section{Safety Property}
+\label{sec:safety}
+% ===================================================================
+
+\textbf{AuditDurability}: no state reachable from \field{Init} by any
+sequence of the operations in \S\ref{sec:ops} has
+\field{lostUnwarned = ztrue}.
+
+Unlike spec-mission-lifecycle.tex's \field{AbandonSafety}, this is not
+checked as a schema invariant (\S\ref{sec:state} explains why it must not
+be one). It is checked the way a genuine counter-example search is always
+checked: by running the actual operation set through ProB and inspecting
+the states it reaches.
+
+\subsection{The current-design counter-example}
+\label{sec:counterexample}
+
+\texttt{/z-spec:check} passes on this document. \texttt{/z-spec:test}
+against \field{Init} and the eight operations of \S\ref{sec:ops} explores
+17 states and 78 transitions, is deadlock-free, and raises no assertion
+violation --- expected, since \field{lostUnwarned} carries no invariant
+for probcli to check (\S\ref{sec:state}). Reachability is instead
+confirmed by a goal-directed search, \fpath{probcli ... -model\_check
+-goal "lostUnwarned=ztrue" -check\_goal}, which finds
+\field{lostUnwarned = ztrue} by the shortest possible route --- no actor
+need do anything but remove the writer checkout while lines are still
+spooled. (The state/transition count this particular run explored is
+recorded in \S\ref{sec:probrun} along with why it is not quoted a second
+time here: per that section, a goal search's count is not stable across
+reruns, unlike a full exploration's.) This is probcli's own trace,
+verbatim:
+
+\begin{verbatim}
+*** TRACE (length=3):
+ 1: SETUP_CONSTANTS(totalLines=2)
+ 2: INITIALISATION(committed=0,hookInstalled=ztrue,lostUnwarned=zfalse,
+                    rosterKnown=ztrue,sealed=0,spooled=2,writerExists=ztrue)
+ 3: WorktreeRemove(lostUnwarned=ztrue,spooled=0,writerExists=zfalse)
+
+==> lostUnwarned = ztrue
+TRUE
+\end{verbatim}
+
+Two lines are destroyed in a single step, with no seal, no commit, and no
+warning at the time of destruction --- \field{CommitInSiblingWorktree}'s
+warning, if it ever fires, fires later and only if some other checkout
+happens to commit afterward (\S\ref{sec:ops}). This is the ethos-015a loss
+state the mission brief names. Recorded tool run: see
+\S\ref{sec:probrun}.
+
+% ===================================================================
+\section{Alternative Designs}
+\label{sec:alternatives}
+% ===================================================================
+
+Three amendments are evaluated against the same property. Each is a
+self-contained variant --- its own state schema and its own operations ---
+run independently of this document's own checked namespace, for the same
+reason spec-mission-lifecycle.tex's two decoupled demonstrations were: to
+get an isolated ProB run per variant without redeclaring \field{AuditLine}
+and its operations a second (or fourth) time in one namespace, and to keep
+each variant's own invariant from silently absorbing the very transition
+being tested (\S\ref{sec:state}). The Z fragments below are shown verbatim
+for the record; they were type-checked and model-checked as independent
+\fpath{.tex} scratch files, and \S\ref{sec:verdict} reports the results.
+
+\subsection{Design 1: per-machine spool outside any checkout}
+\label{sec:design1}
+
+The ethos-ss2x direction: move the live spool out of
+\fpath{<repo>/.punt-labs/local/} entirely, into a per-machine store (a
+SQLite database keyed by repo identity and session, not by checkout path).
+A line is then never inside any one checkout's working tree, so
+\fpath{git worktree remove} cannot reach it structurally, regardless of
+which checkout is removed or when. Sealing becomes a property of
+\emph{a} commit happening anywhere on the machine for the right repo, not
+of a specific checkout surviving.
+
+\begin{verbatim}
+AuditLineD1
+  spooled, sealed, committed : NAT
+  writerExists, hookInstalled, rosterKnown, lostUnwarned : ZBOOL
+where
+  spooled + sealed + committed <= totalLines
+  -- no writerExists-linked clause: the pool is not the writer
+  -- checkout's to lose.
+
+InitD1
+  AuditLineD1'
+where
+  spooled' = totalLines
+  sealed' = 0
+  committed' = 0
+  writerExists' = ztrue
+  hookInstalled' = ztrue
+  rosterKnown' = ztrue
+  lostUnwarned' = zfalse
+
+CommitAnywhereD1
+  Delta AuditLineD1
+where
+  hookInstalled = ztrue
+  spooled' = 0
+  sealed' = 0
+  committed' = committed + spooled + sealed
+  writerExists' = writerExists
+  hookInstalled' = hookInstalled
+  rosterKnown' = rosterKnown
+  lostUnwarned' = lostUnwarned
+
+CommitAnywhereNoHookD1
+  Xi AuditLineD1
+where
+  hookInstalled = zfalse
+  -- the NoHook counterpart carries over from the current design
+  -- (S:ops) unchanged in shape: still a pure query, now retyped
+  -- against AuditLineD1.
+
+WorktreeRemoveD1
+  Delta AuditLineD1
+where
+  writerExists = ztrue
+  writerExists' = zfalse
+  -- the removal itself IS modelled here, unlike WorktreeRemoveD2/D3's
+  -- carry-over of the current design's version: writerExists really
+  -- does flip. What does not follow it is the pool.
+  spooled' = spooled
+  sealed' = sealed
+  committed' = committed
+  hookInstalled' = hookInstalled
+  rosterKnown' = rosterKnown
+  lostUnwarned' = lostUnwarned
+
+-- EthosDisable, SessionEnd, SessionPurgeRefuse, SessionPurgeForce carry
+-- over from the current design unchanged. CommitAnywhereD1 and
+-- WorktreeRemoveD1 above are the two operations that CHANGED relative
+-- to the current design's CommitInWritingCheckout/CommitInSiblingWorktree
+-- and WorktreeRemove; by their own definitions neither ever assigns
+-- lostUnwarned' := ztrue, which is the reachability claim S:probrun
+-- reports.
+\end{verbatim}
+
+\subsection{Design 2: worktree-aware seal}
+\label{sec:design2}
+
+\field{listRepoSessions} (audit\_seal.go:68) is extended to enumerate every
+worktree's session directories via \fpath{git worktree list}, not only the
+committing checkout's own. A commit in a sibling worktree can then seal
+\emph{and commit} the writer checkout's pending lines too, provided the
+writer checkout still exists to be read from.
+
+\begin{verbatim}
+AuditLineD2
+  spooled, sealed, committed : NAT
+  writerExists, hookInstalled, rosterKnown, lostUnwarned : ZBOOL
+where
+  spooled + sealed + committed <= totalLines
+  writerExists = zfalse ==> (spooled = 0 and sealed = 0)
+  -- identical to the current design: the pool still lives inside the
+  -- writer checkout's working tree.
+
+InitD2   -- identical in shape to Init (S:init)
+
+CommitInWritingCheckoutD2   -- identical to CommitInWritingCheckout (S:opcommitwriting)
+
+CommitInWritingCheckoutNoHookD2   -- identical to CommitInWritingCheckoutNoHook
+
+CommitInSiblingWorktreeD2
+  Delta AuditLineD2
+where
+  writerExists = ztrue
+  -- worktree-aware seal can only enumerate a worktree that still
+  -- exists on disk to list and read.
+  spooled' = 0
+  sealed' = 0
+  committed' = committed + spooled + sealed
+  writerExists' = writerExists
+  hookInstalled' = hookInstalled
+  rosterKnown' = rosterKnown
+  lostUnwarned' = lostUnwarned
+
+WorktreeRemoveD2   -- IDENTICAL to WorktreeRemove (S:opworktreeremove):
+                   -- worktree-aware seal changes what a COMMIT does, not
+                   -- what `git worktree remove` does, and no hook fires
+                   -- on removal in this design either.
+
+-- EthosDisable, SessionEnd, SessionPurgeRefuse, SessionPurgeForce
+-- carry over unchanged.
+\end{verbatim}
+
+\subsection{Design 3: sealing SessionEnd}
+\label{sec:design3}
+
+\field{HandleSessionEnd} gains an unsealed-line probe mirroring
+\field{purgeOneTombstoned}'s (store.go:534--697), but seals rather than
+refuses: \field{HandleSessionEnd} already documents its cleanup as
+best-effort with no retry path (session\_end.go:41--45), and a hook with
+no interactive caller to retry against cannot usefully \emph{refuse} the
+way a CLI command can return nonzero and let an operator re-run it.
+Sealing converts a pending line from ``in the gitignored live file'' to
+``in a tracked-but-uncommitted chunk file'' --- which changes what
+\fpath{git worktree remove} sees: git's own dirty-worktree check refuses a
+plain (non-\texttt{--force}) removal when a tracked path has uncommitted
+content (\S\ref{sec:nongoals}), so a sealed-but-uncommitted chunk is
+something git itself can now block on --- but only a block, not a
+guarantee: \field{WorktreeRemoveD3}'s guard,
+\field{force? = ztrue} $\lor$ \field{sealed = 0}, is a disjunction, so
+an operator who passes \texttt{--force} keeps the operation enabled
+regardless of \field{sealed}'s value, by the guard's own shape and with
+no need to search for a witness state. This is the same shape of
+override \field{SessionPurgeForce} already offers on the purge path
+(\S\ref{sec:ops}); \S\ref{sec:verdict} returns to the difference.
+
+\begin{verbatim}
+AuditLineD3   -- identical fields and invariant to AuditLineD2/AuditLine
+
+InitD3   -- identical in shape to Init (S:init)
+
+CommitInWritingCheckoutD3   -- identical to CommitInWritingCheckout
+
+CommitInWritingCheckoutNoHookD3   -- identical to CommitInWritingCheckoutNoHook
+
+CommitInSiblingWorktreeD3   -- identical to the current design's
+                            -- (pure Xi, S:ops): Design 3 does not touch
+                            -- what a sibling commit does.
+
+SessionEndD3
+  Delta AuditLineD3
+where
+  spooled' = 0
+  sealed' = sealed + spooled
+  committed' = committed
+  writerExists' = writerExists
+  hookInstalled' = hookInstalled
+  rosterKnown' = zfalse
+  lostUnwarned' = lostUnwarned
+
+WorktreeRemoveD3
+  Delta AuditLineD3
+  force? : ZBOOL
+where
+  writerExists = ztrue
+  force? = ztrue or sealed = 0
+  -- git's own refusal: a plain removal is blocked whenever a tracked,
+  -- uncommitted chunk is sitting in the checkout. Only a still-spooled
+  -- (gitignored, untracked) line is invisible to this guard.
+  writerExists' = zfalse
+  spooled' = 0
+  sealed' = 0
+  committed' = committed
+  hookInstalled' = hookInstalled
+  rosterKnown' = rosterKnown
+  (spooled > 0 or sealed > 0) ==> lostUnwarned' = ztrue
+  (spooled = 0 and sealed = 0) ==> lostUnwarned' = lostUnwarned
+
+-- EthosDisable, SessionPurgeRefuse, SessionPurgeForce carry over
+-- unchanged.
+\end{verbatim}
+
+% ===================================================================
+\section{Tool Run}
+\label{sec:probrun}
+% ===================================================================
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lccX@{}}
+\toprule
+\textbf{Model} & \textbf{States} & \textbf{Transitions} &
+  \textbf{Result} \\
+\midrule
+Current design (\S\ref{sec:state}--\ref{sec:ops}), all 8 operations,
+  full exploration &
+  17 & 78 &
+  deadlock-free, no assertion violated (none declared, \S\ref{sec:state}) \\
+Current design, goal search \field{lostUnwarned=ztrue} &
+  6 & 37 &
+  \field{lostUnwarned = ztrue} reachable via \field{WorktreeRemove} from
+  \field{Init} in one step (\S\ref{sec:counterexample}) \\
+Design 1 (\S\ref{sec:design1}): per-machine spool, full exploration &
+  17 & 74 &
+  \emph{No counter example found. ALL states visited} ---
+  \field{lostUnwarned = ztrue} \textbf{unreachable} \\
+Design 2 (\S\ref{sec:design2}): worktree-aware seal, full exploration &
+  17 & 70 &
+  deadlock-free \\
+Design 2, goal search \field{lostUnwarned=ztrue} &
+  4 & 23 &
+  \textbf{still reachable} --- via \field{WorktreeRemoveD2} from
+  \field{Init} in one step, before any
+  \field{CommitInSiblingWorktreeD2} \\
+Design 3 (\S\ref{sec:design3}): sealing \field{SessionEnd}, full
+  exploration & 17 & 84 & deadlock-free \\
+Design 3, goal search \field{lostUnwarned=ztrue} $\land$
+  \field{rosterKnown=ztrue} &
+  7 & 40 &
+  \textbf{still reachable} --- via \field{WorktreeRemoveD3(force?=zfalse)}
+  from \field{Init} in one step, with \field{SessionEndD3} never having
+  fired: a spooled (gitignored) line is invisible to git's
+  dirty-worktree guard, which only inspects \field{sealed} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+fuzz's \texttt{/z-spec:check} reports 0 errors on this document and on
+each of the three scratch variants. Every run in this table was executed
+directly with \fpath{probcli}: the four full-exploration rows via
+\fpath{-model\_check}, the three reachability rows via
+\fpath{-model\_check -goal "<predicate>" -check\_goal}, which halts and
+prints a trace the first time it finds a state satisfying the goal (a
+smaller state/transition count than the corresponding full-exploration
+row is expected --- the goal search stops early).
+
+Full-exploration counts are deterministic --- re-running any of the four
+full-exploration rows reproduces the same state and transition count
+every time, on any probcli build, because exhaustive search visits every
+reachable state regardless of the order it visits them in. Goal-search
+counts are not: \fpath{-check\_goal} stops at the \emph{first} state it
+happens to visit that satisfies the predicate, and re-running the exact
+same goal search against the exact same unmodified file has been
+observed to report a different intermediate state/transition count from
+one run to the next (the current-design goal search above, run twice
+across this document's two review rounds, reported 7/35 and then 6/37).
+The reachability verdict --- \textbf{TRUE}, with a concrete trace ---
+is what the goal search establishes; its state/transition count is a
+report of how much of the space that particular run happened to touch
+before stopping, not a fact about the specification. All runs were
+against \fpath{.tex} files --- \texttt{probcli} silently reports 0 states
+and 0 transitions on any other extension (spec-mission-lifecycle.tex \S Tool
+run makes the same point; it is worth repeating because it is exactly the
+kind of mistake that produces a false-clean report with no error message
+at all).
+
+% ===================================================================
+\section{Verdict}
+\label{sec:verdict}
+% ===================================================================
+
+Only Design~1 satisfies \field{AuditDurability} unconditionally: moving the
+live spool out of any one checkout's working tree is what makes
+\fpath{git worktree remove} structurally unable to reach it, in every
+ordering ProB explored. This is the strongest of the three amendments and
+the one this specification recommends as the fix bead ethos-ss2x should
+implement --- a per-machine store, not a per-checkout hook.
+
+Design~2 (worktree-aware seal) and Design~3 (sealing \field{SessionEnd})
+each close a real ordering but not the one the mission brief's counter-example
+uses. Design~2 only helps when a sibling checkout happens to commit
+\emph{before} the writer checkout is removed; a \fpath{git worktree remove}
+run with no other commit pending anywhere still destroys the pool exactly
+as today, because worktree-aware seal changes what a \emph{commit} does,
+and nothing changes what \fpath{git worktree remove} does. Design~3 only
+helps when \field{HandleSessionEnd} actually ran and sealed before the
+checkout was removed; a checkout whose session crashed, or was torn down
+by a script that never went through a clean session end, presents the
+same unsealed, gitignored pool that git's own dirty-worktree check cannot
+see (confirmed: \field{lostUnwarned = ztrue} $\land$
+\field{rosterKnown = ztrue} is reachable in one step from \field{Init},
+\S\ref{sec:probrun}). And even in the ordering Design~3 does cover, its
+refusal is only git's default one: an operator who passes
+\texttt{--force} to \fpath{git worktree remove} defeats it exactly as
+plainly as \field{SessionPurgeForce} lets \texttt{--force} defeat
+\field{SessionPurgeRefuse} (\S\ref{sec:ops}) --- the difference is that
+purge's force path still leaves a flagged tombstone, and a forced
+\fpath{git worktree remove} leaves nothing. Neither is wrong to build --- each narrows the exposure window at low
+cost, and Design~3 in particular converts a silent loss into a git-level
+refusal for the ordering it does cover, which is exactly the kind of
+promotion \field{SessionPurgeForce} (\S\ref{sec:ops}) already gets right
+for the purge path. But neither is a substitute for removing the
+checkout-dependency itself. The recommendation to ethos-ss2x is Design~1
+as the fix, with Design~3 worth adding afterward as cheap defense in depth
+for the ordering it does close; Design~2 is not worth the
+\field{listRepoSessions} complexity it would add once Design~1 has already
+made the underlying loss impossible.
+
+% ===================================================================
+\section{Traceability}
+\label{sec:trace}
+% ===================================================================
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+\textbf{Z construct} & \textbf{Go / doc source} & \textbf{Note} \\
+\midrule
+\field{AuditLine} zone split &
+  docs/audit-seal.md \S Two zones, lines 65--73 &
+  live (gitignored) vs.\ sealed (tracked) paths \\
+\field{CommitInWritingCheckout} & \field{SealRepo}
+  (audit\_seal.go:49--64), \field{sealDirLocked}
+  (audit\_seal.go:177--220) & seal-then-commit, same commit \\
+\field{CommitInSiblingWorktree} & \field{listRepoSessions}
+  (audit\_seal.go:68), \field{VacuumCrossCheck}
+  (audit\_vacuum.go:46--124) & seals nothing outside \field{repoRoot};
+  warns post-hoc \\
+\field{WorktreeRemove} & \emph{no ethos hook exists} &
+  internal/resolve only reads worktree layout
+  (resolve.go:757--827); confirmed absent by inspection \\
+\field{SessionEnd} & \field{HandleSessionEnd}
+  (session\_end.go:46--67), \field{ss.Delete} $\to$ \field{deleteFiles}
+  (internal/session/store.go:278--301) & no seal, no probe, by design \\
+\field{EthosDisable} & \fpath{internal/enable/enable.go}: \field{unchainHooks}
+  (line 193), info-only unsealed-count message (lines 197--198) & \\
+\field{SessionPurgeRefuse}, \field{SessionPurgeForce} &
+  \field{purgeOneTombstoned} (internal/session/store.go:534--697) &
+  refuse-or-flagged-tombstone, never silent \\
+\field{AuditDurability} counter-example &
+  ethos-015a & \field{lostUnwarned} reachable in one step from
+  \field{Init} \\
+Design 1 & bead ethos-ss2x (SQLite per-machine spool) & recommended fix \\
+Design 2 & \field{listRepoSessions} worktree-aware extension &
+  partial, ordering-dependent \\
+Design 3 & \field{HandleSessionEnd} seal-on-end &
+  partial, crash-ordering-dependent \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\end{document}

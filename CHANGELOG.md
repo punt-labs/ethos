@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Three new Z specifications extend formal coverage to the subsystems
+  producing the current bug queue.** `docs/spec-writeset-admission.tex`
+  models path canonicalization and write-set admission and reproduces
+  ethos-vaib (leading-slash loss admits `/docs/x.md` under `docs/**`) and
+  ethos-8ady (the lint coverage heuristic's `HasSuffix(w, "/")`
+  short-circuit) as ProB counter-examples, with the corrected semantics
+  model-checked clean and certified complete.
+  `docs/spec-audit-durability.tex` models audit-line durability across
+  checkouts, worktrees, and sessions; ProB reaches the ethos-015a loss
+  state in one step under the current design, and of three candidate
+  fixes only a per-machine spool (bead ethos-ss2x) satisfies the safety
+  property unconditionally — the spec's verdict section is the formal
+  input to that bead. `docs/spec-hook-gates.tex` models the composed
+  SubagentStart verifier gate and PreToolUse write gate; the
+  silent-disabled state is reachable under today's mute empty-MISSION_ID
+  skip and unreachable under a loud-skip variant that changes
+  diagnostics only (per ethos-yf6n's triage).
+- **`make check` now type-checks Z specifications.** A `fuzz-check`
+  target detects Z specs by content (`usepackage{fuzz}`), runs fuzz on
+  each, hard-fails in CI when fuzz is absent, and skips loudly (one
+  line) on local machines without it. CI installs fuzz from
+  punt-labs/z-spec v0.20.5 (ethos-cy70).
+
+### Changed
+
+- **`docs/spec-mission-lifecycle.tex` is re-baselined to current code.**
+  The Abandon operation now models DES-076 semantics (aborted
+  delegations never block; `--disclaim` excludes a named delegation),
+  DES-072 correction events are excluded with a cited three-fact
+  argument, the traceability table is refreshed to commit 244b6c3, and a
+  currency rule now requires lifecycle-touching PRs to amend the spec or
+  state why it is unaffected (also in `docs/development.md`'s Standards
+  Checklist).
+
 ## [4.19.1] - 2026-09-19
 
 ### Fixed

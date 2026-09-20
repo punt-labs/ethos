@@ -1,0 +1,154 @@
+results:
+    - mission: m-2026-09-20-003
+      round: 1
+      created_at: "2026-09-20T15:44:51Z"
+      author: jms
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/spec-audit-durability.tex
+          added: 785
+          removed: 0
+      evidence:
+        - name: zspec check docs/spec-audit-durability.tex
+          status: pass
+        - name: zspec test docs/spec-audit-durability.tex (setsize 3)
+          status: pass
+        - name: 'probcli -model_check on committed file: 17 states, 78 transitions, deadlock-free, no assertion violated'
+          status: pass
+        - name: 'probcli -model_check -goal lostUnwarned=ztrue -check_goal on committed file: COUNTER EXAMPLE FOUND, 3-step trace via WorktreeRemove from Init'
+          status: pass
+        - name: 'scratch design1.tex (per-machine spool): full exploration 9 states/38 transitions, No counter example found, ALL states visited'
+          status: pass
+        - name: 'scratch design2.tex (worktree-aware seal): full exploration 17 states/66 transitions; goal search still finds lostUnwarned=ztrue in 3 steps via WorktreeRemove before any sibling commit'
+          status: pass
+        - name: 'scratch design3.tex (sealing SessionEnd): full exploration 17 states/80 transitions; goal search finds lostUnwarned=ztrue both via forced removal after SessionEndD3 (4 steps) and via direct removal with SessionEnd never having run (3 steps, rosterKnown stays ztrue)'
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        docs/spec-audit-durability.tex models an audit line's life (spooled,
+        sealed, committed) across the six named actors: commit in the writing
+        checkout, commit in a sibling worktree, git worktree remove, session
+        end, ethos disable, and session purge. Every operation cites file:line
+        in internal/hook/audit_seal.go, audit_vacuum.go, session_end.go, and
+        internal/session/store.go.
+
+        The safety property, AuditDurability, is deliberately not baked into
+        the AuditLine state schema's own invariant, following the errata
+        already on record in spec-mission-lifecycle.tex's Validation section:
+        doing so would make any operation that violates it unsatisfiable
+        rather than caught, which is a false negative, not a clean result.
+        Reachability is instead confirmed directly with probcli's goal search
+        (-model_check -goal "<predicate>" -check_goal), which halts and prints
+        a real trace the first time it finds a matching state.
+
+        On the committed file, that search confirms the ethos-015a loss state
+        is reachable in one step: WorktreeRemove destroys two spooled lines
+        with no seal and no warning, because no ethos hook fires on git
+        worktree remove at all (confirmed absent by inspecting internal/resolve,
+        which only reads worktree layout).
+
+        Three candidate designs were each built as an independent scratch .tex
+        file (per spec-mission-lifecycle.tex's own decoupled-variant technique,
+        to avoid redeclaring the state schema and to keep each variant's own
+        invariant from absorbing its own buggy transition), type-checked and
+        model-checked directly with probcli, and their Z source and results
+        transcribed into the committed document as illustrative verbatim plus a
+        results table:
+
+          - Design 1, per-machine spool: unconditionally safe. Full exploration
+            of all 9 reachable states finds no violation in any ordering.
+          - Design 2, worktree-aware seal: only safe when a sibling checkout
+            commits before the writer checkout is removed; a bare removal with
+            no other commit pending still reaches the loss state.
+          - Design 3, sealing SessionEnd: only safe when SessionEnd actually
+            ran and the operator does not pass --force to git worktree remove;
+            both the crash/never-ended ordering and the deliberate-force
+            ordering still reach the loss state.
+
+        The verdict section recommends Design 1 (bead ethos-ss2x, a per-machine
+        SQLite spool) as the fix, with Design 3 worth adding afterward as cheap
+        defense in depth for the ordering it does close.
+
+        make check passes (golangci-lint, shellcheck, e2e pytest, markdownlint,
+        go test -race across all packages, validate-content, and fuzz on all
+        four .tex specs in docs/ including this one). Only
+        docs/spec-audit-durability.tex was touched; committed as 2faef55.
+    - mission: m-2026-09-20-003
+      round: 2
+      created_at: "2026-09-20T16:06:33Z"
+      author: jms
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: docs/spec-audit-durability.tex
+          added: 816
+          removed: 0
+      evidence:
+        - name: zspec check docs/spec-audit-durability.tex
+          status: pass
+        - name: 'zspec test docs/spec-audit-durability.tex (setsize 3): 17 states, 78 transitions, deadlock-free, no assertion violated'
+          status: pass
+        - name: 'probcli -model_check -goal lostUnwarned=ztrue -check_goal on committed file: COUNTER EXAMPLE FOUND, reachable in one step via WorktreeRemove from Init'
+          status: pass
+        - name: 'citation fix verified: internal/session/store.go:634-669 is the actual purgeOneTombstoned unsealed-lines guard (if !force and (unsealed>0 or probeFailed)); 499-508 was PurgeTombstoned''s unrelated roster-unreadable branch'
+          status: pass
+        - name: 'scratch design1.tex + CommitAnywhereNoHookD1: full exploration 9 states/42 transitions, No counter example found, ALL states visited (unreachable, conclusion unchanged)'
+          status: pass
+        - name: 'scratch design2.tex + CommitInWritingCheckoutNoHookD2: full exploration 17 states/70 transitions (was 66, now matches jra''s independent reproduction); goal search confirms lostUnwarned=ztrue still reachable in 1 step via WorktreeRemoveD2'
+          status: pass
+        - name: 'scratch design3.tex + CommitInWritingCheckoutNoHookD3: full exploration 17 states/84 transitions (was 80, now matches jra''s independent reproduction); goal search with rosterKnown=ztrue confirms lostUnwarned=ztrue still reachable in 1 step via WorktreeRemoveD3(force?=zfalse) with SessionEndD3 never having fired'
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Round 2 fixes both required defects from jra's review.
+
+        1. SessionPurgeRefuse's citation named store.go:499-508 for the
+        unsealed-lines refusal guard; those lines are actually inside
+        PurgeTombstoned's unrelated roster-unreadable branch. Re-read
+        purgeOneTombstoned directly and corrected the citation to
+        store.go:634-669, the actual `if !force && (unsealed > 0 ||
+        probeFailed)` guard, keeping 527-530 (the caller's didRefuse
+        bookkeeping) as a supporting cite as jra allowed.
+
+        2. Design 2 and Design 3's scratch models were missing
+        CommitInWritingCheckoutNoHook (the hookInstalled=zfalse case, where a
+        commit lands in the writer checkout but nothing seals because the
+        pre-commit hook was removed by an earlier EthosDisable). That
+        operation carries over unchanged from the current design in both
+        variants and should have been included. Adding it to both scratch
+        files raises their full-exploration transition counts from 66 to 70
+        (Design 2) and 80 to 84 (Design 3), states unchanged at 17 -- matching
+        jra's independent reproduction on two other probcli builds exactly.
+        Added the same missing operation to Design 1 for consistency (38 to
+        42 transitions); Design 1's unreachability conclusion is unaffected,
+        since the added operation is a pure query.
+
+        While reconciling Design 3, an unconstrained goal search for
+        lostUnwarned=ztrue no longer reliably isolated the
+        "SessionEnd-then-forced-removal" ordering from the
+        "crash-then-later-SessionEnd" ordering, because both converge to the
+        same final state (spooled=0, sealed=0, rosterKnown=zfalse,
+        lostUnwarned=ztrue) via different paths, and goal search reports
+        whichever path it happens to reach first -- exactly the instability
+        jra's optional item 3 warned about. Replaced that row with a direct
+        argument from WorktreeRemoveD3's guard shape (force? = ztrue or
+        sealed = 0, a disjunction that stays satisfied under force?=ztrue
+        regardless of sealed) rather than relying on an unstable trace to make
+        the same point. Kept the "SessionEndD3 never ran" ordering as a
+        ProB-confirmed table row (lostUnwarned=ztrue and rosterKnown=ztrue),
+        which is a clean, path-unambiguous witness since only SessionEndD3
+        ever clears rosterKnown.
+
+        Added the optional item 3 caveat: full-exploration ProB counts are
+        deterministic (same 17/78 on rerun of the committed file); the
+        current-design goal-search count itself moved from 7/35 (round 1) to
+        6/37 (round 2 rerun of the unmodified operations), demonstrating in
+        this document's own numbers that goal-search counts are search-order
+        artifacts and reachability (TRUE, with a trace) is the load-bearing
+        claim, not the count.
+
+        make check passes in full. Only docs/spec-audit-durability.tex was
+        touched; committed as d3447cb (round 1 was 2faef55).
