@@ -1,0 +1,35 @@
+mission_id: m-2026-09-20-006
+status: closed
+type: implement
+created_at: "2026-09-20T15:28:11Z"
+updated_at: "2026-09-20T15:39:01Z"
+closed_at: "2026-09-20T15:39:01Z"
+leader: claude
+worker: adb
+evaluator:
+    handle: kth
+    pinned_at: "2026-09-20T15:28:11Z"
+    hash: a9aaec59016f51add2cc894b68a5bd68d2048fa66bc9f8b62f291ee36fa1f4a6
+inputs:
+    ticket: ethos-cy70
+    files:
+        - Makefile
+        - .github/workflows/ci.yml
+    references:
+        - docs/spec-mission-lifecycle.tex
+write_set:
+    - Makefile
+    - .github/workflows/
+    - scripts/
+success_criteria:
+    - make check gains a gate that fails when any Z specification .tex file in docs/ fails fuzz type-checking. Z spec files are identified by a deterministic rule (e.g. usepackage{fuzz}), not a hardcoded list, so new specs are covered automatically
+    - The gate runs in CI (.github/workflows) with fuzz actually installed or vendored there — a graceful skip when fuzz is absent is acceptable ONLY for local developer machines and must print a loud one-line notice; in CI the tool must be present and the gate must be able to fail. Silent skip anywhere is a failure of this mission
+    - 'Non-Z .tex docs (agent-identity-spec.tex, architecture.tex, prfaq.tex) get, at minimum, a documented decision in the Makefile comment: either a compile gate is added here or the reason it is deferred is stated with the bead reference ethos-cy70'
+    - 'The gate is exercised: demonstrate a deliberately broken Z construct failing the gate locally, then passing after revert — include the command transcript in the mission result evidence'
+    - make check still passes end-to-end on the branch; total added CI time is reported in the result
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Workstream 5 (enforcement half) of the formal-spec gap program; bead ethos-cy70. Today make check runs go vet, staticcheck, shellcheck, markdownlint, go test, validate-content — no .tex gate at all, so docs/spec-mission-lifecycle.tex silently drifted against the code for six weeks. Four sibling missions are concurrently authoring docs/spec-writeset-admission.tex, docs/spec-audit-durability.tex, docs/spec-hook-gates.tex and amending docs/spec-mission-lifecycle.tex on this same branch (feat/z-spec-state-machines): your detection rule must pick these up when they land, but do NOT edit any docs/ file yourself — if a spec file is mid-edit and fails fuzz while you test, use your own temporary fixture under .tmp/ for the broken-construct demonstration instead. The z-spec plugin drives fuzz via its MCP server; for make/CI you likely want the fuzz binary directly (check how the z-spec toolchain installs it — z-spec doctor reports toolchain paths; the punt-labs z-spec repo''s setup may have an install script). Keep the Makefile change in the existing style (one target, wired into check).'

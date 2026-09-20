@@ -1,0 +1,35 @@
+mission_id: m-2026-09-20-004
+status: closed
+type: implement
+created_at: "2026-09-20T15:26:46Z"
+updated_at: "2026-09-20T15:46:21Z"
+closed_at: "2026-09-20T15:46:21Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-09-20T15:26:46Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-mr1z
+    files:
+        - docs/spec-mission-lifecycle.tex
+        - internal/hook/subagent_start.go
+        - internal/hook/pretooluse.go
+    references:
+        - internal/hook/pretooluse_dispatch.go
+        - internal/hook/subagent_start_test.go
+write_set:
+    - docs/spec-hook-gates.tex
+success_criteria:
+    - docs/spec-hook-gates.tex exists and models the SubagentStart verifier gate and the PreToolUse write gate as one composed machine whose inputs include the MISSION_ID channel with an explicit 'absent' value and the ETHOS_VERIFIER_ALLOWLIST environment value, with file:line traceability to internal/hook/subagent_start.go and internal/hook/pretooluse.go
+    - 'Safety property stated and checked: every enforcement-skipping path is either provably not-a-verifier or emits a diagnostic — the state ''spawn is a verifier of an open mission AND no gate applied AND no diagnostic emitted'' (silent-disabled) is unreachable. Under the CURRENT semantics (empty MISSION_ID returns mute nil,nil at subagent_start.go:599-605) ProB reaches silent-disabled and the counter-example trace is recorded'
+    - 'A corrected-semantics variant (loud skip: same control flow, mandatory diagnostic, matching the sibling empty-hash skip at subagent_start.go:624-635) runs clean; the spec states which of the three empty-MISSION_ID causes (Tier A ad-hoc spawn, PreToolUse mis-dispatch, PreToolUse not installed) are distinguishable at the gate and which are not'
+    - 'The spec records the composition fact that makes this critical: ETHOS_VERIFIER_ALLOWLIST is the only input to the PreToolUse write gate (pretooluse.go:110-113 allows immediately when empty), so a MISSION_ID propagation failure disables write-set enforcement and the frozen-evaluator gate together'
+    - zspec check (fuzz) reports 0 errors on the committed .tex file; ProB state/transition counts recorded
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Workstream 3 of the formal-spec gap program (bead ethos-mr1z), formalizing ethos-yf6n. That bead is triaged DO NOT FIX AS PROPOSED (2026-07-31) — the code behaves as designed and the gap is observability; your spec must respect that triage: the corrected variant changes diagnostics, not gating semantics. Forensics facts: the mute skip is subagent_start.go:599-605 (return nil, nil on empty declaredMissionID, deliberately avoiding the ethos-z69l handle-misbinding); the loud sibling skip is :624-635 (pre-3.3 empty hash warns); len(verifierMissions)==0 at :178 skips the isolation block and allowlist env; MISSION_ID is injected at internal/hook/pretooluse_dispatch.go:894. All 26 verifier tests set MISSION_ID; none exercises absence. House style: follow docs/spec-mission-lifecycle.tex including its errata technique — the silent-disabled property must live outside the type the buggy variant is checked against (reachability/deadlock encoding). Use z-spec MCP tools; file must be .tex. Do not modify Go code.'

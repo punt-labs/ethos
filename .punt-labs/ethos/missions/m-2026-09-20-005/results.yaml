@@ -1,0 +1,109 @@
+results:
+    - mission: m-2026-09-20-005
+      round: 1
+      created_at: "2026-09-20T15:55:16Z"
+      author: jms
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/spec-mission-lifecycle.tex
+          added: 646
+          removed: 247
+        - path: docs/development.md
+          added: 1
+          removed: 0
+      evidence:
+        - name: 'z-spec check (fuzz) on docs/spec-mission-lifecycle.tex: 0 errors'
+          status: pass
+        - name: 'z-spec model_check on re-baselined spec: 373 states, 989 transitions, 0 assertion violations'
+          status: pass
+        - name: 'z-spec model_check, main doc plus errata AbandonFailOpen schema: 385 states, 1025 transitions, 0 violations (false negative reproduced)'
+          status: pass
+        - name: 'decoupled AbandonFailOpen document, z-spec model_check: 7 states, 21 transitions, deadlock reproduced at status=stAbandoned, blockingDelegationCount=1'
+          status: pass
+        - name: 'decoupled corrected-Abandon document, z-spec model_check: 15 states, 29 transitions, 0 violations, not certified complete'
+          status: pass
+        - name: 'make check: full suite green (golangci-lint, shellcheck, ruff, mypy, pytest, markdownlint, go test -race, validate-content, fuzz on all docs/spec-*.tex)'
+          status: pass
+      prose: |
+        Re-baselined docs/spec-mission-lifecycle.tex from its 9a60b39 (PR #432)
+        pin to the current commit (244b6c3, PR #517), absorbing three
+        lifecycle-affecting PRs it had drifted behind: DES-072 (#478,
+        correction events), DES-075 (#508, storage-layer settlement), and
+        DES-076 (#509, dispatch bindings / abandon --disclaim / aborted-never-
+        blocks).
+
+        Abandon (Section: Operations, opabandon): renamed the state field
+        delegationCount to blockingDelegationCount to match what
+        countBlockingDelegations (store.go:1959-1999) actually returns, and
+        added two new operations DelegateAborted and DisclaimDelegation.
+        DelegateAborted collapses WriteDelegationSkeleton plus the two
+        synchronous pre-run refusal paths (closeDelegationAborted,
+        pretooluse_dispatch.go:991-1014; closeSkeletonOnHashRefusal,
+        subagent_start.go:787-833) into a single Xi Mission self-loop -- the
+        honest schema for DES-076's guarantee that an aborted delegation is
+        invisible to every field this specification tracks. DisclaimDelegation
+        models Store.DisclaimDelegation (store.go:1516-1633), decrementing
+        blockingDelegationCount when it is positive; the per-delegation
+        eligibility gate (BoundVia, Verdict, no double-disclaim;
+        DisclaimDelegationRecord, delegation.go:726-790) is noted as not
+        representable at this specification's count-based granularity, the
+        same simplification already applied elsewhere in the document.
+        AbandonSafety is restated over the renamed field with the new
+        operations folded into its preservation argument.
+
+        DES-072 (Scope, des072): Store.Correct (correct.go:187-228) is
+        excluded, not modelled, with three cited facts -- its guard is the
+        complement of every modelled operation's (status != stOpen), it never
+        writes a Mission-schema field, and the event log it appends to is
+        already outside this specification's state schema. TerminalIsFinal
+        needed no restatement, which is stated explicitly rather than left
+        implicit. PR #517's YAML-truncation free-text validation was reviewed
+        per the mission's note and recorded as out of scope for the same
+        reason (content-only refusal, no status-machine effect).
+
+        Currency rule: added to the Scope section (new subsection, currency)
+        and as one line under docs/development.md's Standards Checklist,
+        requiring a PR touching internal/mission lifecycle logic to amend the
+        spec or state why it is unaffected.
+
+        Traceability table and every file:line citation in the document were
+        checked against the current internal/mission, internal/hook, and
+        docs/mission-abandon.md content and refreshed; line numbers had
+        drifted substantially since the original pin (e.g. Close 897->956,
+        AppendResult 2401->3334, checkResultGateLocked 2583->3516).
+
+        Verification: fuzz type-checks the committed document with 0 errors.
+        ProB model_check was re-run against the current file (373 states, 989
+        transitions, 0 assertion violations) and against the errata's
+        AbandonFailOpen-augmented variant (385 states, 1025 transitions, 0
+        violations, reproducing the documented false negative). The two
+        decoupled MissionU demonstrations described in the errata section were
+        rebuilt as scratch files and re-run: the buggy AbandonFailOpen variant
+        reproduces its deadlock counter-example exactly (SETUP_CONSTANTS,
+        INITIALISATION with repoRootSet=zfalse, Delegate, AbandonFailOpen,
+        deadlock at blockingDelegationCount=1); the corrected Abandon variant
+        finds no assertion or invariant violation, flagged "not certified
+        complete" rather than a clean pass, which is reported honestly in the
+        document rather than repeating the prior revision's stronger, unverified
+        "no deadlock" claim. The Tool run table was updated with the actual
+        numbers from these runs, replacing the prior revision's figures.
+
+        Disclosed, not fixed under this mission: running the fuller
+        /z-spec:test checklist (beyond model_check alone) surfaces a
+        pre-existing AdvanceRound coverage gap in the main document's state
+        space. This reproduces identically against the pre-rebaseline commit
+        (373 states, 749 transitions on the original seven-operation set,
+        same coverage failure), so it predates and is orthogonal to
+        DES-076/DES-072; it is recorded in a new disclosed-gap subsection
+        (probrun-coverage) rather than silently carried forward, and scoped
+        as separate follow-up work rather than folded into this re-baseline.
+
+        make check passes in full (golangci-lint, shellcheck, ruff, mypy,
+        pytest, markdownlint, go test -race with coverage, validate-content,
+        and fuzz on every docs/spec-*.tex including this one). Only
+        docs/spec-mission-lifecycle.tex and docs/development.md were touched;
+        no Go code was changed. Committed as a single logical step (one
+        commit, baf22d0) since the spec's Currency section and the
+        development.md checklist line reference each other and are not
+        independently meaningful.

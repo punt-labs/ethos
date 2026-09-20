@@ -1,0 +1,102 @@
+results:
+    - mission: m-2026-09-20-004
+      round: 1
+      created_at: "2026-09-20T15:42:05Z"
+      author: jms
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/spec-hook-gates.tex
+          added: 805
+          removed: 0
+      evidence:
+        - name: zspec check docs/spec-hook-gates.tex (fuzz)
+          status: pass
+        - name: zspec test docs/spec-hook-gates.tex (probcli, main composed machine)
+          status: pass
+        - name: zspec check .tmp/spec-hook-gates-mute.tex (scratch, decoupled MuteSkip)
+          status: pass
+        - name: 'zspec model_check .tmp/spec-hook-gates-mute.tex: 3 states, 7 transitions, deadlock found'
+          status: pass
+        - name: zspec check .tmp/spec-hook-gates-loud.tex (scratch, decoupled LoudSkip)
+          status: pass
+        - name: 'zspec model_check .tmp/spec-hook-gates-loud.tex: 4 states, 8 transitions, no deadlock, all states visited'
+          status: pass
+        - name: make check (full suite, includes fuzz-check over docs/*.tex)
+          status: pass
+      prose: |
+        docs/spec-hook-gates.tex models the SubagentStart verifier gate
+        (checkVerifierHash, subagent_start.go:585-652) and the PreToolUse
+        write gate (pretooluse.go:110-128) as one composed GateState
+        machine. The MISSION_ID channel is an explicit free type,
+        MissionIDChannel ::= midAbsent | midPresent<<MISSIONID>>, so
+        absence is a distinct value rather than an empty string standing
+        in for it; ETHOS_VERIFIER_ALLOWLIST is modelled as the write
+        gate's sole input, abstracted behind a single boolean
+        targetInAllowlist?, per the mission's own scoping instruction.
+
+        The safety property -- a spawn that truly is the evaluator of an
+        open mission (verifierOfOpenMission = ztrue, an exogenous ground
+        truth frozen at Init and carried unchanged by every operation)
+        ending up gated nowhere (gateApplied = zfalse) and diagnosed
+        nowhere (diagnosticEmitted = zfalse) -- is deliberately kept out
+        of GateState's own invariant, following spec-mission-lifecycle.tex
+        section 6.2's errata technique exactly: baking it in would make
+        MuteSkip's after-state unsatisfiable at exactly the states that
+        exhibit the bug, producing a false-negative clean report instead
+        of a genuine finding. Two decoupled scratch documents (not
+        committed; .tmp/spec-hook-gates-mute.tex,
+        .tmp/spec-hook-gates-loud.tex) retype the state as a minimal GateU
+        with an Idle self-loop excluded exactly at the bad state, converting
+        the safety property into a reachability question. Today's mute-skip
+        semantics (subagent_start.go:599-605, modelled verbatim as MuteSkip)
+        reaches the bad state in two steps and deadlocks there -- the
+        recorded counter-example is INITIALISATION
+        (verifierOfOpenMission := ztrue) then MuteSkip. A corrected loud-skip
+        variant (identical gating decision, gateApplied' = zfalse; mandatory
+        diagnostic, diagnosticEmitted' = ztrue unconditionally) explores the
+        full 4-state space clean, matching bead ethos-yf6n's DO NOT FIX AS
+        PROPOSED triage: the fix changes observability only.
+
+        The three empty-MISSION_ID causes (Tier A ad-hoc spawn,
+        PreToolUse mis-dispatch, PreToolUse not installed) are modelled as
+        a free type, AbsenceCause, declared as an input to MuteSkip but
+        never referenced in its predicate -- the CauseIndistinguishable
+        theorem states, by that construction, that none of the three is
+        distinguishable at this gate, under either the current or the
+        corrected semantics: the channel is a single string, and presence
+        or absence is the only bit it carries.
+
+        The composition fact the mission asked to be recorded --
+        ETHOS_VERIFIER_ALLOWLIST is set if and only if the SubagentStart
+        gate applied -- is GateState's own invariant, allowlistActive =
+        gateApplied (subagent_start.go:178-194's len(verifierMissions) > 0
+        branch is the only place buildVerifierAllowlistEnv is called). The
+        WritePassthroughWhenUngated theorem draws the corollary the mission
+        brief singles out: whenever gateApplied = zfalse, WriteAllowedNoAllowlist
+        is enabled for every Write/Edit with no further condition
+        (pretooluse.go:110-113), so a MISSION_ID propagation failure
+        disables the frozen-evaluator gate and write-set enforcement
+        together, not separately.
+
+        One real translation pitfall surfaced and is recorded in
+        section "Tool run": probcli's Z-to-B translator rejects an Init
+        schema that declares an input (identifier_not_found /
+        initialisation_fails) -- an INITIALISATION operation has nothing to
+        supply an input at machine start. Fixed by leaving
+        verifierOfOpenMission' unconstrained at Init instead, matching how
+        spec-mission-lifecycle.tex itself leaves evaluatorHash' and
+        repoRootSet' unconstrained. Also recorded: probcli's constraint-based
+        -cbc_deadlock check (used internally by the z-spec test/full-suite
+        tool) finds the same bad valuation in both decoupled documents'
+        raw state TYPE, because that check does not respect reachability
+        from Init; the reachability-respecting -model_check is the correct
+        oracle for this property and is what the verdicts above are drawn
+        from -- this distinction is spelled out in the document itself so a
+        future reader does not mistake -cbc_deadlock's "deadlock state
+        found" on the loud variant for a regression.
+
+        No Go files touched. make check passes (golangci-lint, shellcheck,
+        ruff, mypy, pytest, markdownlint, go test -race ./..., validate-content,
+        fuzz-check) with docs/spec-hook-gates.tex included in fuzz-check's
+        docs/*.tex sweep.

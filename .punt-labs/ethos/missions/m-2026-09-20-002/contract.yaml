@@ -1,0 +1,36 @@
+mission_id: m-2026-09-20-002
+status: closed
+type: implement
+created_at: "2026-09-20T15:25:13Z"
+updated_at: "2026-09-20T16:40:04Z"
+closed_at: "2026-09-20T16:40:04Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-09-20T15:25:13Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-q9fn
+    files:
+        - docs/spec-mission-lifecycle.tex
+        - internal/mission/conflict.go
+        - internal/hook/pretooluse.go
+    references:
+        - internal/mission/lint.go
+        - internal/hook/pretooluse_test.go
+write_set:
+    - docs/spec-writeset-admission.tex
+success_criteria:
+    - docs/spec-writeset-admission.tex exists, models paths as an absoluteness flag plus a segment sequence and write-set entries as segment patterns, and defines CanonicalPath and PathContainedBy as Z functions matching internal/mission/conflict.go semantics with file:line traceability to current code
+    - 'The spec states and checks: (a) canonicalization preserves the absolute/relative distinction, (b) containment is path-semantic rather than pattern-string-literal, (c) open-mission write-sets do not overlap (the checkWriteSetConflicts admission property excluded from spec-mission-lifecycle.tex''s scope)'
+    - A decoupled buggy-variant model reproduces ethos-vaib (leading-slash stripping makes /docs/x.md contained by docs/**) as a recorded ProB counter-example trace, following the errata technique in spec-mission-lifecycle.tex section Validation — the safety property must not be baked into the type the buggy operation is checked against
+    - A second decoupled variant reproduces ethos-8ady (literal glob-string comparison in mission lint's coverage heuristic) as a counter-example or, if the property is not expressible as reachability, documents why with the checked alternative
+    - The corrected-semantics model runs clean in ProB; state and transition counts are recorded in the document
+    - zspec check (fuzz) reports 0 errors on the committed .tex file
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'Workstream 1 of the formal-spec gap program (bead ethos-q9fn). Forensics already located the defects: ethos-vaib lives in internal/mission/conflict.go:485-492 (splitSegments drops the leading empty segment produced by an absolute path, so CanonicalPath(''/docs/x.md'') equals CanonicalPath(''docs/x.md'')), consumed by internal/hook/pretooluse.go:290-298 (pathAllowed); note filepath.Clean preserves absoluteness, so the loss happens entirely in splitSegments. The pinning test is TestPathAllowed''s row {absolute match, /abs/contract.yaml, true} (internal/hook/pretooluse_test.go:427-453) — absolute on both sides, stripping cancels. ethos-8ady is mission lint''s write-set coverage heuristic comparing glob strings literally (internal/mission/lint.go; see bd show ethos-8ady). CanonicalPath has 14 other call sites; lint.go:187-193 depends on trailing-slash stripping — your model should preserve that behavior while distinguishing absoluteness. House style: read docs/spec-mission-lifecycle.tex first and follow its structure (Scope with non-goals, cited predicates, Theorems table, Validation section with decoupled buggy variants, Traceability table, and its errata lesson about the schema calculus). Use the z-spec MCP tools: check for fuzz, test/model_check for ProB; the file must be .tex or probcli silently reports 0 states. Do not modify any Go code — this mission is the spec only; the Go fixes for vaib/8ady are separate work that will cite your spec.'

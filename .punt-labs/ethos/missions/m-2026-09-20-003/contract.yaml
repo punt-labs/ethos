@@ -1,0 +1,36 @@
+mission_id: m-2026-09-20-003
+status: closed
+type: implement
+created_at: "2026-09-20T15:26:10Z"
+updated_at: "2026-09-20T16:12:22Z"
+closed_at: "2026-09-20T16:12:22Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-09-20T15:26:10Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-6y4p
+    files:
+        - docs/spec-mission-lifecycle.tex
+        - docs/audit-seal.md
+        - internal/hook/audit_seal.go
+        - internal/hook/audit_vacuum.go
+        - internal/hook/session_end.go
+    references:
+        - internal/session/store.go
+        - internal/hook/audit_vacuum_test.go
+write_set:
+    - docs/spec-audit-durability.tex
+success_criteria:
+    - 'docs/spec-audit-durability.tex exists and models the life of an audit line — written-to-spool, sealed-into-chunk, committed — across the full actor set: commit in the writing checkout, commit in a sibling worktree, git worktree remove, session end, ethos disable, session purge; with file:line traceability to internal/hook/audit_seal.go, audit_vacuum.go, session_end.go, and internal/session/store.go'
+    - 'Safety property stated and checked: no transition destroys an unsealed line without first sealing it or emitting a refusal/warning — under the CURRENT design ProB reaches the ethos-015a loss state (git worktree remove deletes the only copy; the vacuum warning fires only at the next commit in another checkout) and the counter-example trace is recorded'
+    - 'At least three candidate designs are evaluated against the same property, each as its own model variant with recorded ProB results: (1) per-machine spool outside any checkout (the ethos-ss2x SQLite direction), (2) worktree-aware seal (listRepoSessions enumerating git worktree list roots), (3) sealing or refusing SessionEnd (mirroring session purge''s unsealed-line probe). The document ends with a written verdict on which designs satisfy the property and at what cost — this verdict is the formal input to bead ethos-ss2x'
+    - zspec check (fuzz) reports 0 errors on the committed .tex file; ProB state/transition counts recorded per model
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'Workstream 2 of the formal-spec gap program (bead ethos-6y4p). Forensics facts: SealRepo (internal/hook/audit_seal.go:49, :65-68) seals only the committing checkout''s sessions via listRepoSessions(repoRoot); the live zone <checkout>/.punt-labs/local/ is per-checkout and gitignored; the only loss warning is post-hoc in VacuumCrossCheck (internal/hook/audit_vacuum.go:102-107), called only from pre-commit; HandleSessionEnd (internal/hook/session_end.go:57) deletes the session roster with no seal and no unsealed-line probe, while session purge (internal/session/store.go:585-600) does probe and refuses without --force. The design assumption that fails is stated at docs/audit-seal.md:485-490: ''Any commit in the repo drains the repo''s pending audit lines'' — true per checkout, not per repository. TestVacuumCrossCheckWarnsWhenWriterCheckoutIsGone (internal/hook/audit_vacuum_test.go:204-221) pins loss-then-warn as the contract. House style: follow docs/spec-mission-lifecycle.tex (decoupled buggy variants per its errata; Theorems table; Traceability table). Keep the state space small for ProB (bound line counts to 1-2). Use z-spec MCP tools; file must be .tex. Do not modify Go code or bead ethos-ss2x — your verdict section will be quoted into it by the leader.'

@@ -1,0 +1,13 @@
+reflections:
+    - mission: m-2026-09-20-002
+      round: 1
+      created_at: "2026-09-20T16:25:51Z"
+      author: claude
+      converging: true
+      signals:
+        - four of five reconstructed reachability results reproduce exactly (isolated admission model 7266/35915 certified; vaib-fixed 20/36; 8ady-buggy 1/5; 8ady-fixed 5/9); fuzz 0 errors; write-set held
+        - 'defect: shared unwrap axiom never excludes rsEmpty/rsDot from its domain, so SETUP_CONSTANTS enumerates 4 witnesses (visible in the committed report.json) and the vaib-buggy counts (5/21) do not reproduce (jra got 3/16 and 7/23); only the deadlock''s existence is robust'
+        - 'defect: the 8ady model depicts a literal segment comparison being attempted; the real lint.go:193 guard is strings.HasSuffix(w, "/"), which short-circuits before any comparison — the modeled mechanism does not match the cited code'
+        - 'cosmetic: pathContainedBy cited as 360-378; the function is 360-379 by the document''s own closing-brace convention'
+      recommendation: continue
+      reason: 'Round 2, narrowly scoped: add the unwrap domain-restriction axiom (dom unwrap = ran rsSeg), rerun vaib-buggy and the whole-file check and record resulting counts plus whether the whole-file run now certifies; align the 8ady model or prose with the actual HasSuffix guard at lint.go:193; fix the citation. jra''s ruling on open question 2 (symmetric wildcard permissiveness) is accepted as documented — no change.'
