@@ -35,11 +35,45 @@ jobs:
       - name: ShellCheck
         run: shellcheck plugin/hooks/*.sh install.sh
 
+      # fuzz has no distributed binary -- only source -- so CI builds it the
+      # same way a developer would, via z-spec's own install.sh --fuzz-only.
+      # This checks out punt-labs/z-spec pinned to its published v0.20.5
+      # tag -- the same same-origin trust root as the golangci-lint fetch in
+      # `make tools` (see that target's comment for why a tag pin is not a
+      # stronger guarantee than "this account, this release channel", just
+      # the equivalent one). --fuzz-only then clones fuzz's own upstream
+      # source at the commit install.sh pins and runs configure/make/make
+      # install -- no CLI package, no probcli, no plugin. bison and flex are
+      # invoked by literal name in fuzz's Makefile.in with no autoconf
+      # fallback; gcc, make, cpp, and awk already ship in ubuntu-latest's
+      # build-essential, but bison/flex are not guaranteed, so both are
+      # installed explicitly (apt-get is a no-op if already present). This
+      # is what lets the Makefile's fuzz-check gate ACTUALLY run and
+      # ACTUALLY fail in CI -- see that target's comment for why a missing
+      # binary is a hard failure here and a graceful skip only on a
+      # developer's own machine.
+      - name: Checkout z-spec (for its fuzz installer)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: punt-labs/z-spec
+          ref: v0.20.5
+          path: .tmp/z-spec-installer
+
+      - name: Install fuzz (Z spec type-checker)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison flex
+          .tmp/z-spec-installer/install.sh --fuzz-only
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
       - name: Validate content
         run: go run ./cmd/validate-content
+
+      - name: fuzz type-check (Z specs)
+        run: make fuzz-check
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
