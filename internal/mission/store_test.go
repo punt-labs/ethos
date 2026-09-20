@@ -2832,7 +2832,7 @@ func TestStore_AdvanceRound_LogsTransition(t *testing.T) {
 }
 
 // TestStore_EvaluatorHashFrozenAcrossTrajectory guards the
-// EvaluatorHashFrozen theorem in docs/spec-mission-lifecycle.md
+// EvaluatorHashFrozen theorem in docs/spec-mission-lifecycle.tex
 // (S:Theorems): every mutating Store operation's frame includes
 // evaluatorHash' = evaluatorHash, so the pinned hash — "the trust
 // anchor" per store.go's own comment on Create — must be identical

@@ -7,8 +7,9 @@
 % correct.go) and, for the two delegation-refusal call sites Abandon's
 % gate depends on, internal/hook (pretooluse_dispatch.go,
 % subagent_start.go). Current as of commit 244b6c3 (PR #517), the most
-% recent commit to touch internal/mission -- see \S\ref{sec:currency}
-% for why that commit itself required no amendment here. Re-baselined
+% recent commit to change lifecycle-affecting logic in internal/mission
+% -- see \S\ref{sec:currency} for why that commit itself required no
+% amendment here. Re-baselined
 % from the original 9a60b39 (PR #432) pin to absorb DES-072 (#478),
 % DES-075 (#508), and DES-076 (#509) -- see \S\ref{sec:des072} and
 % \S\ref{sec:opabandon}.
@@ -225,7 +226,11 @@ finished mission's status machine.
 \label{sec:currency}
 
 This specification is a baseline, and baselines drift silently unless
-something forces them back into review. The rule: \textbf{a pull
+something calls them back into review. Nothing in CI or in a git hook
+enforces this mechanically today --- the rule below is a review-
+checklist convention, the same status as every other entry in
+\fpath{docs/development.md}'s Standards Checklist, not a gate that
+blocks a merge on its own. The rule: \textbf{a pull
 request that changes lifecycle-affecting logic in
 \fpath{internal/mission} --- a new \field{Status} or
 \field{Recommendation} value, a changed guard on \field{Create},
@@ -1145,12 +1150,28 @@ Same, $+$ \field{AbandonFailOpen} (errata above) & 385 & 1025 &
   0 violations --- false negative, see errata \\
 Decoupled, \field{AbandonFailOpen} & 7 & 21 & deadlock at
   $\field{status} = \field{stAbandoned} \land
-  \field{blockingDelegationCount} = 1$ \\
+  \field{blockingDelegationCount} = 1$; a deadlock search halts at the
+  first violation, so this count is not the full space \\
 Decoupled, \field{Abandon} & 15 & 29 & 0 violations, not certified
   complete \\
 \bottomrule
 \end{tabularx}
 \end{center}
+
+The two decoupled counts above are search-order artifacts, not
+reproducible constants: probcli's deadlock search stops at the first
+violation it finds, so the exact state/transition count depends on the
+order it happens to explore the space in, which can vary across runs,
+tool versions, or even independent re-implementations of the same two
+schemas (\fpath{spec-writeset-admission.tex}'s own Tool run table
+notes the identical caveat for its decoupled rows). What is
+reproducible, and is the entire point of this demonstration, is the
+\emph{verdict}: the buggy \field{AbandonFailOpen} pairing always
+deadlocks, at the state
+$\field{status} = \field{stAbandoned} \land
+\field{blockingDelegationCount} = 1$
+reached by the same four-step trace given below, regardless of exactly
+how many states probcli visits before reporting it.
 
 fuzz's \texttt{/z-spec:check} type-checks this document with 0 errors
 in every revision recorded in its commit history. \texttt{probcli}
