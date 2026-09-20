@@ -114,10 +114,13 @@ obscure rather than sharpen the model:
     depends on an external \field{RoleLister} and is opt-in (nil
     disables it); it is an identity-system concern, not a
     lifecycle-state concern.
-  \item \textbf{Generic \field{Store.Update}} (store.go:873--955) lets
-    a caller rewrite an arbitrary field of an open contract. It is not
+  \item \textbf{Generic \field{Store.Update}} (store.go:873--932) lets
+    a caller rewrite an arbitrary field of a contract. It is not
     one of the nine named transitions and none of the CLI/MCP surfaces
-    route ordinary lifecycle events through it.
+    route ordinary lifecycle events through it. It also carries no
+    $\field{status} = \field{stOpen}$ guard at all, unlike every
+    modelled operation --- see the disclosed divergence in
+    \S\ref{sec:ops} and bead \field{ethos-fhns}.
   \item \textbf{Pipelines, \field{depends\_on}, delegation-inheritance
     templates, and preconditions} (\field{Contract} fields
     \field{Pipeline}, \field{DependsOn}, \field{Preconditions},
@@ -135,7 +138,7 @@ obscure rather than sharpen the model:
     ethos-21v0): \field{Result}, \field{Reflection}, and
     \field{Correction} free-text fields are now refused when a YAML
     plain scalar carries a discarded \texttt{\#}-comment suffix
-    (\fpath{validate.go}, \fpath{reflection.go},
+    (\fpath{result.go}, \fpath{reflection.go},
     \fpath{correct.go} --- each field's own \field{Validate}). This is
     the same non-goal as the reason-argument bullet above, generalised:
     a refusal on the \emph{content} of a free-text field never changes
@@ -527,15 +530,42 @@ precondition, with the sole exception of \field{Idle}
 (\S\ref{sec:idle}), whose entire purpose is to be enabled exactly
 where the others are not. This is not incidental repetition: it is
 the single fact from which \textbf{terminal states are final} follows
---- \field{Store.Update}, \field{AppendResult},
-\field{AppendReflection}, \field{AdvanceRound}, \field{Close},
-\field{Abandon}, and \field{DisclaimDelegation} all begin with the
-same shape of check (``\emph{mission \%q is in terminal state \%q}'',
-store.go:985--987, 1341--1346, 1542--1547, 2891--2893, 3360--3362,
-2727--2729). \field{Delegate} and \field{DelegateAborted} carry the
-same guard as a modelling choice (\S\ref{sec:opdelegate}). Once a
-mission leaves \field{stOpen}, nothing in this specification --- and
-nothing in the real \field{Store} --- can move it again.
+--- \field{AppendResult}, \field{AppendReflection},
+\field{AdvanceRound}, \field{Close}, \field{Abandon}, and
+\field{DisclaimDelegation} all begin with the same shape of check
+(``\emph{mission \%q is in terminal state \%q}'', store.go:985--987,
+1341--1346, 1542--1547, 2891--2893, 3360--3362, 2727--2729).
+\field{Delegate} and \field{DelegateAborted} carry the same guard as a
+modelling choice (\S\ref{sec:opdelegate}). Once a mission leaves
+\field{stOpen}, no operation \emph{this specification models} can move
+it again --- see \field{TerminalIsFinal} (\S\ref{sec:theorems}) for
+the precise claim and the one place it is disclosed as narrower than
+the real code.
+
+\textbf{Disclosed divergence: \field{Store.Update} carries no such
+guard.} \field{Store.Update} (store.go:873--932) is the seventh write
+path in this package, and it has no
+$\field{c.Status} \neq \field{StatusOpen}$ check anywhere in its
+body --- unlike every operation named above, it does not refuse a
+closed, failed, escalated, or abandoned contract.
+\field{Contract.Validate} (validate.go:41--97) accepts all five
+\field{Status} values with no additional constraint relating
+\field{Status} to which fields may change, so
+\field{s.validateContract} inside \field{Update}
+(store.go:906--908) does not catch this either: a caller can pass a
+\field{Contract} whose \field{Status} field has been rewritten back to
+\field{"open"} (or to any other value) for an already-terminal
+mission, and \field{Update} will persist it. This is a real gap in the
+implementation, not a simplification in this specification --- filed
+as bead \field{ethos-fhns} for a fix landing separately; this document
+records the divergence rather than modelling around it or silently
+matching a status guard the code does not have. \field{Update} is
+therefore not one of the operations this specification's own
+\field{TerminalIsFinal} claim is a theorem about (\S\ref{sec:theorems}
+restates the claim precisely over the modelled set); it remains a
+Non-goal for the reasons \S\ref{sec:nongoals} already gives (not one
+of the named transitions, no CLI/MCP surface routes ordinary lifecycle
+events through it) with this one exception added to the record.
 
 \subsection{Delegate}
 \label{sec:opdelegate}
@@ -577,7 +607,7 @@ refused \emph{before its worker ever runs}, collapsed into one atomic
 step: two real events in sequence, \field{WriteDelegationSkeleton}
 (delegation.go:346, \field{Verdict: DelegationVerdictOpen}) followed
 immediately, within the same synchronous hook invocation, by
-\field{CloseDelegationSkeleton} (delegation.go:649--726) stamping
+\field{CloseDelegationSkeleton} (delegation.go:649--692) stamping
 \field{Verdict: DelegationVerdictAborted}. Exactly two call sites do
 this, and \field{TestAbortedVerdictWriteSites\_MatchKnownThree}
 (store.go:1907--1914, referring to
@@ -806,7 +836,7 @@ gated count. Four conjuncts, four gates in the real code:
     \field{DisclaimedAt} (store.go:1990--1992). See also
     docs/mission-abandon.md:39--59 for the gate's narrative form and
     the two carve-outs' rationale.
-  \item \field{resultRounds = \emptyset} --- Gate~2, store.go:1422
+  \item \field{resultRounds} $= \emptyset$ --- Gate~2, store.go:1422
     --1441, checked for \emph{every} round on record, not only the
     current one.
 \end{itemize}
@@ -864,8 +894,8 @@ transition and points the caller at Close instead}''.
 \label{sec:idle}
 
 Not one of the transitions named in \S\ref{sec:scope}, and not a real
-operation on \field{Store} at all. Every operation above except
-\field{DelegateAborted} guards on $\field{status} = \field{stOpen}$
+operation on \field{Store} at all. Every operation above guards on
+$\field{status} = \field{stOpen}$
 (\field{TerminalIsFinal}, \S\ref{sec:theorems}), so a state space
 built only from those transitions has no outgoing transition once
 \field{status} leaves \field{stOpen} --- ProB reports that correctly,
@@ -920,12 +950,19 @@ discharged by proof:
   \field{SubmitResult}, \field{Reflect}, \field{AdvanceRound},
   \field{Close}, and \field{Abandon} all guard on $\field{status} =
   \field{stOpen}$. Once $\field{status}' \neq \field{stOpen}$ (via
-  \field{Close} or \field{Abandon}), no operation in the set is
+  \field{Close} or \field{Abandon}), no operation in this set is
   enabled again --- \field{status} is absorbing at every value in
-  \field{CloseableStatus} $\cup \{ \field{stAbandoned} \}$. DES-072's
+  \field{CloseableStatus} $\cup \{ \field{stAbandoned} \}$, for the
+  operation set this specification models. DES-072's
   \field{Correct} does not extend this set; \S\ref{sec:des072}
   establishes why it cannot falsify this claim without being modelled
-  at all. \\
+  at all. The claim is narrower than ``nothing in the real
+  \field{Store} can move a terminal mission again'': \field{Store.Update}
+  (store.go:873--932) carries no $\field{status} = \field{stOpen}$
+  guard and so is excluded from this theorem's operation set rather
+  than being a seventh instance of it --- \S\ref{sec:ops}'s disclosed
+  divergence and bead \field{ethos-fhns} give the real-code gap this
+  theorem does not paper over. \\
 \field{CloseRequiresResult} &
   \field{Close}'s guard $\field{currentRound} \in
   \field{resultRounds}$ is exactly the calculated precondition of
@@ -1201,10 +1238,16 @@ and, checked directly against the pre-re-baseline commit for
 comparison, the original seven-operation set --- reports the same
 coverage failure in both: \emph{\field{AdvanceRound} never fires}
 within the explored 373-state space. This is not a defect introduced
-by this re-baseline: it reproduces identically, state-for-state and
-transition-for-transition (373 states, 749 transitions on the
-original operation set), against the commit this document itself was
-pinned to before today. Nothing in the operations this re-baseline
+by this re-baseline: it reproduces identically, state-for-state, on
+the pre-re-baseline commit (373 states, matching \S\ref{sec:probrun}'s
+main-document row exactly). The transition count does not match ---
+749 on the original seven-operation set against 989 on the current
+nine-operation set --- but the difference is fully accounted for by
+the 240 additional transitions \field{DelegateAborted} and
+\field{DisclaimDelegation} contribute over the same 373 states
+(\S\ref{sec:probrun}), not by any change in reachable states or in
+whether \field{AdvanceRound} fires. Nothing in the operations this
+re-baseline
 touches (\field{Abandon}, \field{DelegateAborted},
 \field{DisclaimDelegation}) constrains \field{AdvanceRound}'s guard or
 \field{budgetRounds}/\field{reflected} in any way, so there is no
@@ -1249,12 +1292,12 @@ as settled.
   (delegation.go:346--396) & status guard is a modelling choice, see
   \S\ref{sec:opdelegate} \\
 \field{DelegateAborted} & \field{CloseDelegationSkeleton}
-  (delegation.go:649--726) called from \field{closeDelegationAborted}
+  (delegation.go:649--692) called from \field{closeDelegationAborted}
   (internal/hook/pretooluse\_dispatch.go:991--1014) or
   \field{closeSkeletonOnHashRefusal}
   (internal/hook/subagent\_start.go:787--833); read side
   \field{countBlockingDelegations} (store.go:1993--1995) & new,
-  DES-076; \Xi Mission, see \S\ref{sec:opdelegateaborted} \\
+  DES-076; $\Xi \field{Mission}$, see \S\ref{sec:opdelegateaborted} \\
 \field{DisclaimDelegation} & \field{Store.DisclaimDelegation}
   (store.go:1516--1633) via \field{DisclaimDelegationRecord}
   (delegation.go:726--790) & new, DES-076; per-delegation eligibility
