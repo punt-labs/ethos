@@ -97,13 +97,14 @@ validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
 
 # Z specification .tex files are identified by content, not by a
-# hardcoded name list: any docs/*.tex carrying `usepackage{fuzz}` (the
-# package every Z spec loads to get fuzz's Z notation macros) is a Z
-# spec and gets type-checked. A new spec landing under docs/ is picked
-# up on its next `make check` with no Makefile edit. FUZZ_SPECS is
-# re-evaluated on every `make` invocation (grep, not a cached list), so
-# concurrent branches adding spec-*.tex files are covered as soon as
-# they land in the working tree.
+# hardcoded name list: any .tex file anywhere under docs/, at any
+# nesting depth, carrying `usepackage{fuzz}` or `usepackage[opts]{fuzz}`
+# (the package every Z spec loads to get fuzz's Z notation macros) is a
+# Z spec and gets type-checked. A new spec landing under docs/ -- top
+# level or nested -- is picked up on its next `make check` with no
+# Makefile edit. FUZZ_SPECS is re-evaluated on every `make` invocation
+# (grep, not a cached list), so concurrent branches adding spec-*.tex
+# files are covered as soon as they land in the working tree.
 #
 # `fuzz <file>` with no flags performs a full type-check and is silent
 # on success (exit 0, no output) — unlike `-t`, which additionally
@@ -132,11 +133,15 @@ validate-content: ## Validate all ethos content files
 # analogous "silently drifted against the code" failure mode to close.
 # Deferred; tracked under ethos-cy70 if a future need (e.g. CI PDF
 # regeneration checks) reopens it.
-FUZZ_SPECS := $(shell grep -l 'usepackage{fuzz}' docs/*.tex 2>/dev/null)
+FUZZ_SPECS := $(shell grep -Erl --include='*.tex' 'usepackage(\[[^]]*\])?\{fuzz\}' docs)
 
 fuzz-check: ## Type-check Z specification .tex files with fuzz (ethos-cy70)
 	@if [ -z "$(FUZZ_SPECS)" ]; then \
-		echo "fuzz-check: no docs/*.tex carries usepackage{fuzz} -- nothing to type-check"; \
+		if [ -n "$$CI" ]; then \
+			echo "fuzz-check: detection matched zero files -- gate broken (specs exist on this branch)" >&2; \
+			exit 1; \
+		fi; \
+		echo "fuzz-check: no .tex file under docs/ carries usepackage{fuzz} -- nothing to type-check"; \
 		exit 0; \
 	fi; \
 	if ! command -v fuzz >/dev/null 2>&1; then \
