@@ -125,7 +125,7 @@ is dropped from this repo.
 The Makefile is the source of truth (`make help`).
 
 ```bash
-make check                             # All gates: lint + docs + test
+make check                             # All gates: lint + docs + test + validate-content + fuzz-check
 ```
 
 Expands to `make lint docs test validate-content fuzz-check`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI).
