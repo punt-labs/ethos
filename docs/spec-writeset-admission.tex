@@ -76,10 +76,12 @@ Two real defects motivate the Validation section
 path produces, so \field{CanonicalPath("/docs/x.md")} and
 \field{CanonicalPath("docs/x.md")} are the same string; and
 \field{ethos-8ady}, in which mission lint's write-set coverage
-heuristic (\fpath{internal/mission/lint.go}:177--197) compares a
-glob entry's segments against a file's segments as literal strings,
-so a file genuinely covered by \texttt{docs/**} draws a spurious
-``not in write\_set'' warning.
+heuristic (\fpath{internal/mission/lint.go}:191--197) treats a glob
+entry no differently from a literal one --- its trailing-slash guard
+(line~193) and its own \field{HasPrefix} comparison both operate on
+\field{CanonicalPath}'s joined string, blind to what any segment
+inside it means --- so a file genuinely covered by \texttt{docs/**}
+draws a spurious ``not in write\_set'' warning.
 
 \subsection{Non-goals}
 \label{sec:nongoals}
@@ -260,6 +262,7 @@ those tokens carry no segment, by construction.
 \begin{axdef}
 unwrap : RAWSEG \pfun SEG
 \where
+\dom unwrap = \ran rsSeg \\
 \forall s : SEG @ unwrap(rsSeg(s)) = s
 \end{axdef}
 
@@ -368,7 +371,7 @@ Seven fields, three kinds:
 
 \subsection{PathContainedByBuggy}
 
-Today's real \field{pathContainedBy} (conflict.go:360--378) and
+Today's real \field{pathContainedBy} (conflict.go:360--379) and
 \field{segmentsContain} (conflict.go:394--419), specialized to a
 single trailing \texttt{**} (\S\ref{sec:nongoals}): the entry's
 literal prefix (\field{truncLen}, \field{seg1}, \field{seg2}) must
@@ -589,9 +592,9 @@ open' = \{ slot? \} \ndres open
   universally quantifies over that domain. Additionally exercised by
   ProB (\S\ref{sec:validation-admission}): certified complete in
   isolation (\textbf{7266 states, 35915 transitions}), and confirmed
-  again, uncertified but unchanged by a fivefold larger operation
-  budget, against the committed file as a whole (\textbf{29064
-  states, 172720 transitions}); zero violations in either run. \\
+  again, uncertified but reaching the identical state count, against
+  the committed file as a whole (\textbf{7266 states, 43180
+  transitions}); zero violations in either run. \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -658,6 +661,7 @@ ZBOOL ::= ztrue | zfalse
 
 maxSegs : NN;  maxSegs = 2
 unwrap : RAWSEG -+> SEG
+  dom unwrap = ran rsSeg              -- undefined on rsEmpty, rsDot
   forall s : SEG @ unwrap(rsSeg(s)) = s
 witnessPattern : seq PATSEG
   witnessPattern = <litSeg(segDocs), wildRestSeg>
@@ -682,9 +686,26 @@ where
   not (absolute = ztrue and covered = ztrue)
 \end{verbatim}
 
+The \field{dom unwrap = ran rsSeg} line matters and was missing from
+an earlier round of this scratch file: without it, \field{unwrap}'s
+axiom pins down its value only on \field{rsSeg}-wrapped inputs and
+leaves whether it is \emph{also} defined on \field{rsEmpty}/\field{rsDot}
+completely open, so \texttt{SETUP\_CONSTANTS} is free to manufacture
+extra, spurious witnesses for it --- four of them, at the setsize this
+demonstration otherwise uses, inflating every count below without
+changing which state deadlocks. The line closes that gap by stating
+\field{unwrap}'s domain exactly.
+
 \texttt{/z-spec:check} passes on the scratch file with this content.
-\texttt{/z-spec:model\_check} explores \textbf{5 states, 21
-transitions}, and reports a deadlock:
+\texttt{/z-spec:model\_check} still reports a deadlock, now with a
+single \texttt{SETUP\_CONSTANTS} witness rather than four: \textbf{1
+state, 5 transitions} at setsize~2, \textbf{2 states, 6 transitions}
+at setsize~3. A deadlock search halts at the first violation it
+finds, so neither figure is the full space's size --- only the
+deadlock's existence is a robust claim here, exactly as jra's review
+of the previous round noted; what the fix changes is that the count is
+no longer inflated by an under-constrained function with no bearing on
+the bug. The counter-example itself is unchanged:
 
 \begin{verbatim}
 1  SETUP_CONSTANTS
@@ -704,8 +725,8 @@ follows directly from \field{FileRaw}'s own defining equations ---
 \field{raw} = $\langle \field{rsEmpty}, \field{rsSeg(segDocs)} \rangle$
 is the \emph{only} length-$\leq 2$ value whose \field{absolute} field
 is \field{ztrue} and whose \field{segs} is contained by
-\field{witnessPattern}, so it is the unique state the search could
-have found. This is \field{ethos-vaib} exactly: an absolute path ---
+\field{witnessPattern}, so it is the state the search finds regardless
+of setsize. This is \field{ethos-vaib} exactly: an absolute path ---
 \texttt{"/docs"}, in the ticket's own terms --- treated by the buggy
 containment check as though it were the repo-relative \texttt{docs},
 and admitted by the glob entry \texttt{docs/**} that was only ever
@@ -726,8 +747,13 @@ where
 \end{verbatim}
 
 \texttt{/z-spec:check} passes; \texttt{/z-spec:model\_check} explores
-\textbf{20 states, 36 transitions} and reports \textbf{no} deadlock
-and \textbf{no} violation. The state \field{Idle} excludes is never
+\textbf{5 states, 9 transitions} at both setsize~2 and setsize~3 ---
+stable, unlike the buggy pairing above, because a clean run keeps
+searching until the space is exhausted rather than stopping at a
+first violation --- and reports \textbf{no} deadlock and \textbf{no}
+violation (probcli does not mark it certified complete at this size,
+the same caveat \S\ref{sec:validation-admission} records for the
+full admission model). The state \field{Idle} excludes is never
 reached, because \field{fixedAdmit} can never be \field{ztrue} at the
 same time as \field{absolute = ztrue} --- not because a guard happens
 to check for it at runtime, but because the two conjuncts of
@@ -738,13 +764,21 @@ to check for it at runtime, but because the two conjuncts of
 \label{sec:validation-8ady}
 
 Mission lint's coverage heuristic
-(\fpath{internal/mission/lint.go}:177--197) computes
-\field{CanonicalPath(w)+"/"} for a directory entry \field{w} and
-tests \field{strings.HasPrefix} against the candidate file's
-canonical string. Once \field{CanonicalPath} has joined a pattern
-back into a string, a \texttt{**} segment is indistinguishable from a
-real segment named \texttt{**}; \field{Stringify} below is that round
-trip made explicit.
+(\fpath{internal/mission/lint.go}:191--197) does not compare every
+write-set entry against the candidate file: the loop's own guard,
+line~193, is $\field{strings.HasSuffix(w, "/")} \land
+\field{strings.HasPrefix(cf, CanonicalPath(w)+"/")}$, and Go's
+\field{HasSuffix} short-circuits the whole comparison for an entry
+that does not end in \texttt{"/"}. \texttt{docs/**} does not ---
+it ends in \texttt{*} --- so for exactly the entry this demonstration
+uses, the \field{HasPrefix} half is never evaluated at all: the entry
+is silently skipped, not compared and found wanting.
+\field{witnessEntryIsDir} below is that guard made explicit, fixed to
+\field{zfalse} for this witness; \field{Stringify} is the round trip
+\field{CanonicalPath} would still perform on \field{witnessEntry}'s
+segments \emph{if} the guard passed, kept here so \field{literalCovered}
+states the real predicate's full shape rather than silently dropping
+the half that never fires for this witness.
 
 \begin{verbatim}
 SEG ::= segDocs | segFile | segStarStar
@@ -757,15 +791,18 @@ Stringify : PATSEG -> SEG
   forall s : SEG @ Stringify(litSeg(s)) = s
 witnessEntry : seq PATSEG
   witnessEntry = <litSeg(segDocs), wildRestSeg>
+witnessEntryIsDir : ZBOOL             -- strings.HasSuffix("docs/**", "/")
+  witnessEntryIsDir = zfalse          --   = false: no trailing slash
 
 FileSegs
   segs : seq SEG
   semanticCovered : ZBOOL    -- witnessEntry contains segs, glob-aware
-  literalCovered : ZBOOL     -- strings.HasPrefix(segs, Stringify(witnessEntry)+"/")
+  literalCovered : ZBOOL     -- lint.go:193's guarded HasPrefix check
 where
   #segs <= maxSegs
   semanticCovered = ztrue <=> (witnessEntry contains segs, per Contains)
   literalCovered = ztrue <=>
+    witnessEntryIsDir = ztrue and
     #witnessEntry < #segs and
     (forall i : 1..#witnessEntry @ Stringify(witnessEntry(i)) = segs(i))
 
@@ -780,21 +817,20 @@ where
 
 \texttt{/z-spec:check} passes. \texttt{/z-spec:model\_check} explores
 \textbf{1 state, 5 transitions} and reports a deadlock immediately,
-at \field{INITIALISATION}. As with \S\ref{sec:validation-vaib}, the
-violating valuation follows from the schema's own equations rather
-than from the tool's raw output: \field{segs} =
-$\langle \field{segDocs}, \field{segFile} \rangle$ (the file
-\texttt{docs/audited-delegation.md}, in the same terms
+at \field{INITIALISATION}. \field{literalCovered} is \field{zfalse}
+for \emph{every} value of \field{segs}, unconditionally, because
+\field{witnessEntryIsDir = zfalse} already fails the guard's leading
+conjunct --- exactly \field{HasSuffix("docs/**", "/")} returning
+\field{false} in the real code, before \field{HasPrefix} is ever
+reached. \field{semanticCovered}, by contrast, is \field{ztrue} for
+$\field{segs} = \langle \field{segDocs}, \field{segFile} \rangle$
+(the file \texttt{docs/audited-delegation.md}, in the same terms
 \field{pathContainedBy}'s own doc comment uses, conflict.go:339--340)
-is semantically covered by \texttt{docs/**} --- the \texttt{**}
-swallows the second segment --- but \field{literalCovered} is
-\field{zfalse}: \field{Stringify(wildRestSeg)} is \field{segStarStar},
-which is not \field{segFile}, so the literal position-2 comparison
-fails outright, and even the length check
-(\field{\#witnessEntry < \#segs}, i.e.\ $2 < 2$) already fails on its
-own. This is \field{ethos-8ady}: mission lint reports
+--- the \texttt{**} swallows the second segment. This is
+\field{ethos-8ady}: mission lint reports
 \texttt{docs/audited-delegation.md} as \emph{not} covered by
-\texttt{docs/**}, when it plainly is.
+\texttt{docs/**}, when it plainly is, because \field{docs/**} is
+never even a candidate the coverage loop considers.
 
 The corrected pairing routes the heuristic through the same
 \field{Contains} logic \field{PathContainedByFixed} uses
@@ -832,19 +868,23 @@ necessarily also enumerates \field{PathContainedByBuggy}'s and
 (\S\ref{sec:modellingchoice} explains why these coexist safely in one
 namespace despite each being $\seq X$-typed: they are schemas, not
 free functions, so \texttt{SETUP\_CONSTANTS} never has to solve for
-them as constants). That combined run explores \textbf{29064 states,
-172720 transitions}, with zero invariant violations and zero
-deadlocks, though probcli does not report it as certified complete at
-that size (raising the operation budget to 500000 changed nothing,
-so this is very likely the full space, just not flagged as
-exhaustively searched). Isolating \field{Init}/\field{AdmitMission}/
-\field{ReleaseMission} alone --- the same three schemas, in a scratch
-file carrying no other declaration --- \texttt{/z-spec:model\_check}
-explores \textbf{7266 states, 35915 transitions} and \emph{is}
-reported certified complete, with the same result: zero invariant
-violations, zero deadlocks. Both runs agree on the property that
-matters: \field{Store}'s pairwise non-overlap invariant holds
-everywhere \field{AdmitMission} and \field{ReleaseMission} can reach.
+them as constants). That combined run explores \textbf{7266 states,
+43180 transitions} --- the identical state count the isolated run
+below finds, with more transitions because
+\field{PathContainedByBuggy}/\field{Fixed} fire as additional
+enumerated schemas without contributing any new \field{Store} state
+--- with zero invariant violations and zero deadlocks, though probcli
+does not report it as certified complete at that size (raising the
+operation budget to 500000 changed nothing). Isolating
+\field{Init}/\field{AdmitMission}/\field{ReleaseMission} alone ---
+the same three schemas, in a scratch file carrying no other
+declaration --- \texttt{/z-spec:model\_check} explores \textbf{7266
+states, 35915 transitions} and \emph{is} reported certified complete,
+with the same result: zero invariant violations, zero deadlocks. Both
+runs agree on the property that matters, and on the size of the
+state space it holds across: \field{Store}'s pairwise non-overlap
+invariant holds everywhere \field{AdmitMission} and
+\field{ReleaseMission} can reach.
 
 \subsection{Tool run}
 \label{sec:probrun}
@@ -855,13 +895,17 @@ everywhere \field{AdmitMission} and \field{ReleaseMission} can reach.
 \textbf{Model} & \textbf{States} & \textbf{Transitions} & \textbf{Result} \\
 \midrule
 Committed file as a whole (\field{Store} +
-  \field{PathContainedByBuggy}/\field{Fixed}) & 29064 & 172720 & 0
+  \field{PathContainedByBuggy}/\field{Fixed}) & 7266 & 43180 & 0
   violations, not certified complete \\
 \field{Init}/\field{AdmitMission}/\field{ReleaseMission} in
   isolation & 7266 & 35915 & certified complete, 0 violations \\
-Decoupled, \field{ethos-vaib} buggy pairing & 5 & 21 & deadlock at
-  $\field{absolute} = \field{ztrue} \land \field{covered} = \field{ztrue}$ \\
-Decoupled, \field{ethos-vaib} corrected pairing & 20 & 36 & clean \\
+Decoupled, \field{ethos-vaib} buggy pairing (setsize 2 / setsize 3) &
+  1 / 2 & 5 / 6 & deadlock at
+  $\field{absolute} = \field{ztrue} \land \field{covered} = \field{ztrue}$;
+  a deadlock search halts at the first violation, so neither count is
+  the full space \\
+Decoupled, \field{ethos-vaib} corrected pairing & 5 & 9 & clean,
+  identical at setsize 2 and 3 \\
 Decoupled, \field{ethos-8ady} buggy pairing & 1 & 5 & deadlock at
   \field{INITIALISATION} \\
 Decoupled, \field{ethos-8ady} corrected pairing & 5 & 9 & clean \\
@@ -907,7 +951,7 @@ extension.
   \field{overlapSegments} (conflict.go:291--314) & animatability
   device, \S\ref{sec:state} \\
 \field{PathContainedByBuggy} & \field{pathContainedBy} +
-  \field{segmentsContain} (conflict.go:360--378, 394--419) & \\
+  \field{segmentsContain} (conflict.go:360--379, 394--419) & \\
 \field{PathContainedByFixed} & the fix bd ticket \field{ethos-vaib}
   prescribes, applied to \field{pathContainedBy} & not present in
   current code \\
@@ -921,9 +965,12 @@ extension.
 \field{ReleaseMission} & \field{Store.Close}/\field{Store.Abandon}
   freeing a slot & no single named Go function; see
   spec-mission-lifecycle.tex \field{Close}/\field{Abandon} \\
-Literal-string coverage contrast (\S\ref{sec:validation-8ady}) &
-  \fpath{internal/mission/lint.go}:177--197 &
-  \field{ethos-8ady} \\
+Literal-string coverage contrast, \field{witnessEntryIsDir} &
+  \fpath{internal/mission/lint.go}:193's guard, exactly
+  (\S\ref{sec:validation-8ady}) & \field{ethos-8ady}; a direct
+  transcription of the guard, not a representative abstraction --- see
+  \S\ref{sec:validation-8ady} for why \texttt{docs/**} never reaches
+  the \field{HasPrefix} half at all \\
 \bottomrule
 \end{tabularx}
 \end{center}
