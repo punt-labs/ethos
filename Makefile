@@ -35,7 +35,7 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help lint docs docs-pdf test check validate-content sync-embed format build install dev clean clean-latex dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
+.PHONY: help lint docs docs-pdf test check validate-content fuzz-check sync-embed format build install dev clean clean-latex dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -96,6 +96,64 @@ test: ## Run tests with race detection and write coverage to coverage.out
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
 
+# Z specification .tex files are identified by content, not by a
+# hardcoded name list: any docs/*.tex carrying `usepackage{fuzz}` (the
+# package every Z spec loads to get fuzz's Z notation macros) is a Z
+# spec and gets type-checked. A new spec landing under docs/ is picked
+# up on its next `make check` with no Makefile edit. FUZZ_SPECS is
+# re-evaluated on every `make` invocation (grep, not a cached list), so
+# concurrent branches adding spec-*.tex files are covered as soon as
+# they land in the working tree.
+#
+# `fuzz <file>` with no flags performs a full type-check and is silent
+# on success (exit 0, no output) — unlike `-t`, which additionally
+# dumps every global definition's inferred type, drowning a real error
+# in noise. A type/scope error prints one `"file", line N: message`
+# line per error and a nonzero exit; see ethos-cy70's mission evidence
+# for a captured failing/passing transcript against a throwaway fixture.
+#
+# Local vs CI presence of the fuzz binary is NOT graceful in both
+# places. A developer machine without fuzz built (it has no
+# distributed binary — z-spec/install.sh --fuzz-only compiles it from
+# source) degrades to a loud one-line skip, so this target never blocks
+# local iteration on a toolchain most edits never touch. CI has no such
+# excuse: .github/workflows/test.yml installs fuzz explicitly so this
+# gate can actually fail there, and a missing fuzz in CI is treated as
+# a broken environment (hard failure), never a silent or quiet skip —
+# that asymmetry is the whole point of the gate (ethos-cy70).
+#
+# Non-Z .tex docs (docs/agent-identity-spec.tex, docs/architecture.tex,
+# docs/testing-strategy.tex, prfaq.tex) get NO compile gate here.
+# Decision, not an oversight: `make docs-pdf` above already documents
+# why a LaTeX compile step is opt-in rather than part of `check` — it
+# needs a full TeX distribution (MacTeX/TeX Live) that CI does not
+# otherwise install, and none of these four are executable
+# specifications the way the fuzz-typed ones are, so there is no
+# analogous "silently drifted against the code" failure mode to close.
+# Deferred; tracked under ethos-cy70 if a future need (e.g. CI PDF
+# regeneration checks) reopens it.
+FUZZ_SPECS := $(shell grep -l 'usepackage{fuzz}' docs/*.tex 2>/dev/null)
+
+fuzz-check: ## Type-check Z specification .tex files with fuzz (ethos-cy70)
+	@if [ -z "$(FUZZ_SPECS)" ]; then \
+		echo "fuzz-check: no docs/*.tex carries usepackage{fuzz} -- nothing to type-check"; \
+		exit 0; \
+	fi; \
+	if ! command -v fuzz >/dev/null 2>&1; then \
+		if [ -n "$$CI" ]; then \
+			echo "fuzz-check: fuzz type-checker not found on PATH -- CI must have fuzz installed for this gate to run (ethos-cy70); fix the workflow, this is not a skippable condition in CI" >&2; \
+			exit 1; \
+		fi; \
+		echo "fuzz-check: *** fuzz not installed -- SKIPPING Z spec type-check on this machine (build it with '<z-spec repo>/install.sh --fuzz-only', or run 'z-spec doctor' to check toolchain state) ***"; \
+		exit 0; \
+	fi; \
+	status=0; \
+	for f in $(FUZZ_SPECS); do \
+		echo "fuzz $$f"; \
+		fuzz "$$f" || status=1; \
+	done; \
+	exit $$status
+
 sync-embed: ## Copy docs/ETHOS-SETUP.md to its DES-071 tier-C embed source
 	cp docs/ETHOS-SETUP.md internal/enable/setup/ETHOS-SETUP.md
 
@@ -118,7 +176,7 @@ baseline-tokens: ## Recapture E2E token baselines (operator-invoked)
 calibrate-tokens: ## Calibrate the offline tokenizer against Anthropic's API (operator-invoked)
 	@echo "not yet implemented in initial land"
 
-check: lint docs test validate-content ## Run all quality gates
+check: lint docs test validate-content fuzz-check ## Run all quality gates
 
 format: ## Format code (applies the formatters golangci-lint gates)
 	$(GOLANGCI_LINT) fmt
