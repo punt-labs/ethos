@@ -77,11 +77,13 @@ path produces, so \field{CanonicalPath("/docs/x.md")} and
 \field{CanonicalPath("docs/x.md")} are the same string; and
 \field{ethos-8ady}, in which mission lint's write-set coverage
 heuristic (\fpath{internal/mission/lint.go}:191--197) treats a glob
-entry no differently from a literal one --- its trailing-slash guard
-(line~193) and its own \field{HasPrefix} comparison both operate on
-\field{CanonicalPath}'s joined string, blind to what any segment
-inside it means --- so a file genuinely covered by \texttt{docs/**}
-draws a spurious ``not in write\_set'' warning.
+entry no differently from a literal one: its trailing-slash guard
+(line~193) tests the raw entry string itself, and, only once that
+guard passes, its \field{HasPrefix} comparison tests
+\field{CanonicalPath}'s joined string --- neither half is aware that
+a segment inside the entry might mean anything other than its own
+literal characters --- so a file genuinely covered by
+\texttt{docs/**} draws a spurious ``not in write\_set'' warning.
 
 \subsection{Non-goals}
 \label{sec:nongoals}
@@ -340,7 +342,8 @@ Seven fields, three kinds:
     (conflict.go:219--226), the \field{ExtractInto} field's own
     entry-kind flag, and the entry's segments after
     \field{CanonicalPath}-style splitting.
-  \item The predicate \field{isEI = ztrue \implies isDir = ztrue} is
+  \item The predicate
+    $\field{isEI} = \field{ztrue} \implies \field{isDir} = \field{ztrue}$ is
     validate.go rule~17 (validate.go:79, 216--226): ``\emph{extract\_into
     entries must be directory-shaped}.'' The
     $(\lnot\field{isDir} \land \field{isEI})$ combination
@@ -377,8 +380,12 @@ single trailing \texttt{**} (\S\ref{sec:nongoals}): the entry's
 literal prefix (\field{truncLen}, \field{seg1}, \field{seg2}) must
 match a prefix of the file's segments, and the file may be longer
 --- ``\emph{the entry running out is success}'' (conflict.go:389).
-Included via \field{CanonicalPathBuggy}, so the file side carries no
-absoluteness information to check.
+\field{pathContainedBy}'s own leading guard, ``\emph{an empty segment
+list on either side matches nothing}'' (conflict.go:363--365,
+returning \field{false} before \field{segmentsContain} is even
+called), is the leading conjunct below. Included via
+\field{CanonicalPathBuggy}, so the file side carries no absoluteness
+information to check.
 
 \begin{schema}{PathContainedByBuggy}
 CanonicalPathBuggy \\
@@ -386,6 +393,7 @@ ENTRY \\
 containedBy : ZBOOL
 \where
 (containedBy = ztrue \iff
+  \# segs > 0 \land \# pattern > 0 \land
   truncLen \leq \# segs \land
   (truncLen \geq 1 \implies seg1 = litSeg(segs(1))) \land
   (truncLen \geq 2 \implies seg2 = litSeg(segs(2))))
@@ -407,6 +415,7 @@ ENTRY \\
 containedBy : ZBOOL
 \where
 (containedBy = ztrue \iff
+  \# segs > 0 \land \# pattern > 0 \land
   absolute = zfalse \land
   truncLen \leq \# segs \land
   (truncLen \geq 1 \implies seg1 = litSeg(segs(1))) \land
@@ -450,7 +459,8 @@ open : 1 \upto maxOpen \pfun ENTRY
 \forall i, j : \dom open | i \neq j @
   \lnot ( \lnot ((open\ i).isEI = ztrue \land (open\ j).isEI = ztrue) \land
     ( ( (open\ i).isDir = (open\ j).isDir \land
-        (open\ i).truncLen > 0 \land (open\ j).truncLen > 0 \land
+        \lnot ( ((open\ i).truncLen = 0 \land (open\ i).rootGlob = zfalse)
+                \lor ((open\ j).truncLen = 0 \land (open\ j).rootGlob = zfalse) ) \land
         ( (open\ i).rootGlob = ztrue \lor (open\ j).rootGlob = ztrue
           \lor ( (open\ i).seg1 = (open\ j).seg1 \land
                 ( (open\ i).truncLen = 1 \lor (open\ j).truncLen = 1
@@ -466,19 +476,33 @@ open : 1 \upto maxOpen \pfun ENTRY
 \end{schema}
 
 Reading the three disjuncts against \field{entryPairConflicts}
-(conflict.go:186--217): the first is \texttt{ws-dir}$\times$\texttt{ws-dir}
-or \texttt{ws-file}$\times$\texttt{ws-file}, dispatched to
-\field{pathsOverlap}'s truncate-and-compare rule
+(conflict.go:186--217): the first is \texttt{ws-dir}$\times$\texttt{ws-dir},
+\texttt{ws-file}$\times$\texttt{ws-file}, or (since an \texttt{ei-dir}
+entry is always directory-shaped, by \field{ENTRY}'s own
+\field{isEI}/\field{isDir} invariant) \texttt{ws-dir}$\times$\texttt{ei-dir},
+dispatched to \field{pathsOverlap}'s truncate-and-compare rule
 (conflict.go:263--289) --- a root glob on either side overlaps
 unconditionally (``\emph{an entry whose FIRST segment globs claims
-from the root}'', conflict.go:303--305), otherwise the truncated
+from the root}'', conflict.go:254--255), otherwise the truncated
 literal prefixes must agree position-for-position up to the shorter
-one's length. The second and third are the two orderings of
-\texttt{ws-file}$\times$\texttt{ws-dir} (and, by \field{ENTRY}'s own
-invariant forcing \field{isEI = ztrue \implies isDir = ztrue}, also
-cover \texttt{ws-file}$\times$\texttt{ei-dir}), dispatched to
-\field{pathContainedBy}. The leading \field{isEI}-exclusion is
-\texttt{ei-dir}$\times$\texttt{ei-dir}, which
+one's length. The middle conjunct guarding this disjunct,
+$\lnot((\field{truncLen}_i = 0 \land \field{rootGlob}_i = \field{zfalse})
+\lor (\field{truncLen}_j = 0 \land \field{rootGlob}_j = \field{zfalse}))$,
+is \field{pathsOverlap}'s own ``an entry that normalizes to nothing
+and does not glob from the root matches no other path'' guard
+(conflict.go:266--270); without it, the disjunct's
+\field{rootGlob} $= \field{ztrue}$ branch is dead code, because
+\field{ENTRY}'s invariant already forces $\field{rootGlob} =
+\field{ztrue} \implies \field{truncLen} = 0$ --- an earlier revision
+of this document conjoined $\field{truncLen}_i > 0 \land
+\field{truncLen}_j > 0$ directly, which is unsatisfiable whenever
+either side is genuinely root-glob and so could never detect the
+conflict \field{pathsOverlap} exists to catch. The second and third
+disjuncts are the two orderings of
+\texttt{ws-file}$\times$\texttt{ws-dir} (and, again by \field{ENTRY}'s
+invariant, also cover \texttt{ws-file}$\times$\texttt{ei-dir}),
+dispatched to \field{pathContainedBy}. The leading \field{isEI}-exclusion
+is \texttt{ei-dir}$\times$\texttt{ei-dir}, which
 \field{entryPairConflicts} always refuses (conflict.go:196--202):
 ``\emph{Two missions may extract into the same directory... same-filename
 collisions are the leader's responsibility, not admission control's}.''
@@ -505,7 +529,8 @@ slot? \notin \dom open \\
 \forall i : \dom open @
   \lnot ( \lnot (entry?.isEI = ztrue \land (open\ i).isEI = ztrue) \land
     ( (entry?.isDir = (open\ i).isDir \land
-        entry?.truncLen > 0 \land (open\ i).truncLen > 0 \land
+        \lnot ( (entry?.truncLen = 0 \land entry?.rootGlob = zfalse)
+                \lor ((open\ i).truncLen = 0 \land (open\ i).rootGlob = zfalse) ) \land
         ( entry?.rootGlob = ztrue \lor (open\ i).rootGlob = ztrue
           \lor ( entry?.seg1 = (open\ i).seg1 \land
                 ( entry?.truncLen = 1 \lor (open\ i).truncLen = 1
@@ -533,8 +558,9 @@ newly-admitted entry to overlap something already there.
 Not one of \field{findWriteSetConflicts}'s own concerns --- no
 function in \fpath{internal/mission} is named this --- but every real
 mission eventually leaves the open set (\field{Store.Close},
-\field{Store.Abandon}, spec-mission-lifecycle.tex
-\S\ref{sec:opclose}--\ref{sec:opabandon}), and without some way to
+\field{Store.Abandon}, modelled as \field{Close} and \field{Abandon}
+in spec-mission-lifecycle.tex's own \S~Operations), and without some
+way to
 free a slot the admission model could only ever fill up, never
 demonstrate the invariant surviving a longer, mixed sequence of
 admits and departures. Removing an entry from \field{open} can only
@@ -561,7 +587,7 @@ open' = \{ slot? \} \ndres open
 \midrule
 \field{SegmentationUnchanged} &
   \field{CanonicalPathBuggy} and \field{CanonicalPathFixed} compute
-  the identical \field{segs} = \field{squash(raw \comp unwrap)} from
+  the identical $\field{segs} = \field{squash}(\field{raw} \comp \field{unwrap})$ from
   the same \field{raw}; the fix adds a field, it does not change how
   segments are derived. Confirmed by inspection of both schemas
   (\S\ref{sec:canonical}); not separately animated, since the two
@@ -591,9 +617,9 @@ open' = \{ slot? \} \ndres open
   only shrink \field{dom\ open}, so it preserves any invariant that
   universally quantifies over that domain. Additionally exercised by
   ProB (\S\ref{sec:validation-admission}): certified complete in
-  isolation (\textbf{7266 states, 35915 transitions}), and confirmed
+  isolation (\textbf{5790 states, 28535 transitions}), and confirmed
   again, uncertified but reaching the identical state count, against
-  the committed file as a whole (\textbf{7266 states, 43180
+  the committed file as a whole (\textbf{5790 states, 34324
   transitions}); zero violations in either run. \\
 \bottomrule
 \end{tabularx}
@@ -613,7 +639,11 @@ a separate, decoupled reachability demonstration in
 \label{sec:validation}
 % ===================================================================
 
-Three separate probcli runs back the claims above. Each of
+Three demonstrations back the claims above --- one per criterion in
+\S\ref{sec:theorems}'s table, tabulated as the six probcli runs of
+\S\ref{sec:probrun} (a buggy/fixed pairing for each of the two
+decoupled demonstrations, plus the admission model checked both in
+isolation and as part of the committed file). Each of
 \S\ref{sec:validation-vaib} and \S\ref{sec:validation-8ady} follows
 spec-mission-lifecycle.tex's own decoupled-demonstration technique
 (its \S~``A decoupled demonstration''): a small, self-contained Z
@@ -698,14 +728,21 @@ changing which state deadlocks. The line closes that gap by stating
 
 \texttt{/z-spec:check} passes on the scratch file with this content.
 \texttt{/z-spec:model\_check} still reports a deadlock, now with a
-single \texttt{SETUP\_CONSTANTS} witness rather than four: \textbf{1
-state, 5 transitions} at setsize~2, \textbf{2 states, 6 transitions}
-at setsize~3. A deadlock search halts at the first violation it
-finds, so neither figure is the full space's size --- only the
-deadlock's existence is a robust claim here, exactly as jra's review
-of the previous round noted; what the fix changes is that the count is
-no longer inflated by an under-constrained function with no bearing on
-the bug. The counter-example itself is unchanged:
+single \texttt{SETUP\_CONSTANTS} witness rather than four. Repeated
+invocations at setsize~2 and setsize~3 alike report between
+\textbf{1 and 4 states} (\textbf{5 to 8 transitions}) before halting:
+a deadlock search stops at the first violation it finds, and which
+valuation gets visited first is not guaranteed stable across
+invocations of the same file at the same setsize, so neither setsize
+nor repetition pins the count down to one number. What every
+invocation agrees on is the fact that matters --- a deadlock exists,
+and reaching it never takes more than a handful of states --- exactly
+as jra's review of the previous round noted; what this round's fix
+changes is that the count is no longer additionally inflated by an
+under-constrained function with no bearing on the bug (four spurious
+\texttt{SETUP\_CONSTANTS} witnesses before, one now). The
+counter-example the search reports is unchanged in substance across
+every run observed:
 
 \begin{verbatim}
 1  SETUP_CONSTANTS
@@ -725,8 +762,9 @@ follows directly from \field{FileRaw}'s own defining equations ---
 \field{raw} = $\langle \field{rsEmpty}, \field{rsSeg(segDocs)} \rangle$
 is the \emph{only} length-$\leq 2$ value whose \field{absolute} field
 is \field{ztrue} and whose \field{segs} is contained by
-\field{witnessPattern}, so it is the state the search finds regardless
-of setsize. This is \field{ethos-vaib} exactly: an absolute path ---
+\field{witnessPattern}, so it is the state every run's deadlock
+ultimately traces back to, whatever else that run's search visited
+first. This is \field{ethos-vaib} exactly: an absolute path ---
 \texttt{"/docs"}, in the ticket's own terms --- treated by the buggy
 containment check as though it were the repo-relative \texttt{docs},
 and admitted by the glob entry \texttt{docs/**} that was only ever
@@ -825,7 +863,7 @@ conjunct --- exactly \field{HasSuffix("docs/**", "/")} returning
 reached. \field{semanticCovered}, by contrast, is \field{ztrue} for
 $\field{segs} = \langle \field{segDocs}, \field{segFile} \rangle$
 (the file \texttt{docs/audited-delegation.md}, in the same terms
-\field{pathContainedBy}'s own doc comment uses, conflict.go:339--340)
+\field{pathContainedBy}'s own doc comment uses, conflict.go:338)
 --- the \texttt{**} swallows the second segment. This is
 \field{ethos-8ady}: mission lint reports
 \texttt{docs/audited-delegation.md} as \emph{not} covered by
@@ -868,22 +906,27 @@ necessarily also enumerates \field{PathContainedByBuggy}'s and
 (\S\ref{sec:modellingchoice} explains why these coexist safely in one
 namespace despite each being $\seq X$-typed: they are schemas, not
 free functions, so \texttt{SETUP\_CONSTANTS} never has to solve for
-them as constants). That combined run explores \textbf{7266 states,
-43180 transitions} --- the identical state count the isolated run
-below finds, with more transitions because
-\field{PathContainedByBuggy}/\field{Fixed} fire as additional
-enumerated schemas without contributing any new \field{Store} state
---- with zero invariant violations and zero deadlocks, though probcli
-does not report it as certified complete at that size (raising the
-operation budget to 500000 changed nothing). Isolating
+them as constants). That combined run explores \textbf{5790 states,
+34324 transitions}, with zero invariant violations and zero deadlocks,
+though probcli does not report it as certified complete at that size
+(raising the operation budget to 500000 changed nothing). Isolating
 \field{Init}/\field{AdmitMission}/\field{ReleaseMission} alone ---
 the same three schemas, in a scratch file carrying no other
-declaration --- \texttt{/z-spec:model\_check} explores \textbf{7266
-states, 35915 transitions} and \emph{is} reported certified complete,
-with the same result: zero invariant violations, zero deadlocks. Both
-runs agree on the property that matters, and on the size of the
-state space it holds across: \field{Store}'s pairwise non-overlap
-invariant holds everywhere \field{AdmitMission} and
+declaration --- \texttt{/z-spec:model\_check} explores \textbf{5790
+states, 28535 transitions} and \emph{is} reported certified complete,
+with the same result: zero invariant violations, zero deadlocks. The
+two runs reach the \emph{identical} state count, which is the fact
+that matters --- \field{PathContainedByBuggy}/\field{Fixed} contribute
+no new \field{Store} state, only additional enumerated bindings of
+their own --- and the transition counts reconcile exactly:
+$34324 - 28535 = 5789$, matching \field{PathContainedByBuggy}'s own
+reported firing count in the whole-file run (\field{PathContainedByFixed}
+fires the same 5789 times; probcli's own transition accounting does
+not double-count the two coincident enumerations, and this document
+does not depend on why). Both runs agree on the property that
+matters, and on the size of the state space it holds across:
+\field{Store}'s pairwise non-overlap invariant holds everywhere
+\field{AdmitMission} and
 \field{ReleaseMission} can reach.
 
 \subsection{Tool run}
@@ -895,19 +938,20 @@ invariant holds everywhere \field{AdmitMission} and
 \textbf{Model} & \textbf{States} & \textbf{Transitions} & \textbf{Result} \\
 \midrule
 Committed file as a whole (\field{Store} +
-  \field{PathContainedByBuggy}/\field{Fixed}) & 7266 & 43180 & 0
+  \field{PathContainedByBuggy}/\field{Fixed}) & 5790 & 34324 & 0
   violations, not certified complete \\
 \field{Init}/\field{AdmitMission}/\field{ReleaseMission} in
-  isolation & 7266 & 35915 & certified complete, 0 violations \\
-Decoupled, \field{ethos-vaib} buggy pairing (setsize 2 / setsize 3) &
-  1 / 2 & 5 / 6 & deadlock at
-  $\field{absolute} = \field{ztrue} \land \field{covered} = \field{ztrue}$;
-  a deadlock search halts at the first violation, so neither count is
-  the full space \\
+  isolation & 5790 & 28535 & certified complete, 0 violations \\
+Decoupled, \field{ethos-vaib} buggy pairing (repeated runs,
+  setsize 2 and 3) & 1--4 & 5--8 & deadlock every run; a deadlock
+  search halts at the first violation, and which one is visited
+  first is not stable across invocations, so no single count is the
+  full space \\
 Decoupled, \field{ethos-vaib} corrected pairing & 5 & 9 & clean,
   identical at setsize 2 and 3 \\
 Decoupled, \field{ethos-8ady} buggy pairing & 1 & 5 & deadlock at
-  \field{INITIALISATION} \\
+  \field{INITIALISATION}, stable across every setsize~2/3 run
+  observed \\
 Decoupled, \field{ethos-8ady} corrected pairing & 5 & 9 & clean \\
 \bottomrule
 \end{tabularx}
@@ -945,7 +989,7 @@ extension.
   (conflict.go:433--442) does the classification per-segment; not
   separately modelled (\S\ref{sec:nongoals}) \\
 \field{ENTRY.isDir} & \field{isDirEntry} (conflict.go:219--226) & \\
-\field{ENTRY.isEI = ztrue \implies isDir = ztrue} & validate.go rule
+$\field{ENTRY.isEI} = \field{ztrue} \implies \field{isDir} = \field{ztrue}$ & validate.go rule
   17 (validate.go:79, 216--226) & \\
 \field{ENTRY.rootGlob}, \field{truncLen}, \field{seg1}, \field{seg2} &
   \field{overlapSegments} (conflict.go:291--314) & animatability
