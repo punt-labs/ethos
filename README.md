@@ -315,7 +315,7 @@ markdown cannot represent it).
 
 ## Development
 
-Run all quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests):
+Run all quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests, Z-spec fuzz type-check):
 
 ```bash
 make check

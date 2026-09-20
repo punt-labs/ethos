@@ -23,7 +23,7 @@ Before specifying work, check the relevant standard:
 ```bash
 make build                              # Build ethos binary
 make install                            # Build and install to ~/.local/bin
-make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests)
+make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests, Z-spec fuzz type-check)
 ./ethos version                         # Print version
 ./ethos doctor                          # Check installation health
 ./ethos setup                           # Interactive repo setup wizard
@@ -128,7 +128,7 @@ The Makefile is the source of truth (`make help`).
 make check                             # All gates: lint + docs + test
 ```
 
-Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`.
+Expands to `make lint docs test validate-content fuzz-check`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI).
 
 ## Architecture
 
