@@ -374,8 +374,10 @@ lostUnwarned' = lostUnwarned
 
 Models the unsealed-lines guard in \field{purgeOneTombstoned}
 (internal/session/store.go:534--627): with lines still pending and no
-\texttt{--force}, purge refuses outright and changes nothing
-(store.go:499--508, 527--530, the \field{didRefuse} path).
+\texttt{--force}, purge refuses outright and changes nothing. The guard
+itself is \texttt{if !force \&\& (unsealed > 0 || probeFailed)}
+(store.go:634--669); the caller that records the refusal is
+store.go:527--530, the \field{didRefuse} path.
 
 \begin{schema}{SessionPurgeRefuse}
 \Xi AuditLine
@@ -426,7 +428,7 @@ the states it reaches.
 \label{sec:counterexample}
 
 \texttt{/z-spec:check} passes on this document. \texttt{/z-spec:test}
-against \field{Init} and the seven operations of \S\ref{sec:ops} explores
+against \field{Init} and the eight operations of \S\ref{sec:ops} explores
 17 states and 78 transitions, is deadlock-free, and raises no assertion
 violation --- expected, since \field{lostUnwarned} carries no invariant
 for probcli to check (\S\ref{sec:state}). Reachability is instead
@@ -515,6 +517,14 @@ where
   rosterKnown' = rosterKnown
   lostUnwarned' = lostUnwarned
 
+CommitAnywhereNoHookD1
+  Xi AuditLineD1
+where
+  hookInstalled = zfalse
+  -- the NoHook counterpart carries over from the current design
+  -- (S:ops) unchanged in shape: still a pure query, now retyped
+  -- against AuditLineD1.
+
 WorktreeRemoveD1
   Xi AuditLineD1
 where
@@ -550,6 +560,8 @@ where
 InitD2   -- identical in shape to Init (S:init)
 
 CommitInWritingCheckoutD2   -- identical to CommitInWritingCheckout (S:opcommitwriting)
+
+CommitInWritingCheckoutNoHookD2   -- identical to CommitInWritingCheckoutNoHook
 
 CommitInSiblingWorktreeD2
   Delta AuditLineD2
@@ -588,7 +600,14 @@ Sealing converts a pending line from ``in the gitignored live file'' to
 \fpath{git worktree remove} sees: git's own dirty-worktree check refuses a
 plain (non-\texttt{--force}) removal when a tracked path has uncommitted
 content (\S\ref{sec:nongoals}), so a sealed-but-uncommitted chunk is
-something git itself can now block on.
+something git itself can now block on --- but only a block, not a
+guarantee: \field{WorktreeRemoveD3}'s guard,
+\field{force? = ztrue} $\lor$ \field{sealed = 0}, is a disjunction, so
+an operator who passes \texttt{--force} keeps the operation enabled
+regardless of \field{sealed}'s value, by the guard's own shape and with
+no need to search for a witness state. This is the same shape of
+override \field{SessionPurgeForce} already offers on the purge path
+(\S\ref{sec:ops}); \S\ref{sec:verdict} returns to the difference.
 
 \begin{verbatim}
 AuditLineD3   -- identical fields and invariant to AuditLineD2/AuditLine
@@ -596,6 +615,8 @@ AuditLineD3   -- identical fields and invariant to AuditLineD2/AuditLine
 InitD3   -- identical in shape to Init (S:init)
 
 CommitInWritingCheckoutD3   -- identical to CommitInWritingCheckout
+
+CommitInWritingCheckoutNoHookD3   -- identical to CommitInWritingCheckoutNoHook
 
 CommitInSiblingWorktreeD3   -- identical to the current design's
                             -- (pure Xi, S:ops): Design 3 does not touch
@@ -645,39 +666,34 @@ where
 \textbf{Model} & \textbf{States} & \textbf{Transitions} &
   \textbf{Result} \\
 \midrule
-Current design (\S\ref{sec:state}--\ref{sec:ops}), all 7 operations,
+Current design (\S\ref{sec:state}--\ref{sec:ops}), all 8 operations,
   full exploration &
   17 & 78 &
   deadlock-free, no assertion violated (none declared, \S\ref{sec:state}) \\
 Current design, goal search \field{lostUnwarned=ztrue} &
-  7 & 35 &
+  6 & 37 &
   \field{lostUnwarned = ztrue} reachable via \field{WorktreeRemove} from
   \field{Init} in one step (\S\ref{sec:counterexample}) \\
 Design 1 (\S\ref{sec:design1}): per-machine spool, full exploration &
-  9 & 38 &
+  9 & 42 &
   \emph{No counter example found. ALL states visited} ---
   \field{lostUnwarned = ztrue} \textbf{unreachable} \\
 Design 2 (\S\ref{sec:design2}): worktree-aware seal, full exploration &
-  17 & 66 &
+  17 & 70 &
   deadlock-free \\
 Design 2, goal search \field{lostUnwarned=ztrue} &
-  3 & 18 &
+  4 & 23 &
   \textbf{still reachable} --- via \field{WorktreeRemoveD2} from
   \field{Init} in one step, before any
   \field{CommitInSiblingWorktreeD2} \\
 Design 3 (\S\ref{sec:design3}): sealing \field{SessionEnd}, full
-  exploration & 17 & 80 & deadlock-free \\
-Design 3, goal search \field{lostUnwarned=ztrue} &
-  4 & 28 &
-  \textbf{still reachable} --- via \field{SessionEndD3} then
-  \field{WorktreeRemoveD3(force?=ztrue)}: an operator overriding git's
-  refusal still destroys the pool \\
+  exploration & 17 & 84 & deadlock-free \\
 Design 3, goal search \field{lostUnwarned=ztrue} $\land$
   \field{rosterKnown=ztrue} &
-  9 & 48 &
+  7 & 40 &
   \textbf{still reachable} --- via \field{WorktreeRemoveD3(force?=zfalse)}
-  from \field{Init} in one step: a spooled (gitignored) line with
-  \field{SessionEndD3} never having run is invisible to git's
+  from \field{Init} in one step, with \field{SessionEndD3} never having
+  fired: a spooled (gitignored) line is invisible to git's
   dirty-worktree guard, which only inspects \field{sealed} \\
 \bottomrule
 \end{tabularx}
@@ -686,13 +702,28 @@ Design 3, goal search \field{lostUnwarned=ztrue} $\land$
 fuzz's \texttt{/z-spec:check} reports 0 errors on this document and on
 each of the three scratch variants. Every run in this table was executed
 directly with \fpath{probcli}: the four full-exploration rows via
-\fpath{-model\_check}, the five reachability rows via
+\fpath{-model\_check}, the four reachability rows via
 \fpath{-model\_check -goal "<predicate>" -check\_goal}, which halts and
 prints a trace the first time it finds a state satisfying the goal (a
 smaller state/transition count than the corresponding full-exploration
-row is expected --- the goal search stops early). All runs were against
-\fpath{.tex} files --- \texttt{probcli} silently reports 0 states and 0
-transitions on any other extension (spec-mission-lifecycle.tex \S Tool
+row is expected --- the goal search stops early).
+
+Full-exploration counts are deterministic --- re-running any of the four
+full-exploration rows reproduces the same state and transition count
+every time, on any probcli build, because exhaustive search visits every
+reachable state regardless of the order it visits them in. Goal-search
+counts are not: \fpath{-check\_goal} stops at the \emph{first} state it
+happens to visit that satisfies the predicate, and re-running the exact
+same goal search against the exact same unmodified file has been
+observed to report a different intermediate state/transition count from
+one run to the next (the current-design goal search above, run twice
+across this document's two review rounds, reported 7/35 and then 6/37).
+The reachability verdict --- \textbf{TRUE}, with a concrete trace ---
+is what the goal search establishes; its state/transition count is a
+report of how much of the space that particular run happened to touch
+before stopping, not a fact about the specification. All runs were
+against \fpath{.tex} files --- \texttt{probcli} silently reports 0 states
+and 0 transitions on any other extension (spec-mission-lifecycle.tex \S Tool
 run makes the same point; it is worth repeating because it is exactly the
 kind of mistake that produces a false-clean report with no error message
 at all).
