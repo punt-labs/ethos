@@ -62,7 +62,7 @@ both.
     (\field{buildVerifierIsolationBlock}/\field{buildVerifierAllowlistEnv},
     subagent\_start.go:178--194).
   \item The \textbf{PreToolUse write gate}
-    (\fpath{internal/hook/pretooluse.go}:110--128), which decides
+    (\fpath{internal/hook/pretooluse.go}:110--157), which decides
     whether a \field{Write} or \field{Edit} tool call inside that
     subagent's session is confined to the mission's write set. Its
     only input is the environment variable the first gate sets.
@@ -93,16 +93,16 @@ that smaller change is sufficient.
 \field{HandleSubagentStartWithDeps} decides once per subagent
 spawn (subagent\_start.go:102--235); \field{HandlePreToolUse}
 decides once per tool call inside that spawn's session
-(pretooluse.go:86--163). This specification's state,
+(pretooluse.go:86--157). This specification's state,
 \field{GateState} (\S\ref{sec:state}), describes one spawn's
 worth of that history: the SubagentStart decision, taken exactly
 once, followed by zero or more PreToolUse write decisions that all
 read the same environment the first decision set. Nothing here would
 change if it were promoted to a partial function from session
 identifiers to \field{GateState} --- exactly the same simplification
-\S1.1 of \fpath{spec-mission-lifecycle.tex} makes for missions, for
-the same reason: every decision in scope touches exactly one spawn's
-state.
+\fpath{spec-mission-lifecycle.tex}'s \emph{Modelling choice: one
+mission at a time} subsection makes for missions, for the same
+reason: every decision in scope touches exactly one spawn's state.
 
 \subsection{Non-goals}
 \label{sec:nongoals}
@@ -285,13 +285,29 @@ Five fields, one invariant:
     \field{ETHOS\_VERIFIER\_ALLOWLIST} being set in the subagent's
     environment. The invariant
     \field{allowlistActive = gateApplied} is the \textbf{composition
-    fact} this whole document exists to state formally:
-    \field{buildVerifierAllowlistEnv} is called from inside the
-    \field{len(verifierMissions) > 0} branch and nowhere else
-    (subagent\_start.go:179--194), so the write gate's one input is
-    set if and only if the SubagentStart gate applied. Nothing in
+    fact} this whole document exists to state formally, and it is an
+    equality, so both directions need justifying, not one.
+    \emph{Gate applied $\Rightarrow$ allowlist active}:
+    \field{buildVerifierAllowlistEnv} is called only from inside the
+    \field{len(verifierMissions) > 0} branch (subagent\_start.go:
+    179--194); it returns \field{nil} --- which would leave
+    \field{result.Env} unset and the environment variable genuinely
+    absent --- only when its \field{entries} list is empty
+    (subagent\_start.go:514--516). \field{entries} is built from
+    \field{verifierAllowlist}, whose split form,
+    \field{verifierAllowlistSplit}, always appends the mission's own
+    contract path (subagent\_start.go:469--487) once
+    \field{readGateContract} has already resolved that same path
+    successfully earlier in \field{checkVerifierHash}
+    (subagent\_start.go:607--610) --- so the empty-list return is not
+    reachable on this path in practice. That is a fact about how the
+    mission store is populated, not a theorem this specification
+    proves; it is recorded as a caveat rather than assumed silently.
+    \emph{Allowlist active $\Rightarrow$ gate applied}: nothing in
     \fpath{pretooluse.go} sets or reads
-    \field{ETHOS\_VERIFIER\_ALLOWLIST} independently of that branch.
+    \field{ETHOS\_VERIFIER\_ALLOWLIST} independently of that branch,
+    so the variable's only writer is the branch \field{gateApplied}
+    names.
 \end{itemize}
 
 % ===================================================================
@@ -331,9 +347,9 @@ happened yet, so nothing has set the environment.
 \subsection{The SubagentStart decision}
 \label{sec:decision}
 
-Exactly one of the four operations below fires per spawn, guarded by
+Exactly one of the three operations below fires per spawn, guarded by
 \field{decided = zfalse}; each sets \field{decided}$'$ =
-\field{ztrue} so none of the four --- nor any other decision
+\field{ztrue} so none of the three --- nor any other decision
 operation --- is enabled again for this spawn.
 \field{SubagentStartOneShot} (\S\ref{sec:theorems}) records this.
 
@@ -485,9 +501,12 @@ confirm nothing beyond what reading the predicates already shows.
 \field{SilentDisabledReachableUnderMuteSkip} &
   Checked by ProB, not by inspection: \S\ref{sec:validation}'s
   decoupled model with \field{MuteSkip} in place of
-  \field{LoudSkip} reaches, by \field{INITIALISATION} then one
-  \field{MuteSkip} firing with \field{verifierOfOpenMission?} chosen
-  \field{ztrue}, a state satisfying \field{decided = ztrue} $\land$
+  \field{LoudSkip} reaches, by \field{INITIALISATION} choosing
+  \field{verifierOfOpenMission}$'$ = \field{ztrue} (left
+  unconstrained by \field{Init}, \S\ref{sec:init} --- no operation
+  declares \field{verifierOfOpenMission} as an input; ProB enumerates
+  it as a free initial value) followed by one \field{MuteSkip}
+  firing, a state satisfying \field{decided = ztrue} $\land$
   \field{verifierOfOpenMission = ztrue} $\land$ \field{gateApplied =
   zfalse} $\land$ \field{diagnosticEmitted = zfalse} --- the silent-
   disabled state --- and reports it as a deadlock. \\
@@ -541,7 +560,7 @@ neither is a claim ProB checks or a claim a single predicate states:
     \S\ref{sec:decision}--\ref{sec:writeops} carries
     \field{verifierOfOpenMission}$'$ = \field{verifierOfOpenMission}
     (the three decision operations explicitly; the three write
-    operations via \field{\Xi GateState}). Ground truth, once fixed
+    operations via $\Xi$ \field{GateState}). Ground truth, once fixed
     at \field{Init}, is invariant across every operation this
     document models --- matching \fpath{spec-mission-lifecycle.tex}'s
     \field{EvaluatorHashFrozen} in form and in the reason for stating
@@ -581,10 +600,13 @@ ztrue} $\land$ \field{decided = ztrue} $\implies$ \field{gateApplied
 = ztrue} $\lor$ \field{diagnosticEmitted = ztrue}'' is exactly the
 safety property this document exists to check. It is deliberately
 \emph{absent} from \field{GateState} (\S\ref{sec:state}), for the
-reason \fpath{spec-mission-lifecycle.tex} \S6.2 gives in full and
-this document will not re-derive at the same length: $\Delta S$
-abbreviates $S \land S'$, so had that predicate been part of
-\field{GateState}'s own \where-clause, \field{MuteSkip}'s after-state
+reason \fpath{spec-mission-lifecycle.tex} gives in full, under its
+Validation section's \emph{Errata: why this schema is not checked
+against \field{Mission}} heading (cited by title, not number, since
+that document's section numbering has already moved once this
+branch), and this document will not re-derive at the same length:
+$\Delta S$ abbreviates $S \land S'$, so had that predicate been part
+of \field{GateState}'s own \texttt{where}-clause, \field{MuteSkip}'s after-state
 would have to satisfy it too --- and \field{MuteSkip}'s own frame
 conjuncts (\field{gateApplied}$'$ = \field{zfalse},
 \field{diagnosticEmitted}$'$ = \field{zfalse}) make that
@@ -662,8 +684,16 @@ where
 \end{verbatim}
 
 \texttt{/z-spec:check} passes with 0 errors. \texttt{/z-spec:model\_check}
-explores 3 states and 7 transitions and reports a deadlock, with this
-counter-example trace:
+reports a deadlock on every run, but \emph{how many} states and
+transitions it explores before reporting one is not: \field{-model\_check}
+halts at the first violation it finds, and which of the two symmetric
+\field{INITIALISATION} branches (\field{verifierOfOpenMission} \field{ztrue}
+or \field{zfalse}) ProB's search visits first is a traversal-order detail,
+not a property this specification states. Repeated runs on this
+document have reported figures ranging from 1 state/4 transitions to
+3 states/7 transitions before halting. What every run agrees on, and
+what this document actually certifies, is the counter-example trace
+itself:
 
 \begin{verbatim}
 1  INITIALISATION  (verifierOfOpenMission := ztrue, decided := zfalse,
@@ -683,9 +713,11 @@ the three causes in \S\ref{sec:causes}, indistinguishably --- so the
 gate that exists to bind the frozen-evaluator context to exactly this
 spawn does nothing, and says nothing.
 
-The second document is identical except \field{LoudSkip}
-(\S\ref{sec:decision}, retyped against \field{GateU}) replaces
-\field{MuteSkip}:
+The second document is identical except \field{LoudSkip} ---
+defined below, not in \S\ref{sec:decision}: the corrected variant
+exists only as this decoupled demonstration, matching
+\S\ref{sec:trace}'s traceability entry that it is not present in
+current code --- replaces \field{MuteSkip}:
 
 \begin{verbatim}
 LoudSkip
@@ -732,7 +764,7 @@ section's verdicts are drawn from.
 \midrule
 Main document (\S\ref{sec:state}--\ref{sec:ops}), 3 decision ops
   $+$ 3 write ops & 6 & 24 & 0 violations, no deadlock \\
-Decoupled, \field{MuteSkip} & 3 & 7 & deadlock at
+Decoupled, \field{MuteSkip} & 1--3$^{*}$ & 4--7$^{*}$ & deadlock at
   $\field{decided} = \field{ztrue} \land
   \field{verifierOfOpenMission} = \field{ztrue} \land
   \field{gateApplied} = \field{zfalse} \land
@@ -741,6 +773,16 @@ Decoupled, \field{LoudSkip} & 4 & 8 & clean, all states visited \\
 \bottomrule
 \end{tabularx}
 \end{center}
+
+$^{*}$ \field{-model\_check} halts at the first deadlock it finds; how
+many states and transitions it has explored at that point depends on
+ProB's traversal order across the two symmetric \field{INITIALISATION}
+branches, not on the model. The deadlock's existence, and the two-step
+counter-example trace above, are reproducible on every run; the
+exploration count leading up to it is not, and this document does not
+claim it is. The main document and the \field{LoudSkip} row both run to
+completion with no violation, so their counts are exhaustive and
+reproducible.
 
 fuzz's \texttt{/z-spec:check} type-checks this document with 0 errors.
 All \texttt{model\_check}/\texttt{animate} runs reported above,
@@ -790,10 +832,15 @@ input to step 1.
   \S\ref{sec:nongoals} \\
 \field{WriteAllowedNoAllowlist} & \field{HandlePreToolUse}
   (pretooluse.go:110--113) & \\
-\field{WriteAllowedInAllowlist}, \field{WriteDenied} &
+\field{WriteAllowedInAllowlist} &
   \field{HandlePreToolUse}/\field{pathAllowed}
   (pretooluse.go:119--128) & \field{targetInAllowlist?} abstracts
   \field{splitAllowlist}/\field{pathAllowed}, \S\ref{sec:nongoals} \\
+\field{WriteDenied} & \field{HandlePreToolUse}
+  (pretooluse.go:119--125, 155--156) & the final deny, once neither
+  the allowlist (119--125) nor the excluded extract\_into carve-out
+  (\S\ref{sec:nongoals}) matches; 155--156 is the actual deny
+  return \\
 \field{LoudSkip} & not present in current code; proposed corrected
   variant, matching the sibling empty-hash warn already at
   subagent\_start.go:624--635 & modelled only for
