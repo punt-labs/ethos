@@ -1,0 +1,931 @@
+%
+% spec-writeset-admission.tex
+%
+% Write-Set Admission: A Z Specification
+% A formal model of path canonicalization and write-set admission as
+% implemented in internal/mission/conflict.go and consumed by
+% internal/hook/pretooluse.go, current as of the commit that
+% introduced this document (branch feat/z-spec-state-machines).
+%
+% Compile: pdflatex spec-writeset-admission.tex
+%
+% Must be .tex, not .md, for the same reason given in
+% spec-mission-lifecycle.tex's own header comment: this repo's
+% /z-spec:test tooling globs for .tex specifically, and probcli's
+% Z-to-B translation requires the extension to run at all.
+%
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\fpath}[1]{\texttt{#1}}
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Write-Set Admission: A Z Specification}
+\author{Mike S, for Punt Labs}
+\date{September 2026}
+\hypersetup{
+  pdftitle={Write-Set Admission: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+\tableofcontents
+\newpage
+
+% ===================================================================
+\section{Scope}
+\label{sec:scope}
+% ===================================================================
+
+This specification models two things that live together in
+\fpath{internal/mission/conflict.go} because a mistake in either one
+opens the same wound --- a worker writing where its contract did not
+authorize it:
+
+\begin{enumerate}
+  \item \emph{Path canonicalization} --- \field{splitSegments}
+    (conflict.go:475--497) and \field{CanonicalPath}
+    (conflict.go:518--524), which turn a raw path string into the
+    segment list every containment and overlap decision is computed
+    from; and
+  \item \emph{Write-set admission} --- \field{findWriteSetConflicts}
+    (conflict.go:70--120) and the six-rule dispatch underneath it,
+    \field{anyEntryConflicts}/\field{entryPairConflicts}
+    (conflict.go:154--217), which \field{Store.Create} consults to
+    refuse a new mission contract whose declared write territory
+    overlaps an existing \emph{open} mission's.
+\end{enumerate}
+
+The second of these is explicitly the property
+spec-mission-lifecycle.tex's own Non-goals section named and set
+aside: ``\emph{Cross-mission write-set conflicts --- ...\ This is a
+Create-time admission check over the whole store, not a property of
+one mission's lifecycle.}'' (spec-mission-lifecycle.tex
+\S~Non-goals). This document picks up exactly that thread.
+
+Two real defects motivate the Validation section
+(\S\ref{sec:validation}): \field{ethos-vaib}, in which
+\field{splitSegments} discards the leading empty segment an absolute
+path produces, so \field{CanonicalPath("/docs/x.md")} and
+\field{CanonicalPath("docs/x.md")} are the same string; and
+\field{ethos-8ady}, in which mission lint's write-set coverage
+heuristic (\fpath{internal/mission/lint.go}:177--197) compares a
+glob entry's segments against a file's segments as literal strings,
+so a file genuinely covered by \texttt{docs/**} draws a spurious
+``not in write\_set'' warning.
+
+\subsection{Non-goals}
+\label{sec:nongoals}
+
+\begin{itemize}
+  \item \textbf{Single-segment wildcards} (\texttt{*}, \texttt{?},
+    and character classes within one segment,
+    \field{segmentMatches}, conflict.go:433--442, via Go's
+    \field{path.Match}) --- neither defect this document checks, nor
+    the write-set overlap property, depends on matching \emph{within}
+    a segment. Only the whole-segment \texttt{**} form
+    (\field{PATSEG}'s \field{wildRestSeg}, \S\ref{sec:freetypes})
+    is modelled.
+  \item \textbf{A \texttt{**} at a non-trailing pattern position} ---
+    the real \field{segmentsContain} (conflict.go:394--419) handles
+    this via backtracking, but every entry in this codebase places
+    \texttt{**} last when it appears at all. \field{ENTRY}
+    (\S\ref{sec:state}) carries this as a standing invariant rather
+    than as an unchecked assumption.
+  \item \textbf{Case-insensitive filesystems} --- \field{pathsOverlap}'s
+    own comment (conflict.go:236--238) already scopes this out:
+    ``\emph{macOS case-insensitive HFS+ is a known divergence and not
+    handled here}.''
+  \item \textbf{A write\_set file entry whose own text happens to
+    contain a glob metacharacter, compared on the \emph{file} side of
+    a containment check} --- the real \field{pathContainedBy} always
+    glob-interprets the \emph{entry} argument and never the
+    \emph{file} argument (segmentMatches is only ever called with an
+    entry segment as its first parameter). \field{PathContainedByBuggy}/
+    \field{PathContainedByFixed} (\S\ref{sec:containment}) preserve
+    this asymmetry. The admission model's \field{Store} invariant
+    (\S\ref{sec:admission}), which compares two write-set entries
+    against \emph{each other}, applies the same wildcard-aware
+    position rule to both sides for economy; this is very slightly
+    more permissive than \field{entryPairConflicts}'s literal-file-side
+    reading in the one case where a file-shaped entry's own segment
+    text is itself \texttt{**}, a combination no entry in this
+    codebase exhibits.
+  \item \textbf{Role overlap, generic \field{Store.Update}, pipelines} ---
+    excluded for the same reasons spec-mission-lifecycle.tex's own
+    Non-goals section gives; they do not bear on path semantics.
+\end{itemize}
+
+\subsection{Modelling choice: schemas, not free functions, over
+sequences}
+\label{sec:modellingchoice}
+
+\field{CanonicalPath} and \field{PathContainedBy} are presented below
+as schemas (\S\ref{sec:canonical}--\ref{sec:containment}) whose
+predicate relates an input field to an output field, not as
+free-standing \fuzz{} function declarations of the form
+$f : \seq X \fun Y$. This is not a stylistic preference; it is
+forced by a fact about how \texttt{probcli} translates a Z document
+to B, confirmed by trial before this document's own admission model
+was written. Declaring \emph{any} global constant --- via
+\field{axdef} or \field{gendef} --- whose type mentions $\seq X$ in a
+function or relation's domain causes \texttt{SETUP\_CONSTANTS} to
+fail for the \emph{whole} machine, even when the operations actually
+being checked never reference that constant: a single unused
+$\seq X \rel \seq X$ declaration, added to an otherwise-working
+document, turns a clean 128-state run into
+\texttt{setup\_constants\_fails} with zero states explored. $\seq X$
+is unbounded as a Z type regardless of how tightly an axiom
+constrains the function's actual values, and B's constant-solving
+phase must represent the constant's full \emph{declared} type before
+it can apply any axiom at all.
+
+Schemas do not have this problem: a schema is a predicate, not a
+constant requiring existence-proof, and a bounded state component
+typed $\seq X$ (guarded by its own $\# \leq \field{maxSegs}$
+invariant, per \S\ref{sec:constants}) animates exactly as
+spec-mission-lifecycle.tex's own \field{resultRounds} and
+\field{reflected} components did. \field{CanonicalPath} is therefore
+given as the schema relating a raw input to its canonical output;
+reading it as a function means fixing the input and solving the
+schema's predicate for the unique output it determines, which is
+Z's standard schema-as-relation-graph reading, not a departure from
+it.
+
+% ===================================================================
+\section{Basic Types}
+\label{sec:basic}
+% ===================================================================
+
+\begin{zed}
+SEG ::= segDocs | segFile
+\end{zed}
+
+\field{SEG} stands for a normalized path segment name --- the
+counterpart of \field{HANDLE} in spec-mission-lifecycle.tex: two
+concrete constructors are enough to exhibit every defect and every
+admission rule this document checks, and probcli needs a
+finitely-enumerated carrier to animate at all.
+
+% ===================================================================
+\section{Free Types}
+\label{sec:freetypes}
+% ===================================================================
+
+\subsection{ZBOOL}
+
+Carried over from spec-mission-lifecycle.tex \S~ZBOOL for the same
+reason: \fuzz{} has no built-in boolean, and \field{BOOL}/\field{true}/
+\field{false} collide with B keywords under ProB's translation.
+
+\begin{zed}
+ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\subsection{RAWSEG}
+
+The result of splitting a raw path string on \texttt{"/"}
+\emph{before} \field{splitSegments}'s own filtering
+(conflict.go:475--497) removes anything. Go's
+\field{strings.Split("/docs/x.md", "/")} yields
+$\langle \mathtt{""}, \mathtt{"docs"}, \mathtt{"x.md"} \rangle$ --- the
+leading empty token is exactly how an absolute path manifests
+\emph{before} the filter that discards it runs. \field{rsEmpty}
+models that token; \field{rsDot} models a literal \texttt{"."} token
+(from \texttt{./foo} or \texttt{internal/./foo}, which
+validate.go's own \field{TestValidate\_AcceptsSingleDotSegment}
+deliberately accepts as legitimate path syntax, DES-031); every other
+token is a real segment, \field{rsSeg}-wrapped.
+
+\begin{zed}
+RAWSEG ::= rsSeg \ldata SEG \rdata | rsEmpty | rsDot
+\end{zed}
+
+\subsection{PATSEG}
+
+A write-set entry's segment, once split: either a literal name or the
+\texttt{**} wildcard (\S\ref{sec:nongoals} excludes the single-segment
+\texttt{*}/\texttt{?} forms).
+
+\begin{zed}
+PATSEG ::= litSeg \ldata SEG \rdata | wildRestSeg
+\end{zed}
+
+% ===================================================================
+\section{Global Constants}
+\label{sec:constants}
+% ===================================================================
+
+Bounding \field{SEG}'s use in a sequence to a small constant is what
+lets probcli enumerate the state space at all
+(\S\ref{sec:modellingchoice}); the shape of every predicate below is
+independent of the concrete value, exactly as
+spec-mission-lifecycle.tex's own \field{maxRounds}/\field{maxDelegations}
+were chosen small purely for this reason.
+
+\begin{axdef}
+maxSegs : \nat
+\where
+maxSegs = 2
+\end{axdef}
+
+\field{maxOpen} bounds how many concurrently-open missions
+\S\ref{sec:admission}'s \field{Store} tracks. There is no real
+analogue --- the actual \field{Store} holds arbitrarily many open
+missions --- exactly as spec-mission-lifecycle.tex's
+\field{maxDelegations} had none.
+
+\begin{axdef}
+maxOpen : \nat
+\where
+maxOpen = 2
+\end{axdef}
+
+% ===================================================================
+\section{Path Canonicalization}
+\label{sec:canonical}
+% ===================================================================
+
+\field{unwrap} recovers the real segment a \field{RAWSEG} token
+carries; it is undefined on \field{rsEmpty} and \field{rsDot} ---
+those tokens carry no segment, by construction.
+
+\begin{axdef}
+unwrap : RAWSEG \pfun SEG
+\where
+\forall s : SEG @ unwrap(rsSeg(s)) = s
+\end{axdef}
+
+\subsection{CanonicalPathBuggy}
+
+Today's real function. \field{splitSegments} (conflict.go:475--497)
+drops every \field{rsEmpty} and \field{rsDot} token via
+\texttt{squash} over the filtered relation, exactly as
+\field{CanonicalPath} (conflict.go:518--524) does when it joins the
+result back into a string. Its component list is the point: this
+schema has nowhere to put an absoluteness bit, because the real
+function's return type, \texttt{[]string}, has nowhere to put one
+either.
+
+\begin{schema}{CanonicalPathBuggy}
+raw : \seq RAWSEG \\
+segs : \seq SEG
+\where
+\# raw \leq maxSegs \\
+segs = squash(raw \comp unwrap)
+\end{schema}
+
+\subsection{CanonicalPathFixed}
+
+\field{ethos-vaib}'s prescribed fix (bd ticket: ``\emph{Fix requires
+teaching CanonicalPath about absoluteness}''), stated at exactly the
+point the bug lives: the corrected function's codomain must be able
+to express what the buggy one cannot. No function computing this bit
+exists anywhere in the current code; a leading \field{rsEmpty} token
+is exactly Go's own \field{filepath.IsAbs} test, transported through
+the split.
+
+\begin{schema}{CanonicalPathFixed}
+raw : \seq RAWSEG \\
+absolute : ZBOOL \\
+segs : \seq SEG
+\where
+\# raw \leq maxSegs \\
+absolute = (\IF \# raw > 0 \land raw(1) = rsEmpty \THEN ztrue \ELSE zfalse) \\
+segs = squash(raw \comp unwrap)
+\end{schema}
+
+Both schemas agree on \field{segs} for every \field{raw} --- the fix
+changes what is \emph{exposed}, not how segments are computed. That
+equality is recorded as a theorem, \field{SegmentationUnchanged}, in
+\S\ref{sec:theorems}.
+
+% ===================================================================
+\section{Write-Set Entries}
+\label{sec:state}
+% ===================================================================
+
+\begin{schema}{ENTRY}
+isDir, isEI : ZBOOL \\
+pattern : \seq PATSEG \\
+rootGlob : ZBOOL \\
+truncLen : \nat \\
+seg1, seg2 : PATSEG
+\where
+\# pattern \leq maxSegs \\
+isEI = ztrue \implies isDir = ztrue \\
+\forall i : 1 \upto \# pattern @ pattern(i) = wildRestSeg \implies i = \# pattern \\
+rootGlob = (\IF \# pattern = 1 \land pattern(1) = wildRestSeg \THEN ztrue \ELSE zfalse) \\
+truncLen = (\IF \# pattern > 0 \land pattern(\# pattern) = wildRestSeg
+             \THEN \# pattern - 1 \ELSE \# pattern) \\
+truncLen \geq 1 \implies seg1 = pattern(1) \\
+truncLen \geq 2 \implies seg2 = pattern(2)
+\end{schema}
+
+Seven fields, three kinds:
+
+\begin{itemize}
+  \item \field{isDir}, \field{isEI}, \field{pattern} are the real
+    data: \field{isDirEntry}'s trailing-slash test
+    (conflict.go:219--226), the \field{ExtractInto} field's own
+    entry-kind flag, and the entry's segments after
+    \field{CanonicalPath}-style splitting.
+  \item The predicate \field{isEI = ztrue \implies isDir = ztrue} is
+    validate.go rule~17 (validate.go:79, 216--226): ``\emph{extract\_into
+    entries must be directory-shaped}.'' The
+    $(\lnot\field{isDir} \land \field{isEI})$ combination
+    \field{entryPairConflicts}'s own comment calls ``unreachable'' and
+    guards defensively anyway (conflict.go:183--185, 193--195); this
+    document's invariant makes that unreachability a checked fact
+    rather than a defensive comment.
+  \item \field{rootGlob}, \field{truncLen}, \field{seg1}, \field{seg2}
+    have no code counterpart. They are this document's
+    animatability device (\S\ref{sec:modellingchoice}): every
+    predicate that needs to compare two entries' patterns
+    (\field{PathContainedByBuggy}/\field{Fixed},
+    \S\ref{sec:containment}; \field{Store}'s invariant and
+    \field{AdmitMission}'s guard, \S\ref{sec:admission}) reads them
+    instead of re-deriving \field{overlapSegments}'s truncation
+    (conflict.go:291--314) by hand at every use site. The invariant
+    above bans \texttt{**} at any position but the last
+    (\S\ref{sec:nongoals}), so \field{truncLen} is exactly the length
+    of \field{pattern} with any trailing \texttt{**} removed, and
+    \field{seg1}/\field{seg2} are its first two segments where they
+    exist.
+\end{itemize}
+
+% ===================================================================
+\section{Containment}
+\label{sec:containment}
+% ===================================================================
+
+\subsection{PathContainedByBuggy}
+
+Today's real \field{pathContainedBy} (conflict.go:360--378) and
+\field{segmentsContain} (conflict.go:394--419), specialized to a
+single trailing \texttt{**} (\S\ref{sec:nongoals}): the entry's
+literal prefix (\field{truncLen}, \field{seg1}, \field{seg2}) must
+match a prefix of the file's segments, and the file may be longer
+--- ``\emph{the entry running out is success}'' (conflict.go:389).
+Included via \field{CanonicalPathBuggy}, so the file side carries no
+absoluteness information to check.
+
+\begin{schema}{PathContainedByBuggy}
+CanonicalPathBuggy \\
+ENTRY \\
+containedBy : ZBOOL
+\where
+(containedBy = ztrue \iff
+  truncLen \leq \# segs \land
+  (truncLen \geq 1 \implies seg1 = litSeg(segs(1))) \land
+  (truncLen \geq 2 \implies seg2 = litSeg(segs(2))))
+\end{schema}
+
+\subsection{PathContainedByFixed}
+
+The one-conjunct fix: a file path that is absolute cannot be
+contained by a write-set entry, because every entry is repo-relative
+by construction (validate.go:562--568 rejects an absolute
+\field{write\_set}/\field{extract\_into} entry outright). This is
+criterion (a) from the mission brief made concrete: canonicalization
+preserving the absolute/relative distinction is only useful if
+containment then \emph{consults} it.
+
+\begin{schema}{PathContainedByFixed}
+CanonicalPathFixed \\
+ENTRY \\
+containedBy : ZBOOL
+\where
+(containedBy = ztrue \iff
+  absolute = zfalse \land
+  truncLen \leq \# segs \land
+  (truncLen \geq 1 \implies seg1 = litSeg(segs(1))) \land
+  (truncLen \geq 2 \implies seg2 = litSeg(segs(2))))
+\end{schema}
+
+Neither schema compares \field{segs} to \field{pattern} as strings.
+Both consult \field{seg1}/\field{seg2}/\field{truncLen}, which are
+already glob-resolved by \field{ENTRY}'s own predicate --- this is
+criterion (b): containment is path-semantic, not
+pattern-string-literal. The contrast that fails this property ---
+comparing a glob entry's segments as literal text --- is exhibited
+as a reachable state in \S\ref{sec:validation-8ady}, not restated
+here as a third schema, to avoid presenting the same
+\field{ethos-8ady} contrast twice.
+
+% ===================================================================
+\section{Write-Set Admission}
+\label{sec:admission}
+% ===================================================================
+
+Models \field{Store.Create}'s cross-mission conflict scan:
+\field{findWriteSetConflicts} (conflict.go:70--120) dispatching
+through \field{anyEntryConflicts}/\field{entryPairConflicts}
+(conflict.go:154--217). \field{Overlaps}, the six-rule relation those
+functions compute, is not given as a separate schema here for the
+reason \S\ref{sec:modellingchoice} explains: it would need to relate
+two \field{ENTRY} values as a free \fuzz{} relation, and
+\field{ENTRY}'s own \field{pattern} field is $\seq PATSEG$-typed, so
+the same \texttt{SETUP\_CONSTANTS} failure applies to a schema-typed
+domain exactly as it does to a bare sequence type. It is instead
+written out, once, inline in \field{Store}'s own invariant, and
+\field{AdmitMission}'s guard is the calculated precondition of
+preserving that invariant --- the same relationship
+spec-mission-lifecycle.tex's \field{Abandon} has to
+\field{AbandonSafety}.
+
+\begin{schema}{Store}
+open : 1 \upto maxOpen \pfun ENTRY
+\where
+\forall i, j : \dom open | i \neq j @
+  \lnot ( \lnot ((open\ i).isEI = ztrue \land (open\ j).isEI = ztrue) \land
+    ( ( (open\ i).isDir = (open\ j).isDir \land
+        (open\ i).truncLen > 0 \land (open\ j).truncLen > 0 \land
+        ( (open\ i).rootGlob = ztrue \lor (open\ j).rootGlob = ztrue
+          \lor ( (open\ i).seg1 = (open\ j).seg1 \land
+                ( (open\ i).truncLen = 1 \lor (open\ j).truncLen = 1
+                  \lor (open\ i).seg2 = (open\ j).seg2 ) ) ) )
+      \lor ( (open\ i).isDir = zfalse \land (open\ j).isDir = ztrue \land
+        (open\ j).truncLen \leq (open\ i).truncLen \land
+        ( (open\ j).truncLen \geq 1 \implies (open\ j).seg1 = (open\ i).seg1 ) \land
+        ( (open\ j).truncLen \geq 2 \implies (open\ j).seg2 = (open\ i).seg2 ) )
+      \lor ( (open\ j).isDir = zfalse \land (open\ i).isDir = ztrue \land
+        (open\ i).truncLen \leq (open\ j).truncLen \land
+        ( (open\ i).truncLen \geq 1 \implies (open\ i).seg1 = (open\ j).seg1 ) \land
+        ( (open\ i).truncLen \geq 2 \implies (open\ i).seg2 = (open\ j).seg2 ) ) ) )
+\end{schema}
+
+Reading the three disjuncts against \field{entryPairConflicts}
+(conflict.go:186--217): the first is \texttt{ws-dir}$\times$\texttt{ws-dir}
+or \texttt{ws-file}$\times$\texttt{ws-file}, dispatched to
+\field{pathsOverlap}'s truncate-and-compare rule
+(conflict.go:263--289) --- a root glob on either side overlaps
+unconditionally (``\emph{an entry whose FIRST segment globs claims
+from the root}'', conflict.go:303--305), otherwise the truncated
+literal prefixes must agree position-for-position up to the shorter
+one's length. The second and third are the two orderings of
+\texttt{ws-file}$\times$\texttt{ws-dir} (and, by \field{ENTRY}'s own
+invariant forcing \field{isEI = ztrue \implies isDir = ztrue}, also
+cover \texttt{ws-file}$\times$\texttt{ei-dir}), dispatched to
+\field{pathContainedBy}. The leading \field{isEI}-exclusion is
+\texttt{ei-dir}$\times$\texttt{ei-dir}, which
+\field{entryPairConflicts} always refuses (conflict.go:196--202):
+``\emph{Two missions may extract into the same directory... same-filename
+collisions are the leader's responsibility, not admission control's}.''
+
+\subsection{Init}
+
+\begin{schema}{Init}
+Store'
+\where
+open' = \emptyset
+\end{schema}
+
+\subsection{AdmitMission}
+
+Models \field{Store.Create}'s admission gate: the new entry may claim
+an empty slot only if it overlaps no currently-open mission's entry.
+
+\begin{schema}{AdmitMission}
+\Delta Store \\
+slot? : 1 \upto maxOpen \\
+entry? : ENTRY
+\where
+slot? \notin \dom open \\
+\forall i : \dom open @
+  \lnot ( \lnot (entry?.isEI = ztrue \land (open\ i).isEI = ztrue) \land
+    ( (entry?.isDir = (open\ i).isDir \land
+        entry?.truncLen > 0 \land (open\ i).truncLen > 0 \land
+        ( entry?.rootGlob = ztrue \lor (open\ i).rootGlob = ztrue
+          \lor ( entry?.seg1 = (open\ i).seg1 \land
+                ( entry?.truncLen = 1 \lor (open\ i).truncLen = 1
+                  \lor entry?.seg2 = (open\ i).seg2 ) ) ) )
+      \lor (entry?.isDir = zfalse \land (open\ i).isDir = ztrue \land
+        (open\ i).truncLen \leq entry?.truncLen \land
+        ( (open\ i).truncLen \geq 1 \implies (open\ i).seg1 = entry?.seg1 ) \land
+        ( (open\ i).truncLen \geq 2 \implies (open\ i).seg2 = entry?.seg2 ) )
+      \lor ((open\ i).isDir = zfalse \land entry?.isDir = ztrue \land
+        entry?.truncLen \leq (open\ i).truncLen \land
+        ( entry?.truncLen \geq 1 \implies entry?.seg1 = (open\ i).seg1 ) \land
+        ( entry?.truncLen \geq 2 \implies entry?.seg2 = (open\ i).seg2 ) ) ) ) \\
+open' = open \oplus \{ slot? \mapsto entry? \}
+\end{schema}
+
+The guard is syntactically identical to \field{Store}'s own
+invariant with \field{entry?} standing in for \field{open\ i} and
+\field{open\ j} ranging only over the currently-open set: exactly the
+shape a calculated precondition should have, since the only way
+\field{open}$'$ can violate \field{Store}$'$'s invariant is for the
+newly-admitted entry to overlap something already there.
+
+\subsection{ReleaseMission}
+
+Not one of \field{findWriteSetConflicts}'s own concerns --- no
+function in \fpath{internal/mission} is named this --- but every real
+mission eventually leaves the open set (\field{Store.Close},
+\field{Store.Abandon}, spec-mission-lifecycle.tex
+\S\ref{sec:opclose}--\ref{sec:opabandon}), and without some way to
+free a slot the admission model could only ever fill up, never
+demonstrate the invariant surviving a longer, mixed sequence of
+admits and departures. Removing an entry from \field{open} can only
+shrink the set the invariant quantifies over, so it can never
+introduce a violation.
+
+\begin{schema}{ReleaseMission}
+\Delta Store \\
+slot? : 1 \upto maxOpen
+\where
+slot? \in \dom open \\
+open' = \{ slot? \} \ndres open
+\end{schema}
+
+% ===================================================================
+\section{Theorems}
+\label{sec:theorems}
+% ===================================================================
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Theorem} & \textbf{Justification} \\
+\midrule
+\field{SegmentationUnchanged} &
+  \field{CanonicalPathBuggy} and \field{CanonicalPathFixed} compute
+  the identical \field{segs} = \field{squash(raw \comp unwrap)} from
+  the same \field{raw}; the fix adds a field, it does not change how
+  segments are derived. Confirmed by inspection of both schemas
+  (\S\ref{sec:canonical}); not separately animated, since the two
+  schemas share the defining conjunct verbatim. \\
+\field{AbsolutePreserved} &
+  Criterion (a). \field{CanonicalPathFixed}'s \field{absolute} field
+  is exactly the leading-\field{rsEmpty} test applied to \field{raw},
+  by its own defining predicate, and
+  \field{PathContainedByFixed} consults it
+  (\field{absolute = zfalse}) before consulting containment at all.
+  Exhibited as a reachable-deadlock counter-example against the
+  \emph{buggy} pairing, and as a clean run against the fixed pairing,
+  in \S\ref{sec:validation-vaib}. \\
+\field{ContainmentIsSemantic} &
+  Criterion (b). \field{PathContainedByBuggy}/\field{Fixed} both
+  consult \field{ENTRY}'s \field{seg1}/\field{seg2}/\field{truncLen}
+  fields, which are already glob-resolved
+  (\field{ENTRY}'s own predicate, \S\ref{sec:state}), never
+  \field{pattern} compared as literal text against \field{segs}. The
+  contrasting, string-literal reading --- what mission lint's
+  coverage heuristic does instead --- is exhibited as a reachable
+  deadlock in \S\ref{sec:validation-8ady}. \\
+\field{WriteSetNonOverlap} &
+  Criterion (c). \field{Store}'s own invariant states it;
+  \field{AdmitMission}'s guard is that invariant's calculated
+  precondition (\S\ref{sec:admission}); \field{ReleaseMission} can
+  only shrink \field{dom\ open}, so it preserves any invariant that
+  universally quantifies over that domain. Additionally exercised by
+  ProB (\S\ref{sec:validation-admission}): certified complete in
+  isolation (\textbf{7266 states, 35915 transitions}), and confirmed
+  again, uncertified but unchanged by a fivefold larger operation
+  budget, against the committed file as a whole (\textbf{29064
+  states, 172720 transitions}); zero violations in either run. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+None of the four are discharged by proof --- as
+spec-mission-lifecycle.tex's own Theorems section puts it, ``\fuzz{}
+type-checks schemas; it does not discharge proof obligations.'' The
+last is the only one whose \emph{own} state space was exhaustively
+searched by ProB rather than inspected by hand; the first three are
+inspection claims about schemas checked individually, each backed by
+a separate, decoupled reachability demonstration in
+\S\ref{sec:validation}.
+
+% ===================================================================
+\section{Validation}
+\label{sec:validation}
+% ===================================================================
+
+Three separate probcli runs back the claims above. Each of
+\S\ref{sec:validation-vaib} and \S\ref{sec:validation-8ady} follows
+spec-mission-lifecycle.tex's own decoupled-demonstration technique
+(its \S~``A decoupled demonstration''): a small, self-contained Z
+document, checked and animated independently of this file's own
+namespace, built so that the safety property being tested is
+\emph{not} baked into the type the buggy operation is checked
+against. That errata is worth restating in full, because it is the
+reason these demonstrations are built the way they are and not as
+extra schemas typed against \field{ENTRY}/\field{Store} above: a
+schema written as $\Delta S \land P$ silently carries \field{S}'s
+\emph{own} invariant on its primed components regardless of what $P$
+says, so if the safety property already lives in \field{S}'s
+predicate, a buggy $P$ does not violate it --- it has no valid
+after-state at all, and ProB correctly (and uselessly) reports
+nothing wrong. \field{Store}'s own invariant is exactly this kind of
+property, so neither demonstration below is typed against
+\field{ENTRY} or \field{Store}; each builds its own minimal,
+invariant-free state type and converts the safety property into a
+reachability question via the same \field{Idle} self-loop convention
+spec-mission-lifecycle.tex uses: enabled everywhere except the one
+state the demonstration exists to find, so a buggy operation reaching
+that state shows up as a deadlock, and a fixed operation's clean run
+shows the state is never reached at all.
+
+The two demonstration files are scratch --- built under
+\fpath{.tmp/}, checked and animated, and not committed, exactly as
+spec-mission-lifecycle.tex's own two decoupled documents were not
+committed alongside it. Their content is reproduced here verbatim
+for the record.
+
+\subsection{ethos-vaib: absolute paths swallowed by a relative entry}
+\label{sec:validation-vaib}
+
+Shared state schema, carrying \field{CanonicalPath}'s own logic
+(\S\ref{sec:canonical}) plus a fixed write-set entry standing in for
+\texttt{docs/**}, and a boolean recording whether the buggy
+containment check (\S\ref{sec:containment}, ignoring \field{absolute}
+entirely) admits the resulting path:
+
+\begin{verbatim}
+SEG ::= segDocs | segXmd
+RAWSEG ::= rsSeg <SEG> | rsEmpty | rsDot
+PATSEG ::= litSeg <SEG> | wildRestSeg
+ZBOOL ::= ztrue | zfalse
+
+maxSegs : NN;  maxSegs = 2
+unwrap : RAWSEG -+> SEG
+  forall s : SEG @ unwrap(rsSeg(s)) = s
+witnessPattern : seq PATSEG
+  witnessPattern = <litSeg(segDocs), wildRestSeg>
+
+FileRaw
+  raw : seq RAWSEG
+  segs : seq SEG
+  absolute : ZBOOL
+  covered : ZBOOL       -- witnessPattern contains segs, glob-aware
+where
+  #raw <= maxSegs
+  segs = squash(raw ; unwrap)
+  absolute = (if #raw > 0 and raw(1) = rsEmpty then ztrue else zfalse)
+  covered = ztrue <=> (witnessPattern contains segs, per Contains)
+
+Init
+  FileRaw'
+
+Idle                                     -- buggy pairing
+  Xi FileRaw
+where
+  not (absolute = ztrue and covered = ztrue)
+\end{verbatim}
+
+\texttt{/z-spec:check} passes on the scratch file with this content.
+\texttt{/z-spec:model\_check} explores \textbf{5 states, 21
+transitions}, and reports a deadlock:
+
+\begin{verbatim}
+1  SETUP_CONSTANTS
+2  INITIALISATION      (raw := <rsEmpty, rsSeg(segDocs)>)
+                        -- segs = <segDocs>, absolute = ztrue,
+                        --  covered = ztrue (witnessPattern's
+                        --  literal prefix <docs> matches segs'
+                        --  one element; ** swallows the rest)
+   -- deadlock: no operation enabled --
+   absolute = ztrue, covered = ztrue
+\end{verbatim}
+
+The violating valuation is not printed verbatim by the tool's
+structured summary (it reports the deadlock and the operation
+sequence, not the satisfying assignment); it is given here because it
+follows directly from \field{FileRaw}'s own defining equations ---
+\field{raw} = $\langle \field{rsEmpty}, \field{rsSeg(segDocs)} \rangle$
+is the \emph{only} length-$\leq 2$ value whose \field{absolute} field
+is \field{ztrue} and whose \field{segs} is contained by
+\field{witnessPattern}, so it is the unique state the search could
+have found. This is \field{ethos-vaib} exactly: an absolute path ---
+\texttt{"/docs"}, in the ticket's own terms --- treated by the buggy
+containment check as though it were the repo-relative \texttt{docs},
+and admitted by the glob entry \texttt{docs/**} that was only ever
+meant to authorize writes under the repo's own \texttt{docs/}
+directory.
+
+The corrected pairing changes only the \field{Idle} guard, to require
+\field{fixedAdmit} --- containment additionally gated on
+\field{absolute = zfalse}, matching \field{PathContainedByFixed}
+exactly:
+
+\begin{verbatim}
+Idle                                     -- corrected pairing
+  Xi FileRaw
+where
+  not (absolute = ztrue and fixedAdmit = ztrue)
+  -- fixedAdmit = ztrue <=> (absolute = zfalse and covered = ztrue)
+\end{verbatim}
+
+\texttt{/z-spec:check} passes; \texttt{/z-spec:model\_check} explores
+\textbf{20 states, 36 transitions} and reports \textbf{no} deadlock
+and \textbf{no} violation. The state \field{Idle} excludes is never
+reached, because \field{fixedAdmit} can never be \field{ztrue} at the
+same time as \field{absolute = ztrue} --- not because a guard happens
+to check for it at runtime, but because the two conjuncts of
+\field{fixedAdmit}'s own definition are contradictory whenever
+\field{absolute = ztrue}.
+
+\subsection{ethos-8ady: a glob compared as literal text}
+\label{sec:validation-8ady}
+
+Mission lint's coverage heuristic
+(\fpath{internal/mission/lint.go}:177--197) computes
+\field{CanonicalPath(w)+"/"} for a directory entry \field{w} and
+tests \field{strings.HasPrefix} against the candidate file's
+canonical string. Once \field{CanonicalPath} has joined a pattern
+back into a string, a \texttt{**} segment is indistinguishable from a
+real segment named \texttt{**}; \field{Stringify} below is that round
+trip made explicit.
+
+\begin{verbatim}
+SEG ::= segDocs | segFile | segStarStar
+PATSEG ::= litSeg <SEG> | wildRestSeg
+ZBOOL ::= ztrue | zfalse
+
+maxSegs : NN;  maxSegs = 2
+Stringify : PATSEG -> SEG
+  Stringify(wildRestSeg) = segStarStar
+  forall s : SEG @ Stringify(litSeg(s)) = s
+witnessEntry : seq PATSEG
+  witnessEntry = <litSeg(segDocs), wildRestSeg>
+
+FileSegs
+  segs : seq SEG
+  semanticCovered : ZBOOL    -- witnessEntry contains segs, glob-aware
+  literalCovered : ZBOOL     -- strings.HasPrefix(segs, Stringify(witnessEntry)+"/")
+where
+  #segs <= maxSegs
+  semanticCovered = ztrue <=> (witnessEntry contains segs, per Contains)
+  literalCovered = ztrue <=>
+    #witnessEntry < #segs and
+    (forall i : 1..#witnessEntry @ Stringify(witnessEntry(i)) = segs(i))
+
+Init
+  FileSegs'
+
+Idle                                     -- buggy pairing
+  Xi FileSegs
+where
+  not (semanticCovered = ztrue and literalCovered = zfalse)
+\end{verbatim}
+
+\texttt{/z-spec:check} passes. \texttt{/z-spec:model\_check} explores
+\textbf{1 state, 5 transitions} and reports a deadlock immediately,
+at \field{INITIALISATION}. As with \S\ref{sec:validation-vaib}, the
+violating valuation follows from the schema's own equations rather
+than from the tool's raw output: \field{segs} =
+$\langle \field{segDocs}, \field{segFile} \rangle$ (the file
+\texttt{docs/audited-delegation.md}, in the same terms
+\field{pathContainedBy}'s own doc comment uses, conflict.go:339--340)
+is semantically covered by \texttt{docs/**} --- the \texttt{**}
+swallows the second segment --- but \field{literalCovered} is
+\field{zfalse}: \field{Stringify(wildRestSeg)} is \field{segStarStar},
+which is not \field{segFile}, so the literal position-2 comparison
+fails outright, and even the length check
+(\field{\#witnessEntry < \#segs}, i.e.\ $2 < 2$) already fails on its
+own. This is \field{ethos-8ady}: mission lint reports
+\texttt{docs/audited-delegation.md} as \emph{not} covered by
+\texttt{docs/**}, when it plainly is.
+
+The corrected pairing routes the heuristic through the same
+\field{Contains} logic \field{PathContainedByFixed} uses
+(matching the real fix bd-recommends: ``\emph{route lint.go coverage
+through the same mission.PathContainedBy matcher}''), which collapses
+the guard to a tautology:
+
+\begin{verbatim}
+Idle                                     -- corrected pairing
+  Xi FileSegs
+where
+  not (semanticCovered = ztrue and semanticCovered = zfalse)
+\end{verbatim}
+
+\texttt{/z-spec:check} passes; \texttt{/z-spec:model\_check} explores
+\textbf{5 states, 9 transitions} and reports \textbf{no} deadlock and
+\textbf{no} violation --- the two notions of ``covered'' cannot
+disagree once lint asks the same question \field{PathContainedByFixed}
+does.
+
+\subsection{The write-set admission model}
+\label{sec:validation-admission}
+
+Unlike the two demonstrations above, \field{Store} and its operations
+(\S\ref{sec:admission}) are checked \emph{in this document's own
+namespace} --- the errata's trap does not apply here, because
+\field{Store}'s invariant is the property being \emph{confirmed}, not
+a buggy alternative being checked against a type that already
+assumes it. \texttt{/z-spec:check} reports 0 errors on the committed
+file.
+
+Run against the committed file as a whole, \texttt{/z-spec:model\_check}
+necessarily also enumerates \field{PathContainedByBuggy}'s and
+\field{PathContainedByFixed}'s own domains alongside \field{Store}'s
+(\S\ref{sec:modellingchoice} explains why these coexist safely in one
+namespace despite each being $\seq X$-typed: they are schemas, not
+free functions, so \texttt{SETUP\_CONSTANTS} never has to solve for
+them as constants). That combined run explores \textbf{29064 states,
+172720 transitions}, with zero invariant violations and zero
+deadlocks, though probcli does not report it as certified complete at
+that size (raising the operation budget to 500000 changed nothing,
+so this is very likely the full space, just not flagged as
+exhaustively searched). Isolating \field{Init}/\field{AdmitMission}/
+\field{ReleaseMission} alone --- the same three schemas, in a scratch
+file carrying no other declaration --- \texttt{/z-spec:model\_check}
+explores \textbf{7266 states, 35915 transitions} and \emph{is}
+reported certified complete, with the same result: zero invariant
+violations, zero deadlocks. Both runs agree on the property that
+matters: \field{Store}'s pairwise non-overlap invariant holds
+everywhere \field{AdmitMission} and \field{ReleaseMission} can reach.
+
+\subsection{Tool run}
+\label{sec:probrun}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lccl@{}}
+\toprule
+\textbf{Model} & \textbf{States} & \textbf{Transitions} & \textbf{Result} \\
+\midrule
+Committed file as a whole (\field{Store} +
+  \field{PathContainedByBuggy}/\field{Fixed}) & 29064 & 172720 & 0
+  violations, not certified complete \\
+\field{Init}/\field{AdmitMission}/\field{ReleaseMission} in
+  isolation & 7266 & 35915 & certified complete, 0 violations \\
+Decoupled, \field{ethos-vaib} buggy pairing & 5 & 21 & deadlock at
+  $\field{absolute} = \field{ztrue} \land \field{covered} = \field{ztrue}$ \\
+Decoupled, \field{ethos-vaib} corrected pairing & 20 & 36 & clean \\
+Decoupled, \field{ethos-8ady} buggy pairing & 1 & 5 & deadlock at
+  \field{INITIALISATION} \\
+Decoupled, \field{ethos-8ady} corrected pairing & 5 & 9 & clean \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+fuzz's \texttt{/z-spec:check} type-checks this document with 0 errors.
+Every scratch file above was saved with a \texttt{.tex} extension
+before being checked or animated, for the reason
+spec-mission-lifecycle.tex's own Tool-run section already recorded:
+probcli silently reports 0 states and 0 transitions against any other
+extension.
+
+% ===================================================================
+\section{Traceability}
+\label{sec:trace}
+% ===================================================================
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+\textbf{Z construct} & \textbf{Go source} & \textbf{Note} \\
+\midrule
+\field{RAWSEG} & \field{splitSegments}'s input shape
+  (conflict.go:475--497) & the pre-filter split tokens; not a real Go
+  type \\
+\field{unwrap} & the \field{s == ""}/\field{s == "."} filter inside
+  \field{splitSegments} (conflict.go:487--491) & \\
+\field{CanonicalPathBuggy} & \field{splitSegments} +
+  \field{CanonicalPath} (conflict.go:475--497, 518--524) & today's
+  real behavior \\
+\field{CanonicalPathFixed} & the fix bd ticket \field{ethos-vaib}
+  prescribes & not present in current code \\
+\field{PATSEG}, \field{ENTRY.pattern} & entry segments after
+  splitting, glob-classified & \field{segmentMatches}
+  (conflict.go:433--442) does the classification per-segment; not
+  separately modelled (\S\ref{sec:nongoals}) \\
+\field{ENTRY.isDir} & \field{isDirEntry} (conflict.go:219--226) & \\
+\field{ENTRY.isEI = ztrue \implies isDir = ztrue} & validate.go rule
+  17 (validate.go:79, 216--226) & \\
+\field{ENTRY.rootGlob}, \field{truncLen}, \field{seg1}, \field{seg2} &
+  \field{overlapSegments} (conflict.go:291--314) & animatability
+  device, \S\ref{sec:state} \\
+\field{PathContainedByBuggy} & \field{pathContainedBy} +
+  \field{segmentsContain} (conflict.go:360--378, 394--419) & \\
+\field{PathContainedByFixed} & the fix bd ticket \field{ethos-vaib}
+  prescribes, applied to \field{pathContainedBy} & not present in
+  current code \\
+\field{Store} & \field{Store.Create}'s existing-open-missions set,
+  as consulted by \field{findWriteSetConflicts}
+  (conflict.go:70--120) & \\
+\field{Store}'s invariant, \field{AdmitMission}'s guard &
+  \field{anyEntryConflicts}/\field{entryPairConflicts}
+  (conflict.go:154--217), \field{pathsOverlap}
+  (conflict.go:263--289) & \\
+\field{ReleaseMission} & \field{Store.Close}/\field{Store.Abandon}
+  freeing a slot & no single named Go function; see
+  spec-mission-lifecycle.tex \field{Close}/\field{Abandon} \\
+Literal-string coverage contrast (\S\ref{sec:validation-8ady}) &
+  \fpath{internal/mission/lint.go}:177--197 &
+  \field{ethos-8ady} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\end{document}
