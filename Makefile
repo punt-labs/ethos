@@ -106,6 +106,16 @@ validate-content: ## Validate all ethos content files
 # (grep, not a cached list), so concurrent branches adding spec-*.tex
 # files are covered as soon as they land in the working tree.
 #
+# `find docs -name '*.tex' -exec grep ... {} +`, not `grep -r
+# --include='*.tex' ... docs`: --include is a GNU grep extension. On
+# macOS's stock BSD grep, an unrecognized --include exits the whole
+# `grep -r` nonzero, $(shell ...) captures empty output, and FUZZ_SPECS
+# silently comes back empty -- the "nothing to check" branch then
+# reports a clean local skip while actually omitting every spec on a
+# macOS developer's machine. `find` plus `-E`/`\{...\}` extended-regex
+# brace escaping are POSIX and behave identically under GNU and BSD
+# grep; `-r` combined with `--include` was the only GNU-specific part.
+#
 # `fuzz <file>` with no flags performs a full type-check and is silent
 # on success (exit 0, no output) — unlike `-t`, which additionally
 # dumps every global definition's inferred type, drowning a real error
@@ -133,7 +143,7 @@ validate-content: ## Validate all ethos content files
 # analogous "silently drifted against the code" failure mode to close.
 # Deferred; tracked under ethos-cy70 if a future need (e.g. CI PDF
 # regeneration checks) reopens it.
-FUZZ_SPECS := $(shell grep -Erl --include='*.tex' 'usepackage(\[[^]]*\])?\{fuzz\}' docs)
+FUZZ_SPECS := $(shell find docs -name '*.tex' -exec grep -El 'usepackage(\[[^]]*\])?\{fuzz\}' {} +)
 
 fuzz-check: ## Type-check Z specification .tex files with fuzz (ethos-cy70)
 	@if [ -z "$(FUZZ_SPECS)" ]; then \

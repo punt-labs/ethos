@@ -37,13 +37,14 @@ jobs:
 
       # fuzz has no distributed binary -- only source -- so CI builds it the
       # same way a developer would, via z-spec's own install.sh --fuzz-only.
-      # This checks out punt-labs/z-spec pinned to its published v0.20.5
-      # tag -- the same same-origin trust root as the golangci-lint fetch in
-      # `make tools` (see that target's comment for why a tag pin is not a
-      # stronger guarantee than "this account, this release channel", just
-      # the equivalent one). --fuzz-only then clones fuzz's own upstream
-      # source at the commit install.sh pins and runs configure/make/make
-      # install -- no CLI package, no probcli, no plugin. bison and flex are
+      # This checks out punt-labs/z-spec pinned to the immutable commit its
+      # published v0.20.5 tag resolves to (a mutable tag ref is not pinned
+      # against retargeting, matching this repo's convention of pinning
+      # every other `uses:` step to a commit SHA with the tag/version as a
+      # trailing comment, e.g. actions/checkout above). --fuzz-only then
+      # clones fuzz's own upstream source at the commit install.sh pins and
+      # runs configure/make/make install -- no CLI package, no probcli, no
+      # plugin. bison and flex are
       # invoked by literal name in fuzz's Makefile.in with no autoconf
       # fallback; gcc, make, cpp, and awk already ship in ubuntu-latest's
       # build-essential, but bison/flex are not guaranteed, so both are
@@ -56,7 +57,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           repository: punt-labs/z-spec
-          ref: v0.20.5
+          ref: 2d50236d81b1438f7e104fda18ff07d4f446cb60 # v0.20.5
           path: .tmp/z-spec-installer
 
       - name: Install fuzz (Z spec type-checker)
