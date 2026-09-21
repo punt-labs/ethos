@@ -86,16 +86,13 @@ func lintAdjacentTest(c *Contract, ws []Warning) []Warning {
 // no CHANGELOG.md.
 func lintChangelog(c *Contract, ws []Warning) []Warning {
 	hasCode := false
-	hasCL := false
 	for _, p := range c.WriteSet {
-		cp := CanonicalPath(p)
-		if cp == "CHANGELOG.md" || cp == "changelog.md" {
-			hasCL = true
-		}
 		if isProductionCode(p) {
 			hasCode = true
+			break
 		}
 	}
+	hasCL := writeSetContains(c.WriteSet, "CHANGELOG.md") || writeSetContains(c.WriteSet, "changelog.md")
 	if hasCode && !hasCL {
 		ws = append(ws, Warning{
 			Field:    "write_set",
@@ -273,8 +270,16 @@ func hasExternalRepoRef(s string, writeSet []string) bool {
 	return false
 }
 
-// isWriteSetPrefix reports whether candidate is a path prefix of any
-// entry in writeSet. Both sides are canonicalized for comparison.
+// isWriteSetPrefix reports whether candidate names a path inside the
+// repo's own write territory rather than an external repo — either
+// because candidate is an ancestor directory of some write_set entry
+// (the literal-prefix check, unaffected by what a glob suffix on that
+// entry denotes), or because a write_set entry's glob covers candidate
+// itself (PathContainedBy, the ethos-8ady containment primitive). A
+// write_set of internal/** covers a context reference to internal/mission
+// even though "internal/mission" is not a literal prefix of the string
+// "internal/**" — the glob only resolves through containment, not
+// string comparison.
 func isWriteSetPrefix(candidate string, writeSet []string) bool {
 	cc := CanonicalPath(candidate)
 	if cc == "" {
@@ -287,7 +292,7 @@ func isWriteSetPrefix(candidate string, writeSet []string) bool {
 			return true
 		}
 	}
-	return false
+	return writeSetContains(writeSet, candidate)
 }
 
 // isDocsOnlyWriteSet reports whether every path in write_set is a

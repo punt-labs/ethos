@@ -1,0 +1,2 @@
+{"ts":"2026-09-21T03:40:08.111014075Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"","worker":"kpz"}}
+{"ts":"2026-09-21T03:43:35.932258852Z","event":"abandon","actor":"claude","details":{"reason":"throwaway contract created solely for live Phase-3 verification of the ethos-yf6n loud-skip diagnostic; probe spawns were ad-hoc (no MISSION_ID) by design, no worker was ever dispatched"}}

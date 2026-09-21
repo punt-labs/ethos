@@ -103,6 +103,24 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		// ethos-8ady: a glob entry that covers CHANGELOG.md must
+		// silence the warning exactly as an exact match does; a glob
+		// that does not cover it must still warn.
+		{
+			name: "H2: glob entry covers CHANGELOG — no H2 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/lint.go", "internal/mission/lint_test.go", "*.md"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H2: glob entry does not cover CHANGELOG — still warns",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/lint.go", "internal/mission/lint_test.go", "docs/**"}
+			},
+			wantMsg: "CHANGELOG.md",
+			wantSev: SeverityInfo,
+		},
 		// Heuristic 3: README in criteria but not in write_set
 		{
 			name: "H3: criteria mention README, not in write_set",
@@ -328,6 +346,26 @@ func TestLint(t *testing.T) {
 		{
 			name: "H7: context has both file path and real repo ref — H7 fires",
 			mutate: func(c *Contract) {
+				c.Context = "Changes to internal/mission plus punt-labs/biff integration"
+			},
+			wantMsg: "no cross-repo collaboration noted",
+			wantSev: SeverityWarn,
+		},
+		// ethos-8ady: a glob write_set entry covers a context path
+		// exactly as a literal ancestor entry does; a genuinely
+		// foreign reference alongside it must still fire.
+		{
+			name: "H7: context path covered by glob write_set entry — no H7 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/**", "CHANGELOG.md"}
+				c.Context = "Changes to internal/mission linting logic"
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: glob covers one reference but a genuinely foreign repo still warns",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/**", "CHANGELOG.md"}
 				c.Context = "Changes to internal/mission plus punt-labs/biff integration"
 			},
 			wantMsg: "no cross-repo collaboration noted",
