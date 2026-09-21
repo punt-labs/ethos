@@ -1018,8 +1018,11 @@ func TestSubagentStart_LoudSkipStaysQuietWithoutOpenMissionEvaluator(t *testing.
 // stderr, which would suppress the empty-MISSION_ID diagnostic on a
 // genuine store fault with no trace at all -- exactly the failure
 // mode this diagnostic exists to prevent. The function must still
-// never fail the spawn (it returns false, not an error), but the
-// fault itself must be warned.
+// never fail the spawn (matched=false, not an error), but the fault
+// itself must be warned AND reported back via hadError so the caller
+// can tell this apart from a clean scan that simply found no match
+// (TestSubagentStart_LoudSkipUncertaintyDiagnosticWhenMatchingMissionFailsToLoad
+// exercises the caller's degrade-to-uncertainty behavior on hadError).
 func TestIsEvaluatorOfOpenMission_ListErrorWarnsAndSuppresses(t *testing.T) {
 	dir := t.TempDir()
 	// A regular file where the missions directory is expected makes
@@ -1028,15 +1031,15 @@ func TestIsEvaluatorOfOpenMission_ListErrorWarnsAndSuppresses(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "missions"), []byte("not a directory"), 0o600))
 	missions := mission.NewStore(dir)
 
-	var got bool
+	var matched, hadError bool
 	stderrOut := captureStderr(t, func() {
-		got = isEvaluatorOfOpenMission(missions, "djb")
+		matched, hadError = isEvaluatorOfOpenMission(missions, "djb")
 	})
 
-	assert.False(t, got, "a List error must suppress the diagnostic, not crash or refuse the spawn")
+	assert.False(t, matched, "a List error must not fabricate a match")
+	assert.True(t, hadError, "a List error must be reported back, not collapsed into a clean no-match")
 	assert.Contains(t, stderrOut, "listing missions for the empty-MISSION_ID diagnostic",
 		"a List error must be warned to stderr, not swallowed")
-	assert.Contains(t, stderrOut, "diagnostic suppressed")
 }
 
 // TestSubagentStart_LoudSkipScanWarnsOnLoadErrorButFindsSurvivingMatch
@@ -1075,6 +1078,46 @@ func TestSubagentStart_LoudSkipScanWarnsOnLoadErrorButFindsSurvivingMatch(t *tes
 	assert.Contains(t, stderrOut, "empty-MISSION_ID diagnostic scan")
 	assert.Contains(t, stderrOut, "evaluator of an open mission",
 		"the corrupt sibling must not suppress the diagnostic for the surviving, actually-matching mission")
+}
+
+// TestSubagentStart_LoudSkipUncertaintyDiagnosticWhenMatchingMissionFailsToLoad
+// is the invariant reviewer's sharpened HIGH: the spec's LoudSkip is
+// unconditional precisely so no fallible guard can fail to fire, and
+// isEvaluatorOfOpenMission's scan IS fallible. The constructible bad
+// case is an open mission that names the spawn handle as evaluator
+// but whose contract fails strict decode (e.g. version skew) --
+// Store.Load skips it, and a scan that only ever reported "matched"
+// would return false with nothing further to say, silently reaching
+// the exact state the spec proves unreachable: a genuine match hidden
+// by an unrelated failure, and no trace of either. The fix: a scan
+// that hits any error and finds no match degrades to an uncertainty
+// diagnostic instead of falling silent.
+func TestSubagentStart_LoudSkipUncertaintyDiagnosticWhenMatchingMissionFailsToLoad(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// The only mission in the store is corrupt -- Store.List
+	// enumerates it, Store.Load fails to decode it. Its intended
+	// evaluator cannot be inspected (that is the point: the
+	// corruption hides it), so this is exactly the case where a
+	// clean-scan "no match" verdict would be a false negative.
+	missionsDir := filepath.Join(missions.Root(), "missions")
+	require.NoError(t, os.MkdirAll(missionsDir, 0o700))
+	corruptPath := filepath.Join(missionsDir, "m-2026-04-08-997.yaml")
+	require.NoError(t, os.WriteFile(corruptPath, []byte("not valid yaml {[}\n"), 0o600))
+
+	var hookErr error
+	stderrOut := captureStderr(t, func() {
+		_, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+	})
+
+	require.NoError(t, hookErr, "an undeclared mission must still skip the gate, not refuse the spawn")
+	assert.Contains(t, stderrOut, `skipping mission "m-2026-04-08-997"`,
+		"the corrupt mission's Load failure must be warned to stderr, not swallowed")
+	assert.Contains(t, stderrOut, "cannot determine whether",
+		"a scan that hit an error and found no match must degrade to an uncertainty diagnostic, not fall silent")
+	assert.Contains(t, stderrOut, `"djb"`, "the uncertainty diagnostic must name the handle")
+	assert.NotContains(t, stderrOut, "evaluator of an open mission",
+		"the scan never confirmed a match, so it must not claim one")
 }
 
 // TestSubagentStart_VerifierGateLegacyMissionAllowsSpawn asserts that

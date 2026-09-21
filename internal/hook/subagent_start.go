@@ -562,8 +562,12 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 //     know which mission the spawn serves, so we never apply a verifier
 //     gate by handle alone. This is the one nil-nil branch that also
 //     emits a stderr diagnostic (loud-skip, docs/spec-hook-gates.tex,
-//     bead ethos-yf6n), and only when agentType is the evaluator of
-//     some open mission — the gating decision itself does not change
+//     bead ethos-yf6n) — the gating decision itself does not change.
+//     The diagnostic fires when agentType IS, as far as a best-effort
+//     mission-store scan can tell, the evaluator of some open mission,
+//     or degrades to an "uncertain" variant when that scan itself hits
+//     a store fault and finds no match; a clean scan with no match
+//     stays quiet
 //   - the declared mission is not open
 //   - the declared mission's evaluator handle is not agentType (the
 //     spawn serves the mission in another role, e.g. worker)
@@ -608,21 +612,43 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 		// mission only, never by handle alone.
 		//
 		// Diagnostic only (loud-skip, docs/spec-hook-gates.tex,
-		// bead ethos-yf6n): when this handle is the evaluator of
-		// some open mission, staying silent would leave the frozen-
-		// evaluator gate AND ETHOS_VERIFIER_ALLOWLIST write-set
-		// enforcement both inactive for this spawn with no trace —
-		// the spec's AbsenceCause proves the three possible causes
-		// (Tier A ad-hoc spawn, a Tier B dispatch whose MISSION_ID
-		// failed to propagate, or PreToolUse not installed at all)
-		// are not distinguishable from here, so the message names
-		// the consequence, not a guessed cause. A handle that is
-		// not any open mission's evaluator produces no diagnostic —
-		// consistent with the quiet NotAVerifier branches below,
-		// and it keeps an ordinary ad-hoc spawn quiet.
-		if isEvaluatorOfOpenMission(deps.Missions, agentType) {
+		// bead ethos-yf6n): when this handle IS, as far as the scan
+		// below can tell, the evaluator of some open mission,
+		// staying silent would leave the frozen-evaluator gate AND
+		// ETHOS_VERIFIER_ALLOWLIST write-set enforcement both
+		// inactive for this spawn with no trace — the spec's
+		// AbsenceCause proves the three possible causes (Tier A
+		// ad-hoc spawn, a Tier B dispatch whose MISSION_ID failed to
+		// propagate, or PreToolUse not installed at all) are not
+		// distinguishable from here, so the message names the
+		// consequence, not a guessed cause. A handle that is not any
+		// open mission's evaluator produces no diagnostic —
+		// consistent with the quiet NotAVerifier branches below, and
+		// it keeps an ordinary ad-hoc spawn quiet.
+		//
+		// The spec's own LoudSkip is unconditional precisely so no
+		// fallible guard can fail to fire; this guard IS fallible —
+		// isEvaluatorOfOpenMission's scan can itself hit a mission
+		// store fault (List error, or a Load error on the very
+		// mission that would have matched, e.g. a version-skewed
+		// contract that fails strict decode). Collapsing that case
+		// to matched=false would re-open exactly the silent-disabled
+		// state the spec proves unreachable: a genuine match, hidden
+		// by an unrelated failure, staying silent. So the scan
+		// reports whether it hit any fault (hadError) in addition to
+		// whether it found a match, and a fault with no match still
+		// emits — a degraded, uncertain diagnostic rather than
+		// silence. Only a CLEAN scan that found no match stays quiet.
+		matched, hadError := isEvaluatorOfOpenMission(deps.Missions, agentType)
+		switch {
+		case matched:
 			fmt.Fprintf(os.Stderr,
 				"ethos: subagent-start: warning: %q is the evaluator of an open mission but this spawn declared no MISSION_ID; the verifier hash gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement are both inactive for it (cause not distinguishable here: Tier A ad-hoc spawn, PreToolUse MISSION_ID propagation failure, or PreToolUse not installed)\n",
+				agentType,
+			)
+		case hadError:
+			fmt.Fprintf(os.Stderr,
+				"ethos: subagent-start: warning: cannot determine whether %q needed the verifier hash gate (mission store error during the empty-MISSION_ID diagnostic scan); the verifier hash gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement are inactive for this spawn regardless\n",
 				agentType,
 			)
 		}
@@ -676,8 +702,8 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 	return []verifierMission{vm}, nil
 }
 
-// isEvaluatorOfOpenMission reports whether agentType is the evaluator
-// handle of any open mission in the store. It is the empty-
+// isEvaluatorOfOpenMission scans the mission store for a mission that
+// is open and names agentType as its evaluator. It is the empty-
 // MISSION_ID diagnostic's approximation of the spec's
 // verifierOfOpenMission ground truth (docs/spec-hook-gates.tex): the
 // gate has no declared mission to bind by, so this scan cannot say
@@ -689,22 +715,33 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 // check into a refusal -- but every fault is warned to stderr, the
 // same channel the rest of this file uses (see the empty-hash warning
 // above, and the drift and walk-error diagnostics elsewhere in this
-// file). A List error suppresses the whole scan, so the caller gets
-// false, but the operator sees why the diagnostic could not run
-// rather than a diagnostic that silently never fires. A Load error on
-// one mission is skipped so a single corrupt or stale sibling does
-// not block the scan of the rest, but that skip is also warned --
-// unlike checkWriteSetConflicts' skip, which this comment does not
-// claim to match, since a silently skipped Load error here would
-// suppress the very diagnostic this function exists to guarantee.
-func isEvaluatorOfOpenMission(missions *mission.Store, agentType string) bool {
+// file), and also reported back via hadError so the caller can tell a
+// clean "no match" from a scan that could not fully complete. That
+// distinction matters: the spec's LoudSkip is unconditional precisely
+// so no fallible guard can fail to fire, and this scan IS fallible --
+// a List error aborts it outright, and a Load error on the one
+// mission that would have matched (e.g. a version-skewed contract
+// that fails strict decode) makes the scan blind to exactly the
+// mission it exists to find. Returning matched=false in either case
+// with no further signal would silently re-open the state the spec
+// proves unreachable, so hadError lets the caller degrade to an
+// uncertainty diagnostic instead of falling silent.
+//
+// A Load error on one mission is itself warned, then skipped, so a
+// single corrupt or stale sibling does not stop the scan from
+// reaching the rest of the store -- unlike checkWriteSetConflicts'
+// otherwise-similar skip, which warns but does not report the fault
+// back to its caller; that asymmetry is deliberate here because a
+// swallowed fault would suppress the very diagnostic this function
+// exists to guarantee.
+func isEvaluatorOfOpenMission(missions *mission.Store, agentType string) (matched, hadError bool) {
 	ids, err := missions.List()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"ethos: subagent-start: warning: listing missions for the empty-MISSION_ID diagnostic: %v (diagnostic suppressed)\n",
+			"ethos: subagent-start: warning: listing missions for the empty-MISSION_ID diagnostic: %v\n",
 			err,
 		)
-		return false
+		return false, true
 	}
 	for _, id := range ids {
 		c, err := missions.Load(id)
@@ -713,13 +750,14 @@ func isEvaluatorOfOpenMission(missions *mission.Store, agentType string) bool {
 				"ethos: subagent-start: warning: skipping mission %q during empty-MISSION_ID diagnostic scan: %v\n",
 				id, err,
 			)
+			hadError = true
 			continue
 		}
 		if c.Status == mission.StatusOpen && c.Evaluator.Handle == agentType {
-			return true
+			return true, hadError
 		}
 	}
-	return false
+	return false, hadError
 }
 
 // readGateContract reads and validates one mission contract for the
