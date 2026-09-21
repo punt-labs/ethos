@@ -560,7 +560,10 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 //   - agentType is empty
 //   - declaredMissionID is empty: without a declared mission we cannot
 //     know which mission the spawn serves, so we never apply a verifier
-//     gate by handle alone
+//     gate by handle alone. This is the one nil-nil branch that also
+//     emits a stderr diagnostic (loud-skip, docs/spec-hook-gates.tex,
+//     bead ethos-yf6n), and only when agentType is the evaluator of
+//     some open mission — the gating decision itself does not change
 //   - the declared mission is not open
 //   - the declared mission's evaluator handle is not agentType (the
 //     spawn serves the mission in another role, e.g. worker)
@@ -600,7 +603,29 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 	if declaredMissionID == "" {
 		// No declared mission: the spawn cannot be bound to a
 		// (mission_id, role). Applying the verifier gate by handle
-		// alone is exactly the misbinding ethos-z69l fixes.
+		// alone is exactly the misbinding ethos-z69l fixes. GATING
+		// IS UNCHANGED here — the gate still binds by declared
+		// mission only, never by handle alone.
+		//
+		// Diagnostic only (loud-skip, docs/spec-hook-gates.tex,
+		// bead ethos-yf6n): when this handle is the evaluator of
+		// some open mission, staying silent would leave the frozen-
+		// evaluator gate AND ETHOS_VERIFIER_ALLOWLIST write-set
+		// enforcement both inactive for this spawn with no trace —
+		// the spec's AbsenceCause proves the three possible causes
+		// (Tier A ad-hoc spawn, a Tier B dispatch whose MISSION_ID
+		// failed to propagate, or PreToolUse not installed at all)
+		// are not distinguishable from here, so the message names
+		// the consequence, not a guessed cause. A handle that is
+		// not any open mission's evaluator produces no diagnostic —
+		// consistent with the quiet NotAVerifier branches below,
+		// and it keeps an ordinary ad-hoc spawn quiet.
+		if isEvaluatorOfOpenMission(deps.Missions, agentType) {
+			fmt.Fprintf(os.Stderr,
+				"ethos: subagent-start: warning: %q is the evaluator of an open mission but this spawn declared no MISSION_ID; the verifier hash gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement are both inactive for it (cause not distinguishable here: Tier A ad-hoc spawn, PreToolUse MISSION_ID propagation failure, or PreToolUse not installed)\n",
+				agentType,
+			)
+		}
 		return nil, nil
 	}
 
@@ -649,6 +674,35 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 		}))
 	}
 	return []verifierMission{vm}, nil
+}
+
+// isEvaluatorOfOpenMission reports whether agentType is the evaluator
+// handle of any open mission in the store. It is the empty-
+// MISSION_ID diagnostic's approximation of the spec's
+// verifierOfOpenMission ground truth (docs/spec-hook-gates.tex): the
+// gate has no declared mission to bind by, so this scan cannot say
+// WHICH mission was meant, only whether the handle plausibly needed
+// the gate it is not getting.
+//
+// The scan is O(missions in the store), matching
+// checkWriteSetConflicts' own pattern: List then Load each, tolerating
+// and skipping an ID that fails to load (a corrupt or stale sibling
+// mission must not turn a diagnostic check into a spawn failure).
+func isEvaluatorOfOpenMission(missions *mission.Store, agentType string) bool {
+	ids, err := missions.List()
+	if err != nil {
+		return false
+	}
+	for _, id := range ids {
+		c, err := missions.Load(id)
+		if err != nil {
+			continue
+		}
+		if c.Status == mission.StatusOpen && c.Evaluator.Handle == agentType {
+			return true
+		}
+	}
+	return false
 }
 
 // readGateContract reads and validates one mission contract for the
