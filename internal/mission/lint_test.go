@@ -69,6 +69,17 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		// ethos-8ady: glob entry covers the adjacent test file exactly
+		// as a directory entry would (reviewer-verified falsifying
+		// case: internal/hook/** authorizing internal/hook/foo_test.go
+		// still drew a spurious advisory before this fix).
+		{
+			name: "H1: glob entry covers adjacent test file — no H1 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/hook/foo.go", "internal/hook/**", "CHANGELOG.md"}
+			},
+			wantMsg: "",
+		},
 		// Heuristic 2: CHANGELOG gap
 		{
 			name: "H2: production code without CHANGELOG",
@@ -117,6 +128,16 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		// ethos-8ady: a glob entry that covers README.md must silence
+		// the warning exactly as an exact match does.
+		{
+			name: "H3: criteria mention README, covered by glob entry — no H3 warning",
+			mutate: func(c *Contract) {
+				c.SuccessCriteria = []string{"Update README with new command"}
+				c.WriteSet = append(c.WriteSet, "*.md")
+			},
+			wantMsg: "",
+		},
 		// Heuristic 4: inverted test gap
 		{
 			name: "H4: _test.go without corresponding .go",
@@ -137,6 +158,15 @@ func TestLint(t *testing.T) {
 			name: "H4: directory covers production file — no H4 warning",
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"internal/mission/lint_test.go", "internal/mission/", "CHANGELOG.md"}
+			},
+			wantMsg: "",
+		},
+		// ethos-8ady: glob entry covers the corresponding production
+		// file exactly as a directory entry would.
+		{
+			name: "H4: glob entry covers corresponding production file — no H4 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/hook/foo_test.go", "internal/hook/**", "CHANGELOG.md"}
 			},
 			wantMsg: "",
 		},
