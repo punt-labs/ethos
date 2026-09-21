@@ -4208,6 +4208,95 @@ func TestStore_NonTerminalTransitionsUnchanged(t *testing.T) {
 	assert.Contains(t, err.Error(), "round 3")
 }
 
+// TestStore_Update_OpenMissionHappyPath asserts the fix for ethos-fhns
+// does not disturb Update's ordinary case: a status-unchanged edit to
+// an open mission still succeeds and UpdatedAt still bumps.
+func TestStore_Update_OpenMissionHappyPath(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	before := c.UpdatedAt
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	loaded.Context = "happy path edit"
+	require.NoError(t, s.Update(loaded))
+	assert.NotEqual(t, before, loaded.UpdatedAt, "Update must bump UpdatedAt")
+
+	reloaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "happy path edit", reloaded.Context)
+	assert.Equal(t, StatusOpen, reloaded.Status)
+}
+
+// TestStore_Update_RejectsClosedMission asserts ethos-fhns: Update has
+// no c.Status != StatusOpen refusal, unlike every other mutating
+// operation, so before this fix it could rewrite a closed mission's
+// fields (and even its Status) as if it were still live.
+func TestStore_Update_RejectsClosedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
+
+	closed, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	closed.Context = "trying to edit a closed mission"
+	err = s.Update(closed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminal state")
+
+	reloaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.Context, "a refused Update must not write through")
+}
+
+// TestStore_Update_RejectsAbandonedMission covers the other terminal
+// status Update must refuse: a mission that was retired via Abandon
+// rather than Close.
+func TestStore_Update_RejectsAbandonedMission(t *testing.T) {
+	s := NewStoreWithRoots(t.TempDir(), t.TempDir())
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	_, err := s.Abandon(c.MissionID, "never dispatched")
+	require.NoError(t, err)
+
+	abandoned, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	abandoned.Context = "trying to edit an abandoned mission"
+	err = s.Update(abandoned)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminal state")
+}
+
+// TestStore_Update_CannotReopenClosedMission is the exact ethos-fhns
+// exploit: a caller sets Status back to "open" in its copy of a closed
+// contract and calls Update, hoping to resurrect it. The guard checks
+// the on-disk status, not the caller's proposed one, so the attempt is
+// refused and the on-disk status stays closed.
+func TestStore_Update_CannotReopenClosedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
+
+	closed, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	require.Equal(t, StatusClosed, closed.Status)
+	closed.Status = StatusOpen // the exploit: forge the status back to open
+	err = s.Update(closed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminal state")
+
+	reloaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusClosed, reloaded.Status, "a refused Update must not reopen the mission")
+}
+
 // TestStore_Close_EventLogRecordsRoundAndVerdict asserts the M3 fix:
 // the close event carries the round number and verdict of the
 // satisfying result so an auditor reading the JSONL does not have
