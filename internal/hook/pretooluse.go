@@ -122,8 +122,9 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
+	repoRoot := envRepoRoot()
 	entries := splitAllowlist(allowlist)
-	if pathAllowed(target, entries) {
+	if pathAllowed(target, entries, repoRoot) {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
@@ -135,7 +136,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	// applies. This prevents the modify-via-extract_into attack.
 	if extractInto := os.Getenv("ETHOS_VERIFIER_EXTRACT_INTO"); extractInto != "" {
 		eiEntries := splitAllowlist(extractInto)
-		if pathAllowed(target, eiEntries) {
+		if pathAllowed(target, eiEntries, repoRoot) {
 			exists, statErr := targetExists(target)
 			if statErr != nil {
 				// Non-IsNotExist stat failure (EACCES, EIO, ELOOP,
@@ -287,10 +288,51 @@ func splitAllowlist(raw string) []string {
 // declare (ethos-qy7k). The allowlist is built from the write_set, so
 // it must admit exactly what the contract's own containment check
 // admits; a second matcher here would drift.
-func pathAllowed(target string, entries []string) bool {
+//
+// Claude Code's Write/Edit file_path is absolute in production, while
+// a write_set entry is guaranteed relative — validateWriteSetEntry
+// (validate.go:568) rejects an absolute entry outright, so the only
+// absolute allowlist entry that ever occurs is the verifier's own
+// contract.yaml path (verifierAllowlistSplit,
+// subagent_start.go). Comparing the raw absolute target against every
+// entry therefore refuses every ordinary in-repo write outright once
+// mission.PathContainedBy requires absoluteness agreement (ethos-vaib)
+// — an accidental mismatch before that fix, now an explicit rule. So
+// target is ALSO resolved against repoRoot, and both forms are tried:
+// the raw form (which is what matches the one legitimately absolute
+// entry, the contract path) and the repo-relative form (which is what
+// matches an ordinary write_set entry like "docs/**"). The precedent
+// for this two-form comparison is readsContain (preconditions.go),
+// added for the same reason on PR #328 (Copilot finding) — a
+// caller-supplied path and a stored/declared path can disagree on
+// absoluteness for reasons that have nothing to do with which files
+// are actually the same file.
+//
+// filepath.Rel(repoRoot, clean) is used, not manual prefix-stripping:
+// it already rejects a target outside repoRoot (a ".."-prefixed
+// result) the same way readsContain does, and it naturally refuses to
+// resolve a foreign-OS absolute spelling (a Windows drive-letter
+// target like "C:/repo/x.md") against a POSIX repoRoot, because Go's
+// Rel requires both paths to agree on absoluteness by ITS OS's own
+// rule before it will compute anything — exactly the "resolves only
+// if the repo root is also drive-lettered" behavior a real Windows
+// host would need, with no extra branch here to keep in sync with
+// mission.IsAbsolutePath's own (intentionally broader, OS-independent)
+// notion of absolute.
+func pathAllowed(target string, entries []string, repoRoot string) bool {
 	ct := filepath.Clean(target)
+	relTarget := ""
+	if repoRoot != "" {
+		if rel, err := filepath.Rel(repoRoot, ct); err == nil && !strings.HasPrefix(rel, "..") {
+			relTarget = rel
+		}
+	}
 	for _, entry := range entries {
-		if mission.PathContainedBy(ct, filepath.Clean(entry)) {
+		ce := filepath.Clean(entry)
+		if mission.PathContainedBy(ct, ce) {
+			return true
+		}
+		if relTarget != "" && mission.PathContainedBy(relTarget, ce) {
 			return true
 		}
 	}
