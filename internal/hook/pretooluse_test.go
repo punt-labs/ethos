@@ -614,6 +614,97 @@ func TestPathAllowed_DriveLetterTargetNotAdmittedByRelativeEntry(t *testing.T) {
 		"a drive-letter target must resolve against a same-drive-lettered repo root")
 }
 
+// TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal pins the
+// MINOR finding from the re-verification round: the naive idiom
+// !strings.HasPrefix(rel, "..") refuses a filepath.Rel result the
+// instant its first two characters are literal dots, which also
+// catches a legal in-repo name that merely STARTS with two dots
+// ("..config") and never actually escapes repoRoot — that name and a
+// real ".." traversal segment share only their first two bytes. The
+// correct guard is rel == ".." or rel starts with "../"
+// (filepath.Separator-joined), neither of which "..config" satisfies.
+func TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal(t *testing.T) {
+	repoRoot := t.TempDir()
+	target := filepath.Join(repoRoot, "..config")
+	entries := []string{"..config"}
+	assert.True(t, pathAllowed(target, entries, repoRoot),
+		"a dot-dot-PREFIXED in-repo name must not be refused as a traversal escape")
+}
+
+// TestHandlePreToolUse_RepoRootValidation pins the MEDIUM finding from
+// the re-verification round: pathAllowed's repo-relative branch must
+// never resolve against an unmarked directory. allowlistRepoRoot uses
+// resolve.FindRepoRoot (a .git-marker walk), never envRepoRoot's own
+// last-resort bare-os.Getwd() fallback (tierBRepoRoot,
+// pretooluse_dispatch.go) — that fallback is safe for Tier B
+// mission-store resolution (a missing store just fails a subsequent
+// Load, fail-closed) but not here: resolving a target against a
+// directory that is merely SOME subdirectory of the real repo, not
+// the root itself, computes a repo-relative form one level too
+// shallow and lets an ordinary write_set entry admit a file it never
+// authorized — an admit-WIDENING the repo-root-resolution fix must
+// not introduce.
+func TestHandlePreToolUse_RepoRootValidation(t *testing.T) {
+	t.Run("cwd is a repo subdirectory: resolves against the true root, not the subdirectory", func(t *testing.T) {
+		repo := stageRepoRoot(t)
+		sub := filepath.Join(repo, "internal")
+		require.NoError(t, os.MkdirAll(sub, 0o755))
+		require.NoError(t, os.Chdir(sub))
+		t.Cleanup(func() { _ = os.Chdir(repo) })
+
+		t.Setenv("ETHOS_REPO_ROOT", "")
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "docs/**")
+		t.Setenv("MISSION_ID", "")
+
+		// This target resolves to "docs/x.md" (admitted by docs/**) ONLY
+		// if wrongly resolved against the subdirectory `sub`. Resolved
+		// against the true repo root, it is "internal/docs/x.md", which
+		// docs/** does not cover — the correct, pre-fix-equivalent
+		// refusal.
+		target := filepath.Join(sub, "docs", "x.md")
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": target},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
+			"must not admit via resolution against the wrong (subdirectory) base")
+	})
+
+	t.Run("no repo marker anywhere: repo-relative resolution is skipped, not widened", func(t *testing.T) {
+		dir := t.TempDir()
+		orig, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(dir))
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+
+		t.Setenv("ETHOS_REPO_ROOT", "")
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "docs/**")
+		t.Setenv("MISSION_ID", "")
+
+		target := filepath.Join(dir, "docs", "x.md")
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": target},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
+			"an unmarked directory must not be trusted as a repo root")
+	})
+}
+
 // TestHandlePreToolUse_EnvVarFromSubagentStart verifies end-to-end
 // that the env var format produced by buildVerifierAllowlistEnv is
 // correctly consumed by HandlePreToolUse.
