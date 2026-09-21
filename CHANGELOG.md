@@ -34,8 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SubagentStart gate's empty-MISSION_ID skip emits a one-line diagnostic
   when the spawn handle is an open mission's evaluator, naming the two
   enforcement mechanisms left inactive and the three indistinguishable
-  causes; gating behavior is unchanged per ethos-yf6n's triage.
-  Implemented against `docs/spec-hook-gates.tex`.
+  causes; a store fault during the check degrades to an explicit
+  "cannot determine" variant, never to silence. The diagnostic is
+  delivered where it can be seen — the hook's `systemMessage` and the
+  spawn's own context, not just stderr (which the hook scripts redirect
+  into `hook-errors.log`). Gating behavior is unchanged per
+  ethos-yf6n's triage. Implemented against `docs/spec-hook-gates.tex`
+  and verified live through a real subagent spawn.
 
 ### Added
 

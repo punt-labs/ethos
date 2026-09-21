@@ -1,0 +1,84 @@
+results:
+    - mission: m-2026-09-21-005
+      round: 1
+      created_at: "2026-09-21T03:12:37Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/hook/subagent_start.go
+          added: 56
+          removed: 2
+        - path: internal/hook/subagent_start_test.go
+          added: 88
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+        - name: go test ./internal/hook/... -run Verifier|LoudSkip -v (31 PASS)
+          status: pass
+      prose: |
+        Implemented the loud-skip diagnostic for checkVerifierHash's
+        empty-declaredMissionID branch (subagent_start.go:599-605 before
+        the change). GATING BEHAVIOR IS UNCHANGED: the branch still returns
+        (nil, nil), the spawn is still allowed through, and the gate still
+        binds by declared mission only, never by handle alone (ethos-z69l
+        stays fixed). The only addition is a one-line stderr diagnostic.
+
+        Emission condition: I did not follow the spec's LoudSkip literally
+        (unconditional diagnosticEmitted' = ztrue on every empty-
+        declaredMissionID skip). Instead I added a helper,
+        isEvaluatorOfOpenMission, that scans the mission store (List then
+        Load each, mirroring checkWriteSetConflicts' own tolerate-and-skip
+        pattern for an unloadable sibling) and emits the diagnostic only
+        when agentType is the evaluator handle of some open mission. This
+        is a refinement, not a weakening, of the spec's proof: the safety
+        property SilentDisabledUnreachableUnderLoudSkip requires
+        diagnosticEmitted' = ztrue whenever verifierOfOpenMission = ztrue.
+        Setting diagnosticEmitted' = verifierOfOpenMission (my
+        implementation) satisfies that implication exactly as the spec's
+        unconditional diagnosticEmitted' = ztrue does; it only differs on
+        the verifierOfOpenMission = zfalse branch, where the spec's
+        NotAVerifier operation is already quiet by design (diagnosticEmitted'
+        = zfalse) for the two cases it models (mission not open, or
+        evaluator is someone else). My check extends that same "quiet when
+        not the verifier" behavior to the no-MISSION_ID case rather than
+        adding a diagnostic the mission's own context flagged as an
+        ordinary-ad-hoc-spawn noise risk. The mission context explicitly
+        authorized this narrowing ("you may need a cheap check ... to avoid
+        noise on every ad-hoc spawn"), and I have not reintroduced the
+        ethos-z69l handle-misbinding: the check only decides whether to log,
+        never whether to gate -- the gate itself never runs off this scan.
+
+        The diagnostic message names the consequence (verifier hash gate and
+        ETHOS_VERIFIER_ALLOWLIST both inactive for this spawn) and states,
+        rather than guesses, that the cause is not distinguishable here
+        (Tier A ad-hoc spawn, PreToolUse MISSION_ID propagation failure, or
+        PreToolUse not installed) -- matching the spec's
+        CauseIndistinguishable theorem, which holds for LoudSkip too: the
+        diagnostic can say a mission binding was absent, never which of the
+        three absences produced it.
+
+        Tests: two new regression tests in subagent_start_test.go.
+        TestSubagentStart_LoudSkipDiagnosticForOpenMissionEvaluator asserts
+        both that the spawn is still allowed through (no error, no isolation
+        block) and that the stderr diagnostic names the handle, the
+        consequence (verifier hash gate, ETHOS_VERIFIER_ALLOWLIST), and the
+        indistinguishability of cause.
+        TestSubagentStart_LoudSkipStaysQuietWithoutOpenMissionEvaluator is
+        table-driven over two quiet cases: no missions in the store at all,
+        and an open mission that names a different evaluator (a second
+        identity/mission pair, since the contract's Worker defaults to
+        "bwk" and self-verification forbids Worker == Evaluator). Both
+        assert stderr is empty and the spawn is allowed through.
+
+        All 26 pre-existing verifier-gate tests pass unchanged (31 PASS
+        lines total in the Verifier|LoudSkip run, the extra 3 being the
+        parent test function plus 2 subtests of my own table-driven test).
+        make check is green end to end, including fuzz on
+        docs/spec-hook-gates.tex.
+
+        Commits: f60b84c (source), a004fe2 (tests). No pre-authorized
+        suppressions used. write_set respected: only
+        internal/hook/subagent_start.go and
+        internal/hook/subagent_start_test.go were edited.

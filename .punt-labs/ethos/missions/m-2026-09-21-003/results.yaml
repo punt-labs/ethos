@@ -1,0 +1,130 @@
+results:
+    - mission: m-2026-09-21-003
+      round: 1
+      created_at: "2026-09-21T03:14:59Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/mission/conflict.go
+          added: 81
+          removed: 13
+        - path: internal/mission/conflict_test.go
+          added: 79
+          removed: 0
+        - path: internal/hook/pretooluse_test.go
+          added: 26
+          removed: 1
+      evidence:
+        - name: make check
+          status: pass
+        - name: go test -race -count=1 ./internal/mission/... ./internal/hook/...
+          status: pass
+        - name: go build ./...
+          status: pass
+      prose: |
+        splitSegments now returns (segs []string, absolute bool) instead of
+        just []string. absolute is raw[0] == "" on the trimmed,
+        backslash-normalized, trailing-slash-trimmed string, computed BEFORE
+        the segment-filter loop drops the leading empty token -- exactly the
+        RAWSEG/rsEmpty distinction docs/spec-writeset-admission.tex models.
+        Segment computation itself is unchanged (SegmentationUnchanged from
+        the spec's Theorems table): both the old and new function agree on
+        segs for every input; the fix only exposes a bit the old []string
+        return type had nowhere to carry.
+
+        Three internal callers were updated: overlapSegments discards the
+        flag (both its operands are write_set/extract_into entries, always
+        relative by validate.go's validateWriteSetEntry), CanonicalPath
+        prefixes its joined string with "/" when absolute (so
+        CanonicalPath("docs/x.md") != CanonicalPath("/docs/x.md") --
+        pinned directly by TestCanonicalPath_AbsoluteDistinctFromRelative),
+        and pathContainedBy is the actual fix site.
+
+        Decision: absoluteness AGREEMENT, not "file must be relative".
+        The spec's PathContainedByFixed schema states the guard as
+        "absolute(file) = false", because its ENTRY model represents only
+        validator-checked write_set entries, which are always relative by
+        construction. But pathContainedBy is also called with a
+        legitimately absolute ENTRY: verifierAllowlistSplit
+        (internal/hook/subagent_start.go) adds the verifier's own
+        contract.yaml path -- an absolute filesystem path -- to
+        ETHOS_VERIFIER_ALLOWLIST. Applying the spec's literal guard would
+        make an absolute file unconditionally uncontainable, which breaks
+        that real case. I implemented "absolute(file) == absolute(entry)"
+        instead: it refuses the ethos-vaib mismatch (relative entry,
+        absolute file) exactly as the spec requires, and additionally keeps
+        the absolute x absolute case working when segments agree. This is a
+        strict widening of the spec's guard on the one input class (an
+        absolute entry) the spec's own ENTRY type cannot represent, not a
+        narrowing of the safety property criterion (a) tests for.
+
+        TestPathAllowed's existing {"absolute match", "/abs/contract.yaml",
+        true} row is kept true, deliberately, with a comment explaining why:
+        under the pre-fix code it passed by coincidence (both sides'
+        leading empty segments were dropped uniformly, so the two strings
+        matched regardless of absoluteness ever being compared); under the
+        fix it passes because file and entry agree on absoluteness AND their
+        segments match. A new row in the same table,
+        {"absolute target not admitted by relative glob entry (ethos-vaib)",
+        "/docs/x.md", false} with "docs/**" added to that test's entries,
+        pins the actual regression end to end through pathAllowed. I also
+        added the equivalent case directly at the pathContainedBy level in
+        TestPathContainedBy (4 new rows: relative-glob-vs-absolute-file,
+        relative-literal-vs-absolute-file, absolute-vs-absolute match,
+        and relative-file-vs-absolute-entry), and a
+        TestCanonicalPath_AbsoluteDistinctFromRelative test plus four new
+        absolute-path rows in TestCanonicalPath's table.
+
+        Root-glob test: added "bare doublestar entry is a root glob
+        overlapping anything" to TestPathsOverlap (a="**", b=
+        "internal/mission/store.go", want=true). Every existing root-glob
+        row used a glob segment that also carried a literal suffix ("*.go",
+        "**/store.go"); none exercised ENTRY.rootGlob's own defining case
+        (#pattern = 1 and pattern(1) = wildRestSeg) -- a single "**" segment
+        with nothing else. pathsOverlap's root-escape branch (conflict.go,
+        "if aRoot || bRoot return true") already handled it correctly; the
+        gap was in test coverage, not in the code.
+
+        No change was needed in internal/hook/pretooluse.go itself.
+        pathAllowed already delegates entirely to mission.PathContainedBy
+        (its only path-comparison call), so the fix at the mission-package
+        level closes the hook-level bug without a second, parallel
+        implementation to keep in sync -- exactly the reason PathContainedBy
+        is exported at all, per its own doc comment ("a second implementation
+        in the hook package would drift the moment the entry semantics
+        change"). pretooluse_test.go got the new/updated TestPathAllowed
+        rows only.
+
+        Inspected all CanonicalPath/splitSegments call sites for absoluteness
+        impact (14 total: 10 in lint.go, 2 in cmd/ethos/mission.go, 2 direct
+        splitSegments call sites inside conflict.go itself):
+
+        internal/mission/lint.go:
+        - line 75  (lintAdjacentTest, CanonicalPath(want)):        no impact -- want derives from a write_set entry, never absolute (validate.go rejects absolute write_set entries).
+        - line 80  (lintAdjacentTest, CanonicalPath(dir)):         no impact -- dir derives from the same write_set entry.
+        - line 98  (lintChangelog, CanonicalPath(p)):               no impact -- p ranges over c.WriteSet.
+        - line 160 (lintInvertedTestGap, CanonicalPath(prod)):      no impact -- prod derives from a write_set entry.
+        - line 162 (lintInvertedTestGap, CanonicalPath(dir)):       no impact -- dir derives from the same write_set entry.
+        - line 188 (lintInputsNotInWriteSet, CanonicalPath(f)):     REAL IMPACT -- f ranges over c.Inputs.Files, which is NOT run through validateWriteSetEntry and so CAN be absolute. Combined with line 193's PathContainedBy(f, w) call (already routed through the fixed mission.PathContainedBy by an earlier mission, ethos-8ady), an absolute inputs.files entry that a relative write_set glob used to match by the same bug now correctly draws the "not in write_set" advisory warning instead of silently passing. This is the lint-advisory mirror of the enforcement-side fix.
+        - line 240 (writeSetIndex, CanonicalPath(p)):               no impact -- p ranges over write_set.
+        - line 305 (isWriteSetPrefix, CanonicalPath(candidate)):    no impact -- candidate comes from repoNamePattern's regex match over free-text prose fields; the pattern (\b[a-zA-Z0-9_-]+/...) cannot match a leading "/".
+        - line 311 (isWriteSetPrefix, CanonicalPath(w)):            no impact -- w ranges over write_set.
+        - line 499 (allDocPaths, CanonicalPath(p)):                 no impact -- p ranges over write_set.
+
+        cmd/ethos/mission.go:
+        - line 1832 (--verify, CanonicalPath(path)):                no impact -- path is a key from `git diff --numstat`, always repo-relative.
+        - line 1841 (--verify, CanonicalPath(fc.Path)):              no impact -- fc.Path is validated via validateFileChange -> validateWriteSetEntry, which rejects absolute paths.
+
+        internal/mission/conflict.go (direct splitSegments callers, not through the CanonicalPath wrapper):
+        - overlapSegments's `all, _ := splitSegments(p)`:            no impact by design -- both pathsOverlap operands are write_set/extract_into entries, always validator-relative; the flag is discarded and the discard is commented in place.
+        - pathContainedBy's `fs, fileAbsolute := splitSegments(file)` / `es, entryAbsolute := splitSegments(entry)`: THE FIX SITE -- file is a caller-supplied tool target (via PreToolUse's pathAllowed) and can be absolute; entry is usually a validated-relative write_set entry but can legitimately be an absolute allowlist entry. The new `fileAbsolute != entryAbsolute` guard is exactly criterion (a).
+
+        Commits: 17c5f06 (conflict.go + conflict_test.go), 1f1cb2b
+        (pretooluse_test.go). No pre-authorized suppressions used.
+        write_set respected: only internal/mission/conflict.go,
+        internal/mission/conflict_test.go, and internal/hook/pretooluse_test.go
+        were edited; internal/hook/pretooluse.go was inspected but needed no
+        change. internal/mission/store.go, internal/mission/lint.go, and
+        internal/hook/subagent_start.go (sibling missions' write_sets) were
+        read for context only, never written.

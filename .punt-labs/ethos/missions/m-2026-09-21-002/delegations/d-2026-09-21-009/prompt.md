@@ -1,0 +1,7 @@
+You are executing ethos mission m-2026-09-21-002 in <repo> on branch fix/spec-backed-enforcement (already checked out — do not switch branches).
+
+First run: ethos mission show m-2026-09-21-002 — the contract is authoritative: write_set internal/mission/store.go + store_test.go, criteria, round budget 2, context.
+
+Summary: add the missing terminal-state guard to Store.Update (store.go:873-932) so it refuses non-open missions with the same error shape as AppendResult/Close/Abandon, closing bead ethos-fhns (Update can currently rewrite a closed contract's Status back to open). Before placing the guard, grep Update's call sites for any legitimate non-open use and report what you find in the result. Add the regression matrix: refuse closed, refuse abandoned, cannot reopen, open-mission happy path intact. No docs/ edits. Three sibling missions are concurrently editing internal/mission/conflict.go, internal/mission/lint.go, and internal/hook/subagent_start.go — do not touch those files.
+
+make check before every commit; commit per logical step; do not push. When done, submit a round-1 result (ethos mission result --help; the YAML must carry mission: m-2026-09-21-002; avoid trailing whitespace in prose). Then stop — evaluator rsc and the leader handle review and close.

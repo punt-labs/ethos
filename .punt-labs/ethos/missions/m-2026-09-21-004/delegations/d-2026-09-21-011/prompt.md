@@ -1,0 +1,7 @@
+You are executing ethos mission m-2026-09-21-004 in <repo> on branch fix/spec-backed-enforcement (already checked out — do not switch branches).
+
+First run: ethos mission show m-2026-09-21-004 — the contract is authoritative: write_set internal/mission/lint.go + lint_test.go, criteria, round budget 2, context.
+
+Summary: fix ethos-8ady per docs/spec-writeset-admission.tex (merged): lint's inputs-not-in-write-set coverage check is gated by strings.HasSuffix(w, "/") at lint.go:193, so a glob entry like docs/** short-circuits to uncovered and the advisory fires spuriously. Replace the literal check with the path-semantic containment primitive the admission path uses (PathContainedBy/CanonicalPath) per the spec's 8ady-fixed model. Regression matrix per the contract. IMPORTANT COORDINATION: a sibling mission is concurrently changing internal/mission/conflict.go (absoluteness semantics, ethos-vaib) — call the public primitives, do not copy their internals, do not edit conflict.go; if a test briefly fails due to the sibling's in-flight edits, write your tests against the primitives' documented contracts and note the interaction in your result. Also do not touch internal/mission/store.go or internal/hook/**.
+
+make check before every commit; commit per logical step; do not push. Submit a round-1 result (mission: m-2026-09-21-004; no trailing whitespace in prose). Then stop — evaluator rsc and the leader handle review and close.

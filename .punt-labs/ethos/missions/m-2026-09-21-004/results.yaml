@@ -1,0 +1,58 @@
+results:
+    - mission: m-2026-09-21-004
+      round: 1
+      created_at: "2026-09-21T03:10:45Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/mission/lint.go
+          added: 11
+          removed: 11
+        - path: internal/mission/lint_test.go
+          added: 27
+          removed: 0
+      evidence:
+        - name: go test -race -count=1 ./internal/mission/...
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Fixed ethos-8ady per docs/spec-writeset-admission.tex's 8ady-fixed
+        model. lintInputsNotInWriteSet (lint.go) compared write_set entries
+        as literal strings gated by strings.HasSuffix(w, "/") at the old
+        line 193; a glob entry like docs/** never ends in "/", so the guard
+        short-circuited before HasPrefix ever ran and a file it genuinely
+        covers drew a spurious "not in write_set" advisory. Replaced the
+        whole coverage loop with a call to PathContainedBy(f, w) per
+        write_set entry - the same path-semantic containment primitive the
+        write-set admission path uses (conflict.go). writeSetIndex's exact-
+        match fast path was folded into the same call, since PathContainedBy
+        already treats equal segment lists as contained; writeSetIndex
+        itself is unchanged and still used by the two other heuristics that
+        need it (H1, H4).
+
+        Regression matrix added to lint_test.go's existing H5 table:
+        docs/** covers docs/audited-delegation.md (direct child) and
+        docs/a/b.md (nested); docs/** does not cover other/audited-
+        delegation.md (still warns). The three pre-existing H5 cases are
+        unchanged and still pass: directory entry with trailing slash still
+        covers its contents, an exact file-entry match is still silent, and
+        a genuinely uncovered file still warns with unchanged wording
+        ("<path> is in inputs.files but not in write_set").
+
+        No other lint.go heuristic touches write-set coverage semantics, so
+        the fix is scoped to lintInputsNotInWriteSet alone; the advisory's
+        wording is unchanged. Lint remains advisory-only - no new hard
+        failures were introduced.
+
+        Coordination: internal/mission/conflict.go was mid-edit under the
+        sibling ethos-vaib mission for part of this round (splitSegments
+        gaining an absolute return value). One go build attempt failed
+        transiently on conflict.go itself (not on any file in this
+        mission's write_set) while that edit was in flight; a retry a few
+        seconds later built clean, and PathContainedBy's and CanonicalPath's
+        exported signatures were unchanged throughout, so lint.go's calls
+        into them needed no adjustment. make check (including the
+        spec-writeset-admission.tex fuzz check) passes at the commit this
+        result names.

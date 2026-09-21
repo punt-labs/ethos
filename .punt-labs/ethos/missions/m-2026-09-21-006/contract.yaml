@@ -1,0 +1,21 @@
+mission_id: m-2026-09-21-006
+status: abandoned
+type: implement
+created_at: "2026-09-21T03:40:07Z"
+updated_at: "2026-09-21T03:43:35Z"
+closed_at: "2026-09-21T03:43:35Z"
+leader: claude
+worker: kpz
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-21T03:40:07Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - .tmp/live-verify-scratch.md
+success_criteria:
+    - throwaway contract for live verification of the ethos-yf6n loud-skip diagnostic; never to be worked
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

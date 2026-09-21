@@ -1,0 +1,39 @@
+mission_id: m-2026-09-21-003
+status: closed
+type: implement
+created_at: "2026-09-21T03:04:58Z"
+updated_at: "2026-09-21T03:20:37Z"
+closed_at: "2026-09-21T03:20:37Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-21T03:04:58Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-vaib
+    files:
+        - docs/spec-writeset-admission.tex
+        - internal/mission/conflict.go
+        - internal/hook/pretooluse.go
+    references:
+        - internal/mission/lint.go
+        - internal/hook/pretooluse_test.go
+        - internal/mission/conflict_test.go
+write_set:
+    - internal/mission/conflict.go
+    - internal/mission/conflict_test.go
+    - internal/hook/pretooluse.go
+    - internal/hook/pretooluse_test.go
+success_criteria:
+    - 'The path model preserves the absolute/relative distinction end to end: /docs/x.md is NOT admitted by a write-set/allowlist entry docs/** (the ethos-vaib failure case from docs/spec-writeset-admission.tex). Implement per the spec: a leading empty segment from an absolute path is semantic, not cosmetic noise — splitSegments (conflict.go:485-492) or its callers must carry absoluteness rather than dropping it'
+    - The trailing-slash and doubled-interior-slash normalization that lint.go:187-193 and other call sites depend on is preserved — CanonicalPath has 14 call sites (internal/mission/lint.go x10, cmd/ethos/mission.go x2 plus the two in conflict.go); every one is inspected and listed in the result with a one-line impact statement
+    - 'Regression tests derived from the spec: TestPathAllowed gains the relative-entry/absolute-target row (entries=[docs/**], target=/docs/x.md, want false) — note the EXISTING row {absolute match, /abs/contract.yaml, true} pins today''s bug when both sides are absolute; decide the correct semantics for absolute-entry cases from the spec and update that row deliberately, documenting the decision. TestCanonicalPath gains an absolute-path row asserting CanonicalPath(docs/x.md) != CanonicalPath(/docs/x.md)'
+    - A root-glob entry (**) still conflicts with everything per pathsOverlap's root escape (conflict.go:266-275) — covered by a test, since the spec's rootGlob review round proved this path was previously untested
+    - make check passes; go test -race on internal/mission and internal/hook green
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Bead ethos-vaib. The defect: strings.Split(''/docs/x.md'',''/'') yields a leading empty segment; the skip loop at conflict.go:485-492 drops it along with cosmetic doubled-slash artifacts, so absolute and relative paths canonicalize identically, and pathAllowed (internal/hook/pretooluse.go:290-298, caller-supplied tool input) admits /docs/x.md under docs/**. The authoritative semantics are in docs/spec-writeset-admission.tex (merged PR #530): paths are an absoluteness flag plus segments; canonicalization preserves the flag; containment requires flag equality. The spec''s decoupled vaib-fixed model is the reference for correct behavior. Note validateWriteSetEntry (internal/mission/result.go:246-256) already rejects absolute paths on the contract side — only the hook target side is unvalidated; your fix closes the comparison semantics regardless. Implement against the spec, not against the old test expectations.'

@@ -1,0 +1,57 @@
+results:
+    - mission: m-2026-09-21-002
+      round: 1
+      created_at: "2026-09-21T03:10:35Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/mission/store.go
+          added: 15
+          removed: 1
+        - path: internal/mission/store_test.go
+          added: 89
+          removed: 0
+      evidence:
+        - name: go test ./internal/mission/... -run TestStore_Update -v
+          status: pass
+        - name: go test ./internal/mission/... -race -count=1
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Added the terminal-state guard to Store.Update at the point where the
+        on-disk contract is already decoded (onDisk, store.go), refusing when
+        onDisk.Status != StatusOpen with the error 'mission %q is in terminal
+        state %q; updates are accepted only on open missions' -- matching the
+        shape used by AppendResult, AppendReflection, and AdvanceRound (all
+        three read 'mission %q is in terminal state %q; ...'; Close and
+        Abandon use a second, pre-existing 'already in terminal state'
+        variant). The guard checks the on-disk status rather than the
+        caller's proposed status, so a caller cannot bypass it by setting
+        Status back to StatusOpen in its own copy before calling Update --
+        covered by TestStore_Update_CannotReopenClosedMission.
+
+        Call-site audit (grep -rn "\.Update\(" across the repo, excluding
+        _test.go files): zero production callers of mission.Store.Update
+        exist anywhere in the codebase today. The only Update calls
+        currently matching that method live in internal/mission/store_test.go.
+        (Unrelated .Update( hits in internal/mcp/attribute_tools.go,
+        cmd/ethos/adr.go, and cmd/ethos/attribute.go belong to different
+        types -- identity.Store and adr's store -- not mission.Store.) No
+        legitimate non-open caller was found, so the guard needed no special
+        placement or exception; it sits unconditionally right after the
+        on-disk contract is decoded, before any other mutation is applied.
+
+        Regression matrix added to store_test.go: refuse closed
+        (TestStore_Update_RejectsClosedMission), refuse abandoned
+        (TestStore_Update_RejectsAbandonedMission), cannot reopen
+        (TestStore_Update_CannotReopenClosedMission), open-mission happy
+        path intact (TestStore_Update_OpenMissionHappyPath). All four pass,
+        plus the full internal/mission suite and make check.
+
+        Two commits: 9052b9e (guard, internal/mission/store.go) and 87fbe18
+        (tests, internal/mission/store_test.go). No docs/ files touched.
+        internal/mission/conflict.go, lint.go, and internal/hook/subagent_start.go
+        were left untouched, per the write-set restriction for the three
+        concurrent sibling missions.
