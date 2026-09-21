@@ -174,23 +174,23 @@ func lintInvertedTestGap(c *Contract, ws []Warning) []Warning {
 // lintInputsNotInWriteSet warns when an inputs.files path is absent
 // from write_set. This signals the leader may have intended to add
 // the file to write_set but forgot.
+//
+// Coverage is decided by PathContainedBy, the same path-semantic
+// containment primitive the write-set admission path uses (see
+// docs/spec-writeset-admission.tex's 8ady-fixed model). A prior
+// version compared entries as literal strings gated by a
+// trailing-slash guard, so a glob entry like docs/** — which never
+// ends in "/" — short-circuited the guard and never reached the
+// comparison at all: a file it genuinely covers still drew a
+// spurious warning (ethos-8ady).
 func lintInputsNotInWriteSet(c *Contract, ws []Warning) []Warning {
-	set := writeSetIndex(c.WriteSet)
 	for _, f := range c.Inputs.Files {
-		cf := CanonicalPath(f)
-		if cf == "" {
+		if CanonicalPath(f) == "" {
 			continue
 		}
-		if set[cf] {
-			continue
-		}
-		// Check directory coverage. CanonicalPath strips the
-		// trailing slash, so we re-add "/" to enforce a segment
-		// boundary — without it "internal/foo" would match
-		// "internal/foobar/file.go".
 		covered := false
 		for _, w := range c.WriteSet {
-			if strings.HasSuffix(w, "/") && strings.HasPrefix(cf, CanonicalPath(w)+"/") {
+			if PathContainedBy(f, w) {
 				covered = true
 				break
 			}

@@ -173,6 +173,33 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		// ethos-8ady: glob write_set entries must cover
+		// path-semantically, not by literal string comparison.
+		{
+			name: "H5: glob entry covers nested file — no H5 warning",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"docs/audited-delegation.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H5: glob entry covers deeply nested file — no H5 warning",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"docs/a/b.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H5: glob entry does not cover sibling directory — not covered",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"other/audited-delegation.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "other/audited-delegation.md is in inputs.files but not in write_set",
+			wantSev: SeverityInfo,
+		},
 		// Heuristic 6: placeholder evaluator handle
 		{
 			name: "H6: evaluator handle is 'evaluator'",
