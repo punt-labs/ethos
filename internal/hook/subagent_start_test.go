@@ -1012,6 +1012,71 @@ func TestSubagentStart_LoudSkipStaysQuietWithoutOpenMissionEvaluator(t *testing.
 	}
 }
 
+// TestIsEvaluatorOfOpenMission_ListErrorWarnsAndSuppresses is a
+// silent-failure fix-round regression: a missions.List() error used
+// to make isEvaluatorOfOpenMission return false with nothing on
+// stderr, which would suppress the empty-MISSION_ID diagnostic on a
+// genuine store fault with no trace at all -- exactly the failure
+// mode this diagnostic exists to prevent. The function must still
+// never fail the spawn (it returns false, not an error), but the
+// fault itself must be warned.
+func TestIsEvaluatorOfOpenMission_ListErrorWarnsAndSuppresses(t *testing.T) {
+	dir := t.TempDir()
+	// A regular file where the missions directory is expected makes
+	// Store.List's os.ReadDir fail with ENOTDIR, not the ErrNotExist
+	// List already tolerates silently.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "missions"), []byte("not a directory"), 0o600))
+	missions := mission.NewStore(dir)
+
+	var got bool
+	stderrOut := captureStderr(t, func() {
+		got = isEvaluatorOfOpenMission(missions, "djb")
+	})
+
+	assert.False(t, got, "a List error must suppress the diagnostic, not crash or refuse the spawn")
+	assert.Contains(t, stderrOut, "listing missions for the empty-MISSION_ID diagnostic",
+		"a List error must be warned to stderr, not swallowed")
+	assert.Contains(t, stderrOut, "diagnostic suppressed")
+}
+
+// TestSubagentStart_LoudSkipScanWarnsOnLoadErrorButFindsSurvivingMatch
+// is the other half of the same fix-round finding: a missions.Load()
+// error on one sibling mission used to be skipped with nothing on
+// stderr. Worse, since map/directory iteration order is not the
+// mission's own concern here, a corrupt sibling encountered anywhere
+// in the scan must not stop the scan from reaching the mission that
+// actually matches the spawn handle. This test proves both halves at
+// once: the corrupt sibling's Load failure is warned, and the
+// diagnostic still fires for the surviving open mission that is
+// actually the spawn's evaluator.
+func TestSubagentStart_LoudSkipScanWarnsOnLoadErrorButFindsSurvivingMatch(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// Drop a corrupt sibling mission file directly into the missions
+	// directory: Store.List enumerates it, Store.Load fails to decode
+	// it.
+	missionsDir := filepath.Join(missions.Root(), "missions")
+	require.NoError(t, os.MkdirAll(missionsDir, 0o700))
+	corruptPath := filepath.Join(missionsDir, "m-2026-04-08-998.yaml")
+	require.NoError(t, os.WriteFile(corruptPath, []byte("not valid yaml {[}\n"), 0o600))
+
+	var hookErr error
+	stderrOut := captureStderr(t, func() {
+		_, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+	})
+
+	require.NoError(t, hookErr, "an undeclared mission must still skip the gate, not refuse the spawn")
+	assert.Contains(t, stderrOut, `skipping mission "m-2026-04-08-998"`,
+		"the corrupt sibling's Load failure must be warned to stderr, not swallowed")
+	assert.Contains(t, stderrOut, "empty-MISSION_ID diagnostic scan")
+	assert.Contains(t, stderrOut, "evaluator of an open mission",
+		"the corrupt sibling must not suppress the diagnostic for the surviving, actually-matching mission")
+}
+
 // TestSubagentStart_VerifierGateLegacyMissionAllowsSpawn asserts that
 // pre-3.3 missions with an empty Evaluator.Hash do NOT block verifier
 // spawns. They predate the gate; refusing them would force operators

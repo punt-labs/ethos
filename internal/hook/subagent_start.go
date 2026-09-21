@@ -684,18 +684,35 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 // WHICH mission was meant, only whether the handle plausibly needed
 // the gate it is not getting.
 //
-// The scan is O(missions in the store), matching
-// checkWriteSetConflicts' own pattern: List then Load each, tolerating
-// and skipping an ID that fails to load (a corrupt or stale sibling
-// mission must not turn a diagnostic check into a spawn failure).
+// The scan is O(missions in the store): List then Load each. It never
+// fails the spawn -- a store fault here must not turn a diagnostic
+// check into a refusal -- but every fault is warned to stderr, the
+// same channel the rest of this file uses (see the empty-hash warning
+// above, and the drift and walk-error diagnostics elsewhere in this
+// file). A List error suppresses the whole scan, so the caller gets
+// false, but the operator sees why the diagnostic could not run
+// rather than a diagnostic that silently never fires. A Load error on
+// one mission is skipped so a single corrupt or stale sibling does
+// not block the scan of the rest, but that skip is also warned --
+// unlike checkWriteSetConflicts' skip, which this comment does not
+// claim to match, since a silently skipped Load error here would
+// suppress the very diagnostic this function exists to guarantee.
 func isEvaluatorOfOpenMission(missions *mission.Store, agentType string) bool {
 	ids, err := missions.List()
 	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: subagent-start: warning: listing missions for the empty-MISSION_ID diagnostic: %v (diagnostic suppressed)\n",
+			err,
+		)
 		return false
 	}
 	for _, id := range ids {
 		c, err := missions.Load(id)
 		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: subagent-start: warning: skipping mission %q during empty-MISSION_ID diagnostic scan: %v\n",
+				id, err,
+			)
 			continue
 		}
 		if c.Status == mission.StatusOpen && c.Evaluator.Handle == agentType {
