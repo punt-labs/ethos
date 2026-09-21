@@ -200,6 +200,17 @@ func TestLint(t *testing.T) {
 			wantMsg: "other/audited-delegation.md is in inputs.files but not in write_set",
 			wantSev: SeverityInfo,
 		},
+		// ethos-vaib: an absolute inputs.files entry must not match a
+		// relative write_set entry, even when their segments agree.
+		{
+			name: "H5: absolute input file not covered by relative glob entry",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"/docs/audited-delegation.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "/docs/audited-delegation.md is in inputs.files but not in write_set",
+			wantSev: SeverityInfo,
+		},
 		// Heuristic 6: placeholder evaluator handle
 		{
 			name: "H6: evaluator handle is 'evaluator'",
