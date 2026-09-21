@@ -114,13 +114,16 @@ obscure rather than sharpen the model:
     depends on an external \field{RoleLister} and is opt-in (nil
     disables it); it is an identity-system concern, not a
     lifecycle-state concern.
-  \item \textbf{Generic \field{Store.Update}} (store.go:873--932) lets
-    a caller rewrite an arbitrary field of a contract. It is not
+  \item \textbf{Generic \field{Store.Update}} (store.go:878--946) lets
+    a caller rewrite an arbitrary field of an open contract. It is not
     one of the nine named transitions and none of the CLI/MCP surfaces
-    route ordinary lifecycle events through it. It also carries no
-    $\field{status} = \field{stOpen}$ guard at all, unlike every
-    modelled operation --- see the disclosed divergence in
-    \S\ref{sec:ops} and bead \field{ethos-fhns}.
+    route ordinary lifecycle events through it. It now refuses a
+    terminal on-disk mission the same way its six siblings do
+    (ethos-fhns), but a caller can still forge an open mission's
+    \field{Status} directly to a terminal value through it, past
+    \field{Close}'s and \field{Abandon}'s own gates --- see the
+    disclosed divergence in \S\ref{sec:ops} and bead
+    \field{ethos-w1ii}.
   \item \textbf{Pipelines, \field{depends\_on}, delegation-inheritance
     templates, and preconditions} (\field{Contract} fields
     \field{Pipeline}, \field{DependsOn}, \field{Preconditions},
@@ -542,30 +545,47 @@ it again --- see \field{TerminalIsFinal} (\S\ref{sec:theorems}) for
 the precise claim and the one place it is disclosed as narrower than
 the real code.
 
-\textbf{Disclosed divergence: \field{Store.Update} carries no such
-guard.} \field{Store.Update} (store.go:873--932) is the seventh write
-path in this package, and it has no
-$\field{c.Status} \neq \field{StatusOpen}$ check anywhere in its
-body --- unlike every operation named above, it does not refuse a
-closed, failed, escalated, or abandoned contract.
-\field{Contract.Validate} (validate.go:41--97) accepts all five
-\field{Status} values with no additional constraint relating
-\field{Status} to which fields may change, so
-\field{s.validateContract} inside \field{Update}
-(store.go:906--908) does not catch this either: a caller can pass a
-\field{Contract} whose \field{Status} field has been rewritten back to
-\field{"open"} (or to any other value) for an already-terminal
-mission, and \field{Update} will persist it. This is a real gap in the
-implementation, not a simplification in this specification --- filed
-as bead \field{ethos-fhns} for a fix landing separately; this document
-records the divergence rather than modelling around it or silently
-matching a status guard the code does not have. \field{Update} is
-therefore not one of the operations this specification's own
-\field{TerminalIsFinal} claim is a theorem about (\S\ref{sec:theorems}
-restates the claim precisely over the modelled set); it remains a
-Non-goal for the reasons \S\ref{sec:nongoals} already gives (not one
-of the named transitions, no CLI/MCP surface routes ordinary lifecycle
-events through it) with this one exception added to the record.
+\textbf{Disclosed divergence: \field{Store.Update} is asymmetrically
+guarded.} \field{Store.Update} (store.go:878--946) is the seventh
+write path in this package. In the \emph{terminal}$\to$\field{stOpen}
+direction it now carries the same on-disk terminal-state guard as its
+six siblings: \field{onDisk.Status} $\neq$ \field{StatusOpen} refuses
+before any write (store.go:914--916), and the check reads the
+on-disk contract under the per-mission lock, not the caller's
+proposed \field{Status} --- a caller cannot resurrect a closed,
+failed, escalated, or abandoned mission by forging its own copy's
+\field{Status} back to \field{"open"} (ethos-fhns, fixed on this
+branch; pinned by
+\field{TestStore\_Update\_CannotReopenClosedMission},
+store\_test.go:4279).
+
+The narrower divergence that remains: once \field{onDisk.Status} is
+confirmed \field{stOpen}, \field{Update} copies the \emph{entire}
+caller-supplied contract (store.go:917: \field{updated := *c}) and
+passes it to \field{s.validateContract} (store.go:920--922), which
+runs \field{Contract.Validate} (validate.go:41--97) --- accepting any
+of the five \field{Status} values with no constraint tying
+\field{Status} to which \emph{other} fields may change alongside it.
+Neither \field{checkResultGateLocked} nor
+\field{countBlockingDelegations} is ever called from \field{Update}'s
+body, so a caller can set \field{c.Status} directly to
+\field{"closed"}/\field{"failed"}/\field{"escalated"} and forge the
+$\field{stOpen} \to \field{CloseableStatus}$ transition past
+\field{Close}'s result gate (\S\ref{sec:opclose}), or to
+\field{"abandoned"} and forge it past \field{Abandon}'s blocking-
+delegation gate (\S\ref{sec:opabandon}) --- filed as bead
+\field{ethos-w1ii}, a real gap in the implementation, not a
+simplification in this specification. \field{TerminalIsFinal}
+therefore holds for \field{Update} in the
+\emph{terminal}$\to$\field{stOpen} direction; it is the
+$\field{stOpen} \to \emph{terminal}$ direction via \field{Update} that
+remains unguarded, and \field{Update} stays excluded from the
+theorem's operation set (\S\ref{sec:theorems}) for that reason ---
+an asymmetric gap, not a wholesale absence of a guard --- rather than
+for lacking a guard outright. It remains a Non-goal for the reasons
+\S\ref{sec:nongoals} already gives (not one of the named transitions,
+no CLI/MCP surface routes ordinary lifecycle events through it), with
+this exception recorded rather than modelled around.
 
 \subsection{Delegate}
 \label{sec:opdelegate}
@@ -956,13 +976,16 @@ discharged by proof:
   operation set this specification models. DES-072's
   \field{Correct} does not extend this set; \S\ref{sec:des072}
   establishes why it cannot falsify this claim without being modelled
-  at all. The claim is narrower than ``nothing in the real
-  \field{Store} can move a terminal mission again'': \field{Store.Update}
-  (store.go:873--932) carries no $\field{status} = \field{stOpen}$
-  guard and so is excluded from this theorem's operation set rather
-  than being a seventh instance of it --- \S\ref{sec:ops}'s disclosed
-  divergence and bead \field{ethos-fhns} give the real-code gap this
-  theorem does not paper over. \\
+  at all. \field{Store.Update} (store.go:878--946) holds this claim
+  in one direction only: its own on-disk terminal-state guard
+  (store.go:914--916, ethos-fhns) makes
+  \emph{terminal}$\to$\field{stOpen} via \field{Update} exactly as
+  unreachable as it is via every operation in this set, but
+  $\field{stOpen} \to \emph{terminal}$ via \field{Update} remains
+  unguarded (bead \field{ethos-w1ii}) --- \field{Update} is excluded
+  from this theorem's operation set for that one-sided gap, not for
+  lacking a guard outright; \S\ref{sec:ops} gives the full disclosed
+  divergence. \\
 \field{CloseRequiresResult} &
   \field{Close}'s guard $\field{currentRound} \in
   \field{resultRounds}$ is exactly the calculated precondition of

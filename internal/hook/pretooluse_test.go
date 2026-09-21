@@ -425,7 +425,13 @@ func TestSplitAllowlist(t *testing.T) {
 }
 
 func TestPathAllowed(t *testing.T) {
-	entries := []string{"internal/hook/pretooluse.go", "cmd/ethos/", "/abs/contract.yaml"}
+	entries := []string{"internal/hook/pretooluse.go", "cmd/ethos/", "/abs/contract.yaml", "docs/**"}
+	// A fixed, fictional repo root. Deliberately does NOT prefix
+	// "/abs/contract.yaml" or "/docs/x.md" below, so those two rows'
+	// outcomes are decided by the direct absolute-vs-absolute /
+	// absolute-vs-relative comparison, never by the repo-root
+	// resolution this round adds.
+	const repoRoot = "/repo"
 
 	tests := []struct {
 		name   string
@@ -435,6 +441,27 @@ func TestPathAllowed(t *testing.T) {
 		{"exact file match", "internal/hook/pretooluse.go", true},
 		{"under directory", "cmd/ethos/hook.go", true},
 		{"exact directory", "cmd/ethos", true},
+		// Both sides absolute, and NOT under repoRoot: this row PINNED
+		// the ethos-vaib bug before the absoluteness fix, but for the
+		// wrong reason — the pre-fix splitSegments dropped the leading
+		// empty segment on BOTH sides uniformly, so "/abs/contract.yaml"
+		// and "abs/contract.yaml" canonicalized identically regardless
+		// of the entry's own absoluteness, and the match "worked" by
+		// coincidence rather than by comparing absoluteness at all. The
+		// real allowlist legitimately carries an absolute entry here —
+		// verifierAllowlistSplit (subagent_start.go) adds the
+		// verifier's own contract.yaml path as an absolute entry — so
+		// the deliberate post-fix semantics keep this row true: an
+		// absolute target IS admitted by an absolute entry once file
+		// and entry AGREE on absoluteness and their segments match. See
+		// docs/spec-writeset-admission.tex §Containment,
+		// PathContainedByFixed, and pathContainedBy's own doc comment
+		// for why this implementation widens the spec's stricter
+		// "absolute(file) = false" reading. This row is unaffected by
+		// the repo-root resolution this round adds: "/abs/contract.yaml"
+		// is not under repoRoot ("/repo"), so filepath.Rel would reject
+		// it as out-of-repo even if it were tried — the match here comes
+		// entirely from the direct absolute-vs-absolute comparison.
 		{"absolute match", "/abs/contract.yaml", true},
 		{"outside all entries", "internal/mission/store.go", false},
 		{"partial prefix no sep", "cmd/ethosX/hook.go", false},
@@ -444,10 +471,35 @@ func TestPathAllowed(t *testing.T) {
 		{"traversal escapes allowlist", "internal/hook/../../secret.go", false},
 		{"traversal into sibling", "cmd/ethos/../../internal/mission/store.go", false},
 		{"traversal that stays inside", "cmd/ethos/sub/../hook.go", true},
+		// The OUT-OF-REPO case: "/docs/x.md" is absolute but lives
+		// nowhere under repoRoot ("/repo"), so filepath.Rel(repoRoot,
+		// "/docs/x.md") resolves to "../docs/x.md" — rejected by the
+		// leading-".." guard — and no repo-relative candidate is ever
+		// computed for it. It falls back to the direct absolute-vs-
+		// relative comparison, which mission.PathContainedBy already
+		// refuses (ethos-vaib): a relative glob entry must NOT admit an
+		// absolute target, even though the entry's own literal segments
+		// (docs, **) would otherwise match. This row used to be named
+		// as if the bare absoluteness mismatch were the whole story;
+		// with repo-root resolution added, the true root of the
+		// refusal is "outside the repo", not merely "is absolute" — see
+		// the next row for the case where an absolute target inside the
+		// repo root IS admitted.
+		{"out-of-repo absolute target not admitted by relative glob entry (ethos-vaib)", "/docs/x.md", false},
+		// The NEW case this round adds: Claude Code's real Write/Edit
+		// file_path is absolute, and it is normally rooted under the
+		// repo the verifier is working in — not under some unrelated
+		// absolute prefix. "/repo/docs/x.md" resolves, via
+		// filepath.Rel(repoRoot, ...), to the repo-relative form
+		// "docs/x.md", which docs/** legitimately covers. Without this
+		// resolution, EVERY real absolute Write/Edit target would be
+		// refused by every ordinary (relative) write_set entry, which
+		// is the cross-fix seam the absoluteness fix opened.
+		{"repo-root-anchored absolute target admitted by relative glob entry", "/repo/docs/x.md", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, pathAllowed(tt.target, entries))
+			assert.Equal(t, tt.want, pathAllowed(tt.target, entries, repoRoot))
 		})
 	}
 }
@@ -475,7 +527,7 @@ func TestPathAllowed_GlobEntry(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, pathAllowed(tt.target, entries))
+			assert.Equal(t, tt.want, pathAllowed(tt.target, entries, "/repo"))
 		})
 	}
 }
@@ -500,14 +552,157 @@ func TestPathAllowed_GlobDoesNotAdmitTraversal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.False(t, pathAllowed(tt.target, entries),
+			assert.False(t, pathAllowed(tt.target, entries, "/repo"),
 				"%q must not be admitted by any glob entry", tt.target)
 		})
 	}
 
 	// The same entries still admit what they legitimately name.
-	assert.True(t, pathAllowed("internal/hook/notes.go", entries))
-	assert.True(t, pathAllowed("docs/design/adr.md", entries))
+	assert.True(t, pathAllowed("internal/hook/notes.go", entries, "/repo"))
+	assert.True(t, pathAllowed("docs/design/adr.md", entries, "/repo"))
+}
+
+// TestPathAllowed_DriveLetterTargetNotAdmittedByRelativeEntry pins the
+// Windows spelling of ethos-vaib at the enforcement boundary: a
+// caller-supplied tool target rooted at a Windows drive letter
+// ("C:/...", "C:\...") is absolute exactly as a leading-`/` path is,
+// and must not be admitted by a relative write_set/allowlist entry —
+// including a leading-doublestar entry like "**/notes.go", which
+// claims the relative root but not a foreign-OS absolute one.
+// splitSegments only checked for a leading empty split token before
+// this round, so a drive-letter path classified as relative and this
+// exact entry shape admitted it. repoRoot is a POSIX path ("/repo")
+// for every row here, which also pins that repo-root resolution does
+// NOT rescue a drive-letter target against a POSIX repo root:
+// filepath.Rel requires both sides to agree on absoluteness by Go's
+// own (OS-native) rule, and a POSIX-absolute repoRoot and a
+// drive-letter target never agree on that — "resolves only if the
+// repo root is also drive-lettered" is exercised separately below.
+func TestPathAllowed_DriveLetterTargetNotAdmittedByRelativeEntry(t *testing.T) {
+	entries := []string{"docs/**", "**/notes.go"}
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{"drive-letter target under a relative doublestar glob", "C:/docs/x.md"},
+		{"drive-letter target with backslashes", `C:\docs\x.md`},
+		{"drive-letter target matching a leading-doublestar entry's literal name", "C:/anything/notes.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, pathAllowed(tt.target, entries, "/repo"),
+				"%q must not be admitted by a relative entry", tt.target)
+		})
+	}
+
+	// A drive-letter-rooted entry still admits a matching drive-letter-
+	// rooted target by direct absolute-vs-absolute comparison — the
+	// fix requires absoluteness AGREEMENT, not an unconditional refusal
+	// of every absolute target. repoRoot is irrelevant to this
+	// assertion (passed as "/repo" for signature completeness only).
+	assert.True(t, pathAllowed("C:/repo/docs/x.md", []string{"C:/repo/docs/**"}, "/repo"))
+
+	// "resolves only if the repo root is also drive-lettered": when
+	// repoRoot itself carries the same drive-letter prefix, Go's
+	// filepath.Rel treats "C:" as an ordinary path segment on
+	// non-Windows (VolumeName is always empty there), so the two sides
+	// agree on absoluteness by its rule and the resolution succeeds —
+	// a drive-lettered target under a drive-lettered repo root resolves
+	// to a relative form a relative entry can legitimately admit.
+	assert.True(t, pathAllowed("C:/repo/docs/x.md", []string{"docs/**"}, "C:/repo"),
+		"a drive-letter target must resolve against a same-drive-lettered repo root")
+}
+
+// TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal pins the
+// MINOR finding from the re-verification round: the naive idiom
+// !strings.HasPrefix(rel, "..") refuses a filepath.Rel result the
+// instant its first two characters are literal dots, which also
+// catches a legal in-repo name that merely STARTS with two dots
+// ("..config") and never actually escapes repoRoot — that name and a
+// real ".." traversal segment share only their first two bytes. The
+// correct guard is rel == ".." or rel starts with "../"
+// (filepath.Separator-joined), neither of which "..config" satisfies.
+func TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal(t *testing.T) {
+	repoRoot := t.TempDir()
+	target := filepath.Join(repoRoot, "..config")
+	entries := []string{"..config"}
+	assert.True(t, pathAllowed(target, entries, repoRoot),
+		"a dot-dot-PREFIXED in-repo name must not be refused as a traversal escape")
+}
+
+// TestHandlePreToolUse_RepoRootValidation pins the MEDIUM finding from
+// the re-verification round: pathAllowed's repo-relative branch must
+// never resolve against an unmarked directory. allowlistRepoRoot uses
+// resolve.FindRepoRoot (a .git-marker walk), never envRepoRoot's own
+// last-resort bare-os.Getwd() fallback (tierBRepoRoot,
+// pretooluse_dispatch.go) — that fallback is safe for Tier B
+// mission-store resolution (a missing store just fails a subsequent
+// Load, fail-closed) but not here: resolving a target against a
+// directory that is merely SOME subdirectory of the real repo, not
+// the root itself, computes a repo-relative form one level too
+// shallow and lets an ordinary write_set entry admit a file it never
+// authorized — an admit-WIDENING the repo-root-resolution fix must
+// not introduce.
+func TestHandlePreToolUse_RepoRootValidation(t *testing.T) {
+	t.Run("cwd is a repo subdirectory: resolves against the true root, not the subdirectory", func(t *testing.T) {
+		repo := stageRepoRoot(t)
+		sub := filepath.Join(repo, "internal")
+		require.NoError(t, os.MkdirAll(sub, 0o755))
+		require.NoError(t, os.Chdir(sub))
+		t.Cleanup(func() { _ = os.Chdir(repo) })
+
+		t.Setenv("ETHOS_REPO_ROOT", "")
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "docs/**")
+		t.Setenv("MISSION_ID", "")
+
+		// This target resolves to "docs/x.md" (admitted by docs/**) ONLY
+		// if wrongly resolved against the subdirectory `sub`. Resolved
+		// against the true repo root, it is "internal/docs/x.md", which
+		// docs/** does not cover — the correct, pre-fix-equivalent
+		// refusal.
+		target := filepath.Join(sub, "docs", "x.md")
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": target},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
+			"must not admit via resolution against the wrong (subdirectory) base")
+	})
+
+	t.Run("no repo marker anywhere: repo-relative resolution is skipped, not widened", func(t *testing.T) {
+		dir := t.TempDir()
+		orig, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(dir))
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+
+		t.Setenv("ETHOS_REPO_ROOT", "")
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "docs/**")
+		t.Setenv("MISSION_ID", "")
+
+		target := filepath.Join(dir, "docs", "x.md")
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": target},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
+			"an unmarked directory must not be trusted as a repo root")
+	})
 }
 
 // TestHandlePreToolUse_EnvVarFromSubagentStart verifies end-to-end

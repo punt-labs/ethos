@@ -11,6 +11,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.
@@ -122,8 +123,9 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
+	repoRoot := allowlistRepoRoot()
 	entries := splitAllowlist(allowlist)
-	if pathAllowed(target, entries) {
+	if pathAllowed(target, entries, repoRoot) {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
@@ -135,7 +137,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	// applies. This prevents the modify-via-extract_into attack.
 	if extractInto := os.Getenv("ETHOS_VERIFIER_EXTRACT_INTO"); extractInto != "" {
 		eiEntries := splitAllowlist(extractInto)
-		if pathAllowed(target, eiEntries) {
+		if pathAllowed(target, eiEntries, repoRoot) {
 			exists, statErr := targetExists(target)
 			if statErr != nil {
 				// Non-IsNotExist stat failure (EACCES, EIO, ELOOP,
@@ -287,14 +289,99 @@ func splitAllowlist(raw string) []string {
 // declare (ethos-qy7k). The allowlist is built from the write_set, so
 // it must admit exactly what the contract's own containment check
 // admits; a second matcher here would drift.
-func pathAllowed(target string, entries []string) bool {
+//
+// Claude Code's Write/Edit file_path is absolute in production, while
+// a write_set entry is guaranteed relative — validateWriteSetEntry
+// (validate.go:568) rejects an absolute entry outright, so the only
+// absolute allowlist entry that ever occurs is the verifier's own
+// contract.yaml path (verifierAllowlistSplit,
+// subagent_start.go). Comparing the raw absolute target against every
+// entry therefore refuses every ordinary in-repo write outright once
+// mission.PathContainedBy requires absoluteness agreement (ethos-vaib)
+// — an accidental mismatch before that fix, now an explicit rule. So
+// target is ALSO resolved against repoRoot, and both forms are tried:
+// the raw form (which is what matches the one legitimately absolute
+// entry, the contract path) and the repo-relative form (which is what
+// matches an ordinary write_set entry like "docs/**"). The precedent
+// for this two-form comparison is readsContain (preconditions.go),
+// added for the same reason on PR #328 (Copilot finding) — a
+// caller-supplied path and a stored/declared path can disagree on
+// absoluteness for reasons that have nothing to do with which files
+// are actually the same file.
+//
+// filepath.Rel(repoRoot, clean) is used, not manual prefix-stripping:
+// it already rejects a target outside repoRoot the same way
+// readsContain does, and it naturally refuses to resolve a foreign-OS
+// absolute spelling (a Windows drive-letter target like
+// "C:/repo/x.md") against a POSIX repoRoot, because Go's Rel requires
+// both paths to agree on absoluteness by ITS OS's own rule before it
+// will compute anything — exactly the "resolves only if the repo root
+// is also drive-lettered" behavior a real Windows host would need,
+// with no extra branch here to keep in sync with
+// mission.IsAbsolutePath's own (intentionally broader, OS-independent)
+// notion of absolute. A Rel result is rejected when it is exactly
+// ".." or starts with "../" — NOT via a bare HasPrefix(rel, "..") —
+// because the bare form also rejects a legal in-repo name that starts
+// with two literal dots ("/repo/..config" -> rel "..config"), which
+// share only their first two bytes with an escape and are not one.
+//
+// repoRoot is trusted as-is: pathAllowed does no marker validation of
+// its own. It is the caller's job to pass a root confirmed to
+// actually BE the repo root (a .git-marker walk, not a bare cwd) —
+// see allowlistRepoRoot's own doc comment for why that distinction is
+// load-bearing here specifically.
+func pathAllowed(target string, entries []string, repoRoot string) bool {
 	ct := filepath.Clean(target)
+	relTarget := ""
+	if repoRoot != "" {
+		if rel, err := filepath.Rel(repoRoot, ct); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			relTarget = rel
+		}
+	}
 	for _, entry := range entries {
-		if mission.PathContainedBy(ct, filepath.Clean(entry)) {
+		ce := filepath.Clean(entry)
+		if mission.PathContainedBy(ct, ce) {
+			return true
+		}
+		if relTarget != "" && mission.PathContainedBy(relTarget, ce) {
 			return true
 		}
 	}
 	return false
+}
+
+// allowlistRepoRoot returns the repo root pathAllowed's repo-relative
+// resolution branch may trust, or "" when no such root can be
+// validated.
+//
+// This is deliberately NOT envRepoRoot(), whose own last-resort
+// fallback — tierBRepoRoot's bare os.Getwd() (pretooluse_dispatch.go)
+// — exists so Tier B mission-store resolution always has SOME
+// directory to try, even an unmarked one; that fallback is safe there
+// because a missing/wrong store just fails a subsequent Load, fail-
+// closed. It is NOT safe here: pathAllowed's repo-relative branch
+// resolves a target against whatever root it is given and then
+// compares the RESULT against a relative write_set entry. If the hook
+// process's cwd is merely some subdirectory of the repo rather than
+// the repo root itself (a verifier subprocess launched from
+// <repo>/internal, say) and ETHOS_REPO_ROOT is unset, treating that
+// cwd as the root resolves "<repo>/internal/docs/x.md" to "docs/x.md"
+// against the wrong base — one directory too shallow — so a
+// write_set entry like "docs/**" wrongly admits a file it never
+// authorized. Before repo-relative resolution existed, such a target
+// was always denied (right answer, wrong reason); this must not
+// become a NEW way to be admitted.
+//
+// resolve.FindRepoRoot is reused rather than re-deriving the same
+// check: it already honors ETHOS_REPO_ROOT first, then walks upward
+// for the .git marker, and returns "" — never a bare, unmarked cwd —
+// when neither resolves. An empty return here means pathAllowed's
+// repoRoot parameter is "", which its own repoRoot != "" guard
+// already treats as "skip the repo-relative try, raw comparison
+// only" — i.e. the pre-fix behavior, not a new admission.
+func allowlistRepoRoot() string {
+	return resolve.FindRepoRoot()
 }
 
 // tierAAdvice is the one-line suggestion emitted to stderr when an

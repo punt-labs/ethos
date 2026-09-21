@@ -63,7 +63,6 @@ func Lint(c *Contract) []Warning {
 // lintAdjacentTest warns when a .go file in write_set has no adjacent
 // _test.go. Skips files that are themselves test files.
 func lintAdjacentTest(c *Contract, ws []Warning) []Warning {
-	set := writeSetIndex(c.WriteSet)
 	for _, p := range c.WriteSet {
 		if !strings.HasSuffix(p, ".go") {
 			continue
@@ -72,18 +71,12 @@ func lintAdjacentTest(c *Contract, ws []Warning) []Warning {
 			continue
 		}
 		want := strings.TrimSuffix(p, ".go") + "_test.go"
-		if !set[CanonicalPath(want)] {
-			// Also check directory coverage: if the write_set
-			// contains the directory of the test file, the worker
-			// can create it.
-			dir := filepath.Dir(want) + "/"
-			if !set[CanonicalPath(dir)] {
-				ws = append(ws, Warning{
-					Field:    "write_set",
-					Message:  p + " has no adjacent " + filepath.Base(want) + " in write_set",
-					Severity: SeverityWarn,
-				})
-			}
+		if !writeSetContains(c.WriteSet, want) {
+			ws = append(ws, Warning{
+				Field:    "write_set",
+				Message:  p + " has no adjacent " + filepath.Base(want) + " in write_set",
+				Severity: SeverityWarn,
+			})
 		}
 	}
 	return ws
@@ -93,16 +86,13 @@ func lintAdjacentTest(c *Contract, ws []Warning) []Warning {
 // no CHANGELOG.md.
 func lintChangelog(c *Contract, ws []Warning) []Warning {
 	hasCode := false
-	hasCL := false
 	for _, p := range c.WriteSet {
-		cp := CanonicalPath(p)
-		if cp == "CHANGELOG.md" || cp == "changelog.md" {
-			hasCL = true
-		}
 		if isProductionCode(p) {
 			hasCode = true
+			break
 		}
 	}
+	hasCL := writeSetContains(c.WriteSet, "CHANGELOG.md") || writeSetContains(c.WriteSet, "changelog.md")
 	if hasCode && !hasCL {
 		ws = append(ws, Warning{
 			Field:    "write_set",
@@ -127,45 +117,30 @@ func lintReadmeInCriteria(c *Contract, ws []Warning) []Warning {
 	if !mentionsReadme {
 		return ws
 	}
-	set := writeSetIndex(c.WriteSet)
-	if !set["README.md"] && !set["readme.md"] {
-		// Check whether any directory in write_set could contain README.md.
-		hasDir := false
-		for _, p := range c.WriteSet {
-			if strings.HasSuffix(p, "/") {
-				hasDir = true
-				break
-			}
-		}
-		if !hasDir {
-			ws = append(ws, Warning{
-				Field:    "success_criteria",
-				Message:  "criteria mention README but README.md is not in write_set",
-				Severity: SeverityWarn,
-			})
-		}
+	if writeSetContains(c.WriteSet, "README.md") || writeSetContains(c.WriteSet, "readme.md") {
+		return ws
 	}
-	return ws
+	return append(ws, Warning{
+		Field:    "success_criteria",
+		Message:  "criteria mention README but README.md is not in write_set",
+		Severity: SeverityWarn,
+	})
 }
 
 // lintInvertedTestGap warns when write_set contains a _test.go but
 // not the corresponding production .go file.
 func lintInvertedTestGap(c *Contract, ws []Warning) []Warning {
-	set := writeSetIndex(c.WriteSet)
 	for _, p := range c.WriteSet {
 		if !strings.HasSuffix(p, "_test.go") {
 			continue
 		}
 		prod := strings.TrimSuffix(p, "_test.go") + ".go"
-		if !set[CanonicalPath(prod)] {
-			dir := filepath.Dir(prod) + "/"
-			if !set[CanonicalPath(dir)] {
-				ws = append(ws, Warning{
-					Field:    "write_set",
-					Message:  p + " has no corresponding " + filepath.Base(prod) + " in write_set",
-					Severity: SeverityInfo,
-				})
-			}
+		if !writeSetContains(c.WriteSet, prod) {
+			ws = append(ws, Warning{
+				Field:    "write_set",
+				Message:  p + " has no corresponding " + filepath.Base(prod) + " in write_set",
+				Severity: SeverityInfo,
+			})
 		}
 	}
 	return ws
@@ -175,27 +150,11 @@ func lintInvertedTestGap(c *Contract, ws []Warning) []Warning {
 // from write_set. This signals the leader may have intended to add
 // the file to write_set but forgot.
 func lintInputsNotInWriteSet(c *Contract, ws []Warning) []Warning {
-	set := writeSetIndex(c.WriteSet)
 	for _, f := range c.Inputs.Files {
-		cf := CanonicalPath(f)
-		if cf == "" {
+		if CanonicalPath(f) == "" {
 			continue
 		}
-		if set[cf] {
-			continue
-		}
-		// Check directory coverage. CanonicalPath strips the
-		// trailing slash, so we re-add "/" to enforce a segment
-		// boundary — without it "internal/foo" would match
-		// "internal/foobar/file.go".
-		covered := false
-		for _, w := range c.WriteSet {
-			if strings.HasSuffix(w, "/") && strings.HasPrefix(cf, CanonicalPath(w)+"/") {
-				covered = true
-				break
-			}
-		}
-		if !covered {
+		if !writeSetContains(c.WriteSet, f) {
 			ws = append(ws, Warning{
 				Field:    "inputs.files",
 				Message:  f + " is in inputs.files but not in write_set",
@@ -204,6 +163,31 @@ func lintInputsNotInWriteSet(c *Contract, ws []Warning) []Warning {
 		}
 	}
 	return ws
+}
+
+// writeSetContains reports whether file lives inside any entry of
+// write_set, per PathContainedBy's path-semantic containment: exact
+// file matches, directory entries, and glob entries (docs/**) are all
+// consulted through the one primitive the write-set admission path
+// uses (see docs/spec-writeset-admission.tex's 8ady-fixed model).
+//
+// Every write_set coverage fallback in this file used to decide this
+// by literal canonical-string membership instead — comparing an exact
+// path or, at best, a trailing-slash-gated directory prefix, both of
+// which treat a glob entry's segments as literal text rather than a
+// pattern. A glob entry like internal/hook/** authorizes a file under
+// internal/hook/ exactly as a directory entry would, but the literal
+// check never recognized it: internal/hook/foo_test.go still drew a
+// spurious "not in write_set" advisory even though the glob covers it
+// (ethos-8ady, same defect class as H5's fix, now shared by H1, H3,
+// and H4 through this one helper).
+func writeSetContains(writeSet []string, file string) bool {
+	for _, w := range writeSet {
+		if PathContainedBy(file, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // lintEvaluatorRole warns when the evaluator handle looks like a
@@ -230,19 +214,6 @@ func formatHandle(h string) string {
 		return "(empty)"
 	}
 	return `"` + h + `"`
-}
-
-// writeSetIndex builds a set of canonical paths from write_set for
-// O(1) membership checks.
-func writeSetIndex(writeSet []string) map[string]bool {
-	m := make(map[string]bool, len(writeSet))
-	for _, p := range writeSet {
-		cp := CanonicalPath(p)
-		if cp != "" {
-			m[cp] = true
-		}
-	}
-	return m
 }
 
 // repoNamePattern matches owner/repo (e.g. "punt-labs/ethos") or a
@@ -299,8 +270,16 @@ func hasExternalRepoRef(s string, writeSet []string) bool {
 	return false
 }
 
-// isWriteSetPrefix reports whether candidate is a path prefix of any
-// entry in writeSet. Both sides are canonicalized for comparison.
+// isWriteSetPrefix reports whether candidate names a path inside the
+// repo's own write territory rather than an external repo — either
+// because candidate is an ancestor directory of some write_set entry
+// (the literal-prefix check, unaffected by what a glob suffix on that
+// entry denotes), or because a write_set entry's glob covers candidate
+// itself (PathContainedBy, the ethos-8ady containment primitive). A
+// write_set of internal/** covers a context reference to internal/mission
+// even though "internal/mission" is not a literal prefix of the string
+// "internal/**" — the glob only resolves through containment, not
+// string comparison.
 func isWriteSetPrefix(candidate string, writeSet []string) bool {
 	cc := CanonicalPath(candidate)
 	if cc == "" {
@@ -313,7 +292,7 @@ func isWriteSetPrefix(candidate string, writeSet []string) bool {
 			return true
 		}
 	}
-	return false
+	return writeSetContains(writeSet, candidate)
 }
 
 // isDocsOnlyWriteSet reports whether every path in write_set is a

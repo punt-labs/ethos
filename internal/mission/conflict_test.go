@@ -265,6 +265,20 @@ func TestPathsOverlap(t *testing.T) {
 			want: true,
 		},
 		{
+			// A bare `**` entry — ENTRY.rootGlob's own defining case in
+			// docs/spec-writeset-admission.tex (#pattern = 1 and
+			// pattern(1) = wildRestSeg), distinct from "*.go" and
+			// "**/store.go" above, whose root-glob-ness comes from a
+			// glob segment that also carries a literal suffix. Every
+			// existing root-glob row here leaves this single-segment,
+			// no-suffix shape untested; the spec's own decoupled
+			// admission model exercises it, this table did not.
+			name: "bare doublestar entry is a root glob overlapping anything",
+			a:    "**",
+			b:    "internal/mission/store.go",
+			want: true,
+		},
+		{
 			name: "leading glob against an empty entry still matches nothing",
 			a:    "*.go",
 			b:    "",
@@ -549,6 +563,113 @@ func TestPathContainedBy(t *testing.T) {
 			entry: "internal/a[b*",
 			want:  false,
 		},
+		// --- Absoluteness (ethos-vaib, docs/spec-writeset-admission.tex
+		// §Containment, PathContainedByFixed). Before the fix,
+		// splitSegments discarded the leading empty segment an
+		// absolute path's split produces, so "/docs/x.md" and
+		// "docs/x.md" canonicalized to the identical segment list and
+		// the relative glob entry below wrongly admitted the absolute
+		// file.
+		{
+			name:  "an absolute file is not contained by a relative glob entry (ethos-vaib)",
+			file:  "/docs/x.md",
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			name:  "an absolute file is not contained by a relative literal entry",
+			file:  "/internal/mission/store.go",
+			entry: "internal/mission/store.go",
+			want:  false,
+		},
+		{
+			// The real write_set validator (validate.go) rejects an
+			// absolute entry, so this pairing cannot arise from a
+			// contract's own write_set. It CAN arise on the PreToolUse
+			// allowlist: verifierAllowlistSplit
+			// (internal/hook/subagent_start.go) adds the verifier's own
+			// contract.yaml path as an absolute allowlist entry.
+			// PathContainedByFixed's spec predicate states
+			// "absolute(file) = false" because its ENTRY model never
+			// represents an absolute entry; this implementation widens
+			// that to "absolute(file) = absolute(entry)" so an absolute
+			// file can still be contained by an absolute entry that
+			// names it, rather than being refused unconditionally the
+			// moment it is absolute.
+			name:  "an absolute file IS contained by a matching absolute entry",
+			file:  "/abs/contract.yaml",
+			entry: "/abs/contract.yaml",
+			want:  true,
+		},
+		{
+			name:  "a relative file is not contained by an absolute entry",
+			file:  "docs/x.md",
+			entry: "/docs/**",
+			want:  false,
+		},
+		// --- Windows drive-letter absoluteness. A leading empty token
+		// (`/docs/x.md`) is not the only spelling of "absolute" a
+		// caller-supplied tool path can carry — a Windows drive-letter
+		// root ("C:/...", "C:\...") is absolute too, and splitSegments
+		// only checked raw[0]=="" until this round, so a drive-letter
+		// path classified as relative and a leading-glob entry like
+		// `**/notes.go` (segmentsContain's own doc comment cites this
+		// shape as real) contained it — the ethos-vaib admit-
+		// degradation in its Windows spelling.
+		{
+			name:  "a drive-letter file is not contained by a relative glob entry (ethos-vaib, Windows spelling)",
+			file:  "C:/docs/x.md",
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			name:  "a drive-letter file with backslashes is not contained by a relative glob entry",
+			file:  `C:\docs\x.md`,
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			// The exact shape the reviewer's hand trace used: a
+			// leading-doublestar entry, which claims the relative root,
+			// must not also claim a drive-letter-rooted file.
+			name:  "a leading doublestar entry does not contain a drive-letter file",
+			file:  "C:/anything/notes.go",
+			entry: "**/notes.go",
+			want:  false,
+		},
+		{
+			// A bare drive letter with nothing after it: still
+			// absolute, and its one segment ("C:") cannot equal any
+			// relative entry's first segment.
+			name:  "a lone drive letter is absolute and contains nothing a relative entry names",
+			file:  "C:",
+			entry: "C",
+			want:  false,
+		},
+		{
+			name:  "a drive-letter file IS contained by a matching drive-letter entry",
+			file:  "C:/repo/docs/x.md",
+			entry: "C:/repo/docs/**",
+			want:  true,
+		},
+		// --- UNC paths were already correct before this round (a
+		// leading `\\` becomes a leading `//` after backslash
+		// normalization, which is a leading empty token — the same
+		// signal a POSIX absolute path produces); pinned here
+		// explicitly alongside the drive-letter fix so a future change
+		// to the absoluteness check cannot regress this case silently.
+		{
+			name:  "a UNC file is not contained by a relative glob entry",
+			file:  `\\server\share\docs\x.md`,
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			name:  "a UNC file IS contained by a matching UNC entry",
+			file:  `\\server\share\docs\x.md`,
+			entry: `\\server\share\docs\**`,
+			want:  true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -585,6 +706,14 @@ func TestCanonicalPath(t *testing.T) {
 		{name: "nested dots", in: "./.", want: ""},
 		{name: "root slashes", in: "///", want: ""},
 		{name: "multi-segment round-trip", in: "cmd/ethos/mission.go", want: "cmd/ethos/mission.go"},
+		// --- Absoluteness (ethos-vaib). The leading `/` is preserved on
+		// the canonical form rather than dropped, which is what made
+		// CanonicalPath("docs/x.md") and CanonicalPath("/docs/x.md")
+		// collapse to the same string before the fix.
+		{name: "absolute path preserves its leading slash", in: "/docs/x.md", want: "/docs/x.md"},
+		{name: "absolute path with trailing slash", in: "/internal/foo/", want: "/internal/foo"},
+		{name: "absolute path with doubled interior slash", in: "/internal//foo", want: "/internal/foo"},
+		{name: "absolute path with leading whitespace", in: "  /a.txt", want: "/a.txt"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -592,6 +721,19 @@ func TestCanonicalPath(t *testing.T) {
 				"CanonicalPath(%q)", tt.in)
 		})
 	}
+}
+
+// TestCanonicalPath_AbsoluteDistinctFromRelative pins criterion (a) of
+// docs/spec-writeset-admission.tex directly against the exported
+// wrapper: an absolute path and its repo-relative counterpart must
+// canonicalize to different strings. Before the fix they did not —
+// splitSegments dropped the leading empty segment strings.Split
+// produces for an absolute input, so "/docs/x.md" and "docs/x.md"
+// both canonicalized to "docs/x.md", which is exactly how a relative
+// write_set entry like docs/** came to admit an absolute target
+// (ethos-vaib).
+func TestCanonicalPath_AbsoluteDistinctFromRelative(t *testing.T) {
+	assert.NotEqual(t, CanonicalPath("docs/x.md"), CanonicalPath("/docs/x.md"))
 }
 
 // TestCanonicalPath_EquivalenceClass asserts that every member of a

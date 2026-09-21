@@ -69,6 +69,17 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		// ethos-8ady: glob entry covers the adjacent test file exactly
+		// as a directory entry would (reviewer-verified falsifying
+		// case: internal/hook/** authorizing internal/hook/foo_test.go
+		// still drew a spurious advisory before this fix).
+		{
+			name: "H1: glob entry covers adjacent test file — no H1 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/hook/foo.go", "internal/hook/**", "CHANGELOG.md"}
+			},
+			wantMsg: "",
+		},
 		// Heuristic 2: CHANGELOG gap
 		{
 			name: "H2: production code without CHANGELOG",
@@ -91,6 +102,24 @@ func TestLint(t *testing.T) {
 				c.WriteSet = []string{"CHANGELOG.md", "README.md", "config.yaml"}
 			},
 			wantMsg: "",
+		},
+		// ethos-8ady: a glob entry that covers CHANGELOG.md must
+		// silence the warning exactly as an exact match does; a glob
+		// that does not cover it must still warn.
+		{
+			name: "H2: glob entry covers CHANGELOG — no H2 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/lint.go", "internal/mission/lint_test.go", "*.md"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H2: glob entry does not cover CHANGELOG — still warns",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/lint.go", "internal/mission/lint_test.go", "docs/**"}
+			},
+			wantMsg: "CHANGELOG.md",
+			wantSev: SeverityInfo,
 		},
 		// Heuristic 3: README in criteria but not in write_set
 		{
@@ -117,6 +146,16 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		// ethos-8ady: a glob entry that covers README.md must silence
+		// the warning exactly as an exact match does.
+		{
+			name: "H3: criteria mention README, covered by glob entry — no H3 warning",
+			mutate: func(c *Contract) {
+				c.SuccessCriteria = []string{"Update README with new command"}
+				c.WriteSet = append(c.WriteSet, "*.md")
+			},
+			wantMsg: "",
+		},
 		// Heuristic 4: inverted test gap
 		{
 			name: "H4: _test.go without corresponding .go",
@@ -137,6 +176,15 @@ func TestLint(t *testing.T) {
 			name: "H4: directory covers production file — no H4 warning",
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"internal/mission/lint_test.go", "internal/mission/", "CHANGELOG.md"}
+			},
+			wantMsg: "",
+		},
+		// ethos-8ady: glob entry covers the corresponding production
+		// file exactly as a directory entry would.
+		{
+			name: "H4: glob entry covers corresponding production file — no H4 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/hook/foo_test.go", "internal/hook/**", "CHANGELOG.md"}
 			},
 			wantMsg: "",
 		},
@@ -172,6 +220,44 @@ func TestLint(t *testing.T) {
 				c.Inputs.Files = []string{"internal/mission/lint.go"}
 			},
 			wantMsg: "",
+		},
+		// ethos-8ady: glob write_set entries must cover
+		// path-semantically, not by literal string comparison.
+		{
+			name: "H5: glob entry covers nested file — no H5 warning",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"docs/audited-delegation.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H5: glob entry covers deeply nested file — no H5 warning",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"docs/a/b.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H5: glob entry does not cover sibling directory — not covered",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"other/audited-delegation.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "other/audited-delegation.md is in inputs.files but not in write_set",
+			wantSev: SeverityInfo,
+		},
+		// ethos-vaib: an absolute inputs.files entry must not match a
+		// relative write_set entry, even when their segments agree.
+		{
+			name: "H5: absolute input file not covered by relative glob entry",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"/docs/audited-delegation.md"}
+				c.WriteSet = append(c.WriteSet, "docs/**")
+			},
+			wantMsg: "/docs/audited-delegation.md is in inputs.files but not in write_set",
+			wantSev: SeverityInfo,
 		},
 		// Heuristic 6: placeholder evaluator handle
 		{
@@ -260,6 +346,26 @@ func TestLint(t *testing.T) {
 		{
 			name: "H7: context has both file path and real repo ref — H7 fires",
 			mutate: func(c *Contract) {
+				c.Context = "Changes to internal/mission plus punt-labs/biff integration"
+			},
+			wantMsg: "no cross-repo collaboration noted",
+			wantSev: SeverityWarn,
+		},
+		// ethos-8ady: a glob write_set entry covers a context path
+		// exactly as a literal ancestor entry does; a genuinely
+		// foreign reference alongside it must still fire.
+		{
+			name: "H7: context path covered by glob write_set entry — no H7 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/**", "CHANGELOG.md"}
+				c.Context = "Changes to internal/mission linting logic"
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: glob covers one reference but a genuinely foreign repo still warns",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/**", "CHANGELOG.md"}
 				c.Context = "Changes to internal/mission plus punt-labs/biff integration"
 			},
 			wantMsg: "no cross-repo collaboration noted",

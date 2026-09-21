@@ -855,7 +855,12 @@ func (s *Store) decodeAndValidate(data []byte, missionID string) (*Contract, err
 
 // Update writes a mutated contract back to disk under flock. The caller
 // is responsible for any field mutation; Update bumps UpdatedAt and
-// validates before writing.
+// validates before writing. Update refuses a mission whose on-disk
+// status is not open — it operates on live missions only, the same
+// scope Store.Correct's doc comment assumes when it points callers
+// back to Update/Reflect. A caller cannot bypass the guard by setting
+// Status back to "open" in its own copy: the check reads the on-disk
+// status, not the caller's.
 //
 // Update works on a shallow copy of the caller's contract inside the
 // lock so that a mid-method failure (stat, validate, write) leaves the
@@ -899,6 +904,15 @@ func (s *Store) Update(c *Contract) error {
 		onDisk, err := DecodeContractStrict(oldData, c.MissionID)
 		if err != nil {
 			return fmt.Errorf("reading mission %q: %w", c.MissionID, err)
+		}
+		// Refuse to update a mission that is already terminal, for the
+		// same reason AppendResult/AppendReflection/AdvanceRound do:
+		// the on-disk status is checked, not the caller's proposed
+		// status, so a caller cannot use Update to resurrect a closed
+		// or abandoned mission by setting Status back to "open" in its
+		// copy of the contract.
+		if onDisk.Status != StatusOpen {
+			return fmt.Errorf("mission %q is in terminal state %q; updates are accepted only on open missions", c.MissionID, onDisk.Status)
 		}
 		updated := *c
 		updated.WriteSetReleasedAt = onDisk.WriteSetReleasedAt

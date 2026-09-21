@@ -1,0 +1,33 @@
+mission_id: m-2026-09-21-004
+status: closed
+type: implement
+created_at: "2026-09-21T03:05:34Z"
+updated_at: "2026-09-21T03:14:06Z"
+closed_at: "2026-09-21T03:14:06Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-21T03:05:34Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-8ady
+    files:
+        - docs/spec-writeset-admission.tex
+        - internal/mission/lint.go
+    references:
+        - internal/mission/conflict.go
+write_set:
+    - internal/mission/lint.go
+    - internal/mission/lint_test.go
+success_criteria:
+    - 'mission lint''s inputs-not-in-write-set coverage check treats a glob write-set entry path-semantically: inputs.files docs/audited-delegation.md with write_set [docs/**] produces NO spurious advisory (the ethos-8ady failure case). The fix replaces the HasSuffix(w, "/")-gated literal string comparison at lint.go:187-197 with the same containment primitive the admission path uses (PathContainedBy / CanonicalPath), per docs/spec-writeset-admission.tex''s 8ady-fixed model'
+    - 'Regression tests: glob entry covers nested file (docs/** covers docs/a/b.md); directory entry with trailing slash still covers as before; file entry exact-match unchanged; a genuinely uncovered input still warns'
+    - The advisory's wording is unchanged unless the fix requires otherwise; lint remains advisory-only (no new hard failures)
+    - make check passes; go test -race ./internal/mission green
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Bead ethos-8ady. Verified mechanism (review round on PR #530): lint.go:193''s guard is strings.HasSuffix(w, "/"); for docs/** the guard fails, no comparison is attempted, covered stays false, and the advisory fires spuriously. The spec docs/spec-writeset-admission.tex (merged) models both the buggy short-circuit (witnessEntryIsDir leading conjunct) and the fixed path-semantic containment; implement the fixed model. Coordinate note: a sibling mission is concurrently changing internal/mission/conflict.go''s canonicalization to carry absoluteness (ethos-vaib) — use the public containment primitives rather than duplicating their internals, and if your tests interact with in-flight conflict.go changes, rebase your expectations on the primitives'' contracts, not their current bytes. Do not touch conflict.go yourself.'

@@ -1,0 +1,31 @@
+mission_id: m-2026-09-21-002
+status: closed
+type: implement
+created_at: "2026-09-21T03:04:22Z"
+updated_at: "2026-09-21T03:15:12Z"
+closed_at: "2026-09-21T03:15:12Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-09-21T03:04:22Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-fhns
+    files:
+        - internal/mission/store.go
+        - docs/spec-mission-lifecycle.tex
+write_set:
+    - internal/mission/store.go
+    - internal/mission/store_test.go
+success_criteria:
+    - Store.Update (internal/mission/store.go:873-932) refuses a mission whose status is not open, with the same error shape as the sibling guards ('mission %q is in terminal state %q' — compare AppendResult store.go:2891-2893, Close :985-987, Abandon :1341-1346)
+    - 'Regression tests: Update on a closed mission is refused; Update on an abandoned mission is refused; Update cannot rewrite Status back to open; Update on an open mission still works (happy path preserved)'
+    - docs/spec-mission-lifecycle.tex's disclosed-divergence paragraph is NOT edited by this mission (it will be retired in a follow-up once this fix merges) — no docs/ writes
+    - make check passes; no other behavior of Update changes (WriteSetReleasedAt preservation, UpdatedAt bump, validate, event append all as before)
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Bead ethos-fhns, found 2026-09-20 by spec-branch review: Store.Update has no c.Status != StatusOpen refusal, unlike every other mutating operation, and Contract.Validate accepts all five statuses, so Update can resurrect a closed/abandoned mission. The spec docs/spec-mission-lifecycle.tex (merged PR #530) records this as a disclosed divergence in its Operations section — your fix makes the code match the spec''s TerminalIsFinal property. Store.Correct''s doc comment (''refuses an open mission — use Update/Reflect instead'') confirms Update is for open missions. Check whether any existing caller legitimately Updates a non-open mission (grep call sites) before choosing the guard''s position; if one exists, report it in the result rather than silently widening the guard.'

@@ -1,0 +1,9 @@
+id: d-2026-09-21-011
+tier: B
+mission: m-2026-09-21-004
+parent_session: 00f1ab56-8e0a-4c22-8f2c-ed8da8891ca9
+agent_type: bwk
+created_at: "2026-09-21T03:05:43Z"
+closed_at: "2026-09-21T03:14:06Z"
+verdict: pass
+bound_via: active_mission_sidecar_dispatch

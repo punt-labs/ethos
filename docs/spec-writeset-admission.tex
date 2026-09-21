@@ -432,6 +432,67 @@ as a reachable state in \S\ref{sec:validation-8ady}, not restated
 here as a third schema, to avoid presenting the same
 \field{ethos-8ady} contrast twice.
 
+\subsection{Implementation note: the allowlist's one absolute entry}
+\label{sec:implnote}
+
+The merged implementation of \field{pathContainedBy}
+(conflict.go:367--410, PR \#530) widens this document's
+\field{absolute = zfalse} conjunct to flag equality,
+\field{absolute(file) = absolute(entry)}. \field{pathContainedBy} is
+called not only with validator-checked \field{write\_set}/
+\field{extract\_into} entries --- always relative, which is why
+\field{ENTRY} (\S\ref{sec:state}) carries no \field{absolute} field
+at all --- but also with the PreToolUse verifier allowlist's entries,
+and that allowlist legitimately contains one absolute path: the
+verifier's own \field{contract.yaml}, appended by
+\field{verifierAllowlistSplit} (internal/hook/subagent\_start.go:457--489)
+so a verifier subagent can \field{Write}/\field{Edit} the contract
+governing it (the DES-069 self-audit flow). Refusing containment
+whenever \field{file} is absolute, unconditionally, would refuse that
+legitimate write along with the \field{ethos-vaib} mismatch this
+document exists to close.
+
+Nothing about \field{ENTRY}'s own scope changed: it still models only
+validator-checked write-set entries, validate.go:562--568 still
+rejects an absolute one, and every value \field{ENTRY} represents
+therefore has \field{absolute} definitionally \field{zfalse}. For
+every such entry, flag equality and this document's stricter
+\field{absolute = zfalse} are the same predicate:
+$\field{absolute(entry)} = \field{zfalse}$ makes
+$\field{absolute(file)} = \field{absolute(entry)}$ collapse to
+$\field{absolute(file)} = \field{zfalse}$. \field{PathContainedByFixed}
+as given above is therefore not divergent from the merged
+implementation --- it is the implementation's own rule, specialized to
+the one operand class (\field{ENTRY}) this document models, and the
+code's own comment says as much: ``\emph{The spec's own fixed
+predicate states this as ``absolute(file) = false'', because its
+ENTRY model represents only validator-checked write\_set entries,
+which are always relative}'' (conflict.go:377--379).
+\field{ethos-vaib}'s property --- a relative entry never contains an
+absolute file --- is preserved under either reading: a relative entry
+has \field{absolute(entry) = zfalse}, and flag equality then forces
+\field{absolute(file) = zfalse} too, exactly as the strict reading
+already required.
+
+The strict reading was not merely widened for symmetry; the
+alternative was considered and rejected. Keeping
+\field{absolute = zfalse} unconditional in the implementation would
+refuse every absolute-file case regardless of the entry, breaking a
+verifier's ability to write its own contract --- the allowlist's one
+absolute entry is there by design, not an oversight the strict rule
+happens to catch. Pinned by \field{conflict\_test.go}'s ``\emph{an
+absolute file IS contained by a matching absolute entry}''
+(conflict\_test.go:599) and \field{pretooluse\_test.go}'s ``\emph{absolute
+match}'' row (pretooluse\_test.go:455).
+
+This is a prose-only amendment: no schema in this document changed,
+so none of \S\ref{sec:probrun}'s recorded ProB counts are affected.
+\field{ethos-vaib}'s own decoupled demonstration
+(\S\ref{sec:validation-vaib}) already used a fixed, always-relative
+\field{witnessPattern} --- exactly the \field{ENTRY} case this note
+describes --- so its deadlock and clean-run results stand as
+recorded.
+
 % ===================================================================
 \section{Write-Set Admission}
 \label{sec:admission}

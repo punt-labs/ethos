@@ -1,0 +1,34 @@
+mission_id: m-2026-09-21-005
+status: closed
+type: implement
+created_at: "2026-09-21T03:06:09Z"
+updated_at: "2026-09-21T03:15:52Z"
+closed_at: "2026-09-21T03:15:52Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: mdm
+    pinned_at: "2026-09-21T03:06:09Z"
+    hash: a532fcdb152c76185524a96d4ff9a1860ed24808a9e998bfb0a949ebb732c173
+inputs:
+    ticket: ethos-yf6n
+    files:
+        - docs/spec-hook-gates.tex
+        - internal/hook/subagent_start.go
+    references:
+        - internal/hook/subagent_start_test.go
+        - internal/hook/pretooluse.go
+write_set:
+    - internal/hook/subagent_start.go
+    - internal/hook/subagent_start_test.go
+success_criteria:
+    - The empty-MISSION_ID skip in checkVerifierHash (internal/hook/subagent_start.go:599-605) emits a one-line stderr diagnostic before returning, matching the sibling empty-hash skip's loud pattern (:624-635). GATING BEHAVIOR IS UNCHANGED — bead ethos-yf6n is triaged DO NOT FIX AS PROPOSED; this mission delivers the loud-skip variant docs/spec-hook-gates.tex proved makes the silent-disabled state unreachable, diagnostics only
+    - 'The diagnostic names the consequence and the indistinguishable causes per the spec: verifier gate and ETHOS_VERIFIER_ALLOWLIST both inactive for this spawn; MISSION_ID absent (Tier A ad-hoc spawn, PreToolUse mis-dispatch, or PreToolUse not installed — not distinguishable here)'
+    - 'Regression test: checkVerifierHash (or the HandleSubagentStart path) with empty MISSION_ID while an open mission''s evaluator handle matches the spawn — asserts the skip occurs AND the diagnostic is emitted; a second case with empty MISSION_ID and no matching evaluator asserts the skip stays quiet or is acceptably loud (decide per the spec''s NotAVerifier operation and document the choice)'
+    - All 26 existing verifier-gate tests still pass unchanged; make check green
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Bead ethos-yf6n. The mute skip is the only silent one in checkVerifierHash; because ETHOS_VERIFIER_ALLOWLIST is the sole input to the PreToolUse write gate (pretooluse.go:110-113 allows immediately when empty), a MISSION_ID propagation failure disables write-set enforcement and the frozen-evaluator gate together with no trace. docs/spec-hook-gates.tex (merged PR #530) models this exactly: MuteSkip reaches silent-disabled; LoudSkip (same gating decision, mandatory diagnostic) makes it unreachable; the AbsenceCause free type proves the three causes are indistinguishable at the gate — your diagnostic must not pretend otherwise. Note: to emit the diagnostic only when it matters, you may need a cheap check for whether the spawn handle is any open mission''s evaluator — keep it O(open missions) at most and avoid reintroducing the ethos-z69l handle-misbinding (the diagnostic may reference the possibility, but the gate must still bind by declared mission only). A sibling mission is editing internal/hook/pretooluse*.go — do not touch those files.'

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Write-set enforcement no longer admits an absolute path under a
+  relative entry.** Path canonicalization preserves the absolute/relative
+  distinction end to end — `splitSegments` carries an absoluteness flag
+  computed before the empty-segment filter, `CanonicalPath("/docs/x.md")`
+  differs from `CanonicalPath("docs/x.md")`, and containment requires the
+  two sides to agree — so the PreToolUse allowlist refuses `/docs/x.md`
+  against `docs/**` instead of treating them as the same file
+  (ethos-vaib). The verifier's own absolute contract-path allowlist entry
+  keeps matching. Implemented against `docs/spec-writeset-admission.tex`.
+- **`Store.Update` refuses terminal missions.** The one mutating
+  operation without a terminal-state guard could rewrite a closed or
+  abandoned contract's status back to open; it now refuses with the same
+  error shape as its siblings, and a forged caller-side status cannot
+  resurrect a mission (ethos-fhns). The remaining sibling gap — Update
+  forging open→closed past Close's result gate — is tracked as
+  ethos-w1ii.
+- **`ethos mission lint` no longer flags files a glob write-set entry
+  covers.** The inputs-coverage heuristic compared entries as literal
+  strings behind a trailing-slash guard, so `docs/**` never covered
+  anything; it now uses the same path-semantic containment primitive as
+  write-set admission (ethos-8ady).
+- **A verifier spawn that loses its MISSION_ID is loud now.** The
+  SubagentStart gate's empty-MISSION_ID skip emits a one-line diagnostic
+  when the spawn handle is an open mission's evaluator, naming the two
+  enforcement mechanisms left inactive and the three indistinguishable
+  causes; a store fault during the check degrades to an explicit
+  "cannot determine" variant, never to silence. The diagnostic is
+  delivered where it can be seen — the hook's `systemMessage` and the
+  spawn's own context, not just stderr (which the hook scripts redirect
+  into `hook-errors.log`). Gating behavior is unchanged per
+  ethos-yf6n's triage. Implemented against `docs/spec-hook-gates.tex`
+  and verified live through a real subagent spawn.
+
 ### Added
 
 - **Three new Z specifications extend formal coverage to the subsystems

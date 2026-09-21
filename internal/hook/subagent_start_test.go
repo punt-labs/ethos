@@ -924,6 +924,290 @@ func TestSubagentStart_VerifierGateNoOpForClosedMission(t *testing.T) {
 	require.NoError(t, err, "closed mission must not block verifier spawn")
 }
 
+// TestSubagentStart_LoudSkipDiagnosticForOpenMissionEvaluator is the
+// ethos-yf6n regression. docs/spec-hook-gates.tex (merged PR #530)
+// proves that checkVerifierHash's empty-declaredMissionID branch,
+// left mute, reaches a silent-disabled state whenever the spawn
+// handle is, in fact, the evaluator of an open mission: the frozen-
+// evaluator gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement
+// are both inactive for the spawn with nothing to show it. Bead
+// ethos-yf6n is triaged DO NOT FIX AS PROPOSED — this asserts only
+// the diagnostic. The spawn must still be allowed through exactly as
+// before (gating is unchanged).
+//
+// The diagnostic must reach the OPERATOR, not just stderr: every hook
+// script this plugin ships redirects the subprocess's stderr into a
+// per-operator, unrotated log file nothing reads
+// (plugin/hooks/subagent-start.sh), so stderr alone is, in
+// deployment, silent. The session-visible channels are the hook's
+// JSON output: hookSpecificOutput.additionalContext (so the spawned
+// subagent itself sees enforcement is inactive) and the top-level
+// SystemMessage (so the operator sees it in the transcript,
+// independent of additionalContext). Stderr is asserted too because
+// it still carries the same text for forensics.
+func TestSubagentStart_LoudSkipDiagnosticForOpenMissionEvaluator(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	var out string
+	var hookErr error
+	stderrOut := captureStderr(t, func() {
+		out, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+	})
+
+	require.NoError(t, hookErr, "an undeclared mission must still skip the gate, not refuse the spawn")
+	require.NotEmpty(t, out, "a diagnostic must produce JSON output, not silence")
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.NotContains(t, result.HookSpecificOutput.AdditionalContext, "Verifier context",
+		"an undeclared mission spawn must not receive the isolation block")
+
+	for _, channel := range []struct {
+		name, text string
+	}{
+		{"stderr", stderrOut},
+		{"additionalContext", result.HookSpecificOutput.AdditionalContext},
+		{"SystemMessage", result.SystemMessage},
+	} {
+		assert.Contains(t, channel.text, `"djb"`, "%s must name the handle", channel.name)
+		assert.Contains(t, channel.text, "evaluator of an open mission",
+			"%s must state the premise that makes the consequence matter", channel.name)
+		assert.Contains(t, channel.text, "verifier hash gate", "%s must name the disabled gate", channel.name)
+		assert.Contains(t, channel.text, "ETHOS_VERIFIER_ALLOWLIST",
+			"%s must name the disabled write-set enforcement", channel.name)
+		assert.Contains(t, channel.text, "not distinguishable",
+			"%s must not claim a specific cause -- the spec's AbsenceCause proves the three causes are indistinguishable at this gate", channel.name)
+	}
+}
+
+// TestSubagentStart_LoudSkipDiagnosticEmittedWithNoPersona closes the
+// gap this delivery-channel round found: previously, when no persona
+// resolved for agentType and there was no verifier isolation block,
+// HandleSubagentStartWithDeps emitted no JSON at all -- a diagnostic
+// with nowhere to go. It uses a mission-store identity (feeding the
+// hash gate, via hash's own captured store reference) that differs
+// from the session's persona-resolution identity store (deliberately
+// empty here), so matched=true and persona=="" hold simultaneously --
+// a realistic gap when a mission's evaluator identity is not resolvable
+// in the spawning installation.
+func TestSubagentStart_LoudSkipDiagnosticEmittedWithNoPersona(t *testing.T) {
+	_, _, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// A separate, empty identity store stands in for deps.Identities:
+	// "djb" resolves to no persona here, even though the store baked
+	// into hash (via setupVerifierTest) has it.
+	noPersonaIdentities := identity.NewStore(t.TempDir())
+
+	var out string
+	var hookErr error
+	captureStderr(t, func() {
+		out, hookErr = runHookForVerifier(t, noPersonaIdentities, sessions, missions, hash, "djb", "")
+	})
+
+	require.NoError(t, hookErr)
+	require.NotEmpty(t, out, "a diagnostic with no persona and no verifier block must still emit JSON")
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Equal(t, "SubagentStart", result.HookSpecificOutput.HookEventName)
+	assert.Contains(t, result.HookSpecificOutput.AdditionalContext, "evaluator of an open mission",
+		"additionalContext must carry the diagnostic even with no persona block to accompany it")
+	assert.Contains(t, result.SystemMessage, "evaluator of an open mission",
+		"SystemMessage must carry the diagnostic so the operator sees it in the transcript")
+}
+
+// TestSubagentStart_LoudSkipStaysQuietWithoutOpenMissionEvaluator
+// covers the spec's NotAVerifier-adjacent quiet branches: an empty
+// declaredMissionID produces no diagnostic when the spawn handle is
+// not the evaluator of any open mission, so an ordinary ad-hoc spawn
+// -- no mission work in flight for this handle at all -- does not log
+// on every subagent launch.
+func TestSubagentStart_LoudSkipStaysQuietWithoutOpenMissionEvaluator(t *testing.T) {
+	tests := []struct {
+		name string
+		seed func(t *testing.T, idStore *identity.Store, missions *mission.Store, hash mission.HashSources)
+	}{
+		{
+			name: "no missions in the store at all",
+			seed: func(t *testing.T, idStore *identity.Store, missions *mission.Store, hash mission.HashSources) {},
+		},
+		{
+			name: "an open mission exists but names a different evaluator",
+			seed: func(t *testing.T, idStore *identity.Store, missions *mission.Store, hash mission.HashSources) {
+				require.NoError(t, idStore.Save(&identity.Identity{
+					Name:         "Ada B",
+					Handle:       "adb",
+					Kind:         "agent",
+					Personality:  "bernstein",
+					WritingStyle: "bernstein-prose",
+					Talents:      []string{"security"},
+				}))
+				c := validVerifierContract("adb")
+				require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+				require.NoError(t, missions.Create(&c))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+			tt.seed(t, idStore, missions, hash)
+
+			var out string
+			var hookErr error
+			stderrOut := captureStderr(t, func() {
+				out, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+			})
+
+			require.NoError(t, hookErr)
+			assert.Empty(t, stderrOut,
+				"no diagnostic when the spawn handle is not any open mission's evaluator")
+
+			// "djb" has an identity (setupVerifierTest seeds it), so the
+			// clean-scan quiet case still emits JSON for the ordinary
+			// persona block -- SystemMessage must simply be absent from
+			// it.
+			if out != "" {
+				var result SubagentStartResult
+				require.NoError(t, json.Unmarshal([]byte(out), &result))
+				assert.Empty(t, result.SystemMessage,
+					"no SystemMessage when the spawn handle is not any open mission's evaluator")
+			}
+		})
+	}
+}
+
+// TestIsEvaluatorOfOpenMission_ListErrorWarnsAndSuppresses is a
+// silent-failure fix-round regression: a missions.List() error used
+// to make isEvaluatorOfOpenMission return false with nothing on
+// stderr, which would suppress the empty-MISSION_ID diagnostic on a
+// genuine store fault with no trace at all -- exactly the failure
+// mode this diagnostic exists to prevent. The function must still
+// never fail the spawn (matched=false, not an error), but the fault
+// itself must be warned AND reported back via hadError so the caller
+// can tell this apart from a clean scan that simply found no match
+// (TestSubagentStart_LoudSkipUncertaintyDiagnosticWhenMatchingMissionFailsToLoad
+// exercises the caller's degrade-to-uncertainty behavior on hadError).
+func TestIsEvaluatorOfOpenMission_ListErrorWarnsAndSuppresses(t *testing.T) {
+	dir := t.TempDir()
+	// A regular file where the missions directory is expected makes
+	// Store.List's os.ReadDir fail with ENOTDIR, not the ErrNotExist
+	// List already tolerates silently.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "missions"), []byte("not a directory"), 0o600))
+	missions := mission.NewStore(dir)
+
+	var matched, hadError bool
+	stderrOut := captureStderr(t, func() {
+		matched, hadError = isEvaluatorOfOpenMission(missions, "djb")
+	})
+
+	assert.False(t, matched, "a List error must not fabricate a match")
+	assert.True(t, hadError, "a List error must be reported back, not collapsed into a clean no-match")
+	assert.Contains(t, stderrOut, "listing missions for the empty-MISSION_ID diagnostic",
+		"a List error must be warned to stderr, not swallowed")
+}
+
+// TestSubagentStart_LoudSkipScanWarnsOnLoadErrorButFindsSurvivingMatch
+// is the other half of the same fix-round finding: a missions.Load()
+// error on one sibling mission used to be skipped with nothing on
+// stderr. Worse, since map/directory iteration order is not the
+// mission's own concern here, a corrupt sibling encountered anywhere
+// in the scan must not stop the scan from reaching the mission that
+// actually matches the spawn handle. This test proves both halves at
+// once: the corrupt sibling's Load failure is warned, and the
+// diagnostic still fires for the surviving open mission that is
+// actually the spawn's evaluator.
+func TestSubagentStart_LoudSkipScanWarnsOnLoadErrorButFindsSurvivingMatch(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// Drop a corrupt sibling mission file directly into the missions
+	// directory: Store.List enumerates it, Store.Load fails to decode
+	// it.
+	missionsDir := filepath.Join(missions.Root(), "missions")
+	require.NoError(t, os.MkdirAll(missionsDir, 0o700))
+	corruptPath := filepath.Join(missionsDir, "m-2026-04-08-998.yaml")
+	require.NoError(t, os.WriteFile(corruptPath, []byte("not valid yaml {[}\n"), 0o600))
+
+	var hookErr error
+	stderrOut := captureStderr(t, func() {
+		_, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+	})
+
+	require.NoError(t, hookErr, "an undeclared mission must still skip the gate, not refuse the spawn")
+	assert.Contains(t, stderrOut, `skipping mission "m-2026-04-08-998"`,
+		"the corrupt sibling's Load failure must be warned to stderr, not swallowed")
+	assert.Contains(t, stderrOut, "empty-MISSION_ID diagnostic scan")
+	assert.Contains(t, stderrOut, "evaluator of an open mission",
+		"the corrupt sibling must not suppress the diagnostic for the surviving, actually-matching mission")
+}
+
+// TestSubagentStart_LoudSkipUncertaintyDiagnosticWhenMatchingMissionFailsToLoad
+// is the invariant reviewer's sharpened HIGH: the spec's LoudSkip is
+// unconditional precisely so no fallible guard can fail to fire, and
+// isEvaluatorOfOpenMission's scan IS fallible. The constructible bad
+// case is an open mission that names the spawn handle as evaluator
+// but whose contract fails strict decode (e.g. version skew) --
+// Store.Load skips it, and a scan that only ever reported "matched"
+// would return false with nothing further to say, silently reaching
+// the exact state the spec proves unreachable: a genuine match hidden
+// by an unrelated failure, and no trace of either. The fix: a scan
+// that hits any error and finds no match degrades to an uncertainty
+// diagnostic instead of falling silent.
+func TestSubagentStart_LoudSkipUncertaintyDiagnosticWhenMatchingMissionFailsToLoad(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// The only mission in the store is corrupt -- Store.List
+	// enumerates it, Store.Load fails to decode it. Its intended
+	// evaluator cannot be inspected (that is the point: the
+	// corruption hides it), so this is exactly the case where a
+	// clean-scan "no match" verdict would be a false negative.
+	missionsDir := filepath.Join(missions.Root(), "missions")
+	require.NoError(t, os.MkdirAll(missionsDir, 0o700))
+	corruptPath := filepath.Join(missionsDir, "m-2026-04-08-997.yaml")
+	require.NoError(t, os.WriteFile(corruptPath, []byte("not valid yaml {[}\n"), 0o600))
+
+	var out string
+	var hookErr error
+	stderrOut := captureStderr(t, func() {
+		out, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+	})
+
+	require.NoError(t, hookErr, "an undeclared mission must still skip the gate, not refuse the spawn")
+	assert.Contains(t, stderrOut, `skipping mission "m-2026-04-08-997"`,
+		"the corrupt mission's Load failure must be warned to stderr, not swallowed")
+
+	require.NotEmpty(t, out, "an uncertainty diagnostic must produce JSON output, not silence")
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	for _, channel := range []struct {
+		name, text string
+	}{
+		{"stderr", stderrOut},
+		{"additionalContext", result.HookSpecificOutput.AdditionalContext},
+		{"SystemMessage", result.SystemMessage},
+	} {
+		assert.Contains(t, channel.text, "cannot determine whether",
+			"%s: a scan that hit an error and found no match must degrade to an uncertainty diagnostic, not fall silent", channel.name)
+		assert.Contains(t, channel.text, `"djb"`, "%s: the uncertainty diagnostic must name the handle", channel.name)
+		assert.NotContains(t, channel.text, "evaluator of an open mission",
+			"%s: the scan never confirmed a match, so it must not claim one", channel.name)
+	}
+}
+
 // TestSubagentStart_VerifierGateLegacyMissionAllowsSpawn asserts that
 // pre-3.3 missions with an empty Evaluator.Hash do NOT block verifier
 // spawns. They predate the gate; refusing them would force operators
