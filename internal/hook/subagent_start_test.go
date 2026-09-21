@@ -924,6 +924,94 @@ func TestSubagentStart_VerifierGateNoOpForClosedMission(t *testing.T) {
 	require.NoError(t, err, "closed mission must not block verifier spawn")
 }
 
+// TestSubagentStart_LoudSkipDiagnosticForOpenMissionEvaluator is the
+// ethos-yf6n regression. docs/spec-hook-gates.tex (merged PR #530)
+// proves that checkVerifierHash's empty-declaredMissionID branch,
+// left mute, reaches a silent-disabled state whenever the spawn
+// handle is, in fact, the evaluator of an open mission: the frozen-
+// evaluator gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement
+// are both inactive for the spawn with nothing on stderr to show it.
+// Bead ethos-yf6n is triaged DO NOT FIX AS PROPOSED — this asserts
+// only the diagnostic. The spawn must still be allowed through
+// exactly as before (gating is unchanged); the one-line stderr
+// warning is new.
+func TestSubagentStart_LoudSkipDiagnosticForOpenMissionEvaluator(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	var out string
+	var hookErr error
+	stderrOut := captureStderr(t, func() {
+		out, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+	})
+
+	require.NoError(t, hookErr, "an undeclared mission must still skip the gate, not refuse the spawn")
+	assert.NotContains(t, out, "Verifier context",
+		"an undeclared mission spawn must not receive the isolation block")
+
+	assert.Contains(t, stderrOut, `"djb"`, "diagnostic must name the handle")
+	assert.Contains(t, stderrOut, "evaluator of an open mission",
+		"diagnostic must state the premise that makes the consequence matter")
+	assert.Contains(t, stderrOut, "verifier hash gate", "diagnostic must name the disabled gate")
+	assert.Contains(t, stderrOut, "ETHOS_VERIFIER_ALLOWLIST",
+		"diagnostic must name the disabled write-set enforcement")
+	assert.Contains(t, stderrOut, "not distinguishable",
+		"diagnostic must not claim a specific cause -- the spec's AbsenceCause proves the three causes are indistinguishable at this gate")
+}
+
+// TestSubagentStart_LoudSkipStaysQuietWithoutOpenMissionEvaluator
+// covers the spec's NotAVerifier-adjacent quiet branches: an empty
+// declaredMissionID produces no diagnostic when the spawn handle is
+// not the evaluator of any open mission, so an ordinary ad-hoc spawn
+// -- no mission work in flight for this handle at all -- does not log
+// on every subagent launch.
+func TestSubagentStart_LoudSkipStaysQuietWithoutOpenMissionEvaluator(t *testing.T) {
+	tests := []struct {
+		name string
+		seed func(t *testing.T, idStore *identity.Store, missions *mission.Store, hash mission.HashSources)
+	}{
+		{
+			name: "no missions in the store at all",
+			seed: func(t *testing.T, idStore *identity.Store, missions *mission.Store, hash mission.HashSources) {},
+		},
+		{
+			name: "an open mission exists but names a different evaluator",
+			seed: func(t *testing.T, idStore *identity.Store, missions *mission.Store, hash mission.HashSources) {
+				require.NoError(t, idStore.Save(&identity.Identity{
+					Name:         "Ada B",
+					Handle:       "adb",
+					Kind:         "agent",
+					Personality:  "bernstein",
+					WritingStyle: "bernstein-prose",
+					Talents:      []string{"security"},
+				}))
+				c := validVerifierContract("adb")
+				require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+				require.NoError(t, missions.Create(&c))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+			tt.seed(t, idStore, missions, hash)
+
+			var hookErr error
+			stderrOut := captureStderr(t, func() {
+				_, hookErr = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", "")
+			})
+
+			require.NoError(t, hookErr)
+			assert.Empty(t, stderrOut,
+				"no diagnostic when the spawn handle is not any open mission's evaluator")
+		})
+	}
+}
+
 // TestSubagentStart_VerifierGateLegacyMissionAllowsSpawn asserts that
 // pre-3.3 missions with an empty Evaluator.Hash do NOT block verifier
 // spawns. They predate the gate; refusing them would force operators
