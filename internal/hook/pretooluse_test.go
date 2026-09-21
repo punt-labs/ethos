@@ -535,6 +535,40 @@ func TestPathAllowed_GlobDoesNotAdmitTraversal(t *testing.T) {
 	assert.True(t, pathAllowed("docs/design/adr.md", entries))
 }
 
+// TestPathAllowed_DriveLetterTargetNotAdmittedByRelativeEntry pins the
+// Windows spelling of ethos-vaib at the enforcement boundary: a
+// caller-supplied tool target rooted at a Windows drive letter
+// ("C:/...", "C:\...") is absolute exactly as a leading-`/` path is,
+// and must not be admitted by a relative write_set/allowlist entry —
+// including a leading-doublestar entry like "**/notes.go", which
+// claims the relative root but not a foreign-OS absolute one.
+// splitSegments only checked for a leading empty split token before
+// this round, so a drive-letter path classified as relative and this
+// exact entry shape admitted it.
+func TestPathAllowed_DriveLetterTargetNotAdmittedByRelativeEntry(t *testing.T) {
+	entries := []string{"docs/**", "**/notes.go"}
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{"drive-letter target under a relative doublestar glob", "C:/docs/x.md"},
+		{"drive-letter target with backslashes", `C:\docs\x.md`},
+		{"drive-letter target matching a leading-doublestar entry's literal name", "C:/anything/notes.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, pathAllowed(tt.target, entries),
+				"%q must not be admitted by a relative entry", tt.target)
+		})
+	}
+
+	// A drive-letter-rooted entry still admits a matching drive-letter-
+	// rooted target — the fix requires absoluteness AGREEMENT, not an
+	// unconditional refusal of every absolute target.
+	assert.True(t, pathAllowed("C:/repo/docs/x.md", []string{"C:/repo/docs/**"}))
+}
+
 // TestHandlePreToolUse_EnvVarFromSubagentStart verifies end-to-end
 // that the env var format produced by buildVerifierAllowlistEnv is
 // correctly consumed by HandlePreToolUse.

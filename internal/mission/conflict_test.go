@@ -607,6 +607,69 @@ func TestPathContainedBy(t *testing.T) {
 			entry: "/docs/**",
 			want:  false,
 		},
+		// --- Windows drive-letter absoluteness. A leading empty token
+		// (`/docs/x.md`) is not the only spelling of "absolute" a
+		// caller-supplied tool path can carry — a Windows drive-letter
+		// root ("C:/...", "C:\...") is absolute too, and splitSegments
+		// only checked raw[0]=="" until this round, so a drive-letter
+		// path classified as relative and a leading-glob entry like
+		// `**/notes.go` (segmentsContain's own doc comment cites this
+		// shape as real) contained it — the ethos-vaib admit-
+		// degradation in its Windows spelling.
+		{
+			name:  "a drive-letter file is not contained by a relative glob entry (ethos-vaib, Windows spelling)",
+			file:  "C:/docs/x.md",
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			name:  "a drive-letter file with backslashes is not contained by a relative glob entry",
+			file:  `C:\docs\x.md`,
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			// The exact shape the reviewer's hand trace used: a
+			// leading-doublestar entry, which claims the relative root,
+			// must not also claim a drive-letter-rooted file.
+			name:  "a leading doublestar entry does not contain a drive-letter file",
+			file:  "C:/anything/notes.go",
+			entry: "**/notes.go",
+			want:  false,
+		},
+		{
+			// A bare drive letter with nothing after it: still
+			// absolute, and its one segment ("C:") cannot equal any
+			// relative entry's first segment.
+			name:  "a lone drive letter is absolute and contains nothing a relative entry names",
+			file:  "C:",
+			entry: "C",
+			want:  false,
+		},
+		{
+			name:  "a drive-letter file IS contained by a matching drive-letter entry",
+			file:  "C:/repo/docs/x.md",
+			entry: "C:/repo/docs/**",
+			want:  true,
+		},
+		// --- UNC paths were already correct before this round (a
+		// leading `\\` becomes a leading `//` after backslash
+		// normalization, which is a leading empty token — the same
+		// signal a POSIX absolute path produces); pinned here
+		// explicitly alongside the drive-letter fix so a future change
+		// to the absoluteness check cannot regress this case silently.
+		{
+			name:  "a UNC file is not contained by a relative glob entry",
+			file:  `\\server\share\docs\x.md`,
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			name:  "a UNC file IS contained by a matching UNC entry",
+			file:  `\\server\share\docs\x.md`,
+			entry: `\\server\share\docs\**`,
+			want:  true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

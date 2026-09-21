@@ -523,6 +523,25 @@ func segmentMatches(entrySeg, fileSeg string) bool {
 // unchanged: both the pre-fix and post-fix readings agree on segs for
 // every input; the fix only exposes a bit the old return type had no
 // room for.
+//
+// A leading Windows drive-letter token (`C:`, after `\`-to-`/`
+// normalization) is ALSO absolute, alongside a leading empty token.
+// This is not filepath.IsAbs — that function's notion of "absolute"
+// is OS-dependent at runtime, and would say false for "C:/repo/x.md"
+// on the Linux hosts ethos actually runs on. But splitSegments' file
+// operand is caller-supplied tool input (PreToolUse's pathAllowed),
+// not a path ethos itself constructed, and the codebase already
+// supports Windows callers (internal/session's store uses LockFileEx
+// on that platform) — so a Windows-spelled absolute path must
+// classify as absolute regardless of the OS ethos is running on.
+// Without this, "C:/repo/docs/a.md" classified as relative (only
+// raw[0]=="" was checked), so a leading-glob entry like `**/notes.go`
+// (segmentsContain's own doc comment, conflict.go, cites this shape
+// as real) contained "C:/anything/notes.go" — the same admit-
+// degradation ethos-vaib fixed, in its Windows spelling. A UNC path
+// (`\\server\share\...`) already produces a leading empty token after
+// backslash normalization (two leading `\` become two leading `/`),
+// so it was already classified as absolute before this change.
 func splitSegments(p string) (segs []string, absolute bool) {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -534,7 +553,7 @@ func splitSegments(p string) (segs []string, absolute bool) {
 		return nil, false
 	}
 	raw := strings.Split(p, "/")
-	absolute = raw[0] == ""
+	absolute = raw[0] == "" || isDriveLetterPrefix(raw[0])
 	out := raw[:0]
 	for _, s := range raw {
 		if s == "" || s == "." {
@@ -546,6 +565,18 @@ func splitSegments(p string) (segs []string, absolute bool) {
 		return nil, absolute
 	}
 	return out, absolute
+}
+
+// isDriveLetterPrefix reports whether s is a Windows drive-letter root
+// segment — exactly one ASCII letter followed by `:`, and nothing
+// else ("C:", "d:"). A longer token ("abc:") or one missing the colon
+// is not a drive letter and must not be misclassified as absolute.
+func isDriveLetterPrefix(s string) bool {
+	if len(s) != 2 || s[1] != ':' {
+		return false
+	}
+	c := s[0]
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 // CanonicalPath returns a canonical string form of p that matches the
