@@ -33,6 +33,17 @@ type SubagentStartResult struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext,omitempty"`
 	} `json:"hookSpecificOutput"`
+	// SystemMessage is Claude Code's common top-level hook-output
+	// field, rendered in the session transcript independent of
+	// hookSpecificOutput -- the only path an operator actually sees a
+	// diagnostic emitted here. Every hook script this plugin ships
+	// redirects the subprocess's stderr into a per-operator,
+	// unrotated log file nothing reads
+	// (plugin/hooks/subagent-start.sh), so a diagnostic on stderr
+	// alone is, in deployment, silent (bead ethos-yf6n). Used today
+	// for the empty-MISSION_ID loud-skip/uncertainty diagnostic;
+	// stderr still carries the same text for forensics.
+	SystemMessage string `json:"systemMessage,omitempty"`
 	// Env is an optional map of environment variables that Claude Code
 	// sets in the spawned subagent's process. Used by verifier isolation
 	// to pass ETHOS_VERIFIER_ALLOWLIST to the subagent's PreToolUse hooks.
@@ -99,6 +110,18 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 // current hash prefixes, and the relaunch instruction the operator
 // needs to recover. Hash success is silent — operators only see
 // the hash when something is wrong.
+//
+// checkVerifierHash's empty-MISSION_ID diagnostic (bead ethos-yf6n) is
+// the one non-empty diagnostic this function surfaces without also
+// refusing the spawn. It is delivered on every exit path that would
+// otherwise omit it: prepended to hookSpecificOutput.additionalContext
+// (so the SPAWNED SUBAGENT itself sees that enforcement is inactive)
+// and set as the top-level SystemMessage (so the OPERATOR sees it in
+// the session transcript, the field Claude Code renders independent
+// of hookSpecificOutput). A spawn with no persona and no verifier
+// isolation block would otherwise emit no JSON at all — this function
+// still emits one when there is a diagnostic to carry, even though it
+// has nothing else to say.
 func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
@@ -126,7 +149,7 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	// as its evaluator. A verifier spawn yields a one-element slice
 	// that Phase 3.5's context-isolation path below consumes.
 	declaredMissionID := os.Getenv("MISSION_ID")
-	verifierMissions, err := checkVerifierHash(agentType, declaredMissionID, deps)
+	verifierMissions, diagnostic, err := checkVerifierHash(agentType, declaredMissionID, deps)
 	if err != nil {
 		// DES-054 phase 2d: when the refusal fires after PreToolUse-on-
 		// Agent wrote a delegation skeleton (MISSION_ID + DELEGATION_ID
@@ -187,41 +210,54 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 		result := SubagentStartResult{}
 		result.HookSpecificOutput.HookEventName = "SubagentStart"
 		result.HookSpecificOutput.AdditionalContext = block
+		// diagnostic is always empty on this path: checkVerifierHash
+		// produces it only from the empty-declaredMissionID branch,
+		// which never yields a non-empty verifierMissions. Set it
+		// anyway rather than assume the invariant at the call site.
+		result.SystemMessage = diagnostic
 		// Set ETHOS_VERIFIER_ALLOWLIST so PreToolUse hooks in the
 		// subagent can enforce the file allowlist mechanically.
 		result.Env = buildVerifierAllowlistEnv(verifierMissions, deps.Missions)
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
 
-	// If no persona matched, nothing more to do.
-	if persona == "" {
-		return nil
-	}
-
-	// Load identity with full attribute content for persona injection.
-	id, err := deps.Identities.Load(persona)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: subagent-start: identity %q exists but attribute resolution failed: %v\n", persona, err)
-		return nil
-	}
-	for _, w := range id.Warnings {
-		fmt.Fprintf(os.Stderr, "ethos: subagent-start: identity %q: %s\n", persona, w)
-	}
-
+	// Past this point there is no verifier isolation block. Historically
+	// this function emitted nothing at all when persona was empty (an
+	// ordinary ad-hoc spawn with no matching identity). That is no
+	// longer sufficient: a non-empty diagnostic from checkVerifierHash
+	// must reach the operator regardless of persona, so a diagnostic
+	// alone now still produces a JSON result carrying it.
 	var sections []string
-
-	block := BuildPersonaBlock(id)
-	if block != "" {
-		// Prepend parent context if we can resolve the parent from the roster.
-		parentLine := resolveParentLine(deps.Sessions, sessionID, p.Parent, deps.Identities)
-		if parentLine != "" {
-			block = insertAfterFirstLine(block, parentLine)
-		}
-		sections = append(sections, block)
+	if diagnostic != "" {
+		// Prepended so the SPAWNED SUBAGENT sees it first, ahead of its
+		// own persona block, if it has one.
+		sections = append(sections, diagnostic)
 	}
 
-	if extCtx := BuildExtensionContext(id.Ext); extCtx != "" {
-		sections = append(sections, extCtx)
+	if persona != "" {
+		// Load identity with full attribute content for persona injection.
+		id, err := deps.Identities.Load(persona)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: subagent-start: identity %q exists but attribute resolution failed: %v\n", persona, err)
+		} else {
+			for _, w := range id.Warnings {
+				fmt.Fprintf(os.Stderr, "ethos: subagent-start: identity %q: %s\n", persona, w)
+			}
+
+			block := BuildPersonaBlock(id)
+			if block != "" {
+				// Prepend parent context if we can resolve the parent from the roster.
+				parentLine := resolveParentLine(deps.Sessions, sessionID, p.Parent, deps.Identities)
+				if parentLine != "" {
+					block = insertAfterFirstLine(block, parentLine)
+				}
+				sections = append(sections, block)
+			}
+
+			if extCtx := BuildExtensionContext(id.Ext); extCtx != "" {
+				sections = append(sections, extCtx)
+			}
+		}
 	}
 
 	if len(sections) == 0 {
@@ -231,6 +267,7 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	result := SubagentStartResult{}
 	result.HookSpecificOutput.HookEventName = "SubagentStart"
 	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
+	result.SystemMessage = diagnostic
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
@@ -555,29 +592,37 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 // verifier when the spawn carries a different (or no) MISSION_ID; that
 // misbinding was ethos-z69l.
 //
-// Returns (nil, nil) — no gate, normal persona path — when:
+// Returns (nil, "", nil) — no gate, normal persona path, no diagnostic
+// — when:
 //   - Missions is nil (legacy install, no mission store)
 //   - agentType is empty
-//   - declaredMissionID is empty: without a declared mission we cannot
-//     know which mission the spawn serves, so we never apply a verifier
-//     gate by handle alone. This is the one nil-nil branch that also
-//     emits a stderr diagnostic (loud-skip, docs/spec-hook-gates.tex,
-//     bead ethos-yf6n) — the gating decision itself does not change.
-//     The diagnostic fires when agentType IS, as far as a best-effort
-//     mission-store scan can tell, the evaluator of some open mission,
-//     or degrades to an "uncertain" variant when that scan itself hits
-//     a store fault and finds no match; a clean scan with no match
-//     stays quiet
 //   - the declared mission is not open
 //   - the declared mission's evaluator handle is not agentType (the
 //     spawn serves the mission in another role, e.g. worker)
 //
-// Returns (a one-element slice, nil) when the spawn IS the declared
-// mission's verifier and the mission is either legacy (empty pinned
-// hash) or its current content matches the pinned hash. That slice is
-// Phase 3.5's single source of truth for "this IS a verifier spawn".
+// Returns (nil, diagnostic, nil) — no gate, normal persona path, WITH
+// a non-empty diagnostic — only when declaredMissionID is empty:
+// without a declared mission we cannot know which mission the spawn
+// serves, so we never apply a verifier gate by handle alone. This is
+// the one branch that also produces a diagnostic (loud-skip,
+// docs/spec-hook-gates.tex, bead ethos-yf6n) — the gating decision
+// itself does not change. The diagnostic names the handle when it IS,
+// as far as a best-effort mission-store scan can tell, the evaluator
+// of some open mission, or degrades to an "uncertain" variant when
+// that scan itself hits a store fault and finds no match; a clean
+// scan with no match returns an empty diagnostic, staying quiet. The
+// caller is responsible for surfacing a non-empty diagnostic on every
+// path out of HandleSubagentStartWithDeps, session-visible and not
+// stderr-only — see that function's doc comment.
 //
-// Returns (nil, fatal error) when:
+// Returns (a one-element slice, "", nil) when the spawn IS the
+// declared mission's verifier and the mission is either legacy (empty
+// pinned hash) or its current content matches the pinned hash. That
+// slice is Phase 3.5's single source of truth for "this IS a verifier
+// spawn"; the diagnostic is always empty on this path (mutually
+// exclusive with the empty-declaredMissionID branch above).
+//
+// Returns (nil, "", fatal error) when:
 //   - deps.Hash is misconfigured (Missions is non-nil but HashSources
 //     is incomplete). Silent skip would let stale evaluator content
 //     through under a configuration error.
@@ -589,19 +634,19 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 //     the pinned and current rollup hash prefixes, the per-section
 //     hashes of the CURRENT content so the operator can cross-reference
 //     which file they edited, and two recovery options.
-func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDeps) ([]verifierMission, error) {
+func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDeps) (verifierMissions []verifierMission, diagnostic string, err error) {
 	if deps.Missions == nil {
-		return nil, nil // legacy install: no mission store
+		return nil, "", nil // legacy install: no mission store
 	}
 	if err := deps.Hash.Validate(); err != nil {
 		// Misconfiguration: a mission store is present but the hash
 		// sources are not. Refusing spawns on misconfiguration is
 		// the safe default — silently skipping the gate would let
 		// stale evaluator content through.
-		return nil, fmt.Errorf("verifier hash gate misconfigured: %w", err)
+		return nil, "", fmt.Errorf("verifier hash gate misconfigured: %w", err)
 	}
 	if strings.TrimSpace(agentType) == "" {
-		return nil, nil
+		return nil, "", nil
 	}
 	declaredMissionID = strings.TrimSpace(declaredMissionID)
 	if declaredMissionID == "" {
@@ -642,33 +687,42 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 		matched, hadError := isEvaluatorOfOpenMission(deps.Missions, agentType)
 		switch {
 		case matched:
-			fmt.Fprintf(os.Stderr,
-				"ethos: subagent-start: warning: %q is the evaluator of an open mission but this spawn declared no MISSION_ID; the verifier hash gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement are both inactive for it (cause not distinguishable here: Tier A ad-hoc spawn, PreToolUse MISSION_ID propagation failure, or PreToolUse not installed)\n",
+			diagnostic = fmt.Sprintf(
+				"%q is the evaluator of an open mission but this spawn declared no MISSION_ID; the verifier hash gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement are both inactive for it (cause not distinguishable here: Tier A ad-hoc spawn, PreToolUse MISSION_ID propagation failure, or PreToolUse not installed)",
 				agentType,
 			)
 		case hadError:
-			fmt.Fprintf(os.Stderr,
-				"ethos: subagent-start: warning: cannot determine whether %q needed the verifier hash gate (mission store error during the empty-MISSION_ID diagnostic scan); the verifier hash gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement are inactive for this spawn regardless\n",
+			diagnostic = fmt.Sprintf(
+				"cannot determine whether %q needed the verifier hash gate (mission store error during the empty-MISSION_ID diagnostic scan); the verifier hash gate and ETHOS_VERIFIER_ALLOWLIST write-set enforcement are inactive for this spawn regardless",
 				agentType,
 			)
 		}
-		return nil, nil
+		if diagnostic != "" {
+			// Stderr costs nothing and lands in the operator's
+			// hook-errors.log for forensics, but it is not the
+			// operator-visible channel: every hook script redirects
+			// stderr there (plugin/hooks/subagent-start.sh), and
+			// nothing reads that file. The caller is responsible for
+			// also surfacing this string session-visibly.
+			fmt.Fprintf(os.Stderr, "ethos: subagent-start: warning: %s\n", diagnostic)
+		}
+		return nil, diagnostic, nil
 	}
 
 	c, raw, err := readGateContract(deps.Missions, declaredMissionID)
 	if err != nil {
-		return nil, fmt.Errorf("verifier hash gate: %w", err)
+		return nil, "", fmt.Errorf("verifier hash gate: %w", err)
 	}
 	if c.Status != mission.StatusOpen {
 		// A closed, failed, or escalated mission is out of the gate's
 		// purview; the spawn falls through to the normal persona path.
-		return nil, nil
+		return nil, "", nil
 	}
 	if c.Evaluator.Handle != agentType {
 		// The spawn serves the declared mission in another role (the
 		// worker, most commonly). It is not the mission's verifier, so
 		// the frozen-evaluator gate does not apply — THE ethos-z69l FIX.
-		return nil, nil
+		return nil, "", nil
 	}
 
 	vm := verifierMission{Contract: c, RawYAML: raw}
@@ -683,23 +737,23 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 			"ethos: subagent-start: warning: mission %s has empty Evaluator.Hash (pre-3.3); skipping gate\n",
 			c.MissionID,
 		)
-		return []verifierMission{vm}, nil
+		return []verifierMission{vm}, "", nil
 	}
 
 	breakdown, err := mission.ComputeEvaluatorHashBreakdown(c.Evaluator.Handle, deps.Hash)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"verifier hash gate: recomputing hash for evaluator %q: %w",
 			c.Evaluator.Handle, err,
 		)
 	}
 	if c.Evaluator.Hash != breakdown.Rollup {
-		return nil, errors.New(formatDriftError(agentType, breakdown, driftedMission{
+		return nil, "", errors.New(formatDriftError(agentType, breakdown, driftedMission{
 			ID:     c.MissionID,
 			Pinned: c.Evaluator.Hash,
 		}))
 	}
-	return []verifierMission{vm}, nil
+	return []verifierMission{vm}, "", nil
 }
 
 // isEvaluatorOfOpenMission scans the mission store for a mission that
