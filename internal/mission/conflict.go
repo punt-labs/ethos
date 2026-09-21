@@ -304,7 +304,13 @@ func pathsOverlap(a, b string) bool {
 // rather than as an empty (matches-nothing) entry, which is how the
 // hole in ethos-qy7k's first round would otherwise reopen.
 func overlapSegments(p string) (segs []string, rootGlob bool) {
-	all := splitSegments(p)
+	// The absoluteness flag is discarded here: both operands of
+	// pathsOverlap are write_set/extract_into entries, and the
+	// per-entry validator (validate.go) already rejects an absolute
+	// entry before it can reach this comparison. Only pathContainedBy,
+	// whose file operand is a caller-supplied tool target, needs to
+	// consult absoluteness (ethos-vaib).
+	all, _ := splitSegments(p)
 	for i, s := range all {
 		if strings.ContainsAny(s, globMeta) {
 			return all[:i], i == 0
@@ -357,10 +363,35 @@ func PathContainedBy(file, entry string) bool {
 //
 // An empty segment list on either side matches nothing. The per-
 // entry validator has already rejected the malformed forms upstream.
+//
+// Containment additionally requires file and entry to agree on
+// absoluteness (ethos-vaib; docs/spec-writeset-admission.tex
+// §Containment, PathContainedByFixed). Before this check,
+// splitSegments discarded the leading empty token an absolute path's
+// split produces, so "/docs/x.md" and "docs/x.md" canonicalized
+// identically and a relative glob entry (docs/**) admitted an
+// absolute target it was never meant to authorize — entry is
+// caller-supplied only through the PreToolUse allowlist, but file is
+// a caller-supplied tool target, so it is the one side that can
+// actually be absolute at this call site. The spec's own fixed
+// predicate states this as "absolute(file) = false", because its
+// ENTRY model represents only validator-checked write_set entries,
+// which are always relative. This function widens that to
+// "absolute(file) = absolute(entry)" because pathContainedBy is also
+// called with a legitimately absolute entry — the verifier's own
+// contract.yaml path, added to the allowlist by
+// verifierAllowlistSplit (internal/hook/subagent_start.go) — and an
+// absolute entry can only ever contain an absolute file. Either
+// reading refuses the ethos-vaib mismatch (relative entry, absolute
+// file); the wider one additionally keeps the absolute-entry case
+// working.
 func pathContainedBy(file, entry string) bool {
-	fs := splitSegments(file)
-	es := splitSegments(entry)
+	fs, fileAbsolute := splitSegments(file)
+	es, entryAbsolute := splitSegments(entry)
 	if len(fs) == 0 || len(es) == 0 {
+		return false
+	}
+	if fileAbsolute != entryAbsolute {
 		return false
 	}
 	// A file path that still climbs out of the tree is inside nothing.
@@ -472,28 +503,49 @@ func segmentMatches(entrySeg, fileSeg string) bool {
 // An empty or whitespace-only input — or an input like `///` or `./.`
 // that collapses to nothing after filtering — produces a nil segment
 // list, which signals "matches nothing" to pathsOverlap.
-func splitSegments(p string) []string {
+//
+// The second return value, absolute, reports whether p's normalized
+// form starts with `/` — equivalently, whether the FIRST token
+// strings.Split produces (before this function's own filtering loop
+// removes it) is empty. ethos-vaib (docs/spec-writeset-admission.tex
+// §Path Canonicalization, CanonicalPathFixed): that leading empty
+// token is how an absolute path manifests, and it is semantic, not
+// cosmetic — it is the only signal, once segments are split, that
+// distinguishes "/docs/x.md" from "docs/x.md". Discarding it (the
+// pre-fix behavior: computing only segs, with nowhere on a []string
+// to carry the flag) made the two canonicalize identically, so a
+// relative glob entry like docs/** admitted an absolute target no
+// entry should ever reach. absolute is computed from the trimmed,
+// slash-normalized, trailing-slash-trimmed form — after the
+// normalization steps above, but before the segment filter — so a
+// trailing slash on an otherwise-absolute path (`/docs/`) still
+// reports absolute correctly. Segment computation itself is
+// unchanged: both the pre-fix and post-fix readings agree on segs for
+// every input; the fix only exposes a bit the old return type had no
+// room for.
+func splitSegments(p string) (segs []string, absolute bool) {
 	p = strings.TrimSpace(p)
 	if p == "" {
-		return nil
+		return nil, false
 	}
 	p = strings.ReplaceAll(p, `\`, "/")
 	p = strings.TrimRight(p, "/")
 	if p == "" {
-		return nil
+		return nil, false
 	}
 	raw := strings.Split(p, "/")
-	segs := raw[:0]
+	absolute = raw[0] == ""
+	out := raw[:0]
 	for _, s := range raw {
 		if s == "" || s == "." {
 			continue
 		}
-		segs = append(segs, s)
+		out = append(out, s)
 	}
-	if len(segs) == 0 {
-		return nil
+	if len(out) == 0 {
+		return nil, absolute
 	}
-	return segs
+	return out, absolute
 }
 
 // CanonicalPath returns a canonical string form of p that matches the
@@ -515,12 +567,28 @@ func splitSegments(p string) []string {
 // exactly one implementation of path canonicalization in the package;
 // a parallel normalizer in the CLI would drift the moment the
 // validator's rules change.
+//
+// The returned string now carries a leading `/` when p is absolute,
+// so CanonicalPath("docs/x.md") != CanonicalPath("/docs/x.md")
+// (ethos-vaib) — the two previously collapsed to the identical string
+// "docs/x.md" because splitSegments discarded the absolute/relative
+// distinction entirely. Every existing caller (mission lint's
+// coverage heuristic, the CLI --verify cross-check) compares two
+// CanonicalPath outputs to each other or uses one as a HasPrefix
+// argument against a same-shape path; none constructs a raw
+// filesystem path from the result, so prefixing an already-absolute
+// canonical form with `/` cannot turn a working relative comparison
+// into a broken one.
 func CanonicalPath(p string) string {
-	segs := splitSegments(p)
+	segs, absolute := splitSegments(p)
 	if len(segs) == 0 {
 		return ""
 	}
-	return strings.Join(segs, "/")
+	joined := strings.Join(segs, "/")
+	if absolute {
+		return "/" + joined
+	}
+	return joined
 }
 
 // formatConflictError builds the operator-facing error string from
