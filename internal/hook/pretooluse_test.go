@@ -425,7 +425,7 @@ func TestSplitAllowlist(t *testing.T) {
 }
 
 func TestPathAllowed(t *testing.T) {
-	entries := []string{"internal/hook/pretooluse.go", "cmd/ethos/", "/abs/contract.yaml"}
+	entries := []string{"internal/hook/pretooluse.go", "cmd/ethos/", "/abs/contract.yaml", "docs/**"}
 
 	tests := []struct {
 		name   string
@@ -435,6 +435,23 @@ func TestPathAllowed(t *testing.T) {
 		{"exact file match", "internal/hook/pretooluse.go", true},
 		{"under directory", "cmd/ethos/hook.go", true},
 		{"exact directory", "cmd/ethos", true},
+		// Both sides absolute: this row PINNED the ethos-vaib bug before
+		// the fix, but for the wrong reason — the pre-fix splitSegments
+		// dropped the leading empty segment on BOTH sides uniformly, so
+		// "/abs/contract.yaml" and "abs/contract.yaml" canonicalized
+		// identically regardless of the entry's own absoluteness, and
+		// the match "worked" by coincidence rather than by comparing
+		// absoluteness at all. The real allowlist legitimately carries
+		// an absolute entry here — verifierAllowlistSplit
+		// (subagent_start.go) adds the verifier's own contract.yaml
+		// path as an absolute entry — so the deliberate post-fix
+		// semantics keep this row true: an absolute target IS admitted
+		// by an absolute entry once file and entry AGREE on
+		// absoluteness and their segments match. See
+		// docs/spec-writeset-admission.tex §Containment,
+		// PathContainedByFixed, and pathContainedBy's own doc comment
+		// for why this implementation widens the spec's stricter
+		// "absolute(file) = false" reading.
 		{"absolute match", "/abs/contract.yaml", true},
 		{"outside all entries", "internal/mission/store.go", false},
 		{"partial prefix no sep", "cmd/ethosX/hook.go", false},
@@ -444,6 +461,14 @@ func TestPathAllowed(t *testing.T) {
 		{"traversal escapes allowlist", "internal/hook/../../secret.go", false},
 		{"traversal into sibling", "cmd/ethos/../../internal/mission/store.go", false},
 		{"traversal that stays inside", "cmd/ethos/sub/../hook.go", true},
+		// The ethos-vaib regression itself: a relative glob entry must
+		// NOT admit an absolute target, even though the entry's own
+		// literal segments (docs, **) would otherwise match. Before the
+		// fix, splitSegments discarded the leading empty segment an
+		// absolute path's split produces, so "/docs/x.md" and
+		// "docs/x.md" canonicalized identically and this target was
+		// wrongly admitted by docs/**.
+		{"absolute target not admitted by relative glob entry (ethos-vaib)", "/docs/x.md", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
