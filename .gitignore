@@ -58,12 +58,28 @@ Lux.ini
 *.synctex.gz
 *.toc
 
-# Z-spec / fuzz build artifacts
-docs/*.mf
-docs/*.sty
-docs/*.fuzz
-docs/*.pdf
+# Z-spec / fuzz build artifacts. `**/` matches at any depth, including
+# zero, so these cover both docs/x.fuzz and docs/sub/x.fuzz. A bare `*`
+# does not cross `/`, and the fuzz-check gate detects specs with
+# `find docs -name '*.tex'` at any nesting depth (Makefile), so a
+# single-level pattern would leave a nested spec's artifacts untracked.
+docs/**/*.mf
+docs/**/*.sty
+docs/**/*.fuzz
+docs/**/*.pdf
 .orphaned_at
+
+# Z-spec tool reports: the zspec MCP tools write their results beside the
+# spec they ran on (<stem>.fuzz.json from check, <stem>.report.json from
+# test/model_check, plus partition/audit). They are a record of one run on
+# one machine at one moment, so a committed copy goes stale the moment the
+# .tex changes and then asserts a result nobody re-derived. `make check`
+# re-runs fuzz over every spec, which is the gate that actually holds.
+# Depth-insensitive for the same reason as the artifacts above.
+docs/**/*.fuzz.json
+docs/**/*.report.json
+docs/**/*.partition.json
+docs/**/*.audit.json
 
 # IDE
 .idea/

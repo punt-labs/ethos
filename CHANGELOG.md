@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`.claude/settings.json` conforms to `punt-kit/standards/permissions.md`.**
+  `Bash(bash:*)` and `Bash(sed:*)` were allowed; the standard forbids both
+  by name (§3). `Bash(bash:*)` nullified every network deny rule, because
+  `bash -c "curl ..."` satisfies the allow list while `Bash(curl:*)` is
+  denied; `Bash(sed:*)` nullified `Edit(.env)` and `Edit(.envrc)` by
+  editing in place. A bare `"Bash"` entry subsumed the whole per-command
+  allow list, so removing the other two would have changed nothing on its
+  own — it is gone, and the enumerated commands now govern. `Bash(vox:*)`
+  went with it as a strict subset of that bare entry. The five missing
+  plugin MCP wildcards (`beadle_email`, `dungeon_grimoire`, `lux_lux`,
+  `vox_mic`, `z-spec_zspec`) are added, satisfying §3's "all Punt Labs
+  plugin MCP servers, or none". Required Bash, MCP, and deny sets are now
+  complete and no dead `Write(path)`-style rule remains.
+
+  `.bin/health/claude-permissions.py` reports this repo as `2 missing`
+  after the change: its `REQUIRED_BASH` set (lines 75, 88) lists
+  `Bash(bash:*)` and `Bash(sed:*)` as *required*, contradicting the
+  standard it checks against. The standard governs; the checker is stale
+  and is fixed separately in the workspace repo.
+- **Z-spec tool reports no longer dirty the working tree, at any
+  directory depth.** The `zspec` MCP tools write their results beside the
+  spec they ran on (`<stem>.fuzz.json`, `<stem>.report.json`, and the
+  partition/audit equivalents), and `.gitignore` covered only
+  `docs/*.fuzz`, so each `check` or `test` run left untracked files
+  behind and the first `git add -A` would commit a one-machine,
+  one-moment result that goes stale the moment the `.tex` changes.
+  `make check` re-runs `fuzz` over every spec, which is the gate that
+  actually holds. Every `docs/` artifact pattern is now `docs/**/*.ext`
+  rather than `docs/*.ext`: a bare `*` does not cross `/`, while the
+  `fuzz-check` gate detects specs with `find docs -name '*.tex'` at any
+  nesting depth, so the single-level patterns would have left a nested
+  spec's artifacts untracked — including the pre-existing `.mf`, `.sty`,
+  `.fuzz`, and `.pdf` rules, which are widened with them.
 - **Write-set enforcement no longer admits an absolute path under a
   relative entry.** Path canonicalization preserves the absolute/relative
   distinction end to end — `splitSegments` carries an absoluteness flag
@@ -44,6 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Seven Claude Code output styles are tracked at
+  `.claude/output-styles/`.** `caveman`, `executive`, `machine`,
+  `no-ai-slop`, `plain-english`, `smart-brevity`, and `unslop` now travel
+  with a clone instead of existing only on the machine that wrote them, so
+  a contributor selecting one gets the same definition everyone else has.
+  They sit under `.claude/`, which `.markdownlint-cli2.jsonc` ignores, so
+  they are not markdown-linted — the same treatment as the generated agent
+  files.
 - **Three new Z specifications extend formal coverage to the subsystems
   producing the current bug queue.** `docs/spec-writeset-admission.tex`
   models path canonicalization and write-set admission and reproduces

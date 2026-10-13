@@ -319,6 +319,16 @@ deny-by-default on `Bash` breaks every worker.
    z-spec row leaves the in-repo exposure set and R1 shrinks to the
    `identity` deny alone. This is a question for the z-spec owner
    (jms/jra), not for ethos.
+
+   **Answered for this repo only, not org-wide:** `.gitignore` now
+   ignores all four sidecar shapes under `docs/` at any depth. That does
+   *not* shrink R1 and does *not* remove the z-spec row from the exposure
+   set: `WritesInRepo` classifies by where a tool writes, not by whether
+   git tracks the result, and these tools still overwrite a file inside
+   the work tree. `internal/mcpclass/mcpclass.go:77-80` is therefore
+   unchanged and still correct. The org-wide half of the question — and
+   the R1-shrinking conclusion that would follow from it — remains open
+   and still belongs to the z-spec owner.
 3. **How is an R2 classification re-verified when a tool releases?**
    Options: never (accept drift, the classification is coarse enough
    that it rarely changes), or a release-checklist item in the
