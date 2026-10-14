@@ -2,8 +2,10 @@
 
 Six of the output styles in this directory are copied from
 [smixs/awesome-claude-output-styles](https://github.com/smixs/awesome-claude-output-styles),
-which is MIT-licensed. Its copyright and permission notice is reproduced
-below, as that license requires for copies and substantial portions.
+which is MIT-licensed. Its LICENSE file is reproduced verbatim below, as
+the license requires for copies and substantial portions — including its
+own preserved notices for the further upstream projects some of its
+styles adapt.
 
 | File | Origin |
 |------|--------|
@@ -25,6 +27,18 @@ notice below for the six files above.
 MIT License
 
 Copyright (c) 2026 Serge Shima
+
+Some styles adapt ideas and text from MIT-licensed projects; their copyright
+notices are preserved in the credit lines of the corresponding style files
+and in README credits:
+
+- Copyright (c) 2026 Matt Pocock (mattpocock/skills)
+- Copyright (c) Julius Brussee (JuliusBrussee/caveman)
+- Copyright (c) Carlos Duplá (carlosduplar/caveman-output-style-claude-code)
+- Copyright (c) ayghri (ayghri/i-have-adhd)
+- Copyright (c) Amin Boulegroun (AminBlg/SimpleEnglish)
+- Copyright (c) Peter Yang (petergyang/no-ai-slop)
+- Copyright (c) 2026 Lauren Tan (cursor/plugins, pstack)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -315,20 +315,21 @@ deny-by-default on `Bash` breaks every worker.
    new ADR amending DES-035, and it should be decided before any
    further investment in per-tool mapping.
 2. **Are the z-spec sidecar reports (`*.report.json`, `*.fuzz.json`)
-   meant to be git-tracked?** If they are gitignored org-wide, the
-   z-spec row leaves the in-repo exposure set and R1 shrinks to the
-   `identity` deny alone. This is a question for the z-spec owner
-   (jms/jra), not for ethos.
+   meant to be git-tracked?** This is a question for the z-spec owner
+   (jms/jra), not for ethos, and remains open at the org level.
 
-   **Answered for this repo only, not org-wide:** `.gitignore` now
-   ignores all four sidecar shapes under `docs/` at any depth. That does
-   *not* shrink R1 and does *not* remove the z-spec row from the exposure
-   set: `WritesInRepo` classifies by where a tool writes, not by whether
-   git tracks the result, and these tools still overwrite a file inside
-   the work tree. `internal/mcpclass/mcpclass.go:77-80` is therefore
-   unchanged and still correct. The org-wide half of the question — and
-   the R1-shrinking conclusion that would follow from it — remains open
-   and still belongs to the z-spec owner.
+   **This question does not bear on R1 at all, in either direction —
+   corrected from an earlier draft of this note.** `.gitignore` now
+   ignores all four sidecar shapes under `docs/` at any depth for this
+   repo. `DenyReason` (`internal/mcpclass/mcpclass.go:105-126`) checks
+   only `WritesInRepo` map membership; it never reads git-tracking state,
+   for this repo or any other. So neither this repo's ignore rule nor a
+   hypothetical org-wide one would change which tools the verifier deny
+   covers — the original framing above, that an org-wide ignore "shrinks
+   R1 ... to the `identity` deny alone," is wrong and is retracted. The
+   z-spec row stays in the exposure set regardless of what `.gitignore`
+   says anywhere, because these tools still overwrite a file inside the
+   work tree, which is the only thing `WritesInRepo` classifies on.
 3. **How is an R2 classification re-verified when a tool releases?**
    Options: never (accept drift, the classification is coarse enough
    that it rarely changes), or a release-checklist item in the

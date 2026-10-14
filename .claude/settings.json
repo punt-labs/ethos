@@ -32,6 +32,7 @@
       "Bash(npx:*)",
       "Bash(go:*)",
       "Bash(ethos:*)",
+      "Bash(vox:*)",
       "WebFetch(domain:claude.com)",
       "WebFetch(domain:docs.anthropic.com)",
       "WebFetch(domain:elevenlabs.io)",
