@@ -17,11 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   editing in place. A bare `"Bash"` entry subsumed the whole per-command
   allow list, so removing the other two would have changed nothing on its
   own — it is gone, and the enumerated commands now govern. `Bash(vox:*)`
-  went with it as a strict subset of that bare entry. The five missing
-  plugin MCP wildcards (`beadle_email`, `dungeon_grimoire`, `lux_lux`,
-  `vox_mic`, `z-spec_zspec`) are added, satisfying §3's "all Punt Labs
-  plugin MCP servers, or none". Required Bash, MCP, and deny sets are now
-  complete and no dead `Write(path)`-style rule remains.
+  is retained as its own live entry, no longer a dead subset of the bare
+  entry: it is the sole grant authorizing the CLI fallback commands
+  (`vox say`, `vox music`, etc.) that `.punt-labs/vox/CLAUDE.md` documents
+  for a plugin-less agent and the stop-hook continuation path. The five
+  missing plugin MCP wildcards (`beadle_email`, `dungeon_grimoire`,
+  `lux_lux`, `vox_mic`, `z-spec_zspec`) are added, satisfying §3's "all
+  Punt Labs plugin MCP servers, or none". Required Bash, MCP, and deny
+  sets are now complete and no dead `Write(path)`-style rule remains.
 
   `.bin/health/claude-permissions.py` reports this repo as `2 missing`
   after the change: its `REQUIRED_BASH` set (lines 75, 88) lists
