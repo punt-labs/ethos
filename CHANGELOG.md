@@ -77,6 +77,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Third-party notice for the imported output styles.**
+  `.claude/output-styles/NOTICE.md` reproduces the MIT copyright and
+  permission notice of
+  [smixs/awesome-claude-output-styles](https://github.com/smixs/awesome-claude-output-styles),
+  from which six of the seven tracked styles are copied, and records which
+  file came from where. The repo-root `LICENSE` names only Punt Labs and
+  does not displace that notice. `machine.md` is original work.
 - **Seven Claude Code output styles are tracked at
   `.claude/output-styles/`.** `caveman`, `executive`, `machine`,
   `no-ai-slop`, `plain-english`, `smart-brevity`, and `unslop` now travel
