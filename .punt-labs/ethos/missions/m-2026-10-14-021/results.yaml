@@ -1,0 +1,119 @@
+results:
+    - mission: m-2026-10-14-021
+      round: 1
+      created_at: "2026-10-14T17:08:27Z"
+      author: ghr
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs/prfaq-opencode-integration.md
+          added: 45
+          removed: 29
+      evidence:
+        - name: markdownlint-cli2 on docs/prfaq-opencode-integration.md
+          status: pass
+        - name: grep sweep confirms no remaining V1 hook-registration syntax (async ({project,client,$,directory,worktree}) => Hooks factory, bare object-key hook names)
+          status: pass
+      prose: |
+        Replaced V1 OpenCode plugin hook vocabulary with the confirmed V2 API
+        throughout docs/prfaq-opencode-integration.md, per the migration table
+        sourced from anomalyco/opencode's migrate-v1.mdx:
+
+        - "Why not reuse Claude Code hooks verbatim?" FAQ: replaced the V1
+          `async ({project, client, $, directory, worktree}) => Hooks` factory
+          description with `Plugin.define({id, async setup(ctx) {...}})`, and
+          replaced the flat hook-name list with the actual V2 registration
+          surfaces (`ctx.session.hook(...)`, `ctx.tool.hook(...)`,
+          `ctx.shell.hook(...)`, `ctx.permission.hook(...)`,
+          `ctx.event.subscribe()`).
+        - Added a sourcing/correction note at the top of that FAQ: targets
+          OpenCode V2 (confirmed released, v2.0.26 installed), citing
+          migrate-v1.mdx, and disclosing that an earlier draft used V1 syntax
+          sourced from the stable docs site before V2's release was confirmed.
+        - Session-fork FAQ: changed "the plugin's `session.created` hook
+          fires" to "the plugin's `ctx.event.subscribe()` loop observes a
+          `session.created` event"; changed "hook payload"/"hook event shape"
+          to "event payload" in the surrounding confidence paragraph. Left
+          the session.fork HTTP endpoint content, the
+          context.data.session.root/family lineage-lookup content, and the
+          Claude Code `source: "fork"` citation untouched (unaffected,
+          confirmed correct).
+        - Ethos-restart FAQ: no V1 hook-registration syntax was present in
+          this section; left unchanged except the already-correct
+          context.data.session.status content, which needed no fix.
+        - Worktree/concurrency FAQ: changed "every plugin hook context" to
+          "the plugin's setup(ctx) context" (still carries directory/worktree
+          fields; unaffected content preserved).
+        - Bundled-plugin recommendation: replaced the description of how the
+          plugin would be structured and triggered with
+          `Plugin.define({id, setup(ctx)})` + `ctx.event.subscribe()` for
+          session.created/session.updated; replaced the standalone-adapter
+          option's `tool.execute.before` reference with
+          `ctx.tool.hook("execute.before", ...)`.
+        - "What I could not verify" section: changed "plugin hook's event
+          payload" to "event's payload" for internal consistency; left the
+          confidence/sourcing claims themselves untouched.
+
+        Untouched, as instructed: the session.fork endpoint facts, the
+        context.data.session.{root,family,status} citations, the exemplars
+        section, the non-goals section, and the plugin-vs-adapter-vs-config
+        trade-off reasoning. Two remaining `.opencode/plugins/*.ts` references
+        are file-path/location citations (where a plugin is loaded from), not
+        hook-registration syntax, and were left as-is.
+
+        Verification: grep swept the file for `async function`, `=> Hooks`,
+        bare V1 hook-name object keys, and `tool.execute.before`/
+        `tool.execute.after` as bare dotted identifiers outside code spans;
+        none remain. markdownlint-cli2 run from inside the worktree against
+        the relative path reports 0 issues in 1 file.
+    - mission: m-2026-10-14-021
+      round: 2
+      created_at: "2026-10-14T17:23:31Z"
+      author: ghr
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs/prfaq-opencode-integration.md
+          added: 475
+          removed: 0
+      evidence:
+        - name: markdownlint-cli2 on docs/prfaq-opencode-integration.md
+          status: pass
+        - name: 'grep re-sweep for opencode.json config-key, factory-destructure, and other V1 tells beyond hook-call syntax: zero remaining instances'
+          status: pass
+      prose: |
+        Round 2: fixed the three items evaluator adt's reflection named, all
+        missed in round 1 because they are not hook-call syntax.
+
+        1. opencode.json plugin-config key (lines ~70, ~436): renamed the V1
+           singular "plugin" array key to V2's "plugins" array, and noted the
+           entry shape changed to a {package, options} object, at both
+           citation sites in the document.
+        2. Worktree/concurrency FAQ (lines ~232-244): replaced the claim that
+           setup(ctx)'s context carries flat `directory`/`worktree` fields
+           (cited to the V1 stable-docs page) with the correct V2 shape:
+           `directory` survives as `ctx.location.directory`; `worktree` does
+           not survive as a flat field -- V2 exposes it as a structured
+           per-project domain API (`ctx.worktree.create/list/refresh/remove`,
+           each requiring a projectID). Re-cited to migrate-v1.mdx (for the
+           directory rename) and index.mdx (for the ctx.worktree.* shape).
+           Updated the paragraph's reasoning and the later `(worktree, ...)`
+           key-tuple reference to `(ctx.location.directory, ...)`, since
+           ctx.location.directory alone is sufficient to disambiguate
+           concurrent worktree checkouts for this integration's purpose.
+        3. Disclosure-note overclaim ("that syntax has been replaced
+           throughout"): left the sentence as-is, since fixing items 1 and 2
+           makes the claim true rather than requiring it to be softened.
+
+        Did a full re-sweep beyond the three named items, per the request to
+        check the whole document before this final round: grepped for the V1
+        factory-destructure signature, the bare "Hooks" return type, the
+        opencode.json singular-key pattern, chat.message/chat.params/
+        chat.headers/permission.ask/shell.env (all V1-only names with no V2
+        survival anywhere), and dispose. Found nothing beyond what's already
+        fixed in round 1 (hook-registration calls) and this round (config key,
+        context-field shape). The one `session_id` hit in the document is
+        Claude Code's own hook payload field, describing Claude Code, not
+        OpenCode -- correctly left untouched.
+
+        markdownlint-cli2 run from inside the worktree: 0 issues in 1 file.

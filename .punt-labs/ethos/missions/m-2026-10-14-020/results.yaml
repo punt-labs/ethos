@@ -1,0 +1,139 @@
+results:
+    - mission: m-2026-10-14-020
+      round: 1
+      created_at: "2026-10-14T16:26:50Z"
+      author: ghr
+      verdict: pass
+      confidence: 0.82
+      files_changed:
+        - path: docs/prfaq-opencode-integration.md
+          added: 392
+          removed: 0
+      evidence:
+        - name: markdownlint-cli2 docs/prfaq-opencode-integration.md
+          status: pass
+        - name: git status --short (worktree) shows only the write-set file as untracked
+          status: pass
+        - name: specs/v2/session.md fetched directly from anomalyco/opencode dev branch via GitHub blob view, read in full (17 pages)
+          status: pass
+        - name: V2_HTTP_API_AUDIT.md fetched directly from anomalyco/opencode dev branch via GitHub blob view, read in full (28 pages)
+          status: pass
+        - name: opencode.ai/docs/plugins/ full document re-verified page-by-page (32 pages) against event/hook claims
+          status: pass
+        - name: opencode.ai/docs/sdk/ full document re-verified page-by-page (38 pages) against session.* client API claims
+          status: pass
+        - name: quarry find across punt-labs-captures/opencode.ai/github.com collections for >=3 cross-harness identity/audit exemplars
+          status: pass
+      open_questions:
+        - context7 (/websites/opencode_ai_plugins, /anomalyco/opencode) and WebFetch were not available as tools in this session — only quarry's CLI ingest/find pipeline via Bash. I substituted by ingesting the two named spec documents directly from GitHub through quarry and reading them in full, but the mission brief's context7 citation targets were not literally invoked. Flagged explicitly in the doc's confidence section.
+        - The context.data.session.{list,get,root,family,cost,status,sync,invalidate} API surface named in the mission brief was not found in any document I could fetch (opencode.ai/docs/plugins, /sdk, /custom-tools, or the two anomalyco/opencode spec docs). Flagged as an unverified gap in the doc rather than guessed at.
+        - The local shallow clone at ~/Coding/punt-labs/biff/.tmp/opencode-src no longer exists (confirmed via ls; prior session-b8a0261f transcript records it was deliberately deleted after that research closed). Could not use it as a source-of-truth cross-check as the mission brief anticipated; relied on docs + direct GitHub fetches instead, with a confidence note about which claims rest on the now-unavailable prior session's secondhand code citations.
+      prose: |
+        Wrote docs/prfaq-opencode-integration.md as a Working-Backwards PR/FAQ
+        for bead ethos-5y4r (native OpenCode 2.x integration for ethos mission
+        traceability). Structure: press release framed at a concrete user
+        (Priya) who loses Mission:/Delegation: git-trailer attribution when
+        driving an ethos-owned mission through OpenCode instead of Claude Code;
+        FAQs covering why the Claude Code hook mechanism can't be reused
+        verbatim (different invocation model entirely — shell/MCP hook vs. JS/TS
+        plugin module — though the underlying git commit-msg hook stays shared
+        and only needs a new trigger to read from), session.fork mid-mission
+        handling (new delegation round under the same mission, not a silent
+        identity inherit), ethos/OpenCode restart handling, worktree/concurrent
+        session handling, and a reasoned plugin-vs-adapter-vs-config
+        recommendation (bundled plugin, following ethos's own vox/z-spec
+        per-repo enable pattern); a non-goals section explicitly separating this
+        work's stable correlation metadata from Circuit's mutable PR-watch
+        state (grounded in the SLSA provenance-vs-live-state distinction); four
+        real-world and in-house exemplars (W3C Trace Context via Claude Code's
+        own TRACEPARENT support, SLSA build provenance, ethos's own existing
+        Mission:/Delegation: trailer mechanism including its prior silent-failure
+        incident, and the in-house model-provider/Bifrost multi-harness routing
+        precedent); and an explicit confidence/verification section separating
+        what was directly sourced and read in full from what was inferred,
+        from a prior unrelated session's secondhand claims, and from what
+        could not be found at all (the context.data.session surface).
+
+        Tooling constraint: this session had no context7 or WebFetch tools —
+        only quarry (CLI, via Bash) was available. I worked around this by
+        using quarry's own URL-ingest pipeline to fetch the two specific GitHub
+        spec documents the mission brief named (specs/v2/session.md and
+        V2_HTTP_API_AUDIT.md) directly from the anomalyco/opencode dev branch,
+        then read each in full after ingestion — this gives the same
+        source-grounding the brief asked for, just through a different tool
+        path. That substitution, and the two items I could not verify despite
+        it, are called out explicitly in the open_questions above and in the
+        document's own "What I could not verify" section, per the mission's
+        citation and confidence-level requirements. Recommending the evaluator
+        treat those two gaps as the primary review focus rather than the
+        overall structure, which closely follows the mission's required
+        outline.
+    - mission: m-2026-10-14-020
+      round: 2
+      created_at: "2026-10-14T16:43:49Z"
+      author: ghr
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: docs/prfaq-opencode-integration.md
+          added: 443
+          removed: 0
+      evidence:
+        - name: markdownlint-cli2 docs/prfaq-opencode-integration.md
+          status: pass
+        - name: git status --short (worktree) shows only the write-set file as untracked
+          status: pass
+        - name: cli.mdx (services/www/src/docs/content/build/plugins/cli.mdx, anomalyco/opencode dev branch) fetched directly via GitHub blob view through quarry ingest, read in full (28 pages), confirmed context.data.session.{list,get,root,family,cost,status,sync,invalidate} verbatim plus sibling .pending/.message/.permission/.form namespaces
+          status: pass
+        - name: 'Fork FAQ addendum: context.data.session.root/.family cited as the lineage-lookup mechanism, confidence raised from medium to high for that specific claim, with the remaining hook-payload-field uncertainty scoped narrowly to apply only outside this lineage-lookup use'
+          status: pass
+        - name: 'Restart FAQ addendum: context.data.session.status(sessionID) cited as a materially cheaper liveness check than polling sessions.active() + recovery-attempt counts'
+          status: pass
+        - name: '''What I could not verify'' section updated: the context.data.session gap is now marked resolved-in-round-2 rather than silently deleted, with the CLI/TUI-plugin vs hook-plugin surface distinction stated explicitly so the document does not imply the two plugin surfaces are the same thing'
+          status: pass
+      prose: |
+        Addressed both items from adt's round-1 reflection, without rewriting
+        anything adt confirmed as sound (exemplars, non-goal boundary,
+        plugin-vs-adapter-vs-config reasoning, press release/FAQ consistency
+        all left untouched).
+
+        1. Fork-handling FAQ: added context.data.session.root(sessionID) and
+           .family(sessionID) as the concrete session-lineage lookup mechanism
+           the plugin uses to detect whether a forked child's ancestry carries
+           an active mission claim. Raised the confidence rating for this
+           specific claim from medium to high, since root/family give a CLI
+           plugin direct hierarchy access independent of whatever fields a
+           session.created hook's event payload carries — the previously-open
+           question (hook payload shape) is now explicitly scoped to apply
+           only outside this particular lineage-lookup use, not resolved away
+           entirely (I still don't know the hook payload's field set, and say
+           so).
+
+        2. Restart FAQ: added context.data.session.status(sessionID) as a
+           materially cheaper liveness-check primitive than reconstructing
+           liveness from the write-ahead-claim/recovery spec language alone,
+           which is what the FAQ relied on exclusively before this round.
+
+        3. Updated the "What I could not verify" section's relevant bullet
+           from "not verified, flagged as a gap" to "resolved in round 2" —
+           narrated honestly: round 1's gap was a correctly-disclosed tooling
+           limitation (no context7/WebFetch that session), not an error, and
+           nothing already written needed retraction. Explicitly noted the
+           leader's finding that cli.mdx documents a *different* plugin
+           surface (@opencode/plugin/tui, the CLI/TUI plugin loaded via a
+           package's ./tui export) than the one the rest of the document
+           scopes to (.opencode/plugins/*.ts hook plugins) — the two are
+           siblings within one package, not alternatives, and I cited the
+           "Publish and load" section of cli.mdx itself to support that
+           distinction so the document doesn't conflate the two surfaces.
+
+        Verified cli.mdx content directly: fetched via quarry's ingest
+        pipeline against the exact GitHub blob URL the leader supplied, read
+        all 28 pages in full, confirmed the method list verbatim against what
+        the leader's reflection described (list, get, root, family, cost,
+        status, sync (async), invalidate, plus .pending/.message/.permission/.form
+        siblings) before citing it.
+
+        markdownlint-cli2 passes clean on the updated file. git status shows
+        only docs/prfaq-opencode-integration.md as touched — write-set
+        respected.

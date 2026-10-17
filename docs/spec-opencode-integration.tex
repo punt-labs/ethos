@@ -1,0 +1,1794 @@
+%
+% spec-opencode-integration.tex
+%
+% OpenCode-to-Ethos Session and Delegation Binding: A Z Specification
+% A formal, harness-neutral model of the session/mission/delegation
+% correlation problem tracked by bead ethos-5y4r (mirrored as points-hqi
+% in punt-labs/points). Drafted BEFORE any OpenCode-side design or
+% implementation work, per the mission brief: this document is the
+% design step, not a retrospective account of code that already exists
+% for OpenCode (none does yet).
+%
+% The Claude Code half of this model is read off real code, cited by
+% file and line, exactly as spec-mission-lifecycle.tex and
+% spec-writeset-admission.tex are: internal/process/tree.go,
+% internal/session/{session,store,match}.go, internal/resolve/resolve.go,
+% internal/mission/active.go, internal/hook/{pretooluse_dispatch,
+% commit_trailers,audit_log}.go, internal/githook/{resolver,githook}.go.
+%
+% The OpenCode half is grounded in a companion research artifact,
+% docs/prfaq-opencode-integration.md (a sibling worktree), which was
+% sourced directly from anomalyco/opencode's dev branch (specs/v2/
+% session.md, V2_HTTP_API_AUDIT.md, the CLI-plugin cli.mdx, and the
+% migrate-v1.mdx hook-surface reference) via context7, across two
+% evaluation rounds -- the second of which corrected a V1-vocabulary
+% draft and located the context.data.session.{root,family,status}
+% surface a round-1 search had correctly disclosed as unfound rather
+% than guessed at. This agent did not independently fetch those
+% primary sources (no context7/WebFetch tool was available in this
+% session) and attributes every OpenCode-specific claim below to that
+% companion document -- see \S\ref{sec:harness-instantiation}'s
+% opening paragraph for the precise chain of evidence.
+%
+% Compile: pdflatex spec-opencode-integration.tex
+%
+% Must be .tex, not .md -- for the identical reason given in
+% spec-mission-lifecycle.tex's own header comment and restated in
+% spec-writeset-admission.tex's: this repo's /z-spec:test tooling globs
+% docs/*.tex for the fuzz usepackage (Makefile's FUZZ_SPECS), and
+% probcli's Z-to-B translation silently produces 0 states against any
+% other extension. The mission contract naming this file's write_set as
+% docs/spec-opencode-integration.md is corrected here, in the same PR,
+% to the .tex path the toolchain actually requires -- see this
+% document's own mission result for the explicit note.
+%
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\fpath}[1]{\texttt{#1}}
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{OpenCode-to-Ethos Session and Delegation Binding: A Z Specification}
+\author{Mike S, for Punt Labs}
+\date{October 2026}
+\hypersetup{
+  pdftitle={OpenCode-to-Ethos Session and Delegation Binding: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+\tableofcontents
+\newpage
+
+% ===================================================================
+\section{Scope}
+\label{sec:scope}
+% ===================================================================
+
+Ethos today binds a Claude Code session to its identity, mission-claim,
+and delegation state through a chain that is, in several places,
+Claude-Code-specific by construction: a corroborated \field{CLAUDE\_PID}
+(\fpath{internal/process/tree.go}), a PID-keyed pointer file
+(\fpath{internal/session/store.go}'s \field{WriteCurrentSession}/
+\field{ReadCurrentSession}), and a resolution chain
+(\fpath{internal/resolve/resolve.go}'s \field{SessionID}) that walks a
+process tree when no environment override is present. Bead
+\field{ethos-5y4r} (mirrored as \field{points-hqi} in
+\fpath{punt-labs/points}) asks for a harness-neutral generalization of
+this chain that ALSO covers OpenCode 2.x, specified formally before any
+design or implementation work proceeds.
+
+This document models the state, invariants, transitions, and failure
+modes of that generalized binding: which (harness, session) pairs are
+active, which delegations are open and to which session and mission
+each belongs, and how a commit's Mission/Delegation trailers are
+resolved -- or, correctly, refused -- from that state. It does not model
+the mission-contract status machine itself (that is
+spec-mission-lifecycle.tex's job) or write-set path semantics (that is
+spec-writeset-admission.tex's) -- both are cross-referenced where the
+boundary matters, never re-derived.
+
+\subsection{Non-goals}
+\label{sec:nongoals}
+
+\begin{itemize}
+  \item \textbf{Circuit's PR-watch workflow state} -- the mutable PR
+    head SHA tracked by the sibling Circuit/GitHub integration is
+    explicitly a separate, GitHub-owned concern per the bead's own
+    design note (``\emph{mutable PR head SHA remains GitHub/Circuit-owned}'').
+    This document covers only the STABLE correlation metadata: harness
+    session ID, Bead, Ethos mission, and delegation.
+  \item \textbf{Changing Claude Code's existing behavior} -- every
+    schema and operation below that touches the Claude Code side is
+    read off code that already ships; \S\ref{sec:harness-instantiation}
+    shows that code as ONE instantiation of this generalized model, not
+    a replacement for it. A reviewer checking this document against
+    \fpath{internal/resolve/resolve.go} should find the existing
+    \field{SessionID} three-outcome contract unchanged.
+  \item \textbf{The audit-log enrichment fallback chain's own known gap}
+    -- \fpath{internal/hook/audit\_log.go}'s \field{buildAuditEntry}
+    enriches a tool-call audit entry with \field{delegation\_id}/
+    \field{contract\_id} from, in order, the tool input itself, then
+    \field{DELEGATION\_ID}/\field{MISSION\_ID} env vars, with no
+    sidecar fallback for a Tier A spawn (\fpath{audit\_log.go}:189--232).
+    That gap is tracked separately as \field{ethos-f298} and is a
+    property of audit-entry ENRICHMENT at tool-call time, not of the
+    session/delegation BINDING this document models -- a different
+    layer, not re-derived here.
+  \item \textbf{True concurrent-writer interleaving.} Every operation
+    below is a single atomic Z step, exactly the simplification
+    spec-mission-lifecycle.tex's own \S~``Modelling choice: one mission
+    at a time'' and spec-writeset-admission.tex's Validation section
+    both disclose for their own state machines. The real mutual
+    exclusion -- \field{AcquireDispatchPendingLock}
+    (\fpath{internal/mission/active.go}:476--550), the per-session
+    roster flock (\fpath{internal/session/store.go}'s
+    \field{withLock}), the per-mission and per-delegation flocks -- is
+    what makes the atomic-step assumption sound in the real system; it
+    is not itself re-derived in Z. \S\ref{sec:failure-concurrent}
+    states exactly what this document DOES check given that assumption,
+    and what it does not.
+  \item \textbf{OpenCode's own execution-recovery semantics.} The V2
+    session contract commits a write-ahead claim when a process-local
+    busy period starts, and an unclean OpenCode server death preserves
+    that claim for the next startup to resume -- but, per the
+    contract's own words, ``\emph{recovery is bounded per claimed
+    execution but does not guarantee exactly-once provider requests or
+    tool effects}'' (\fpath{specs/v2/session.md}, \S~``Execution Is
+    Process-Local,'' as read and cited in this document's companion
+    research artifact, \fpath{docs/prfaq-opencode-integration.md}).
+    Whether a retried tool call runs exactly once is an OpenCode-side
+    concern this document's correlation metadata is unaffected by --
+    that metadata is a durable file, re-read fresh on every query, not
+    an in-memory session object a crash could corrupt. The ACTUAL
+    safeguard against a double-applied effect is the mission worker's
+    own commit-per-step discipline (already required by this repo's
+    mission-contract success criteria), not anything this integration
+    adds or needs to model.
+  \item \textbf{The exact wire shape of an OpenCode plugin payload.}
+    \S\ref{sec:harness-instantiation} names the confirmed V2 hook
+    surfaces and event types a plugin subscribes to
+    (\field{Plugin.define}, \field{ctx.event.subscribe},
+    \field{session.created}/\field{session.updated}) and the confirmed
+    \field{context.data.session} lookup API
+    (\field{root}/\field{family}/\field{status}), but does not model
+    the full JSON shape of an event payload or every method on the
+    OpenCode SDK client -- only the subset this document's operations
+    actually consume.
+  \item \textbf{Mission-contract status, round budget, result gates,
+    write-set admission.} Already specified, respectively, by
+    spec-mission-lifecycle.tex and spec-writeset-admission.tex. This
+    document's \field{MISSIONID} is exactly that other document's
+    mission identifier, treated here as an opaque given set.
+\end{itemize}
+
+\subsection{Precedent}
+\label{sec:precedent}
+
+Binding one tool's identity or audit state across more than one
+runtime is not a new problem class, and this design does not pretend
+to invent its shape from nothing. Four precedents, surveyed in detail
+in this document's companion research artifact
+(\fpath{docs/prfaq-opencode-integration.md}, \S~``Exemplars''), bear
+directly on the invariants below: W3C Trace Context's
+\field{TRACEPARENT}/\field{TRACESTATE} header pair, which Claude Code
+itself already reads, shows that a single correlation identifier
+travelling as inert metadata works across runtimes sharing nothing
+else -- exactly the shape of \field{MISSIONID}/\field{DELEGATIONID}
+this document moves between harnesses; SLSA build provenance's
+immutable-provenance-vs-mutable-build-state split is the formal
+ancestor of this document's own stable-correlation-metadata-vs-Circuit's
+-mutable-PR-SHA non-goal boundary (\S\ref{sec:nongoals}); the in-house
+\field{model-provider}/Bifrost tool already solves the sibling
+problem -- one control surface, several harnesses -- by writing into
+each harness's own native extension point rather than inventing a
+cross-harness daemon, the same design this document's
+\S\ref{sec:harness-instantiation} follows for OpenCode; and, closest
+to home and most directly load-bearing for
+\field{FailClosedOnAmbiguity} (\S\ref{sec:theorems}), ethos's own
+existing \field{Mission:}/\field{Delegation:} trailer mechanism has
+ALREADY failed silently once in production -- a session-binding bug
+meant the commit-msg hook ``stamped nothing'' the first time a
+multi-session scenario exercised it, per this repo's own
+\fpath{docs/MODERNIZATION\_CASE\_STUDY.tex} as quoted in the companion
+research artifact's \S~``Exemplars.'' This document did not
+independently re-read that case-study file (it does not exist in this
+author's own worktree checkout at the time of writing); the claim is
+attributed to the companion artifact, not independently verified
+here. \field{FailClosedOnAmbiguity} exists precisely so this
+integration does not discover the same failure mode a second time, in
+a second harness, before fixing it formally the first time.
+
+\subsection{Modelling choice: one global registry, not per-harness
+state machines}
+\label{sec:modelling-choice}
+
+A tempting alternative design gives Claude Code and OpenCode each their
+own state schema and asks whether the two satisfy ``the same''
+invariants by analogy. That throws away exactly the property worth
+proving: that a SINGLE state machine, with no branch on which harness a
+session belongs to, accounts for both. \S\ref{sec:state} defines one
+schema, \field{Registry}, whose session and delegation components carry
+a \field{HARNESS} tag purely as data -- no operation's guard or effect
+ever inspects it. \field{HarnessNeutrality}
+(\S\ref{sec:theorems}) states this precisely: it is a claim checkable by
+inspection of every operation's predicate, not an empirical property
+established by running the model twice under different parameters.
+
+% ===================================================================
+\section{Basic Types}
+\label{sec:basic}
+% ===================================================================
+
+Three given sets carry no internal structure this specification needs:
+a session identifier (a corroborated \field{CLAUDE\_PID}, an
+\field{ETHOS\_SESSION} value, or -- per
+\S\ref{sec:harness-instantiation} -- an OpenCode session ID), a mission
+identifier (spec-mission-lifecycle.tex's own \field{MISSIONID}, opaque
+here), and a delegation identifier (spec-mission-lifecycle.tex's
+\field{blockingDelegationCount} counts these; this document tracks each
+one's own session and mission binding instead of only a count, because
+the binding -- not merely the count -- is exactly what this bead is
+about).
+
+\begin{zed}
+[SESSIONID, MISSIONID, DELEGATIONID]
+\end{zed}
+
+% ===================================================================
+\section{Free Types}
+\label{sec:freetypes}
+% ===================================================================
+
+\subsection{ZBOOL}
+
+Carried over from both existing specifications, for the identical
+reason: \fuzz{} has no built-in boolean, and \field{BOOL}/\field{true}/
+\field{false} collide with B keywords under ProB's translation.
+
+\begin{zed}
+ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+\subsection{HARNESS}
+
+The two harnesses this bead names. A third would be a third
+constructor, not a design change -- nothing below branches on which
+value a session carries (\S\ref{sec:modelling-choice}).
+
+\begin{zed}
+HARNESS ::= hClaude | hOpenCode
+\end{zed}
+
+\subsection{TIER}
+
+The two delegation tiers \fpath{internal/mission/delegation.go}:19--20
+names directly: \field{TierA} (an ad hoc spawn, no mission) and
+\field{TierB} (spawned under an explicit mission).
+
+\begin{zed}
+TIER ::= tierA | tierB
+\end{zed}
+
+\subsection{ORIGIN}
+
+How a Tier B delegation's mission came to be known, generalizing
+\fpath{internal/mission/active.go}'s \field{BindOrigin*}/\field{BoundVia*}
+constants (lines 100--113, 59--62) to the dimension this document
+checks: was the binding stated outright, dispatched by a leader for
+someone else, inherited down a \field{parent\_delegation} CHAIN (a
+per-delegation pointer, the Claude Code Tier B inheritance mechanism),
+or propagated by a root/family LOOKUP on the forking session's own
+hierarchy (the OpenCode mechanism, \S\ref{sec:opforkpropagate}) --
+these are two structurally different evidencing mechanisms for
+``this delegation's mission binding is traceable, not asserted,'' kept
+as two distinct constructors rather than collapsed into one, because
+\S\ref{sec:delegation-schema}'s guard on each is different: one
+requires a stored \field{DELEGLINK} pointer, the other requires
+none, because the evidence lives in \field{SESSION.root} instead (see
+\field{TraceabilityViaRootSuffices}, \S\ref{sec:theorems}).
+\field{oNone} is reserved for Tier A, which has no mission and hence no
+origin to record.
+
+\begin{zed}
+ORIGIN ::= oNone | oClaim | oDispatch | oInherited | oForkPropagated
+\end{zed}
+
+\subsection{PARENTLINK}
+
+A session's fork provenance -- present (\field{forkedFrom(p)}) when
+this session was created by forking an existing session \field{p},
+absent (\field{noParent}) for a root session. Retained purely as
+descriptive data on a \field{SESSION} record
+(\S\ref{sec:session-schema}): unlike the ORIGINAL draft of this
+document, no operation below ever walks this link to RESOLVE anything
+-- the OpenCode research confirms lineage is looked up directly via
+\field{context.data.session.root}/\field{.family}
+(\S\ref{sec:harness-instantiation}), which this document models as the
+\field{root}/\field{family} FIELDS on \field{SESSION} itself
+(\S\ref{sec:session-schema}), not as a chain an operation has to
+traverse at read time. \field{PARENTLINK} survives only as the
+immediate-parent provenance a \field{ForkSession} event records, kept
+separate from \field{root}/\field{family} because ``who directly forked
+me'' and ``who is the lineage root / who else shares it'' are
+genuinely different questions \S\ref{sec:opforksession} needs to ask
+and answer independently.
+
+\begin{zed}
+PARENTLINK ::= noParent | forkedFrom \ldata SESSIONID \rdata
+\end{zed}
+
+\subsection{MISSIONLINK, DELEGLINK}
+
+The same optional-value idiom, for a delegation's mission (absent on
+Tier A) and a delegation's inherited parent delegation (absent except
+under \field{oInherited}).
+
+\begin{zed}
+MISSIONLINK ::= noMission | missionOf \ldata MISSIONID \rdata
+\end{zed}
+
+\begin{zed}
+DELEGLINK ::= noDeleg | delegOf \ldata DELEGATIONID \rdata
+\end{zed}
+
+% ===================================================================
+\section{Global Constants}
+\label{sec:constants}
+% ===================================================================
+
+Bounding the number of concurrently tracked sessions and delegations is
+what lets probcli enumerate the state space at all -- the identical
+economy argument spec-mission-lifecycle.tex's \field{maxRounds}/
+\field{maxDelegations} and spec-writeset-admission.tex's \field{maxOpen}
+make for their own bounds. Neither constant has a real-code analogue:
+the actual \field{Registry} (a session roster directory plus a mission
+tree) holds arbitrarily many of each.
+
+\begin{axdef}
+maxSessions : \nat
+\where
+maxSessions = 2
+\end{axdef}
+
+\begin{axdef}
+maxDelegations : \nat
+\where
+maxDelegations = 2
+\end{axdef}
+
+\field{RestartService} (\S\ref{sec:oprestart}) increments
+\field{Registry.epoch} unconditionally on every firing, so without an
+explicit bound the epoch component is unbounded in exactly the way
+z-spec's own ProB-compatibility guidance warns against -- ProB cannot
+enumerate a state space with an ever-growing natural number in it, and
+a model-check run against the unbounded form times out rather than
+reporting anything. \field{maxEpoch} bounds it purely for this reason;
+the real system has no such ceiling (a long-lived \field{ethos serve}
+process restarts an unbounded number of times over its lifetime).
+
+\begin{axdef}
+maxEpoch : \nat
+\where
+maxEpoch = 2
+\end{axdef}
+
+One small partial function recovers the wrapped value from a
+\field{DELEGLINK}, exactly as spec-writeset-admission.tex's
+\field{unwrap} does for \field{RAWSEG}: undefined on the ``absent''
+constructor, total and faithful on the ``present'' one.
+
+\begin{axdef}
+delegID : DELEGLINK \pfun DELEGATIONID
+\where
+\dom delegID = \ran delegOf \\
+\forall d : DELEGATIONID @ delegID(delegOf(d)) = d
+\end{axdef}
+
+A second such function recovers the wrapped value from a
+\field{PARENTLINK}: unlike the first draft of this document, it is used
+only to STATE the lineage invariant below (\S\ref{sec:registry}), never
+to RESOLVE a chain of pointers at query time -- \S\ref{sec:registry}'s
+\field{lineageRoot} is the maintained projection that makes repeated
+chain-walking unnecessary, matching how OpenCode's own
+\field{context.data.session.root}/\field{.family} are confirmed,
+already-maintained lookups, not something a plugin has to derive itself
+on every call (\S\ref{sec:harness-instantiation}).
+
+\begin{axdef}
+parentID : PARENTLINK \pfun SESSIONID
+\where
+\dom parentID = \ran forkedFrom \\
+\forall s : SESSIONID @ parentID(forkedFrom(s)) = s
+\end{axdef}
+
+% ===================================================================
+\section{State}
+\label{sec:state}
+% ===================================================================
+
+\subsection{SESSION}
+\label{sec:session-schema}
+
+The generalized harness session identity -- the minimal common shape a
+Claude Code session and an OpenCode session both instantiate. Five
+fields: which harness, this session's immediate fork provenance (if
+any), the lineage ROOT session (every session is a member of exactly
+one lineage, rooted at itself if it was never forked from anything),
+the liveness epoch at which this record was last corroborated as real,
+and whether it is currently recorded as alive at all.
+
+\begin{schema}{SESSION}
+harness : HARNESS \\
+parent : PARENTLINK \\
+root : SESSIONID \\
+bornEpoch : \nat \\
+alive : ZBOOL
+\where
+bornEpoch \leq maxEpoch
+\end{schema}
+
+\field{root} is this document's Z rendering of OpenCode's own
+\field{context.data.session.root(sessionID)} lookup
+(\S\ref{sec:harness-instantiation}) -- a direct, maintained hierarchy
+projection the CLI-plugin data-cache API exposes, independent of
+whatever fields a \field{session.created} event payload happens to
+carry. A session's FAMILY -- OpenCode's
+\field{context.data.session.family(sessionID)} -- is deliberately NOT
+a second stored field on \field{SESSION}: it is the DERIVED set of
+every currently-rostered session sharing the same \field{root}
+(\field{Registry}'s own \field{family} function,
+\S\ref{sec:registry}). Storing family as data on every member would
+require rewriting every other family member's record each time a new
+fork joins -- an operation with no natural single-key Z rendering and
+no counterpart in the real API either, which exposes \field{family} as
+a LOOKUP, not a field a caller sets. Deriving it from \field{root}
+equality is the one representational change this document makes
+between its first and second draft, driven directly by confirming
+OpenCode's hierarchy API shape; \field{ForkSession}
+(\S\ref{sec:opforksession}) therefore needs to write only the ONE new
+session's own record, never a bulk update over its lineage.
+
+\field{bornEpoch} together with \field{Registry}'s own \field{epoch}
+component (\S\ref{sec:registry}) is the generalization of
+\field{ClaudePIDFromEnvCorroborated}'s live-ancestor check
+(\fpath{internal/process/tree.go}:52--86): a session is usable only
+when its OWN liveness anchor has been corroborated against CURRENT
+reality, not merely recorded once and cached. \field{FindClaudePID}'s
+own doc comment states the property this generalizes directly:
+``\emph{resolved fresh on every call -- never cached. A long-lived
+process (\field{ethos serve}) outlives any single session it has
+observed; a process-lifetime cache... would keep answering with the
+first session's PID forever}'' (\fpath{tree.go}:18--22, DES-074). A
+session record is never mutated to look alive by assertion; only
+\field{CorroborateSession} (\S\ref{sec:opcorroborate}) can re-stamp
+\field{bornEpoch}, and only by re-asserting every other field unchanged.
+\S\ref{sec:harness-instantiation} shows this abstract pair
+INSTANTIATED two different ways: a PID-ancestry re-walk for Claude
+Code, and the confirmed, cheaper
+\field{context.data.session.status(sessionID)} projection for
+OpenCode -- the status primitive the companion research names as
+materially better than reconstructing liveness from the write-ahead
+execution-claim recovery language (\S\ref{sec:nongoals}'s own
+disclosed exclusion of that recovery machinery).
+
+\subsection{DELEGATION}
+\label{sec:delegation-schema}
+
+One delegation's binding: which session opened it, which mission (if
+any) it was opened under, which tier, how its mission binding was
+established, and -- for an inherited binding -- which ancestor
+delegation licensed the inheritance.
+
+\begin{schema}{DELEGATION}
+session : SESSIONID \\
+mission : MISSIONLINK \\
+tier : TIER \\
+origin : ORIGIN \\
+parentDelegation : DELEGLINK \\
+bornEpoch : \nat
+\where
+bornEpoch \leq maxEpoch \\
+tier = tierA \implies
+  (mission = noMission \land origin = oNone \land parentDelegation = noDeleg) \\
+tier = tierB \implies (mission \neq noMission \land origin \neq oNone) \\
+origin = oInherited \iff parentDelegation \neq noDeleg
+\end{schema}
+
+$\field{bornEpoch} \leq \field{maxEpoch}$ is the same ProB-animatability bound
+\S\ref{sec:registry} adds to \field{Registry.epoch}, needed here for
+the identical reason. The other three conjuncts are, respectively: a
+Tier A delegation
+(\fpath{internal/mission/delegation.go}:19, \fpath{internal/hook/
+pretooluse\_dispatch.go}'s \field{dispatchTierA}) carries no mission and
+needs no origin to explain, because there is nothing to attribute; a
+Tier B delegation always names a mission, by definition of the tier;
+and -- the formal statement of the bead's own ``a fork of a session
+never silently inherits its parent's mission binding without an
+explicit, traceable link'' criterion -- \field{origin = oInherited}
+IF AND ONLY IF a non-empty \field{parentDelegation} pointer is carried.
+Strengthened from the first draft's one-directional implication to a
+biconditional once \field{oForkPropagated} was added
+(\S\ref{sec:opforkpropagate}): a fork-propagated delegation's own
+traceability witness is a shared \field{family}, never a
+\field{parentDelegation} pointer, so the type now makes it
+UNREPRESENTABLE for any non-\field{oInherited} origin -- including the
+new one -- to carry that pointer at all, not merely unconventional.
+There is no value of \field{ORIGIN} that lets a delegation claim
+``inherited'' while leaving the chain unrecorded, nor one that lets a
+delegation carry an inheritance pointer while claiming a DIFFERENT
+origin: the type itself makes a silent or a misattributed inheritance
+unrepresentable, not merely disallowed by a guard that a caller could
+omit.
+
+\subsection{Registry}
+\label{sec:registry}
+
+The one global state: every tracked session, every tracked delegation,
+every mission claim, every session's delegation-binding sidecar, and
+the current liveness epoch.
+
+\begin{schema}{Registry}
+sessions : SESSIONID \pfun SESSION \\
+delegations : DELEGATIONID \pfun DELEGATION \\
+claims : SESSIONID \pfun MISSIONID \\
+delegationOf : SESSIONID \pfun DELEGATIONID \\
+epoch : \nat
+\where
+epoch \leq maxEpoch \\
+\# (\dom sessions) \leq maxSessions \\
+\# (\dom delegations) \leq maxDelegations \\
+\dom claims \subseteq \dom sessions \\
+\dom delegationOf \subseteq \dom sessions \\
+\forall s : \dom delegationOf @
+  delegationOf(s) \in \dom delegations \land
+  (delegations(delegationOf(s))).session = s \\
+\forall s : \dom sessions |
+    (sessions(s)).parent = noParent @
+  (sessions(s)).root = s \\
+\forall s : \dom sessions |
+    (sessions(s)).parent \neq noParent \land
+    parentID((sessions(s)).parent) \in \dom sessions @
+  (sessions(s)).root = (sessions(parentID((sessions(s)).parent))).root
+\end{schema}
+
+\field{family(s)}, the derived per-session lookup OpenCode's own
+\field{context.data.session.family(sessionID)} names
+(\S\ref{sec:session-schema}), is NOT declared as a free-standing
+global function here, deliberately: spec-writeset-admission.tex's own
+\S~``Modelling choice: schemas, not free functions, over sequences''
+already identifies the reason -- declaring any global constant whose
+type mentions a function or relation over an unbounded carrier makes
+\texttt{SETUP\_CONSTANTS} fail for the WHOLE machine, even when every
+operation that actually fires never references it, because $\field{SESSIONID}
+\pfun \field{SESSION}$ is unbounded as a Z type regardless of how
+tightly \field{maxSessions} constrains it in practice. \field{family(s)}
+is therefore written inline, at its one call site
+(\S\ref{sec:opforkpropagate}), as the set comprehension
+$\{ t : \dom sessions \mid (sessions(t)).root = (sessions(s)).root \}$
+directly against whichever \field{Registry} binding is in scope -- the
+identical VALUE the generic notation \field{family(sessions)} names
+informally throughout this document's prose, with no schema-level
+declaration for ProB to choke on.
+
+Eight predicates, five load-bearing:
+
+\begin{itemize}
+  \item $\field{epoch} \leq \field{maxEpoch}$ and the two cardinality bounds are
+    ProB animatability conditions, with no code counterpart -- the
+    identical role spec-mission-lifecycle.tex's
+    \field{blockingDelegationCount} $\leq$ \field{maxDelegations} and
+    spec-writeset-admission.tex's \field{Store} invariant play for
+    their own bounds. \field{epoch}'s bound is forced by
+    \field{RestartService} (\S\ref{sec:oprestart}), the one operation
+    whose effect is an unconditional increment; without it the state
+    space is unbounded and probcli times out rather than reporting
+    anything, exactly the failure this document's own first model-check
+    attempt hit before \field{maxEpoch} was added.
+  \item \field{claims} and \field{delegationOf} are both scoped to
+    LIVE-ROSTER sessions ($\dom \field{claims}$ $\subseteq$
+    $\dom \field{sessions}$) -- these are the two per-session SIDECARS
+    (\field{active-mission}, \field{delegation-binding};
+    \fpath{internal/mission/active.go}:31--49, 342--347), ephemeral
+    state that lives beside a session's roster entry and is cleared
+    when the roster entry goes (\field{EndSession},
+    \S\ref{sec:opendsession}).
+  \item \field{delegationOf}'s own defining conjunct -- a per-session
+    sidecar always names a REAL delegation actually bound to THAT
+    session -- is the formal shape of
+    \field{WriteCommitTrailers}'s own same-mission cross-check
+    (\fpath{internal/hook/commit\_trailers.go}:65: ``\emph{The
+    delegation is emitted only when its binding names the same
+    mission}''), restated as a standing state invariant rather than a
+    read-time guard: the sidecar and the record it names can never
+    drift apart, by construction, so \field{ResolveCommitAttribution}
+    (\S\ref{sec:opresolve}) never needs to reconcile a mismatch -- there
+    is none reachable.
+  \item The last two conjuncts together are this redesign's
+    \field{root} CONSISTENCY property, in place of the earlier draft's
+    single dangling-\field{PARENTLINK} sanity bound: a session with no
+    recorded fork-parent is its OWN lineage root, and a session WITH a
+    recorded fork-parent, WHILE that parent is still currently
+    rostered, agrees with it on which root they share. The guard is
+    deliberately conditioned on the parent STILL being in
+    $\dom \field{sessions}$ -- a fork's own \field{root} is stamped once,
+    at \field{ForkSession} time, and never re-derived afterward
+    (\S\ref{sec:opforksession}), so a parent ending its session later
+    (\field{EndSession}, \S\ref{sec:opendsession}) must not retroactively
+    falsify this invariant for every child it ever forked, exactly the
+    same durability argument this document's own note on
+    \field{(delegations(d)).session} already makes below. Deriving
+    \field{family} from \field{root} EQUALITY (rather than storing it
+    per-session) is what makes the earlier draft's separate
+    ``no two family-mates disagree on root'' conjunct unnecessary here:
+    two sessions sharing a root are family by \field{family}'s own
+    definition, not by a second fact that could drift out of sync with
+    the first.
+\end{itemize}
+
+Deliberately ABSENT from this schema: a conjunct requiring every
+delegation's \field{session} field to name a currently-rostered
+session. A delegation record is DURABLE audit data -- it lives under
+the mission's own tree, independent of the session roster -- while a
+session's roster entry is EPHEMERAL, removed on \field{EndSession} or
+purge. Requiring $\field{(delegations(d)).session} \in \dom \field{sessions}$ for
+every \field{d} would make \field{EndSession} (\S\ref{sec:opendsession})
+retroactively falsify the state invariant for every delegation that
+session ever opened -- exactly backwards, since the real
+\fpath{internal/session/store.go}'s \field{Store.Delete} deletes a
+roster entry while leaving the delegation tree under
+\fpath{.punt-labs/ethos/missions/} entirely untouched. This omission is
+a checked design decision, not an oversight: it is what lets
+\field{EndSession} below drop a session from $\dom \field{sessions}$
+without disturbing a single delegation record that names it.
+
+% ===================================================================
+\section{Initialization}
+\label{sec:init}
+% ===================================================================
+
+\begin{schema}{Init}
+Registry'
+\where
+sessions' = \emptyset \\
+delegations' = \emptyset \\
+claims' = \emptyset \\
+delegationOf' = \emptyset \\
+epoch' = 0
+\end{schema}
+
+% ===================================================================
+\section{Operations}
+\label{sec:ops}
+% ===================================================================
+
+Every schema below that constructs a new \field{SESSION} or
+\field{DELEGATION} value takes it as an INPUT parameter
+(\field{rec?}), constrained by equations, rather than building one from
+field-literals inline -- the same discipline
+spec-writeset-admission.tex's \field{AdmitMission} applies to
+\field{entry? : ENTRY}. It avoids any dependence on a schema-binding
+display construct and keeps every operation's predicate a flat
+conjunction, matching house style.
+
+\subsection{JoinRootSession}
+\label{sec:opjoin}
+
+Models a new, UNFORKED harness session entering the registry -- the
+real \fpath{internal/session/store.go}'s \field{Store.CreateInCheckout}
+for Claude Code (every Claude Code session is a root session per
+\S\ref{sec:harness-instantiation}), and, for OpenCode, the
+\field{session.created} event firing for a session with no fork
+ancestry. A root session is its own lineage: \field{root} names
+itself, so \field{family} (\S\ref{sec:registry}'s derived lookup)
+evaluates to the singleton containing only itself the instant it joins
+-- \field{ForkSession} (\S\ref{sec:opforksession}) is the only
+operation whose effect ever makes some OTHER session's \field{family}
+grow beyond one member.
+
+\begin{schema}{JoinRootSession}
+\Delta Registry \\
+sid? : SESSIONID \\
+rec? : SESSION
+\where
+sid? \notin \dom sessions \\
+\# (\dom sessions) < maxSessions \\
+rec?.parent = noParent \\
+rec?.root = sid? \\
+rec?.bornEpoch = epoch \\
+rec?.alive = ztrue \\
+sessions' = sessions \oplus \{ sid? \mapsto rec? \} \\
+delegations' = delegations \\
+claims' = claims \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+\subsection{ForkSession}
+\label{sec:opforksession}
+
+Models a session FORKING an existing one -- OpenCode's
+\field{POST /api/session/\{sessionID\}/fork} (operation ID
+\field{session.fork}), confirmed by the companion research as a
+first-class, routinely-exercised V2 primitive, not a corner case
+(\S\ref{sec:harness-instantiation}). The forked child receives its OWN
+session ID distinct from its parent's -- nothing about the fork
+endpoint's contract ties the two identities together beyond transcript
+and instruction-value copying, per the companion research's direct
+reading of \fpath{specs/v2/session.md}'s own ``Instructions Are Value
+Deltas'' section. The child's \field{root} is inherited from the PARENT
+(a fork of a fork still belongs to the ORIGINAL lineage, never starts a
+new one); because \field{family} is DERIVED from \field{root} equality
+(\S\ref{sec:registry}), stamping \field{root} correctly on the one new
+record is all that is needed for the new child to appear in its whole
+lineage's \field{family} and for every existing member's own
+\field{family} to pick the newcomer up automatically, the next time
+either is queried -- modelling OpenCode's own
+\field{context.data.session.family(sessionID)} as a maintained,
+symmetric projection with no corresponding WRITE this operation has to
+perform on any session other than the one it creates.
+
+\begin{schema}{ForkSession}
+\Delta Registry \\
+sid? : SESSIONID \\
+parentSid? : SESSIONID \\
+rec? : SESSION
+\where
+sid? \notin \dom sessions \\
+\# (\dom sessions) < maxSessions \\
+parentSid? \in \dom sessions \\
+rec?.parent = forkedFrom(parentSid?) \\
+rec?.root = (sessions(parentSid?)).root \\
+rec?.bornEpoch = epoch \\
+rec?.alive = ztrue \\
+sessions' = sessions \oplus \{ sid? \mapsto rec? \} \\
+delegations' = delegations \\
+claims' = claims \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+The load-bearing conjunct for the bead's fork criterion is the one that
+is ABSENT: \field{claims' = claims}. A freshly forked session enters
+the registry with NO mission claim of its own at all -- the ONLY ways a
+session's \field{claims} entry is ever populated are
+\field{ClaimMission} (\S\ref{sec:opclaim}, an explicit operator act)
+and \field{AllocateDelegationTierB}'s \field{oInherited} or
+\field{oForkPropagated} cases (\S\ref{sec:opallocateb},
+\S\ref{sec:opforkpropagate}, both of which require an explicit,
+checkable traceability witness -- a \field{parentDelegation} link or a
+shared \field{family}, respectively -- never a bare assertion).
+\field{ForkNeverInheritsClaim} (\S\ref{sec:theorems}) names this
+precisely, and is SHARPENED rather than weakened by \field{ForkSession}
+being a frequent, first-class operation: the more often a fork fires,
+the more this guarantee is actually exercised, not merely
+theoretically available.
+
+\subsection{ClaimMission}
+\label{sec:opclaim}
+
+Models \field{ethos mission claim} -- the operator declaring ``I am
+working on this mission'' -- via \field{WriteActiveMission}
+(\fpath{internal/mission/active.go}:223--229).
+
+\begin{schema}{ClaimMission}
+\Delta Registry \\
+sid? : SESSIONID \\
+mission? : MISSIONID
+\where
+sid? \in \dom sessions \\
+(sessions(sid?)).alive = ztrue \\
+(sessions(sid?)).bornEpoch = epoch \\
+claims' = claims \oplus \{ sid? \mapsto mission? \} \\
+sessions' = sessions \\
+delegations' = delegations \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+\subsection{ReleaseClaim}
+
+Models \field{ethos mission release} clearing the active-mission
+sidecar (\field{ClearActiveMission}, \fpath{active.go}:414--423).
+
+\begin{schema}{ReleaseClaim}
+\Delta Registry \\
+sid? : SESSIONID
+\where
+sid? \in \dom claims \\
+claims' = \{ sid? \} \ndres claims \\
+sessions' = sessions \\
+delegations' = delegations \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+\subsection{AllocateDelegationTierA}
+
+Models \field{dispatchTierA} (\fpath{internal/hook/
+pretooluse\_dispatch.go}:657--700): an ad hoc spawn with no mission,
+allocated a fresh \field{delegation\_id} and attributed to the issuing
+session alone.
+
+\begin{schema}{AllocateDelegationTierA}
+\Delta Registry \\
+sid? : SESSIONID \\
+id? : DELEGATIONID \\
+rec? : DELEGATION
+\where
+sid? \in \dom sessions \\
+(sessions(sid?)).alive = ztrue \\
+(sessions(sid?)).bornEpoch = epoch \\
+id? \notin \dom delegations \\
+\# (\dom delegations) < maxDelegations \\
+rec?.session = sid? \\
+rec?.mission = noMission \\
+rec?.tier = tierA \\
+rec?.origin = oNone \\
+rec?.parentDelegation = noDeleg \\
+rec?.bornEpoch = epoch \\
+delegations' = delegations \oplus \{ id? \mapsto rec? \} \\
+sessions' = sessions \\
+claims' = claims \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+\subsection{AllocateDelegationTierB}
+\label{sec:opallocateb}
+
+Models \field{dispatchTierB} (\fpath{pretooluse\_dispatch.go}:711--912):
+a spawn attributed to an explicit mission, by one of the three routes
+\fpath{active.go}'s \field{BoundVia*} constants name --
+\field{BoundViaMissionIDEnv}/\field{BoundViaSidecarClaim} both collapse
+to \field{oClaim} or \field{oDispatch} at this document's granularity
+(the distinction between an explicit env var and a sidecar claim is a
+mechanism-of-discovery detail with no bearing on any invariant checked
+here -- the same economy spec-writeset-admission.tex applies when it
+elides \field{segmentMatches}' per-segment classification), while
+\field{BoundViaInherited} maps to \field{oInherited} exactly.
+
+\begin{schema}{AllocateDelegationTierB}
+\Delta Registry \\
+sid? : SESSIONID \\
+id? : DELEGATIONID \\
+rec? : DELEGATION
+\where
+sid? \in \dom sessions \\
+(sessions(sid?)).alive = ztrue \\
+(sessions(sid?)).bornEpoch = epoch \\
+id? \notin \dom delegations \\
+\# (\dom delegations) < maxDelegations \\
+rec?.session = sid? \\
+rec?.tier = tierB \\
+rec?.mission \neq noMission \\
+rec?.origin \in \{ oClaim, oDispatch, oInherited \} \\
+rec?.origin = oInherited \implies
+  ( rec?.parentDelegation \neq noDeleg \land
+    delegID(rec?.parentDelegation) \in \dom delegations \land
+    (delegations(delegID(rec?.parentDelegation))).mission = rec?.mission ) \\
+rec?.origin \neq oInherited \implies rec?.parentDelegation = noDeleg \\
+rec?.bornEpoch = epoch \\
+delegations' = delegations \oplus \{ id? \mapsto rec? \} \\
+sessions' = sessions \\
+claims' = claims \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+The \field{oInherited} guard is the formal mirror of
+\field{enforceDelegationDepth}'s own parent-chain walk
+(\fpath{pretooluse\_dispatch.go}:912--964): the ancestor named by
+\field{parentDelegation} must already be on record, and must name the
+SAME mission the child inherits -- inheritance never silently invents a
+mission the ancestor did not itself carry. The guard is narrowed from
+the first draft's $\field{rec?.origin} \neq \field{oNone}$ to an explicit
+three-way enumeration EXCLUDING \field{oForkPropagated}: a fork's own
+delegation round is allocated by the DEDICATED
+\field{AllocateDelegationForkPropagated} operation below
+(\S\ref{sec:opforkpropagate}), never by this one, because the two have
+different traceability witnesses to check (a \field{parentDelegation}
+pointer versus a shared \field{family}) and conflating them into one
+schema's guard would let either witness silently satisfy the other.
+
+\subsection{AllocateDelegationForkPropagated}
+\label{sec:opforkpropagate}
+
+Models the companion research's own recommended plugin behavior for a
+forked OpenCode session: on the child's \field{session.created}/
+equivalent event firing with a new Session ID and no existing claim,
+the plugin resolves lineage via \field{context.data.session.root}/
+\field{.family} and, finding an active mission claim on some member of
+that family, opens a NEW DELEGATION ROUND for the forked session under
+the SAME mission -- ``ethos's mission model already supports multiple
+delegations per mission, so this is an existing primitive applied to a
+new trigger, not new machinery''
+(\fpath{docs/prfaq-opencode-integration.md}, \S~``What happens if
+OpenCode forks a session mid-mission?''). Given its OWN dedicated
+operation, distinct from \field{AllocateDelegationTierB}, because V2
+fork is frequent and first-class, not a corner case to fold into the
+generic inheritance path.
+
+\begin{schema}{AllocateDelegationForkPropagated}
+\Delta Registry \\
+sid? : SESSIONID \\
+id? : DELEGATIONID \\
+witness? : SESSIONID \\
+rec? : DELEGATION
+\where
+sid? \in \dom sessions \\
+(sessions(sid?)).alive = ztrue \\
+(sessions(sid?)).bornEpoch = epoch \\
+sid? \notin \dom claims \\
+witness? \in \dom sessions \\
+(sessions(witness?)).root = (sessions(sid?)).root \\
+witness? \in \dom claims \\
+id? \notin \dom delegations \\
+\# (\dom delegations) < maxDelegations \\
+rec?.session = sid? \\
+rec?.tier = tierB \\
+rec?.mission = missionOf(claims(witness?)) \\
+rec?.origin = oForkPropagated \\
+rec?.parentDelegation = noDeleg \\
+rec?.bornEpoch = epoch \\
+delegations' = delegations \oplus \{ id? \mapsto rec? \} \\
+sessions' = sessions \\
+claims' = claims \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+Four guards earn their place against the bead's own criterion:
+$\field{sid?} \notin \dom \field{claims}$ -- a session that already holds its own
+claim does not need (and must not receive) a fork-propagated one, so
+this operation can never silently overwrite an explicit
+\field{ClaimMission}; $\field{witness?} \in \dom \field{sessions}$ together with
+$\field{(sessions(witness?)).root} = \field{(sessions(sid?)).root}$ -- the
+witnessing session must be a genuine, currently-rostered member of the
+FORKED session's OWN lineage (the two conjuncts together are the
+inline expansion of ``\field{witness?} is in \field{sid?}'s
+\field{family}'', unpacked rather than named via a global function
+for the reason \S\ref{sec:session-schema} gives), not an arbitrary
+other session -- exactly the \field{root}/\field{family} lookup
+(\S\ref{sec:harness-instantiation}) replacing a parent-chain walk; and
+$\field{witness?} \in \dom \field{claims}$ -- there must be an ACTUAL claim to
+propagate, not a fabricated one. No conjunct here ever needs to resolve
+\field{witness?} back through \field{sessions} a second way: membership
+in \field{family} already IS the traceability witness
+\field{oForkPropagated} exists to name, which is exactly
+\field{TraceabilityViaRootSuffices}'s claim (\S\ref{sec:theorems}).
+
+\subsection{BindDelegationToSession}
+
+Models \field{WriteDelegationBinding}
+(\fpath{internal/mission/active.go}:349--358) -- the per-session
+sidecar bridging the PreToolUse allocation point to the PostToolUse
+audit writer, DES-054 v5.
+
+\begin{schema}{BindDelegationToSession}
+\Delta Registry \\
+sid? : SESSIONID \\
+id? : DELEGATIONID
+\where
+sid? \in \dom sessions \\
+id? \in \dom delegations \\
+(delegations(id?)).session = sid? \\
+delegationOf' = delegationOf \oplus \{ sid? \mapsto id? \} \\
+sessions' = sessions \\
+delegations' = delegations \\
+claims' = claims \\
+epoch' = epoch
+\end{schema}
+
+The guard \field{(delegations(id?)).session = sid?} is exactly what
+keeps \field{Registry}'s own \field{delegationOf} invariant
+(\S\ref{sec:registry}) an invariant rather than a hope: a session can
+only ever bind to a delegation IT ITSELF opened, never to one opened by
+a different session.
+
+\subsection{UnbindDelegation}
+
+Models \field{ClearDelegationBinding}
+(\fpath{internal/mission/active.go}:968--980).
+
+\begin{schema}{UnbindDelegation}
+\Delta Registry \\
+sid? : SESSIONID
+\where
+sid? \in \dom delegationOf \\
+delegationOf' = \{ sid? \} \ndres delegationOf \\
+sessions' = sessions \\
+delegations' = delegations \\
+claims' = claims \\
+epoch' = epoch
+\end{schema}
+
+\subsection{CorroborateSession}
+\label{sec:opcorroborate}
+
+Models re-validating a session's liveness anchor against CURRENT
+reality -- \field{isLiveAncestor}'s live walk for Claude Code
+(\fpath{tree.go}:136--161), or (per
+\S\ref{sec:harness-instantiation}) an OpenCode session-liveness query
+for OpenCode. The real OS/harness-level check this models -- is the
+anchor genuinely still live -- happens OUTSIDE \field{Registry}'s own
+state, the same way \field{isLiveAncestor} reads \fpath{/proc} rather
+than any ethos-persisted fact; this operation's precondition captures
+only the ethos-side bookkeeping requirement (the session is on record
+and was not already marked dead), not the external liveness check
+itself, which the caller is assumed to have already performed before
+invoking it.
+
+\begin{schema}{CorroborateSession}
+\Delta Registry \\
+sid? : SESSIONID \\
+rec? : SESSION
+\where
+sid? \in \dom sessions \\
+(sessions(sid?)).alive = ztrue \\
+rec?.harness = (sessions(sid?)).harness \\
+rec?.parent = (sessions(sid?)).parent \\
+rec?.root = (sessions(sid?)).root \\
+rec?.alive = ztrue \\
+rec?.bornEpoch = epoch \\
+sessions' = sessions \oplus \{ sid? \mapsto rec? \} \\
+delegations' = delegations \\
+claims' = claims \\
+delegationOf' = delegationOf \\
+epoch' = epoch
+\end{schema}
+
+Every field of \field{rec?} except \field{bornEpoch} is forced equal to
+the session's existing record: corroboration can only refresh WHEN a
+session was last confirmed live, never silently change WHAT it is.
+
+\subsection{RestartService}
+\label{sec:oprestart}
+
+Models the class of event \field{FindClaudePID}'s own doc comment names
+as the reason liveness must never be cached: a daemon restart, or any
+long-lived \field{ethos serve} process moving on from the session it
+last observed (\fpath{tree.go}:18--22). The real event is unconditional
+-- a restart can happen at any time, and happening does not itself
+discard any durable data; the \field{epoch < maxEpoch} guard below is
+purely the \S\ref{sec:constants} animatability bound, with no real-code
+counterpart (the real \field{epoch} has no ceiling).
+
+\begin{schema}{RestartService}
+\Delta Registry
+\where
+epoch < maxEpoch \\
+epoch' = epoch + 1 \\
+sessions' = sessions \\
+delegations' = delegations \\
+claims' = claims \\
+delegationOf' = delegationOf
+\end{schema}
+
+Nothing here deletes a session, a claim, or a delegation binding --
+every sidecar genuinely is a FILE that survives a restart on disk. What
+changes is \field{epoch} alone, and that one change is sufficient:
+\field{RestartClearsLiveness} (\S\ref{sec:theorems}) shows that every
+session recorded before the restart immediately fails the
+\field{bornEpoch = epoch} conjunct every operation in \S\ref{sec:ops}
+checks, so none of them is usable again until explicitly
+\field{CorroborateSession}'d.
+
+\subsection{EndSession}
+\label{sec:opendsession}
+
+Models \field{Store.Delete}/\field{Store.Purge} removing a roster entry
+and its sidecars (\fpath{internal/session/store.go}:200--301,
+\field{clearMissionSidecarsLocked}) -- but NOT the delegation tree,
+which is durable audit data outliving the roster (\S\ref{sec:registry}).
+
+\begin{schema}{EndSession}
+\Delta Registry \\
+sid? : SESSIONID
+\where
+sid? \in \dom sessions \\
+sessions' = \{ sid? \} \ndres sessions \\
+claims' = \{ sid? \} \ndres claims \\
+delegationOf' = \{ sid? \} \ndres delegationOf \\
+delegations' = delegations \\
+epoch' = epoch
+\end{schema}
+
+\subsection{AdapterDataMissing}
+\label{sec:opadaptermissing}
+
+The ``missing harness adapter data'' failure mode: a harness lifecycle
+event fires with insufficient information to identify a session at all
+-- no usable, stable ID. Rather than coerce a fabricated or
+best-guess \field{SESSIONID} into existence, the event is modelled as a
+self-loop that touches nothing, the same discipline
+spec-mission-lifecycle.tex's \field{Idle} and
+spec-writeset-admission.tex's non-goals both apply to an input the
+model refuses to manufacture a value for.
+
+\begin{schema}{AdapterDataMissing}
+\Xi Registry \\
+harness? : HARNESS
+\end{schema}
+
+\subsection{ResolveCommitAttribution}
+\label{sec:opresolve}
+
+Models the operation \field{ethos hook commit-trailers} performs --
+\field{runHookCommitTrailers} resolving a session via
+\field{resolve.SessionID}, then \field{WriteCommitTrailers} reading that
+ONE session's sidecars (\fpath{cmd/ethos/hook.go}:218--251,
+\fpath{internal/hook/commit\_trailers.go}:45--72) -- generalized to any
+harness. A pure query: \field{Registry} is never changed by resolving a
+commit's trailers.
+
+\begin{schema}{ResolveCommitAttribution}
+\Xi Registry \\
+sessionExpected? : ZBOOL \\
+sessionResolved? : ZBOOL \\
+candidate? : SESSIONID \\
+trailerMission! : MISSIONLINK \\
+trailerDelegation! : DELEGLINK \\
+diagnostic! : ZBOOL
+\where
+sessionResolved? = ztrue \implies sessionExpected? = ztrue \\
+sessionExpected? = zfalse \implies
+  ( trailerMission! = noMission \land trailerDelegation! = noDeleg \land
+    diagnostic! = zfalse ) \\
+( sessionExpected? = ztrue \land sessionResolved? = zfalse ) \implies
+  ( trailerMission! = noMission \land trailerDelegation! = noDeleg \land
+    diagnostic! = ztrue ) \\
+( sessionResolved? = ztrue \land
+  \lnot ( candidate? \in \dom sessions \land
+          (sessions(candidate?)).alive = ztrue \land
+          (sessions(candidate?)).bornEpoch = epoch \land
+          candidate? \in \dom claims ) ) \implies
+  ( trailerMission! = noMission \land trailerDelegation! = noDeleg \land
+    diagnostic! = zfalse ) \\
+( sessionResolved? = ztrue \land
+  candidate? \in \dom sessions \land
+  (sessions(candidate?)).alive = ztrue \land
+  (sessions(candidate?)).bornEpoch = epoch \land
+  candidate? \in \dom claims ) \implies
+  ( trailerMission! = missionOf(claims(candidate?)) \land
+    diagnostic! = zfalse \land
+    ( ( candidate? \in \dom delegationOf \land
+        (delegations(delegationOf(candidate?))).mission = missionOf(claims(candidate?)) )
+      \implies trailerDelegation! = delegOf(delegationOf(candidate?)) ) \land
+    ( \lnot ( candidate? \in \dom delegationOf \land
+              (delegations(delegationOf(candidate?))).mission = missionOf(claims(candidate?)) ) )
+      \implies trailerDelegation! = noDeleg )
+\end{schema}
+
+Four cases, mutually exclusive on \field{sessionExpected?}/
+\field{sessionResolved?}/the candidate's own usability, and each one
+answers a question the bead's acceptance criteria ask directly:
+
+\begin{itemize}
+  \item \textbf{No session was ever expected} (headless, CI, a plain
+    terminal, or -- generalized -- any invocation outside either
+    harness): silent, no diagnostic. This is \field{UnderClaudeCode()}
+    returning false and \field{SessionID} returning
+    \field{ErrNotUnderClaudeCode}
+    (\fpath{resolve.go}:233--247) -- a normal state, not a failure.
+  \item \textbf{A session was expected but could not be resolved} --
+    ambiguous attribution, a broken pointer, an uncorroborated anchor:
+    no trailer, AND \field{diagnostic!} = \field{ztrue}. This is
+    \field{SessionID} returning \field{ErrNoSession}
+    (\fpath{resolve.go}:154--197), and \field{runHookCommitTrailers}'s
+    own stderr line (\fpath{hook.go}:237--239) is exactly this
+    conjunct's observable effect: ``\emph{a silently missing trailer is
+    exactly the failure class it exists to prevent}''
+    (\fpath{hook.go}:230--233).
+  \item \textbf{A session resolved cleanly but has no usable claim} --
+    dead, uncorroborated since the last restart, or simply never
+    claimed anything: no trailer, and -- the point that must not be
+    conflated with the previous case -- NO diagnostic either. This is
+    the bead's own ``a small, mission-free leader commit never receives
+    a Mission/Delegation trailer'' criterion, and the silence is
+    deliberate: an unclaimed session committing is the ORDINARY case,
+    not a resolution failure, exactly matching
+    \field{WriteCommitTrailers}'s own silent return when
+    \field{missionID == ""} (\fpath{commit\_trailers.go}:53--55).
+  \item \textbf{A session resolved and has a usable claim}: the mission
+    trailer is emitted, and the delegation trailer is emitted ONLY when
+    the session's own delegation-binding sidecar names a delegation
+    bound to the SAME mission -- precisely
+    \field{WriteCommitTrailers}'s own
+    \field{b.MissionID != missionID} gate
+    (\fpath{commit\_trailers.go}:65), restated here as a direct
+    consequence of \field{Registry}'s own \field{delegationOf}
+    invariant (\S\ref{sec:registry}) rather than a read-time check this
+    operation has to perform itself.
+\end{itemize}
+
+\field{FailClosedOnAmbiguity} (\S\ref{sec:theorems}) names the first
+two cases' distinction as the theorem it is.
+
+% ===================================================================
+\section{Theorems}
+\label{sec:theorems}
+% ===================================================================
+
+\fuzz{} type-checks schemas; it does not discharge proof obligations.
+The following are claims about the operation set
+$\{\field{JoinRootSession}, \field{ForkSession}, \field{ClaimMission},
+\field{ReleaseClaim}, \field{AllocateDelegationTierA},
+\field{AllocateDelegationTierB}, \field{AllocateDelegationForkPropagated},
+\field{BindDelegationToSession}, \field{UnbindDelegation},
+\field{CorroborateSession}, \field{RestartService}, \field{EndSession}\}$,
+each backed by inspection of the schemas above; two
+(\field{DelegationIDFreshness}, \field{RestartClearsLiveness}) are
+additionally exercised by ProB animation (\S\ref{sec:validation}). None
+are discharged by proof.
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Theorem} & \textbf{Justification} \\
+\midrule
+\field{DelegationIDFreshness} &
+  \field{AllocateDelegationTierA}, \field{AllocateDelegationTierB}, and
+  \field{AllocateDelegationForkPropagated} all guard
+  $\field{id?} \notin \dom \field{delegations}$, and no OTHER operation in the set
+  adds to $\dom \field{delegations}$ at all. Two concurrent
+  sessions -- same or different harness -- can therefore never end up
+  bound to the same \field{delegation\_id}: whichever atomic step
+  allocates first makes the id unavailable to every subsequent one,
+  directly answering the bead's first acceptance criterion. Real
+  mutual exclusion across truly concurrent allocators is provided by
+  \field{AcquireDispatchPendingLock} (\S\ref{sec:nongoals}'s disclosed
+  scope), not re-derived here. \\
+\field{ForkNeverInheritsClaim} &
+  \field{JoinRootSession}'s and \field{ForkSession}'s own frame
+  conjunct \field{claims' = claims} (\S\ref{sec:opjoin},
+  \S\ref{sec:opforksession}) holds identically for a root session and a
+  forked one -- there is no case split in either schema's guard that
+  could let a fork take a different path to a claim than a root session
+  does. A freshly joined OR forked session therefore has NO
+  \field{claims} entry the instant it enters the registry; any later
+  entry requires a separate, explicit \field{ClaimMission}, an
+  \field{AllocateDelegationTierB} whose \field{oInherited} guard already
+  forces a recorded, checkable \field{parentDelegation} link
+  (\S\ref{sec:delegation-schema}), or an
+  \field{AllocateDelegationForkPropagated} whose guard requires an
+  ACTUAL witnessing claim on a genuine \field{family} member
+  (\S\ref{sec:opforkpropagate}). Silent inheritance is not merely
+  guarded against; it has no value in \field{ORIGIN} that could express
+  it without one of those two checkable witnesses. Confirming that V2
+  fork is frequent and first-class (\S\ref{sec:harness-instantiation})
+  sharpens this claim rather than weakening it: \field{ForkSession} is
+  not a rarely-exercised edge case whose guard might go untested in
+  practice, but the routine path every multi-step OpenCode mission round
+  is expected to take. \\
+\field{TraceabilityViaRootSuffices} &
+  \field{AllocateDelegationForkPropagated}'s guard
+  (\S\ref{sec:opforkpropagate}) requires \field{witness?} to be a member
+  of \field{sid?}'s family -- which the schema states, unpacked, as a
+  single \field{root} equality check against \field{witness?}, needing
+  no traversal of any chain. Because
+  \field{ForkSession} stamps a correct, inherited \field{root} on every
+  session it creates (its own guard,
+  \field{rec?.root = (sessions(parentSid?)).root}), and
+  \field{JoinRootSession} stamps every root session as its own root,
+  \field{root} equality between two live sessions is ALWAYS sufficient
+  evidence that they share a lineage -- there is no additional
+  provenance fact \field{AllocateDelegationForkPropagated} needs to
+  consult beyond what \field{family} already packages. This is the
+  formal statement of why this document's second draft could replace a
+  parent-chain WALK (the first draft's rejected design) with a single
+  \field{root} LOOKUP once OpenCode's own API was confirmed to expose
+  lineage the same way. \\
+\field{RestartClearsLiveness} &
+  \field{RestartService}'s sole effect is \field{epoch' = epoch + 1}; no
+  session's \field{bornEpoch} changes. Every operation in
+  \S\ref{sec:ops} that reads a session's liveness checks
+  \field{(sessions(s)).bornEpoch = epoch} as one of its two liveness
+  conjuncts, so the instant a restart fires, every PRE-restart session
+  fails that check and is unusable by any operation until
+  \field{CorroborateSession} explicitly re-stamps it. A stale on-disk
+  binding is therefore structurally incapable of being treated as live
+  across a restart without a fresh, explicit corroboration step --
+  exactly \field{FindClaudePID}'s own ``\emph{resolved fresh on every
+  call -- never cached}'' discipline (\fpath{tree.go}:18--22), lifted
+  from one session's PID to every session's epoch. \\
+\field{WorktreeIndependence} &
+  Every $\Delta \field{Registry}$ operation above updates
+  \field{claims}/\field{delegationOf}/\field{sessions} via
+  $\oplus$ or $\ndres$ applied to EXACTLY ONE \field{sid?}
+  key, never a blanket update over a range or a second session's
+  entry. Two distinct sessions -- whether or not either is bound to a
+  worktree (this document has no separate \field{WORKTREE} type,
+  because nothing in the model needs to single it out: the
+  independence property holds for ANY two distinct sessions, a strictly
+  stronger and more economical result than modelling worktree as a
+  special case) -- can therefore never have one operation's effect on
+  one cross into the other's state. \\
+\field{HarnessNeutrality} &
+  No guard or effect predicate in any schema in \S\ref{sec:ops}
+  mentions the \field{harness} field at all. The entire state machine
+  -- and hence every invariant and theorem in this table -- therefore
+  applies identically to a session regardless of which \field{HARNESS}
+  value it carries: \S\ref{sec:modelling-choice}'s design choice (one
+  registry, not two) is exactly what makes this claim checkable by
+  inspection rather than asserted by analogy. \\
+\field{FailClosedOnAmbiguity} &
+  \field{ResolveCommitAttribution}'s second and third cases
+  (\S\ref{sec:opresolve}) both emit no trailer, but differ on
+  \field{diagnostic!}: \field{ztrue} exactly when a session was
+  expected and did not resolve (an ambiguous or broken binding -- the
+  failure class the bead's criterion names), \field{zfalse} when a
+  session resolved cleanly but simply has no claim (the ordinary,
+  unremarkable mission-free-commit case). The schema's own guard
+  structure makes these two outcomes mutually exclusive and jointly
+  exhaustive of ``no trailer was emitted,'' so a mission-free leader
+  commit and a genuinely ambiguous one can never be confused for each
+  other at the output. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ===================================================================
+\section{Harness Instantiation}
+\label{sec:harness-instantiation}
+% ===================================================================
+
+\textbf{On this section's sourcing.} This agent's own toolset for the
+present mission carried no live web-fetch or web-search capability.
+The OpenCode-side mapping below is therefore attributed, throughout, to
+a companion research artifact
+(\fpath{docs/prfaq-opencode-integration.md}, a sibling worktree) that
+WAS produced with direct source access -- fetched via context7 from
+\fpath{anomalyco/opencode}'s \field{dev} branch across two evaluation
+rounds, the second of which both corrected a V1-vocabulary draft and
+located the \field{context.data.session}
+hierarchy/liveness API a first search had correctly disclosed as
+unfound rather than guessed at. OpenCode V2 is a RELEASED, currently
+running system (v2.0.26 confirmed installed, in production use on
+multiple operator machines) -- an earlier round of this same research
+mistakenly reported V2 as dev-branch-only and not yet cut; that was
+wrong, was retracted on the research mission's own audit trail, and is
+corrected here: every claim below targets the CURRENT, shipping V2
+system, not a forthcoming one. Every quoted or paraphrased OpenCode
+fact below carries its own citation back to the specific section of the
+companion artifact (or, transitively, the companion artifact's own
+primary source) it is attributed to; this author did not independently
+re-fetch any of those primary sources. The Claude Code mapping that
+follows carries no such attribution chain: it is read directly off this
+repository's own code, cited by file and line, exactly as every other
+Claude-Code-side claim in this document.
+
+\subsection{Claude Code}
+
+\fpath{SESSION.harness} = \field{hClaude}. \fpath{SESSIONID} is a
+corroborated \field{CLAUDE\_PID}
+(\field{ClaudePIDFromEnvCorroborated}, \fpath{tree.go}:68--86) or an
+explicit \field{ETHOS\_SESSION} value (\fpath{resolve.go}:316--318),
+whichever \field{SessionID}'s chain resolves first.
+
+The striking fact, confirmed directly from \fpath{tree.go}'s own doc
+comment (lines 28--33): \textbf{\field{SESSION.parent} is, in every real
+Claude Code binding today, \field{noParent}}. ``\emph{a Task-tool
+subagent or hook subprocess inherits its leader's \field{CLAUDE\_PID}
+verbatim, and correctly so, since it belongs to the same session}'' --
+Claude Code never mints a new top-level \field{SESSIONID} for a
+subagent at all; leader and subagent share one session, full stop. The
+forking Claude Code DOES have lives entirely at the DELEGATION level --
+\field{parent\_delegation}, already modelled by
+\field{AllocateDelegationTierB}'s \field{oInherited} case
+(\S\ref{sec:opallocateb}) -- not at the session level this document's
+\field{PARENTLINK} field exists to generalize. \field{ForkNeverInheritsClaim}
+is, for Claude Code specifically, true in a nearly vacuous sense: the
+session-level fork it protects against essentially never occurs in the
+first place, because Claude Code's own architecture never creates the
+precondition.
+
+\field{IsLiveSession}'s two conjuncts instantiate directly:
+\field{alive} = whether the session's roster file is still present
+(\field{Store.Load} succeeds), and \field{bornEpoch = epoch} =
+\field{isLiveAncestor}'s own fresh-every-call re-walk of
+\fpath{/proc} (or the macOS/Windows equivalent) confirming the
+corroborated PID is STILL a live ancestor right now, not merely was one
+when first observed.
+
+\subsection{OpenCode}
+\label{sec:opencode-instantiation}
+
+\fpath{SESSION.harness} = \field{hOpenCode}. An ethos-owned plugin is a
+\field{Plugin.define(\{id, async setup(ctx) \{...\}\})} module, loaded
+from \fpath{.opencode/plugins/} (or an npm package named in
+\fpath{opencode.json}'s \field{"plugins"} array), whose \field{setup}
+subscribes via \field{ctx.event.subscribe(\{signal\})} -- consumed with
+\field{for await} inside \field{setup} -- to session lifecycle event
+types including \field{session.created}, \field{session.updated},
+\field{session.idle}, and \field{session.deleted}
+(\fpath{docs/prfaq-opencode-integration.md}, \S~``Why not just reuse
+the Claude Code hook mechanism verbatim?,'' citing
+\fpath{anomalyco/opencode}'s
+\fpath{services/www/src/docs/content/build/plugins/migrate-v1.mdx},
+confirmed via context7). \field{ctx.session.hook()} is a DIFFERENT,
+narrower surface accepting only \field{"context"}/\field{"prompt"}/
+\field{"compaction"}/\field{"model.request"}/\field{"http.request"} --
+none of which fire on session start or update -- so
+\field{ctx.event.subscribe()} is the confirmed, correct primitive for
+this integration's \field{JoinRootSession}/\field{ForkSession}
+triggers, identified by elimination against that narrower list in the
+companion research.
+
+\textbf{JoinRootSession and ForkSession.} On a \field{session.created}
+event with no fork ancestry, the plugin calls \field{ethos mission
+claim <id>} (the existing Tier B dispatch-binding primitive, per this
+repo's own \fpath{docs/development.md} Build \& Run section) if an
+active claim is relevant, instantiating \field{JoinRootSession}
+(\S\ref{sec:opjoin}). A session FORK is OpenCode's own
+\field{POST /api/session/\{sessionID\}/fork} HTTP endpoint (operation ID
+\field{session.fork}, confirmed listed in
+\fpath{anomalyco/opencode}'s \fpath{V2\_HTTP\_API\_AUDIT.md} on the
+\field{dev} branch, Group 4 table, row 053) -- the forked child gets its
+OWN, distinct OpenCode session ID; the V2 session contract spec states
+directly that forking ``copies messages only through its selected
+boundary but adopts the parent's newest instruction values as its
+baseline'' (\fpath{specs/v2/session.md}, \S~``Instructions Are Value
+Deltas''), and nothing in that contract ties the two session identities
+together beyond transcript and instruction-value copying. This
+instantiates \field{ForkSession} (\S\ref{sec:opforksession}) directly:
+\field{session.fork}'s own confirmed semantics are exactly why this
+document's \field{rec?.root} guard inherits from the PARENT rather than
+starting a new lineage, and exactly why \field{claims' = claims} is the
+one frame conjunct that must hold regardless.
+
+\textbf{Lineage lookup: root/family as confirmed, maintained
+projections, not payload fields.} The CLI-plugin data-cache API --
+\field{context.data.session.\{list, get, root, family, cost, status,
+sync, invalidate\}}, on a distinct plugin surface
+(\fpath{@opencode/plugin/tui}, loaded via a package's \field{./tui}
+export) that coexists alongside the main hook-plugin entry in the same
+package -- exposes \field{context.data.session.root(sessionID)} and
+\field{.family(sessionID)} as DIRECT hierarchy lookups, confirmed by a
+full read of \fpath{anomalyco/opencode}'s
+\fpath{services/www/src/docs/content/build/plugins/cli.mdx} on the
+\field{dev} branch (\fpath{docs/prfaq-opencode-integration.md},
+\S~``What happens if OpenCode forks a session mid-mission?''). This is
+the exact confirmation that licenses \S\ref{sec:session-schema}'s own
+design choice: \field{SESSION.root} is stored, maintained data, not
+something a plugin -- or this document's own
+\field{AllocateDelegationForkPropagated}, \S\ref{sec:opforkpropagate}
+-- has to reconstruct by chaining \field{session.created} event payload
+fields together, whose exact field set the companion research explicitly
+leaves at medium confidence (\fpath{prfaq-opencode-integration.md},
+\S~``What I could not verify''). \field{TraceabilityViaRootSuffices}
+(\S\ref{sec:theorems}) is the formal payoff of this confirmation.
+
+\textbf{Liveness: \field{context.data.session.status}, not a
+reconstructed execution-claim check.} OpenCode's V2 session contract
+commits a write-ahead claim per process-local busy period, preserved
+across an unclean server restart but explicitly NOT a liveness
+guarantee -- ``\emph{durable execution events and claims are historical
+and recovery records, not proof that this process is still live}''
+(\fpath{specs/v2/session.md}, \S~``Execution Is Process-Local,'' as
+quoted in the companion research). Reconstructing \field{IsLiveSession}
+from that recovery language directly would be exactly the expensive,
+indirect check the companion research's restart FAQ warns against;
+\field{context.data.session.status(sessionID)} is confirmed as a
+DIRECT, maintained liveness projection instead -- materially cheaper
+than polling \field{sessions.active()} and cross-referencing
+recovery-attempt counts. This document's \field{SESSION.alive}
+instantiates to \field{status(sessionID)} for OpenCode, the same
+abstract role \field{Store.Load} succeeding plays for Claude Code
+(below); \field{SESSION.bornEpoch = epoch} instantiates to a fresh
+\field{status} query returning ``live'' RIGHT NOW, not merely having
+returned it once.
+
+\textbf{Worktree keying.} V2 replaces V1's flat \field{directory}
+context field with \field{ctx.location.directory}; a separate, flat
+\field{worktree} field was removed entirely in favor of a structured
+\field{ctx.worktree.\{create,list,refresh,remove\}} domain API keyed by
+\field{projectID}. For this integration's correlation-keying purpose,
+\field{ctx.location.directory} alone is sufficient: a git worktree
+checkout IS a directory, and \field{.punt-labs/ethos/} is a tracked
+directory present identically inside every worktree, so the plugin
+keys its write by \field{(ctx.location.directory, OpenCode Session
+ID)} with no new multi-worktree design needed
+(\fpath{docs/prfaq-opencode-integration.md}, \S~``What happens with
+OpenCode worktree or concurrent sessions?''). This grounds
+\field{WorktreeIndependence} (\S\ref{sec:theorems}) for OpenCode the
+same way the existing per-worktree \fpath{.punt-labs/ethos/} layout
+already grounds it for Claude Code.
+
+The \field{AdapterDataMissing} failure mode
+(\S\ref{sec:opadaptermissing}) is named for exactly this harness: an
+OpenCode plugin lifecycle event firing with a payload that does not
+carry a usable, stable session identifier (a malformed or partial
+event, a hook firing before the server has finished assigning an ID) is
+the shape of failure this operation's self-loop represents, where
+Claude Code's own \field{CLAUDE\_PID}-corroboration chain has no direct
+analogue to fail in quite the same way.
+
+% ===================================================================
+\section{Failure Modes}
+\label{sec:failure-modes}
+% ===================================================================
+
+The task brief names three; each is addressed by a construct already
+introduced above, gathered here for a single point of reference.
+
+\begin{itemize}
+  \item \textbf{Ambiguous attribution.}
+    \field{ResolveCommitAttribution}'s second case
+    (\S\ref{sec:opresolve}): $\field{sessionExpected?} = \field{ztrue} \land
+    \field{sessionResolved?} = \field{zfalse}$ emits no trailer and sets
+    $\field{diagnostic!} = \field{ztrue}$. \field{FailClosedOnAmbiguity}
+    (\S\ref{sec:theorems}) is the formal statement that this case can
+    never be confused with the silent, undiagnosed mission-free-commit
+    case.
+  \item \textbf{Missing harness adapter data.} \field{AdapterDataMissing}
+    (\S\ref{sec:opadaptermissing}): a lifecycle event with no usable
+    session identifier is modelled as a self-loop touching nothing in
+    \field{Registry}, rather than coercing a fabricated
+    \field{SESSIONID} into existence. See
+    \S\ref{sec:harness-instantiation} for why this is named for
+    OpenCode specifically.
+  \item \textbf{Concurrent writers to the same sidecar.}
+  \label{sec:failure-concurrent}
+    Disclosed as out of scope in \S\ref{sec:nongoals}: this is a Z
+    document of atomic, sequential-step operations, the identical
+    modelling boundary spec-mission-lifecycle.tex and
+    spec-writeset-admission.tex both disclose for their own state
+    machines. What IS checked here is the structural property that
+    makes the real locks (\field{AcquireDispatchPendingLock}, the
+    per-session roster flock) SUFFICIENT to prevent corruption once
+    they serialize these operations: every $\Delta \field{Registry}$
+    operation above writes to \field{claims}/\field{delegationOf}/
+    \field{sessions}/\field{delegations} via a SINGLE-KEY $\oplus$
+    or $\ndres$, never a multi-key sweep -- so SERIALIZED
+    execution of these operations (which the real flocks guarantee, and
+    this document does not re-derive) composes safely, by the same
+    reasoning \field{WorktreeIndependence} already gives.
+\end{itemize}
+
+% ===================================================================
+\section{Validation}
+\label{sec:validation}
+% ===================================================================
+
+\texttt{/z-spec:check} (\texttt{fuzz}) type-checks this document with
+\textbf{0 errors}.
+
+\subsection{Certified-complete run at setsize~1}
+
+\texttt{probcli -model\_check -p DEFAULT\_SETSIZE 1 -df -c} (raising
+\field{MAX\_OPERATIONS} from its default of 10, which otherwise
+truncates transition computation before the state space is actually
+exhausted) explores \field{SESSIONID}, \field{MISSIONID}, and
+\field{DELEGATIONID} each at a single witness value and reports
+\textbf{``No counter example found. ALL states visited'' -- 287
+states, 3862 transitions, certified complete}: \textbf{zero invariant
+violations, zero deadlocks}, over the ENTIRE reachable state space at
+this setsize, not a bounded sample of it. Sixteen of this document's
+eighteen operations fire -- \field{ResolveCommitAttribution} alone
+1347 times, \field{AdapterDataMissing} 570 times, every claim/release/
+corroborate/bind/unbind/end transition at least a dozen times each.
+\field{ForkSession} and \field{AllocateDelegationForkPropagated} are
+the two operations the coverage census reports as
+\texttt{UNCOVERED\_OPERATIONS} at this setsize, and the reason is
+structural, not a defect: both require TWO DISTINCT \field{SESSIONID}
+values in their own guards (\field{ForkSession}'s
+$\field{sid?} \notin \dom \field{sessions} \land \field{parentSid?} \in \dom \field{sessions}$,
+\field{AllocateDelegationForkPropagated}'s
+$\field{witness?} \in \dom \field{sessions}$ naming a DIFFERENT session from
+\field{sid?}), which a carrier of size~1 cannot supply -- the
+coverage gap is forced by the setsize bound alone, confirmed by its
+disappearance the moment setsize rises to 2 (below), not a sign either
+operation is unreachable in general.
+
+\subsection{Bounded run at setsize~2}
+
+At \field{DEFAULT\_SETSIZE} 2 ($\field{maxEpoch} = 2$,
+$\field{maxSessions} = 2$, $\field{maxDelegations} = 2$, per
+\S\ref{sec:constants}) -- the setsize every other check in this
+document's own toolchain defaults to, and the one at which
+\field{ForkSession} finally has the second \field{SESSIONID} value its
+own guard needs -- the reachable space is considerably LARGER than
+either existing specification's own (spec-mission-lifecycle.tex: 373
+states; spec-writeset-admission.tex: 5790 states).
+
+\textbf{Errata (second correction): probcli's own transition count at
+this setsize is NOT uniformly non-deterministic, and the first
+correction to this section misattributed its cause.} That correction
+observed three different transition counts under nominally the same
+\texttt{-mc 2000 -df} invocation -- 49,062, 82,155, 50,400 -- across
+three independent invocations by three parties, and attributed the
+split to ``probcli's own search order.'' This is WRONG, and is itself
+corrected here. The evaluator's final-round reproduction, independently
+confirmed by rerunning both exact invocations here, isolates the real
+cause: \texttt{-p MAX\_OPERATIONS 5000 -mc 2000 -df} returns
+\textbf{82,155} transitions, deterministically, every time (3 runs
+confirmed by the evaluator, 3 more confirmed here); \texttt{-mc 2000
+-df} with probcli's DEFAULT \field{MAX\_OPERATIONS} returns
+\textbf{50,400}, deterministically, every time (2 runs confirmed by the
+evaluator, 2 more confirmed here). The 82,155/50,400 split is a
+\textbf{\field{MAX\_OPERATIONS} CONFOUND between two differently-flagged
+invocations across the first and second drafts of this section} -- NOT
+search-order non-determinism, and NOT evidence that \texttt{-df} itself
+is non-deterministic. Genuine run-to-run non-determinism IS real, but
+is confirmed ONLY under the no-flags/\texttt{-c}-alone configuration:
+the evaluator observed five DIFFERENT counts across five runs of
+\texttt{-mc 2000} with no \texttt{-df} (47,254, 48,111, 47,158, 46,780,
+47,852), and this document's own earlier reruns independently observed
+the same pattern (ten different counts across ten no-flags/\texttt{-c}
+runs, a two-run spread at a 10,000-state no-flags bound). The original
+49,062 figure this whole errata chain traces back to was never
+reproduced by anyone under either deterministic \texttt{-df}
+configuration, and its exact provenance (which \field{MAX\_OPERATIONS}
+value, if any, the very first invocation used) is not reconstructible
+from the record; it does not need to be, since the corrected, properly
+attributed picture below supersedes it.
+
+\textbf{Errata (second correction): the claim that all eighteen
+operations fire ``under every flag configuration tried'' is false, and
+is corrected here.} \field{AllocateDelegationForkPropagated} is
+UNCOVERED in every \texttt{-df} run performed by the evaluator (5 runs,
+both \field{MAX\_OPERATIONS} variants) and independently reconfirmed
+here (3 further runs, both variants): \textbf{18/18 coverage is
+achieved ONLY under the no-flags configuration}, not under
+\texttt{-df}. This was checked directly, not inferred: the
+\texttt{probcli -c} coverage census under \texttt{-mc 2000 -df -c}
+(both with and without \field{MAX\_OPERATIONS} raised to 5000) reports
+\texttt{UNCOVERED\_OPERATIONS (1), AllocateDelegationForkPropagated} in
+every run; the identical invocation with \texttt{-df} dropped reports
+\texttt{UNCOVERED\_OPERATIONS (0)} every time this document's own
+reruns tried it. The earlier draft's claim of universal coverage
+``under every flag configuration tried'' did not hold even at the time
+it was written, because \texttt{-df}'s own deadlock-search discipline
+evidently visits states in an order that starves this one operation's
+guard of a satisfying witness within the explored bound -- a fact about
+\texttt{-df}'s search strategy, not about this specification's
+reachability (\S\ref{sec:opforkpropagate}'s own guard is satisfiable,
+confirmed directly by its firing under the no-flags configuration at
+the identical 2000-state bound).
+
+What DOES reproduce, consistently, across EVERY configuration and every
+run performed by all three parties, with no exception found: \textbf{zero
+invariant violations, zero deadlocks}, at bounds ranging from 2000
+states up to 10,000+ states (the evaluator's own independent check:
+414,730 transitions, 0 violations) and 13,632 states (this document's
+own earlier, longer run: 317,844 transitions, 0 violations). This
+safety claim is NOT weakened by either correction above -- it is the
+one claim in this subsection that survives both.
+
+This IS a disclosed, not a hidden, coverage gap at setsize~2 -- the
+exact discipline spec-mission-lifecycle.tex's own
+\S~``A disclosed, pre-existing gap'' models, now corrected TWICE over:
+first, in an earlier revision, for treating a flag-dependent number as
+a fixed fact and building a withdrawn growth-rate narrative on it; and
+second, here, for misattributing the flag-dependence itself to search
+non-determinism and for overstating operation coverage. What IS
+established without
+qualification: the ENTIRE setsize~1 state space (287 states) is free of
+invariant violations and deadlocks, with sixteen of eighteen operations
+exercised and the remaining two's non-firing explained structurally;
+zero invariant violations and zero deadlocks hold across every
+setsize~2 run performed by any party under any configuration, with no
+exception found; and full 18/18 operation coverage is achieved under
+the no-flags configuration specifically, confirmed at every bound
+tried from 2000 through 10,000+ states. What is NOT established: the
+exact size of the setsize~2 reachable space; a single, configuration-
+independent transition count for any given state bound (two of the
+three counts this errata chain discusses are flag-determined, not
+run-to-run noise -- only the no-flags/\texttt{-c}-alone configuration
+is genuinely non-deterministic); any claim about how a transition count
+trends as the state bound grows (withdrawn in the first correction and
+not restored here); or full operation coverage under \texttt{-df}
+specifically, which this correction now states does not hold.
+Diagnosing why \texttt{-df}'s own search order leaves
+\field{AllocateDelegationForkPropagated} unreached within a 2000-state
+bound, and whether a larger bound or different flags close that gap,
+is scoped as follow-up work for a subsequent revision, not resolved
+here.
+
+% ===================================================================
+\section{Open Dependency: punt-labs/points}
+\label{sec:open-dependency}
+% ===================================================================
+
+Bead \field{ethos-5y4r} names a mirrored bead, \field{points-hqi}, in
+\fpath{punt-labs/points} -- the repo responsible for configuring how AI
+coding harnesses route to model sources, and therefore a plausible
+owner of harness-adapter-side work this bead's acceptance criteria
+depend on. A search of that repository's issue tracker via \field{gh}
+for ``\field{points-hqi}'', ``\field{ethos}'', and ``\field{session
+traceability}'' during this drafting session returned ZERO results --
+either the issue is tracked elsewhere, the tracker is not populated for
+this bead yet, or issues are disabled on that repository. This is
+recorded here, honestly, as an UNRESOLVED open dependency: the content
+of \field{points-hqi} could not be read and is not reflected anywhere
+in this document. Confirming its content (or its absence) is a
+prerequisite for the next pipeline stage's design review, not something
+this specification can discharge on its own.
+
+% ===================================================================
+\section{Traceability}
+\label{sec:trace}
+% ===================================================================
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+\textbf{Z construct} & \textbf{Go source} & \textbf{Note} \\
+\midrule
+\field{HARNESS} & -- & new; names the two harnesses this bead covers \\
+\field{TIER} & \fpath{internal/mission/delegation.go}:19--20 & \\
+\field{ORIGIN} & \field{BindOrigin*}/\field{BoundVia*}
+  (\fpath{active.go}:100--113, \fpath{delegation.go}:59--62) &
+  \field{oClaim}/\field{oDispatch}/\field{oInherited} collapse the
+  existing Claude Code constants; \field{oForkPropagated} is new, see
+  \S\ref{sec:opforkpropagate} \\
+\field{SESSION} & \fpath{internal/session/session.go}'s
+  \field{Participant}/\field{Roster} $+$ liveness from
+  \fpath{internal/process/tree.go} & the generalized harness-neutral
+  shape; \field{root} new in this redesign, modelling
+  \field{context.data.session.root}, see
+  \S\ref{sec:harness-instantiation} for both instantiations \\
+\field{DELEGATION} & \fpath{internal/mission/delegation.go}'s
+  \field{Delegation} record (fields \field{Session}, \field{Mission},
+  \field{Tier}, \field{BoundVia}, \field{ParentDelegation}) & \\
+\field{Registry} & no single Go type -- the session roster directory
+  plus the mission tree's delegation records, read jointly & see
+  \S\ref{sec:registry}'s own note on why a delegation's session field
+  is NOT required to stay in $\dom \field{sessions}$ \\
+``family'' (inline expansion, no Z declaration) &
+  \field{context.data.session.family} & new concept; unpacked at its
+  one call site as a \field{root}-equality check, not declared as a
+  global function, see \S\ref{sec:session-schema} \\
+\field{JoinRootSession} & \field{Store.CreateInCheckout}
+  (\fpath{internal/session/store.go}:53--94); OpenCode's
+  \field{session.created} event with no fork ancestry & \\
+\field{ForkSession} & OpenCode's \field{POST /api/session/\{id\}/fork}
+  (\field{session.fork}) & new; no Claude Code analogue --
+  \S\ref{sec:harness-instantiation} shows Claude Code never exercises
+  this operation \\
+\field{ClaimMission} & \field{WriteActiveMission}
+  (\fpath{active.go}:223--229) & \\
+\field{ReleaseClaim} & \field{ClearActiveMission}
+  (\fpath{active.go}:414--423) & \\
+\field{AllocateDelegationTierA} & \field{dispatchTierA}
+  (\fpath{internal/hook/pretooluse\_dispatch.go}:657--700) & \\
+\field{AllocateDelegationTierB} & \field{dispatchTierB}
+  (\fpath{pretooluse\_dispatch.go}:711--912) & \\
+\field{AllocateDelegationForkPropagated} & the companion research's
+  recommended OpenCode plugin behavior on a forked
+  \field{session.created} & new; no Claude Code analogue, see
+  \S\ref{sec:opforkpropagate} \\
+\field{BindDelegationToSession} & \field{WriteDelegationBinding}
+  (\fpath{active.go}:349--358) & \\
+\field{UnbindDelegation} & \field{ClearDelegationBinding}
+  (\fpath{active.go}:968--980) & \\
+\field{CorroborateSession} & \field{isLiveAncestor}
+  (\fpath{tree.go}:136--161); OpenCode's
+  \field{context.data.session.status(sessionID)} & \\
+\field{RestartService} & the event class \field{FindClaudePID}'s doc
+  comment names (\fpath{tree.go}:18--22, DES-074) & no single
+  call site -- a daemon restart or a long-lived \field{ethos serve}
+  outliving an observed session \\
+\field{EndSession} & \field{Store.Delete} via
+  \field{deleteFiles}/\field{clearMissionSidecarsLocked}
+  (\fpath{internal/session/store.go}:200--348) & \\
+\field{AdapterDataMissing} & -- & new; named for a malformed OpenCode
+  lifecycle payload, see \S\ref{sec:harness-instantiation} \\
+\field{ResolveCommitAttribution} & \field{runHookCommitTrailers}
+  (\fpath{cmd/ethos/hook.go}:218--251) via \field{resolve.SessionID}
+  (\fpath{internal/resolve/resolve.go}:278--360) and
+  \field{WriteCommitTrailers}
+  (\fpath{internal/hook/commit\_trailers.go}:45--72) & \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\end{document}

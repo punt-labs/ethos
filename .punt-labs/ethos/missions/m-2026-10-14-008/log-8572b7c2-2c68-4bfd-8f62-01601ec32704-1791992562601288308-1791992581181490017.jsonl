@@ -1,0 +1,2 @@
+{"ts":"2026-10-14T15:42:42.601288308Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"","worker":"bwk"}}
+{"ts":"2026-10-14T15:43:01.181490017Z","event":"abandon","actor":"claude","details":{"reason":"reassigning workers/evaluators per repo roster table before any stage dispatches (spec:jms/jra, design:bwk/rsc, implement/test:bwk/rsc, review:mdm/rop, document:claude/mcg) instead of one blanket bwk/rsc"}}

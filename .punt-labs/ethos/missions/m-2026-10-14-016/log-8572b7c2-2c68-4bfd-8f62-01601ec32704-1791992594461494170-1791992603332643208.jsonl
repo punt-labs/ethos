@@ -1,0 +1,2 @@
+{"ts":"2026-10-14T15:43:14.46149417Z","event":"create","actor":"claude","details":{"evaluator":"jra","ticket":"","worker":"jms"}}
+{"ts":"2026-10-14T15:43:23.332643208Z","event":"abandon","actor":"claude","details":{"reason":"premature — recreated with correct per-stage worker/evaluator at actual delegation time, per org rule that implementation never dispatches before design is ratified by the operator"}}
