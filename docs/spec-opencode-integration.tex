@@ -1293,6 +1293,31 @@ answers a question the bead's acceptance criteria ask directly:
     not a resolution failure, exactly matching
     \field{WriteCommitTrailers}'s own silent return when
     \field{missionID == ""} (\fpath{commit\_trailers.go}:53--55).
+    \textbf{Why ``dead/uncorroborated'' and ``never claimed'' share this
+    one silent case rather than splitting, a question review raised
+    explicitly:} \field{sessionResolved?} = \field{ztrue} models what
+    the REAL \field{resolve.SessionID} itself reports -- a corroborated
+    PID was found and a roster pointer successfully read
+    (\S\ref{sec:opresolve}'s own citation,
+    \fpath{resolve.go}:278--360). Whether that SAME candidate is still
+    alive in the CURRENT \field{epoch} is a separate,
+    \field{Registry}-level fact, checked AFTER resolution, not a second
+    resolution attempt -- \field{resolve.SessionID} has already
+    returned by the time this check runs, so a stale candidate is not a
+    FAILURE OF RESOLUTION in the sense \field{FailClosedOnAmbiguity}
+    targets (an ambiguous or broken pointer \field{resolve.SessionID}
+    itself could not resolve); it is a successfully-resolved pointer to
+    a session \field{Registry} itself now considers unusable. Both
+    sub-cases -- dead/stale and never-claimed -- converge on the
+    identical observable fact the real \field{WriteCommitTrailers}
+    checks for: no USABLE mission claim exists for this candidate right
+    now, for whatever reason. A reader wanting to DISTINGUISH ``stale''
+    from ``never claimed'' at the trailer-writing layer would need
+    \field{WriteCommitTrailers} itself to read \field{Registry}'s
+    epoch/liveness state directly, which the real function does not do
+    (it reads only the active-mission sidecar's own presence/content);
+    adding that distinction here would claim a diagnostic capability
+    the real implementation does not have.
   \item \textbf{A session resolved and has a usable claim}: the mission
     trailer is emitted, and the delegation trailer is emitted ONLY when
     the session's own delegation-binding sidecar names a delegation
