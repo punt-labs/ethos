@@ -12047,12 +12047,24 @@ against pre-fix code before its fix landed.
 ## DES-078: OpenCode V2 plugin/adapter design — concrete mapping from the harness-neutral spec to real OpenCode (PROPOSED)
 
 **Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
-mission `m-2026-10-18-007`. Full design: `docs/design-opencode-plugin.md`.
-Builds on the formal model in `docs/spec-opencode-integration.tex`
-(PR #534) and its companion research artifact,
-`docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
-ratification before an implementation mission is dispatched, per this
-repo's own design-review-before-implementation rule.
+missions `m-2026-10-18-007` (round 1) and `m-2026-10-18-008` (round 2).
+Full design: `docs/design-opencode-plugin.md`. Builds on the formal model
+in `docs/spec-opencode-integration.tex` (PR #534) and its companion
+research artifact, `docs/prfaq-opencode-integration.md`. Awaiting leader
+review and operator ratification before an implementation mission is
+dispatched, per this repo's own design-review-before-implementation rule.
+
+**Round 2 correction.** Three independent automated reviewers (Qodo,
+GitHub Copilot, Cursor Bugbot) converged on five defects in round 1's
+PR #536; the leader verified the top three directly against real source
+before routing round 2. All five are fixed in `docs/design-opencode-plugin.md`
+and summarized in the Decision/Rejected-alternatives/Non-goals sections
+below — the round-1 decision's shape (three pieces, minimal new Go
+surface) is unchanged, but point 1 below now includes session-roster
+registration before any claim, point 2's propagation mechanism is
+corrected to the actual OpenCode hook that carries a mutable environment,
+and point 3 now includes server-verified fork lineage and an atomic
+delegation-binding write.
 
 ### Problem
 
@@ -12074,16 +12086,22 @@ is running under OpenCode.
 Ship the mapping as three pieces, deliberately minimizing new Go surface:
 
 1. **A TypeScript OpenCode plugin** (`.opencode/plugins/ethos.ts`)
-   registering exactly three hooks: `ctx.event.subscribe()` for
+   registering four hooks: `ctx.event.subscribe()` for
    `session.created`/`session.forked` (the primary trigger for
-   `JoinRootSession`/`ForkSession`), and `ctx.tool.hook("execute.before",
-   ...)` for two jobs — a trigger-independent second path for
-   `AllocateDelegationForkPropagated` (covering the confirmed volatility
-   of `ctx.event.subscribe()`, which can permanently miss a fork event
-   during a disconnection window) and `ETHOS_SESSION` propagation into
-   every tool call's own environment. Every state-mutating action shells
-   out to the existing `ethos` binary — the plugin holds no direct file
-   access to `.punt-labs/ethos/`.
+   `JoinRootSession`/`ForkSession`), `ctx.tool.hook("execute.before", ...)`
+   for a trigger-independent second path for
+   `AllocateDelegationForkPropagated` (covering the confirmed volatility of
+   `ctx.event.subscribe()`, which can permanently miss a fork event during
+   a disconnection window), and `ctx.shell.hook("create.before", ...)` for
+   `ETHOS_SESSION` propagation into every spawned shell's own environment
+   (round 2 correction: `ToolExecuteBefore` has no mutable `env` field;
+   `ShellCreateBefore` does). Every `JoinRootSession`/`ForkSession` also
+   registers the new OpenCode session's roster with `ethos session create`
+   before any `mission claim` is attempted — a brand-new session has no
+   roster entry for the claim's `RefuseIfSessionGone` guard to find
+   otherwise (round 2 fix). Every state-mutating action shells out to the
+   existing `ethos` binary — the plugin holds no direct file access to
+   `.punt-labs/ethos/`.
 2. **Zero changes to `resolve.SessionID`, `runHookCommitTrailers`,
    `WriteCommitTrailers`, or `plugin/hooks/commit-msg.sh`.** The commit-msg
    hook already resolves the committing session purely from `ETHOS_SESSION`
@@ -12091,13 +12109,29 @@ Ship the mapping as three pieces, deliberately minimizing new Go surface:
    per the existing four-case `ResolveCommitAttribution` split. The entire
    OpenCode engineering problem is making `ETHOS_SESSION` land correctly
    in the committing shell's environment — not teaching the shared
-   resolver a new, harness-specific discovery step.
+   resolver a new, harness-specific discovery step. **Open item (round
+   2):** whether a `create.before` shell-spawn event can always be
+   correlated back to the one session responsible for it, in a deployment
+   where multiple sessions run concurrently in one plugin process, is
+   unconfirmed by any source read for this design — see
+   `docs/design-opencode-plugin.md` §3.2 for the full disclosure and the
+   fail-closed behavior this design specifies pending that confirmation.
 3. **One new, narrow Go primitive** — a `claim-forked`-shaped addition to
    `internal/mission` implementing `AllocateDelegationForkPropagated`'s own
    guard (ancestor-set membership under the one-step `parentID` relation,
    bounded the same way `process.tree.go`'s `maxWalkDepth` already bounds
    Claude Code's own ancestor walk) — called by the plugin, not
-   reimplemented in TypeScript.
+   reimplemented in TypeScript. **Round 2 corrections:** the guard now
+   verifies ancestry against a new, Go-stored `Roster.ParentSession` field
+   (written by `ethos session create --parent-session <id>` at
+   fork-registration time) rather than trusting the plugin's own
+   `--witness` argument outright — closing a gap where nothing server-side
+   previously existed to check a caller-supplied witness against; and the
+   primitive now writes the matching `DelegationBinding` sidecar
+   atomically with the claim, which round 1 omitted — without it,
+   `WriteCommitTrailers`'s same-mission cross-check
+   (`commit_trailers.go:65`) finds no binding and the `Delegation:` trailer
+   silently never appears.
 
 Full lifecycle-hook mapping, session-ID mapping, and the commit-trailer
 resolution chain (unchanged) are laid out in
@@ -12153,15 +12187,28 @@ Full writeups, including two historical exploit traces, are in
 - **Circuit's PR-watch workflow state is untouched.** The mutable PR head
   SHA stays GitHub/Circuit-owned; nothing in this design reads or writes
   any file Circuit's own tracking interprets.
-- **Whether `ctx.tool.hook`'s `event.env` mutation reaches every commit
+- **Whether `ctx.shell.hook`'s `event.env` mutation reaches every commit
   path OpenCode supports** — confirmed only for the agent-issued
   tool-call path; whether a human typing `git commit` directly into an
   OpenCode TUI terminal goes through the same hook is unverified by any
   source read for this design and is named as a prerequisite for the
   next pipeline stage to confirm against a running `opencode serve`
-  instance.
+  instance. (Round 2: this bullet's hook name is corrected from
+  `ctx.tool.hook` to `ctx.shell.hook`, per the Decision section's fix; see
+  also the sessionID-correlation gap named there and in
+  `docs/design-opencode-plugin.md` §3.2-§3.3, a distinct, newly surfaced
+  open item on top of this one.)
 - **OpenCode's own restart-liveness signal** — the companion research
   found no primitive currently confirmed, by direct source or
   documentation read, to give the bundled hook-plugin a reliable
   restart-liveness check; this is inherited as an open item, not
   resolved by this design.
+- **Whether `ethos enable --opencode` is compatible with every consuming
+  repo's own dev-config gate** (round 2, finding 6, confirmed directly).
+  `punt-labs/points`'s `.bin/check-dev-config.sh` — run by `make
+  check-dev`/`make doctor` — fails unconditionally the moment
+  `opencode.json` has a `"plugins"` key at all, which `ethos enable
+  --opencode` would add. This is a real, confirmed conflict for that one
+  repo, not a speculative one; whether and how to reconcile it is an
+  operator decision, not resolved by this design — see
+  `docs/design-opencode-plugin.md` §6.1 for the full disclosure.
