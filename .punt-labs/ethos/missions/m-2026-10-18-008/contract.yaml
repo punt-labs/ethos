@@ -1,0 +1,31 @@
+mission_id: m-2026-10-18-008
+status: open
+type: design
+created_at: "2026-10-18T13:19:57Z"
+updated_at: "2026-10-18T13:19:57Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-10-18T13:19:57Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/design-opencode-plugin.md
+    - DESIGN.md
+success_criteria:
+    - 'Fix finding 1 (confirmed real, Qodo/Copilot): JoinRootSession (Sec2.1) calls ''ethos mission claim'' on a brand-new OpenCode session, but runMissionClaim''s RefuseIfSessionGone (internal/hook/pretooluse_dispatch.go:494) refuses any session with no roster entry. Specify explicit roster registration (ethos session create, cmd/ethos/session.go:684) for the OpenCode session before any claim is attempted, including how a plugin-restart reconciles sessions that were already registered.'
+    - 'Fix finding 2 (confirmed real, Qodo/Copilot/Bugbot, verified directly against .tmp/effect.mdx): Sec3.2''s ETHOS_SESSION propagation cites ctx.tool.hook(''execute.before'', ...) as having a mutable env field, but .tmp/effect.mdx''s ToolHooks/ToolExecuteBefore interface has no env field -- only ShellHooks/ShellCreateBefore (the separate ctx.shell.hook(''create.before'', ...) hook) has env: Record<string,string|undefined>. Correct Sec1.2, Sec3.2, Sec3.3, and DES-078 consistently: either specify ctx.shell.hook(''create.before'', ...) as the actual propagation mechanism (verifying it carries or can be paired with the firing session''s own ID), or identify and verify a different real mechanism. State plainly if this cannot be confirmed from available reference material without running a live opencode serve instance.'
+    - 'Fix finding 3 (confirmed real, Qodo, security-relevant): the proposed ''ethos mission claim-forked --session <child> --witness <parent>'' (Sec5) has no Go-side authoritative data to verify the caller-supplied witness is actually sid''s ancestor -- internal/session/session.go''s Participant.Parent is a within-roster participant link, not a session-to-session lineage record, and nothing else in the codebase stores session parentage. Specify how OpenCode parent/child links get registered in Ethos-owned storage (not just passed as CLI args to be trusted), so claim-forked''s guard can verify ancestry server-side rather than trusting the TypeScript plugin''s claim.'
+    - 'Fix finding 5 (confirmed real, Qodo): claim-forked (Sec5) is described as allocating a delegation and writing the child''s mission claim, but WriteCommitTrailers (internal/hook/commit_trailers.go:53-71) also requires a matching DelegationBinding written via WriteDelegationBinding (internal/mission/active.go:352) for the delegation trailer to appear. Specify that claim-forked must also write the delegation binding, atomically with the claim.'
+    - 'Fix finding 4 (confirmed real, procedural): the mission contract required ''each commit must pass make check'' but the prior round''s result only ran and recorded make docs. Run make check (not just make docs) before each commit in this round and record it in the result evidence.'
+    - 'Address finding 6 (unverified cross-repo claim, Qodo): review states ''ethos enable --opencode'' registering a plugins array entry in opencode.json would fail punt-labs/points''s make check-dev and make doctor. Do not accept or reject this blind -- either verify against the actual punt-labs/points repo files cited (.bin/check-dev-config.sh, Makefile) if reachable, or explicitly flag this as an open cross-repo compatibility question for a future round/operator decision in Sec6 (non-goals) rather than silently ignoring it.'
+    - 'Reply to finding 7 (invalid, same pattern as PR #535''s identical Qodo finding) is already handled by the leader directly on the PR -- do not change mission log JSONL format for this.'
+    - 'Do not re-litigate or change anything the prior round got right (verified by leader review: resolve.go/hook.go/commit_trailers.go/tree.go citations were all confirmed accurate; the 7 rejected alternatives in Sec7 stand). Scope this round to fixing the 5 confirmed defects above, not a rewrite.'
+    - Commit incrementally -- one commit per logical fix. Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Revision round for ethos-5y4r''s DES-078 design, PR #536 (https://github.com/punt-labs/ethos/pull/536), branch design/opencode-plugin-adapter -- already checked out, DO NOT create a new branch or touch main. Three independent reviewers (Qodo, GitHub Copilot, Cursor Bugbot) converged on the same findings on the first round; the leader verified the top 3 directly against real source before routing this mission. Push commits to origin design/opencode-plugin-adapter (already tracked) to update the existing PR -- do not open a new PR.'
