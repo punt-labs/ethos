@@ -1,0 +1,37 @@
+mission_id: m-2026-10-18-006
+status: open
+type: implement
+created_at: "2026-10-18T04:51:47Z"
+updated_at: "2026-10-18T04:51:47Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-18T04:51:47Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs: {}
+write_set:
+    - docs/spec-opencode-integration.tex
+    - docs/prfaq-opencode-integration.md
+success_criteria:
+    - |-
+      Finding B, the one remaining unaddressed Copilot finding from PR #534 (thread PRRT_kwDORp6BQc6tmxjb on docs/prfaq-opencode-integration.md line ~175), after missions m-2026-10-18-001/002/005 closed the other findings. All other findings from this review round (event-vocabulary caveat, nested-fork exploit, Claude Code fork claim, and two residual fabrications from an earlier failed mission) are ALREADY FIXED and independently verified (commit a32ee03) -- do not re-touch them except where finding B's own fix requires a cross-reference update.
+
+      THE FINDING, already confirmed real by the leader via context7 direct source read (cite this verification, do not re-derive from scratch): OpenCode's event.subscribe is a VOLATILE stream with no replay/catch-up primitive. Confirmed sources: specs/v2/event-stream-architecture.md states 'Events before registration may be missed, consistent with a volatile stream'; services/www/src/docs/content/build/client/index.mdx states 'Live subscriptions do not replay missed events'; services/www/src/docs/content/build/plugins/rpc.mdx states 'Event subscriptions are live only, so disconnected subscribers miss events.' No document read anywhere describes a durable-event-catch-up or reconciliation primitive.
+
+      THE PROBLEM THIS CREATES: the fork FAQ's entire design (docs/prfaq-opencode-integration.md, 'What happens if OpenCode forks a session mid-mission?') and the companion spec's AllocateDelegationForkPropagated operation (docs/spec-opencode-integration.tex, \label{sec:opforkpropagate}) both assume the plugin's ctx.event.subscribe() loop WILL observe the triggering SessionEvent.Forked event for every fork that needs attribution. If the plugin's event subscription was disconnected (process restart, network blip, reconnection window) at the exact moment a fork occurred, that SessionEvent.Forked is PERMANENTLY MISSED -- the plugin never learns the fork happened, and the forked session has no specified path to ever acquire its promised delegation. This is a design gap, not a bug in either document's current content: a fork created during a disconnection window is simply unaccounted for by the current design.
+
+      REQUIRED FIX: specify a startup/reconnection reconciliation mechanism for both documents, consistently. The design shape (adjust if your own research finds a better approach, but justify the choice): on plugin startup or reconnection (ctx.event.subscribe() resuming after a gap), the plugin should enumerate currently-live OpenCode sessions (via whatever mechanism the hook-plugin's own Context actually exposes for this -- check ctx.session's real member list per packages/plugin/src/effect/session.ts on the v2.0.32 release tag, since context.data.session is NOT reachable from the hook-plugin per this document's own already-established finding) and, for each live session with a parent but no existing delegation/claim, treat it exactly as if its SessionEvent.Forked had just fired -- i.e. apply the fork-propagation logic retroactively. This retroactive application MUST be IDEMPOTENT: if it runs more than once for the same session (e.g. reconnection happens twice, or overlaps with a normal live event firing for the same session), it must not create two delegations for one session, and must not violate DelegationIDFreshness (already a proven theorem in this spec -- any new/modified operation must not break it).
+
+      FORMAL WORK REQUIRED on docs/spec-opencode-integration.tex: decide and implement ONE of two approaches, justified explicitly: (a) author a genuinely new operation (e.g. ReconcileMissedForks) whose guard checks the same conditions AllocateDelegationForkPropagated checks but is explicitly idempotent (e.g. guarded by sid? \notin \dom claims, same as the existing operation, so a second firing for an already-claimed session simply cannot fire again -- if this is sufficient, explain why a SEPARATE operation is still warranted rather than just relying on AllocateDelegationForkPropagated's own existing guard already making re-firing safe); or (b) argue that AllocateDelegationForkPropagated's EXISTING guards (sid? \notin \dom claims, id? \notin \dom delegations) already make it safe to call this same operation reactively on normal fork-event receipt AND retroactively on reconciliation, with no new operation needed -- in which case the fix is primarily a PROSE clarification (the operation already models 'allocate a fork-propagated delegation for this session,' independent of WHEN or WHY the plugin learned it needed to), not new Z content, and the real gap is simply stating this reconciliation TRIGGER explicitly in both documents' prose. Pick whichever is actually correct per the theorem's real guarantees -- read DelegationIDFreshness's proof in S:theorems carefully, don't assume. Either way:
+      - Add a new Failure Modes entry (or extend an existing one) describing 'fork event missed during plugin disconnection' and its resolution path.
+      - If a new operation is added: author it, run fuzz (0 errors required), run probcli setsize-1 (report the state/transition counts against the 286/3862/0/0 baseline, since a genuinely new operation changes the state space -- a divergence here is EXPECTED, not a red flag, but must be reported honestly, not hidden).
+      - If NO new operation is needed: still run fuzz and probcli setsize-1 to confirm the prose-only change didn't inadvertently touch anything, and the baseline should be IDENTICAL (no new operation, no new states).
+
+      FORMAL WORK REQUIRED on docs/prfaq-opencode-integration.md: update the fork FAQ to describe the reconciliation trigger explicitly -- what the plugin does on startup/reconnection, citing the chosen design from the spec side, and why it's safe to run idempotently. Add this as a corrected/extended FAQ or paragraph, consistent in tone and citation discipline with the rest of this heavily-reviewed document (cite every source checked, confirm or refute, no fabricated API members -- this document has already been burned twice this session by citations that didn't match the real v2.0.32 source, so verify everything against real source before writing it).
+
+      Run markdownlint on the prfaq file and make check overall after both documents are edited. Submit your result via  citing every verification performed.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

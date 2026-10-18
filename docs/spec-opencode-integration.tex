@@ -1001,7 +1001,9 @@ sid? \in \dom sessions \\
 (sessions(sid?)).bornEpoch = epoch \\
 (sessions(sid?)).parent \neq noParent \\
 sid? \notin \dom claims \\
-witness? = parentID((sessions(sid?)).parent) \\
+witness? \in \ran ( \{ sid? \} \dres
+  ( \{ s : \dom sessions \mid (sessions(s)).parent \neq noParent @
+       s \mapsto parentID((sessions(s)).parent) \} \plus ) ) \\
 witness? \in \dom sessions \\
 (sessions(witness?)).alive = ztrue \\
 (sessions(witness?)).bornEpoch = epoch \\
@@ -1020,6 +1022,71 @@ claims' = claims \oplus \{ sid? \mapsto claims(witness?) \} \\
 delegationOf' = delegationOf \\
 epoch' = epoch
 \end{schema}
+
+\textbf{Corrected by review, round 4 (Cursor Bugbot).} The round-3 fix
+above closed the nested-fork reverse-propagation exploit by requiring
+\field{witness?} to equal \field{sid?}'s single IMMEDIATE parent --
+correct for closing that specific exploit, but too narrow for the
+general case the companion PR/FAQ's own fork FAQ already promises:
+``checks whether \field{parentID} (OR ANY ANCESTOR REACHABLE FROM IT)
+holds an active mission claim.'' A one-hop guard cannot satisfy that
+text: a grandchild whose immediate parent was never itself claimed, but
+whose GRANDPARENT was, could not inherit under the one-hop guard, even
+though the grandparent's claim is exactly the kind of traceable
+ancestry this operation exists to propagate. The round-3 justification
+for the one-hop guard -- that \field{maxSessions} = 2 makes a one-hop
+lookup and an unbounded walk COINCIDE -- is true only of THIS
+document's own bounded Z model for model-checking; \S\ref{sec:nongoals}
+states plainly that the real \field{Registry} is unbounded, so that
+coincidence does not hold in production, where three or more sessions
+in one fork lineage can all be live simultaneously.
+
+The corrected guard above replaces the single \field{parentID} equality
+with set membership in \field{sid?}'s full ANCESTOR set, computed as
+the relational image of \field{sid?} under the TRANSITIVE CLOSURE
+($\plus$) of the one-step parent-link relation, itself written inline
+as a set comprehension over $\dom \field{sessions}$ -- the same
+``bounded by the currently-live session set, not a global declaration
+over an unbounded carrier'' technique \S\ref{sec:session-schema} already
+uses for \field{family}, so this introduces no new unbounded-type risk
+\texttt{SETUP\_CONSTANTS} would reject. The comprehension's domain is
+explicitly restricted to $\dom \field{sessions}$, so the relation can
+only ever connect sessions whose records still exist; the moment an
+ancestor's own record is removed (\field{EndSession}), the chain is
+structurally unwalkable past that point -- \field{EndSession}
+(\S\ref{sec:opendsession}) removes only the ended session's OWN entry
+from \field{sessions}/\field{claims}/\field{delegationOf} via
+$\ndres$, leaving every OTHER session's \field{.parent} pointer
+(including a surviving child's pointer back to the one that ended)
+untouched, so the relation correctly reflects ``as much of the
+ancestor chain as still has a live, readable record,'' never a
+dangling reference the schema would apply \field{sessions} to outside
+its domain.
+
+Directionality, and therefore both previously-closed exploits, survive
+unchanged: the one-step relation maps $s \mapsto \field{parentID}((\field{sessions(s)}).\field{parent})$
+-- CHILD to PARENT, never the reverse -- so its transitive closure from
+\field{sid?} can only ever reach \field{sid?}'s own ancestors, never
+its descendants. Re-checked against both exploit traces directly: (1)
+$\field{JoinRootSession(A)} \to \field{ForkSession(B,A)} \to
+\field{ClaimMission(B,M)} \to
+\field{AllocateDelegationForkPropagated(A, \field{witness?}=B)}$ still
+fails at $\field{(sessions(sid?)).parent} \neq \field{noParent}$ before
+the ancestor-set guard is even reached, because \field{A} is a root
+session with no parent at all -- untouched by this correction. (2)
+$\field{JoinRootSession(A)} \to \field{ForkSession(B,A)} \to
+\field{EndSession(A)} \to \field{ForkSession(C,B)} \to
+\field{ClaimMission(C,M)} \to
+\field{AllocateDelegationForkPropagated(B, \field{witness?}=C)}$: with
+$\field{sid?} = \field{B}$, the ancestor set of \field{B} is $\{
+\field{A} \}$ (one hop via \field{B}'s own \field{.parent} pointer,
+which still names \field{A} even after \field{A}'s record was removed
+-- though \field{A} itself fails the subsequent liveness/membership
+guards, correctly refusing any witness against a purged ancestor too);
+\field{C} is \field{B}'s DESCENDANT, reachable only by walking the
+relation in the opposite direction from the one it encodes, so
+$\field{witness?} = \field{C}$ is never a member of \field{B}'s
+ancestor set and the guard rejects it, exactly as before.
 
 \textbf{Corrected by review:} the first draft's frame conjunct here was
 $\field{claims?} = \field{claims}$, an outright defect, not a stylistic
@@ -1489,37 +1556,33 @@ are discharged by proof.
   practice, but the routine path every multi-step OpenCode mission round
   is expected to take. \\
 \field{TraceabilityViaRootSuffices} &
-  \textbf{Corrected by review, round 2:} an intermediate draft stated
-  this theorem as ``\field{root} equality between two live sessions is
-  ALWAYS sufficient evidence that they share a lineage, so
-  \field{AllocateDelegationForkPropagated} needs no further provenance
-  fact beyond \field{family}'' -- true as a statement about SHARING a
-  lineage, but not sufficient on its own to license propagating a
-  claim DIRECTIONALLY from one family member to another, as the nested
-  fork counterexample in \S\ref{sec:opforkpropagate} demonstrates
-  (\field{C}'s claim flowing backward to its own parent \field{B} under
-  root equality alone). The theorem's title survives, restated
-  precisely: what actually suffices for traceability is \field{sid?}'s
-  single immediate \field{parentID} LOOKUP (\field{sid?}'s
-  \field{root}, re-derived from that same \field{parent} pointer, is
-  used elsewhere in this document only to confirm LINEAGE MEMBERSHIP in
-  general, never as the propagation guard itself any longer) --
-  \field{ForkSession} stamps a correct \field{parent} pointer on every
-  session it creates, and \field{JoinRootSession} stamps every root
-  session's \field{parent} as \field{noParent}, so a session's own
-  \field{parentID} is always either absent (a root) or names exactly
-  one live-or-ended session with no further traversal needed to
-  identify IT specifically -- the one-step parent relationship, not the
-  whole-lineage root, is the provenance fact
-  \field{AllocateDelegationForkPropagated} actually needs and now
-  checks. Confirming $\field{maxSessions} = 2$ (\S\ref{sec:constants})
-  makes this the SAME guard a chain walk would produce at this bound --
-  with at most two sessions simultaneously live, a one-step parent
-  lookup and an unbounded ancestor walk coincide exactly, so no
-  animatable counterexample at this scale could distinguish the two
-  formulations; the correction is needed precisely because root
-  equality is a DIFFERENT, strictly weaker relation than either, not
-  because a walk and a lookup disagree. \\
+  \textbf{Corrected by review across rounds 2 and 4.} Round 2
+  corrected an intermediate draft's claim that ``\field{root} equality
+  between two live sessions is ALWAYS sufficient evidence that they
+  share a lineage, so \field{AllocateDelegationForkPropagated} needs no
+  further provenance fact beyond \field{family}'' -- true about SHARING
+  a lineage, but not sufficient to license propagating a claim
+  DIRECTIONALLY, as the nested-fork counterexample in
+  \S\ref{sec:opforkpropagate} demonstrated (\field{C}'s claim flowing
+  backward to its own parent \field{B}). Round 2's own replacement --
+  requiring \field{witness?} to equal \field{sid?}'s single IMMEDIATE
+  parent, justified by $\field{maxSessions} = 2$ making a one-step
+  lookup and an unbounded walk ``coincide'' -- was ITSELF corrected in
+  round 4 (Cursor Bugbot): that coincidence holds only within this
+  document's own BOUNDED model-checking carrier, not in the real,
+  explicitly unbounded \field{Registry} \S\ref{sec:nongoals} describes,
+  where a grandchild's live, claimed GRANDPARENT is a real ancestor a
+  one-hop guard cannot see. The theorem's title survives a second time,
+  restated to its now-final, general form: what suffices for
+  traceability is \field{sid?}'s full ANCESTOR SET under the
+  TRANSITIVE CLOSURE of the one-step parent-link relation
+  (\S\ref{sec:opforkpropagate}'s corrected guard) -- \field{root}
+  equality is too weak (round 2's finding) and a single \field{parentID}
+  lookup is too narrow (round 4's finding); only the transitive closure
+  of the SAME one-step relation both those formulations approximated
+  from opposite directions is both sound (directional, so neither
+  exploit trace re-opens) and complete (reaches every live ancestor at
+  any lineage depth, not merely a bounded-model coincidence). \\
 \field{RestartClearsLiveness} &
   \field{RestartService}'s sole effect is \field{epoch' = epoch + 1}; no
   session's \field{bornEpoch} changes. Every operation in
@@ -1742,6 +1805,24 @@ this integration's \field{JoinRootSession}/\field{ForkSession}
 triggers, identified by elimination against that narrower list in the
 companion research.
 
+\textbf{Added, round 4: \field{ctx.event.subscribe()} is volatile, with
+no replay primitive.} Confirmed directly:
+\fpath{specs/v2/event-stream-architecture.md} states ``Events before
+registration may be missed, consistent with a volatile stream'';
+\fpath{services/www/src/docs/content/build/client/index.mdx} states
+``Live subscriptions do not replay missed events''; and
+\fpath{services/www/src/docs/content/build/plugins/rpc.mdx} states
+``Event subscriptions are live only, so disconnected subscribers miss
+events.'' A \field{SessionEvent.Forked} firing during a plugin
+disconnection window is therefore permanently unobserved via this
+primitive alone. \S\ref{sec:failure-modes}'s ``Fork event missed during
+plugin disconnection'' entry gives the full treatment: the fix is not a
+new operation, but recognizing that \field{ctx.tool.hook("execute.before", ...)}
+-- already load-bearing elsewhere in this integration for
+\field{ETHOS\_SESSION} propagation -- gives \field{AllocateDelegationForkPropagated}
+a second, independent trigger that does not depend on
+\field{ctx.event.subscribe()}'s connection state at all.
+
 \textbf{JoinRootSession and ForkSession.} On a \field{session.created}
 event with no fork ancestry, the plugin calls \field{ethos mission
 claim <id>} (the existing Tier B dispatch-binding primitive, per this
@@ -1913,6 +1994,35 @@ introduced above, gathered here for a single point of reference.
     execution of these operations (which the real flocks guarantee, and
     this document does not re-derive) composes safely, by the same
     reasoning \field{WorktreeIndependence} already gives.
+  \item \textbf{Fork event missed during plugin disconnection,
+    \textbf{added, round 4 (Cursor Bugbot via the companion PR/FAQ's
+    own event-volatility finding).}} OpenCode's \field{ctx.event.subscribe()}
+    is a volatile stream with no replay or catch-up primitive
+    (\S\ref{sec:harness-instantiation}'s OpenCode subsection, citing
+    \fpath{specs/v2/event-stream-architecture.md}: ``Events before
+    registration may be missed, consistent with a volatile stream'') --
+    a \field{SessionEvent.Forked} that fires during a disconnection
+    window is gone, and the forked session has no event to trigger its
+    delegation via the companion PR/FAQ's primary fork-handling
+    mechanism. This is NOT modelled as a new operation or a relaxed
+    guard: \field{AllocateDelegationForkPropagated}
+    (\S\ref{sec:opforkpropagate}) already guards on
+    $\field{sid?} \notin \dom \field{claims}$ and
+    $\field{id?} \notin \dom \field{delegations}$, which make it
+    equally safe to invoke from a SECOND, independent trigger the
+    companion PR/FAQ documents -- \field{ctx.tool.hook("execute.before", ...)},
+    which fires with the session's own ID on every tool call that
+    session makes, regardless of \field{ctx.event.subscribe()}'s
+    connection state at any point. A session already claimed via the
+    live event fails the first guard on a second attempt and nothing
+    fires; a session whose fork event was genuinely missed has no claim
+    yet, so the SAME operation fires exactly once, from whichever
+    trigger observes it first. The missed-event case is therefore not a
+    silent, unrecoverable gap -- it is covered by an operation this
+    document already specifies and already proved safe to invoke more
+    than once for the same session, triggered from a channel
+    (per-tool-call) that cannot itself be disconnected the way an event
+    stream can.
 \end{itemize}
 
 % ===================================================================
@@ -2131,6 +2241,67 @@ not implied by, root equality), so every state the corrected operation
 can reach was already reachable under the prior guard, and no new
 violation or deadlock is introduced by narrowing an already-verified-safe
 transition's firing conditions further.
+
+\textbf{A fourth correction, round 4:} Cursor Bugbot found that round
+3's own one-hop \field{parentID} guard was, in turn, too NARROW --
+correct for closing the nested-fork exploit, but inconsistent with the
+companion PR/FAQ's own promise to check ``\field{parentID} or any
+ancestor reachable from it,'' and justified only by a bounded-model
+coincidence ($\field{maxSessions} = 2$) that does not hold against the
+real, explicitly unbounded \field{Registry} \S\ref{sec:nongoals}
+describes. Fixed by replacing the single \field{parentID} equality with
+membership in \field{sid?}'s full ancestor set, computed as the
+relational image of \field{sid?} under the transitive closure
+($\plus$) of an inline one-step parent-link comprehension
+(\S\ref{sec:opforkpropagate}) -- bounded by $\dom \field{sessions}$ the
+same way \field{family}'s own comprehension already is, so no new
+unbounded-type risk is introduced. \field{TraceabilityViaRootSuffices}
+restated a second time to its final, general form (\S\ref{sec:theorems}).
+Directionality re-checked against BOTH historical exploit traces
+directly in \S\ref{sec:opforkpropagate}'s own prose, not merely
+asserted: round 2's exploit still fails at the
+$\field{(sessions(sid?)).parent} \neq \field{noParent}$ guard before
+the ancestor-set check is reached; round 3's exploit still fails
+because the relation is child-to-parent only, so a session's
+DESCENDANT is never a member of its own ancestor set under any closure
+depth. \texttt{/z-spec:check} re-confirms 0 errors.
+
+This round's re-verification differs from every prior round in one
+respect, disclosed plainly rather than omitted: a \field{DEFAULT\_SETSIZE}
+2 run was ATTEMPTED specifically BECAUSE the guard changed from a
+single lookup to an unbounded-looking closure operator, the exact
+pattern this document's own \fpath{reference/z-notation.md} conventions
+flag as a ProB-animatability risk -- unlike round 3's guard narrowing,
+this round's change is not provably state-space-equivalent to its
+predecessor by inspection alone, so the leader chose to check directly
+rather than assume. \texttt{init}, \texttt{animate}, \field{cbc\_assertions}
+(no assertion violated), and \field{cbc\_deadlock} (deadlock-free) ALL
+PASSED at setsize 2 under the tool's own default invocation
+(\field{MAX\_OPERATIONS} 1000, \field{TIME\_OUT} 30000ms per step) --
+zero invariant violations and zero deadlocks were found in everything
+this run actually completed. The \field{model\_check} CENSUS phase
+itself exceeded the harness's 600-second budget and was stopped before
+producing a coverage report, consistent with this document's own
+earlier, repeated account of setsize 2's large, flag-sensitive state
+space -- this is a TIMEOUT, not a counterexample, and is reported as
+such rather than silently omitted or conflated with a violation.
+\textbf{What this does, and does not, establish:} it does NOT
+reconfirm full operation coverage at setsize 2 the way round-1's
+original (pre-correction) figures did, because the census never
+finished; it DOES confirm, independent of the guard-change-specific
+concern that motivated running it, that the new transitive-closure
+construct does not itself cause probcli to fail, crash, or report a
+parse/evaluation error at this bound -- every phase that DID complete
+behaved normally. Setsize-1's certified-complete result (286 states,
+3862 transitions, zero violations, zero deadlocks, identical across
+all four correction rounds) remains this document's strongest directly
+verified claim; confirming the corrected guard's exact setsize-2
+transition/coverage numbers, the same open item round 3 already
+recommended before this document is treated as the final word on
+setsize-2 behavior, now additionally requires either a longer timeout
+budget or a narrower probcli invocation (\texttt{-df}, a raised
+\field{MAX\_OPERATIONS}) than this round attempted -- not resolved
+here.
 
 % ===================================================================
 \section{Open Dependency: punt-labs/points}

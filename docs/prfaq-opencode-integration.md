@@ -230,6 +230,64 @@ so they are not an available cross-check for this document's design at
 all, not merely a non-primary one. This FAQ's own lineage mechanism
 does not depend on them.
 
+### What happens if the fork event itself is missed?
+
+Confirmed directly, across three independent sources:
+`specs/v2/event-stream-architecture.md` states "Events before
+registration may be missed, consistent with a volatile stream";
+`services/www/src/docs/content/build/client/index.mdx` states "Live
+subscriptions do not replay missed events"; and
+`services/www/src/docs/content/build/plugins/rpc.mdx` states "Event
+subscriptions are live only, so disconnected subscribers miss events."
+`ctx.event.subscribe()` -- the FAQ above's own fork-lineage mechanism
+-- is therefore a VOLATILE stream with no replay or catch-up
+primitive. If the plugin's subscription was disconnected (a process
+restart, a network blip, a reconnection window) at the exact moment a
+fork occurred, that fork's `SessionEvent.Forked` is gone -- the plugin
+never observes it, and the forked session has no event to trigger its
+delegation.
+
+**The fix does not need a second code path.** `ctx.tool.hook
+("execute.before", ...)` -- already relied on elsewhere in this
+document to propagate `ETHOS_SESSION` into every tool call a session
+makes -- fires with that session's own `sessionID` on every tool
+invocation, independent of `ctx.event.subscribe()`'s connection state
+[`packages/plugin/src/effect/tool.ts`, directly sourced: the
+`execute.before` event carries `sessionID` as a required field].
+Because a forked OpenCode session cannot do any real work without
+executing at least one tool, this hook is a second, independent
+trigger the plugin already has reachable: on EVERY tool call, before
+(or instead of) trusting that the session's fork was already
+registered via the live event stream, the plugin reads the session's
+own record (`ctx.session.get({ sessionID })`, confirmed on the
+hook-plugin's own `SessionDomain`) for its `parentID`, and -- if that
+session is not yet claimed under this mission -- applies the SAME
+fork-propagation logic the live-event path already applies. This is
+not a parallel reconciliation mechanism to design and verify
+separately; it is the SAME trigger-independent operation
+(`AllocateDelegationForkPropagated`, the companion spec's
+\S~"AllocateDelegationForkPropagated") invoked from a second place.
+
+**Why this is safe to call twice for the same session, stated
+precisely.** The companion spec's operation already guards on
+`sid? \notin dom claims` and `id? \notin dom delegations` -- a session
+that is ALREADY claimed (because its `SessionEvent.Forked` WAS
+observed normally) simply fails that first guard the second time
+tool-hook-triggered reconciliation checks it, and nothing fires. A
+session whose fork event was genuinely missed has no claim yet, so the
+guard is satisfied and the delegation is allocated exactly once,
+whichever trigger noticed first. No new Z operation, no relaxed guard,
+and no new idempotency machinery were needed -- the existing operation
+was already safe to call reactively (on the live event) or
+retroactively (on the next tool call), because "allocate a
+fork-propagated delegation for this still-unclaimed session" was
+always independent of WHEN or WHY the plugin learned it needed to. The
+companion spec's own Failure Modes section (`AdapterDataMissing`'s
+discussion) is extended with this case: a missed fork event is not a
+silent, unrecoverable gap, because the tool-hook trigger provides a
+guaranteed second chance the moment the forked session does anything
+at all.
+
 ### What happens on ethos service restart?
 
 Two different processes can restart, and they fail differently.
