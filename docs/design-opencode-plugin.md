@@ -720,9 +720,10 @@ pipeline stage's write-set is unambiguous:
 4. **`ethos enable --opencode`** (or equivalent flag/subcommand) deposits
    the plugin file and registers it in `opencode.json`'s `"plugins"` array
    (`.tmp/plugins-web.mdx:33-38`'s config shape), mirroring the existing
-   `vox enable`/`z-spec enable` per-repo deposit pattern. **See §6.1 for an
-   open cross-repo compatibility question this specific mechanism raises
-   for at least one consuming repo.**
+   `vox enable`/`z-spec enable` per-repo deposit pattern. **See §6.1 for a
+   same-repo-only collision this specific mechanism has with one
+   consuming repo's own dev-config gate** — not a general incompatibility
+   with projects that use that repo's tooling elsewhere.
 
 None of 1-4 is implemented in this mission. They are named here so the
 mission contract for the implementation stage can cite this section
@@ -740,10 +741,12 @@ identical STABLE-metadata/MUTABLE-PR-SHA boundary the spec itself draws
 separate, GitHub-owned concern"). No file this design writes or reads is
 shared with, or interpreted by, Circuit's own tracking.
 
-### 6.1 Open cross-repo compatibility question: `ethos enable --opencode` vs. `punt-labs/points`'s `make doctor`
+### 6.1 Same-repo-only collision: `ethos enable --opencode` inside `punt-labs/points`'s own source tree
 
 **Finding 6 (Qodo), checked directly rather than accepted or rejected
-blind.** `punt-labs/points`'s `.bin/check-dev-config.sh` — the script
+blind, and re-scoped in round 3 after reading `punt-labs/points`'s own
+repo directly rather than describing the finding secondhand.**
+`punt-labs/points`'s `.bin/check-dev-config.sh` — the script
 `make check-dev` runs, which `make doctor` depends on
 (`points/Makefile:29-30`, `:104-105`: `doctor: build check-dev`) —
 contains this exact gate, confirmed by direct read:
@@ -755,34 +758,48 @@ fi
 ```
 
 (`points/.bin/check-dev-config.sh:16-18`.) This is a real, confirmed
-conflict, not a speculative one: §5 point 4's `ethos enable --opencode`
-registers this design's plugin in `opencode.json`'s `"plugins"` array
-(`.tmp/plugins-web.mdx:33-38`'s config shape) by design — that is the
-entire mechanism by which OpenCode discovers and loads
-`.opencode/plugins/ethos.ts` outside the per-repo `.opencode/plugins/`
-auto-discovery path (§1.1). Running `ethos enable --opencode` inside
-`punt-labs/points` would add a `"plugins"` key to that repo's
-`opencode.json`, which `check-dev-config.sh` fails unconditionally the
-moment the key exists at all, regardless of its contents or purpose. Any
-repo whose own dev-config gate enumerates `"plugins"` as requiring
-out-of-band review — `punt-labs/points` is the one confirmed instance, by
-direct read of its committed script, but the pattern could exist in other
-repos this design has not checked — would break `make doctor` the first
-time an operator ran `ethos enable --opencode` there, with no code change
-on the ethos side at fault.
+collision, not a speculative one — but it is narrower than "projects that
+use `points` for model routing conflict with projects that use the ethos
+OpenCode integration." It is **specifically and only** about running
+`ethos enable --opencode` inside the `points` repo's own checkout: that
+command would add a `"plugins"` key to *that repo's own*
+`opencode.json`, and `check-dev-config.sh` fails unconditionally the
+moment the key exists there, regardless of its contents or purpose.
+
+This is a same-repo-only collision, confirmed by reading `points`'s own
+source: `check-dev-config.sh`'s gate reads and fails on `points`'s own
+`opencode.json` and runs only under `points`'s own `make check-dev`/`make
+doctor` — it is internal tooling `points` applies to itself, not a check
+`points` deploys, enforces, or propagates into any other repository that
+`points` happens to be used to configure. `points` itself, per its own
+README (`points/README.md`), exposes exactly four commands — `route`,
+`status`, `verify`, `unroute` — all of which write or read only
+model/source/provider routing selection; none of them touches an
+`opencode.json` `"plugins"` key in any repo, `points`'s own or otherwise
+(confirmed by direct read of `points/.bin/`: no script there writes a
+`"plugins"` key anywhere). A repo that uses `points` to route its own
+harness-to-model config, and separately runs `ethos enable --opencode` for
+the ethos OpenCode integration, does not hit this gate at all — the two
+mechanisms write disjoint parts of `opencode.json` in that repo, and
+`check-dev-config.sh` does not exist outside `points`'s own tree to
+object. The one real, narrow case is: don't run `ethos enable --opencode`
+inside `punt-labs/points`'s own source tree without first resolving the
+"area-8 review" its own gate names.
 
 This is **not** resolved by this design, deliberately: whether to (a) make
 `ethos enable --opencode` idempotent against a pre-existing
 `check-dev-config.sh`-style gate (there is no general mechanism for ethos
 to know such a gate exists in an arbitrary consuming repo), (b) document
-`ethos enable --opencode` as requiring the "area-8 review"
-`points`'s own gate names before use in that repo, or (c) some other
+`ethos enable --opencode` as requiring the "area-8 review" `points`'s own
+gate names before use inside `points`'s own repo, or (c) some other
 reconciliation, is an operator decision this design flags rather than
-makes. Named here, per this round's mission contract, as an open question
-for the implementation stage or the operator to rule on — not silently
-ignored, and not accepted as blocking this design's own scope (§6's
-`Non-goals`), since it is a property of one consuming repo's own gate
-script, not of anything `ethos enable --opencode` writes incorrectly.
+makes. Named here as a narrow, same-repo-only open question for the
+implementation stage or the operator to rule on — not silently ignored,
+and not accepted as blocking this design's own scope (§6's `Non-goals`),
+since it is a property of one repo's own gate script applied to its own
+config file, not a general conflict between `points`-routed repos and
+ethos-OpenCode-integrated repos, and not anything `ethos enable --opencode`
+writes incorrectly.
 
 ## 7. Rejected alternatives
 
