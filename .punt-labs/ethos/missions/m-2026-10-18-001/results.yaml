@@ -1,0 +1,71 @@
+results:
+    - mission: m-2026-10-18-001
+      round: 1
+      created_at: "2026-10-18T03:08:02Z"
+      author: claude
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/spec-opencode-integration.tex
+          added: 340
+          removed: 80
+      evidence:
+        - name: fuzz type-check after fix
+          status: pass
+        - name: AllocateDelegationForkPropagated claims' = claims defect fixed
+          status: pass
+        - name: parent-authorization exploit closed (sid?.parent != noParent added)
+          status: pass
+        - name: witness? and sid? liveness guards added (alive/bornEpoch=epoch)
+          status: pass
+        - name: ForkSession parentSid? liveness guard added
+          status: pass
+        - name: HarnessNeutrality restated to the property that actually holds
+          status: pass
+        - name: ResolveCommitAttribution precedence verified against literal LaTeX, documented as correct
+          status: pass
+        - name: ResolveCommitAttribution case-3 justification added (commit aee7d3c, after a self-audit caught it missing)
+          status: pass
+        - name: pdflatex compiles cleanly
+          status: pass
+        - name: 'probcli setsize-1 unchanged: 286 states, 3862 transitions, 0 violations'
+          status: pass
+      prose: |
+        Worker jms was stopped (TaskStop) after the leader misjudged a genuine
+        20+ minute stall as unresponsive -- the kill notification later showed
+        jms was mid-reasoning, not stalled. No ethos mission result was ever
+        submitted by jms under this contract.
+
+        The leader had already independently verified every finding in this
+        contract's brief against real source (direct reads of
+        internal/resolve/resolve.go, internal/hook/commit_trailers.go,
+        internal/hook/audit_log.go, and the spec's own schemas) before the
+        stall occurred, through earlier rounds of this same multi-day
+        correction effort. Rather than re-dispatch jms from scratch at the risk
+        of further delay on an already-fully-diagnosed defect, the leader
+        applied the fix directly: commits dfe0f67 and aee7d3c on branch
+        feature/opencode-integration-spec (PR #534).
+
+        The core defect named in this contract -- AllocateDelegationForkPropagated's
+        claims' = claims frame conjunct leaving a forked session permanently
+        unable to produce a commit trailer -- is fixed: claims' = claims \oplus
+        { sid? -> claims(witness?) } (docs/spec-opencode-integration.tex:987).
+        The compounding parent-authorization exploit this contract flagged
+        (JoinRootSession(A) -> ForkSession(B,A) -> ClaimMission(B,M) ->
+        AllocateDelegationForkPropagated(A, witness=B) letting the parent
+        acquire a delegation off its child's claim) is closed by the added
+        guard sid?.parent != noParent (line 970), plus liveness guards on both
+        sid? and witness? (lines 968-969, 973-974) and on ForkSession's own
+        parentSid? (preventing a stale parent from forking a live child across
+        a restart). ResolveCommitAttribution's precedence was reviewed against
+        the literal LaTeX source per this contract's instruction and documented
+        as already correctly scoped (the four implications are top-level
+        schema-predicate conjuncts, not chained antecedents) -- no change was
+        needed there, with the reasoning recorded in the spec itself
+        (S:resolvecommit, "On precedence, checked by review").
+
+        This mission's own write-set conflicted with a later, unrelated
+        dispatch attempt (new Copilot findings on event-vocabulary currency
+        and event volatility, post-dating this mission's own close window) --
+        this result is being submitted now specifically to clear that
+        conflict via a proper close rather than bypass the mission system.

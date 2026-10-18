@@ -1,0 +1,32 @@
+mission_id: m-2026-10-18-001
+status: closed
+type: implement
+created_at: "2026-10-18T02:04:40Z"
+updated_at: "2026-10-18T03:11:31Z"
+closed_at: "2026-10-18T03:11:31Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-18T02:04:40Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs: {}
+write_set:
+    - docs/spec-opencode-integration.tex
+success_criteria:
+    - |-
+      Fix a real, independently-confirmed correctness defect in docs/spec-opencode-integration.tex found by two independent GitHub reviewers (Cursor Bugbot and Copilot) on PR #534, and confirmed by the leader reading the schemas directly.
+
+      THE DEFECT: AllocateDelegationForkPropagated (S:opforkpropagate, ~line 918-946) states claims' = claims -- it never adds sid? to claims. But ResolveCommitAttribution's only trailer-emitting case (S:resolvecommit, ~line 1147-1168) requires candidate? \in \dom claims before it will emit ANY Mission:/Delegation: trailer. The consequence: a forked OpenCode session that takes the fork-propagated delegation path gets a delegation record but can NEVER produce a commit trailer -- it is permanently unclaimed in the formal model. This is exactly the silent-attribution-loss failure bead ethos-5y4r's FailClosedOnAmbiguity invariant exists to prevent, except here it fails SILENTLY rather than closed (no diagnostic is emitted either -- ResolveCommitAttribution's case 3, the 'candidate unusable' branch, fires with diagnostic!=zfalse, treating a forked-but-never-claimed session identically to a session nobody expected, which is also probably wrong -- a forked session IS expected to be attributable, it just structurally cannot be under the current schema).
+
+      COMPOUNDING PROSE DEFECT: the spec's own prose at ~line 758-767 explicitly asserts 'AllocateDelegationTierB's oInherited or oForkPropagated cases... populate claims' -- this is false of the ACTUAL AllocateDelegationForkPropagated schema (claims' = claims, confirmed by direct read), so the design narrative contradicts the formal content it describes. The prose also says this at ForkNeverInheritsClaim's own justification (S:theorems table, ~line 1249, and ~line 1387's discussion).
+
+      REQUIRED FIX: decide and implement the correct resolution -- likely AllocateDelegationForkPropagated needs claims' = claims \oplus \{ sid? \mapsto <something> \} so the forked session IS claimed under the propagated mission once a delegation is allocated for it, OR a separate explicit claim-writing step must be composed into the fork-propagation sequence (fork -> allocate -> an explicit bind, analogous to BindDelegationToSession) with the prose corrected to describe that composed sequence accurately instead of asserting a single operation does something it doesn't. Either fix must preserve ForkNeverInheritsClaim's actual guarantee (a fork does NOT silently inherit its PARENT's claim without an explicit, checkable witness -- the family-membership witness already in the schema is exactly that explicit witness, so claiming the FORKED session itself under its OWN new delegation is not the same thing as inheriting the parent's claim, and the theorem's statement should be checked/clarified to make this distinction precise rather than conflating 'inherits the parent's existing claim' with 'gets claimed via its own witnessed fork-delegation').
+
+      ALSO FIX: a related Z-precedence finding from the same review round -- ResolveCommitAttribution's chained \implies statements inside one \where (~line 1165-1167) may not parenthesize the final implication correctly per Z's precedence rules, such that when sessionResolved?=ztrue and a matching delegation exists, the negated binding condition in an earlier conjunct could be false and let the mandatory output constraints (trailerMission!, diagnostic!, trailerDelegation!) go unconstrained rather than fixed. Read Z's actual operator precedence (implies is right-associative, lower precedence than land) carefully against the literal LaTeX source (not a re-derivation from memory) and either confirm this is a non-issue (if so, explain exactly why the existing parenthesization already scopes correctly) or add the needed explicit parenthesization so every case's output constraints are unconditionally mandatory once that case's guard is satisfied.
+
+      Re-verify everything with fuzz (0 errors required) and probcli (re-run the full setsize-1 certified-complete check and the setsize-2 no-flags/−df checks this spec's own S:validation already documents the correct invocations for) after the fix -- a schema change here could change state/transition counts from what's currently documented, and if so, update S:validation's numbers honestly rather than leaving stale ones. This is a real logic fix, not a prose-only correction -- expect Z content to change, and expect ForkNeverInheritsClaim's theorem statement or proof sketch to need revision to match the corrected schema.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

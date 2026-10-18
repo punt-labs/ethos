@@ -44,8 +44,9 @@ Starting with this release, ethos ships an OpenCode plugin
 (`ethos enable --opencode`, mirroring the existing per-repo
 `vox`/`z-spec` enablement pattern) that calls the same `ethos mission
 claim <id>` primitive Claude Code-bound workers already use for
-Tier B dispatch, triggered from OpenCode's own `session.created` and
-`session.updated` lifecycle events, subscribed via `ctx.event.subscribe()`
+Tier B dispatch, triggered from OpenCode's own `session.created` event
+(`session.updated` also fires per the plugin docs, but see the caveat
+below: it is a legacy V1 event type, not current V2), subscribed via `ctx.event.subscribe()`
 inside the plugin's `Plugin.define({id, setup(ctx)})` entry point,
 instead of a Claude Code SessionStart hook. The commit-msg hook is
 unchanged git-level machinery; it now
@@ -95,7 +96,17 @@ plus `ctx.event.subscribe({signal})`, consumed via `for await` inside
 `session.compacted`, `session.deleted`, `session.diff`, `session.error`,
 `session.idle`, `session.status`, and `session.updated`
 [github.com/anomalyco/opencode `services/www/src/docs/content/build/plugins/migrate-v1.mdx`,
-confirmed via context7]. Claude Code will never invoke a
+confirmed via context7]. **Caveat on this list, confirmed by direct
+read of the real V2 schema source (`packages/schema/src/session-event.ts`,
+`packages/schema/src/session-status-event.ts`, `packages/schema/src/v1/session.ts`,
+on the released `v2.0.32` tag):** `session.created`, `session.status`,
+and `session.deleted` are current V2 events; `session.idle` is a real
+V2 event but is marked `// deprecated` in its own schema source;
+`session.updated` is NOT a current V2 event at all -- it exists only in
+the legacy V1 schema and is not wired into the V2 `EventManifest`
+server-side event chain, surviving only as a name still listed on the
+public `plugins.mdx` docs page under `packages/schema/AGENTS.md`'s
+stated compatibility-surface policy. Claude Code will never invoke a
 `.opencode/plugins/*.ts` file; OpenCode has no concept of
 `.claude/settings.json`'s `hooks` block. There is nothing to "reuse
 verbatim" -- the integration has to be written twice, once per harness,
@@ -163,7 +174,10 @@ parent.id, boundary: {...}, ...inherited })`. The parent is handed to
 the plugin's event subscriber in the SAME hook-plugin context the rest
 of this integration already uses, at fork time, with no need to reach
 across to the separate CLI-plugin data-cache API for this specific
-lookup.
+lookup -- which is fortunate, because (per finding 6 in the restart
+FAQ below) that separate API is not reachable from the hook-plugin
+surface at all in this integration's actual headless target
+deployment.
 
 That means the mission-claim binding does **not** carry over
 automatically, by construction, and it should not: if it did, any
@@ -174,13 +188,18 @@ to close. The correct handling, and the one this integration ships:
 the plugin's `ctx.event.subscribe()` loop observes `SessionEvent.Forked`
 for the child, reads `parentID` directly off that event's own payload,
 and checks whether `parentID` (or any ancestor reachable from it) holds
-an active mission claim. The CLI-plugin data-cache API's
-`context.data.session.root(sessionID)`/`.family(sessionID)` remain
-available as a general-purpose, independently queryable cross-check --
-useful if a plugin needs lineage for a session OTHER than at the moment
-of its own fork event -- but are not the PRIMARY mechanism for this
-specific lookup, since `parentID` is simpler, same-context, and
-requires no cross-plugin-surface dependency
+an active mission claim. (An earlier round of this document also named
+the CLI-plugin data-cache API's `context.data.session.root(sessionID)`/
+`.family(sessionID)` as an available general-purpose cross-check for
+this lookup. Per finding 6 below, that framing does not hold for this
+integration's actual headless deployment: the bundled hook-plugin's own
+`Context` type has no `data` field at all, so `context.data.session.*`
+is not reachable from it regardless of what else is running. This FAQ's
+PRIMARY mechanism -- `SessionEvent.Forked`'s `parentID`, read directly
+off the hook-plugin's own event payload -- is unaffected, since it
+never depended on the CLI-plugin surface in the first place.) The
+mechanism this FAQ actually relies on requires `parentID`, which is
+simpler, same-context, and needs no cross-plugin-surface dependency
 [github.com/anomalyco/opencode `packages/core/src/session.ts`, directly
 sourced via context7]. If so, the plugin opens a **new delegation round
 under the same mission** for the forked session -- ethos's mission model
@@ -203,10 +222,13 @@ The open question in an earlier round (whether a GENERIC
 moot for this FAQ now: forking fires its own dedicated event with
 `parentID` built in, so there is no generic-payload ambiguity to
 resolve for the fork-lineage case specifically. The
-`context.data.session.root`/`.family` CLI-plugin lookups remain a
-separately useful, independently confirmed general-purpose mechanism
-(see the restart FAQ below), just not the primary one for fork
-handling.
+`context.data.session.root`/`.family` CLI-plugin lookups are confirmed
+to exist as a general-purpose mechanism, but -- per finding 6 in the
+restart FAQ below -- they are not reachable from the bundled
+hook-plugin this integration ships in its actual headless deployment,
+so they are not an available cross-check for this document's design at
+all, not merely a non-primary one. This FAQ's own lineage mechanism
+does not depend on them.
 
 ### What happens on ethos service restart?
 
@@ -254,21 +276,158 @@ integration adds.
 The spec language above answers "is the claim durable," but not "can
 the plugin cheaply check liveness without re-deriving it from
 execution-claim semantics on every poll." For that, the CLI-plugin
-data-cache API exposes exactly this as a maintained projection:
+data-cache API exposes a maintained projection:
 `context.data.session.status(sessionID)` returns the session's current
-status directly, alongside `sync(sessionID)` to force a refresh and
+status, alongside `sync(sessionID)` to force a refresh and
 `invalidate(sessionID)` to drop the cached value
 [github.com/anomalyco/opencode `services/www/src/docs/content/build/plugins/cli.mdx`,
-"Sessions" section, quarry-indexed, full page dump verified]. A
-plugin-side liveness check for this integration -- "is the session
-this mission is claimed against still live, or did the OpenCode server
-restart and leave the claim durable-but-stale" -- reads as a direct
-`context.data.session.status(sessionID)` call rather than requiring
-the plugin to reconstruct liveness from the write-ahead-claim
-recovery language itself. This is a materially cheaper answer than
-polling `sessions.active()` and cross-referencing recovery-attempt
-counts, and it is the mechanism this integration should use for that
-check.
+"Sessions" section, quarry-indexed, full page dump verified]. (As
+finding 6 below states, this CLI-plugin API is not actually reachable
+from the hook-plugin this integration recommends bundling, in a
+headless `opencode serve` deployment -- this subsection's naming of
+`status`/`sync`/`invalidate` is retained for completeness of the
+primitive's documented behavior, not as something the bundled plugin
+can call.)
+
+**A cache-ambiguity caveat that applies regardless of which plugin
+surface ends up calling it.** `status(sessionID)` reads a CACHED
+value with no server round-trip by default -- confirmed directly:
+`cli.mdx` describes the `session` data-cache object as backed by a
+local store that `sync(sessionID)` refreshes and `invalidate(sessionID)`
+clears, meaning a bare `status()` call returns whatever was last
+cached, not a live check. This makes a bare `status()` call
+UNSAFE as a liveness check on its own: a session that was never
+claimed (or never existed) and a session that genuinely IS idle can
+read as the same idle-like cached value, because nothing distinguishes
+"no entry, defaulted" from "entry present, idle" without a forced
+refresh. A plugin checking whether a claimed session died across a
+restart must call `sync(sessionID)` first and read the POST-sync
+value, or otherwise treat an unsynced `status()` read as inconclusive
+for liveness purposes -- not call `status()` directly and trust the
+result. This is a materially cheaper answer than polling
+`sessions.active()` and cross-referencing recovery-attempt counts, but
+only once the sync-before-read requirement is honored; it is not a
+property of `status()` by itself.
+
+**Finding 6, stated precisely: `context.data.session.*` is not
+reachable from the hook-plugin this integration recommends bundling,
+at all, in ethos's actual headless target deployment.** This is a
+structural fact about the type, not a documentation gap. The main
+hook-plugin's `Context` interface -- the type `Plugin.define`'s
+`effect` function receives, per
+`services/www/src/docs/content/build/plugins/effect.mdx`'s own
+interface declaration, confirmed by direct read (and cross-checked
+against `index.mdx`'s matching Promise-based `Context` for the
+non-Effect hook-plugin variant) -- is a fully enumerated object with
+fields `app, location, options, agent, aisdk, command, event,
+experimental, integration, mcp, model, generate, permission, plugin,
+provider, reference, rpc, session, shell, skill, storage, tool, vcs,
+websearch, worktree`. There is no `data` field anywhere on it.
+`context.data.session.{root,family,status,...}` is a DIFFERENT API,
+exclusive to `@opencode/plugin/tui`'s own `Plugin.define` (imported
+from the `/tui` subpath) -- a UI-rendering plugin type whose own
+documented example calls `context.ui.toast.show(...)`, and whose
+package.json configuration requires `@opentui/core`, `@opentui/solid`,
+and `solid-js` as peer dependencies to render into a terminal UI.
+`opencode serve` starts a headless HTTP server "without launching the
+TUI" [cli.mdx's companion server-startup doc]. In a headless `opencode
+serve` deployment -- the deployment this integration actually targets,
+since ethos sessions do not run a TUI -- the recommended bundled
+hook-plugin cannot reach `context.data.session` at all. This holds
+independent of whether a TUI happens to be attached to the server
+elsewhere, because the hook-plugin's own `Context` type simply has no
+such field to read regardless of what else is running.
+
+**What this means for the restart FAQ's liveness check, stated
+honestly rather than patched over.** The recommendation above --
+`sync()` then read `status()` -- cannot be carried out by the bundled
+hook-plugin as written, because `context.data.session` is the TUI-only
+surface this paragraph just ruled out. Two live candidates exist on
+the hook-plugin's own `Context`. `ctx.session.get({ sessionID })`, part
+of the hook-plugin's own `SessionDomain`, is a server round-trip, not a
+client-side cache, unlike `context.data.session.status()` -- confirmed
+against the real source, `packages/plugin/src/effect/session.ts:153-170`
+on the released `v2.0.32` tag, whose `SessionDomain` type is `Pick<
+SessionApi<unknown>, "create" | "get" | "remove" | "switchAgent" |
+"switchModel" | "prompt" | "generate" | "command" | "compact" |
+"synthetic" | "interrupt" | "update" | "move" | "wait" | "context">`.
+**Correction to an earlier round of this document:** that round's text
+also claimed a `"list"` member on this same `Pick` list, citing it as
+"checked directly against `effect.mdx`." `"list"` is not present at
+`v2.0.32` -- it was added only by an unreleased `dev`-branch commit
+(`bc5fa1cc`, "feat(plugin): expose session list," merged 2026-10-17,
+after this document's targeted release) and has since been removed
+from this FAQ's text. The second live candidate is `ctx.event.subscribe()`,
+part of the hook-plugin's own `EventDomain`
+(`packages/plugin/src/effect/event.ts`, `Pick<EventApi<unknown>,
+"subscribe">`), which delivers the server's live event stream. **A
+second correction to that same earlier round:** it attributed an
+enumerated four-event "session-events list" (`session.idle`/
+`session.status`/`session.updated`/`session.deleted`) to `migrate-v1.mdx`
+as a group citation. Read directly, `migrate-v1.mdx` (at `v2.0.32`)
+contains exactly ONE event-type reference anywhere in the file -- a
+single `session.idle` code example (`if (event.type === "session.idle")
+console.log("Session completed")`) -- not an enumerated list. The four
+event names themselves are not all fabricated, but their sourcing was
+wrong and their status is mixed, confirmed directly against
+`packages/schema/src/session-status-event.ts:35-51` (the real V2
+schema source): `session.status` is a real, current V2 event; `session.idle`
+is a real V2 event but is explicitly marked `// deprecated` in that
+same file, immediately above its definition; `session.deleted` is a
+real, current V2 event (`packages/schema/src/session-event.ts:178`);
+and `session.updated` is NOT a current V2 event type at all -- it
+exists only in the legacy V1 schema (`packages/schema/src/v1/session.ts:572`),
+is not wired into the V2 `EventManifest.Definitions` chain this
+package's own manifest builds server-side event types from, and
+survives today only as a name still listed in the public
+`packages/web/src/content/docs/plugins.mdx` "Session Events" page
+(line 189) -- consistent with `packages/schema/AGENTS.md`'s stated
+policy that "compatibility events" remain available "only to the
+existing App/TUI/CLI compatibility surface while they are still
+needed" even after a current/V2 split. None of this is confirmed, by
+anything read for this document, to answer the SPECIFIC question this
+FAQ needs answered: what `ctx.session.get()` returns, or whether a
+`session.deleted`/`session.idle` event fires, for a session ID that
+was claimed before an OpenCode server restart and may or may not still
+exist in the restarted server's own session store. No document
+consulted describes `session.get`'s or the event stream's behavior
+across a server restart specifically, as opposed to their existence and
+general shape. Stated plainly, per this mission's own standing
+instructions against fabricating an answer: **no primitive is
+currently confirmed, by direct source or documentation read, to give
+the bundled hook-plugin a reliable restart-liveness signal.**
+`ctx.session.get()` and the `session.status`/`session.deleted` event
+types (plus the deprecated `session.idle`, and `session.updated` only
+if a compatibility surface is in play) are the concrete candidates a
+future implementation round should test directly against a running
+`opencode serve` instance before this FAQ's liveness recommendation can
+be stated with confidence; until then, the restart-liveness question is
+more open than this document previously claimed.
+
+**Does this change the bundled-plugin recommendation itself?** No,
+and the reasoning is given here rather than asserted. This
+integration's CORE requirement -- `SessionEvent.Forked`-based fork
+handling (the fork FAQ above, unaffected by this finding, since it
+never depended on `context.data.session`) and `ETHOS_SESSION`
+propagation into the committing shell's environment (the opening FAQ
+above, likewise independent) -- is fully reachable from the main
+hook-plugin's own `Context`: `ctx.event.subscribe()` for lifecycle and
+fork events, `ctx.session` for session operations, `ctx.tool.hook()`
+for environment propagation into spawned subprocesses. `context.data.session`
+was never load-bearing for either of those; it was cited only as a
+cross-check for fork lineage (now corrected above to note it was never
+reachable from the hook-plugin in the first place) and as the
+restart-liveness mechanism (now corrected above to an open question).
+Shipping the TUI package as a sibling export alongside the hook-plugin,
+purely to reach `context.data.session` in deployments where a TUI
+happens to be attached, would add a dependency and a packaging
+surface this integration's actual headless target would never load --
+`opencode serve` does not run a TUI, so a TUI-plugin sibling would sit
+unused in exactly the deployment this document targets. The bundled
+hook-plugin recommendation survives unchanged, with the caveat that the
+restart-liveness check needs a confirmed primitive before
+implementation, not with the TUI package added as a workaround for a
+gap that a TUI-only export cannot close for a headless server anyway.
 
 ### What happens with OpenCode worktree or concurrent sessions?
 
@@ -356,7 +515,9 @@ enable --opencode` writes a marker, e.g.
 `.punt-labs/ethos/opencode/enabled`, alongside the plugin file). Its
 job is deliberately narrow: a `Plugin.define({id, setup(ctx)})` entry
 point whose `setup` subscribes via `ctx.event.subscribe()` for
-`session.created`/`session.updated` and, on each, calls the *existing*
+`session.created` (the live current-V2 trigger; `session.updated` is
+legacy V1 only, per the sourcing caveat above, and is not relied on
+here) and, on each, calls the *existing*
 `ethos mission claim <id>` CLI primitive (already shipped for Tier B
 dispatch binding, per this repo's own Build & Run docs) to write the
 correlation file; let the unchanged git-level commit-msg hook read it.
@@ -486,7 +647,18 @@ config surface rather than requiring a shared daemon all four run
   on the `anomalyco/opencode` `dev` branch, fetched directly via its
   GitHub blob view and read in full, 28 pages -- this source was not
   reachable in round 1 and was supplied by the leader for round 2;
-  see below).
+  see below) -- **and, confirmed in round 3 by direct read of
+  `services/www/src/docs/content/build/plugins/effect.mdx`'s own
+  `interface Context` declaration (35 pages, read in full), that this
+  entire `context.data.session.*` API is exclusive to the separate
+  `@opencode/plugin/tui` plugin type and is NOT a member of the main
+  hook-plugin `Context` interface's field list
+  (`app, location, options, agent, aisdk, command, event, experimental,
+  integration, mcp, model, generate, permission, plugin, provider,
+  reference, rpc, session, shell, skill, storage, tool, vcs, websearch,
+  worktree` -- no `data` field).** See the restart FAQ's finding-6
+  discussion above for what this means for the liveness-check
+  recommendation and for the bundled-plugin decision.
 
 - **Medium confidence, partially inferred:** the exact field set a
   `session.created`/`session.updated` event's payload carries (as
@@ -540,8 +712,18 @@ config surface rather than requiring a shared daemon all four run
   anything written in round 1 -- the gap was correctly scoped and
   disclosed, not guessed at, and the CLI-plugin data-cache surface does
   not supersede any claim already made about the hook-plugin surface.
-  It strengthens two FAQs above (fork lineage lookup, restart
-  liveness check) and is now cited there directly.
+  **Correction from round 3:** this surface does NOT strengthen the
+  fork-lineage or restart-liveness FAQs, contrary to what round 2
+  claimed here. Round 3's direct read of `effect.mdx`'s `Context`
+  interface confirmed `context.data.session.*` is exclusive to the
+  separate `@opencode/plugin/tui` plugin type and unreachable from the
+  main hook-plugin this integration bundles, in the headless `opencode
+  serve` deployment this integration targets. Both FAQs have been
+  corrected above accordingly -- fork lineage never actually depended
+  on it (its PRIMARY mechanism is `SessionEvent.Forked`'s `parentID`),
+  and restart liveness is now stated as an open question pending a
+  confirmed hook-plugin-reachable primitive, not resolved by this
+  surface.
 
 - **A fast-release-cadence risk worth naming explicitly:** the public
   `opencode.ai/docs/sdk/` page's `session.*` method table (crawled

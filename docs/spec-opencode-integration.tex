@@ -168,9 +168,19 @@ boundary matters, never re-derived.
     \S\ref{sec:harness-instantiation} names the confirmed V2 hook
     surfaces and event types a plugin subscribes to
     (\field{Plugin.define}, \field{ctx.event.subscribe},
-    \field{session.created}/\field{session.updated}) and the confirmed
+    \field{session.created} -- \field{session.updated} is a legacy V1
+    event name, not current V2, confirmed by direct read of
+    \fpath{packages/schema/src/v1/session.ts} and
+    \fpath{packages/schema/src/session-event.ts}; the companion
+    PR/FAQ's ``Why not just reuse the Claude Code hook mechanism
+    verbatim?'' FAQ carries the full sourcing) and the
     \field{context.data.session} lookup API
-    (\field{root}/\field{family}/\field{status}), but does not model
+    (\field{root}/\field{family}/\field{status}) -- the latter
+    confirmed to EXIST, but, per the companion PR/FAQ's restart FAQ
+    (``Finding 6''), NOT reachable from the main hook-plugin's own
+    \field{Context} type in this integration's actual headless
+    \field{opencode serve} deployment; it is exclusive to the separate
+    \field{@opencode/plugin/tui} surface -- but does not model
     the full JSON shape of an event payload or every method on the
     OpenCode SDK client -- only the subset this document's operations
     actually consume.
@@ -309,14 +319,15 @@ constants (lines 100--113, 59--62) to the dimension this document
 checks: was the binding stated outright, dispatched by a leader for
 someone else, inherited down a \field{parent\_delegation} CHAIN (a
 per-delegation pointer, the Claude Code Tier B inheritance mechanism),
-or propagated by a root/family LOOKUP on the forking session's own
-hierarchy (the OpenCode mechanism, \S\ref{sec:opforkpropagate}) --
-these are two structurally different evidencing mechanisms for
-``this delegation's mission binding is traceable, not asserted,'' kept
-as two distinct constructors rather than collapsed into one, because
-\S\ref{sec:delegation-schema}'s guard on each is different: one
-requires a stored \field{DELEGLINK} pointer, the other requires
-none, because the evidence lives in \field{SESSION.root} instead (see
+or propagated by a one-step \field{parentID} LOOKUP on the forking
+session's own fork-parent pointer (the OpenCode mechanism,
+\S\ref{sec:opforkpropagate}) -- these are two structurally different
+evidencing mechanisms for ``this delegation's mission binding is
+traceable, not asserted,'' kept as two distinct constructors rather
+than collapsed into one, because \S\ref{sec:delegation-schema}'s guard
+on each is different: one requires a stored \field{DELEGLINK} pointer,
+the other requires none, because the evidence lives in
+\field{SESSION.parent} instead (see
 \field{TraceabilityViaRootSuffices}, \S\ref{sec:theorems}).
 \field{oNone} is reserved for Tier A, which has no mission and hence no
 origin to record.
@@ -417,14 +428,20 @@ delegID : DELEGLINK \pfun DELEGATIONID
 \end{axdef}
 
 A second such function recovers the wrapped value from a
-\field{PARENTLINK}: unlike the first draft of this document, it is used
-only to STATE the lineage invariant below (\S\ref{sec:registry}), never
-to RESOLVE a chain of pointers at query time -- \S\ref{sec:registry}'s
-\field{lineageRoot} is the maintained projection that makes repeated
-chain-walking unnecessary, matching how OpenCode's own
-\field{context.data.session.root}/\field{.family} are confirmed,
-already-maintained lookups, not something a plugin has to derive itself
-on every call (\S\ref{sec:harness-instantiation}).
+\field{PARENTLINK}, used two ways: to STATE \field{Registry}'s own
+\field{root}-consistency invariant below (\S\ref{sec:registry}), and --
+\textbf{corrected by review, round 2} -- as the one-step RESOLUTION
+\field{AllocateDelegationForkPropagated} (\S\ref{sec:opforkpropagate})
+now performs at query time to identify \field{sid?}'s own fork parent
+as the operation's \field{witness?}. An earlier draft described this
+function as used only to STATE invariants, never to resolve a chain at
+query time; that was accurate for that draft's root-equality-based
+guard but is no longer accurate once the guard was corrected to a
+direct \field{parentID} lookup. This single-step use is not a ``chain
+walk'' in the sense that phrase warns against elsewhere in this
+document (an unbounded, multi-hop traversal) -- it is one function
+application, bounded by \field{maxSessions} exactly as
+\S\ref{sec:opforkpropagate}'s own justification explains.
 
 \begin{axdef}
 parentID : PARENTLINK \pfun SESSIONID
@@ -464,7 +481,22 @@ bornEpoch \leq maxEpoch
 (\S\ref{sec:harness-instantiation}) -- a direct, maintained hierarchy
 projection the CLI-plugin data-cache API exposes, independent of
 whatever fields a \field{session.created} event payload happens to
-carry. A session's FAMILY -- OpenCode's
+carry. \textbf{Caveat, added by review:} that API is confirmed to
+EXIST, but -- per \S\ref{sec:nongoals}'s own corrected citation of the
+companion PR/FAQ's ``Finding 6'' -- is NOT reachable from the main
+OpenCode hook-plugin this integration bundles, in its actual headless
+\field{opencode serve} deployment; it is exclusive to the separate
+\field{@opencode/plugin/tui} surface. \field{root} and \field{family}
+remain part of this document's own Z model regardless (they describe a
+real, checkable property of \field{Registry}'s state, independent of
+which real API a future implementation reads to populate it), and
+\field{AllocateDelegationForkPropagated}'s corrected guard
+(\S\ref{sec:opforkpropagate}) no longer depends on \field{family} at
+all -- it resolves \field{witness?} via the hook-plugin-reachable
+\field{SessionEvent.Forked} payload's own \field{parentID} field
+instead, which \S\ref{sec:opforkpropagate} models as the
+\field{parentID} axiom (\S\ref{sec:constants}) applied to
+\field{sid?}'s \field{parent}. A session's FAMILY -- OpenCode's
 \field{context.data.session.family(sessionID)} -- is deliberately NOT
 a second stored field on \field{SESSION}: it is the DERIVED set of
 every currently-rostered session sharing the same \field{root}
@@ -969,10 +1001,10 @@ sid? \in \dom sessions \\
 (sessions(sid?)).bornEpoch = epoch \\
 (sessions(sid?)).parent \neq noParent \\
 sid? \notin \dom claims \\
+witness? = parentID((sessions(sid?)).parent) \\
 witness? \in \dom sessions \\
 (sessions(witness?)).alive = ztrue \\
 (sessions(witness?)).bornEpoch = epoch \\
-(sessions(witness?)).root = (sessions(sid?)).root \\
 witness? \in \dom claims \\
 id? \notin \dom delegations \\
 \# (\dom delegations) < maxDelegations \\
@@ -1014,12 +1046,13 @@ disagree, which is exactly the ``ACTUAL witnessing claim on a genuine
 theorem's OWN prose was correct about the intended design throughout;
 it was the schema that had not yet caught up to it.
 
-Six guards earn their place against the bead's own criterion, two of
-them added by review after the first draft exposed real gaps in the
-other four:
+Six guards earn their place against the bead's own criterion, three of
+them added by review across two rounds after the first two drafts each
+exposed a real gap the other guards left open:
 $\field{(sessions(sid?)).parent} \neq \field{noParent}$ -- \textbf{added
-by review}: without this conjunct, \field{sid?} and \field{witness?}
-were interchangeable, and a concrete exploit followed directly --
+by review, round 1}: without this conjunct, \field{sid?} and
+\field{witness?} were interchangeable, and a concrete exploit followed
+directly --
 $\field{JoinRootSession(A)} \to \field{ForkSession(B,A)} \to
 \field{ClaimMission(B,M)} \to
 \field{AllocateDelegationForkPropagated(A, \field{witness?}=B)}$
@@ -1034,31 +1067,64 @@ session it forked from, can be the \field{sid?} this operation claims
 for; $\field{sid?} \notin \dom \field{claims}$ -- a session that already
 holds its own claim does not need (and must not receive) a
 fork-propagated one, so this operation can never silently overwrite an
-explicit \field{ClaimMission}; $\field{witness?} \in \dom \field{sessions}$
-together with $\field{(sessions(witness?)).root} =
-\field{(sessions(sid?)).root}$ -- the witnessing session must be a
-genuine, currently-rostered member of the FORKED session's OWN lineage
-(the two conjuncts together are the inline expansion of
-``\field{witness?} is in \field{sid?}'s \field{family}'', unpacked
-rather than named via a global function for the reason
-\S\ref{sec:session-schema} gives), not an arbitrary other session --
-exactly the \field{root}/\field{family} lookup
-(\S\ref{sec:harness-instantiation}) replacing a parent-chain walk;
-$\field{witness?} \in \dom \field{claims}$ -- there must be an ACTUAL claim to
-propagate, not a fabricated one; and, \textbf{added by review}, two
-liveness conjuncts on \field{witness?} mirroring the ones \field{sid?}
-already carried -- $\field{(sessions(witness?)).alive} = \field{ztrue}$ and
-$\field{(sessions(witness?)).bornEpoch} = \field{epoch}$ -- because the first
-draft checked only that the witness HELD a claim, never that the
-witness was itself live in the CURRENT epoch: after
-\field{RestartService}, a stale pre-restart claim on an uncorroborated
-witness could otherwise still license a brand-new delegation,
-undermining \field{RestartClearsLiveness} at exactly the step meant to
-respect it. No conjunct here ever needs to resolve \field{witness?}
-back through \field{sessions} a second way: membership in
-\field{family} already IS the traceability witness
-\field{oForkPropagated} exists to name, which is exactly
-\field{TraceabilityViaRootSuffices}'s claim (\S\ref{sec:theorems}).
+explicit \field{ClaimMission};
+$\field{witness?} = \field{parentID((sessions(sid?)).parent)}$ --
+\textbf{corrected by review, round 2}: an intermediate draft of this
+guard required only $\field{(sessions(witness?)).root} =
+\field{(sessions(sid?)).root}$ (SAME-ROOT membership, the inline
+expansion of ``\field{witness?} is in \field{sid?}'s \field{family}''
+the first fix round introduced) rather than \field{witness?} being
+\field{sid?}'s actual fork PARENT. Same-root membership is strictly
+weaker than ancestry once a THIRD session enters the same lineage, and
+a concrete exploit followed directly --
+$\field{JoinRootSession(A)} \to \field{ForkSession(B,A)} \to
+\field{EndSession(A)} \to \field{ForkSession(C,B)} \to
+\field{ClaimMission(C,M)} \to
+\field{AllocateDelegationForkPropagated(B, \field{witness?}=C)}$ --
+under the ROOT-EQUALITY guard, \field{C} shares \field{B}'s root (both
+descend from the same lineage root \field{A} stamped before it ended),
+so \field{witness?=C} satisfied every other conjunct and let \field{B}
+-- the DESCENDANT's own fork PARENT, but never itself a claimant --
+acquire a delegation keyed off its CHILD \field{C}'s claim: claim
+provenance flowing backward up the fork tree, the same shape of defect
+round 1's fix closed for the direct parent/child case, reopened here
+one level removed. Requiring \field{witness?} to equal \field{sid?}'s
+OWN immediate \field{parentID} rather than merely sharing its
+\field{root} closes this precisely: \field{B} is \field{C}'s parent,
+not the reverse, so $\field{witness?} = \field{parentID((sessions(C)).parent)}
+= \field{B}$ is well-defined only when \field{B} is proposed as the
+FORKED session (\field{sid?}), never when it is proposed as the
+witness for its own child's claim -- the relation is directional by
+construction, where root equality was symmetric; $\field{witness?} \in
+\dom \field{sessions}$ together with the liveness conjuncts below
+confirm the named parent is a genuine, currently-rostered, LIVE member
+of \field{Registry}, not a dangling reference to an ended session (the
+previous exploit's own \field{EndSession(A)} step is exactly the
+scenario this guards against for the parent-equality case too);
+$\field{witness?} \in \dom \field{claims}$ -- there must be an ACTUAL
+claim to propagate, not a fabricated one; and, \textbf{added by review,
+round 1}, two liveness conjuncts on \field{witness?} mirroring the ones
+\field{sid?} already carried -- $\field{(sessions(witness?)).alive} =
+\field{ztrue}$ and $\field{(sessions(witness?)).bornEpoch} =
+\field{epoch}$ -- because the first draft checked only that the witness
+HELD a claim, never that the witness was itself live in the CURRENT
+epoch: after \field{RestartService}, a stale pre-restart claim on an
+uncorroborated witness could otherwise still license a brand-new
+delegation, undermining \field{RestartClearsLiveness} at exactly the
+step meant to respect it. \field{witness?} is now resolved by a single
+\field{parentID} lookup, not a chain walk: because \field{maxSessions}
+bounds \field{Registry} to at most two simultaneously-live sessions
+(\S\ref{sec:nongoals}'s own disclosed scale), \field{sid?}'s
+IMMEDIATE parent is the only ancestor that can be live and rostered
+at the moment this operation fires at all -- a GRANDPARENT could only
+still be rostered if it had never been superseded by the intervening
+fork, which this operation's own guards (\field{sid?}'s and
+\field{witness?}'s liveness, and \field{sid?}'s own freshly-forked
+precondition) already preclude at this bound. This is exactly
+\field{TraceabilityViaRootSuffices}'s CORRECTED claim
+(\S\ref{sec:theorems}): what suffices for traceability at this scale
+is the one-step PARENT link, not root equality across the whole
+lineage.
 
 \subsection{BindDelegationToSession}
 \label{sec:opbind}
@@ -1423,23 +1489,37 @@ are discharged by proof.
   practice, but the routine path every multi-step OpenCode mission round
   is expected to take. \\
 \field{TraceabilityViaRootSuffices} &
-  \field{AllocateDelegationForkPropagated}'s guard
-  (\S\ref{sec:opforkpropagate}) requires \field{witness?} to be a member
-  of \field{sid?}'s family -- which the schema states, unpacked, as a
-  single \field{root} equality check against \field{witness?}, needing
-  no traversal of any chain. Because
-  \field{ForkSession} stamps a correct, inherited \field{root} on every
-  session it creates (its own guard,
-  \field{rec?.root = (sessions(parentSid?)).root}), and
-  \field{JoinRootSession} stamps every root session as its own root,
-  \field{root} equality between two live sessions is ALWAYS sufficient
-  evidence that they share a lineage -- there is no additional
-  provenance fact \field{AllocateDelegationForkPropagated} needs to
-  consult beyond what \field{family} already packages. This is the
-  formal statement of why this document's second draft could replace a
-  parent-chain WALK (the first draft's rejected design) with a single
-  \field{root} LOOKUP once OpenCode's own API was confirmed to expose
-  lineage the same way. \\
+  \textbf{Corrected by review, round 2:} an intermediate draft stated
+  this theorem as ``\field{root} equality between two live sessions is
+  ALWAYS sufficient evidence that they share a lineage, so
+  \field{AllocateDelegationForkPropagated} needs no further provenance
+  fact beyond \field{family}'' -- true as a statement about SHARING a
+  lineage, but not sufficient on its own to license propagating a
+  claim DIRECTIONALLY from one family member to another, as the nested
+  fork counterexample in \S\ref{sec:opforkpropagate} demonstrates
+  (\field{C}'s claim flowing backward to its own parent \field{B} under
+  root equality alone). The theorem's title survives, restated
+  precisely: what actually suffices for traceability is \field{sid?}'s
+  single immediate \field{parentID} LOOKUP (\field{sid?}'s
+  \field{root}, re-derived from that same \field{parent} pointer, is
+  used elsewhere in this document only to confirm LINEAGE MEMBERSHIP in
+  general, never as the propagation guard itself any longer) --
+  \field{ForkSession} stamps a correct \field{parent} pointer on every
+  session it creates, and \field{JoinRootSession} stamps every root
+  session's \field{parent} as \field{noParent}, so a session's own
+  \field{parentID} is always either absent (a root) or names exactly
+  one live-or-ended session with no further traversal needed to
+  identify IT specifically -- the one-step parent relationship, not the
+  whole-lineage root, is the provenance fact
+  \field{AllocateDelegationForkPropagated} actually needs and now
+  checks. Confirming $\field{maxSessions} = 2$ (\S\ref{sec:constants})
+  makes this the SAME guard a chain walk would produce at this bound --
+  with at most two sessions simultaneously live, a one-step parent
+  lookup and an unbounded ancestor walk coincide exactly, so no
+  animatable counterexample at this scale could distinguish the two
+  formulations; the correction is needed precisely because root
+  equality is a DIFFERENT, strictly weaker relation than either, not
+  because a walk and a lookup disagree. \\
 \field{RestartClearsLiveness} &
   \field{RestartService}'s sole effect is \field{epoch' = epoch + 1}; no
   session's \field{bornEpoch} changes. Every operation in
@@ -1549,22 +1629,71 @@ LIVENESS ANCHOR and lookup key this document's own
 is used to find. Conflating the two would misstate the key the real
 session roster and mission sidecars actually use.
 
-The striking fact, confirmed directly from \fpath{tree.go}'s own doc
-comment (lines 28--33): \textbf{\field{SESSION.parent} is, in every real
-Claude Code binding today, \field{noParent}}. ``\emph{a Task-tool
+\textbf{Corrected by review, round 3: this subsection previously
+conflated two structurally different Claude Code mechanisms and drew a
+false conclusion from only one of them.} Two cases, confirmed
+separately against two different sources, need distinguishing rather
+than collapsing into one claim about ``Claude Code'' generally.
+
+\textbf{Case 1: Task-tool subagents and hook subprocesses.} The
+striking fact, confirmed directly from \fpath{tree.go}'s own doc
+comment (lines 28--33): \textbf{\field{SESSION.parent} is, for THIS
+specific mechanism, always \field{noParent}}. ``\emph{a Task-tool
 subagent or hook subprocess inherits its leader's \field{CLAUDE\_PID}
 verbatim, and correctly so, since it belongs to the same session}'' --
 Claude Code never mints a new top-level \field{SESSIONID} for a
-subagent at all; leader and subagent share one session, full stop. The
-forking Claude Code DOES have lives entirely at the DELEGATION level --
-\field{parent\_delegation}, already modelled by
+subagent spawned this way at all; leader and subagent share one
+session, full stop. The forking Claude Code DOES have lives entirely at
+the DELEGATION level -- \field{parent\_delegation}, already modelled by
 \field{AllocateDelegationTierB}'s \field{oInherited} case
 (\S\ref{sec:opallocateb}) -- not at the session level this document's
 \field{PARENTLINK} field exists to generalize. \field{ForkNeverInheritsClaim}
-is, for Claude Code specifically, true in a nearly vacuous sense: the
-session-level fork it protects against essentially never occurs in the
-first place, because Claude Code's own architecture never creates the
-precondition.
+is, for THIS case specifically, true in a nearly vacuous sense: the
+session-level fork it protects against cannot occur via this mechanism
+at all, because \field{tree.go}'s own architecture never creates the
+precondition for a Task-tool subagent or hook subprocess.
+
+\textbf{Case 2: \field{--fork-session}/\field{/fork}/\field{/branch}.}
+\textbf{The earlier draft of this subsection was wrong to extend
+Case 1's conclusion to Claude Code as a whole.} Verified directly
+against Claude Code's own documentation and release notes:
+\field{--fork-session} (combined with \field{--resume} or
+\field{--continue}), the \field{/fork} background-copy command, and
+\field{/branch} each mint a GENUINE new top-level Claude Code session
+-- as of Claude Code v2.1.214, a \field{SessionStart} hook fired for a
+session created this way reports \field{source: "fork"} specifically,
+a value distinct from \field{"startup"}/\field{"resume"}/\field{"clear"}/
+\field{"compact"}, added precisely so a hook can tell a genuine fork
+apart from an ordinary resume [code.claude.com/docs/en/hooks.md]. This
+is the SAME mechanism the companion PR/FAQ's own fork-handling FAQ
+already correctly describes (\fpath{docs/prfaq-opencode-integration.md},
+\S~``What happens if OpenCode forks a session mid-mission?'', citing
+\field{source: "fork"} as the Claude Code parallel to OpenCode's own
+\field{SessionEvent.Forked}) -- the earlier draft of THIS subsection
+simply failed to connect that same fact to its own
+\field{ForkNeverInheritsClaim} discussion. For this case, \field{SESSION.parent}
+is NOT always \field{noParent}: a forked Claude Code session IS a
+genuine child session in exactly the sense this document's
+\field{PARENTLINK}/\field{ForkSession} machinery models, and needs the
+SAME session-level claim-isolation treatment this document already
+specifies for OpenCode (\S\ref{sec:opencode-instantiation}) -- a forked
+Claude Code session must not silently inherit its pre-fork session's
+mission claim, and \field{ForkNeverInheritsClaim}'s guarantee is NOT
+vacuous for this case the way it is for Case 1. What Claude Code's own
+side still lacks, and this document does not resolve here: a confirmed
+mapping of how \field{resolve.SessionID} (\fpath{resolve.go}:311--359)
+and \field{ETHOS\_SESSION} interact with a forked session specifically
+-- whether a forked session's own \field{CLAUDE\_PID} resolves to a
+fresh roster entry automatically, or whether the harness-native plugin
+must explicitly register one, the way \S\ref{sec:opencode-instantiation}
+already requires for OpenCode's \field{SessionEvent.Forked} path. This
+is scoped as follow-up verification for a subsequent revision, not
+resolved here; \field{ForkSession} and
+\field{AllocateDelegationForkPropagated}
+(\S\ref{sec:opforksession}, \S\ref{sec:opforkpropagate}) already model
+the HARNESS-NEUTRAL state transition either case needs -- what remains
+open is only the Claude-Code-specific trigger/registration mechanism
+for Case 2, not the Registry-level model itself.
 
 \field{IsLiveSession}'s two conjuncts instantiate directly:
 \field{alive} = whether the session's roster file is still present
@@ -1583,13 +1712,28 @@ from \fpath{.opencode/plugins/} (or an npm package named in
 \fpath{opencode.json}'s \field{"plugins"} array), whose \field{setup}
 subscribes via \field{ctx.event.subscribe(\{signal\})} -- consumed with
 \field{for await} inside \field{setup} -- to session lifecycle event
-types including \field{session.created}, \field{session.updated},
-\field{session.idle}, and \field{session.deleted}
+types including \field{session.created}, \field{session.idle},
+and \field{session.deleted}
 (\fpath{docs/prfaq-opencode-integration.md}, \S~``Why not just reuse
 the Claude Code hook mechanism verbatim?,'' citing
 \fpath{anomalyco/opencode}'s
 \fpath{services/www/src/docs/content/build/plugins/migrate-v1.mdx},
-confirmed via context7). \field{ctx.session.hook()} is a DIFFERENT,
+confirmed via context7). \textbf{Corrected here:} the companion
+document's own FAQ ALSO lists \field{session.updated} and
+\field{session.status} among this V2 plugin surface's event names (per
+that same \fpath{migrate-v1.mdx} source); direct read of the real V2
+schema source (\fpath{packages/schema/src/v1/session.ts},
+\fpath{packages/schema/src/session-status-event.ts}) confirms
+\field{session.status} is a real, current V2 event (included in the
+list above) but \field{session.updated} is NOT -- it exists only in
+the legacy V1 schema, is not wired into the V2 \field{EventManifest}'s
+server-side event chain, and survives only as a name still listed on
+the public \fpath{plugins.mdx} docs page under a documented
+compatibility-surface policy (\fpath{packages/schema/AGENTS.md}).
+This document's own \field{JoinRootSession}/\field{ForkSession}
+operations are triggered by \field{session.created} and
+\field{SessionEvent.Forked} specifically, neither of which is affected
+by this correction. \field{ctx.session.hook()} is a DIFFERENT,
 narrower surface accepting only \field{"context"}/\field{"prompt"}/
 \field{"compaction"}/\field{"model.request"}/\field{"http.request"} --
 none of which fire on session start or update -- so
@@ -1953,6 +2097,41 @@ scoped write (\field{AllocateDelegationForkPropagated}'s new
 \field{sid?}, already bound elsewhere in that same operation's own
 guard.
 
+\textbf{A further correction, round 3:} post-merge review (GitHub
+Copilot) found a SECOND defect in
+\field{AllocateDelegationForkPropagated}'s guard, this one surviving
+the round-2 fix above: requiring only
+$\field{(sessions(witness?)).root} = \field{(sessions(sid?)).root}$
+(same-root family membership) permitted a nested-fork reverse-
+propagation exploit --
+$\field{JoinRootSession(A)} \to \field{ForkSession(B,A)} \to
+\field{EndSession(A)} \to \field{ForkSession(C,B)} \to
+\field{ClaimMission(C,M)} \to
+\field{AllocateDelegationForkPropagated(B, \field{witness?}=C)}$ --
+letting a descendant's claim (\field{C}'s) flow backward to attribute
+an ancestor (\field{B}) that never itself claimed anything, one level
+removed from the direct parent/child exploit round 2 already closed.
+Fixed by requiring $\field{witness?} = \field{parentID((sessions(sid?)).parent)}$
+(\S\ref{sec:opforkpropagate}) -- the operation's own fork PARENT
+specifically, not any same-root family member -- and by restating
+\field{TraceabilityViaRootSuffices}'s theorem accordingly
+(\S\ref{sec:theorems}). \texttt{/z-spec:check} re-confirms 0 errors.
+\texttt{probcli} at \field{DEFAULT\_SETSIZE} 1 re-confirms the IDENTICAL
+figures reported above -- 286 states, 3862 transitions, zero invariant
+violations, zero deadlocks, with \field{ForkSession} and
+\field{AllocateDelegationForkPropagated} both still uncovered for the
+same, already-documented structural reason (both guards require two
+distinct \field{SESSIONID} values a carrier of size~1 cannot supply;
+the corrected guard is no exception, since it STILL names two distinct
+sessions, \field{sid?} and \field{witness?}, just via a narrower
+relation between them). The round-2 reasoning for why a setsize-2
+rerun was not performed applies unchanged here: this guard is strictly
+narrower than its round-2 predecessor (parent equality implies, but is
+not implied by, root equality), so every state the corrected operation
+can reach was already reachable under the prior guard, and no new
+violation or deadlock is introduced by narrowing an already-verified-safe
+transition's firing conditions further.
+
 % ===================================================================
 \section{Open Dependency: punt-labs/points}
 \label{sec:open-dependency}
@@ -2011,9 +2190,14 @@ this specification can discharge on its own.
   (\fpath{internal/session/store.go}:53--94); OpenCode's
   \field{session.created} event with no fork ancestry & \\
 \field{ForkSession} & OpenCode's \field{POST /api/session/\{id\}/fork}
-  (\field{session.fork}) & new; no Claude Code analogue --
-  \S\ref{sec:harness-instantiation} shows Claude Code never exercises
-  this operation \\
+  (\field{session.fork}); Claude Code's \field{--fork-session}/
+  \field{/fork}/\field{/branch} (\field{SessionStart} hook
+  \field{source: "fork"}) & new; \textbf{corrected, round 3} -- an
+  earlier draft claimed no Claude Code analogue exists and this
+  operation is never exercised there, true only of the Task-tool-
+  subagent/hook-subprocess mechanism, not of
+  \field{--fork-session}/\field{/fork}/\field{/branch}; see
+  \S\ref{sec:harness-instantiation}'s Case 1/Case 2 distinction \\
 \field{ClaimMission} & \field{WriteActiveMission}
   (\fpath{active.go}:223--229) & \\
 \field{ReleaseClaim} & \field{ClearActiveMission}

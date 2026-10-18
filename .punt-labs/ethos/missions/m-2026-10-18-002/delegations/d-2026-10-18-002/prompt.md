@@ -1,0 +1,13 @@
+You are the worker on ethos mission m-2026-10-18-002. Read it first: `ethos mission show m-2026-10-18-002` — it contains all six findings in full detail, exact file:line citations to check, and what to do for each. Your write-set is `docs/prfaq-opencode-integration.md` only.
+
+This document was already merged into PR #534 (branch `feature/opencode-integration-spec` in the main ethos repo), but two reviewers (Copilot and Cursor Bugbot) found six potential defects post-merge, each citing a specific source file and line range in either `anomalyco/opencode` or this repo's own `internal/resolve/resolve.go` / `cmd/ethos/mission.go`. Check out `feature/opencode-integration-spec` if your worktree doesn't already have this content.
+
+You have context7 available — use it (`/anomalyco/opencode` for OpenCode source, or clone it directly if you need exact line numbers context7 doesn't surface) to verify each of the six findings against real source before writing anything. For findings (4) and (5), which cite THIS repo's own Go source, read `internal/resolve/resolve.go` and `cmd/ethos/mission.go` directly in your worktree.
+
+Do not assume any finding is correct just because a reviewer stated it confidently, and do not assume any finding is wrong just because it would mean a lot of rework — verify each one against the actual cited source and report what you find, whether it confirms or refutes the claim.
+
+If finding (1) (fork lineage via root/family doesn't bridge to the pre-fork session) is confirmed, this has a direct consequence for the companion Z-spec, which is being corrected in a parallel mission (m-2026-10-18-001) right now. Flag this explicitly and precisely in your result — name the exact mechanism you find (if any) that DOES link a fork to its source session, so the leader can relay it to that spec-fix mission rather than have the two artifacts diverge or fix the same problem two different, inconsistent ways.
+
+If multiple findings turn out to interact (e.g., findings 1, 3, and 6 could together mean the entire fork/restart FAQ approach and even the bundled-plugin recommendation need more than patching), say so plainly and do the real rework rather than preserving text that the facts no longer support. Keep what's still true — the four exemplars, the non-goals boundary, the press release framing — but only where nothing you find invalidates them.
+
+Cite every file and line you actually check, for both confirmed and refuted findings. Run markdownlint before submitting. Submit via `ethos mission result` when done.
