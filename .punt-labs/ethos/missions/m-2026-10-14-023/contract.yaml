@@ -1,0 +1,28 @@
+mission_id: m-2026-10-14-023
+status: closed
+type: implement
+created_at: "2026-10-14T20:58:09Z"
+updated_at: "2026-10-14T22:16:19Z"
+closed_at: "2026-10-14T22:16:19Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-14T20:58:09Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs: {}
+write_set:
+    - docs/spec-opencode-integration.tex
+success_criteria:
+    - |-
+      Two narrow, prose-only corrections to S:validation's setsize-2 subsection, found by jra's final-round verification on the now-closed mission m-2026-10-14-022 (see its round-2 correction for full context). Z content, theorems, harness instantiation, and everything outside this one subsection must not change.
+
+      (1) The document attributes the 82,155/50,400 transition-count split to probcli's own search-order non-determinism. This is wrong. jra independently reproduced 82,155 deterministically (3x) under '-p MAX_OPERATIONS 5000 -mc 2000 -df' and 50,400 deterministically (2x) under '-mc 2000 -df' alone -- the split is a MAX_OPERATIONS confound between the two invocations, not search-order non-determinism. Only the no-flags/-c-alone configuration is genuinely non-deterministic (jra observed 5 different counts there: 47254, 48111, 47158, 46780, 47852). Correct the causal attribution: state plainly that the specific numeric split traces to differing MAX_OPERATIONS settings across the two prior invocations, and that genuine run-to-run non-determinism was separately confirmed only under the no-flags/-c-alone configuration.
+
+      (2) The document claims all 18 operations fire 'under every flag configuration tried.' This is false. jra found AllocateDelegationForkPropagated uncovered in every -df run (5 runs, both flag variants) -- 18/18 coverage is achieved only under the no-flags configuration. Correct this claim to state the actual, narrower scope: 18/18 coverage is achieved under the no-flags configuration (confirmed at every bound tried, including 10,000+ states); -df runs do not achieve full coverage (AllocateDelegationForkPropagated specifically remains uncovered under -df).
+
+      Neither correction weakens the real safety claim, which remains true and should stay stated plainly: 0 violations, 0 deadlocks reproduced in every run across every configuration tried. Verify your edit with fuzz before submitting. This should be a small diff -- reread jira's correction on m-2026-10-14-022 for full verbatim detail if anything above is ambiguous.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

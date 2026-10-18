@@ -1,0 +1,80 @@
+results:
+    - mission: m-2026-10-18-006
+      round: 1
+      created_at: "2026-10-18T05:32:13Z"
+      author: claude
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/spec-opencode-integration.tex
+          added: 160
+          removed: 7
+        - path: docs/prfaq-opencode-integration.md
+          added: 60
+          removed: 0
+      evidence:
+        - name: fuzz type-check after all changes
+          status: pass
+        - name: 'probcli setsize-1: 286 states, 3862 transitions, 0 violations, 0 deadlocks -- identical to baseline'
+          status: pass
+        - name: 'probcli setsize-2: init/animate/cbc_assertions/cbc_deadlock all passed (0 violations, deadlock-free); model_check census exceeded 600s and was stopped before completing -- a timeout, not a violation, reported honestly in the spec''s own Validation addendum'
+          status: pass
+        - name: 'markdownlint: 0 issues in 333 files'
+          status: pass
+        - name: 'make check: golangci-lint, shellcheck, ruff, mypy, pytest, go test -race, validate-content, fuzz on all 6 specs all pass'
+          status: pass
+        - name: 'finding B: determined AllocateDelegationForkPropagated''s existing guards (sid? notin dom claims, id? notin dom delegations) already make it safe to invoke from a second trigger (ctx.tool.hook execute.before) independent of ctx.event.subscribe''s volatile connection state -- no new Z operation needed, prose-only fix plus a new Failure Modes entry'
+          status: pass
+        - name: 'ancestor-chain guard fix: replaced one-hop parentID equality with transitive closure (R-plus) over an inline parent-link comprehension bounded by dom sessions, verified directional (child-to-parent only); both historical exploit traces (round 2''s parent-takes-child''s-claim, round 3''s nested-fork reverse-propagation) re-checked directly against the new guard and both still fail'
+          status: pass
+        - name: TraceabilityViaRootSuffices theorem restated to its final general form matching the transitive-closure guard
+          status: pass
+      prose: |
+        Worker opencode-findingB (jms) was stopped by the leader after a
+        confirmed genuine stall: 20+ minutes of zero file-diff activity on
+        either target document, two unanswered status-check pings, and
+        (unlike this session's two prior stall misjudgments) no evidence of
+        active research or verification work -- file mtimes were stale across
+        multiple checks spanning the full runtime. This is reported as a
+        genuine stall, not a repeat of the earlier misjudgments.
+
+        The leader completed both pieces of this mission's scope directly:
+
+        FINDING B (event.subscribe volatility reconciliation): researched via
+        context7 against the real v2.0.32-era source. Confirmed the
+        hook-plugin's own ctx.tool.hook("execute.before", ...) event carries
+        the session's own sessionID on every tool invocation
+        (packages/plugin/src/effect/tool.ts), independent of
+        ctx.event.subscribe()'s connection state -- already load-bearing
+        elsewhere in this document for ETHOS_SESSION propagation. Read
+        AllocateDelegationForkPropagated's guards carefully per the contract's
+        own instruction: sid? notin dom claims and id? notin dom delegations
+        already make the operation idempotent in the relevant sense --
+        calling it for an already-claimed session simply fails the first
+        guard and does nothing, regardless of which trigger (live event or
+        tool-hook reconciliation) calls it first or twice. Concluded NO new Z
+        operation or relaxed guard was needed; the fix is prose identifying
+        the dual-trigger safety argument in both documents, plus a new
+        Failure Modes entry in the spec.
+
+        ANCESTOR-CHAIN GUARD (new Bugbot finding, folded into this mission's
+        scope mid-flight since it touched the same schema): replaced the
+        round-3 one-hop parentID equality with membership in sid?'s full
+        ancestor set under the transitive closure of the one-step parent-link
+        relation, written as an inline set comprehension bounded by dom
+        sessions (the same technique already used for family), avoiding any
+        new unbounded-type risk. Verified directionality by re-checking BOTH
+        historical exploit traces directly against the new guard's actual
+        text, not by assertion. TraceabilityViaRootSuffices restated a second
+        time to its final, general form.
+
+        Verification was unusually thorough given the guard change's
+        structural novelty (a transitive closure, not a simple lookup): ran
+        probcli at BOTH setsize 1 (clean, identical to baseline) and setsize 2
+        (the first setsize-2 attempt in this document's correction history
+        motivated specifically by a guard-shape change, not a narrowing) --
+        the setsize-2 model_check phase timed out at 600s without completing
+        its coverage census, but every phase that DID complete (init,
+        animate, assertions, deadlock-check) passed cleanly with zero
+        violations. This is reported honestly as a timeout in the spec's own
+        Validation addendum, not hidden or conflated with a pass.

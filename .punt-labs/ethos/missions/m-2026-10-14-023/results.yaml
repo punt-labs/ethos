@@ -1,0 +1,58 @@
+results:
+    - mission: m-2026-10-14-023
+      round: 1
+      created_at: "2026-10-14T21:04:24Z"
+      author: jms
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: docs/spec-opencode-integration.tex
+          added: 58
+          removed: 42
+      evidence:
+        - name: /z-spec:check (fuzz type-check) after the correction
+          status: pass
+        - name: pdflatex compiles cleanly to a 23-page PDF after the correction (checked in .tmp/, not committed)
+          status: pass
+        - name: 'Independently reproduced the MAX_OPERATIONS confound: -p MAX_OPERATIONS 5000 -mc 2000 -df returns 82155 deterministically across 3 runs here; -mc 2000 -df with default MAX_OPERATIONS returns 50400 deterministically across 2 runs here -- confirms jra''s diagnosis exactly, no search-order non-determinism involved in this split'
+          status: pass
+        - name: 'Independently reproduced the coverage defect: -mc 2000 -df -c (both MAX_OPERATIONS variants) reports UNCOVERED_OPERATIONS (1), AllocateDelegationForkPropagated in every run; -mc 2000 -c with no -df reports UNCOVERED_OPERATIONS (0) every run -- confirms 18/18 coverage requires the no-flags configuration specifically, not -df'
+          status: pass
+        - name: 'Independently reconfirmed genuine non-determinism is real but confined to the no-flags/-c-alone configuration: 3 further no-flags runs here returned 3 different counts (47154, 47078, 47336), consistent with jra''s 5-run spread'
+          status: pass
+      prose: |
+        Two precise, prose-only corrections to §Validation's "Bounded run at
+        setsize~2" subsection, per jra's final-round evaluation of the
+        now-closed m-2026-10-14-022 and the coordinator's relayed mission
+        contract. No Z content, theorem, schema, or anything outside this one
+        subsection was touched.
+
+        Before editing I independently reproduced both of jra's findings
+        myself rather than taking them on report: (1) `-p MAX_OPERATIONS
+        5000 -mc 2000 -df` returns 82155 deterministically (3/3 runs here);
+        `-mc 2000 -df` with default MAX_OPERATIONS returns 50400
+        deterministically (2/2 runs here) -- confirming the 82155/50400 split
+        is a MAX_OPERATIONS confound between differently-flagged invocations
+        across this section's first and second drafts, not search-order
+        non-determinism as the prior correction claimed. (2)
+        AllocateDelegationForkPropagated is uncovered in every -df run (both
+        MAX_OPERATIONS variants, confirmed here) and covered in every
+        no-flags run -- confirming 18/18 coverage requires the no-flags
+        configuration specifically, not "every flag configuration tried" as
+        the prior correction claimed.
+
+        The corrected subsection now: (1) states the real cause of the
+        82155/50400 split (a MAX_OPERATIONS confound, not search
+        non-determinism) and narrows the genuine-non-determinism claim to
+        the no-flags/-c-alone configuration specifically, where it does hold
+        (confirmed independently: 3 further no-flags runs here returned 3
+        different counts); (2) corrects the coverage claim to its actual,
+        narrower scope -- 18/18 achieved under no-flags, AllocateDelegationForkPropagated
+        specifically uncovered under -df -- with a note that this is a fact
+        about -df's own search-order discipline, not about the
+        specification's reachability (the guard is satisfiable, confirmed by
+        its own firing under no-flags at the identical bound). The one claim
+        that survives both corrections untouched and restated plainly: zero
+        invariant violations, zero deadlocks, reproduced in every run under
+        every configuration by every party, with no exception found at any
+        bound tried (2000 through 13,632+ states).

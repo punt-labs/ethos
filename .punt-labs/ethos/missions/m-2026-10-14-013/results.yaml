@@ -1,0 +1,66 @@
+results:
+    - mission: m-2026-10-14-013
+      round: 1
+      created_at: "2026-10-14T19:16:11Z"
+      author: jms
+      verdict: escalate
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: docs/spec-opencode-integration.tex written, type-checks with fuzz (0 errors), compiles cleanly to a 22-page PDF
+          status: pass
+        - name: 'probcli -model_check -p DEFAULT_SETSIZE 1 -df -c: certified complete, 287 states, 3862 transitions, 0 violations, 0 deadlocks'
+          status: pass
+        - name: 'probcli -mc 2000 at setsize 2: 0 violations, 0 deadlocks, 18/18 operations covered (state space not exhausted — disclosed in spec''s own Validation section)'
+          status: pass
+      open_questions:
+        - 'Request write_set correction: contract.yaml names docs/spec-opencode-integration.md, but this repo''s own toolchain (Makefile FUZZ_SPECS grep for usepackage{fuzz}, probcli''s hard .tex requirement, confirmed against both existing specs'' own header comments making the identical point) requires a .tex extension — a .md file is invisible to /z-spec:test and reports 0 states. I wrote docs/spec-opencode-integration.tex instead of the contracted .md path. The deliverable is complete, type-checks, and is model-checked, but files_changed cannot declare a path outside the contract''s write_set, and I have no authority under the immutable-contract model to amend write_set myself.'
+        - points-hqi (the mirrored bead in punt-labs/points) could not be read — a gh search against that repo for points-hqi/ethos/session-traceability returned zero results. This is an open, unresolved dependency recorded in the spec's own Open Dependency section, not something this mission can discharge.
+      prose: |
+        The specification itself is complete and verified: docs/spec-opencode-integration.tex
+        (1739 lines) models the harness-neutral session/mission/delegation
+        binding problem per bead ethos-5y4r. fuzz type-checks it with 0
+        errors; probcli at DEFAULT_SETSIZE 1 is CERTIFIED COMPLETE (287
+        states, 3862 transitions, 0 violations, 0 deadlocks — the entire
+        reachable space at that setsize); probcli at setsize 2 covers all 18
+        operations with 0 violations across every run performed, though that
+        larger space is not certified complete (disclosed explicitly in the
+        spec's own Validation section, following spec-mission-lifecycle.tex's
+        precedent for a genuine, disclosed coverage gap rather than a hidden
+        one). pdflatex compiles the document cleanly to a 22-page PDF.
+
+        Escalating solely because the mission contract's write_set names
+        docs/spec-opencode-integration.md, and this repo's own z-spec
+        toolchain requires .tex (confirmed by reading the Makefile's
+        FUZZ_SPECS detection rule and both existing specs' own header
+        comments, which make this exact point for the identical reason).
+        I wrote the .tex file as instructed by the mission brief's own
+        explicit contingency ("if the mission's write_set literally requires
+        .md, write the .tex content ... documenting why you deviate"), but
+        `ethos mission result` refuses a files_changed path outside the
+        declared write_set, and amending write_set is outside a worker's
+        authority under the immutable-contract model. Requesting the leader
+        correct write_set to docs/spec-opencode-integration.tex (a one-line
+        contract amendment) so a passing result can be submitted against the
+        real deliverable, which already exists, type-checks, and is
+        model-checked at the repository root
+        docs/spec-opencode-integration.tex.
+
+        The Claude Code half of the model is grounded in direct reads of
+        internal/process/tree.go, internal/session/{session,store,match}.go,
+        internal/resolve/resolve.go, internal/mission/active.go, and
+        internal/hook/{pretooluse_dispatch,commit_trailers,audit_log}.go,
+        cited by file and line throughout. The OpenCode half is grounded in
+        a companion research artifact (docs/prfaq-opencode-integration.md,
+        a sibling worktree) produced via context7 against anomalyco/opencode's
+        dev branch across two evaluation rounds; I had no web-fetch tool of
+        my own and attribute every OpenCode-specific claim to that artifact's
+        own citations, disclosed explicitly in the spec's own Harness
+        Instantiation section. A mid-task pause-and-resume occurred: the
+        coordinator paused this mission to commission that research (the
+        confirmed session.fork/context.data.session.{root,family,status} API)
+        before the fork/lineage invariants were finalized; the resumed draft
+        replaced a generic, first-draft parent-pointer-walk design with the
+        confirmed root/family lookup shape once that research landed,
+        recorded in the spec's own prose as the one genuine representational
+        change between drafts.

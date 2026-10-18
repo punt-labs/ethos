@@ -1,0 +1,2 @@
+{"ts":"2026-10-18T03:52:26.002482544Z","event":"create","actor":"claude","details":{"evaluator":"adt","ticket":"","worker":"ghr"}}
+{"ts":"2026-10-18T04:45:14.997243802Z","event":"result","actor":"claude","details":{"confidence":0.88,"evidence_entries":9,"files_changed":2,"round":1,"verdict":"fail"}}

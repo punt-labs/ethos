@@ -1,0 +1,21 @@
+mission_id: m-2026-10-14-020
+status: closed
+type: implement
+created_at: "2026-10-14T15:50:48Z"
+updated_at: "2026-10-14T16:57:17Z"
+closed_at: "2026-10-14T16:57:17Z"
+leader: claude
+worker: ghr
+evaluator:
+    handle: adt
+    pinned_at: "2026-10-14T15:50:48Z"
+    hash: f4822d0281ba4c1b67b2db5b6b4be838a5eedd05089be8a17480efe09be83523
+inputs: {}
+write_set:
+    - docs/prfaq-opencode-integration.md
+success_criteria:
+    - 'Research and write a Working-Backwards PR/FAQ for a first-class, native OpenCode 2.x integration with ethos (bead ethos-5y4r). Must include: (1) a survey of at least 3 real exemplars of cross-harness or multi-agent identity/traceability integrations (prior art for binding a tool''s identity/audit layer to more than one coding-agent runtime) — search quarry, context7, and the web; (2) a concrete description of OpenCode 2.x''s actual plugin/event/session model as it exists today, sourced from context7 (/websites/opencode_ai_plugins, /anomalyco/opencode) and the local shallow clone at ~/Coding/punt-labs/biff/.tmp/opencode-src if still present — specifically the session.{created,compacted,deleted,diff,error,idle,status,updated} plugin events, the session.fork HTTP endpoint and its ''before'' message-ID semantics, context.data.session.{list,get,root,family,cost,status,sync,invalidate}, and OpenCode''s own specs/v2/session.md describing SessionExecution as process-local keyed by Session ID with SessionRunCoordinator ownership rules — read that spec file directly, it is a close formal exemplar for what we are about to build; (3) what ''first class'' and ''native'' should concretely mean for this integration as a product decision, not an engineering default — e.g. should it ship as an OpenCode plugin bundled with ethos, a standalone adapter binary, config-only wiring, something else; (4) explicit non-goals per bead ethos-5y4r: do not conflate with Circuit''s PR-watch workflow tracking (mutable PR head SHA stays GitHub/Circuit-owned); this covers only stable correlation metadata (harness session ID, Bead, ethos mission, delegation); (5) a press release framed at the person who currently loses commit/PR traceability when they drive an ethos-owned mission through OpenCode instead of Claude Code; (6) FAQs covering: why not just reuse the Claude Code hook mechanism verbatim, what breaks if OpenCode forks a session mid-mission, what happens on ethos service restart or OpenCode worktree sessions. Check quarry for prior research sessions (session-b8a0261f ran OpenCode-focused research before, for a different problem — biff notification channels — read it for context but do not treat its conclusions as answering this problem). Output is a complete prfaq.tex-style PR/FAQ at docs/prfaq-opencode-integration.md covering all of the above, with citations for every factual claim about OpenCode''s current behavior.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2

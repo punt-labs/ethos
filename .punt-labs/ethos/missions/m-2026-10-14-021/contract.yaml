@@ -1,0 +1,21 @@
+mission_id: m-2026-10-14-021
+status: closed
+type: implement
+created_at: "2026-10-14T17:00:49Z"
+updated_at: "2026-10-14T17:34:00Z"
+closed_at: "2026-10-14T17:34:00Z"
+leader: claude
+worker: ghr
+evaluator:
+    handle: adt
+    pinned_at: "2026-10-14T17:00:49Z"
+    hash: f4822d0281ba4c1b67b2db5b6b4be838a5eedd05089be8a17480efe09be83523
+inputs: {}
+write_set:
+    - docs/prfaq-opencode-integration.md
+success_criteria:
+    - 'Correct mission m-2026-10-14-020''s closed deliverable (docs/prfaq-opencode-integration.md) to target OpenCode V2''s actual current plugin hook API instead of V1. V2 is released (v2.0.26 confirmed installed) -- this is a vocabulary correction against a confirmed-current API, not new research. Replace every V1 hook reference with its V2 equivalent per this exact migration table (already verified via context7 against anomalyco/opencode dev branch migrate-v1.mdx): session.created/session.updated as plugin-returned object keys -> ctx.session.hook(''prompt''|''context''|''compaction'', ...) registered inside Plugin.define({id, setup(ctx)}); tool.execute.before/.after as object keys -> ctx.tool.hook(''execute.before''|''execute.after'', ...); the async ({project, client, $, directory, worktree}) => Hooks factory shape -> Plugin.define({id: string, async setup(ctx) {...}}) where ctx carries project/location context; bare ''event'' hook -> ctx.event.subscribe({signal}) consumed via for-await inside setup, with a cleanup function returned from setup for disposal. Specifically correct: the ''why not reuse Claude Code hooks verbatim'' FAQ''s code description, the ''session.fork mid-mission'' FAQ''s hook registration shape (keep the session.fork HTTP endpoint and lineage-lookup content, which is unaffected -- only the hook REGISTRATION syntax around it is V1), the ''ethos service restart'' FAQ''s hook registration shape, and the bundled-plugin recommendation''s description of how the plugin would be structured (Plugin.define, not the old factory-function export). Do NOT touch the session.fork endpoint content, the context.data.session.{root,family,status} citations, the exemplars section, the non-goals section, or the plugin-vs-adapter-vs-config trade-off reasoning -- all confirmed sound by two prior evaluation rounds and unaffected by this correction. This is a scoped terminology/code-sketch fix, not a rewrite. Cite github.com/anomalyco/opencode/blob/dev/services/www/src/docs/content/build/plugins/migrate-v1.mdx directly for the V2 API shapes.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2

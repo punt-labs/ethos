@@ -1,0 +1,21 @@
+mission_id: m-2026-10-14-022
+status: closed
+type: implement
+created_at: "2026-10-14T19:17:44Z"
+updated_at: "2026-10-14T20:57:37Z"
+closed_at: "2026-10-14T20:57:37Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-14T19:17:44Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs: {}
+write_set:
+    - docs/spec-opencode-integration.tex
+success_criteria:
+    - 'Correction of escalated mission m-2026-10-14-013: write_set was mis-specified as .md when this repo''s toolchain requires .tex. The spec is already complete, written, fuzz-type-checked (0 errors), and probcli-model-checked (DEFAULT_SETSIZE 1: certified complete, 287 states, 3862 transitions, 0 violations, 0 deadlocks; setsize 2: 0 violations across 49,062+ transitions, 18/18 operations covered, disclosed as not fully certified complete at that size) at docs/spec-opencode-integration.tex in the existing worktree /home/jfreeman/Coding/punt-labs/ethos/.claude/worktrees/agent-a0bd34866c5edbb81/. No rewrite needed -- submit the mission result against the file as it already exists, citing the verification already performed. If anything has changed in the worktree since the original escalation, re-verify with fuzz/probcli before submitting.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2

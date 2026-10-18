@@ -1,0 +1,2 @@
+{"ts":"2026-10-14T15:43:14.043998385Z","event":"create","actor":"claude","details":{"evaluator":"jra","ticket":"","worker":"jms"}}
+{"ts":"2026-10-14T15:43:29.510242033Z","event":"abandon","actor":"claude","details":{"reason":"premature and wrong worker/evaluator (inherited jms/jra pipeline default meant for spec stage only) — will recreate as a standalone mission with bwk/rsc once spec closes"}}

@@ -1,0 +1,95 @@
+results:
+    - mission: m-2026-10-18-005
+      round: 1
+      created_at: "2026-10-18T04:45:14Z"
+      author: claude
+      verdict: fail
+      confidence: 0.88
+      files_changed:
+        - path: docs/prfaq-opencode-integration.md
+          added: 196
+          removed: 27
+        - path: docs/spec-opencode-integration.tex
+          added: 150
+          removed: 30
+      evidence:
+        - name: fuzz type-check after all fixes
+          status: pass
+        - name: 'probcli setsize-1: 286 states, 3862 transitions, 0 violations, 0 deadlocks -- identical to pre-fix baseline'
+          status: pass
+        - name: 'markdownlint: 0 issues in 333 files'
+          status: pass
+        - name: 'make check: golangci-lint, shellcheck, ruff, mypy, pytest, markdownlint, go test -race, validate-content, fuzz all pass'
+          status: pass
+        - name: 'residual m-2026-10-18-002 fabrications fixed: fabricated ctx.session "list" member removed, migrate-v1.mdx mischaracterization corrected, both verified against real v2.0.32 source'
+          status: pass
+        - name: 'finding A: session.updated V1-sourcing caveat added in both documents (4 citations), session.compaction.ended/session.execution.failed NOT introduced as replacements since neither is confirmed real'
+          status: pass
+        - name: 'finding C: nested-fork reverse-propagation exploit closed -- witness? now requires parentID(sid?.parent) equality, not mere root membership; TraceabilityViaRootSuffices theorem restated to match'
+          status: pass
+        - name: 'finding D: Claude Code harness-instantiation section corrected to distinguish Task-tool-subagent case (vacuous, as originally argued) from --fork-session/--fork/--branch case (genuine new top-level session, confirmed via Claude Code''s own SessionStart source:"fork" docs since v2.1.214)'
+          status: pass
+        - name: finding B (event.subscribe volatility reconciliation design) -- NOT completed, contract not fully satisfied, overall verdict is fail for this reason alone
+          status: fail
+      prose: |
+        Worker opencode-fix-consolidated (ghr) was stopped by the leader after
+        a ~25-minute apparent plateau in the prfaq file's diff combined with
+        two unanswered status-check pings. THIS WAS A MISJUDGMENT THE LEADER
+        EXPLICITLY ACKNOWLEDGES: reading the worker's completed diff after the
+        stop revealed it was doing careful, high-quality source verification
+        during the apparent plateau -- it had identified that the earlier
+        round's fabricated "list" member on ctx.session was not pure
+        fabrication but an unreleased dev-branch addition (commit bc5fa1cc,
+        merged after this project's targeted v2.0.32 release), and had
+        precisely corrected the migrate-v1.mdx mischaracterization by reading
+        the real file content rather than re-asserting a claim. This is
+        exactly the rigor the mission's own brief demanded after the prior
+        round's fabrication failure. The leader cannot undo the stop, and
+        acknowledges this is the second such misjudgment in this session.
+
+        The worker's own prfaq edit (findings residual-6, part of finding A's
+        event.subscribe discussion) was complete, correct, and left in place
+        unmodified -- verified by the leader via git diff review and matched
+        against the real v2.0.32 source citations the worker's own diff
+        names. The leader then completed the remaining work directly:
+
+        - Finding A (spec side): added the session.updated V1-sourcing caveat
+          to both spec citations (lines ~171, ~1596 pre-edit), matching the
+          caveat already established in the prfaq by the stopped worker.
+        - Finding C: fixed AllocateDelegationForkPropagated's witness? guard
+          to require parentID(sid?.parent) equality rather than mere
+          same-root membership, closing the nested-fork reverse-propagation
+          exploit Copilot identified (B's claim flowing backward via C in a
+          three-session fork chain). Restated TraceabilityViaRootSuffices's
+          theorem to match the corrected guard, and updated three other prose
+          locations (ORIGIN subsection, SESSION schema's root/family
+          discussion, the parentID axdef's own usage note) that described the
+          now-superseded root-equality design, to keep the document internally
+          consistent rather than leaving stale cross-references. Fixed two
+          broken label references discovered while editing (a nonexistent
+          \S\ref{sec:functions}, a nonexistent lineageRoot citation) that
+          predated this round.
+        - Finding D: corrected the Claude Code harness-instantiation
+          subsection to distinguish the Task-tool-subagent/hook-subprocess
+          case (session-level fork genuinely never occurs, as the original
+          text correctly argued) from --fork-session/--fork/--branch (a
+          genuine new top-level session IS minted, confirmed via Claude
+          Code's own SessionStart hook source:"fork" value, documented since
+          v2.1.214) -- the original text wrongly extended case 1's conclusion
+          to Claude Code as a whole, contradicting the companion prfaq's own
+          correct fork-handling FAQ. Updated the traceability table's
+          ForkSession row, which repeated the same now-corrected claim.
+
+        Finding B (event.subscribe volatility reconciliation design -- a new
+        or modified Z operation for idempotent delegation allocation on
+        reconnection) was NOT reached before the leader needed to submit this
+        result and continue the PR-driving cycle. This is reported honestly
+        as incomplete rather than claimed done. Recommend a follow-up round
+        (or a separate, narrowly-scoped mission) for finding B specifically,
+        since it is the one finding in this contract requiring genuinely new
+        Z content rather than a guard correction or prose fix.
+
+        Full verification run: fuzz 0 errors, probcli setsize-1 identical to
+        baseline (286/3862/0/0), markdownlint 0 issues, make check green
+        (golangci-lint, shellcheck, ruff, mypy, pytest, go test -race,
+        validate-content, fuzz on all specs).

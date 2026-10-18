@@ -1,0 +1,2 @@
+{"ts":"2026-10-14T15:42:07.484833255Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"","worker":"bwk"}}
+{"ts":"2026-10-14T15:42:37.458408767Z","event":"abandon","actor":"claude","details":{"reason":"pipeline instantiate retry: write_set validation failed on later stage, no worker spawned, cleaning up to retry"}}

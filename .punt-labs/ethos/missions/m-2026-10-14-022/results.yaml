@@ -1,0 +1,163 @@
+results:
+    - mission: m-2026-10-14-022
+      round: 1
+      created_at: "2026-10-14T19:18:30Z"
+      author: jms
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/spec-opencode-integration.tex
+          added: 1739
+          removed: 0
+      evidence:
+        - name: /z-spec:check (fuzz type-check)
+          status: pass
+        - name: 'probcli -model_check -p DEFAULT_SETSIZE 1 -df -c: certified complete, 287 states, 3862 transitions, 0 violations, 0 deadlocks'
+          status: pass
+        - name: 'probcli -mc 2000 at setsize 2: 0 violations, 0 deadlocks, 18/18 operations covered (full setsize-2 space not exhausted — disclosed explicitly in spec''s own Validation section)'
+          status: pass
+        - name: pdflatex compiles cleanly to a 22-page PDF with no errors
+          status: pass
+      open_questions:
+        - points-hqi (the mirrored bead in punt-labs/points) could not be read — a gh search against that repo for points-hqi/ethos/session-traceability returned zero results. This is an open, unresolved dependency recorded in the spec's own Open Dependency section, not something this mission can discharge.
+        - Setsize-2 model-check is NOT certified complete — the reachable state space exceeds 72,488 and does not converge within the runs performed. Disclosed explicitly in the spec's own Validation section, following spec-mission-lifecycle.tex's precedent for reporting a genuine coverage gap rather than hiding it. Diagnosing the state-space growth (most likely driven by the SESSIONID-typed parameters on ForkSession/AllocateDelegationForkPropagated) and tightening the model if warranted is scoped as follow-up work, not resolved here.
+      prose: |
+        Resubmission against the corrected contract m-2026-10-14-022
+        (write_set=docs/spec-opencode-integration.tex), replacing the
+        escalated m-2026-10-14-013 whose write_set was mis-specified as
+        .md. No rewrite was needed or performed: the worktree is unchanged
+        since the escalation, confirmed via `git status`/`git diff --stat`
+        immediately before this submission, and fuzz was re-run fresh
+        (0 errors) to confirm nothing had drifted.
+
+        docs/spec-opencode-integration.tex (1739 lines) is a harness-neutral
+        Z specification of the OpenCode-to-ethos session/mission/delegation
+        binding problem (bead ethos-5y4r). The Claude Code side is grounded
+        in direct reads of internal/process/tree.go,
+        internal/session/{session,store,match}.go, internal/resolve/resolve.go,
+        internal/mission/active.go, and
+        internal/hook/{pretooluse_dispatch,commit_trailers,audit_log}.go,
+        cited by file and line throughout. The OpenCode side is grounded in
+        a companion research artifact (docs/prfaq-opencode-integration.md,
+        a sibling worktree) produced via context7 against anomalyco/opencode's
+        dev branch across two evaluation rounds; this agent had no web-fetch
+        tool of its own and attributes every OpenCode-specific claim to that
+        artifact's own citations, disclosed explicitly in the spec's own
+        Harness Instantiation section.
+
+        The spec models: a HARNESS-tagged SESSION/DELEGATION/Registry state
+        where no operation's guard or effect ever inspects the harness tag
+        (HarnessNeutrality theorem); JoinRootSession and a dedicated
+        ForkSession operation (OpenCode's session.fork, confirmed first-class
+        and frequent, not a corner case); root/family as OpenCode's own
+        context.data.session.root/.family lookups, modelled as a stored root
+        field plus a family relation DERIVED from root equality (not stored
+        per-session, to avoid the SETUP_CONSTANTS trap spec-writeset-admission.tex
+        already documents for function-typed global constants); a dedicated
+        AllocateDelegationForkPropagated operation whose traceability witness
+        is family membership, distinct from the existing Claude Code
+        parent_delegation inheritance path; and the five ethos-5y4r invariants
+        as named theorems (DelegationIDFreshness, ForkNeverInheritsClaim,
+        RestartClearsLiveness, WorktreeIndependence, FailClosedOnAmbiguity via
+        a four-case ResolveCommitAttribution, plus a new
+        TraceabilityViaRootSuffices theorem justifying the root-lookup design).
+
+        fuzz type-checks the document with 0 errors. probcli at
+        DEFAULT_SETSIZE 1 is CERTIFIED COMPLETE (287 states, 3862
+        transitions, 0 violations, 0 deadlocks) -- the entire reachable space
+        at that setsize, not a bounded sample; 16 of 18 operations fire, and
+        the other two (ForkSession, AllocateDelegationForkPropagated)
+        structurally cannot at setsize 1 (both require two distinct
+        SESSIONID values), confirmed by their firing cleanly once setsize
+        rises to 2. At setsize 2 the state space is considerably larger than
+        either existing spec's own (373 and 5790 states respectively) and
+        does not converge within the runs performed (up to 13,632 states,
+        317,844 transitions, 0 violations, all 18 operations covered) -- this
+        is disclosed, not hidden, in the spec's own Validation section, and
+        flagged as follow-up diagnostic work for the evaluator or a
+        subsequent revision.
+
+        A mid-task pause-and-resume cycle occurred during drafting: the
+        coordinator paused the original mission to commission additional
+        OpenCode V2 research (the confirmed session.fork/
+        context.data.session.{root,family,status} API, sourced via context7
+        against anomalyco/opencode, two evaluation rounds) before the
+        fork/lineage invariants were finalized. The resumed draft replaced a
+        generic, first-draft PARENTLINK-walk design with the confirmed
+        root/family lookup shape once that research landed -- recorded in
+        the spec's own prose as the one genuine representational change
+        between drafts.
+
+        pdflatex compiles the document cleanly to a 22-page PDF (fixed one
+        real LaTeX bug along the way: several \field{\dom ...} constructs
+        nested a \mathop-defined Z macro inside \texttt{}'s text-mode
+        argument, which fails even inside $...$ -- corrected by moving \dom/
+        \seq outside \field{} throughout, matching the existing convention
+        in spec-mission-lifecycle.tex).
+    - mission: m-2026-10-14-022
+      round: 2
+      created_at: "2026-10-14T20:29:44Z"
+      author: jms
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/spec-opencode-integration.tex
+          added: 51
+          removed: 23
+      evidence:
+        - name: /z-spec:check (fuzz type-check) after the correction
+          status: pass
+        - name: pdflatex compiles cleanly to a 22-page PDF after the correction (checked in .tmp/, not committed)
+          status: pass
+        - name: 'Reran probcli -mc 2000 -df 8 times: all 8 returned 50400 transitions identically (a THIRD fixed value, distinct from both jms''s original 49062 and jra''s 82155) -- confirms determinism WITHIN one flag configuration but non-reproducibility of the exact number ACROSS independent invocations of nominally the same command by different parties'
+          status: pass
+        - name: 'Reran probcli -mc 2000 with no flags / -c alone 10 times: every run returned a different transition count (range 46630-48290), confirming jra''s non-determinism finding directly'
+          status: pass
+        - name: 'Reran probcli -mc 10000 with no flags twice: 231765 and 235631 transitions -- confirms non-determinism persists at a larger bound, matching jra''s own 10000-state check (414730 transitions, 18/18 covered, 0 violations) in the qualitative finding though not in the exact count'
+          status: pass
+      open_questions:
+        - points-hqi (the mirrored bead in punt-labs/points) remains unread/unresolved, as disclosed in the spec's own Open Dependency section. Unchanged from round 1 -- not touched by this round's correction.
+        - Diagnosing probcli's own run-to-run nondeterminism at setsize 2 (search-order effects, MAX_OPERATIONS interaction, or a probcli-version-specific behavior) is scoped as follow-up work, not resolved in this correction, per jra's own round-1 reflection.
+      prose: |
+        Round 2 correction, scoped exactly to §Validation's "Bounded run at
+        setsize~2" subsection per jra's round-1 reflection (pivot,
+        converging=false) and the coordinator's relayed instructions.
+        Nothing else in the document was touched -- jra's reflection
+        confirmed the five theorems, HarnessNeutrality, TraceabilityViaRootSuffices,
+        the ORIGIN biconditional, ResolveCommitAttribution's case-exhaustiveness,
+        the family-derivation SETUP_CONSTANTS avoidance, all eight Claude Code
+        citations, and the non-goals/open-dependency disclosures as sound, and
+        none of that was modified.
+
+        Before writing the correction I reran probcli myself rather than
+        taking jra's numbers on faith: under -mc 2000 -df, 8 independent runs
+        performed here all returned 50400 transitions identically -- a THIRD
+        distinct fixed value, matching neither my original 49062 nor jra's
+        reported 82155. Under -mc 2000 with no flags (probcli's actual
+        default) or -c alone, 10 runs performed here returned 10 different
+        counts (range 46630-48290), directly confirming jra's non-determinism
+        finding. A longer, no-flags -mc 10000 run repeated twice returned two
+        different counts (231765 vs 235631), confirming the nondeterminism
+        persists at a larger bound, consistent with jra's own independent
+        10000-state check.
+
+        The corrected subsection: (1) states the evaluator's and this
+        resubmission's own observed ranges explicitly, rather than a single
+        cherry-picked number, and names the specific contradicting figures
+        (49062 / 82155 / 50400 under identical -df flags; 10 different counts
+        under no-flags/-c); (2) discloses plainly, as a fact worth stating
+        rather than softening, that probcli's search at this setsize is
+        run-to-run non-deterministic, with three independent parties each
+        obtaining a different count under the nominally identical invocation
+        as the clearest evidence; (3) WITHDRAWS the original growth-rate
+        narrative outright ("the running total keeps growing rather than
+        converging") rather than re-deriving a weaker version of it, because
+        a claim that a number is growing presupposes the number is
+        well-defined across reruns, which it is not. What survives, stated
+        as the honest residual claim: zero invariant violations, zero
+        deadlocks, and all eighteen operations covered reproduce consistently
+        across every configuration and every run any party has performed, at
+        bounds from 2000 states up through this evaluator's own independent
+        10000-state check and this document's own earlier 13632-state run --
+        and that qualitative claim is what the Validation section now rests
+        its conclusion on, not any specific transition count.
