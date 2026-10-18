@@ -19,12 +19,26 @@ reconstruct. The only record that this commit was mission-owned work
 lives in Priya's memory of what she asked for.
 
 This is not a edge case -- it is the default outcome today. Ethos's
-commit-msg hook finds "whose session is this" by walking the process
-tree for a Claude Code ancestor PID (`internal/process/`). OpenCode
-is not Claude Code and has no such ancestor to find. The hook runs,
-finds nothing, and stamps nothing -- silently, because a git hook has
-no channel to tell the operator "I could not identify a mission to
-attribute this commit to."
+commit-msg hook resolves "whose session is this" via
+`resolve.SessionID` (`internal/resolve/resolve.go:311-359`), which
+checks an `ETHOS_SESSION` environment override first and otherwise
+requires a corroborated Claude Code PID lookup -- confirmed by direct
+read, the function has **no process-tree-walk fallback at all**, an
+earlier draft of this document said it did and was wrong. OpenCode
+sets neither signal today, so `SessionID` returns `ErrNotUnderClaudeCode`
+and the hook takes the "no session was ever expected" branch: no
+trailer, and correctly **no diagnostic either**, because that branch
+means "nothing was expected to happen here," not "something failed."
+That is a different, narrower silence than this document's earlier
+draft claimed -- `runHookCommitTrailers` DOES print a stderr diagnostic
+(`ethos: commit-trailers: ...; no trailer added`) whenever a session
+WAS expected and failed to resolve; it is not true that "a git hook has
+no channel to tell the operator." The actual gap this integration
+closes is narrower and more precise: OpenCode is not recognized as a
+session-bearing harness at all today, so no session is ever expected
+from it, and the silent branch -- correct for its own case -- fires
+instead of the diagnostic branch that would fire for an ambiguous
+Claude Code resolution failure.
 
 Starting with this release, ethos ships an OpenCode plugin
 (`ethos enable --opencode`, mirroring the existing per-repo
@@ -35,9 +49,10 @@ Tier B dispatch, triggered from OpenCode's own `session.created` and
 inside the plugin's `Plugin.define({id, setup(ctx)})` entry point,
 instead of a Claude Code SessionStart hook. The commit-msg hook is
 unchanged git-level machinery; it now
-reads the claimed-mission binding from the same per-worktree
-`.punt-labs/ethos/` state it already reads for Claude Code, regardless
-of which harness produced the commit. Priya's OpenCode-driven commit
+reads the claimed-mission binding from the same global,
+session-ID-keyed `.punt-labs/ethos/` state it already reads for Claude
+Code, regardless of which harness produced the commit. Priya's
+OpenCode-driven commit
 gets the same `Mission:`/`Delegation:` trailers her Claude
 Code-driven commits already get. Nothing about Circuit's PR-watch
 tracking changes -- the mutable PR head SHA stays GitHub/Circuit-owned,
@@ -91,13 +106,38 @@ commit-msg hook that stamps `Mission:`/`Delegation:` trailers. That
 hook already runs independent of which process made the commit --
 it's a plain git hook, not a Claude Code hook. The only change is
 *what it reads* to decide whose mission a commit belongs to: today it
-walks the process tree for a Claude Code ancestor; the fix is to have
-it also check a small per-worktree correlation file the harness-native
-plugin writes via the existing `ethos mission claim <id>` CLI
-primitive (listed under Build & Run in this repo's own
-`docs/development.md`, confirming the primitive already exists for
-Tier B dispatch binding). One new harness-side trigger, zero new
-ethos-side mechanism.
+resolves a session via `resolve.SessionID` (`ETHOS_SESSION` env, then a
+corroborated Claude PID -- no process-tree walk, confirmed by direct
+source read); the fix is to have the harness-native plugin ensure
+`ETHOS_SESSION` resolves to the right identity for OpenCode too.
+
+**Corrected here, a real gap an earlier draft glossed over.** It is
+not enough for the plugin to call `ethos mission claim <id>` with no
+further argument. `runMissionClaim`
+(`cmd/ethos/mission.go:2076-2129`) writes its active-mission sidecar
+under the caller's OWN resolved session -- it does not register a new
+OpenCode session with ethos, and it does not allocate a delegation.
+And that sidecar lives under the user-GLOBAL,
+session-ID-keyed `$HOME/.punt-labs/ethos/sessions/<session-id>/` tree
+(`internal/mission/active.go`'s `ActiveMissionPath`), not a per-worktree
+file as an earlier draft of this FAQ claimed -- `resolve.SessionID`
+reads `ETHOS_SESSION` from THAT process's environment, so setting it
+only for the `mission claim` subprocess has no effect on a LATER
+committing shell unless the SAME value is exported into that shell's
+environment too. The actual requirement, stated precisely: the plugin
+must (1) register the OpenCode session with ethos (allocating a
+delegation under the active mission, not merely writing a bare
+sidecar), and (2) export `ETHOS_SESSION=<opencode-session-id>` into the
+environment of every subprocess OpenCode spawns for that session,
+including whatever shell eventually runs `git commit` -- for example
+via `ctx.tool.hook("execute.before", ...)` setting the env on each
+tool invocation, if OpenCode's own process model allows a plugin to
+influence a spawned shell's environment this way (confirming that
+mechanism is a prerequisite for this design, not assumed here). Only
+once BOTH of those are true does "worktree independence" hold for
+OpenCode the way it already holds for Claude Code -- it is a property
+of each harness correctly keying its own session identity, not of
+where a correlation file happens to live on disk.
 
 ### What happens if OpenCode forks a session mid-mission?
 
@@ -111,9 +151,19 @@ its selected boundary but adopts the parent's newest instruction
 values as its baseline"
 [github.com/anomalyco/opencode `specs/v2/session.md`, "Instructions
 Are Value Deltas" section, quarry-indexed, full page dump verified].
-Nothing in that spec ties the fork's identity to the parent beyond
-transcript and instruction state -- a fork gets its own, distinct
-OpenCode Session ID.
+a fork gets its own, distinct OpenCode Session ID.
+
+**Corrected here -- an earlier draft overstated how little ties a
+fork's identity to its parent.** Forking does NOT publish a generic
+`session.created` event, confirmed by direct read of
+`anomalyco/opencode`'s own `packages/core/src/session.ts`: it publishes
+a dedicated `SessionEvent.Forked`, whose payload carries `parentID`
+DIRECTLY: `bus.publish(SessionEvent.Forked, { sessionID, parentID:
+parent.id, boundary: {...}, ...inherited })`. The parent is handed to
+the plugin's event subscriber in the SAME hook-plugin context the rest
+of this integration already uses, at fork time, with no need to reach
+across to the separate CLI-plugin data-cache API for this specific
+lookup.
 
 That means the mission-claim binding does **not** carry over
 automatically, by construction, and it should not: if it did, any
@@ -121,41 +171,42 @@ unrelated fork of a mission-bound session would silently inherit
 mission authorship for whatever the forked conversation does next --
 exactly the kind of unattributed-commit risk this integration exists
 to close. The correct handling, and the one this integration ships:
-the plugin's `ctx.event.subscribe()` loop observes a `session.created`
-event for the forked child with its own new Session ID and no existing
-claim. Rather than relying on the event payload to supply parentage, the
-CLI-plugin data-cache API
-gives a plugin direct hierarchy access: `context.data.session.root(sessionID)`
-resolves the top-of-tree ancestor and `context.data.session.family(sessionID)`
-resolves every session in that lineage, both callable for the forked
-child's own new ID the moment `session.created` fires
-[github.com/anomalyco/opencode `services/www/src/docs/content/build/plugins/cli.mdx`,
-"Sessions" section, quarry-indexed, full page dump verified: "Session
-data exposes list, lookup, hierarchy, cost, status, synchronization,
-and invalidation" with `root(sessionID)` and `family(sessionID)` in the
-same code block]. The plugin resolves the forked child's root/family,
-checks whether any ancestor in that family carries an active mission
-claim, and if so opens a **new delegation round under the same
-mission** for the forked session -- ethos's mission model already
-supports multiple delegations per mission, so this is an existing
-primitive applied to a new trigger, not new machinery. This mirrors
-how Claude Code's own `--fork-session`/`/fork` is already surfaced to
+the plugin's `ctx.event.subscribe()` loop observes `SessionEvent.Forked`
+for the child, reads `parentID` directly off that event's own payload,
+and checks whether `parentID` (or any ancestor reachable from it) holds
+an active mission claim. The CLI-plugin data-cache API's
+`context.data.session.root(sessionID)`/`.family(sessionID)` remain
+available as a general-purpose, independently queryable cross-check --
+useful if a plugin needs lineage for a session OTHER than at the moment
+of its own fork event -- but are not the PRIMARY mechanism for this
+specific lookup, since `parentID` is simpler, same-context, and
+requires no cross-plugin-surface dependency
+[github.com/anomalyco/opencode `packages/core/src/session.ts`, directly
+sourced via context7]. If so, the plugin opens a **new delegation round
+under the same mission** for the forked session -- ethos's mission model
+already supports multiple delegations per mission, so this is an
+existing primitive applied to a new trigger, not new machinery. This
+mirrors how Claude Code's own `--fork-session`/`/fork` is already
+surfaced to
 hooks via `source: "fork"` [code.claude.com/docs/en/hooks.md, p.36] --
 a fork is treated as a new delegation, never a silent identity swap.
 
-**Confidence: high** on all three legs of this FAQ -- the HTTP
-endpoint and the spec's fork-copies-history claim (both directly
-sourced, full documents read), and now also the session-lineage lookup
-mechanism itself: `context.data.session.root`/`.family` are a CLI
-plugin's direct hierarchy-access API, confirmed by direct source read,
-and this makes the lineage lookup independent of whatever fields a
-`session.created` event's payload happens to carry -- the open
-question in round 1 (whether the event payload exposes parentage
-field-by-field) no longer needs resolving for this specific lineage-
-lookup claim, because `root`/`family` reach the hierarchy directly
-rather than through the event payload shape. The event payload's exact
-field set remains unconfirmed for other purposes (see "What I could
-not verify" below), but not for this one.
+**Confidence: high** on every leg of this FAQ as now written -- the
+HTTP endpoint and the spec's fork-copies-history claim (both directly
+sourced, full documents read), and the `SessionEvent.Forked` event's
+own `parentID` field, confirmed by direct read of
+`packages/core/src/session.ts`'s actual `bus.publish` call -- the
+highest-confidence source available for this specific claim, since it
+is the implementation itself, not a documentation page describing it.
+The open question in an earlier round (whether a GENERIC
+`session.created` event's payload exposes parentage field-by-field) is
+moot for this FAQ now: forking fires its own dedicated event with
+`parentID` built in, so there is no generic-payload ambiguity to
+resolve for the fork-lineage case specifically. The
+`context.data.session.root`/`.family` CLI-plugin lookups remain a
+separately useful, independently confirmed general-purpose mechanism
+(see the restart FAQ below), just not the primary one for fork
+handling.
 
 ### What happens on ethos service restart?
 
@@ -163,11 +214,12 @@ Two different processes can restart, and they fail differently.
 
 **Ethos's own MCP server restarting** is low-risk for this
 integration specifically, because the correlation state this
-integration introduces is a flat file under the per-worktree
-`.punt-labs/ethos/missions/<id>/` tree (the same place Claude Code
-dispatch already writes mission state), not an in-memory session
-object. A restarted ethos binary re-reads that file on its next tool
-call. The documented risk for ethos restarts is a *different* one,
+integration introduces is a flat file under the global,
+session-ID-keyed `$HOME/.punt-labs/ethos/sessions/<session-id>/` tree
+(`internal/mission/active.go`'s `ActiveMissionPath` -- the same
+location, not a per-worktree one, Claude Code dispatch already writes
+mission state to today), not an in-memory session object. A restarted
+ethos binary re-reads that file on its next tool call. The documented risk for ethos restarts is a *different* one,
 already known and unrelated to OpenCode: reinstalling ethos mid-session
 does not restart an already-running MCP server, so a stale binary can
 keep answering until the server is manually reconnected (this repo's
@@ -237,24 +289,36 @@ requiring a `projectID`)
 [github.com/anomalyco/opencode `services/www/src/docs/content/build/plugins/migrate-v1.mdx`
 for the `directory` -> `ctx.location.directory` rename;
 `services/www/src/docs/content/build/plugins/index.mdx` for the
-`ctx.worktree.*` domain API shape; both confirmed via context7]. For
-this integration's correlation-keying purpose, `ctx.location.directory`
-is sufficient on its own: a git worktree checkout *is* a directory, so
-the working directory the plugin already reads from `ctx.location`
-disambiguates one worktree from another without needing the removed
-flat field. This repo's own worktree convention
+`ctx.worktree.*` domain API shape; both confirmed via context7].
+
+**Open question, corrected here -- an earlier draft asserted this was
+settled when it was not.** `ctx.location` is the V2 plugin's own
+load-time location, documented as a property of the PLUGIN INSTANCE,
+not necessarily of every session or event that instance later
+receives. If one running plugin instance can observe lifecycle events
+for a session belonging to a DIFFERENT checkout than the one it was
+loaded in, keying a correlation write by `ctx.location.directory`
+could silently file that session's state under the WRONG worktree.
+Whether that cross-checkout scenario is actually reachable in
+practice -- and, if so, what field (if any) identifies an EVENT's own
+affected session's location independently of the plugin's load-time
+`ctx.location` -- is not resolved by anything read for this document
+and is left as an explicit prerequisite for the next pipeline stage's
+design, not assumed settled here.
+
+This integration's correlation state also does NOT live in a
+per-worktree file, correcting an earlier draft's claim: it lives under
+the user-global, session-ID-keyed
+`$HOME/.punt-labs/ethos/sessions/<session-id>/` tree (see the restart
+FAQ above), so worktree independence for OpenCode -- like for Claude
+Code today -- is a property of each harness correctly keying a
+DISTINCT session identity per worktree's work, not of the correlation
+file's own location on disk. This repo's own worktree convention
 (`.claude/worktrees/agent-<id>` per in-flight agent, documented in the
-org `CLAUDE.md`) already means multiple ethos-bound missions can be in
-flight in separate worktrees of the same repo simultaneously, today,
-under Claude Code. Since `.punt-labs/ethos/` is a tracked directory
-present identically inside every worktree, the correlation file this
-integration introduces lands inside the already-per-worktree
-`.punt-labs/ethos/missions/<id>/` tree -- the existing layout
-disambiguates concurrent worktrees for free. No new multi-worktree
-design is needed; the plugin keys its write by
-`(ctx.location.directory, OpenCode Session ID)`, and the commit-msg hook
-that consumes it already runs with a specific worktree's `$GIT_DIR` in
-scope.
+org `CLAUDE.md`) already demonstrates multiple ethos-bound missions
+running in separate worktrees of the same repo simultaneously, today,
+under Claude Code, via exactly this mechanism -- distinct session IDs,
+not distinct storage locations.
 
 ### Why a bundled plugin instead of a standalone adapter or config-only wiring?
 
@@ -303,6 +367,17 @@ long-running process, and it follows the same "deposit + marker +
 (vox, z-spec, quarry) already uses, so a developer who has enabled any
 one of those tools in this repo already knows the shape of what
 `ethos enable --opencode` does.
+
+**A known downstream adoption blocker, disclosed here rather than
+discovered later:** `punt-labs/points` currently requires every active
+OpenCode plugin to be built-in, so enabling this integration there as
+written would fail that repo's own `make doctor` check, and registering
+it through `opencode.json` would fail its `make check-dev`. This is a
+real cross-repo policy conflict, not a defect in THIS recommendation --
+closing it requires `points` to explicitly review and admit this one
+reviewed, pinned ethos plugin without opening its built-in-only policy
+to arbitrary external plugins, a decision that repo owns and this
+document does not make on its behalf.
 
 **This also matches the in-house precedent for "one control plane,
 many harnesses."** `model-provider`/Bifrost already routes model
@@ -362,17 +437,22 @@ transferable to this problem:
    already does exactly this pattern for Claude Code today: a
    commit-msg hook stamps trailers derived from session state at
    commit time, and `ethos audit show --delegation <id>` reconstructs
-   the full trail from that trailer [this repo's `docs/MODERNIZATION_CASE_STUDY.tex`,
-   "The audit chain" section, quarry-indexed: "commits carry `Mission:`
-   and `Delegation:` trailers. The intended reconstruction is `git
-   blame` -> commit -> trailer -> contract -> prompt -> full audit
-   trail"]. This is not a precedent from outside the org -- it is the
-   exact mechanism this PR/FAQ proposes extending to a second harness,
-   and the same case-study doc records, candidly, that the mechanism
-   silently failed once already (a session-binding bug meant the hook
-   "stamped nothing" the first time it was relied on) -- the precise
-   failure mode this integration has to design against for OpenCode
-   from day one, not discover in production a second time.
+   the full trail from that trailer. This is not a precedent from
+   outside the org -- it is the exact mechanism this PR/FAQ proposes
+   extending to a second harness. **Corrected here:** an earlier draft
+   cited this history to `docs/MODERNIZATION_CASE_STUDY.tex`, a file
+   confirmed, by direct check, NOT to exist anywhere in this
+   repository. The real, verifiable incident is commit `d3ba3c4` (bead
+   `ethos-jawp`, PR #412): the commit-msg hook's fallback keyed trailers
+   off the delegation-binding sidecar, which was never cleared, so a
+   STALE binding from an earlier session tagged unrelated commits with
+   the WRONG mission -- a mis-attributed trailer, not a silently
+   missing one as an earlier draft of this document characterized it.
+   The root cause is the same class this integration has to design
+   against regardless of which direction the failure points: a sidecar
+   that outlives the session state it was written for, discovered in
+   production once already and not something to discover again in a
+   second harness before fixing it formally the first time.
 
 A fourth, narrower precedent directly informed the plugin-vs-adapter-
 vs-config decision above: the in-house `model-provider`/Bifrost tool,
@@ -394,8 +474,10 @@ config surface rather than requiring a shared daemon all four run
   17 pages); the `session.fork` HTTP endpoint's `before`-message-ID
   contract change (`V2_HTTP_API_AUDIT.md`, same repo/branch, fetched
   directly and read in full, 28 pages); ethos's own existing
-  `Mission:`/`Delegation:` trailer mechanism and its prior silent
-  failure (`docs/MODERNIZATION_CASE_STUDY.tex`, this repo); the W3C
+  `Mission:`/`Delegation:` trailer mechanism and its prior
+  mis-attribution incident (commit `d3ba3c4`, bead `ethos-jawp`, PR
+  #412 -- corrected from an earlier draft's citation to a file
+  confirmed not to exist in this repo); the W3C
   Trace Context precedent via Claude Code's own `TRACEPARENT`/
   `TRACESTATE` support; the SLSA provenance precedent; the CLI-plugin
   `context.data.session.{list,get,root,family,cost,status,sync,invalidate}`
