@@ -515,77 +515,74 @@ runs, exactly the shape `.tmp/migrate-v1.mdx:104-137`'s `"shell.env"` ->
 `ctx.shell.hook("create.before", ...)` migration example sets
 `event.env.COMPANY_ENV = "development"` for a shell command about to run.
 
-**The correlation gap this correction surfaces, stated plainly rather than
-assumed away.** `ShellCreateBefore`'s own field list —
-`command, cwd, timeout, shell, env` — confirmed identical on both copies of
-the reference material, carries **no `sessionID` field**. `ToolExecuteBefore`
-does carry `sessionID` as a required field (§1.2 point 2, the companion
-research's direct source read), but that is a *different* hook, firing for
-a *different* event type, and this design does not have confirmed evidence
-that the two are paired per-invocation (e.g., that a `create.before` event
-for a git-commit shell is preceded, synchronously and without
-interleaving, by the `execute.before` event for the tool call that spawned
-it, with no other session's tool call or shell command able to land in
-between). Two shapes this gap could resolve to, neither confirmed by
-anything read for this design:
+**The correlation gap this correction surfaces, and the confirmed window in
+which it closes (round 3 correction).** `ShellCreateBefore`'s own field
+list — `command, cwd, timeout, shell, env` — confirmed identical on both
+copies of the reference material, carries **no `sessionID` field** in the
+current OpenCode V2 dev-branch API. This is a real gap as that API stands
+today, not a speculative one, and this design does not claim the gap is
+closed for the dev-branch API as currently shipped.
 
-- OpenCode could serialize shell/tool execution such that there is always
-  exactly one outstanding session's commands in flight at the
-  plugin-process level, in which case a plugin-local "most recently seen
-  `execute.before` sessionID" variable, read by the next `create.before`
-  handler, would correctly correlate every shell spawn with its issuing
-  session.
-- OpenCode could run tool calls and shell spawns from multiple concurrent
-  sessions interleaved within one plugin process (the headless `opencode
-  serve` deployment this design targets explicitly supports multiple
-  simultaneous sessions, per §2's own session-fork discussion), in which
-  case the "most recently seen" variable above would intermittently carry
-  a *different* session's ID into `ETHOS_SESSION` — precisely the
-  plausible-but-wrong session-attribution failure mode `resolve.SessionID`'s
-  own design principle (resolve.go:278-310, cited in §4's rejected
-  alternative A) exists to prevent, reopened through a new door rather than
-  closed.
+It is, however, a narrow, time-bound window with a known closing
+condition — not an open design question this document defers to a future
+round's judgment call, and not something that needs a plugin-local
+correlation workaround at all. A direct `WebFetch` of
+`github.com/anomalyco/opencode/pull/54842` ("feat(plugin): shell hook
+command source and TUI link open hook", OPEN/unmerged as of this check,
+opened 2026-10-12) confirms it adds `source?: ShellCreateSource` to
+`ShellCreateBefore`, where `ShellCreateSource = { type: "tool" | "user",
+sessionID: Session.ID }`. Once PR #54842 merges, `ShellCreateBefore`
+carries its own `sessionID` directly on every firing whose `source.type` is
+`"tool"` — the plugin reads `event.source.sessionID` and sets
+`event.env.ETHOS_SESSION` from it directly, with no plugin-local state, no
+"most recently seen" proxy, and no ambiguity about which of several
+concurrently running sessions issued the shell spawn. (`ToolExecuteBefore`
+carries `sessionID` as a required field today, confirmed directly against
+`/anomalyco/opencode`'s dev branch, `packages/plugin/src/effect/tool.ts` —
+but that is a different hook, for a different event type, and is not the
+mechanism #54842 adds to `ShellCreateBefore` itself.) The one condition the
+implementation stage must check before relying on `ShellCreateBefore
+.source.sessionID` is whether #54842 has merged to the branch OpenCode V2
+ships from — the field does not exist before that merge, and this design
+targets OpenCode V2 exclusively (per the spec's own "Scope" and "Harness
+Instantiation" sections), so no earlier-API fallback is in scope here.
 
-This design does **not** adopt the "most recently seen" proxy, because its
-correctness depends entirely on which of the two shapes above is true, and
-neither is confirmed. **This is named here as an open item a future
-implementation round must resolve by direct observation against a running
-`opencode serve` instance** — specifically, whether concurrent sessions can
-have interleaved `execute.before`/`create.before` firings in one plugin
-process, and if so, what correlating signal (if any) ties a given
-`create.before` event back to the session that issued it. Absent a
-confirmed answer, the only behavior this design can specify without
-guessing is: **set `ETHOS_SESSION` only when the plugin can establish, with
-no ambiguity, which single session is responsible for the shell command
-about to run** (e.g., a deployment mode confirmed to run one session at a
-time per plugin process) — and otherwise leave `event.env` untouched for
-that invocation, which degrades to the existing silent "no trailer" case
-(§4's first table row's negation) rather than risking a wrong one. This is
-the same fail-closed discipline §4.1 already states for fork-miss
-reconciliation, applied here to a second place this design could have been
-tempted to guess.
+Until #54842 merges, this design does not adopt a guessing mechanism to
+close the gap early. The only behavior it specifies for that window is the
+same fail-closed rule round 2 already stated: **set `ETHOS_SESSION` only
+when the plugin can establish, with no ambiguity, which single session is
+responsible for the shell command about to run** (e.g., a deployment mode
+confirmed to run one session at a time per plugin process) — and otherwise
+leave `event.env` untouched for that invocation, which degrades to the
+existing silent "no trailer" case (§4's first table row's negation) rather
+than risking a wrong one. This is the same fail-closed discipline §4.1
+already states for fork-miss reconciliation, applied here to a second
+place this design could have been tempted to guess — now bounded to a
+window with a known closing condition (#54842's merge) rather than an
+open-ended one.
 
 ### 3.3 What this does NOT cover — stated plainly
 
-- **The sessionID-correlation gap named in §3.2 is the primary open item
-  this design inherits from this round's correction**, superseding round
-  1's narrower framing of the same general concern. Round 1 asked only
-  whether a human typing `git commit` directly into an OpenCode TUI
-  terminal goes through the same hook as an agent-issued tool call
-  (`docs/prfaq-opencode-integration.md` lines 143-151) — still itself
-  unconfirmed by any source read for this design — but that question
-  presupposed a `create.before` event, once observed, could always be
-  attributed to the correct session. §3.2 shows that presupposition itself
-  needs confirming first: `.tmp/plugins-index.mdx:1694-1719`'s
-  `ShellCreateBefore` documents that the hook *exists* and *can* mutate
-  `env`; it documents neither every code path that constructs a
-  `ShellCreateBefore` event nor any field correlating that event to the
-  session responsible for it. A future implementation round must confirm
-  both questions directly against a running `opencode serve` instance (the
+- **The sessionID-correlation gap named in §3.2 is NOT an open design risk
+  requiring a plugin-local correlation workaround (round 3 correction).**
+  It is a narrow, time-bound window, real today against the current
+  OpenCode V2 dev-branch API, that closes once
+  `github.com/anomalyco/opencode/pull/54842` merges and
+  `ShellCreateBefore` starts carrying `source.sessionID` directly (§3.2).
+  The implementation stage's one job here is to check whether #54842 has
+  merged before relying on that field — not to design around an
+  unresolved ambiguity. Round 1 separately asked whether a human typing
+  `git commit` directly into an OpenCode TUI terminal goes through the
+  same `create.before` hook as an agent-issued shell spawn
+  (`docs/prfaq-opencode-integration.md` lines 143-151) — that question is
+  distinct from the sessionID-correlation gap and remains unconfirmed by
+  any source read for this design. A future implementation round must
+  confirm it directly against a running `opencode serve` instance (the
   same verification gap the companion research names for the
   restart-liveness question, lines 456-463) before this propagation path
-  can be trusted for any commit path OpenCode supports, agent-issued or
-  human-typed alike.
+  can be trusted for the human-typed commit path specifically; the
+  agent-issued tool-call path's sessionID source is now confirmed per
+  §3.2, pending only #54842's merge.
 
 ## 4. Fail-closed behavior for ambiguous attribution
 
