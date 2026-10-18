@@ -15,6 +15,25 @@ Nothing below is asserted from training-data memory of OpenCode; where the
 reference material did not answer a question, this document says so and
 states what a future implementation round must confirm, rather than guessing.
 
+**Round 2 corrections (mission `m-2026-10-18-008`, PR #536):** three
+independent automated reviewers converged on five defects in round 1; the
+leader personally verified the first three against real source before
+routing this round. Fixed here: (1) §2.1 now registers an OpenCode
+session's roster before any `mission claim` attempt, including
+plugin-restart reconciliation (§2.1.1); (2) §1.2, §3.2, §3.3, and DESIGN.md
+now correctly attribute `ETHOS_SESSION` propagation to `ctx.shell.hook
+("create.before", ...)`, not `ctx.tool.hook("execute.before", ...)`, and
+disclose the resulting sessionID-correlation gap rather than asserting it
+away; (3) §2.3.2 adds a `Roster.ParentSession` field so `claim-forked`'s
+ancestor-set guard verifies a caller-supplied witness against Go-stored
+lineage instead of trusting it outright, and §5 specifies that
+`claim-forked` also writes the matching `DelegationBinding` atomically with
+the claim (finding 5). §6.1 adds a confirmed (not speculative) cross-repo
+compatibility question about `punt-labs/points`'s `make doctor` gate.
+Nothing else in §§1-4 or §7 was re-litigated; those sections were
+independently verified accurate by the leader before this round was
+dispatched.
+
 ## 1. Plugin shape and lifecycle hooks
 
 ### 1.1 Entry point
@@ -49,7 +68,8 @@ up automatically").
 
 ### 1.2 Hooks actually registered
 
-Three, no more:
+Four, no more — corrected in this round from the round-1 count of three,
+which conflated two distinct hook domains (see the correction below):
 
 1. **`ctx.event.subscribe({ signal })`**, consumed with `for await`
    (`.tmp/migrate-v1.mdx:296-311`; `.tmp/plugins-index.mdx:1303-1311`). This
@@ -63,19 +83,37 @@ Three, no more:
 2. **`ctx.tool.hook("execute.before", callback)`**
    (`.tmp/plugins-index.mdx:1721-1729`, `.tmp/effect.mdx:1453-1467`). This is
    the *second*, trigger-independent path for `ForkSession` /
-   `AllocateDelegationForkPropagated` (§2.3) and the sole mechanism for
-   §3's `ETHOS_SESSION` propagation into spawned subprocesses. Every tool
-   call carries the firing session's own `sessionID` as a required field —
-   confirmed via the companion research's direct read of
-   `packages/plugin/src/effect/tool.ts` (`docs/prfaq-opencode-integration.md`
-   line 255-256: "the `execute.before` event carries `sessionID` as a
-   required field"); this mission's own `.tmp/` material does not carry
-   that file, so this one field claim is attributed to the companion
-   artifact rather than re-derived here, exactly as the spec's own
-   `AllocateDelegationForkPropagated` discussion does for the same fact
-   (spec §"Fork event missed during plugin disconnection").
+   `AllocateDelegationForkPropagated` (§2.3). Every tool call carries the
+   firing session's own `sessionID` as a required field — confirmed via the
+   companion research's direct read of `packages/plugin/src/effect/tool.ts`
+   (`docs/prfaq-opencode-integration.md` line 255-256: "the `execute.before`
+   event carries `sessionID` as a required field"); this mission's own
+   `.tmp/` material does not carry that file, so this one field claim is
+   attributed to the companion artifact rather than re-derived here, exactly
+   as the spec's own `AllocateDelegationForkPropagated` discussion does for
+   the same fact (spec §"Fork event missed during plugin disconnection").
+   **Correction (round 2, finding 2):** round 1 additionally claimed this
+   hook as "the sole mechanism for §3's `ETHOS_SESSION` propagation into
+   spawned subprocesses," citing an `event.env` field on `ToolExecuteBefore`.
+   That field does not exist. Direct read of both `.tmp/effect.mdx:1484-1500`
+   and `.tmp/plugins-index.mdx:1740-1754`'s `ToolHooks`/`ToolExecuteBefore`
+   reference blocks shows `execute.before`'s event carries no `env` field at
+   all — only `sessionID`-bearing tool identity and input/output. The `env`
+   field belongs to a different hook domain entirely: `ShellHooks`/
+   `ShellCreateBefore` (`.tmp/effect.mdx:1436-1451`,
+   `.tmp/plugins-index.mdx:1708-1719`), registered separately as
+   `ctx.shell.hook("create.before", ...)`. §3.2 below corrects the
+   propagation mechanism accordingly.
 
-3. No `ctx.session.hook(...)` registration (prompt/context/compaction/etc.,
+3. **`ctx.shell.hook("create.before", callback)`**
+   (`.tmp/effect.mdx:1419-1451`, `.tmp/plugins-index.mdx:1694-1719`). This is
+   the mechanism §3.2 actually relies on for `ETHOS_SESSION` propagation —
+   `ShellCreateBefore`'s `env: Record<string, string | undefined>` field
+   (confirmed present on both reference copies) is the one place this
+   design's reference material confirms a plugin can mutate an outbound
+   shell's environment before it runs.
+
+4. No `ctx.session.hook(...)` registration (prompt/context/compaction/etc.,
    `.tmp/plugins-index.mdx:1336-1649`) is needed. Those hooks intercept
    model-call content; nothing in the Registry model reads or writes model
    input/output.
@@ -105,9 +143,12 @@ or a prompt already admitted into an existing session
 own non-goals section (§"The exact wire shape of an OpenCode plugin
 payload") already narrows the event surface to `Plugin.define`,
 `ctx.event.subscribe`, and `session.created`; this design adds
-`ctx.tool.hook("execute.before", ...)` on top, grounded in the companion
-FAQ's own "fix does not need a second code path" argument
-(`docs/prfaq-opencode-integration.md` lines 250-289).
+`ctx.tool.hook("execute.before", ...)` for fork-miss reconciliation
+(§2.3) and `ctx.shell.hook("create.before", ...)` for `ETHOS_SESSION`
+propagation (§3.2) on top, the former grounded in the companion FAQ's own
+"fix does not need a second code path" argument
+(`docs/prfaq-opencode-integration.md` lines 250-289), the latter in
+§3.2's own confirmed `ShellCreateBefore.env` field.
 
 ## 2. Session ID mapping: OpenCode parent/child -> Ethos Registry
 
@@ -117,24 +158,83 @@ On `event.type === "session.created"` with no `parentID` on the payload
 (`.tmp/session-event.ts:48-67`'s `Created` schema: `sessionID`, `projectID`,
 `location`, `parentID` *optional*), the plugin:
 
-1. Checks whether any session in this OpenCode instance already holds an
+1. **Registers the OpenCode session with ethos's own roster first, before
+   any claim is attempted.** `ethos session create --session <id>
+   --root-id <id> --primary-id <id>` (`cmd/ethos/session.go:684-692`'s
+   `runSessionCreate`, wrapping `session.Store.Create`,
+   `internal/session/store.go:49`) writes the session's roster file —
+   the same file `RefuseIfSessionGone`
+   (`internal/hook/pretooluse_dispatch.go:494`) checks for before letting
+   any sidecar write proceed. Without this step, every later `ethos
+   mission claim <id>` call against the brand-new OpenCode session fails:
+   `RefuseIfSessionGone` calls `ss.Load(sessionID)`
+   (`internal/session/store.go`'s `Load`), which errors `fs.ErrNotExist`
+   for a session with no roster file, and `runMissionClaim`
+   (`cmd/ethos/mission.go:2076-2129`) propagates that error outright — a
+   brand-new OpenCode session, with no roster entry of its own, has
+   nothing for `Load` to find. The root and primary participant IDs are
+   both the OpenCode `sessionID` itself (there is no separate
+   human/agent split to preserve the way Claude Code's `userID`/
+   `claudePID` split does — `internal/hook/session_start.go`'s
+   `createSessionRoster` — because OpenCode's plugin has no equivalent
+   two-process boundary to record); `ss.Create`'s own de-duplication
+   (`internal/session/store.go:76-82`'s comment on "a solo session where
+   the agent is the human") collapses the two rows into one roster entry
+   when they match, exactly as it already does for that case.
+2. Checks whether any session in this OpenCode instance already holds an
    active mission claim relevant to the new session (the plugin's own
    bookkeeping of "the session I'm meant to attribute this claim to" —
    see §2.4 for how the plugin itself learns which mission to claim).
-2. If so, calls `ethos mission claim <id>` — the existing Tier B
+3. If so, calls `ethos mission claim <id>` — the existing Tier B
    primitive (`cmd/ethos/mission.go:2076-2129`'s `runMissionClaim`) — as a
    subprocess, with `ETHOS_SESSION=<opencode-session-id>` set in that
    subprocess's own environment so `resolve.SessionID` resolves to the
    OpenCode session, not whatever ambient session (if any) the plugin's
-   own host process happens to carry.
+   own host process happens to carry. By this point the session's roster
+   entry from step 1 already exists, so `RefuseIfSessionGone` passes.
 
 This instantiates `JoinRootSession` (spec §5.1): `rec?.parent = noParent`,
-`rec?.root = sid?`. No ethos-side mechanism is new here — `ClaimMission`
-(spec §5.3) already models `ethos mission claim` for Claude Code; OpenCode
-reuses the identical primitive, the harness-neutral seam the spec's own
-`ETHOS_SESSION` finding establishes (spec §"Scope": "`ETHOS_SESSION` is
-ALREADY a harness-neutral integration seam, with zero new ethos-side
-mechanism needed for OpenCode to use it").
+`rec?.root = sid?`. The claim act itself is no new ethos-side mechanism —
+`ClaimMission` (spec §5.3) already models `ethos mission claim` for Claude
+Code; OpenCode reuses the identical primitive, the harness-neutral seam the
+spec's own `ETHOS_SESSION` finding establishes (spec §"Scope":
+"`ETHOS_SESSION` is ALREADY a harness-neutral integration seam, with zero
+new ethos-side mechanism needed for OpenCode to use it"). What *is* new,
+corrected in this round, is step 1: the roster-registration call the claim
+depends on, which round 1 omitted — `session create` is an existing,
+`Hidden: true` CLI primitive (`cmd/ethos/session.go:79`), not new Go
+surface, so §5's "what is genuinely new ethos-side code" enumeration is
+unaffected by this fix.
+
+#### 2.1.1 Reconciling an already-registered session after a plugin restart
+
+A plugin process restart (OpenCode server restart, plugin reload) does not
+invalidate any roster entry §2.1 already wrote — rosters are files under
+`.punt-labs/ethos/sessions/`, independent of the plugin process's own
+lifetime. On restart, the plugin's `setup`/`effect` function re-runs from
+scratch and re-subscribes via `ctx.event.subscribe()` (§1.1), but
+`session.created` fires exactly once per session, at creation — a restarted
+plugin does not receive it again for a session that already exists. The
+reconciliation the plugin needs on restart is therefore not "did this
+session's `session.created` already pass through me" (unanswerable from
+the event stream alone) but "does this session already have a roster
+entry," answered directly and idempotently: call `ethos session create`
+for every currently-live OpenCode session the plugin can enumerate via
+`ctx.session.list(...)` (`.tmp/effect.mdx:833-837`'s paginated
+`ctx.session.list({ directory, limit, cursor })`) at `setup` time, before
+resubscribing to new events. `ss.Create`'s own `writeRoster`
+(`internal/session/store.go:858-877`) always overwrites the roster file
+atomically (temp file + rename, no `O_EXCL` check), so re-running `session
+create` for a session that is already registered is a safe no-op on the
+roster shape — it rewrites the same root/primary participant rows rather
+than erroring on an existing file. This mirrors `ClearActiveMission`'s own
+stated idempotence principle (`internal/mission/active.go`, "clearing an
+already-clear slot is a no-op") applied to the create path instead of the
+clear path. A session whose claim was already written (§2.4) is untouched
+by this reconciliation step — `session create` touches only the roster
+file, never the active-mission or delegation-binding sidecars — so
+re-registering a session's roster on plugin restart cannot clobber a claim
+already in place.
 
 ### 2.2 ForkSession
 
@@ -256,6 +356,66 @@ reason the spec bounds its own comprehension — to guarantee termination
 against a malformed or adversarial chain, not because deep fork lineages
 are expected to be common.
 
+#### 2.3.2 Verifying the witness server-side, not trusting the plugin's claim
+
+**Correction (round 2, finding 3).** Round 1 proposed `ethos mission
+claim-forked --session <child> --witness <parent>` (§5, point 1) performing
+the ancestor-set guard "server side in Go." It did not specify what
+Go-owned data that guard reads. `internal/session/session.go`'s
+`Participant.Parent` (`session.go:10`) is a *within-roster* link — which
+participant, inside one session's own roster, joined on whose behalf
+(`internal/hook/session_start.go:184`'s `root`/`primary` pair, where
+`primary.Parent = root.AgentID`) — not a link between two different
+sessions' rosters. Confirmed by direct read: nothing else in
+`internal/session/` or `internal/mission/` stores session-to-session
+parentage. Without that data, a `claim-forked` call's `--witness` flag is
+exactly the "caller-supplied, trusted outright" shape this spec's own
+`ForkNeverInheritsClaim` theorem (§7.1, alternative A) and round-4 guard
+exist to prevent — a malicious or buggy plugin could name any session as
+`--witness` and the guard would have nothing server-side to check it
+against.
+
+The fix is a new field on the *session* roster, not the participant:
+`Roster.ParentSession string` — the OpenCode `sessionID` this session was
+forked from, set once, at roster-creation time, and never mutated
+afterward. Two write paths populate it:
+
+- **`ethos session create`** (§2.1) gains an optional `--parent-session
+  <id>` flag. On `ForkSession` (§2.2), the plugin passes the forking
+  session's own `parentID` (confirmed directly on the wire,
+  `.tmp/session-event.ts:187-201`/`.tmp/api.ts:559-571`'s
+  `SessionEvent.Forked` payload) as this flag's value when it first
+  registers the child session's roster — the same roster-registration step
+  §2.1.1 already requires before any claim.
+- A root session (§2.1, no `parentID` on its `session.created` payload) is
+  created with `ParentSession` left empty — there is nothing to record, and
+  an empty value reads unambiguously as "this session has no ethos-known
+  parent," matching the spec's own `noParent` case (spec §5.1).
+
+`claim-forked --session <child> --witness <parent>`'s guard then resolves
+`witness?`'s ancestor-set membership the same way §2.3.1's Go walk already
+does — `maxWalkDepth`-bounded, one step at a time — except each step now
+reads `ParentSession` off the *Go-stored* roster (`ss.Load(sessionID)
+.ParentSession`) instead of trusting a caller-supplied chain: starting
+from `child`, follow `ParentSession` upward, checking at each hop whether
+the current session ID equals `witness`, until either a match is found
+(the guard passes), the chain terminates at an empty `ParentSession` (no
+match found anywhere in the ancestor set — the guard refuses), or the depth
+cap is hit (refuse, fail closed, same discipline as §2.3.1). The plugin's
+own `--witness` argument is now merely *which* session to check for —
+`claim-forked` itself walks the lineage from data it alone wrote via
+`session create`, so a plugin that lies about `--witness` simply gets a
+refusal: the walk from `child` will not reach a session the plugin never
+registered as an ancestor, regardless of what the flag claims.
+
+This is additive to `Roster`'s existing fields (`internal/session/session.go`'s
+struct, listed in `session.go:25-32`) and requires no change to any
+existing `Create`/`CreateInCheckout` caller that does not pass
+`--parent-session` — an empty string is the correct default for every
+current caller (Claude Code's SessionStart hook, `ethos session create`
+run without the new flag), none of which have an OpenCode-style fork
+concept to record.
+
 ### 2.4 How the plugin itself learns "which mission"
 
 Neither `JoinRootSession`/`ClaimMission` (§2.1) nor the fork-propagation
@@ -338,53 +498,94 @@ plugin has not wired up (§3.3).
 
 ### 3.2 Propagating `ETHOS_SESSION` into the committing shell
 
-The committing process is typically a shell OpenCode spawns to run a git
-command (via its own shell-execution path, `ctx.shell.hook("create.before",
-...)`'s own domain — `.tmp/plugins-index.mdx:1694-1719`) or the `bash`-style
-tool OpenCode's agent loop invokes directly. Both are reachable from the
-*same* `ctx.tool.hook("execute.before", ...)` hook §2.3 already registers
-for fork-miss reconciliation — confirmed to carry the firing session's own
-`sessionID` as a required field (`docs/prfaq-opencode-integration.md` line
-255-256). On every `execute.before` firing, the plugin sets
-`ETHOS_SESSION=<sessionID>` into the tool's own environment before
-execution, exactly the shape `.tmp/migrate-v1.mdx:104-137`'s
-`"shell.env"` -> `ctx.shell.hook("create.before", ...)` migration example
-sets `event.env.COMPANY_ENV` for a shell command about to run
-(`.tmp/plugins-index.mdx:1694-1719`'s `ShellCreateBefore` interface
-confirms an `env: Record<string, string | undefined>` field the hook can
-mutate).
+**Correction (round 2, finding 2).** Round 1 attributed this propagation to
+`ctx.tool.hook("execute.before", ...)`, claiming its event carries a
+mutable `env` field. It does not. Direct read of both copies of the
+reference material confirms `ToolExecuteBefore`
+(`.tmp/effect.mdx:1484-1500`, `.tmp/plugins-index.mdx:1740-1754`) has no
+`env` field at all. The hook that *does* expose a mutable environment is a
+different one, on a different domain: `ctx.shell.hook("create.before",
+...)`'s `ShellCreateBefore` event
+(`.tmp/effect.mdx:1436-1442`, `.tmp/plugins-index.mdx:1712-1718`) —
+`{ command, cwd, timeout, shell, env: Record<string, string |
+undefined> }`, confirmed identical on both copies. That is the mechanism
+this design now specifies: on every `create.before` firing, the plugin
+sets `event.env.ETHOS_SESSION = <sessionID>` before the shell command
+runs, exactly the shape `.tmp/migrate-v1.mdx:104-137`'s `"shell.env"` ->
+`ctx.shell.hook("create.before", ...)` migration example sets
+`event.env.COMPANY_ENV = "development"` for a shell command about to run.
 
-This is the single environment-propagation mechanism this design relies
-on. No new git-level hook, no change to `commit-msg.sh`
-(`plugin/hooks/commit-msg.sh`), no change to `ethos hook commit-trailers`'s
-own Go code. The commit-msg hook already shells to `ethos hook
-commit-trailers` unconditionally when `MISSION_ID`/`DELEGATION_ID` are not
-already in env (`commit-msg.sh:55-89`); that subprocess inherits whatever
-`ETHOS_SESSION` the committing shell's own environment carries, by
-ordinary process inheritance, with no OpenCode-awareness in the hook
-script at all — the harness-blindness the spec's own `WorktreeIndependence`
-and non-goals sections already rely on (spec §"Non-goals": "Changing
-Claude Code's existing behavior").
+**The correlation gap this correction surfaces, stated plainly rather than
+assumed away.** `ShellCreateBefore`'s own field list —
+`command, cwd, timeout, shell, env` — confirmed identical on both copies of
+the reference material, carries **no `sessionID` field**. `ToolExecuteBefore`
+does carry `sessionID` as a required field (§1.2 point 2, the companion
+research's direct source read), but that is a *different* hook, firing for
+a *different* event type, and this design does not have confirmed evidence
+that the two are paired per-invocation (e.g., that a `create.before` event
+for a git-commit shell is preceded, synchronously and without
+interleaving, by the `execute.before` event for the tool call that spawned
+it, with no other session's tool call or shell command able to land in
+between). Two shapes this gap could resolve to, neither confirmed by
+anything read for this design:
+
+- OpenCode could serialize shell/tool execution such that there is always
+  exactly one outstanding session's commands in flight at the
+  plugin-process level, in which case a plugin-local "most recently seen
+  `execute.before` sessionID" variable, read by the next `create.before`
+  handler, would correctly correlate every shell spawn with its issuing
+  session.
+- OpenCode could run tool calls and shell spawns from multiple concurrent
+  sessions interleaved within one plugin process (the headless `opencode
+  serve` deployment this design targets explicitly supports multiple
+  simultaneous sessions, per §2's own session-fork discussion), in which
+  case the "most recently seen" variable above would intermittently carry
+  a *different* session's ID into `ETHOS_SESSION` — precisely the
+  plausible-but-wrong session-attribution failure mode `resolve.SessionID`'s
+  own design principle (resolve.go:278-310, cited in §4's rejected
+  alternative A) exists to prevent, reopened through a new door rather than
+  closed.
+
+This design does **not** adopt the "most recently seen" proxy, because its
+correctness depends entirely on which of the two shapes above is true, and
+neither is confirmed. **This is named here as an open item a future
+implementation round must resolve by direct observation against a running
+`opencode serve` instance** — specifically, whether concurrent sessions can
+have interleaved `execute.before`/`create.before` firings in one plugin
+process, and if so, what correlating signal (if any) ties a given
+`create.before` event back to the session that issued it. Absent a
+confirmed answer, the only behavior this design can specify without
+guessing is: **set `ETHOS_SESSION` only when the plugin can establish, with
+no ambiguity, which single session is responsible for the shell command
+about to run** (e.g., a deployment mode confirmed to run one session at a
+time per plugin process) — and otherwise leave `event.env` untouched for
+that invocation, which degrades to the existing silent "no trailer" case
+(§4's first table row's negation) rather than risking a wrong one. This is
+the same fail-closed discipline §4.1 already states for fork-miss
+reconciliation, applied here to a second place this design could have been
+tempted to guess.
 
 ### 3.3 What this does NOT cover — stated plainly
 
-Confirmed as an open item by the companion research
-(`docs/prfaq-opencode-integration.md` lines 143-151) and inherited here
-rather than silently resolved: whether OpenCode's own process model lets a
-plugin's `execute.before` mutation of `event.env` actually reach a shell
-OpenCode spawns for a user-interactive terminal session (as opposed to a
-tool call OpenCode's own agent loop issues) is **not confirmed** by any
-source this design has read. `.tmp/plugins-index.mdx:1694-1719`'s
-`ShellCreateBefore` documents the hook *exists* and *can* mutate `env`; it
-does not document every code path that constructs a `ShellCreateBefore`
-event, so whether a human typing `git commit` directly into an OpenCode
-TUI terminal (as opposed to the agent issuing a `bash` tool call on the
-human's behalf) goes through this same hook is unverified. A future
-implementation round must confirm this directly against a running
-`opencode serve` instance (the same verification gap the companion
-research names for the restart-liveness question, lines 456-463) before
-this propagation path can be trusted for every commit path OpenCode
-supports — not merely the agent-issued-tool-call path, which is confirmed.
+- **The sessionID-correlation gap named in §3.2 is the primary open item
+  this design inherits from this round's correction**, superseding round
+  1's narrower framing of the same general concern. Round 1 asked only
+  whether a human typing `git commit` directly into an OpenCode TUI
+  terminal goes through the same hook as an agent-issued tool call
+  (`docs/prfaq-opencode-integration.md` lines 143-151) — still itself
+  unconfirmed by any source read for this design — but that question
+  presupposed a `create.before` event, once observed, could always be
+  attributed to the correct session. §3.2 shows that presupposition itself
+  needs confirming first: `.tmp/plugins-index.mdx:1694-1719`'s
+  `ShellCreateBefore` documents that the hook *exists* and *can* mutate
+  `env`; it documents neither every code path that constructs a
+  `ShellCreateBefore` event nor any field correlating that event to the
+  session responsible for it. A future implementation round must confirm
+  both questions directly against a running `opencode serve` instance (the
+  same verification gap the companion research names for the
+  restart-liveness question, lines 456-463) before this propagation path
+  can be trusted for any commit path OpenCode supports, agent-issued or
+  human-typed alike.
 
 ## 4. Fail-closed behavior for ambiguous attribution
 
@@ -470,19 +671,48 @@ ADR rather than introducing unreviewed here.
 This design intentionally minimizes new Go surface. Enumerated so the next
 pipeline stage's write-set is unambiguous:
 
-1. **A delegation-allocation CLI primitive for `AllocateDelegationForkPropagated`.**
+1. **A `--parent-session` flag on the existing `ethos session create`
+   primitive** (§2.3.2), writing a new `Roster.ParentSession` field. Not a
+   new command — `session create` already exists
+   (`cmd/ethos/session.go:79`, `Hidden: true`) — but the `ParentSession`
+   field itself is new on `internal/session/session.go`'s `Roster` struct,
+   and every reader that walks ancestor chains (§2.3.1's bounded walk,
+   `claim-forked`'s guard below) depends on it being populated correctly
+   by `ForkSession` (§2.2).
+2. **A delegation-allocation CLI primitive for `AllocateDelegationForkPropagated`.**
    `ethos mission claim` (§2.1, §2.4) already covers `JoinRootSession` +
    `ClaimMission`. Fork-propagation (§2.3) needs a new, narrow primitive —
    e.g. `ethos mission claim-forked --session <child> --witness <parent>`
-   — that performs the spec's own guard (ancestor-set membership, liveness,
-   `sid? not-in dom claims`) server-side in Go, not in the TypeScript plugin,
-   so the guard logic lives once, in the same package
-   (`internal/mission`) that already owns `WriteActiveMission` and
+   — that performs the spec's own guard (ancestor-set membership via the
+   `Roster.ParentSession` chain from point 1, not the caller's own
+   `--witness` claim; liveness; `sid? not-in dom claims`) server-side in Go,
+   not in the TypeScript plugin, so the guard logic lives once, in the same
+   package (`internal/mission`) that already owns `WriteActiveMission` and
    `WriteDelegationBinding`. The plugin's job is only to *call* this
    primitive with the right two session IDs, resolved per §2.2-2.3; it
-   does not reimplement the guard.
-2. **`.opencode/plugins/ethos.ts` (or an npm-published equivalent) —** the
-   TypeScript plugin itself, implementing §1-§3's three hooks, calling the
+   does not reimplement the guard. **Correction (round 2, finding 5):**
+   round 1 specified that this primitive "allocates a delegation... and
+   writes the child's own claim" but did not specify writing the matching
+   `DelegationBinding` sidecar. `WriteCommitTrailers`
+   (`internal/hook/commit_trailers.go:45-72`) emits a `DELEGATION_ID`
+   trailer only when `ReadDelegationBinding` (`internal/mission/active.go`)
+   finds a binding whose `MissionID` matches the active-mission claim
+   (`commit_trailers.go:65`'s `b.MissionID != missionID` gate) — a claim
+   with no matching binding produces a `Mission:` trailer but silently no
+   `Delegation:` trailer, the same shape Claude Code's own dispatch path
+   avoids by writing both atomically
+   (`internal/hook/pretooluse_dispatch.go:881-888`'s
+   `WriteDelegationBinding` call, alongside the claim and skeleton writes
+   in the same critical section). `claim-forked` must do the same: inside
+   the one `mission.WithDispatchPendingLock` critical section that writes
+   the child's `WriteActiveMission` claim, also call
+   `mission.WriteDelegationBinding(globalRoot, childSession,
+   mission.DelegationBinding{DelegationID: <newly allocated>, MissionID:
+   <witness's claimed mission>, ParentSession: witness})` — mirroring the
+   existing dispatch path's own three-write pattern (skeleton, claim,
+   binding) rather than writing the claim alone.
+3. **`.opencode/plugins/ethos.ts` (or an npm-published equivalent) —** the
+   TypeScript plugin itself, implementing §1-§3's four hooks, calling the
    existing `ethos` binary as a subprocess (the same pattern
    `commit-msg.sh` already uses to call `ethos hook commit-trailers`) for
    every state-mutating action. No direct file access to
@@ -490,12 +720,14 @@ pipeline stage's write-set is unambiguous:
    binary, so there is exactly one implementation of the Registry's
    locking and validation discipline (`AcquireDispatchPendingLock`,
    per-session flocks), not two.
-3. **`ethos enable --opencode`** (or equivalent flag/subcommand) deposits
+4. **`ethos enable --opencode`** (or equivalent flag/subcommand) deposits
    the plugin file and registers it in `opencode.json`'s `"plugins"` array
    (`.tmp/plugins-web.mdx:33-38`'s config shape), mirroring the existing
-   `vox enable`/`z-spec enable` per-repo deposit pattern.
+   `vox enable`/`z-spec enable` per-repo deposit pattern. **See §6.1 for an
+   open cross-repo compatibility question this specific mechanism raises
+   for at least one consuming repo.**
 
-None of 1-3 is implemented in this mission. They are named here so the
+None of 1-4 is implemented in this mission. They are named here so the
 mission contract for the implementation stage can cite this section
 directly as its write-set boundary.
 
@@ -510,6 +742,50 @@ identical STABLE-metadata/MUTABLE-PR-SHA boundary the spec itself draws
 (spec §"Non-goals": "Circuit's PR-watch workflow state... is explicitly a
 separate, GitHub-owned concern"). No file this design writes or reads is
 shared with, or interpreted by, Circuit's own tracking.
+
+### 6.1 Open cross-repo compatibility question: `ethos enable --opencode` vs. `punt-labs/points`'s `make doctor`
+
+**Finding 6 (Qodo), checked directly rather than accepted or rejected
+blind.** `punt-labs/points`'s `.bin/check-dev-config.sh` — the script
+`make check-dev` runs, which `make doctor` depends on
+(`points/Makefile:29-30`, `:104-105`: `doctor: build check-dev`) —
+contains this exact gate, confirmed by direct read:
+
+```bash
+if jq -e 'has("plugins") or (.experimental? != null)' opencode.json >/dev/null; then
+  fail 'project OpenCode plugins/experimental hooks require an explicit area-8 review'
+fi
+```
+
+(`points/.bin/check-dev-config.sh:16-18`.) This is a real, confirmed
+conflict, not a speculative one: §5 point 4's `ethos enable --opencode`
+registers this design's plugin in `opencode.json`'s `"plugins"` array
+(`.tmp/plugins-web.mdx:33-38`'s config shape) by design — that is the
+entire mechanism by which OpenCode discovers and loads
+`.opencode/plugins/ethos.ts` outside the per-repo `.opencode/plugins/`
+auto-discovery path (§1.1). Running `ethos enable --opencode` inside
+`punt-labs/points` would add a `"plugins"` key to that repo's
+`opencode.json`, which `check-dev-config.sh` fails unconditionally the
+moment the key exists at all, regardless of its contents or purpose. Any
+repo whose own dev-config gate enumerates `"plugins"` as requiring
+out-of-band review — `punt-labs/points` is the one confirmed instance, by
+direct read of its committed script, but the pattern could exist in other
+repos this design has not checked — would break `make doctor` the first
+time an operator ran `ethos enable --opencode` there, with no code change
+on the ethos side at fault.
+
+This is **not** resolved by this design, deliberately: whether to (a) make
+`ethos enable --opencode` idempotent against a pre-existing
+`check-dev-config.sh`-style gate (there is no general mechanism for ethos
+to know such a gate exists in an arbitrary consuming repo), (b) document
+`ethos enable --opencode` as requiring the "area-8 review"
+`points`'s own gate names before use in that repo, or (c) some other
+reconciliation, is an operator decision this design flags rather than
+makes. Named here, per this round's mission contract, as an open question
+for the implementation stage or the operator to rule on — not silently
+ignored, and not accepted as blocking this design's own scope (§6's
+`Non-goals`), since it is a property of one consuming repo's own gate
+script, not of anything `ethos enable --opencode` writes incorrectly.
 
 ## 7. Rejected alternatives
 
@@ -614,7 +890,7 @@ one-mechanism-per-harness-via-its-own-native-extension-point precedent the
 spec itself cites approvingly — the `model-provider`/Bifrost tool "writing
 into each harness's own native extension point rather than inventing a
 cross-harness daemon" (spec §"Precedent") — is exactly what §3.2's
-`ctx.tool.hook` env-propagation design follows: OpenCode's own plugin
+`ctx.shell.hook` env-propagation design follows: OpenCode's own plugin
 surface sets `ETHOS_SESSION`, the one variable the *existing*, unmodified
 resolver already checks first. No new resolver code, no new env var name,
 no new harness-conditional branch.
