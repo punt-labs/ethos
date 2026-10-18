@@ -12047,12 +12047,13 @@ against pre-fix code before its fix landed.
 ## DES-078: OpenCode V2 plugin/adapter design — concrete mapping from the harness-neutral spec to real OpenCode (PROPOSED)
 
 **Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
-missions `m-2026-10-18-007` (round 1) and `m-2026-10-18-008` (round 2).
-Full design: `docs/design-opencode-plugin.md`. Builds on the formal model
-in `docs/spec-opencode-integration.tex` (PR #534) and its companion
-research artifact, `docs/prfaq-opencode-integration.md`. Awaiting leader
-review and operator ratification before an implementation mission is
-dispatched, per this repo's own design-review-before-implementation rule.
+missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
+`m-2026-10-18-020` (round 3). Full design: `docs/design-opencode-plugin.md`.
+Builds on the formal model in `docs/spec-opencode-integration.tex`
+(PR #534) and its companion research artifact,
+`docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
+ratification before an implementation mission is dispatched, per this
+repo's own design-review-before-implementation rule.
 
 **Round 2 correction.** Three independent automated reviewers (Qodo,
 GitHub Copilot, Cursor Bugbot) converged on five defects in round 1's
@@ -12065,6 +12066,21 @@ registration before any claim, point 2's propagation mechanism is
 corrected to the actual OpenCode hook that carries a mutable environment,
 and point 3 now includes server-verified fork lineage and an atomic
 delegation-binding write.
+
+**Round 3 correction.** The leader personally verified two further items
+against real sources — context7 against `/anomalyco/opencode`'s dev
+branch, a direct `WebFetch` of a real, open GitHub PR, and a direct read
+of `punt-labs/points`'s own repo — rather than accepting or re-asserting
+round 2's framing. Fixed: (1) the sessionID-correlation gap named in
+round 2 (point 2 below, `docs/design-opencode-plugin.md` §3.2-§3.3) was
+an open-ended design risk; it is now stated as a narrow, time-bound
+window closing specifically on `github.com/anomalyco/opencode/pull/54842`'s
+merge, named by number and link. (2) the `punt-labs/points` conflict
+(Non-goals bullet below, `docs/design-opencode-plugin.md` §6.1) was
+framed as a general incompatibility between `points`-routed repos and
+ethos-OpenCode-integrated repos; it is now stated as a same-repo-only
+collision, confirmed by reading `points`'s own source, which never
+writes a `"plugins"` key in any repo it configures.
 
 ### Problem
 
@@ -12109,13 +12125,15 @@ Ship the mapping as three pieces, deliberately minimizing new Go surface:
    per the existing four-case `ResolveCommitAttribution` split. The entire
    OpenCode engineering problem is making `ETHOS_SESSION` land correctly
    in the committing shell's environment — not teaching the shared
-   resolver a new, harness-specific discovery step. **Open item (round
-   2):** whether a `create.before` shell-spawn event can always be
-   correlated back to the one session responsible for it, in a deployment
-   where multiple sessions run concurrently in one plugin process, is
-   unconfirmed by any source read for this design — see
-   `docs/design-opencode-plugin.md` §3.2 for the full disclosure and the
-   fail-closed behavior this design specifies pending that confirmation.
+   resolver a new, harness-specific discovery step. **Round 3 correction:**
+   the `create.before` sessionID-correlation gap is real today against the
+   current OpenCode V2 dev-branch API, but it is a narrow, time-bound
+   window, not an open-ended design risk — it closes once
+   `github.com/anomalyco/opencode/pull/54842` (OPEN/unmerged, opened
+   2026-10-12) merges and `ShellCreateBefore` starts carrying
+   `source.sessionID` directly. See `docs/design-opencode-plugin.md` §3.2
+   for the full disclosure and the one precondition (#54842's merge) the
+   implementation stage must check.
 3. **One new, narrow Go primitive** — a `claim-forked`-shaped addition to
    `internal/mission` implementing `AllocateDelegationForkPropagated`'s own
    guard (ancestor-set membership under the one-step `parentID` relation,
@@ -12194,21 +12212,30 @@ Full writeups, including two historical exploit traces, are in
   source read for this design and is named as a prerequisite for the
   next pipeline stage to confirm against a running `opencode serve`
   instance. (Round 2: this bullet's hook name is corrected from
-  `ctx.tool.hook` to `ctx.shell.hook`, per the Decision section's fix; see
-  also the sessionID-correlation gap named there and in
-  `docs/design-opencode-plugin.md` §3.2-§3.3, a distinct, newly surfaced
-  open item on top of this one.)
+  `ctx.tool.hook` to `ctx.shell.hook`, per the Decision section's fix.
+  Round 3: the sessionID-correlation gap named there is re-scoped from an
+  open-ended design risk to a narrow window closing on
+  `github.com/anomalyco/opencode/pull/54842`'s merge — see
+  `docs/design-opencode-plugin.md` §3.2-§3.3 — distinct from this bullet's
+  human-typed-commit question, which remains open.)
 - **OpenCode's own restart-liveness signal** — the companion research
   found no primitive currently confirmed, by direct source or
   documentation read, to give the bundled hook-plugin a reliable
   restart-liveness check; this is inherited as an open item, not
   resolved by this design.
-- **Whether `ethos enable --opencode` is compatible with every consuming
-  repo's own dev-config gate** (round 2, finding 6, confirmed directly).
-  `punt-labs/points`'s `.bin/check-dev-config.sh` — run by `make
-  check-dev`/`make doctor` — fails unconditionally the moment
-  `opencode.json` has a `"plugins"` key at all, which `ethos enable
-  --opencode` would add. This is a real, confirmed conflict for that one
-  repo, not a speculative one; whether and how to reconcile it is an
-  operator decision, not resolved by this design — see
-  `docs/design-opencode-plugin.md` §6.1 for the full disclosure.
+- **A same-repo-only collision between `ethos enable --opencode` and
+  `punt-labs/points`'s own dev-config gate** (round 2, finding 6,
+  confirmed directly; re-scoped in round 3 after reading `points`'s own
+  repo). `punt-labs/points`'s `.bin/check-dev-config.sh` — run by `make
+  check-dev`/`make doctor` — fails unconditionally the moment that
+  repo's own `opencode.json` has a `"plugins"` key at all, which `ethos
+  enable --opencode` would add if run inside `points`'s own source tree.
+  This is real and confirmed, but it is **not** a general incompatibility
+  between repos that use `points` for model routing and repos that use
+  the ethos OpenCode integration — `points` never writes a `"plugins"`
+  key in any repo it configures (its four commands are
+  route/status/verify/unroute, all routing-only), so the two mechanisms
+  do not collide anywhere except inside `points`'s own checkout. Whether
+  and how to reconcile that one case is an operator decision, not
+  resolved by this design — see `docs/design-opencode-plugin.md` §6.1 for
+  the full disclosure.

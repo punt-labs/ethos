@@ -34,6 +34,24 @@ Nothing else in §§1-4 or §7 was re-litigated; those sections were
 independently verified accurate by the leader before this round was
 dispatched.
 
+**Round 3 corrections (mission `m-2026-10-18-020`, PR #536):** the leader
+personally verified two further items against real sources this round —
+context7 against `/anomalyco/opencode`'s dev branch, a direct `WebFetch`
+of a real, open GitHub PR, and a direct read of `punt-labs/points`'s own
+repo. Fixed: (1) §3.2-§3.3's sessionID-correlation gap, framed in round 2
+as an open-ended design risk, is now stated as a narrow, time-bound
+window: real today against the current OpenCode V2 dev-branch API, and
+closing specifically once `github.com/anomalyco/opencode/pull/54842`
+(OPEN/unmerged, opened 2026-10-12) merges and adds `source.sessionID` to
+`ShellCreateBefore`; (2) §6.1's `punt-labs/points` conflict, framed as a
+general incompatibility between `points`-routed repos and
+ethos-OpenCode-integrated repos, is now stated as a same-repo-only
+collision — confirmed by reading `points`'s own source, `points` never
+writes a `"plugins"` key in any repo it configures, so the collision only
+occurs when `ethos enable --opencode` runs inside `points`'s own
+checkout. §§1-2, §4, §5 (apart from its §6.1 cross-reference), and §7
+were not re-litigated this round.
+
 ## 1. Plugin shape and lifecycle hooks
 
 ### 1.1 Entry point
