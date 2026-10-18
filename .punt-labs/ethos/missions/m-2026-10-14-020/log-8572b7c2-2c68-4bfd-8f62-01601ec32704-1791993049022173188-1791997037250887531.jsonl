@@ -1,5 +1,7 @@
 {"ts":"2026-10-14T15:50:49.022173188Z","event":"create","actor":"claude","details":{"evaluator":"adt","ticket":"","worker":"ghr"}}
+{"ts":"2026-10-14T16:26:50.848193969Z","event":"result","actor":"ghr","details":{"confidence":0.82,"evidence_entries":7,"files_changed":1,"round":1,"verdict":"pass"}}
 {"ts":"2026-10-14T16:40:14.363001936Z","event":"reflect","actor":"adt","details":{"converging":true,"recommendation":"pivot","round":1,"signal_count":6}}
 {"ts":"2026-10-14T16:40:49.849678223Z","event":"round_advanced","actor":"claude","details":{"from_round":1,"recommendation":"pivot","to_round":2}}
+{"ts":"2026-10-14T16:43:49.303571107Z","event":"result","actor":"ghr","details":{"confidence":0.92,"evidence_entries":6,"files_changed":1,"round":2,"verdict":"pass"}}
 {"ts":"2026-10-14T16:56:36.268663542Z","event":"reflect","actor":"adt","details":{"converging":false,"recommendation":"escalate","round":2,"signal_count":5}}
 {"ts":"2026-10-14T16:57:17.250887531Z","event":"close","actor":"claude","details":{"round":2,"status":"closed","verdict":"pass"}}
