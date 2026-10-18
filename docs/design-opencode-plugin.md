@@ -28,9 +28,9 @@ away; (3) §2.3.2 adds a `Roster.ParentSession` field so `claim-forked`'s
 ancestor-set guard verifies a caller-supplied witness against Go-stored
 lineage instead of trusting it outright, and §5 specifies that
 `claim-forked` also writes the matching `DelegationBinding` atomically with
-the claim (finding 5). §6.1 adds a confirmed (not speculative) cross-repo
-compatibility question about `punt-labs/points`'s `make doctor` gate.
-Nothing else in §§1-4 or §7 was re-litigated; those sections were
+the claim (finding 5). §6.1 adds a confirmed (not speculative) collision
+with `punt-labs/points`'s `make doctor` gate (round 3 narrows its scope —
+see below). Nothing else in §§1-4 or §7 was re-litigated; those sections were
 independently verified accurate by the leader before this round was
 dispatched.
 
