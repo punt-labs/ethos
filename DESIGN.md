@@ -12043,3 +12043,125 @@ that; (3) A's new FAIL path is reached only when
 specifically to avoid — none of those cases exercise the new path, and
 none regressed. Every regression test above was confirmed failing
 against pre-fix code before its fix landed.
+
+## DES-078: OpenCode V2 plugin/adapter design — concrete mapping from the harness-neutral spec to real OpenCode (PROPOSED)
+
+**Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
+mission `m-2026-10-18-007`. Full design: `docs/design-opencode-plugin.md`.
+Builds on the formal model in `docs/spec-opencode-integration.tex`
+(PR #534) and its companion research artifact,
+`docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
+ratification before an implementation mission is dispatched, per this
+repo's own design-review-before-implementation rule.
+
+### Problem
+
+`docs/spec-opencode-integration.tex` specifies a harness-neutral
+`Registry`/`SESSION`/`DELEGATION` model covering both Claude Code and
+OpenCode V2 as two instantiations of one state machine, with dedicated
+`ForkSession`/`AllocateDelegationForkPropagated` operations for OpenCode's
+first-class `session.fork`. The spec is explicitly a formal model, not a
+concrete engineering plan: it names the confirmed OpenCode V2 primitives
+(`Plugin.define`, `ctx.event.subscribe`, `SessionEvent.Forked`'s `parentID`
+field) but does not specify which hooks a real plugin registers, how a
+real implementation resolves an unbounded ancestor chain, or how
+`ethos hook commit-trailers` — unchanged, Claude-Code-specific code today
+— is supposed to resolve an OpenCode session without ever being told it
+is running under OpenCode.
+
+### Decision
+
+Ship the mapping as three pieces, deliberately minimizing new Go surface:
+
+1. **A TypeScript OpenCode plugin** (`.opencode/plugins/ethos.ts`)
+   registering exactly three hooks: `ctx.event.subscribe()` for
+   `session.created`/`session.forked` (the primary trigger for
+   `JoinRootSession`/`ForkSession`), and `ctx.tool.hook("execute.before",
+   ...)` for two jobs — a trigger-independent second path for
+   `AllocateDelegationForkPropagated` (covering the confirmed volatility
+   of `ctx.event.subscribe()`, which can permanently miss a fork event
+   during a disconnection window) and `ETHOS_SESSION` propagation into
+   every tool call's own environment. Every state-mutating action shells
+   out to the existing `ethos` binary — the plugin holds no direct file
+   access to `.punt-labs/ethos/`.
+2. **Zero changes to `resolve.SessionID`, `runHookCommitTrailers`,
+   `WriteCommitTrailers`, or `plugin/hooks/commit-msg.sh`.** The commit-msg
+   hook already resolves the committing session purely from `ETHOS_SESSION`
+   (step 1 of the existing, harness-blind chain) and already fails closed
+   per the existing four-case `ResolveCommitAttribution` split. The entire
+   OpenCode engineering problem is making `ETHOS_SESSION` land correctly
+   in the committing shell's environment — not teaching the shared
+   resolver a new, harness-specific discovery step.
+3. **One new, narrow Go primitive** — a `claim-forked`-shaped addition to
+   `internal/mission` implementing `AllocateDelegationForkPropagated`'s own
+   guard (ancestor-set membership under the one-step `parentID` relation,
+   bounded the same way `process.tree.go`'s `maxWalkDepth` already bounds
+   Claude Code's own ancestor walk) — called by the plugin, not
+   reimplemented in TypeScript.
+
+Full lifecycle-hook mapping, session-ID mapping, and the commit-trailer
+resolution chain (unchanged) are laid out in
+`docs/design-opencode-plugin.md` §1–§4, each claim cited to a specific
+`.tmp/` reference file or the companion PR/FAQ, never asserted from
+training-data memory of OpenCode.
+
+### Rejected alternatives
+
+Full writeups, including two historical exploit traces, are in
+`docs/design-opencode-plugin.md` §7. Summarized:
+
+- **Automatic claim inheritance on fork** — rejected; reopens the exact
+  unattributed/misattributed-commit risk the spec's own
+  `ForkNeverInheritsClaim` theorem exists to close.
+- **Root-equality ("same family") as the fork-propagation witness** —
+  rejected; symmetric, so a descendant's claim can flow backward and
+  attribute an ancestor that never claimed anything (the spec's own
+  round-2/3 exploit traces). Directional ancestor-set membership under
+  transitive closure closes both historical exploits by construction.
+- **A single live-event trigger with no tool-hook fallback** — rejected;
+  `ctx.event.subscribe()` is a confirmed volatile stream with no replay
+  primitive, so a disconnection at the exact moment of a fork
+  permanently loses that fork's event with no recovery path.
+- **Resolving fork lineage via `context.data.session.root`/`.family`**
+  (the CLI-plugin data-cache API) instead of the event payload's own
+  `parentID` — rejected; that surface belongs to the separate
+  `@opencode/plugin/tui` plugin type and is structurally unreachable from
+  the headless hook-plugin this design bundles (confirmed by direct read
+  of the hook-plugin's own `Context` interface, which has no `data`
+  field).
+- **Teaching `resolve.SessionID` a third, OpenCode-specific discovery
+  step** (e.g. an `OPENCODE_SESSION_ID` fallback) — rejected; reopens the
+  exact `ethos-vqwn` risk DES-074 closed for Claude Code (a shared
+  resolver falling back to a mechanism that can resolve a plausible but
+  wrong session) and makes the resolver harness-aware in exactly the
+  place the spec's own `HarnessNeutrality` theorem argues it should not
+  be.
+- **A per-harness commit-msg hook variant** — rejected; duplicates
+  `commit-msg.sh`'s entire idempotency and host-chaining logic for zero
+  behavioral gain, since the existing script already works correctly the
+  moment `ETHOS_SESSION` is set, regardless of which harness's shell
+  spawned it.
+- **Writing Mission/Delegation trailers directly from the OpenCode
+  plugin**, bypassing the git commit-msg hook — rejected; creates a
+  second trailer-writing code path with its own same-mission
+  cross-check to keep in sync, and silently stops working for any commit
+  path the plugin's own tool-call interception does not cover (e.g. a
+  human typing `git commit` directly in an OpenCode terminal).
+
+### What this does NOT cover — stated plainly
+
+- **Circuit's PR-watch workflow state is untouched.** The mutable PR head
+  SHA stays GitHub/Circuit-owned; nothing in this design reads or writes
+  any file Circuit's own tracking interprets.
+- **Whether `ctx.tool.hook`'s `event.env` mutation reaches every commit
+  path OpenCode supports** — confirmed only for the agent-issued
+  tool-call path; whether a human typing `git commit` directly into an
+  OpenCode TUI terminal goes through the same hook is unverified by any
+  source read for this design and is named as a prerequisite for the
+  next pipeline stage to confirm against a running `opencode serve`
+  instance.
+- **OpenCode's own restart-liveness signal** — the companion research
+  found no primitive currently confirmed, by direct source or
+  documentation read, to give the bundled hook-plugin a reliable
+  restart-liveness check; this is inherited as an open item, not
+  resolved by this design.
