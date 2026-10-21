@@ -34,6 +34,18 @@ see below). Nothing else in §§1-4 or §7 was re-litigated; those sections were
 independently verified accurate by the leader before this round was
 dispatched.
 
+**Round 4 corrections (mission `m-2026-10-21-003`, PR #536):** the operator
+read `internal/enable/enable.go` directly and found that `ethos enable`'s
+deposit step is Claude-Code-specific, so a `--opencode` flag on it would
+make OpenCode an opt-in qualifier on a Claude Code default. Fixed: (1) §5
+point 4 now specifies coequal `ethos enable claude` / `ethos enable
+opencode` subcommands with no privileged bare form; (2) §2.2-§2.3.2 and §5
+state that `claim-forked` and `Roster.ParentSession` are harness-neutral,
+and §5 adds Claude Code's own fork wiring (`SessionStart` with `source:
+"fork"`) to the same implementation stage, per `docs/spec-opencode-integration.tex`
+§Harness Instantiation, Case 2; (3) wording elsewhere no longer frames
+either harness as the default.
+
 **Round 3 corrections (mission `m-2026-10-18-020`, PR #536):** the leader
 personally verified two further items against real sources this round —
 context7 against `/anomalyco/opencode`'s dev branch, a direct `WebFetch`
@@ -48,7 +60,7 @@ general incompatibility between `points`-routed repos and
 ethos-OpenCode-integrated repos, is now stated as a same-repo-only
 collision — confirmed by reading `points`'s own source, `points` never
 writes a `"plugins"` key in any repo it configures, so the collision only
-occurs when `ethos enable --opencode` runs inside `points`'s own
+occurs when `ethos enable opencode` runs inside `points`'s own
 checkout. §§1-2, §4, §5 (apart from its §6.1 cross-reference), and §7
 were not re-litigated this round.
 
@@ -72,9 +84,11 @@ form is what `.tmp/effect.mdx` documents as current.
 Loaded from `.opencode/plugins/ethos.ts` (project-level) for a per-repo
 install, mirroring `vox`/`z-spec`'s existing per-repo enablement pattern
 (`.punt-labs/vox/CLAUDE.md`, `.punt-labs/z-spec/CLAUDE.md`) — gated on the
-same `.punt-labs/ethos/enabled` marker `ethos enable` already writes, not a
-new marker. `.tmp/migrate-v1.mdx:38` confirms V2 discovers local plugins
-from `.opencode/plugins/`.
+same repo-level `.punt-labs/ethos/enabled` marker that either harness's
+enable command writes (§5, point 4), not a new marker. The plugin file
+itself is deposited only by `ethos enable opencode`.
+`.tmp/migrate-v1.mdx:38` confirms V2 discovers local plugins from
+`.opencode/plugins/`.
 
 The `setup`/`effect` function registers, and returns a cleanup closure that
 disposes all of them (`.tmp/migrate-v1.mdx:290-315`; `.tmp/effect-plugin.ts`'s
@@ -735,13 +749,38 @@ pipeline stage's write-set is unambiguous:
    binary, so there is exactly one implementation of the Registry's
    locking and validation discipline (`AcquireDispatchPendingLock`,
    per-session flocks), not two.
-4. **`ethos enable --opencode`** (or equivalent flag/subcommand) deposits
-   the plugin file and registers it in `opencode.json`'s `"plugins"` array
-   (`.tmp/plugins-web.mdx:33-38`'s config shape), mirroring the existing
-   `vox enable`/`z-spec enable` per-repo deposit pattern. **See §6.1 for a
-   same-repo-only collision this specific mechanism has with one
-   consuming repo's own dev-config gate** — not a general incompatibility
-   with projects that use that repo's tooling elsewhere.
+4. **Per-harness enable subcommands: `ethos enable claude` and `ethos
+   enable opencode`, coequal, with no privileged bare form.** Read directly,
+   `internal/enable/enable.go`'s `EnableTo` is not harness-neutral today: its
+   deposit step is Claude-Code-specific (`CanonicalImport =
+   "@.punt-labs/ethos/CLAUDE.md"`, written by `claudemd.Register` into the
+   repo `CLAUDE.md`, `enable.go:46,127`). Bolting `--opencode` onto it would
+   make Claude Code the unqualified default and OpenCode an opt-in
+   qualifier. The design instead splits `EnableTo` into two layers:
+   - **Harness-neutral repo steps**, which neither harness owns: the gitlink
+     guard, the vendored-guide deposit, `.gitignore` protection, the
+     `.punt-labs/ethos/enabled` marker, and commit-msg/pre-commit hook
+     chaining (`enable.go:87-125,137`). Both subcommands run them
+     idempotently, marker last, exactly as `EnableTo` orders them now.
+   - **One harness-native step per subcommand**: `ethos enable claude`
+     writes the `CLAUDE.md` import line; `ethos enable opencode` deposits
+     `.opencode/plugins/ethos.ts` and registers it in `opencode.json`'s
+     `"plugins"` array (`.tmp/plugins-web.mdx:33-38`'s config shape).
+     Neither subcommand writes the other's artifact, and neither skips it:
+     a repo using both harnesses runs both commands explicitly.
+
+   There is no bare `ethos enable` that means one harness. Bare `ethos
+   enable` exits with a usage error naming both subcommands. `ethos disable
+   claude` and `ethos disable opencode` mirror this: each removes only its
+   own artifact, and the neutral marker and hook chaining are removed only
+   when no harness artifact remains. Existing callers of bare `ethos
+   enable` (docs, scripts, `ETHOS-SETUP.md`, `ethos doctor` hints) are
+   migration work for the implementation stage; whether a deprecation
+   window keeps bare `ethos enable` working is an operator ruling, not
+   decided here. **See §6.1 for a same-repo-only collision the OpenCode
+   subcommand has with one consuming repo's own dev-config gate** — not a
+   general incompatibility with projects that use that repo's tooling
+   elsewhere.
 
 None of 1-4 is implemented in this mission. They are named here so the
 mission contract for the implementation stage can cite this section
@@ -759,7 +798,7 @@ identical STABLE-metadata/MUTABLE-PR-SHA boundary the spec itself draws
 separate, GitHub-owned concern"). No file this design writes or reads is
 shared with, or interpreted by, Circuit's own tracking.
 
-### 6.1 Same-repo-only collision: `ethos enable --opencode` inside `punt-labs/points`'s own source tree
+### 6.1 Same-repo-only collision: `ethos enable opencode` inside `punt-labs/points`'s own source tree
 
 **Finding 6 (Qodo), checked directly rather than accepted or rejected
 blind, and re-scoped in round 3 after reading `punt-labs/points`'s own
@@ -779,7 +818,7 @@ fi
 collision, not a speculative one — but it is narrower than "projects that
 use `points` for model routing conflict with projects that use the ethos
 OpenCode integration." It is **specifically and only** about running
-`ethos enable --opencode` inside the `points` repo's own checkout: that
+`ethos enable opencode` inside the `points` repo's own checkout: that
 command would add a `"plugins"` key to *that repo's own*
 `opencode.json`, and `check-dev-config.sh` fails unconditionally the
 moment the key exists there, regardless of its contents or purpose.
@@ -796,19 +835,19 @@ model/source/provider routing selection; none of them touches an
 `opencode.json` `"plugins"` key in any repo, `points`'s own or otherwise
 (confirmed by direct read of `points/.bin/`: no script there writes a
 `"plugins"` key anywhere). A repo that uses `points` to route its own
-harness-to-model config, and separately runs `ethos enable --opencode` for
+harness-to-model config, and separately runs `ethos enable opencode` for
 the ethos OpenCode integration, does not hit this gate at all — the two
 mechanisms write disjoint parts of `opencode.json` in that repo, and
 `check-dev-config.sh` does not exist outside `points`'s own tree to
-object. The one real, narrow case is: don't run `ethos enable --opencode`
+object. The one real, narrow case is: don't run `ethos enable opencode`
 inside `punt-labs/points`'s own source tree without first resolving the
 "area-8 review" its own gate names.
 
 This is **not** resolved by this design, deliberately: whether to (a) make
-`ethos enable --opencode` idempotent against a pre-existing
+`ethos enable opencode` idempotent against a pre-existing
 `check-dev-config.sh`-style gate (there is no general mechanism for ethos
 to know such a gate exists in an arbitrary consuming repo), (b) document
-`ethos enable --opencode` as requiring the "area-8 review" `points`'s own
+`ethos enable opencode` as requiring the "area-8 review" `points`'s own
 gate names before use inside `points`'s own repo, or (c) some other
 reconciliation, is an operator decision this design flags rather than
 makes. Named here as a narrow, same-repo-only open question for the
@@ -816,7 +855,7 @@ implementation stage or the operator to rule on — not silently ignored,
 and not accepted as blocking this design's own scope (§6's `Non-goals`),
 since it is a property of one repo's own gate script applied to its own
 config file, not a general conflict between `points`-routed repos and
-ethos-OpenCode-integrated repos, and not anything `ethos enable --opencode`
+ethos-OpenCode-integrated repos, and not anything `ethos enable opencode`
 writes incorrectly.
 
 ## 7. Rejected alternatives

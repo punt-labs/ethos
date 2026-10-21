@@ -1,0 +1,2 @@
+{"ts":"2026-10-21T06:53:41.593450764Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"ethos-5y4r","worker":"bwk"}}
+{"ts":"2026-10-21T06:54:01.392521318Z","event":"abandon","actor":"claude","details":{"reason":"Dispatch command had a shell quoting bug (unescaped backticks around /fork and /branch triggered command substitution), corrupting one criterion's text. No worker was ever spawned against this contract. Re-dispatching with corrected quoting."}}
