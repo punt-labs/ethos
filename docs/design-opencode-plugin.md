@@ -153,8 +153,8 @@ which conflated two distinct hook domains (see the correction below):
 `ctx.storage` (`.tmp/plugins-index.mdx:912-949`) is **not** used for any of
 this design's durable state. The Registry's durable state is the existing
 `.punt-labs/ethos/` global tree (sessions, active-mission and
-delegation-binding sidecars) — the same files Claude Code's Tier B dispatch
-already reads and writes (`internal/mission/active.go`). Using
+delegation-binding sidecars) — the harness-neutral files both Claude Code's
+Tier B dispatch and this plugin read and write (`internal/mission/active.go`). Using
 `ctx.storage` instead would create a second, OpenCode-private copy of
 state the commit-msg hook (a plain git hook, harness-blind, §3) cannot
 read, defeating the one cross-harness requirement this whole bead exists
@@ -227,8 +227,8 @@ On `event.type === "session.created"` with no `parentID` on the payload
 
 This instantiates `JoinRootSession` (spec §5.1): `rec?.parent = noParent`,
 `rec?.root = sid?`. The claim act itself is no new ethos-side mechanism —
-`ClaimMission` (spec §5.3) already models `ethos mission claim` for Claude
-Code; OpenCode reuses the identical primitive, the harness-neutral seam the
+`ClaimMission` (spec §5.3) models `ethos mission claim` for every harness;
+Claude Code and OpenCode call the identical primitive, the harness-neutral seam the
 spec's own `ETHOS_SESSION` finding establishes (spec §"Scope":
 "`ETHOS_SESSION` is ALREADY a harness-neutral integration seam, with zero
 new ethos-side mechanism needed for OpenCode to use it"). What *is* new,
@@ -680,7 +680,7 @@ OpenCode design introduces a second sidecar, a cache, or any state that
 could go stale independent of the Registry's own `claims`/`delegationOf`
 maps — the OpenCode plugin's event handlers write to exactly the same
 `.punt-labs/ethos/sessions/<id>/{active-mission,delegation-binding}`
-sidecars Claude Code's dispatch path writes (`internal/mission/active.go`),
+sidecars Claude Code's dispatch path writes too (`internal/mission/active.go`),
 through the identical CLI primitives (`ethos mission claim`, and a new
 delegation-allocation call — §5 — that is itself a thin Go addition, not a
 new storage format).
