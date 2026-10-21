@@ -449,38 +449,6 @@ without the new flag, and Claude Code's `SessionStart` hook until §2.5's
 wiring lands). Neither the field nor the flag contains any OpenCode-specific
 logic; see §2.5.
 
-### 2.5 Fork propagation is harness-neutral: Claude Code needs it too
-
-The machinery in §2.2, §2.3, and §2.3.2 is not OpenCode-specific.
-`claim-forked` and `Roster.ParentSession` are harness-neutral Go primitives
-with no OpenCode-specific logic in them: they take two session IDs and walk
-Go-stored lineage. Only the *trigger* that calls them differs per harness.
-
-The spec's Harness Instantiation section, Case 2
-(`docs/spec-opencode-integration.tex`, §"Harness Instantiation", Claude Code
-subsection), records the verified fact. Claude Code's `--fork-session`,
-`/fork`, and `/branch` each mint a genuine new top-level session, exactly as
-OpenCode's `session.fork` does, and a `SessionStart` hook fired for such a
-session reports `source: "fork"` (Claude Code v2.1.214,
-`code.claude.com/docs/en/hooks.md`). The spec concludes that
-`ForkNeverInheritsClaim` is **not** vacuous for Claude Code in this case and
-needs the same session-level claim-isolation treatment OpenCode gets. The
-other Claude Code mechanism, Task-tool subagents and hook subprocesses,
-shares its leader's session and mints no new one, so it is unaffected.
-
-Nothing in `internal/mission/` or `internal/hook/` implements this for
-Claude Code today: no `AllocateDelegationForkPropagated`-shaped primitive
-exists anywhere in the codebase. Building `claim-forked` for OpenCode alone
-would therefore itself create a parity difference between the harnesses.
-This design makes the Claude Code wiring in scope for the same
-implementation stage (§5, point 3): Claude Code's `SessionStart` hook, when
-it observes `source: "fork"`, calls `ethos session create --parent-session
-<parent>` and `ethos mission claim-forked`, the same two calls the OpenCode
-plugin makes on `session.forked`. The spec leaves one point open for Claude
-Code: whether a forked session's own `CLAUDE_PID` resolves to a fresh roster
-entry automatically, or the hook must register one. The implementation stage
-must confirm this against a running Claude Code, as the spec states.
-
 ### 2.4 How the plugin itself learns "which mission"
 
 Neither `JoinRootSession`/`ClaimMission` (§2.1) nor the fork-propagation
@@ -515,6 +483,38 @@ round that wants OpenCode-native mission declaration (e.g. a custom
 `.tmp/plugins-index.mdx`'s command domain) is an additive UX improvement
 on top of this mapping, not a precondition for it, and is explicitly out
 of scope for this design.
+
+### 2.5 Fork propagation is harness-neutral: Claude Code needs it too
+
+The machinery in §2.2, §2.3, and §2.3.2 is not OpenCode-specific.
+`claim-forked` and `Roster.ParentSession` are harness-neutral Go primitives
+with no OpenCode-specific logic in them: they take two session IDs and walk
+Go-stored lineage. Only the *trigger* that calls them differs per harness.
+
+The spec's Harness Instantiation section, Case 2
+(`docs/spec-opencode-integration.tex`, §"Harness Instantiation", Claude Code
+subsection), records the verified fact. Claude Code's `--fork-session`,
+`/fork`, and `/branch` each mint a genuine new top-level session, exactly as
+OpenCode's `session.fork` does, and a `SessionStart` hook fired for such a
+session reports `source: "fork"` (Claude Code v2.1.214,
+`code.claude.com/docs/en/hooks.md`). The spec concludes that
+`ForkNeverInheritsClaim` is **not** vacuous for Claude Code in this case and
+needs the same session-level claim-isolation treatment OpenCode gets. The
+other Claude Code mechanism, Task-tool subagents and hook subprocesses,
+shares its leader's session and mints no new one, so it is unaffected.
+
+Nothing in `internal/mission/` or `internal/hook/` implements this for
+Claude Code today: no `AllocateDelegationForkPropagated`-shaped primitive
+exists anywhere in the codebase. Building `claim-forked` for OpenCode alone
+would therefore itself create a parity difference between the harnesses.
+This design makes the Claude Code wiring in scope for the same
+implementation stage (§5, point 3): Claude Code's `SessionStart` hook, when
+it observes `source: "fork"`, calls `ethos session create --parent-session
+<parent>` and `ethos mission claim-forked`, the same two calls the OpenCode
+plugin makes on `session.forked`. The spec leaves one point open for Claude
+Code: whether a forked session's own `CLAUDE_PID` resolves to a fresh roster
+entry automatically, or the hook must register one. The implementation stage
+must confirm this against a running Claude Code, as the spec states.
 
 ## 3. `ethos hook commit-trailers` without Claude process-tree discovery
 

@@ -12163,12 +12163,12 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    `WriteCommitTrailers`'s same-mission cross-check
    (`commit_trailers.go:65`) finds no binding and the `Delegation:` trailer
    silently never appears. **Round 4:** this primitive and the
-`Roster.ParentSession` field are harness-neutral. Claude Code needs the
-same fork treatment (`--fork-session`, `/fork`, `/branch` mint genuine new
-sessions; `SessionStart` reports `source: "fork"`), so wiring Claude Code's
-`SessionStart` hook to call `session create --parent-session` and
-`claim-forked` is in scope for the same implementation stage as the
-OpenCode plugin.
+   `Roster.ParentSession` field are harness-neutral. Claude Code needs the
+   same fork treatment (`--fork-session`, `/fork`, `/branch` mint genuine new
+   sessions; `SessionStart` reports `source: "fork"`), so wiring Claude Code's
+   `SessionStart` hook to call `session create --parent-session` and
+   `claim-forked` is in scope for the same implementation stage as the
+   OpenCode plugin.
 4. **Per-harness enable subcommands**, `ethos enable claude` and `ethos
    enable opencode`, coequal and with no privileged bare form. Harness-neutral
    repo steps (vendored deposit, gitignore, marker, hook chaining) run
