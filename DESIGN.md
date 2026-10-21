@@ -12048,7 +12048,7 @@ against pre-fix code before its fix landed.
 
 **Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
 missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
-`m-2026-10-18-020` (round 3). Full design: `docs/design-opencode-plugin.md`.
+`m-2026-10-18-020` (round 3), and `m-2026-10-21-003` (round 4). Full design: `docs/design-opencode-plugin.md`.
 Builds on the formal model in `docs/spec-opencode-integration.tex`
 (PR #534) and its companion research artifact,
 `docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
@@ -12082,6 +12082,20 @@ ethos-OpenCode-integrated repos; it is now stated as a same-repo-only
 collision, confirmed by reading `points`'s own source, which never
 writes a `"plugins"` key in any repo it configures.
 
+**Round 4 correction (mission `m-2026-10-21-003`).** The operator read
+`internal/enable/enable.go` directly and found that `ethos enable`'s
+deposit step is Claude-Code-specific (`CanonicalImport`,
+`claudemd.Register`). Fixed in `docs/design-opencode-plugin.md`: (1) the
+`--opencode` flag is replaced by coequal `ethos enable claude` / `ethos
+enable opencode` subcommands, each depositing only its own harness-native
+artifact, with a usage error for bare `ethos enable` (§5 point 5); (2)
+`claim-forked` and `Roster.ParentSession` are stated to be harness-neutral,
+and Claude Code's own fork wiring (`SessionStart` with `source: "fork"`) is
+in scope for the same implementation stage (new §2.5, §5 point 3), per
+`docs/spec-opencode-integration.tex` §Harness Instantiation, Case 2;
+(3) framing that treated OpenCode as an add-on to a Claude Code baseline
+is corrected.
+
 ### Problem
 
 `docs/spec-opencode-integration.tex` specifies a harness-neutral
@@ -12093,13 +12107,12 @@ concrete engineering plan: it names the confirmed OpenCode V2 primitives
 (`Plugin.define`, `ctx.event.subscribe`, `SessionEvent.Forked`'s `parentID`
 field) but does not specify which hooks a real plugin registers, how a
 real implementation resolves an unbounded ancestor chain, or how
-`ethos hook commit-trailers` — unchanged, Claude-Code-specific code today
-— is supposed to resolve an OpenCode session without ever being told it
-is running under OpenCode.
+`ethos hook commit-trailers` — unchanged — is supposed to resolve an
+OpenCode session without ever being told which harness it is running under.
 
 ### Decision
 
-Ship the mapping as three pieces, deliberately minimizing new Go surface:
+Ship the mapping as four pieces, deliberately minimizing new Go surface:
 
 1. **A TypeScript OpenCode plugin** (`.opencode/plugins/ethos.ts`)
    registering four hooks: `ctx.event.subscribe()` for
@@ -12149,7 +12162,20 @@ Ship the mapping as three pieces, deliberately minimizing new Go surface:
    atomically with the claim, which round 1 omitted — without it,
    `WriteCommitTrailers`'s same-mission cross-check
    (`commit_trailers.go:65`) finds no binding and the `Delegation:` trailer
-   silently never appears.
+   silently never appears. **Round 4:** this primitive and the
+`Roster.ParentSession` field are harness-neutral. Claude Code needs the
+same fork treatment (`--fork-session`, `/fork`, `/branch` mint genuine new
+sessions; `SessionStart` reports `source: "fork"`), so wiring Claude Code's
+`SessionStart` hook to call `session create --parent-session` and
+`claim-forked` is in scope for the same implementation stage as the
+OpenCode plugin.
+4. **Per-harness enable subcommands**, `ethos enable claude` and `ethos
+   enable opencode`, coequal and with no privileged bare form. Harness-neutral
+   repo steps (vendored deposit, gitignore, marker, hook chaining) run
+   idempotently from either; each subcommand adds only its own native
+   artifact (the `CLAUDE.md` import, or the `.opencode/plugins/ethos.ts`
+   file plus `opencode.json` registration). See
+   `docs/design-opencode-plugin.md` §5 point 5.
 
 Full lifecycle-hook mapping, session-ID mapping, and the commit-trailer
 resolution chain (unchanged) are laid out in
@@ -12223,13 +12249,13 @@ Full writeups, including two historical exploit traces, are in
   documentation read, to give the bundled hook-plugin a reliable
   restart-liveness check; this is inherited as an open item, not
   resolved by this design.
-- **A same-repo-only collision between `ethos enable --opencode` and
+- **A same-repo-only collision between `ethos enable opencode` and
   `punt-labs/points`'s own dev-config gate** (round 2, finding 6,
   confirmed directly; re-scoped in round 3 after reading `points`'s own
   repo). `punt-labs/points`'s `.bin/check-dev-config.sh` — run by `make
   check-dev`/`make doctor` — fails unconditionally the moment that
   repo's own `opencode.json` has a `"plugins"` key at all, which `ethos
-  enable --opencode` would add if run inside `points`'s own source tree.
+  enable opencode` would add if run inside `points`'s own source tree.
   This is real and confirmed, but it is **not** a general incompatibility
   between repos that use `points` for model routing and repos that use
   the ethos OpenCode integration — `points` never writes a `"plugins"`
