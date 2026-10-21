@@ -38,10 +38,10 @@ dispatched.
 read `internal/enable/enable.go` directly and found that `ethos enable`'s
 deposit step is Claude-Code-specific, so a `--opencode` flag on it would
 make OpenCode an opt-in qualifier on a Claude Code default. Fixed: (1) §5
-point 4 now specifies coequal `ethos enable claude` / `ethos enable
+point 5 now specifies coequal `ethos enable claude` / `ethos enable
 opencode` subcommands with no privileged bare form; (2) §2.2-§2.3.2 and §5
-state that `claim-forked` and `Roster.ParentSession` are harness-neutral,
-and §5 adds Claude Code's own fork wiring (`SessionStart` with `source:
+state that `claim-forked` and `Roster.ParentSession` are harness-neutral
+(new §2.5), and §5 point 3 adds Claude Code's own fork wiring (`SessionStart` with `source:
 "fork"`) to the same implementation stage, per `docs/spec-opencode-integration.tex`
 §Harness Instantiation, Case 2; (3) wording elsewhere no longer frames
 either harness as the default.
@@ -85,7 +85,7 @@ Loaded from `.opencode/plugins/ethos.ts` (project-level) for a per-repo
 install, mirroring `vox`/`z-spec`'s existing per-repo enablement pattern
 (`.punt-labs/vox/CLAUDE.md`, `.punt-labs/z-spec/CLAUDE.md`) — gated on the
 same repo-level `.punt-labs/ethos/enabled` marker that either harness's
-enable command writes (§5, point 4), not a new marker. The plugin file
+enable command writes (§5, point 5), not a new marker. The plugin file
 itself is deposited only by `ethos enable opencode`.
 `.tmp/migrate-v1.mdx:38` confirms V2 discovers local plugins from
 `.opencode/plugins/`.
@@ -444,9 +444,42 @@ This is additive to `Roster`'s existing fields (`internal/session/session.go`'s
 struct, listed in `session.go:25-32`) and requires no change to any
 existing `Create`/`CreateInCheckout` caller that does not pass
 `--parent-session` — an empty string is the correct default for every
-current caller (Claude Code's SessionStart hook, `ethos session create`
-run without the new flag), none of which have an OpenCode-style fork
-concept to record.
+current caller that does not yet record a fork (`ethos session create` run
+without the new flag, and Claude Code's `SessionStart` hook until §2.5's
+wiring lands). Neither the field nor the flag contains any OpenCode-specific
+logic; see §2.5.
+
+### 2.5 Fork propagation is harness-neutral: Claude Code needs it too
+
+The machinery in §2.2, §2.3, and §2.3.2 is not OpenCode-specific.
+`claim-forked` and `Roster.ParentSession` are harness-neutral Go primitives
+with no OpenCode-specific logic in them: they take two session IDs and walk
+Go-stored lineage. Only the *trigger* that calls them differs per harness.
+
+The spec's Harness Instantiation section, Case 2
+(`docs/spec-opencode-integration.tex`, §"Harness Instantiation", Claude Code
+subsection), records the verified fact. Claude Code's `--fork-session`,
+`/fork`, and `/branch` each mint a genuine new top-level session, exactly as
+OpenCode's `session.fork` does, and a `SessionStart` hook fired for such a
+session reports `source: "fork"` (Claude Code v2.1.214,
+`code.claude.com/docs/en/hooks.md`). The spec concludes that
+`ForkNeverInheritsClaim` is **not** vacuous for Claude Code in this case and
+needs the same session-level claim-isolation treatment OpenCode gets. The
+other Claude Code mechanism, Task-tool subagents and hook subprocesses,
+shares its leader's session and mints no new one, so it is unaffected.
+
+Nothing in `internal/mission/` or `internal/hook/` implements this for
+Claude Code today: no `AllocateDelegationForkPropagated`-shaped primitive
+exists anywhere in the codebase. Building `claim-forked` for OpenCode alone
+would therefore itself create a parity difference between the harnesses.
+This design makes the Claude Code wiring in scope for the same
+implementation stage (§5, point 3): Claude Code's `SessionStart` hook, when
+it observes `source: "fork"`, calls `ethos session create --parent-session
+<parent>` and `ethos mission claim-forked`, the same two calls the OpenCode
+plugin makes on `session.forked`. The spec leaves one point open for Claude
+Code: whether a forked session's own `CLAUDE_PID` resolves to a fresh roster
+entry automatically, or the hook must register one. The implementation stage
+must confirm this against a running Claude Code, as the spec states.
 
 ### 2.4 How the plugin itself learns "which mission"
 
@@ -740,8 +773,17 @@ pipeline stage's write-set is unambiguous:
    <witness's claimed mission>, ParentSession: witness})` — mirroring the
    existing dispatch path's own three-write pattern (skeleton, claim,
    binding) rather than writing the claim alone.
-3. **`.opencode/plugins/ethos.ts` (or an npm-published equivalent) —** the
-   TypeScript plugin itself, implementing §1-§3's four hooks, calling the
+3. **Fork wiring for both harnesses, in the same implementation stage.**
+   `claim-forked` and `Roster.ParentSession` (points 1-2) are harness-neutral
+   (§2.5), so two triggers call them: the OpenCode plugin on
+   `session.forked` (point 4), and Claude Code's `SessionStart` hook when it
+   observes `source: "fork"`. The Claude Code trigger is a change to
+   `internal/hook/session_start.go` that calls `session create
+   --parent-session` and `claim-forked`. It is not a separate future concern:
+   shipping only the OpenCode trigger would leave Claude Code's identical gap
+   open and reintroduce a parity difference between the harnesses.
+4. **`.opencode/plugins/ethos.ts` (or an npm-published equivalent) —** the
+   TypeScript plugin itself, implementing §1-§3's four hooks (the OpenCode instantiation of the same Registry model), calling the
    existing `ethos` binary as a subprocess (the same pattern
    `commit-msg.sh` already uses to call `ethos hook commit-trailers`) for
    every state-mutating action. No direct file access to
@@ -749,7 +791,7 @@ pipeline stage's write-set is unambiguous:
    binary, so there is exactly one implementation of the Registry's
    locking and validation discipline (`AcquireDispatchPendingLock`,
    per-session flocks), not two.
-4. **Per-harness enable subcommands: `ethos enable claude` and `ethos
+5. **Per-harness enable subcommands: `ethos enable claude` and `ethos
    enable opencode`, coequal, with no privileged bare form.** Read directly,
    `internal/enable/enable.go`'s `EnableTo` is not harness-neutral today: its
    deposit step is Claude-Code-specific (`CanonicalImport =
@@ -782,7 +824,7 @@ pipeline stage's write-set is unambiguous:
    general incompatibility with projects that use that repo's tooling
    elsewhere.
 
-None of 1-4 is implemented in this mission. They are named here so the
+None of 1-5 is implemented in this mission. They are named here so the
 mission contract for the implementation stage can cite this section
 directly as its write-set boundary.
 
