@@ -133,6 +133,59 @@ stated; (6) every Claude-only part of the shared guide is enumerated, and
 `validate-content` rejects `.claude/` and `Claude Code` in it; (7) the
 `session create` citation is `session.go:79`.
 
+**Round 8 corrections (missions `m-2026-10-22-031` and `m-2026-10-22-042`,
+the model; `m-2026-10-22-046`, this reconciliation; PR #536):** the
+lifecycle operations of §2.1.1, §2.6, and §5 points 1 and 2 were modelled as
+a state machine in `docs/spec-opencode-lifecycle.tex` and model-checked with
+ProB, and the evaluator (jra) accepted it. The model found nine
+counterexamples (C1 to C9) in the prose of rounds 6 and 7. **With all nine
+fix switches `ztrue` the spec's operations are the authority for those
+sections, and where this document and the spec disagree the spec wins.**
+Fixed: (1) a `claim-forked` read-phase refusal reconciles first (C1,
+`fixRefuseReconciles`; §5 point 2); (2) `deleteFiles` removes the roster
+before the `parent-session` sidecar (C2, `fixDeleteOrder`), closes the
+skeletons its session names first and stops if that fails (C5,
+`fixDeleteCloses`; spec N2) (§2.1.1, §2.6); (3) `ensure` refuses an edge
+that closes a cycle (C3, `fixCycleCheck`), and the visited set of the
+ancestor walk stays mandatory (spec N4) (§2.1.1, §2.3.1); (4) an
+already-claimed child closes its skeleton unless the binding is live (C4,
+`fixInertBinding`), and a reconcile that does not resume the record also
+closes the skeleton of the child's current binding (C9, `fixSupersede`)
+(§5 point 2 item 5); (5) the mission is re-read after the skeleton is on
+disk, before the binding (C6, `fixPostCheck`) (§5 point 2 item 1); (6) a
+roster with a live numeric participant is never purged, which **reverses
+row 2 of the `TestIsStale` table**, and an unreadable roster with a fresh
+`last-seen` is not purged (C7, C8; `fixStaleLive`, `fixCorruptPurge`)
+(§2.1.1); (7) every close writes verdict `aborted` (spec N5). The limits the
+spec records and this design relies on are stated where they bite: N3
+(`Store.Close`'s sweep is best-effort, §5 point 2 item 5), N4 (§2.1.1 rule
+3), N7 (the child's claim is two files, §5 point 2 item 1), and N8 (a live
+session with an unreadable roster and no `last-seen` is still purged,
+§2.1.1). Leader-run review findings, not covered by the model: (a) the
+`claim-forked` status prose says success plus three non-success statuses;
+(b) every spelled-out plugin `ensure` command carries `--touch`; (c) the
+`Store.Close` and `DisclaimDelegation` citations are
+`internal/mission/store.go:1107,1217-1246` and `:1589`; (d) a Claude Code
+fork `SessionStart` whose parent has no roster retries `Ensure` with
+`parentGone` (§2.5); (e) a `last-seen` read error is not stale with a
+warning, a future-dated one is capped at now, and the older-binary purge
+exposure is stated (`cmd/ethos/session.go:881`) (§2.1.1); (f) the read phase
+reads the child's claim lock-free first so an already-claimed child returns
+success, a corrupt pending record or `record.yaml` is "do not retry", a Go
+panic (status 2) and a signal death are in the status table, and
+`cmd/ethos/main.go:51-70` must map the new statuses with `errors.As` (§5
+point 2 items 2 and 4); (g) the compiler enforces the lock non-nesting only
+if the write phase lives in `internal/mission` and `RefuseIfSessionGone` is
+re-expressed over the reader interface (§5 point 2); (h) a reconcile close
+whose mission directory is gone takes no lock and treats the skeleton as
+gone. The shared guide's Claude-only parts now include lines 11 and 43-44,
+`validate-content` rejects `Claude`, `SessionStart`, `CLAUDE_`, `subagent`,
+and `.claude/` (allowing the whole word `CLAUDE.md`), `TestHarnessNamesOnlyInList`
+also fails on a harness-specific import or identifier outside
+`harnesses.go` and matches allowed literals by exact equality, and
+`opencode.json` ownership and spelling normalization are specified (§5 point
+5).
+
 ## 1. Plugin shape and lifecycle hooks
 
 ### 1.1 Entry point
@@ -1957,14 +2010,28 @@ pipeline stage's write-set is unambiguous:
    (`cmd/ethos/setup.go:808`, `term.IsTerminal`), the check the repo's
    other prompting command uses.
 
-   **The guide is harness-neutral (round 6).** `deposit` writes the guide
+   **The guide is harness-neutral (round 6, extended in round 8).**
+   `deposit` writes the guide
    to `.punt-labs/ethos/CLAUDE.md` (`deposit.go:15,87`). That path is the
    org standard's and does not change. Its content does: it carries no
-   instruction that only one harness can follow. Today's guide has four such
+   instruction that only one harness can follow. Today's guide has six such
    parts, all in `internal/enable/guide/CLAUDE.md`, and each is neutralized
-   or moved to the Claude Code native artifact (round 7 enumerates them):
+   or moved to the Claude Code native artifact (rounds 7 and 8 enumerate
+   them):
+   - line 11, "deliberately not `@`-imported here": `@`-import is Claude
+     Code's include syntax. Reworded without it, for example "is
+     deliberately not loaded into agent context here";
    - lines 19-21, the `.claude/agents/<handle>.md` generation and "restart
      Claude Code" note;
+   - lines 43-44, "the write-set is enforced at runtime, so an edit outside
+     it fails the mission". Write-set enforcement is carried by Claude Code
+     hooks (`write_set` is enforced mechanically only for verifier spawns
+     and only for `Write` and `Edit`, `docs/development.md`, DES-069); a
+     harness without those hooks enforces nothing, so the shared guide must
+     not promise it. The shared sentence keeps the instruction ("commit one
+     logical step at a time and stay inside the mission's write-set") and
+     drops the enforcement claim; the claim that an out-of-set edit fails
+     the mission moves to the Claude Code native artifact;
    - lines 58-67, the Review agents section, which says `ethos seed`
      deploys the agents to `.claude/agents/`;
    - lines 69-74, the local review sequence, which invokes those agents;
@@ -1973,13 +2040,25 @@ pipeline stage's write-set is unambiguous:
    The shared guide keeps the harness-neutral content: what the review
    agents are for and the order to run them, reworded without naming a
    directory or a harness. The Claude Code specifics move to that harness's
-   native artifact. **`validate-content` enforces this (round 7):** a new
-   check rejects the embedded guide
+   native artifact. **`validate-content` enforces this (round 7, widened in
+   round 8):** a check rejects the embedded guide
    (`internal/enable/guide/CLAUDE.md`) and this repo's deposited copy if
-   either contains the string `.claude/` or `Claude Code`. The check runs
-   in `make check` beside "CLAUDE.md guide embed sync", so a harness name
-   cannot return to the shared guide unnoticed. (`CLAUDE.md` as a file name
-   is not a harness name here: the guide's own path is the org standard's.)
+   either contains any of the **deny list**: `.claude/`, `Claude`,
+   `SessionStart`, `CLAUDE_`, `subagent`. Round 7's list was `.claude/` and
+   `Claude Code`, which missed the `@`-import wording, a bare `SessionStart`
+   or `CLAUDE_PID`, and the word `subagent`. Matching is case-insensitive.
+   The single **allowlist** entry is the file name `CLAUDE.md`, matched by
+   exact equality of the whole word: the guide's own path is the org
+   standard's (`.punt-labs/ethos/CLAUDE.md`) and the code-reviewer
+   description says "CLAUDE.md-compliance". The check strips each occurrence
+   of `CLAUDE.md` that is a whole word (the character before it and the
+   character after it are not a letter, a digit, or an underscore) before it
+   looks for the deny list. So `CLAUDE_PID`, `Claude Code`, `OLDCLAUDE.md`,
+   and `CLAUDE.mdx` fail, while `.punt-labs/ethos/CLAUDE.md` and
+   `CLAUDE.md-compliance` pass. A test feeds each of these strings to the
+   check. The check runs in `make check` beside "CLAUDE.md
+   guide embed sync", so a harness name cannot return to the shared guide
+   unnoticed.
    Each
    harness's native step wires the one shared file in:
    - `ethos enable claude` writes the `@.punt-labs/ethos/CLAUDE.md` import
@@ -1994,10 +2073,28 @@ pipeline stage's write-set is unambiguous:
      `AGENTS.md` files, in listed order, and entries from all config
      documents are combined. Missing files are skipped. The addition is
      idempotent: append the entry only if absent, and preserve the existing
-     entries and their order. `ethos disable opencode` removes only that
-     entry. (Round 6 first recorded this as blocked because
+     entries and their order. (Round 6 first recorded this as blocked because
      `points/docs/opencode/06-instructions-context.md:63-65` calls the
      array inactive; that note is out of date.)
+     **Ownership and normalization (round 8).** *Absent* is decided after
+     normalizing both sides: a leading `./`, repeated separators, and `.` and
+     `..` segments are resolved lexically (the `path.Clean` rule), so
+     `./.punt-labs/ethos/CLAUDE.md`, `.punt-labs//ethos/CLAUDE.md`, and
+     `.punt-labs/ethos/../ethos/CLAUDE.md` all count as the entry. Globs,
+     `~/` paths, absolute paths, and URLs are compared as written and not
+     equated with the relative spelling. `enable` appends the entry in the
+     canonical spelling `.punt-labs/ethos/CLAUDE.md` only when it is absent,
+     and **records that it added it**, in ethos's own state under
+     `.punt-labs/ethos/` and not in `opencode.json`, which the operator
+     edits. When the entry was already present, in any spelling, `enable`
+     records nothing. `ethos disable opencode` removes the entry only if the
+     record says `enable` added it, matching by the same normalization, and
+     then deletes the record; an entry the operator added, or an entry
+     `enable` added that the operator has since removed, is left alone, and
+     `disable` reports which case applied. Tests: each equivalent spelling is
+     found; an operator-added entry survives `enable` and `disable`; an
+     entry `enable` added is removed by `disable` and an unrelated entry
+     with the same prefix is not.
    - Harness-specific operating notes live in each harness's native
      artifact, not the shared guide: the Claude Code plugin's commands and
      hook-injected context for Claude Code, and the header of the deposited
@@ -2020,11 +2117,28 @@ pipeline stage's write-set is unambiguous:
    `TestHarnessNamesOnlyInList`, which:
    - parses every non-test `.go` file in `internal/enable` and
      `cmd/ethos/enable.go` and `cmd/ethos/disable.go` with `go/parser`;
-   - fails if any string literal, other than an import path, contains
-     `claude` or `opencode` (case-insensitive) in any file except
-     `harnesses.go`. The one literal allowed elsewhere is the org-standard
-     guide path `.punt-labs/ethos/CLAUDE.md`, which names a file, not a
-     harness; a `//go:embed` directive is a comment, not a literal;
+   - fails if any string literal contains `claude` or `opencode`
+     (case-insensitive) in any file except `harnesses.go`. **Round 8:** an
+     import path is no longer exempt (next item), and a literal is allowed
+     elsewhere only by **exact equality** with an entry of a short explicit
+     allowlist in the test, never by substring or prefix. The allowlist is
+     the org-standard guide path `.punt-labs/ethos/CLAUDE.md` and its base
+     name `CLAUDE.md`, which name a file, not a harness; a `//go:embed`
+     directive is a comment, not a literal. A literal such as
+     `"@.punt-labs/ethos/CLAUDE.md"` or `".claude/agents"` is not equal to
+     an entry and fails;
+   - **fails on any import of a harness-specific package** outside
+     `harnesses.go`: `internal/claudemd` today (`enable.go` imports it for
+     `claudemd.Register`), and any future package whose import path
+     contains `claude` or `opencode` (case-insensitive), such as an
+     `internal/opencode`. The harness-native steps are reached only through
+     the `harnesses.go` entries;
+   - **fails on any identifier** (declared or referenced: functions, types,
+     variables, constants, fields, parameters, and package qualifiers such
+     as `claudemd.Register`) whose name contains `claude` or `opencode`
+     (case-insensitive) in any file except `harnesses.go`. Comments are not
+     scanned. A helper named `registerClaudeImport` outside the list fails
+     even if no literal in it does;
    - fails if the declared list is not sorted by name (`sort.SliceIsSorted`
      over the exported accessor) or is empty;
    - and a companion test injects a third entry into the list and asserts
