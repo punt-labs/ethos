@@ -109,8 +109,8 @@ keeps a `claim-forked-pending` record so no retry leaves an orphan skeleton,
 and states that `Ensure` and `claim-forked` never nest locks (§5 point 2);
 (5) §5 point 2 item 4 is a complete cause-to-status table with four
 statuses and a plugin action for each; (6) the deposited guide is
-harness-neutral, and how `enable opencode` wires it in is an open item
-awaiting a ruling (§5 point 5); (7) the harness list is generated, sorted,
+harness-neutral, and `enable opencode` wires it in through the
+`opencode.json` `instructions` array, idempotently (§5 point 5); (7) the harness list is generated, sorted,
 and enforced by a named test (§5 point 5); (8) DES-078 decision points 2 and
 4 are corrected; (9) the `AcquireMissionLock` citation is
 `pretooluse_dispatch.go:791-808`, and the nearby TOCTOU, `NewID`, binding,
@@ -1547,17 +1547,20 @@ pipeline stage's write-set is unambiguous:
    harness's native step wires the one shared file in:
    - `ethos enable claude` writes the `@.punt-labs/ethos/CLAUDE.md` import
      into the repo `CLAUDE.md`.
-   - `ethos enable opencode` must make OpenCode read the same file. **Open
-     item, blocked for a leader ruling.** The requested mechanism is an
-     entry in `opencode.json`'s `instructions` array. This worker could not
-     verify that key. No `.tmp/` reference documents it, and no context7
-     tool was available in this round. The one local OpenCode V2 reference
-     that speaks to it says the opposite: `points/docs/opencode/
-     06-instructions-context.md:5-8,63-65` states that `AGENTS.md` is the
-     sole project-instruction authority, that OpenCode "does not load
-     `CLAUDE.md` as a fallback", and that the V2 `instructions` array is
-     inactive. This design does not choose another mechanism (an
-     `AGENTS.md` import, an MCP instruction, a skill) without a ruling.
+   - `ethos enable opencode` adds `.punt-labs/ethos/CLAUDE.md` to the
+     `instructions` array of `opencode.json`. **Verified by the leader
+     against context7 (`/anomalyco/opencode`, dev branch):**
+     `services/www/src/docs/content/instructions.mdx` and `config.mdx`
+     document `instructions` in `opencode.json(c)`. Entries are relative
+     paths or globs (searched from the workspace up to the project root),
+     `~/` paths, absolute paths, or http(s) URLs. They load after
+     `AGENTS.md` files, in listed order, and entries from all config
+     documents are combined. Missing files are skipped. The addition is
+     idempotent: append the entry only if absent, and preserve the existing
+     entries and their order. `ethos disable opencode` removes only that
+     entry. (Round 6 first recorded this as blocked because
+     `points/docs/opencode/06-instructions-context.md:63-65` calls the
+     array inactive; that note is out of date.)
    - Harness-specific operating notes live in each harness's native
      artifact, not the shared guide: the Claude Code plugin's commands and
      hook-injected context for Claude Code, and the header of the deposited

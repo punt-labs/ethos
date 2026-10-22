@@ -12188,9 +12188,9 @@ dispatch-pending lock. A four-status table (success, witness refused, write
 failed, do not retry) covers every cause, with a plugin action per status.
 (16) *Guide and enablement.* The deposited guide keeps its path and becomes
 harness-neutral; `enable claude` writes the `@`-import. The `enable
-opencode` wiring is an open item: the requested `opencode.json`
-`instructions` array could not be verified and a local V2 reference says it
-is inactive. The harness list is one sorted file with a test that fails on
+opencode` appends it to `opencode.json`'s `instructions` array if absent,
+preserving existing entries, and `disable opencode` removes only that entry
+(verified against upstream `instructions.mdx` and `config.mdx`). The harness list is one sorted file with a test that fails on
 any `claude` or `opencode` literal outside it. (17) A citation is fixed:
 `AcquireMissionLock` spans `pretooluse_dispatch.go:791-808`.
 
@@ -12299,8 +12299,8 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    chaining, then the marker last. The deposited guide is harness-neutral.
    Each harness adds only its own native artifact (the `CLAUDE.md` import,
    or the `.opencode/plugins/ethos.ts` file plus `opencode.json`
-   registration); how OpenCode reads the guide is an open item
-   (`docs/design-opencode-plugin.md` §5 point 5).
+   registration); OpenCode reads the guide through the `opencode.json`
+   `instructions` array (`docs/design-opencode-plugin.md` §5 point 5).
    **Round 5 (operator ruling, 2026-10-22, replacing round 4's usage error
    for bare `ethos enable`):** with no harness named on an interactive
    terminal, `ethos enable` prompts for the harnesses, listing every
