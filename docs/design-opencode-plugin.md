@@ -1167,7 +1167,7 @@ pipeline stage's write-set is unambiguous:
         lock and never nested inside one (`active.go:495-497`). Inside it,
         in this order: `RefuseIfSessionGone(child)`; re-check that the child
         holds no claim; allocate the id with `NewID` (item 3,
-        `pretooluse_dispatch.go:777`); acquire the mission lock and then
+        `pretooluse_dispatch.go:775`); acquire the mission lock and then
         the delegation lock (`AcquireMissionLock` and after,
         `pretooluse_dispatch.go:794-806`), the order `dispatchTierB` uses:
         `NewID`, mission lock, delegation lock; re-load the mission and confirm
