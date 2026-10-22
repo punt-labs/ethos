@@ -1327,6 +1327,7 @@ pipeline stage's write-set is unambiguous:
       - *Read phase, outside any lock:*
         1. `ss.Load(child)`. A missing or unreadable child roster is the
            "child roster gone" outcome (item 4), not a witness refusal.
+           This `Load` is the only place an unreadable roster is refused.
         2. Read the witness's claim with `ReadActiveMissionBinding`, the
            same reader `WriteCommitTrailers` uses. **The binding must have
            `Origin == mission.BindOriginClaim`** (`active.go:101-119`;
@@ -1350,10 +1351,30 @@ pipeline stage's write-set is unambiguous:
         always the outermost one, taken before any mission or delegation
         lock and never nested inside one (`active.go:495-497`). Inside it,
         in this order:
-        1. `RefuseIfSessionGone(child)`.
+        1. `RefuseIfSessionGone(child)`. It refuses only when the roster
+           is gone (`fs.ErrNotExist`); it proceeds on any other `Load`
+           error (`pretooluse_dispatch.go:494-508`).
         2. *Reconcile the pending record* (item 5): close any open
            fork-propagated skeleton for this child that this call will not
-           reuse, whether or not the child already holds a claim.
+           reuse, whether or not the child already holds a claim. **The
+           close takes its own locks (round 7), after the child's
+           dispatch-pending lock and before step 5's.** For the skeleton the
+           record names, it acquires the shared mission lock of the
+           *record's* mission (`AcquireMissionLock`; that mission can differ
+           from this call's), then that skeleton's delegation lock
+           (`AcquireDelegationLock`), the order `dispatchTierB` uses, and
+           releases both as soon as `CloseDelegationSkeleton` returns, before
+           step 4. `Store.Close` sweeps open skeletons holding only the
+           exclusive mission lock (`store.go:1107,1217-1246`), and the
+           shared mission lock is what excludes that sweep: the sweep either
+           finishes first (the skeleton is already closed, so the reconcile
+           leaves it alone) or waits for the reconcile. The delegation lock
+           excludes every other writer of the same `record.yaml` (the
+           refusal-close paths and `DisclaimDelegation`, `store.go:1589`),
+           so the reconcile never rewrites a stale copy of the record. The
+           order is the existing global, repo, mission (shared), delegation
+           order (`delegation.go:462-466`); the reconcile's locks and
+           step 5's are taken one after the other, never nested.
         3. If the child holds a claim, the spec's `sid? not-in dom claims`
            guard fails: exit success ("already claimed") without writing.
         4. Allocate the id with `NewID` (item 3,
@@ -1408,8 +1429,8 @@ pipeline stage's write-set is unambiguous:
       |---|---|---|
       | **success** (0) | The child is now claimed and bound. Or the child already held a claim ("already claimed"; the pending record is reconciled first). | Memoize "claimed" for the refresh interval (15 minutes), so a claim lost to a purge is retried after the next re-registration. |
       | **witness refused** | The child's lineage does not reach the witness; an ancestor roster or the witness's own roster is missing or fails to load; a repeated id; the witness holds no claim; the witness binding's origin is not `claim`. | Try the next ancestor as witness, nearest first. When none is left, log once and memoize "unattributed" for the refresh interval (15 minutes, §2.1.1). |
-      | **write failed** | The child's dispatch-pending lock, the mission lock, or the delegation lock cannot be acquired; the pending record, skeleton, binding, or claim write fails; an earlier orphan skeleton could not be closed (item 5). | Retry the **same** witness on the child's next `execute.before`, with no memo. Each retry reconciles first, so leftover state is cleaned up before a new write. Log each failure. |
-      | **do not retry** | The child's roster is gone (`RefuseIfSessionGone` reports `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`) or unreadable; the mission is not open at the TOCTOU re-check, or the mission or its contract fails to load; `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails. | Do not try another ancestor and do not retry in this call. Log. Memoize the outcome for the refresh interval, so a closed mission costs one subprocess per interval per session. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. |
+      | **write failed** | The child's dispatch-pending lock, the mission lock, or the delegation lock cannot be acquired; the mission or delegation lock for an orphan skeleton's close cannot be acquired; the pending record, skeleton, binding, or claim write fails; an earlier orphan skeleton could not be closed (item 5). | Retry the **same** witness on the child's next `execute.before`, with no memo. Each retry reconciles first, so leftover state is cleaned up before a new write. Log each failure. |
+      | **do not retry** | The child's roster is gone (the read-phase `ss.Load` or the write phase's `RefuseIfSessionGone` reports `fs.ErrNotExist`) or unreadable (only the read-phase `ss.Load` refuses on this: `RefuseIfSessionGone` warns and proceeds on any error other than `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`, so a roster that exists but fails to parse is caught in the read phase, not the write phase); the mission is not open at the TOCTOU re-check, or the mission or its contract fails to load; `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails. | Do not try another ancestor and do not retry in this call. Log. Memoize the outcome for the refresh interval, so a closed mission costs one subprocess per interval per session. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. |
 
       Usage errors keep status 2 (bad flags). An error that carries no
       status maps to the generic status 1, which the plugin treats as
@@ -1445,6 +1466,19 @@ pipeline stage's write-set is unambiguous:
         different delegation, close that skeleton `aborted`, then remove
         the record. This covers an operator `ethos mission claim` made
         after an interrupted `claim-forked`.
+        **Outcome when the record and the binding name the same delegation
+        (round 7).** The interrupted `claim-forked` got as far as the
+        binding, and the operator's claim then arrived. Removing only the
+        record leaves the fork-propagated skeleton (open) and the binding in
+        place. `WriteCommitTrailers` stamps a `Delegation:` trailer from
+        that binding only when its `MissionID` equals the claimed mission
+        (`commit_trailers.go:65`). If the operator claimed the same mission
+        the fork would have propagated, the trailer is stamped and is
+        correct: the child is working under that delegation. If the
+        operator claimed a different mission, the binding is inert, the
+        `Mission:` trailer names the operator's mission with no
+        `Delegation:` trailer, and the skeleton stays open only until its
+        own mission closes and `Store.Close` sweeps it.
       - *A close failure is never silent.* The call uses
         `mission.CloseDelegationSkeleton` directly and propagates its
         error. It does not use `closeDelegationAborted`
