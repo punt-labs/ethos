@@ -64,6 +64,32 @@ occurs when `ethos enable opencode` runs inside `points`'s own
 checkout. §§1-2, §4, §5 (apart from its §6.1 cross-reference), and §7
 were not re-litigated this round.
 
+**Round 5 corrections (mission `m-2026-10-22-017`, PR #536):** eleven open
+review findings were each checked against real source, and all eleven
+held. Fixed: (1) §1.1-§1.2 now use the Effect plugin shape throughout
+(Effect-returning hook registration, `Stream` event consumption, scoped
+cleanup), not Promise idioms; (2) §2.3.1 drops the ten-hop cap, which the
+spec's full ancestor-set guard does not have, for cycle detection; (3)
+§3.1 and the new §3.2.1 handle `commit-msg.sh:55` skipping the lookup when
+`MISSION_ID` or `DELEGATION_ID` is inherited, with a two-armed environment
+policy that also clears inherited `ETHOS_SESSION` and Claude signals; (4)
+§4's table now separates a non-empty `ETHOS_SESSION` naming a missing
+session (which `resolve.SessionID` accepts) from a missing propagation;
+(5)-(7) §2.1.1 removes the `ctx.session.list` dependency (absent in
+`v2.0.32`) and the snapshot-before-subscribe window by registering
+sessions lazily, and replaces the replace-semantics `session create` with
+a create-if-absent `session ensure` that keeps lineage write-once; (8),
+(11) the inherited-environment findings, covered by (3); (9) §5 point 2
+replaces the claim that `WithDispatchPendingLock` makes the three sidecar
+writes atomic with a publication order and retry rule; (10) §2.3 has both
+fork triggers register missing rosters and fork links before `claim-forked`,
+and §2.2 reads the persisted `fork.sessionID`, not `parentID`. Separately,
+§5 point 5 applies the operator's 2026-10-22 enablement ruling: bare `ethos
+enable` prompts on a terminal with both harnesses preselected, explicit
+forms skip the prompt, and no terminal with no harness named is a usage
+error naming both. This supersedes round 4's usage error for bare `ethos
+enable`.
+
 ## 1. Plugin shape and lifecycle hooks
 
 ### 1.1 Entry point

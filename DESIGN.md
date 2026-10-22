@@ -12048,7 +12048,8 @@ against pre-fix code before its fix landed.
 
 **Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
 missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
-`m-2026-10-18-020` (round 3), and `m-2026-10-21-003` (round 4). Full design: `docs/design-opencode-plugin.md`.
+`m-2026-10-18-020` (round 3), `m-2026-10-21-003` (round 4), and
+`m-2026-10-22-017` (round 5). Full design: `docs/design-opencode-plugin.md`.
 Builds on the formal model in `docs/spec-opencode-integration.tex`
 (PR #534) and its companion research artifact,
 `docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
@@ -12096,6 +12097,35 @@ in scope for the same implementation stage (new §2.5, §5 point 3), per
 (3) framing that treated OpenCode as an add-on to a Claude Code baseline
 is corrected.
 
+**Round 5 correction (mission `m-2026-10-22-017`).** Eleven open review
+findings were each verified against real source (`internal/`,
+`plugin/hooks/commit-msg.sh`, `docs/spec-opencode-integration.tex`, the
+`.tmp/` OpenCode references); all eleven held, and
+`docs/design-opencode-plugin.md` is amended. (1) The plugin uses the Effect
+shape throughout: hook registration is an Effect run in the plugin `Scope`,
+`ctx.event.subscribe()` is a `Stream`, and every `ethos` call recovers its
+own failures so attribution never blocks a tool call (§1.1-§1.2). (2) The
+ten-hop cap is gone: the spec's guard is the full ancestor set, so both
+walks run to the end of the lineage and stop on a repeated id (§2.3.1).
+(3) Setting `ETHOS_SESSION` alone is insufficient, because
+`commit-msg.sh:55` skips the session lookup when `MISSION_ID` or
+`DELEGATION_ID` is inherited, and `resolve.SessionID` accepts any inherited
+`ETHOS_SESSION` or corroborated `CLAUDE_PID`. Every `create.before` firing
+now rewrites the attribution variables in a known arm or an unknown arm
+(§3.2.1), and the fail-closed table separates a non-empty `ETHOS_SESSION`
+naming a missing session from a missing propagation (§4). (4) Sessions
+register lazily and idempotently through `ensureRegistered` and a new
+create-if-absent `ethos session ensure`; `ctx.session.list` (absent in
+`v2.0.32`), the snapshot-before-subscribe window, and the replace-semantics
+`session create` replay are removed, and both fork triggers register
+missing rosters and fork links, parent first, before `claim-forked`
+(§2.1.1, §2.3). Persisted lineage is read from `fork.sessionID`, not
+`parentID` (§2.2). (5) `claim-forked` writes skeleton, binding, then claim,
+and retries from unclaimed partial state, because
+`WithDispatchPendingLock` serializes writers without making the writes
+atomic (§5 point 2). (6) The operator's 2026-10-22 enablement ruling
+replaces round 4's usage error: see decision point 4.
+
 ### Problem
 
 `docs/spec-opencode-integration.tex` specifies a harness-neutral
@@ -12124,11 +12154,17 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    a disconnection window), and `ctx.shell.hook("create.before", ...)` for
    `ETHOS_SESSION` propagation into every spawned shell's own environment
    (round 2 correction: `ToolExecuteBefore` has no mutable `env` field;
-   `ShellCreateBefore` does). Every `JoinRootSession`/`ForkSession` also
-   registers the new OpenCode session's roster with `ethos session create`
-   before any `mission claim` is attempted — a brand-new session has no
-   roster entry for the claim's `RefuseIfSessionGone` guard to find
-   otherwise (round 2 fix). Every state-mutating action shells out to the
+   `ShellCreateBefore` does). Round 5: the plugin is Effect-native
+   throughout, and every `create.before` firing rewrites the attribution
+   variables (`ETHOS_SESSION`, `MISSION_ID`, `DELEGATION_ID`, and for an
+   unknown session `CLAUDE_PID` and `CLAUDECODE`), because
+   `commit-msg.sh:55` skips the lookup when `MISSION_ID` or
+   `DELEGATION_ID` is inherited. Every session is registered, before any
+   `mission claim` is attempted, by `ensureRegistered` calling the
+   create-if-absent `ethos session ensure` (round 2 fix: a brand-new
+   session has no roster entry for the claim's `RefuseIfSessionGone` guard
+   to find otherwise; round 5: `session create` replaces an existing
+   roster, so it is no longer used). Every state-mutating action shells out to the
    existing `ethos` binary — the plugin holds no direct file access to
    `.punt-labs/ethos/`.
 2. **Zero changes to `resolve.SessionID`, `runHookCommitTrailers`,
@@ -12149,33 +12185,47 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    implementation stage must check.
 3. **One new, narrow Go primitive** — a `claim-forked`-shaped addition to
    `internal/mission` implementing `AllocateDelegationForkPropagated`'s own
-   guard (ancestor-set membership under the one-step `parentID` relation,
-   bounded the same way `process.tree.go`'s `maxWalkDepth` already bounds
-   Claude Code's own ancestor walk) — called by the plugin, not
-   reimplemented in TypeScript. **Round 2 corrections:** the guard now
-   verifies ancestry against a new, Go-stored `Roster.ParentSession` field
-   (written by `ethos session create --parent-session <id>` at
-   fork-registration time) rather than trusting the plugin's own
-   `--witness` argument outright — closing a gap where nothing server-side
-   previously existed to check a caller-supplied witness against; and the
-   primitive now writes the matching `DelegationBinding` sidecar
-   atomically with the claim, which round 1 omitted — without it,
-   `WriteCommitTrailers`'s same-mission cross-check
+   guard (ancestor-set membership under the one-step fork-source relation,
+   walked to the end of the lineage with cycle detection, no depth
+   constant: round 5 removed the `maxWalkDepth`-style ten-hop cap, which
+   the spec's full ancestor-set guard does not have) — called by the
+   plugin, not reimplemented in TypeScript. **Round 2 corrections:** the
+   guard now verifies ancestry against a new, Go-stored
+   `Roster.ParentSession` field (written by `ethos session ensure
+   --parent-session <id>` at fork-registration time, write-once and parent
+   first) rather than trusting the plugin's own `--witness` argument
+   outright — closing a gap where nothing server-side previously existed to
+   check a caller-supplied witness against; and the primitive now writes
+   the matching `DelegationBinding` sidecar, which round 1 omitted —
+   without it, `WriteCommitTrailers`'s same-mission cross-check
    (`commit_trailers.go:65`) finds no binding and the `Delegation:` trailer
-   silently never appears. **Round 4:** this primitive and the
+   silently never appears. **Round 5:** the three sidecar writes are not
+   atomic (`WithDispatchPendingLock` serializes writers, and
+   `WriteCommitTrailers` takes no lock), so the order is skeleton, binding,
+   then claim, and a retry reuses unclaimed partial state. **Round 4:** this primitive and the
    `Roster.ParentSession` field are harness-neutral. Claude Code needs the
    same fork treatment (`--fork-session`, `/fork`, `/branch` mint genuine new
    sessions; `SessionStart` reports `source: "fork"`), so wiring Claude Code's
    `SessionStart` hook to call `session create --parent-session` and
    `claim-forked` is in scope for the same implementation stage as the
    OpenCode plugin.
-4. **Per-harness enable subcommands**, `ethos enable claude` and `ethos
-   enable opencode`, coequal and with no privileged bare form. Harness-neutral
-   repo steps (vendored deposit, gitignore, marker, hook chaining) run
-   idempotently from either; each subcommand adds only its own native
-   artifact (the `CLAUDE.md` import, or the `.opencode/plugins/ethos.ts`
-   file plus `opencode.json` registration). See
-   `docs/design-opencode-plugin.md` §5 point 5.
+4. **Coequal per-harness enablement**, `ethos enable [claude] [opencode]`.
+   Harness-neutral repo steps (vendored deposit, gitignore, marker, hook
+   chaining) run idempotently for any selection; each harness adds only its
+   own native artifact (the `CLAUDE.md` import, or the
+   `.opencode/plugins/ethos.ts` file plus `opencode.json` registration).
+   **Round 5 (operator ruling, 2026-10-22, replacing round 4's usage error
+   for bare `ethos enable`):** with no harness named on an interactive
+   terminal, `ethos enable` prompts for the harnesses, listing every
+   supported harness with both `claude` and `opencode` preselected;
+   `ethos enable claude`, `ethos enable opencode`, and `ethos enable claude
+   opencode` skip the prompt; with no harness named and no terminal it
+   exits non-zero with a usage error naming both harnesses and never picks
+   one silently. `ethos disable` mirrors this, prompting from the harnesses
+   currently enabled. One ordered supported-harness list in
+   `internal/enable` drives the prompt, the usage error, and the help text,
+   so neither harness is privileged. See `docs/design-opencode-plugin.md`
+   §5 point 5.
 
 Full lifecycle-hook mapping, session-ID mapping, and the commit-trailer
 resolution chain (unchanged) are laid out in
@@ -12248,7 +12298,17 @@ Full writeups, including two historical exploit traces, are in
   found no primitive currently confirmed, by direct source or
   documentation read, to give the bundled hook-plugin a reliable
   restart-liveness check; this is inherited as an open item, not
-  resolved by this design.
+  resolved by this design. (Round 5: restart reconciliation no longer
+  depends on `ctx.session.list`, which `v2.0.32` lacks. A session that
+  predates the plugin is registered at its first tool or shell call; one
+  that never makes either stays unregistered, and an operator claim
+  against it is refused.)
+- **Shells that never fire `create.before`** (round 5) keep the OpenCode
+  server's inherited `ETHOS_SESSION`, `MISSION_ID`, and `DELEGATION_ID`;
+  if the human-typed TUI terminal is such a shell, it can stamp the
+  launching session's trailers. The plugin cannot close this without
+  mixing concurrent sessions; the design records it and gives launch
+  guidance (`docs/design-opencode-plugin.md` §3.3).
 - **A same-repo-only collision between `ethos enable opencode` and
   `punt-labs/points`'s own dev-config gate** (round 2, finding 6,
   confirmed directly; re-scoped in round 3 after reading `points`'s own
