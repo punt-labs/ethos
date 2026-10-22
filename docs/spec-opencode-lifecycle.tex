@@ -299,16 +299,35 @@ recorded for it; \field{LineageStable} says the sidecar never departs from
 it while the roster exists. \field{purgedLive} collects every session whose
 roster a purge removed while it was demonstrably live. \field{leaked}
 collects every child for which a \field{claim-forked} call ended with an
-interrupted attempt's skeleton still open and no longer resumable.
+interrupted attempt's skeleton still open and not live.
+
+\field{leaked} is a ghost, and it is only worth anything if it is computed
+by one rule that does not know which amendment is on. Every operation that
+can end a \field{claim-forked} call other than by ``write failed'' (that
+is, \field{LcCfRefuse}, \field{LcCfReconcileClaimed}, \field{LcCfExitNoRetry}
+and \field{LcCfFinish}) therefore sets it by the same equation, in both
+branches of every switch, from the \emph{post}-state:
+\[
+\field{leaked}' = \field{leaked} \cup \{ c? \mid \exists rd \in \field{pend}(\{c?\}) \bullet
+  rd \in \field{dOpen}' \land \lnot\,\field{live}'(c?, rd) \}
+\]
+where $\field{live}'(c, rd)$ says $c \mapsto rd$ is in \field{binding}$'$ and the
+child's claim in \field{claimed}$'$ is for the mission that \field{dMis}$'$
+gives $rd$. The record read is the pre-state one, because that is the
+attempt being exited; whether its skeleton was closed is read off
+\field{dOpen}$'$, which the operation's own predicate determined. A mutant
+operation that omits its closing step therefore leaks, and the invariant is
+checked of what the operation does and not of what it says it does
+(\S\ref{sec:lc-mutants}). An earlier revision set \field{leaked} only in the
+branches with the switch off, so \field{ReconcileOnExit} held of the
+amended operations by construction; that revision is withdrawn.
 
 
 \subsection{The invariants}
 \label{sec:lc-invariants}
 
-The four invariants of the mission contract, each as a schema over
-\field{Lifecycle}, followed by the two checks needed to state the first
-precisely and the well-formedness conditions that validate the model
-itself. A schema here is a statement, not a guard (\S\ref{sec:lc-method}).
+The six invariants, each as a schema over \field{Lifecycle}, followed by
+the well-formedness conditions that validate the model itself. A schema here is a statement, not a guard (\S\ref{sec:lc-method}).
 
 \begin{itemize}
   \item \field{LineageStable}: while a roster exists, the parent that
@@ -929,7 +948,8 @@ phase is about to overwrite the binding.
 c? : SESSIONID
 \where
 c? \notin \dom stage \\
-(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land dOpen' = dOpen \land (c? \in \dom pend \land pend(c?) \in dOpen \implies leaked' = leaked \cup \{ c? \}) \land (\lnot (c? \in \dom pend \land pend(c?) \in dOpen) \implies leaked' = leaked)) \lor (fixRefuseReconciles = ztrue \land leaked' = leaked \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \}))
+(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land dOpen' = dOpen) \lor (fixRefuseReconciles = ztrue \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \})) \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfBegin}
@@ -992,7 +1012,8 @@ stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-(fixInertBinding = ztrue \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \}) \land leaked' = leaked) \lor (fixInertBinding = zfalse \land dOpen' = dOpen \setminus \{ rd : pend \limg \{ c? \} \rimg | (c? \mapsto rd) \notin binding @ rd \} \land (((c? \in \dom pend \land pend(c?) \in dOpen \land (c? \mapsto pend(c?)) \in binding \land \lnot ((c? \mapsto pend(c?)) \in binding \land (\exists m : MISSIONID @ (pend(c?) \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \implies leaked' = leaked \cup \{ c? \}) \land (\lnot ((c? \in \dom pend \land pend(c?) \in dOpen \land (c? \mapsto pend(c?)) \in binding \land \lnot ((c? \mapsto pend(c?)) \in binding \land (\exists m : MISSIONID @ (pend(c?) \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \implies leaked' = leaked))
+(fixInertBinding = ztrue \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \})) \lor (fixInertBinding = zfalse \land dOpen' = dOpen \setminus \{ rd : pend \limg \{ c? \} \rimg | (c? \mapsto rd) \notin binding @ rd \}) \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfReconcileReuse}
@@ -1106,7 +1127,6 @@ cfW' = cfW
 \Xi LcMission \\
 \Xi LcSealed \\
 \Xi LcPurged \\
-\Xi LcLeak \\
 c? : SESSIONID
 \where
 (c? \mapsto 1) \in stage \\
@@ -1114,7 +1134,8 @@ used = DELEGATIONID \lor cfM(c?) \notin missOpen \\
 stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
-cfW' = \{ c? \} \ndres cfW
+cfW' = \{ c? \} \ndres cfW \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfWriteRecord}
@@ -1251,7 +1272,6 @@ cfW' = cfW
 \Xi LcMission \\
 \Xi LcSealed \\
 \Xi LcPurged \\
-\Xi LcLeak \\
 c? : SESSIONID
 \where
 (c? \mapsto 6) \in stage \\
@@ -1260,7 +1280,8 @@ pendWit' = \{ c? \} \ndres pendWit \\
 stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
-cfW' = \{ c? \} \ndres cfW
+cfW' = \{ c? \} \ndres cfW \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfCrash}
@@ -1538,40 +1559,52 @@ assumed. The last five were not known.
     closes the skeleton named by the child's current binding.
 \end{enumerate}
 
-Two of the four invariants needed more than one amendment, and one
-amendment each is necessary: \field{LineageStable} needs only
-\field{fixDeleteOrder}, and \field{Acyclic} needs only
-\field{fixCycleCheck}. \field{NoLiveSessionPurged} needs \field{fixStaleLive} and
-\field{fixCorruptPurge}, each alone leaving the other's counterexample.
-\field{NoOrphanOpenSkeleton} needs \field{fixDeleteCloses} and \field{fixSupersede}
-for its literal form, and \field{fixRefuseReconciles} with \field{fixInertBinding} for the exit
-postcondition; \field{SweepComplete} needs \field{fixDeleteCloses} with
-\field{fixPostCheck}.
+Of the six invariants, \field{LineageStable} needs only
+\field{fixDeleteOrder} and \field{Acyclic} only \field{fixCycleCheck}. The
+other four need two amendments each, and the table of
+\S\ref{sec:lc-verification} shows each of the two to be necessary where a
+run isolates it: \field{NoLiveSessionPurged} needs \field{fixStaleLive} and
+\field{fixCorruptPurge}, each alone leaving the other's counterexample
+(\texttt{P\_stalelive}, \texttt{P\_corrupt});
+\field{NoOrphanOpenSkeleton} needs \field{fixDeleteCloses} and
+\field{fixSupersede} for its literal form (\texttt{Fb2\_w},
+\texttt{Fa\_orph\_nosup}); \field{ReconcileOnExit} needs
+\field{fixRefuseReconciles} and \field{fixInertBinding} (\texttt{Fa\_inert},
+\texttt{Fa\_refuse}); and \field{SweepComplete} needs \field{fixDeleteCloses}
+with \field{fixPostCheck} (\texttt{Fc2\_del}, \texttt{Fc2\_post}).
+
+\paragraph{Decision recorded: the reversal of C7.} The leader has accepted
+C7 as stated: a roster with a live numeric participant is never purged,
+whatever its last-seen says. This reverses row~2 of the \S2.1.1 table of
+DES-078, which asserted the opposite, and it is a decision of the leader and
+not a theorem of this model; the model shows only that the table's row and the
+invariant cannot both stand.
 
 \subsection{Verification}
 \label{sec:lc-verification}
 
-\paragraph{Extraction.} Given the committed file \texttt{F}, a slice is
-produced by the commands below, where \texttt{INIT} is one of
-\field{LcInit}, \field{LcInitPair}, \field{LcInitChain}, \texttt{V$n$} is
-\texttt{ztrue} for each switch to be on and \texttt{zfalse} otherwise,
-and \texttt{DROP} is the list of operation schemas the slice removes.
+\paragraph{Commands.} The file loads directly: \texttt{fuzz} type-checks it
+and \texttt{probcli} reads it with \field{Init} as the empty system, in which
+case the two scenario initialisations are, regrettably, operations that jump
+to their scenario state; no claim below rests on such a run. A \emph{slice}
+is the same file with the switches set, the invariant schemas, the scenario
+initialisations that are not wanted and the operations the slice removes
+deleted, and the wanted initialisation renamed \field{Init}. With
+\texttt{F} this file, \texttt{INIT} one of \field{Init}, \field{LcInitPair},
+\field{LcInitChain}, and \texttt{V$n$} \texttt{ztrue} for each switch to be on
+and \texttt{zfalse} otherwise:
 
 \begin{verbatim}
-awk 'BEGIN{p=1; B="\\" "begin"; E="\\" "end"}
- p==1{print} /[\\]begin[{]document[}]/{p=0}
- /^\[SESSIONID, MISSIONID, DELEGATIONID\]$/ || /^ZBOOL ::= ztrue [|] zfalse$/ \
-   {print B "{zed}"; print; print E "{zed}"}
- /^%%LIFECYCLE-BEGIN/{r=1;next} /^%%LIFECYCLE-END/{r=0} r{print}
- END{print E "{document}"}' F > S.tex
+cp F S.tex
 for n in fixDeleteOrder fixDeleteCloses fixCycleCheck fixRefuseReconciles \
          fixInertBinding fixStaleLive fixCorruptPurge fixPostCheck fixSupersede; do
-  sed -E -i "s/^$n = z(true|false)( [\\\\][\\\\])?\$/$n = V_$n\2/" S.tex   # V_n: ztrue or zfalse
+  sed -E -i "s/^$n = z(true|false)( [\\\\][\\\\])?\$/$n = V_$n\2/" S.tex
 done
 sed -i '/^[\\]begin{schema}{LcInv/,/^[\\]end{schema}/d' S.tex
-for s in OTHER_INIT_1 OTHER_INIT_2 DROPPED_OP ...; do
+for s in LcInitPair LcInitChain DROPPED_OP ...; do      # all but INIT
   sed -i "/^[\\\\]begin{schema}{$s}\$/,/^[\\\\]end{schema}\$/d" S.tex
 done
+# INIT other than Init: delete the schema Init, rename INIT to Init
 sed -i 's/^\([\\]begin{schema}\){INIT}$/\1{Init}/' S.tex
 probcli S.tex -card SESSIONID s -card MISSIONID m -card DELEGATIONID d \
   -p MAX_INITIALISATIONS 1000 -p MAX_OPERATIONS 1000 \
@@ -1579,10 +1612,14 @@ probcli S.tex -card SESSIONID s -card MISSIONID m -card DELEGATIONID d \
 \end{verbatim}
 
 \noindent The switch sed is written once per switch, with the value that
-switch is to have. \texttt{-bf} makes the trace the shortest. \texttt{-nodead}
-is needed because a slice with the operations that re-register a session
-removed deadlocks when every roster is gone, which is not a violation. The
-\texttt{GOAL}s, in B, are the negations of the invariant schemas:
+switch is to have. \texttt{-bf} makes a trace the shortest and makes the
+reported depth the breadth-first level. \texttt{-nodead} is needed because a
+slice with the operations that re-register a session removed deadlocks when
+every roster is gone, which is not a violation. The invariant schemas are
+deleted only because they are not operations and the goals below replace
+them. By the convention of \S\ref{sec:lc-method} every state predicate is a
+\texttt{-goal}; the \texttt{GOAL}s, in B, are the negations of the invariant
+schemas:
 
 \begin{verbatim}
 LineageStable        not(!s.(s:roster => (s:dom(sealed) & sealed(s)=parentSide[{s}])))
@@ -1592,14 +1629,35 @@ NoOrphanOpenSkeleton #d.(d:dOpen & not((#c.(c:dom(pend) & pend(c)=d)) or
                          (#c.(c:roster & c:dom(binding) & binding(c)=d))))
 ReconcileOnExit      leaked /= {}
 SweepComplete        #d.(d:dOpen & dMis(d) /: missOpen & not(#c.(c:dom(pend) & pend(c)=d)))
+WellFormed           not(dom(rkind)=roster & dom(started)=roster & corrupt<:roster &
+                         roster<:dom(sealed) & seenBad/\dom(seen)={} &
+                         dom(corigin)=dom(claimed) & dom(pendWit)=dom(pend) &
+                         skel<:used & dOpen<:skel & dom(dMis)=skel & dom(dOwn)=skel &
+                         dom(cfM)=dom(stage) & dom(cfW)=dom(stage) & dom(cfD)<:dom(stage) &
+                         !c.(c:dom(stage) & stage(c)>=3 => (c:dom(pend) & pend(c)=cfD(c))))
 \end{verbatim}
 
 \noindent A goal that reports ``no counterexample'' is also followed by
 ProB's own message that the goal was ``unknown'' in the root state, which
-has no variables; the result is that of the model check. For two goals the
-result was cross-checked as the LTL formula
-\texttt{G not(\{GOAL\})}: the amended delete slice gives \emph{TRUE}, the
-unamended one a counterexample ending in the same state.
+has no variables; the result is that of the model check. The \texttt{-card}
+values are the S/M/D column of the table; all other options are as above.
+Every run of the table was made on the committed text of this file by these
+commands, with \texttt{-mc} large enough not to bind (five million or more)
+except in the rows marked \emph{not exhausted}, where it was the number in
+the States column.
+
+\paragraph{Direct run.} \texttt{/z-spec:test} of this file as it stands, with
+no extraction, at setsize~1 (\field{MAX\_OPERATIONS} 1000): \texttt{init},
+\texttt{animate}, \texttt{cbc\_assertions} and \texttt{cbc\_deadlock} pass,
+and the model check analyses 1\,627 states and 32\,171 transitions with no
+state-schema violation and no deadlock. Sixteen operations never fire, for
+a structural reason: every \field{LcCf}\ldots operation, \field{LcEnsureLineageOnly}
+and the two scenario initialisations need two distinct sessions, which a
+carrier of size one cannot supply. The run says nothing about the
+invariants, which are goals (\S\ref{sec:lc-method}); it establishes that the
+file loads, that its constants and initialisation are satisfiable, and that
+the state space of the environment and session operations is finite and
+deadlock-free at that size.
 
 \paragraph{Slices.} Operations are removed by name; a removed operation
 leaves its variables at their initial values. \emph{lineage} keeps
@@ -1619,66 +1677,109 @@ keeps only the \field{LcCf}\ldots operations, \field{LcOperatorClaim} and
 \field{LcCloseLocked}. \emph{claim+delete+close} keeps every operation
 except the environment operations, \field{LcEnsureRefresh},
 \field{LcEnsureLineageOnly}, \field{LcCreateCli} and \field{LcPurgeSession}.
+The \emph{claim} slice, which has no \field{LcDeleteSession}, cannot exercise
+\field{fixDeleteCloses}; that amendment is checked on \emph{delete},
+\emph{sweep} and \emph{claim+delete+close}.
 
-\paragraph{Results.} Sessions, missions, delegations are the cardinalities
-of the three given sets. ``Switches'' lists those set to \field{ztrue}.
-The last column is the number of states ProB analysed.
+\paragraph{Results.} Sessions, missions, delegations (S/M/D) are the
+cardinalities of the three given sets; INIT is the initialisation used
+(\field{Init} the empty system, \field{LcInitPair} a child with a parent
+holding an operator claim, \field{LcInitChain} a child, a parent and a
+grandparent, so that the ancestor walk takes more than one hop).
+``Switches'' lists those set to \field{ztrue}. States is the number of
+states ProB analysed; Depth is the number of breadth-first levels it
+reached. A row marked \emph{not exhausted} reached its state bound with
+levels still open, so its Depth is that of the bound and not of the
+space.
 
 {\scriptsize
 \begin{center}
-\begin{tabularx}{\textwidth}{@{}l l l X X l r@{}}
+\begin{tabularx}{\textwidth}{@{}l l l l X X l r r@{}}
 \toprule
-\textbf{Run} & \textbf{Check} & \textbf{S/M/D} & \textbf{Switches} & \textbf{Outcome} & \textbf{Slice} & \textbf{States} \\
+\textbf{Run} & \textbf{Check} & \textbf{INIT} & \textbf{S/M/D} & \textbf{Switches} & \textbf{Outcome} & \textbf{Slice} & \textbf{States} & \textbf{Depth} \\
 \midrule
-\texttt{L\_lin\_w} & LineageStable & 3/2/2 & none & counterexample & lineage & 137 \\
-\texttt{L\_lin\_w\_nogone} & LineageStable & 3/2/2 & none; \field{--parent-gone} disabled & counterexample & lineage & 599 \\
-\texttt{L\_lin\_order} & LineageStable & 3/2/2 & DeleteOrder & holds, all states visited & lineage & 21953 \\
-\texttt{L\_lin\_cycle} & LineageStable & 3/2/2 & CycleCheck & counterexample & lineage & 95 \\
-\texttt{L\_lin\_all} & LineageStable & 3/2/2 & DeleteOrder, CycleCheck & holds, all states visited & lineage & 5489 \\
-\texttt{L\_acyc\_w} & Acyclic & 3/2/2 & none & counterexample & lineage & 2 \\
-\texttt{L\_acyc\_w\_nogone} & Acyclic & 3/2/2 & none; \field{--parent-gone} disabled & counterexample & lineage & 4856 \\
-\texttt{L\_acyc\_order} & Acyclic & 3/2/2 & DeleteOrder & counterexample & lineage & 2 \\
-\texttt{L\_acyc\_cycle} & Acyclic & 3/2/2 & CycleCheck & holds, all states visited & lineage & 15029 \\
-\texttt{L\_acyc\_all} & Acyclic & 3/2/2 & DeleteOrder, CycleCheck & holds, all states visited & lineage & 5489 \\
-\texttt{L\_wf\_w} & WellFormed & 3/2/2 & none & holds, all states visited & lineage & 50654 \\
-\texttt{L\_wf\_all} & WellFormed & 3/2/2 & DeleteOrder, CycleCheck & holds, all states visited & lineage & 5489 \\
-\texttt{P\_w} & NoLiveSessionPurged & 3/2/2 & none & counterexample & purge & 7817 \\
-\texttt{P\_w\_nocorrupt} & NoLiveSessionPurged & 3/2/2 & none; no \field{LcCorruptRoster} & counterexample & purge & 8633 \\
-\texttt{P\_stalelive} & NoLiveSessionPurged & 3/2/2 & StaleLive & counterexample & purge & 7817 \\
-\texttt{P\_corrupt} & NoLiveSessionPurged & 3/2/2 & CorruptPurge & counterexample & purge & 8957 \\
-\texttt{P1\_all} & NoLiveSessionPurged & 1/2/2 & StaleLive, CorruptPurge & holds, all states visited & purge & 817 \\
-\texttt{P1\_wf} & WellFormed & 1/2/2 & StaleLive, CorruptPurge & holds, all states visited & purge & 817 \\
-\texttt{P2\_all} & NoLiveSessionPurged & 2/2/2 & StaleLive, CorruptPurge & no counterexample in states explored; not exhausted & purge & 40000 \\
-\texttt{P\_all} & NoLiveSessionPurged & 3/2/2 & StaleLive, CorruptPurge & no counterexample in states explored; not exhausted & purge & 40000 \\
-\texttt{Fa\_w} & ReconcileOnExit & 2/2/2 & none & counterexample & claim & 609 \\
-\texttt{Fa\_refuse} & ReconcileOnExit & 2/2/2 & RefuseReconciles & counterexample & claim & 2758 \\
-\texttt{Fa\_all} & ReconcileOnExit & 2/2/2 & RefuseReconciles, InertBinding & holds, all states visited & claim & 24481 \\
-\texttt{Fa\_orph\_w} & NoOrphanOpenSkeleton & 2/2/2 & none & counterexample & claim & 14212 \\
-\texttt{Fa\_orph\_nosup} & NoOrphanOpenSkeleton & 2/2/2 & all but Supersede & counterexample & claim & 9640 \\
-\texttt{Fa\_orph\_all} & NoOrphanOpenSkeleton & 2/2/2 & all nine & holds, all states visited & claim & 16681 \\
-\texttt{Fa\_wf\_all} & WellFormed & 2/2/2 & all nine & holds, all states visited & claim & 16681 \\
-\texttt{Fb2\_w} & NoOrphanOpenSkeleton & 2/2/2 & none & counterexample & delete & 248 \\
-\texttt{Fb2\_del} & NoOrphanOpenSkeleton & 2/2/2 & DeleteCloses & holds, all states visited & delete & 2561 \\
-\texttt{Fc2\_w} & SweepComplete & 2/2/2 & none & counterexample & sweep & 1210 \\
-\texttt{Fc2\_post} & SweepComplete & 2/2/2 & PostCheck & counterexample & sweep & 1195 \\
-\texttt{Fc2\_del} & SweepComplete & 2/2/2 & DeleteCloses & counterexample & sweep & 1844 \\
-\texttt{Fc2\_both} & SweepComplete & 2/2/2 & DeleteCloses, PostCheck & holds, all states visited & sweep & 9569 \\
-\texttt{Fc\_w} & SweepComplete & 2/2/2 & none & counterexample & sweep+ensure & 14163 \\
-\texttt{Fc\_del} & SweepComplete & 2/2/2 & DeleteCloses & counterexample & sweep+ensure & 24004 \\
-\texttt{F2\_orph\_all} & NoOrphanOpenSkeleton & 2/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 300000 \\
-\texttt{F2\_leak\_all} & ReconcileOnExit & 2/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 300000 \\
-\texttt{F2\_sweep\_all} & SweepComplete & 2/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 300000 \\
-\texttt{F3\_leak\_all} & ReconcileOnExit & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 \\
-\texttt{F3\_orph\_all} & NoOrphanOpenSkeleton & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 \\
-\texttt{F3\_sweep\_all} & SweepComplete & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 \\
-\texttt{F3\_wf\_all} & WellFormed & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 \\
+\texttt{L\_lin\_w} & LineageStable & Init & 3/2/2 & none & counterexample & lineage & 137 & 4 \\
+\texttt{L\_lin\_w\_nogone} & LineageStable & Init & 3/2/2 & none; \field{--parent-gone} disabled & counterexample & lineage & 599 & 5 \\
+\texttt{L\_lin\_order} & LineageStable & Init & 3/2/2 & DeleteOrder & holds, all states visited & lineage & 21953 & 5 \\
+\texttt{L\_lin\_cycle} & LineageStable & Init & 3/2/2 & CycleCheck & counterexample & lineage & 95 & 4 \\
+\texttt{L\_lin\_all} & LineageStable & Init & 3/2/2 & DeleteOrder, CycleCheck & holds, all states visited & lineage & 5489 & 5 \\
+\texttt{L\_acyc\_w} & Acyclic & Init & 3/2/2 & none & counterexample & lineage & 2 & 3 \\
+\texttt{L\_acyc\_w\_nogone} & Acyclic & Init & 3/2/2 & none; \field{--parent-gone} disabled & counterexample & lineage & 4856 & 6 \\
+\texttt{L\_acyc\_order} & Acyclic & Init & 3/2/2 & DeleteOrder & counterexample & lineage & 2 & 3 \\
+\texttt{L\_acyc\_cycle} & Acyclic & Init & 3/2/2 & CycleCheck & holds, all states visited & lineage & 15029 & 8 \\
+\texttt{L\_acyc\_all} & Acyclic & Init & 3/2/2 & DeleteOrder, CycleCheck & holds, all states visited & lineage & 5489 & 5 \\
+\texttt{L\_wf\_w} & WellFormed & Init & 3/2/2 & none & holds, all states visited & lineage & 50654 & 8 \\
+\texttt{L\_wf\_all} & WellFormed & Init & 3/2/2 & DeleteOrder, CycleCheck & holds, all states visited & lineage & 5489 & 5 \\
+\texttt{P\_w} & NoLiveSessionPurged & Init & 3/2/2 & none & counterexample & purge & 7817 & 5 \\
+\texttt{P\_w\_nocorrupt} & NoLiveSessionPurged & Init & 3/2/2 & none & counterexample & purge, no CorruptRoster & 8633 & 5 \\
+\texttt{P\_stalelive} & NoLiveSessionPurged & Init & 3/2/2 & StaleLive & counterexample & purge & 7817 & 5 \\
+\texttt{P\_corrupt} & NoLiveSessionPurged & Init & 3/2/2 & CorruptPurge & counterexample & purge & 8957 & 5 \\
+\texttt{P1\_all} & NoLiveSessionPurged & Init & 1/2/2 & StaleLive, CorruptPurge & holds, all states visited & purge & 817 & 9 \\
+\texttt{P1\_wf} & WellFormed & Init & 1/2/2 & StaleLive, CorruptPurge & holds, all states visited & purge & 817 & 9 \\
+\texttt{P2\_all} & NoLiveSessionPurged & Init & 2/2/2 & StaleLive, CorruptPurge & no counterexample in states explored; not exhausted & purge & 40000 & 7 \\
+\texttt{P\_all} & NoLiveSessionPurged & Init & 3/2/2 & StaleLive, CorruptPurge & no counterexample in states explored; not exhausted & purge & 40000 & 5 \\
+\texttt{Fa\_w} & ReconcileOnExit & InitPair & 2/2/2 & none & counterexample & claim & 609 & 9 \\
+\texttt{Fa\_refuse} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles & counterexample & claim & 2758 & 12 \\
+\texttt{Fa\_all} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & holds, all states visited & claim & 24481 & 25 \\
+\texttt{Fa\_orph\_w} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & none & counterexample & claim & 14212 & 17 \\
+\texttt{Fa\_orph\_nosup} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but Supersede & counterexample & claim & 9640 & 17 \\
+\texttt{Fa\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all nine & holds, all states visited & claim & 16681 & 21 \\
+\texttt{Fa\_wf\_all} & WellFormed & InitPair & 2/2/2 & all nine & holds, all states visited & claim & 16681 & 21 \\
+\texttt{Fb2\_w} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & none & counterexample & delete & 248 & 9 \\
+\texttt{Fb2\_del} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & DeleteCloses & holds, all states visited & delete & 2561 & 20 \\
+\texttt{Fc2\_w} & SweepComplete & InitPair & 2/2/2 & none & counterexample & sweep & 1210 & 10 \\
+\texttt{Fc2\_post} & SweepComplete & InitPair & 2/2/2 & PostCheck & counterexample & sweep & 1195 & 10 \\
+\texttt{Fc2\_del} & SweepComplete & InitPair & 2/2/2 & DeleteCloses & counterexample & sweep & 1844 & 11 \\
+\texttt{Fc2\_both} & SweepComplete & InitPair & 2/2/2 & PostCheck, DeleteCloses & holds, all states visited & sweep & 9569 & 20 \\
+\texttt{Fc\_w} & SweepComplete & InitPair & 2/2/2 & none & counterexample & sweep+ensure & 14163 & 10 \\
+\texttt{Fc\_del} & SweepComplete & InitPair & 2/2/2 & DeleteCloses & counterexample & sweep+ensure & 24003 & 11 \\
+\texttt{F2\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 300000 & 14 \\
+\texttt{F2\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 300000 & 14 \\
+\texttt{F2\_sweep\_all} & SweepComplete & InitPair & 2/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 300000 & 14 \\
+\texttt{F3\_leak\_all} & ReconcileOnExit & InitChain & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 & 6 \\
+\texttt{F3\_orph\_all} & NoOrphanOpenSkeleton & InitChain & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 & 6 \\
+\texttt{F3\_sweep\_all} & SweepComplete & InitChain & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 & 6 \\
+\texttt{F3\_wf\_all} & WellFormed & InitChain & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim+delete+close & 60000 & 6 \\
+\texttt{Fa\_orph\_d3} & NoOrphanOpenSkeleton & InitPair & 2/2/3 & all nine & holds, all states visited & claim & 106881 & 27 \\
+\texttt{Fa\_inert} & ReconcileOnExit & InitPair & 2/2/2 & InertBinding & counterexample & claim & 609 & 9 \\
+\texttt{Chain\_orph} & NoOrphanOpenSkeleton & InitChain & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim & 300000 & 13 \\
+\texttt{Chain\_leak} & ReconcileOnExit & InitChain & 3/2/2 & all nine & no counterexample in states explored; not exhausted & claim & 300000 & 13 \\
 \bottomrule
 \end{tabularx}
 \end{center}
 }
 
+\paragraph{Mutants of the ghost.}
+\label{sec:lc-mutants}
+\field{ReconcileOnExit} is only evidence if a broken operation can fail it.
+Two mutants of the operations with every exit-related switch on
+(\field{fixRefuseReconciles}, \field{fixInertBinding}), run on the
+\emph{claim} slice from \field{LcInitPair} at 2/2/2 with the goal
+\texttt{leaked /= \{\}}, are each killed:
 
+{\scriptsize
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}l X l r r@{}}
+\toprule
+\textbf{Run} & \textbf{Mutant} & \textbf{Outcome} & \textbf{States} & \textbf{Depth} \\
+\midrule
+\texttt{MutA\_claimed} & \field{LcCfReconcileClaimed} with the unfixed \field{dOpen}$'$ expression (close unless a binding exists) in the \field{fixInertBinding} branch & counterexample & 2758 & 12 \\
+\texttt{MutB\_refuse} & \field{LcCfRefuse} with \field{fixRefuseReconciles} on, but \field{dOpen}$' = $ \field{dOpen} (the skeleton is never closed) & counterexample & 609 & 9 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+}
 
+\noindent The shortest trace of \texttt{MutA\_claimed} is C4 again:
+\field{LcCfBegin}, \field{LcCfReconcileFresh}, \field{LcCfAlloc},
+\field{LcCfWriteRecord}, \field{LcCfWriteSkeleton}, \field{LcCfWriteBinding},
+\field{LcCfCrash}, \field{LcOperatorClaim}$(b,m_2)$, \field{LcCfBegin},
+\field{LcCfReconcileClaimed}. That of \texttt{MutB\_refuse} is C1. The
+unmutated rows \texttt{Fa\_all}, \texttt{Fa\_w} and \texttt{Fa\_refuse}
+have the same state counts (24\,481, 609, 2\,758) as before the ghost was
+made uniform, as they should: for the operations as written the uniform rule and
+the old, branch-wise one agree. They differ only for an operation that does
+not do what it says.
 
 \paragraph{Verdicts.}
 \begin{itemize}
@@ -1691,24 +1792,34 @@ The last column is the number of states ProB analysed.
     alone: 15\,029 states visited (\texttt{L\_acyc\_cycle}), and 5\,489 with both
     lineage amendments. Without it the counterexample is C3: one step with
     \field{--parent-gone} (a session its own parent) and six without it. The walk of \S2.3.1 may
-    therefore keep its visited set as a defence only.
+    therefore keep its visited set as a defence only; but see N4 of
+    \S\ref{sec:lc-limits}.
   \item \textbf{NoLiveSessionPurged} holds with \field{fixStaleLive} and
-    \field{fixCorruptPurge}, exhaustively at one session (817 states) and bounded at two and three sessions (see the table).
+    \field{fixCorruptPurge}, exhaustively at one session (817 states) and
+    bounded at two and three sessions (40\,000 states, not exhausted).
     Each amendment alone leaves the other's counterexample
     (\texttt{P\_stalelive}, \texttt{P\_corrupt}).
   \item \textbf{NoOrphanOpenSkeleton} holds in its literal form with
     \field{fixDeleteCloses} and \field{fixSupersede}: 16\,681 states of the
-    \emph{claim} slice and 2\,561 of the \emph{delete} slice, exhaustively; and
-    in the full two-session machine and the three-session machine no
-    counterexample in the first 300\,000 and 60\,000 states, which is not exhaustive.
+    \emph{claim} slice (106\,881 at three delegations, depth 27) and 2\,561
+    of the \emph{delete} slice, exhaustively; and in the full two-session
+    machine and the three-session machine no counterexample in the first
+    300\,000 and 60\,000 states, which is not exhaustive.
     With \field{fixRefuseReconciles} and \field{fixInertBinding} the exit
     postcondition \field{ReconcileOnExit} holds as well (24\,481 states, all
-    visited). \field{SweepComplete} holds with \field{fixDeleteCloses} and
-    \field{fixPostCheck} (9\,569 states of the \emph{sweep} slice, all visited).
+    visited, computed by the uniform ghost). \field{SweepComplete} holds with
+    \field{fixDeleteCloses} and \field{fixPostCheck} (9\,569 states of the
+    \emph{sweep} slice, all visited).
   \item \textbf{No invariant is left with an open counterexample.} The
     limit is coverage, not a counterexample: the full \field{claim-forked}
     machine is exhausted only slice by slice.
 \end{itemize}
+
+\paragraph{Multi-hop ancestor walk.} The rows with \field{LcInitChain} are
+the only ones in which the walk of \S2.3.1 takes more than one hop. The
+\emph{claim+delete+close} rows are bounded at 60\,000 states and the
+\emph{claim} rows at 300\,000; none is exhaustive at three sessions, and
+nothing in this document claims it.
 
 
 \subsection{Consequences for the design document}
@@ -1732,8 +1843,44 @@ DES-078 is to be brought into line at these places.
     delegation'' (C4); the mission is re-read once the skeleton is on disk
     (C6).
   \item \S2.1.1, \field{isStale} and its test table: row~2 becomes not
-    stale (C7); an unreadable roster with a fresh last-seen is not purged
-    (C8); a test case for each.
+    stale (C7, a decision of the leader recorded in
+    \S\ref{sec:lc-ledger}); an unreadable roster with a fresh last-seen is
+    not purged (C8); a test case for each.
+\end{itemize}
+
+Three further consequences are not counterexamples of the model but
+conditions under which its amended operations are the ones the code runs.
+
+\begin{itemize}
+  \item \textbf{N2. The close step of \field{deleteFiles} short-circuits.}
+    \field{fixDeleteCloses} places the close at step~1 and every later step
+    assumes it succeeded: \field{LcDeleteSession} clears the claim, the
+    binding and the pending record only after the skeletons are closed. A
+    failed close must therefore end the call there, with nothing cleared and
+    the roster kept as the retry token. This is unlike
+    \field{clearMissionSidecarsLocked} (\fpath{session/store.go}:336--348),
+    which joins its errors and continues; a copy of that shape would clear
+    the only names the open skeleton has and reinstate C5.
+  \item \textbf{N4. \field{Acyclic} depends on serialised edge insertion, or
+    on the visited set.} \field{fixCycleCheck} refuses an edge that would
+    close a cycle by reading the recorded chain; \field{Ensure} holds only
+    the lock of the session it writes. Two sessions inserting the two edges
+    of a cycle concurrently each read a chain without the other's edge, and
+    both succeed. The model's operations are atomic and cannot show this.
+    Either edge insertion is serialised across sessions, or the visited set
+    of the walk of \S2.3.1 is mandatory and the walk refuses on a repeat,
+    which is what the design says it does; the statement that the visited
+    set is ``a defence only'' holds of a serialised store and no other.
+  \item \textbf{N5. Every close other than the sweep writes verdict
+    \field{aborted}.} \field{countBlockingDelegations}
+    (\fpath{mission/store.go}:2004--2010) counts every delegation that is
+    neither \field{aborted} nor disclaimed. The closes that
+    \field{fixDeleteCloses}, \field{fixRefuseReconciles},
+    \field{fixInertBinding}, \field{fixSupersede} and \field{LcCfAbort} add
+    all remove a skeleton from \field{dOpen}; in the code each must write
+    verdict \field{aborted}, or the skeleton stops being open in the model
+    and still blocks \field{Abandon} in the code. The model has one bit,
+    open or not, and cannot see the verdict.
 \end{itemize}
 
 \subsection{What this model does not establish}
@@ -1750,7 +1897,22 @@ which the witness releases its claim between them is accepted by the
 design and not examined. A read-phase refusal and the unlocked fallback
 are always enabled, which over-approximates the real conditions. The claim
 \field{claim-forked} writes for the child is given claim origin; the design
-does not say. Time is three values with a threshold of one, and the
+does not say. Three limits of the code are not represented. (N3) \field{Store.Close}'s
+sweep skips a delegation record it cannot load and only logs a failure to
+close one (\fpath{mission/store.go}:1236, 1242--1244), so a skeleton the
+sweep misses is not an error anywhere; and a skeleton directory with no
+\fpath{record.yaml} makes \field{countBlockingDelegations} return an error
+(\fpath{mission/store.go}:1994--2000), which refuses \field{Abandon} for a
+reason the model has no state for. (N7) The origin of a binding that is
+unknown, and the fact that the claim \field{claim-forked} writes for the
+child is two files, the active-mission sidecar and its origin, are not
+represented: \field{claimed} and \field{corigin} are written by one step, and
+\field{BORIGIN} has two values. (N8) \field{NoLiveSessionPurged} judges
+liveness only from rosters it can read (\S\ref{sec:lc-invariants}). A live
+Claude Code session whose roster fails to parse and which has no valid
+last-seen is still purged, as it is today; \field{fixCorruptPurge} protects
+only an unreadable roster that carries a fresh last-seen, and the invariant
+says nothing of the other. Time is three values with a threshold of one, and the
 participant kinds are three; larger values add no behaviour to
 \field{isStale}, which compares only. The instance has three sessions for
 the lineage and purge slices and two for the \field{claim-forked} slices
@@ -1763,20 +1925,22 @@ bounded, and those runs are marked by their state count.
 \begin{itemize}
   \item The predicate part of a state schema becomes a guard of every
     operation in \texttt{probcli}'s translation (\S\ref{sec:lc-method}). The
-    ``zero invariant violations'' of \S\ref{sec:validation} for
-    \field{Registry} are claims about a machine in which a violating
-    transition cannot occur; they say nothing about whether one is
-    possible. This does not affect the \field{Registry} operations'
-    guards, which are the stated protocol, but it does affect the word
-    ``invariant''. The state predicates of \field{Registry} should be
-    re-checked as goals.
-  \item With this section present, \texttt{/z-spec:test} of the whole file
-    still explores \field{Registry} (286 states, 3862 transitions at
-    setsize~1 before; 286 states after), but promotes every schema of this
-    section to an operation. Its transition count rises to 14977 and the
-    run is no longer certified complete at \field{MAX\_OPERATIONS} 5000. A
-    second file for this model, \texttt{docs/spec-opencode-lifecycle.tex},
-    would remove the interference; the mission's write-set did not allow it.
+    ``zero invariant violations'' of the Validation section of
+    \texttt{spec-opencode-integration.tex} for \field{Registry} are claims
+    about a machine in which a violating transition cannot occur; they say
+    nothing about whether one is possible. This does not affect the
+    \field{Registry} operations' guards, which are the stated protocol, but
+    it does affect the word ``invariant''. The state predicates of
+    \field{Registry} should be re-checked as goals.
+  \item A document is one machine. An earlier revision of this model sat
+    inside \texttt{spec-opencode-integration.tex}; \texttt{/z-spec:test} of
+    that file then promoted every schema of the model to an operation of
+    \field{Registry}, and the setsize~1 run rose from 286 states and 3862
+    transitions, certified complete, to 14692 transitions and no
+    certificate. With the model in this file the Registry run is again
+    286 states, 3862 transitions, deadlock-free, with
+    \field{ForkSession} and \field{AllocateDelegationForkPropagated} the
+    only uncovered operations, for the reason that document gives.
 \end{itemize}
 
 
