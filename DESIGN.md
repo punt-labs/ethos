@@ -12049,9 +12049,14 @@ against pre-fix code before its fix landed.
 **Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
 missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
 `m-2026-10-18-020` (round 3), `m-2026-10-21-003` (round 4), and
-`m-2026-10-22-017` (round 5), `m-2026-10-22-026` (round 6), and
-`m-2026-10-22-030` (round 7). Full design:
-`docs/design-opencode-plugin.md`.
+`m-2026-10-22-017` (round 5), `m-2026-10-22-026` (round 6),
+`m-2026-10-22-030` (round 7), and `m-2026-10-22-046` (round 8, which
+reconciles the design to the lifecycle model of `m-2026-10-22-031` and
+`m-2026-10-22-042`). Full design: `docs/design-opencode-plugin.md`. The
+lifecycle operations (session `ensure`, `deleteFiles`, purge,
+`claim-forked`) are specified by the model-checked
+`docs/spec-opencode-lifecycle.tex`, which is the authority where it and the
+design disagree.
 Builds on the formal model in `docs/spec-opencode-integration.tex`
 (PR #534) and its companion research artifact,
 `docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
@@ -12174,8 +12179,9 @@ A Claude Code fork `SessionStart` calls `Ensure` without `touch`, not
 `createSessionRoster`,
 and `ethos session create` refuses an id whose sidecar records a parent
 (§2.1.1). (13) *Purge.* `isStale` consults `last-seen` first and, when it
-parses, decides by the age of the later of `Started` and `last-seen` alone,
-before the empty-roster, participant-count, and PID branches; the required
+parses, decides by the age of the later of `Started` and `last-seen`,
+before the empty-roster and participant-count branches (round 8, item 23,
+adds one exception: a live numeric participant is never stale); the required
 tests include a two-participant roster with a dead numeric `Participants[1]`
 and a fresh `last-seen`, which is not stale. Round 7: a Claude Code roster
 never has `last-seen` (its callers do not pass `touch`), so it keeps today's
@@ -12208,16 +12214,66 @@ opt-in.* `Ensure` writes `last-seen` only when the caller passes `touch`
 call; Claude Code's fork `SessionStart` does not, so a Claude Code roster
 never has `last-seen` and keeps its PID liveness logic (see item 13).
 (19) *`claim-forked` details.* The reconcile close takes the record's shared
-mission lock and the skeleton's delegation lock, which excludes
-`Store.Close`'s sweep and the other record writers. An unreadable child
-roster is refused by the read-phase `ss.Load`; `RefuseIfSessionGone` proceeds
-on any error but not-exist. An operator claim after an interrupted
-`claim-forked` that named the same delegation leaves the skeleton and binding,
-which stamp a `Delegation:` trailer when the missions match and are inert
-otherwise. (20) *Sidecar and guide.* The `parent-session` hard-link temp file
+mission lock and then the skeleton's delegation lock. The mission lock
+excludes `Store.Close`'s sweep, and the delegation lock excludes the other
+writers of the same record. An unreadable child roster is refused by the
+read-phase `ss.Load`, because `RefuseIfSessionGone` refuses only when the
+roster is not found and proceeds on any other error. An operator claim after
+an interrupted `claim-forked` that named the same delegation leaves the
+skeleton and the binding in place; they stamp a `Delegation:` trailer when
+the missions match and are inert otherwise (round 8 closes the inert case,
+item 22). (20) *Sidecar and guide.* The `parent-session` hard-link temp file
 is named `parent-session.tmp-<random>`, removed by `deleteFiles`, and needs
 NTFS on Windows. Every Claude-only part of the shared guide is enumerated
 (item 16), and `validate-content` rejects `.claude/` and `Claude Code` in it.
+
+**Round 8 correction (missions `m-2026-10-22-031`, `-042`, and `-046`).**
+`docs/spec-opencode-lifecycle.tex` models the session lifecycle and
+`claim-forked` as a state machine, model-checked with ProB (accepted by the
+evaluator jra). It found nine counterexamples in the prose of rounds 6 and 7;
+with all nine amendments on, its operations are the authority for these
+operations, and `docs/design-opencode-plugin.md` is brought into line. (21)
+*Lineage and `deleteFiles`.* `ensure` refuses an edge that closes a cycle,
+which round 6's remark that a cycle needs `--parent-gone` had denied (C3), and
+the ancestor walk keeps its visited set as a mandatory guard, because
+concurrent edge insertion is outside the model (N4). `deleteFiles` runs in
+seven steps: close named skeletons (stopping if that fails, N2), the claim,
+the binding, the pending record, `last-seen`, the roster, and the
+`parent-session` sidecar last (C2, C5). (22) *`claim-forked`.* Every exit
+other than "write failed" reconciles first, including a read-phase refusal
+(C1). An already-claimed child closes the skeleton unless the binding is live
+(C4), and a reconcile that does not resume the record also closes the
+skeleton of the child's current binding (C9). The mission is re-read once the
+skeleton is on disk, before the binding (C6). Every close writes verdict
+`aborted` (N5). The read phase reads the child's claim lock-free first, so a
+claimed child returns success. A corrupt pending record or `record.yaml` is
+"do not retry". A Go panic (status 2) and a signal death are in the status
+table, and `cmd/ethos/main.go:51-70` must map the new statuses with
+`errors.As`. The lock non-nesting is compiler-enforced only if the write phase
+lives in `internal/mission` and `RefuseIfSessionGone` is re-expressed over the
+reader interface. (23) *Purge.* A roster with a live numeric participant is
+never stale, which **reverses row 2 of the round 6 `TestIsStale` table**
+(C7, a decision of the leader). An unreadable roster with a fresh `last-seen`
+is not purged (C8). A `last-seen` read error is not stale, a future-dated one
+is capped at now, and an older binary's purge, which ignores `last-seen`,
+remains an exposure (N8 covers the unreadable-roster limit). (24) *Claude
+Code fork.* A fork `SessionStart` whose parent has no roster retries `Ensure`
+with `parentGone`, so the fork still gets a roster and its `CLAUDE_PID`
+pointer. (25) *Guide and enablement.* The shared guide's Claude-only parts
+now include line 11 (the `@`-import wording) and lines 43-44 (write-set
+enforcement is carried by Claude Code hooks);
+`validate-content` rejects `Claude`, `SessionStart`, `CLAUDE_`, `subagent`,
+and `.claude/`, allowing only the whole word `CLAUDE.md`.
+`TestHarnessNamesOnlyInList` also fails on a harness-specific import or on an
+identifier containing `claude` or `opencode` outside `harnesses.go`, and
+allowed literals match by exact equality. `ethos enable opencode` records
+that it added the `opencode.json` `instructions` entry, normalizes `./` and
+equivalent spellings before its absent check, and `ethos disable opencode`
+removes only an entry it added. (26) *Citations and prose.* `Store.Close`
+and `DisclaimDelegation` are `internal/mission/store.go:1107,1217-1246` and
+`:1589`; every spelled-out plugin `ensure` command carries `--touch`; the
+`claim-forked` status prose is success plus three non-success statuses,
+distinct from 0, 1, and 2.
 
 ### Problem
 
@@ -12438,3 +12494,17 @@ Full writeups, including two historical exploit traces, are in
   and how to reconcile that one case is an operator decision, not
   resolved by this design — see `docs/design-opencode-plugin.md` §6.1 for
   the full disclosure.
+- **What the lifecycle model does not establish** (round 8,
+  `docs/spec-opencode-lifecycle.tex`, "What this model does not establish").
+  The model is exhaustive only slice by slice; the full `claim-forked`
+  machine and the three-session slices are bounded runs. It abstracts the
+  locks (except the shared mission lock and its unlocked fallback), takes the
+  read phase and the start of the write phase as one step, and cannot show
+  concurrent edge insertion, so `Acyclic` holds of a serialised store only
+  (N4). Not represented: `Store.Close`'s sweep skipping a record it cannot
+  load, and a skeleton with no `record.yaml` refusing `Abandon` (N3); the
+  claim as two files and an origin that does not resolve (N7); a live Claude
+  Code session whose roster fails to parse and has no `last-seen`, which is
+  still purged (N8). The model sees one bit per delegation, open or not, so
+  every close must write verdict `aborted` (N5), and the close step of
+  `deleteFiles` must stop the call on failure (N2).
