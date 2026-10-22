@@ -15,6 +15,10 @@
 % The two documents share the vocabulary of three given sets and ZBOOL and
 % nothing else; this file reads and writes no Registry component.
 %
+% Note: in a direct /z-spec:test run LcInitPair and LcInitChain appear as
+% operations (probcli promotes every non-Init schema); no coverage claim
+% rests on that run (Verification, Direct run).
+%
 % Compile: pdflatex spec-opencode-lifecycle.tex
 %
 % Must be .tex: this repo's fuzz-check gate globs docs/*.tex for the fuzz
@@ -1748,6 +1752,16 @@ space.
 \end{tabularx}
 \end{center}
 }
+
+\paragraph{Switch set of each state count.} A state count belongs to the
+switch set in its row's Switches column and to no other. The \emph{claim}
+slice from \field{LcInitPair} at 2/2/2 has 24\,481 states with only
+\field{fixRefuseReconciles} and \field{fixInertBinding} on
+(\texttt{Fa\_all}, as the table lists it) and 16\,681 states with all nine on
+(\texttt{Fa\_orph\_all}, \texttt{Fa\_wf\_all}); a run of \texttt{Fa\_all} with
+all nine on also visits 16\,681. The Verdicts below quote 24\,481 for
+\field{ReconcileOnExit} under the two-switch set and 16\,681 for
+\field{NoOrphanOpenSkeleton} under all nine.
 
 \paragraph{Mutants of the ghost.}
 \label{sec:lc-mutants}
