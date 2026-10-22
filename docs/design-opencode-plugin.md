@@ -658,7 +658,11 @@ step 1 of the existing chain, already harness-neutral by construction
 seam"). The entire OpenCode-side engineering problem is making
 `ETHOS_SESSION` land, correctly, in the environment of whatever subprocess
 eventually runs `git commit` — not teaching `resolve.SessionID` a new
-discovery mechanism. `process.UnderClaudeCode()`'s three signals
+discovery mechanism. **Setting `ETHOS_SESSION` is necessary but not
+sufficient (round 5):** `plugin/hooks/commit-msg.sh:55` skips the
+`commit-trailers` lookup whenever `MISSION_ID` or `DELEGATION_ID` is
+already non-empty in the environment, so inherited attribution variables
+must be cleared in the same write. §3.2.1 specifies that. `process.UnderClaudeCode()`'s three signals
 (`CLAUDE_PID`, `CLAUDECODE`, a `claude`-named process ancestor —
 `tree.go:238-254`) are all Claude-Code-specific by name and by design; this
 design does not touch, extend, or generalize that function. An OpenCode
@@ -681,8 +685,10 @@ different one, on a different domain: `ctx.shell.hook("create.before",
 `{ command, cwd, timeout, shell, env: Record<string, string |
 undefined> }`, confirmed identical on both copies. That is the mechanism
 this design now specifies: on every `create.before` firing, the plugin
-sets `event.env.ETHOS_SESSION = <sessionID>` before the shell command
-runs, exactly the shape `.tmp/migrate-v1.mdx:104-137`'s `"shell.env"` ->
+rewrites the attribution variables in `event.env` (setting
+`ETHOS_SESSION = <sessionID>` when the session is known, and clearing the
+inherited variables the existing hook would otherwise honor, per §3.2.1)
+before the shell command runs, exactly the shape `.tmp/migrate-v1.mdx:104-137`'s `"shell.env"` ->
 `ctx.shell.hook("create.before", ...)` migration example sets
 `event.env.COMPANY_ENV = "development"` for a shell command about to run.
 
@@ -719,18 +725,58 @@ targets OpenCode V2 exclusively (per the spec's own "Scope" and "Harness
 Instantiation" sections), so no earlier-API fallback is in scope here.
 
 Until #54842 merges, this design does not adopt a guessing mechanism to
-close the gap early. The only behavior it specifies for that window is the
-same fail-closed rule round 2 already stated: **set `ETHOS_SESSION` only
-when the plugin can establish, with no ambiguity, which single session is
-responsible for the shell command about to run** (e.g., a deployment mode
-confirmed to run one session at a time per plugin process) — and otherwise
-leave `event.env` untouched for that invocation, which degrades to the
-existing silent "no trailer" case (§4's first table row's negation) rather
-than risking a wrong one. This is the same fail-closed discipline §4.1
-already states for fork-miss reconciliation, applied here to a second
-place this design could have been tempted to guess — now bounded to a
-window with a known closing condition (#54842's merge) rather than an
-open-ended one.
+close the gap early. It still does not leave the environment alone: see
+§3.2.1, which replaces the earlier "leave `event.env` untouched" rule.
+
+#### 3.2.1 Environment isolation for every shell the plugin sees (round 5)
+
+**Correction.** Rounds 2-4 said that when the firing session is ambiguous
+the plugin leaves `event.env` untouched, "degrading to the existing
+silent no trailer case." That is not fail-closed. Three unchanged pieces
+of existing code make an untouched environment able to emit a *wrong*
+trailer when OpenCode runs inside a claimed shell, the §2.4 launch case
+where `opencode serve` starts from an already-claimed shell, and the
+server's environment is inherited by every shell it spawns:
+
+- `resolve.SessionID` accepts any non-empty, trimmed `ETHOS_SESSION`
+  immediately (`internal/resolve/resolve.go:316-318`). An inherited
+  parent value therefore names the parent's claim, and a commit in an
+  unrelated or forked child session is stamped with the parent's mission.
+- `plugin/hooks/commit-msg.sh:55` runs the `commit-trailers` lookup only
+  when both `MISSION_ID` and `DELEGATION_ID` are empty. If either was
+  inherited from an attributed worker shell, the hook skips the lookup and
+  stamps the *launching worker's* values (`commit-msg.sh:160-161`), even
+  when the plugin set a correct child `ETHOS_SESSION`. Setting
+  `ETHOS_SESSION` alone is not enough.
+- With `ETHOS_SESSION` empty, an inherited `CLAUDE_PID` that still
+  corroborates as a live ancestor resolves the *enclosing Claude Code
+  session* from its pointer file (`resolve.go:320-359`;
+  `internal/process/tree.go:68-86`), so even clearing `ETHOS_SESSION`
+  can attribute an OpenCode commit to a Claude session.
+
+The policy is therefore two-armed, and both arms rewrite the environment
+on every `create.before` firing. `event.env` is `Record<string, string |
+undefined>` (`.tmp/effect.mdx:1441`); the plugin assigns the empty string
+rather than `undefined`, because every reader above treats an empty value
+as absent (`commit-msg.sh:55` uses `-z`; `resolve.go:316` and
+`tree.go:125-127` trim then test for empty; `tree.go:249` tests `!= ""`),
+whereas the deletion semantics of `undefined` are not documented.
+
+| Arm | Condition | Plugin writes into `event.env` | Resulting commit |
+|---|---|---|---|
+| Known | The plugin establishes, with no ambiguity, which single session issued the shell: `source.sessionID` once #54842 has merged (§3.2), or a deployment confirmed to run one session at a time per plugin process. The session has been through `ensureRegistered`. | `ETHOS_SESSION=<sid>`; `MISSION_ID=""`; `DELEGATION_ID=""` | The hook runs the lookup (`commit-msg.sh:55` is true), `resolve.SessionID` returns `<sid>` from `ETHOS_SESSION` before any Claude signal is consulted, and the session's own claim and delegation binding decide the trailers. A session with no claim gets none. |
+| Unknown | Any other shell: ambiguous session before #54842, an event with no `source`, a `source.type` that is not `"tool"`, or a failed `ensureRegistered`. | `ETHOS_SESSION=""`; `MISSION_ID=""`; `DELEGATION_ID=""`; `CLAUDE_PID=""`; `CLAUDECODE=""` | No attribution path resolves a session. `resolve.SessionID` finds no `ETHOS_SESSION` and no corroboratable `CLAUDE_PID`, so it returns `ErrNotUnderClaudeCode` (silent) or, if a `claude`-named process is still an ancestor, `ErrNoSession` (a stderr diagnostic, `hook.go:238`). Either way no trailer is added and no Claude session is substituted. |
+
+The Unknown arm suppresses attribution; it does not refuse the spawn.
+Refusing would turn a best-effort traceability feature into a gate on the
+agent's work. The plugin logs one diagnostic naming the arm taken. The
+plugin reads the server's inherited `ETHOS_SESSION` once, at setup, for
+§2.4 source 1; it does not mutate the server process's own environment.
+Setting the server's global environment per session would mix concurrent
+sessions, which is the failure this section exists to prevent.
+
+The policy covers shells the plugin sees. A shell that never fires
+`create.before` is outside it, which §3.3 states as an open item.
 
 ### 3.3 What this does NOT cover — stated plainly
 
@@ -754,21 +800,40 @@ open-ended one.
   can be trusted for the human-typed commit path specifically; the
   agent-issued tool-call path's sessionID source is now confirmed per
   §3.2, pending only #54842's merge.
+- **A shell that never fires `create.before` keeps whatever environment the
+  OpenCode server inherited (round 5).** If the human-typed TUI terminal
+  question above resolves "no, it does not go through the hook," a commit
+  typed there carries the server's inherited `ETHOS_SESSION`,
+  `MISSION_ID`, and `DELEGATION_ID`. When the server was started from a
+  claimed or attributed shell (§2.4 source 1), that can stamp the
+  launching session's trailers on a commit that session did not make. The
+  plugin cannot close this: mutating the server process's own environment
+  would mix concurrent sessions (§3.2.1). The implementation stage must
+  confirm the TUI path against a running `opencode serve`. Until then,
+  the supported launch guidance is to start the server with the
+  attribution variables cleared (`env -u MISSION_ID -u DELEGATION_ID`,
+  and `-u ETHOS_SESSION` when §2.4 source 1 is not in use), and the design
+  records the exposure rather than claiming the hole is closed.
 
 ## 4. Fail-closed behavior for ambiguous attribution
 
 This design adds **no new case** to `ResolveCommitAttribution`'s four-way
 split (spec §"ResolveCommitAttribution", §4.2 below) and changes no line of
-`runHookCommitTrailers` or `WriteCommitTrailers`. The existing fail-closed
-behavior already covers every OpenCode-originated commit, because
-`resolve.SessionID` is, by design, blind to which harness set
-`ETHOS_SESSION`:
+`runHookCommitTrailers`, `WriteCommitTrailers`, or `commit-msg.sh`. The
+existing resolver is blind to which harness set `ETHOS_SESSION`, which is
+what lets one hook serve both harnesses. It is also *not* fail-closed
+against inherited state, so round 5 splits the table below into the cases
+that really occur, and §3.2.1 adds the plugin-side environment policy that
+makes the unsafe rows unreachable for every shell the plugin sees:
 
 | Case | `ETHOS_SESSION` | Outcome |
 |---|---|---|
 | OpenCode plugin correctly propagated it into the committing shell, and that session holds a usable claim | present, names a live session with a claim | Trailers emitted — spec's 4th case. |
-| OpenCode plugin correctly propagated it, but the named session has no claim (unclaimed leader work, a released claim) | present, resolves, but `candidate? not-in dom claims` or dead | Silent, no trailer, **no diagnostic** — spec's 3rd case, the ordinary "mission-free commit" state. |
-| OpenCode plugin's propagation did not reach this particular commit path (§3.3's open item), OR the named session was purged/never existed | present but resolves to nothing usable, OR `UnderClaudeCode()` is also false | `ErrNotUnderClaudeCode` path if no Claude signal either -> **silent**, OR, if some Claude signal is ALSO present (e.g. OpenCode running nested inside a Claude Code shell) and that resolution also fails -> **loud `ErrNoSession` diagnostic** on stderr. |
+| OpenCode plugin correctly propagated it, but the named session has no claim (unclaimed leader work, a released claim) | present, names a registered session, `candidate? not-in dom claims` | Silent, no trailer, **no diagnostic** — spec's 3rd case, the ordinary "mission-free commit" state. |
+| `ETHOS_SESSION` is non-empty but names a session with no roster: purged, never registered, mistyped, or inherited from a different host or checkout | present, names nothing in the roster store | **The existing reader does not check liveness.** `resolve.SessionID` returns any non-empty trimmed value (`resolve.go:316-318`) without consulting the roster, and `WriteCommitTrailers` reads only the sidecars (`commit_trailers.go:45-68`). With no sidecars: silent, no trailer. With a retained claim-origin sidecar (a sidecar with no roster has no GC path, `internal/mission/active.go:605-608`): **the trailer is emitted for the dead session.** The spec's `ResolveCommitAttribution` requires `alive` and a matching `bornEpoch` (`docs/spec-opencode-integration.tex:1378-1389`); the reader does not implement that guard, and this design does not change the reader. Liveness is enforced on the write side instead (`RefuseIfSessionGone` before any claim, `mission.go:2113`; teardown clears sidecars with the roster). The plugin only ever sets `ETHOS_SESSION` to an id it has passed through `ensureRegistered`, and the Unknown arm (§3.2.1) never sets a stale value. |
+| Plugin ran the Unknown arm (§3.2.1), or its propagation did not reach this commit path (§3.3's open item) and the shell has no inherited attribution | `ETHOS_SESSION` empty; `CLAUDE_PID`, `CLAUDECODE` cleared by the plugin | `ErrNotUnderClaudeCode` -> **silent**, or, if a `claude`-named process is still an ancestor, **loud `ErrNoSession` diagnostic** on stderr. No trailer either way. |
+| Propagation did not reach this commit path (§3.3's open item) and the shell *inherited* attribution from a launching claimed shell | `ETHOS_SESSION`, `MISSION_ID`, or `DELEGATION_ID` inherited | **A wrong trailer is possible**: the inherited session or the launching worker's mission/delegation is stamped (`resolve.go:316-318`, `commit-msg.sh:55,160-161`). This is the exposure §3.3 discloses. §3.2.1 closes it for every shell that fires `create.before`; it is not closed for shells that do not. |
+| OpenCode shell, unset `ETHOS_SESSION`, and a valid Claude Code ancestor that is *not* cleared (a shell the plugin did not see, running under Claude Code) | unset, `CLAUDE_PID` corroborates | `resolve.SessionID` resolves the *enclosing Claude session* from its pointer file (`resolve.go:320-359`). That is correct for a Claude Code-spawned shell and wrong for an OpenCode one; §3.2.1 clears `CLAUDE_PID` and `CLAUDECODE` for every shell the plugin sees so this row cannot occur there. |
 | No propagation attempted at all — a plain OpenCode-driven commit with the plugin not installed/enabled, no Claude ancestor | unset, no Claude signal | Silent, `ErrNotUnderClaudeCode` — correctly "no session was ever expected," since from `resolve.SessionID`'s perspective nothing claimed one. |
 
 The load-bearing invariant: **this design never adds a mechanism that
