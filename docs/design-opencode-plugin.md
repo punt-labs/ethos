@@ -27,8 +27,9 @@ disclose the resulting sessionID-correlation gap rather than asserting it
 away; (3) §2.3.2 adds a `Roster.ParentSession` field so `claim-forked`'s
 ancestor-set guard verifies a caller-supplied witness against Go-stored
 lineage instead of trusting it outright, and §5 specifies that
-`claim-forked` also writes the matching `DelegationBinding` atomically with
-the claim (finding 5). §6.1 adds a confirmed (not speculative) collision
+`claim-forked` also writes the matching `DelegationBinding` with the claim
+(finding 5; round 2 called this "atomic", which round 5 corrected: the
+writes are ordered and retryable, not atomic, §5 point 2). §6.1 adds a confirmed (not speculative) collision
 with `punt-labs/points`'s `make doctor` gate (round 3 narrows its scope —
 see below). Nothing else in §§1-4 or §7 was re-litigated; those sections were
 independently verified accurate by the leader before this round was
@@ -149,15 +150,26 @@ not code the plugin writes.
 
 ### 1.2 Hooks actually registered
 
-Four, no more — corrected in this round from the round-1 count of three,
-which conflated two distinct hook domains (see the correction below):
+Three registered hooks, no more: the event subscription, `ctx.tool.hook`,
+and `ctx.shell.hook`. (Round 2 said "four" and listed a fourth item that
+registers nothing; round 5 corrects the count. Item 4 below records a
+deliberate non-registration.) Round 1's count conflated two distinct hook
+domains (see the correction below):
 
 1. **`ctx.event.subscribe()`**, a `Stream` of `OpenCodeEvent` consumed under
    `Effect.forkScoped` (`.tmp/effect.mdx:1192-1234`, §1.1). This is the
    primary trigger for `JoinRootSession` and `ForkSession` (spec
    §5.1-5.2). The subscription delivers the server's whole public event
-   stream; the plugin applies `Stream.filter` for `session.created` and
-   `session.forked` by `item.type` (`.tmp/effect.mdx:1211-1221`).
+   stream; the plugin applies `Stream.filter` for `session.created`,
+   `session.forked`, and `session.deleted` by `item.type`
+   (`.tmp/effect.mdx:1211-1221`). `session.deleted` is the OpenCode
+   session-end event (`.tmp/session-event.ts:177-185`, `type:
+   "session.deleted"`, payload `Base`, i.e. the `sessionID`). Its handler is
+   the OpenCode `EndSession` (round 5, §2.6): it runs `ethos session
+   delete --session <id>` (`cmd/ethos/session.go`'s `sessionDeleteCmd`,
+   wrapping `Store.Delete`, `internal/session/store.go:200`) and drops the
+   plugin's in-process memo entry for that id. This mirrors Claude Code's
+   `SessionEnd`, so neither harness leaks rosters or sidecars.
 
 2. **`ctx.tool.hook("execute.before", callback)`**
    (`.tmp/plugins-index.mdx:1721-1729`, `.tmp/effect.mdx:1453-1467`). This is
@@ -325,11 +337,25 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   session: the `session.created` and `session.forked` events, every
   `execute.before` firing (the session's own `sessionID` is always present,
   §1.2), and every `create.before` firing that carries
-  `source.sessionID` (§3.2). It is cheap when the session is already
-  registered, and it is safe to call twice for the same session, so an
-  event delivered both by the live stream and by a hook is harmless. A
-  plugin restart needs no special path: the first tool or shell call of
-  any session that predates the restart registers it.
+  `source.sessionID` (§3.2). It is safe to call twice for the same
+  session, so an event delivered both by the live stream and by a hook is
+  harmless. A plugin restart needs no special path: the first tool or
+  shell call of any session that predates the restart registers it.
+  **Memo (round 5).** The plugin keeps an in-process map from session id
+  to the time of its last successful `ethos session ensure`. A hit younger
+  than the *refresh interval* (15 minutes, a constant far below the
+  24-hour stale TTL) skips the subprocess. A hit at or past the interval
+  is treated as a miss: the plugin calls `ensure` again, which re-verifies
+  that the roster exists (re-creating it if a purge removed it) and
+  refreshes the roster's `LastSeen` (below). A failed `ensure` stores
+  nothing. The memo is never trusted for a write: `mission claim` and
+  `claim-forked` re-check the roster themselves under the session lock
+  (`RefuseIfSessionGone`, `cmd/ethos/mission.go:2113`), so a memo that is
+  stale because of an outside purge inside the interval can only cause a
+  refused claim, never a wrong one. A `session.deleted` event for the id
+  drops its memo entry (§2.6). The plugin cannot observe a purge by
+  another process, which is why the memo expires instead of being
+  invalidated.
 - To register `sid`, the plugin first resolves its lineage from OpenCode
   (`ctx.session.get({ sessionID: sid })`, §2.3): a fork has a fork source,
   a root has none. For a fork it calls `ensureRegistered(source)` first,
@@ -337,26 +363,79 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   The recursion keeps a visited set and refuses a repeated id (§2.3.1).
   A missed fork event therefore registers the child and every missing
   intermediate ancestor, parent first, before `claim-forked` runs.
+  **A failed or inconclusive lineage read aborts registration (round 5).**
+  If `ctx.session.get` fails, times out, returns no record, or returns a
+  record the plugin cannot classify as root or fork, `ensureRegistered`
+  registers nothing for that session, logs the reason, and the caller
+  proceeds unattributed. It never defaults to "root": a fork registered as
+  a root would get an empty `ParentSession`, and lineage is write-once, so
+  the error would be permanent and the fork could never inherit a
+  delegation. There is also no upgrade path from an empty `ParentSession`
+  to a set one; `ensure` refuses it as a lineage conflict (next item). The
+  repair for a session registered with the wrong lineage is operator
+  action: delete its roster (`ethos session delete --session <id>`, which
+  also clears its sidecars), after which the next `ensureRegistered`
+  registers it again from OpenCode's record.
 - `ethos session ensure` runs under the per-session roster lock
   (`Store.withLock`, as `Create` and `Join` do). If no roster exists, it
-  creates one. If a roster exists, it leaves it untouched: `Started`,
+  creates one. If a roster exists, it changes only the roster's
+  `LastSeen` field, which it sets to the current time: `Started`,
   participants, and extensions survive. If a roster exists and the
   supplied `--parent-session` differs from the stored `ParentSession`
   (including one side empty), it exits non-zero with a lineage-conflict
-  error and changes nothing. A non-empty `--parent-session` whose roster
-  does not exist is also an error. Lineage is therefore write-once and
-  parent-first by construction, and a plugin restart cannot blank it.
-  A session whose claim is already written (§2.4) is unaffected:
-  `ensure` touches only the roster file, never the active-mission or
-  delegation-binding sidecars.
+  error and changes nothing, `LastSeen` included. A non-empty
+  `--parent-session` whose roster does not exist is also an error.
+  Lineage is therefore write-once and parent-first by construction, and a
+  plugin restart cannot blank it. A session whose claim is already
+  written (§2.4) is unaffected: `ensure` touches only the roster file,
+  never the active-mission or delegation-binding sidecars.
+
+**Purge must not reclaim a live OpenCode session (round 5).** The
+registered roster has root and primary equal to the OpenCode session id,
+so `CreateInCheckout` collapses them to one participant (§2.1 step 1).
+`isStale` (`internal/session/store.go:942-957`) treats a one-participant
+roster as a solo session and ages it out by `Started` alone
+(`store.go:946-948`, `isOlderThan`, `staleTTL = 24h` at line 933). An
+OpenCode session that stays live for more than 24 hours would therefore
+be deleted, with its claim and delegation sidecars, by `ethos session
+purge` (`Store.Purge`, `store.go:385-404`) or by `PurgeTombstoned`
+(`store.go:514`), and every later `mission claim` would be refused. The
+mechanism that keeps a live session out of `isStale`'s reach:
+
+- `Roster` gains `LastSeen` (RFC 3339), written by `Store.Ensure` on
+  create and refreshed on every successful call, under the roster lock.
+- `isOlderThan` measures age from the later of `Started` and `LastSeen`.
+  An absent `LastSeen` (every Claude Code roster, every existing roster)
+  behaves exactly as today, and Claude Code's numeric-primary branch
+  (`store.go:950-956`) is untouched.
+- The memo's 15-minute refresh interval is what drives refreshes: any
+  OpenCode session that makes a tool or shell call at least every 24 hours
+  keeps `LastSeen` current. Its observability to `isStale` is that
+  `isStale` reads the field from the roster it already loads.
+- A session idle for more than 24 hours with no event ages out and is
+  purged, as any abandoned session is. That is correct: its next tool call
+  re-registers it via `ensureRegistered` (as a root with no claim, or as a
+  fork with its lineage re-read). A claim lost this way must be re-made.
+  `session.deleted` (§2.6) handles explicit endings; the TTL handles
+  missed ones.
+
+`isStale`/`isOlderThan` and `Roster.LastSeen` are therefore implementation
+work, listed in §5 point 1. They are a change to shared session code, not
+OpenCode-specific logic.
 
 A session that predates the plugin and never fires a tool or shell call
 stays unregistered. Nothing it does can reach a commit through the
 plugin, and an operator `ethos mission claim` against its id is refused
 as an unknown session. That refusal is fail-closed, and the next tool or
 shell call from that session registers it. This limit is disclosed, not
-hidden: the formal model's `JoinRootSession` fires on creation, and this
-design reaches the same registry state lazily when creation was missed.
+hidden. The formal model's `JoinRootSession` fires on creation; this
+design registers lazily. A missed `session.created` therefore yields a
+*registered but unclaimed* root: the roster exists once the first tool or
+shell call arrives, but the claim that `JoinRootSession` followed by
+`ClaimMission` would have made is not made by registration. A claim still
+comes from §2.4 (the inherited `ETHOS_SESSION` or an operator's `ethos
+mission claim`), so the registry state is not the same as the model's
+until one of those happens. Registration alone attributes nothing.
 
 ### 2.2 ForkSession
 
@@ -509,10 +588,18 @@ detection, not by a depth constant:
   nothing further for that chain.
 - *Go side* (`claim-forked`, §2.3.2): follows the stored `ParentSession`
   upward from the child with a visited set. It stops on a match (pass), on
-  an empty `ParentSession` (the witness is not an ancestor: refuse), or on
-  a repeated id (refuse, fail closed). Each step either reaches an empty
-  link or visits a new roster, and the roster set is finite, so the walk
-  terminates. A cycle cannot be written through `ensure` (the parent must
+  an empty `ParentSession` (the witness is not an ancestor: refuse), on a
+  repeated id (refuse, fail closed), or **when `ss.Load` fails on any
+  session in the chain, including a missing roster (refuse, fail
+  closed)**. The last case matches the spec: when an ancestor's record is
+  removed (`EndSession`, a `session.deleted` event, or a purge), "the
+  chain is structurally unwalkable past that point" and the relation
+  reflects only "as much of the ancestor chain as still has a live,
+  readable record" (`docs/spec-opencode-integration.tex:1054-1064`). A
+  load error that is not "not found" (a corrupt roster) refuses the same
+  way and is reported to the caller. Each step either reaches an empty
+  link, fails to load, or visits a new roster, and the roster set is
+  finite, so the walk terminates. A cycle cannot be written through `ensure` (the parent must
   already exist and lineage is write-once, §2.1.1), so the visited set
   guards only against a hand-edited or corrupt roster file.
 
@@ -648,6 +735,25 @@ mission claim-forked`, the same two steps the OpenCode plugin takes on
 Code: whether a forked session's own `CLAUDE_PID` resolves to a fresh roster
 entry automatically, or the hook must register one. The implementation stage
 must confirm this against a running Claude Code, as the spec states.
+
+### 2.6 EndSession: `session.deleted` (round 5)
+
+Rounds 1-4 registered OpenCode sessions but never ended them, so rosters
+and claim/binding sidecars outlived their sessions until a purge, and the
+two harnesses differed: Claude Code's `SessionEnd` hook deletes the
+session (`internal/hook/session_end.go:57`, `ss.Delete`). The plugin now
+handles `session.deleted` (§1.2 item 1; `.tmp/session-event.ts:177-185`)
+by running `ethos session delete --session <id>` (`runSessionDelete`,
+`cmd/ethos/session.go:699`, wrapping `Store.Delete`, `store.go:200`). That
+call holds the per-session lock and clears the active-mission claim, the
+delegation binding, and every pending dispatch before removing the roster
+(`deleteFiles`, `store.go`), and the plugin drops the id from its memo
+(§2.1.1). This instantiates the spec's `EndSession`. A forked child whose
+ancestor was deleted becomes unwalkable past that ancestor, and
+`claim-forked` refuses (§2.3.1), which is the spec's own behavior. A missed
+`session.deleted` event is covered by the TTL: the roster stops being
+refreshed and `isStale` reclaims it (§2.1.1). Deleting an unknown id is not
+an error the plugin acts on; it logs and continues.
 
 ## 3. `ethos hook commit-trailers` without Claude process-tree discovery
 
@@ -791,8 +897,22 @@ whereas the deletion semantics of `undefined` are not documented.
 
 | Arm | Condition | Plugin writes into `event.env` | Resulting commit |
 |---|---|---|---|
-| Known | The plugin establishes, with no ambiguity, which single session issued the shell: `source.sessionID` once #54842 has merged (§3.2), or a deployment confirmed to run one session at a time per plugin process. The session has been through `ensureRegistered`. | `ETHOS_SESSION=<sid>`; `MISSION_ID=""`; `DELEGATION_ID=""` | The hook runs the lookup (`commit-msg.sh:55` is true), `resolve.SessionID` returns `<sid>` from `ETHOS_SESSION` before any Claude signal is consulted, and the session's own claim and delegation binding decide the trailers. A session with no claim gets none. |
+| Known | The plugin establishes, with no ambiguity, which single session issued the shell: `source.sessionID` once #54842 has merged (§3.2), or the `singleSession` plugin option (defined below, off by default). The session has been through `ensureRegistered` within the memo's refresh interval (§2.1.1). | `ETHOS_SESSION=<sid>`; `MISSION_ID=""`; `DELEGATION_ID=""` | The hook runs the lookup (`commit-msg.sh:55` is true), `resolve.SessionID` returns `<sid>` from `ETHOS_SESSION` before any Claude signal is consulted, and the session's own claim and delegation binding decide the trailers. A session with no claim gets none. |
 | Unknown | Any other shell: ambiguous session before #54842, an event with no `source`, a `source.type` that is not `"tool"`, or a failed `ensureRegistered`. | `ETHOS_SESSION=""`; `MISSION_ID=""`; `DELEGATION_ID=""`; `CLAUDE_PID=""`; `CLAUDECODE=""` | No attribution path resolves a session. `resolve.SessionID` finds no `ETHOS_SESSION` and no corroboratable `CLAUDE_PID`, so it returns `ErrNotUnderClaudeCode` (silent) or, if a `claude`-named process is still an ancestor, `ErrNoSession` (a stderr diagnostic, `hook.go:238`). Either way no trailer is added and no Claude session is substituted. |
+
+**The `singleSession` option (round 5).** Earlier rounds said "a deployment
+confirmed to run one session at a time" without saying how the plugin
+confirms it. It is now a concrete plugin option, `singleSession`, a boolean
+read from the plugin's `options` (`.tmp/effect-plugin.ts:29`; configured
+in the plugin entry of `opencode.json`, `.tmp/effect.mdx:43-46`), **default
+`false`**. The operator sets it to assert that this server runs one
+session at a time. When it is `true`, the Known arm applies to a shell
+whose `create.before` event carries no `source.sessionID`, and the session
+is the only id the plugin currently holds in its memo that has not been
+deleted (§2.6). If the plugin holds more than one such id, or none, the
+shell takes the Unknown arm: the option never makes the plugin pick among
+sessions. With the option off, no deployment, however small, gets the Known
+arm before #54842.
 
 The Unknown arm suppresses attribution; it does not refuse the spawn.
 Refusing would turn a best-effort traceability feature into a gate on the
@@ -827,6 +947,14 @@ The policy covers shells the plugin sees. A shell that never fires
   can be trusted for the human-typed commit path specifically; the
   agent-issued tool-call path's sessionID source is now confirmed per
   §3.2, pending only #54842's merge.
+- **Until OpenCode PR #54842 merges, a server that runs more than one
+  session gets no `Mission:` or `Delegation:` trailers on plugin-spawned
+  shells (round 5).** Without `source.sessionID` on `ShellCreateBefore`,
+  the plugin cannot say which session issued a shell, so every such shell
+  takes the Unknown arm and its commits carry no trailers (§3.2.1). Only a
+  server configured with `singleSession: true` (one live session) gets
+  attribution in that window. This is the cost of refusing to guess a
+  session id, stated plainly rather than implied.
 - **A shell that never fires `create.before` keeps whatever environment the
   OpenCode server inherited (round 5).** If the human-typed TUI terminal
   question above resolves "no, it does not go through the hook," a commit
@@ -857,7 +985,7 @@ makes the unsafe rows unreachable for every shell the plugin sees:
 |---|---|---|
 | OpenCode plugin correctly propagated it into the committing shell, and that session holds a usable claim | present, names a live session with a claim | Trailers emitted — spec's 4th case. |
 | OpenCode plugin correctly propagated it, but the named session has no claim (unclaimed leader work, a released claim) | present, names a registered session, `candidate? not-in dom claims` | Silent, no trailer, **no diagnostic** — spec's 3rd case, the ordinary "mission-free commit" state. |
-| `ETHOS_SESSION` is non-empty but names a session with no roster: purged, never registered, mistyped, or inherited from a different host or checkout | present, names nothing in the roster store | **The existing reader does not check liveness.** `resolve.SessionID` returns any non-empty trimmed value (`resolve.go:316-318`) without consulting the roster, and `WriteCommitTrailers` reads only the sidecars (`commit_trailers.go:45-68`). With no sidecars: silent, no trailer. With a retained claim-origin sidecar (a sidecar with no roster has no GC path, `internal/mission/active.go:605-608`): **the trailer is emitted for the dead session.** The spec's `ResolveCommitAttribution` requires `alive` and a matching `bornEpoch` (`docs/spec-opencode-integration.tex:1378-1389`); the reader does not implement that guard, and this design does not change the reader. Liveness is enforced on the write side instead (`RefuseIfSessionGone` before any claim, `mission.go:2113`; teardown clears sidecars with the roster). The plugin only ever sets `ETHOS_SESSION` to an id it has passed through `ensureRegistered`, and the Unknown arm (§3.2.1) never sets a stale value. |
+| `ETHOS_SESSION` is non-empty but names a session with no roster: purged, never registered, mistyped, or inherited from a different host or checkout | present, names nothing in the roster store | **The existing reader does not check liveness.** `resolve.SessionID` returns any non-empty trimmed value (`resolve.go:316-318`) without consulting the roster, and `WriteCommitTrailers` reads only the sidecars (`commit_trailers.go:45-68`). With no sidecars: silent, no trailer. With a retained claim-origin sidecar (a sidecar with no roster has no GC path, `internal/mission/active.go:605-608`): **the trailer is emitted for the dead session.** The spec's `ResolveCommitAttribution` requires `alive` and a matching `bornEpoch` (`docs/spec-opencode-integration.tex:1378-1389`); the reader does not implement that guard, and this design does not change the reader. Liveness is enforced on the write side instead (`RefuseIfSessionGone` before any claim, `mission.go:2113`; teardown clears sidecars with the roster). What the plugin guarantees, and what it does not: it sets `ETHOS_SESSION` only to an id for which `ethos session ensure` succeeded within the memo's refresh interval (15 minutes, §2.1.1), and the Unknown arm (§3.2.1) never sets a session id. It cannot see a purge by another process, so a roster deleted inside that window can still be named. Two bounds make that harmless: `Store.Delete`/`Purge` clear the sidecars together with the roster (`deleteFiles`), so a purged session has no trailer to emit, and `LastSeen` (§2.1.1) keeps `isStale` from purging a live session. The residual case is an orphan sidecar (`active.go:605-608`), which the plugin cannot rule out and this design does not claim to. |
 | Plugin ran the Unknown arm (§3.2.1), or its propagation did not reach this commit path (§3.3's open item) and the shell has no inherited attribution | `ETHOS_SESSION` empty; `CLAUDE_PID`, `CLAUDECODE` cleared by the plugin | `ErrNotUnderClaudeCode` -> **silent**, or, if a `claude`-named process is still an ancestor, **loud `ErrNoSession` diagnostic** on stderr. No trailer either way. |
 | Propagation did not reach this commit path (§3.3's open item) and the shell *inherited* attribution from a launching claimed shell | `ETHOS_SESSION`, `MISSION_ID`, or `DELEGATION_ID` inherited | **A wrong trailer is possible**: the inherited session or the launching worker's mission/delegation is stamped (`resolve.go:316-318`, `commit-msg.sh:55,160-161`). This is the exposure §3.3 discloses. §3.2.1 closes it for every shell that fires `create.before`; it is not closed for shells that do not. |
 | OpenCode shell, unset `ETHOS_SESSION`, and a valid Claude Code ancestor that is *not* cleared (a shell the plugin did not see, running under Claude Code) | unset, `CLAUDE_PID` corroborates | `resolve.SessionID` resolves the *enclosing Claude session* from its pointer file (`resolve.go:320-359`). That is correct for a Claude Code-spawned shell and wrong for an OpenCode one; §3.2.1 clears `CLAUDE_PID` and `CLAUDECODE` for every shell the plugin sees so this row cannot occur there. |
@@ -937,13 +1065,21 @@ pipeline stage's write-set is unambiguous:
    field** (§2.1.1, §2.3.2). `Store.Ensure(sessionID, root, primary, repo,
    host, parentSession)` takes the per-session roster lock
    (`Store.withLock`) once and, inside it: creates the roster if none
-   exists; returns without touching an existing roster; returns a
-   lineage-conflict error if an existing roster's `ParentSession` differs
-   from `parentSession`; and returns an error if `parentSession` is
-   non-empty and has no roster. `session create` is unchanged and keeps its
-   replace semantics for its existing callers; the plugin never calls it.
-   The `ParentSession` field is new on `internal/session/session.go`'s
-   `Roster` struct. Every reader that walks ancestor chains (§2.3.1's walk,
+   exists; on an existing roster changes only `LastSeen`; returns a
+   lineage-conflict error (changing nothing) if an existing roster's
+   `ParentSession` differs from `parentSession`; and returns an error if
+   `parentSession` is non-empty and has no roster. `session create` is
+   unchanged and keeps its replace semantics for its existing callers; the
+   plugin never calls it. The `ParentSession` and `LastSeen` fields are new
+   on `internal/session/session.go`'s `Roster` struct. **`isStale` change
+   (round 5):** `isOlderThan` (`store.go:960-966`) measures age from the
+   later of `Started` and `LastSeen`, so `Purge` and `PurgeTombstoned`
+   (`store.go:404,514`) do not reclaim a live OpenCode session after 24
+   hours (§2.1.1). Rosters with no `LastSeen`, including every Claude Code
+   roster, behave as today. This is a change to shared session code with
+   its own tests: a one-participant roster started 25 hours ago with a
+   fresh `LastSeen` is not stale; the same roster without `LastSeen` is.
+   Every reader that walks ancestor chains (§2.3.1's walk,
    `claim-forked`'s guard below) depends on it being populated correctly,
    parent first, by `ForkSession` (§2.2) through `ensureRegistered`.
 2. **A delegation-allocation CLI primitive for `AllocateDelegationForkPropagated`.**
@@ -967,7 +1103,7 @@ pipeline stage's write-set is unambiguous:
    (`commit_trailers.go:65`'s `b.MissionID != missionID` gate) — a claim
    with no matching binding produces a `Mission:` trailer but silently no
    `Delegation:` trailer, the same shape Claude Code's own dispatch path
-   avoids by writing both atomically
+   avoids by writing both (round 2 said "atomically"; superseded below)
    (`internal/hook/pretooluse_dispatch.go:881-888`'s
    `WriteDelegationBinding` call, alongside the claim and skeleton writes
    in the same critical section). `claim-forked` must also write the
@@ -998,28 +1134,83 @@ pipeline stage's write-set is unambiguous:
       pair never reads wrong" (`active.go:240-250`). The binding is also
       not trusted alone: `commit_trailers.go:65` emits it only when its
       `MissionID` equals the claimed mission.
-   2. *Retry reuses the unclaimed partial state.* Under the same lock,
-      `claim-forked` first reads the child's existing delegation binding.
-      If the child has no claim, and the binding names the witness's
-      mission and a skeleton exists for its delegation id, the retry reuses
-      that delegation id, rewrites any missing piece, and then writes the
-      claim. Otherwise it allocates a new id. A child that already holds a
-      claim is refused by the spec's own `sid? not-in dom claims` guard, as
-      before; because the claim is written last, that state implies the
-      skeleton and binding were already written.
-   3. *Failure surfaces; it is never swallowed.* A failed write returns a
-      non-zero exit. The plugin logs it and retries on the child's next
-      `execute.before` (§2.3), which the claim guard makes safe. Until a
-      retry succeeds, the child's commits carry no trailers: the safe
-      direction.
-   4. *Orphans are bounded, not leaked silently.* A skeleton left by an
-      attempt that never reached the claim and is never reused (the
-      mission was released first) is an unreferenced delegation record in
-      the mission's tree. It is inert for attribution. Closing it with
-      verdict `aborted`, as `enforceDelegationDepth` does for a refused
-      spawn (`internal/hook/pretooluse_dispatch.go:863-872`), is the
-      implementation stage's cleanup, and the design requires a test for
-      each interrupt point (after skeleton, after binding, after claim).
+   2. *Lock order and scope.* `claim-forked` splits into an unlocked read
+      phase and a locked write phase.
+      - *Read phase, outside any lock:* read the witness's claim
+        (`ReadActiveMissionBinding`, the same reader `WriteCommitTrailers`
+        uses) and walk the Go-stored lineage (§2.3.1). A refusal here
+        (witness not an ancestor, ancestor roster missing, witness holds no
+        claim) takes no lock and writes nothing.
+      - *Write phase:* the lock is the **child session's** dispatch-pending
+        lock (`mission.WithDispatchPendingLock(globalRoot, child, ...)`,
+        the one `runMissionClaim` already takes for the same session,
+        `cmd/ethos/mission.go:2112`), acquired **first**: that lock is
+        always the outermost one, taken before any mission or delegation
+        lock and never nested inside one (`active.go:495-497`). Inside it,
+        in this order: `RefuseIfSessionGone(child)`; re-check that the child
+        holds no claim; acquire the mission lock and then the delegation
+        lock, in the order `dispatchTierB` uses
+        (`pretooluse_dispatch.go:794-806`); re-load the mission and confirm
+        it is still open (the TOCTOU re-check at lines 820-836); then the
+        three writes of item 1. The witness is not locked, so its claim can
+        be released between the read phase and the write phase. That window
+        is accepted: the child's claim is written for the mission as read,
+        the open-mission re-check bounds it, and the spec's guard is itself
+        evaluated against the state at the time of the operation.
+   3. *Delegation id allocation.* The id comes from the mission-scoped
+      counter, `NewID`, with commit-or-rollback exactly as the dispatch
+      path does it: a deferred `releaseID(success)` that returns the
+      counter if the call fails before the skeleton is on disk, and
+      `success = true` the moment `WriteDelegationSkeleton` returns, after
+      which the id is never rolled back because reuse of an id whose
+      skeleton exists would collide (`pretooluse_dispatch.go:776-788,
+      853-861`).
+   4. *Distinct exit statuses.* `claim-forked` returns three outcomes the
+      plugin can tell apart, none of them the generic failure status:
+      success (0); **witness refused** (not an ancestor, an ancestor
+      roster failed to load, or the witness holds no claim), on which the
+      plugin tries the *next* ancestor as witness; and **write failed**
+      (any lock or write error in the write phase), on which the plugin
+      retries the *same* witness. The exact numbers are fixed in the
+      implementation PR; the requirement is that all three are distinct
+      from each other and from the usage-error status, and are tested.
+   5. *No orphan skeleton from a retry: reuse or roll back.* Two cases.
+      (i) The write phase fails after the skeleton is on disk and the
+      process survives: it closes that skeleton with verdict `aborted`,
+      as `enforceDelegationDepth` does for a refused spawn
+      (`pretooluse_dispatch.go:863-872`), removes a binding it wrote, and
+      exits "write failed". The counter slot stays consumed (item 3), so
+      the retry allocates a fresh id. (ii) The process dies mid-write and
+      cleanup never runs: the next call, under the same child lock, reads
+      the child's delegation binding; if the child has no claim, the
+      binding names the witness's mission, and a skeleton exists for the
+      binding's delegation id, it **reuses** that id and finishes the
+      missing writes; otherwise it ignores the binding and allocates anew.
+      A child that already holds a claim fails the spec's
+      `sid? not-in dom claims` guard, so nothing fires: the call writes
+      nothing and exits success with an "already claimed" message, because
+      the work is done. Since the claim is written last, that state implies
+      the skeleton and binding were written. The implementation PR tests each interrupt
+      point (after skeleton, after binding, after claim) for both cases.
+   6. *Failure surfaces; it is never swallowed.* The plugin logs a "write
+      failed" exit and retries on the child's next `execute.before`
+      (§2.3), which the claim guard makes safe. Until a retry succeeds the
+      child's commits carry no trailers: the safe direction.
+
+   **Deviation from the spec, stated (round 5).** The spec's
+   `AllocateDelegationForkPropagated` leaves `delegationOf' = delegationOf`
+   (`docs/spec-opencode-integration.tex:1017-1022`): it records the
+   delegation and the child's claim but never binds the child to the new
+   delegation. This design's `DelegationBinding` write (round 2, finding 5)
+   is needed because `WriteCommitTrailers` emits a `Delegation:` trailer
+   only from that binding, and it is not modeled. It is therefore a
+   deviation from the formal model, not a refinement of it. The
+   implementation PR must amend `docs/spec-opencode-integration.tex` so
+   that the operation sets `delegationOf' = delegationOf \oplus \{ sid?
+   \mapsto id? \}` (and re-run fuzz and ProB on the amended spec), in the
+   same PR, under this repo's rule that a change to lifecycle logic amends
+   its spec (`docs/development.md`, "internal/mission lifecycle logic").
+   No code for this primitive ships before that amendment is in the PR.
 3. **Fork wiring for both harnesses, in the same implementation stage.**
    `claim-forked` and `Roster.ParentSession` (points 1-2) are harness-neutral
    (§2.5), so two triggers call them: the OpenCode plugin on
@@ -1030,14 +1221,19 @@ pipeline stage's write-set is unambiguous:
    shipping only the OpenCode trigger would leave Claude Code's identical gap
    open and reintroduce a parity difference between the harnesses.
 4. **`.opencode/plugins/ethos.ts` (or an npm-published equivalent) —** the
-   TypeScript plugin itself, implementing §1-§3's four hooks (the OpenCode instantiation of the same Registry model), calling the
+   TypeScript plugin itself, implementing §1-§3's three hooks (the OpenCode instantiation of the same Registry model), calling the
    existing `ethos` binary as a subprocess (the same pattern
    `commit-msg.sh` already uses to call `ethos hook commit-trailers`) for
    every state-mutating action. No direct file access to
    `.punt-labs/ethos/` from TypeScript — every write goes through the Go
    binary, so there is exactly one implementation of the Registry's
    locking and validation discipline (`AcquireDispatchPendingLock`,
-   per-session flocks), not two.
+   per-session flocks), not two. The plugin's scope also includes: the
+   `session.deleted` handler that runs `ethos session delete` (§2.6, the
+   OpenCode `EndSession`); the in-process `ensureRegistered` memo with its
+   15-minute refresh interval (§2.1.1); abort-on-inconclusive lineage
+   (§2.1.1); the two-armed environment policy and the `singleSession`
+   option, default off (§3.2.1); and the Effect shape (§1.1).
 5. **Coequal per-harness enablement: `ethos enable [claude] [opencode]`,
    with harnesses named explicitly or chosen at a prompt, and neither
    privileged.** Read directly,
@@ -1048,10 +1244,22 @@ pipeline stage's write-set is unambiguous:
    make Claude Code the unqualified default and OpenCode an opt-in
    qualifier. The design instead splits `EnableTo` into two layers:
    - **Harness-neutral repo steps**, which neither harness owns: the gitlink
-     guard, the vendored-guide deposit, `.gitignore` protection, the
-     `.punt-labs/ethos/enabled` marker, and commit-msg/pre-commit hook
-     chaining (`enable.go:87-125,137`). Both subcommands run them
-     idempotently, marker last, exactly as `EnableTo` orders them now.
+     guard, the vendored-guide deposit, `.gitignore` protection,
+     commit-msg/pre-commit hook chaining, and the
+     `.punt-labs/ethos/enabled` marker. Every selection runs them
+     idempotently, **in this order: gitlink guard, deposit, gitignore,
+     hook chaining, then the marker last** (round 5 corrects round 4's
+     claim that this is "exactly as `EnableTo` orders them now"). **This is
+     a reorder of today's code.** `EnableTo` writes the marker at
+     `enable.go:119-125`, then the `CLAUDE.md` import (`127-135`), and only
+     then calls `chainHooks` (`137`), so today a marker can be present
+     before hook chaining has run, and a `chainHooks` failure leaves an
+     enabled repo with no commit-msg hook. Moving `chainHooks` ahead of the
+     marker makes "marker present implies the vendored zone, the
+     gitignore protection, and the hooks are all in place" true. The
+     harness-native step runs after the marker, as the import does today;
+     the marker's meaning is "the neutral steps are complete", not "a
+     harness is wired".
    - **One harness-native step per subcommand**: `ethos enable claude`
      writes the `CLAUDE.md` import line; `ethos enable opencode` deposits
      `.opencode/plugins/ethos.ts` and registers it in `opencode.json`'s
@@ -1100,8 +1308,15 @@ pipeline stage's write-set is unambiguous:
    opencode`, and `ethos disable claude opencode` remove only the named
    harness artifacts and never prompt. With none named on an interactive
    terminal, `ethos disable` prompts with the harnesses *currently
-   enabled* (by each entry's `enabled?` probe), all preselected; if none
-   is enabled it reports that and changes nothing. With none named and no
+   enabled* (by each entry's `enabled?` probe), all preselected. Two no-op
+   cases exit 0, never an error: `ethos disable` with nothing enabled
+   prints a message (for example `no harness is enabled; nothing to
+   disable`), changes nothing, and does not prompt; and `ethos disable
+   <harness>` for a harness that is already disabled reports it as a no-op
+   (`opencode is already disabled`) and changes nothing. In a mixed
+   invocation (`disable claude opencode`, one already disabled) the
+   enabled one is disabled and the other is reported as a no-op, exit 0.
+   With none named and no
    terminal it exits non-zero with the same both-harness usage error. Each
    removal touches only its own artifact, and the neutral marker and hook
    chaining are removed only when no harness artifact remains. Existing
