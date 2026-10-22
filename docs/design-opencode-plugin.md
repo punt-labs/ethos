@@ -208,14 +208,23 @@ propagation (§3.2) on top, the former grounded in the companion FAQ's own
 
 On `event.type === "session.created"` with no `parentID` on the payload
 (`.tmp/session-event.ts:48-67`'s `Created` schema: `sessionID`, `projectID`,
-`location`, `parentID` *optional*), the plugin:
+`location`, `parentID` *optional*), the plugin (the `parentID` test only
+selects this path; registration in step 1 resolves lineage itself through
+`ensureRegistered`, §2.1.1, so a fork whose `session.created` arrives first
+is still registered with its fork source):
 
 1. **Registers the OpenCode session with ethos's own roster first, before
-   any claim is attempted.** `ethos session create --session <id>
-   --root-id <id> --primary-id <id>` (`cmd/ethos/session.go:684-692`'s
-   `runSessionCreate`, wrapping `session.Store.Create`,
-   `internal/session/store.go:49`) writes the session's roster file —
-   the same file `RefuseIfSessionGone`
+   any claim is attempted.** `ethos session ensure --session <id>
+   --root-id <id> --primary-id <id>` (new, §5 point 1; it creates the
+   roster only when none exists, and never rewrites an existing one, see
+   §2.1.1) writes the session's roster file — built from the same
+   `session.Store.Create` / `CreateInCheckout` participant logic
+   (`internal/session/store.go:49-94`) that `ethos session create`
+   (`cmd/ethos/session.go:684-692`) already uses. It is **not**
+   `session create`: `Store.CreateInCheckout` builds a fresh roster with a
+   new `Started` time on every call (`store.go:82-93`), so replaying it
+   discards any later `iam`, `join`, or extension state. The roster file is
+   the same one `RefuseIfSessionGone`
    (`internal/hook/pretooluse_dispatch.go:494`) checks for before letting
    any sidecar write proceed. Without this step, every later `ethos
    mission claim <id>` call against the brand-new OpenCode session fails:
@@ -251,42 +260,76 @@ This instantiates `JoinRootSession` (spec §5.1): `rec?.parent = noParent`,
 Claude Code and OpenCode call the identical primitive, the harness-neutral seam the
 spec's own `ETHOS_SESSION` finding establishes (spec §"Scope":
 "`ETHOS_SESSION` is ALREADY a harness-neutral integration seam, with zero
-new ethos-side mechanism needed for OpenCode to use it"). What *is* new,
-corrected in this round, is step 1: the roster-registration call the claim
-depends on, which round 1 omitted — `session create` is an existing,
-`Hidden: true` CLI primitive (`cmd/ethos/session.go:79`), not new Go
-surface, so §5's "what is genuinely new ethos-side code" enumeration is
-unaffected by this fix.
+new ethos-side mechanism needed for OpenCode to use it"). What *is* new
+is step 1: the roster-registration call the claim depends on, which
+round 1 omitted. Round 2 reused `session create` for it. Round 5 found
+that `session create` replaces an existing roster, so step 1 is now the
+create-if-absent `session ensure`, which is new Go surface listed in §5
+point 1.
 
-#### 2.1.1 Reconciling an already-registered session after a plugin restart
+#### 2.1.1 Registration is lazy and idempotent: restart, missed events, and the event-loss window
 
-A plugin process restart (OpenCode server restart, plugin reload) does not
-invalidate any roster entry §2.1 already wrote — rosters are files under
-`.punt-labs/ethos/sessions/`, independent of the plugin process's own
-lifetime. On restart, the plugin's `setup`/`effect` function re-runs from
-scratch and re-subscribes via `ctx.event.subscribe()` (§1.1), but
-`session.created` fires exactly once per session, at creation — a restarted
-plugin does not receive it again for a session that already exists. The
-reconciliation the plugin needs on restart is therefore not "did this
-session's `session.created` already pass through me" (unanswerable from
-the event stream alone) but "does this session already have a roster
-entry," answered directly and idempotently: call `ethos session create`
-for every currently-live OpenCode session the plugin can enumerate via
-`ctx.session.list(...)` (`.tmp/effect.mdx:833-837`'s paginated
-`ctx.session.list({ directory, limit, cursor })`) at `setup` time, before
-resubscribing to new events. `ss.Create`'s own `writeRoster`
-(`internal/session/store.go:858-877`) always overwrites the roster file
-atomically (temp file + rename, no `O_EXCL` check), so re-running `session
-create` for a session that is already registered is a safe no-op on the
-roster shape — it rewrites the same root/primary participant rows rather
-than erroring on an existing file. This mirrors `ClearActiveMission`'s own
-stated idempotence principle (`internal/mission/active.go`, "clearing an
-already-clear slot is a no-op") applied to the create path instead of the
-clear path. A session whose claim was already written (§2.4) is untouched
-by this reconciliation step — `session create` touches only the roster
-file, never the active-mission or delegation-binding sidecars — so
-re-registering a session's roster on plugin restart cannot clobber a claim
-already in place.
+**Corrections (round 5).** Earlier rounds reconciled a restart by
+enumerating live sessions with `ctx.session.list(...)` and replaying
+`ethos session create` for each. Both halves were wrong.
+
+1. *`ctx.session.list` is not in the targeted release.* The companion
+   research records that `SessionDomain` at the released `v2.0.32` tag has
+   no `"list"` member: it was added by a `dev`-branch commit merged after
+   that release (`docs/prfaq-opencode-integration.md:408-418`). The copy of
+   `effect.mdx` under `.tmp/` documents it (`.tmp/effect.mdx:833-837`)
+   because it describes `dev`, not the release. This design therefore does
+   not call `ctx.session.list`, and needs no minimum-version check for it.
+2. *Snapshot-then-subscribe loses events.* Reading a session page before
+   subscribing leaves a window: a root created after the page is read and
+   before the subscription starts appears in neither source, is never
+   registered, and a later root-session claim fails `RefuseIfSessionGone`.
+   This design takes no snapshot, so there is no window to close.
+3. *`session create` is not idempotent.* `CreateInCheckout` always builds a
+   new roster with a new `Started` and only the supplied participants
+   (`internal/session/store.go:58-93`, see §2.1 step 1). Replaying it after `iam`,
+   a `join`, or an extension update loses that state, and replaying it
+   without lineage would blank a fork's `ParentSession` (§2.3.2).
+
+The replacement is one function in the plugin, `ensureRegistered(sid)`,
+and one new Go command, `ethos session ensure` (§5 point 1):
+
+- `ensureRegistered(sid)` runs at every point where the plugin learns of a
+  session: the `session.created` and `session.forked` events, every
+  `execute.before` firing (the session's own `sessionID` is always present,
+  §1.2), and every `create.before` firing that carries
+  `source.sessionID` (§3.2). It is cheap when the session is already
+  registered, and it is safe to call twice for the same session, so an
+  event delivered both by the live stream and by a hook is harmless. A
+  plugin restart needs no special path: the first tool or shell call of
+  any session that predates the restart registers it.
+- To register `sid`, the plugin first resolves its lineage from OpenCode
+  (`ctx.session.get({ sessionID: sid })`, §2.3): a fork has a fork source,
+  a root has none. For a fork it calls `ensureRegistered(source)` first,
+  then `ethos session ensure --session sid --parent-session source ...`.
+  The recursion keeps a visited set and refuses a repeated id (§2.3.1).
+  A missed fork event therefore registers the child and every missing
+  intermediate ancestor, parent first, before `claim-forked` runs.
+- `ethos session ensure` runs under the per-session roster lock
+  (`Store.withLock`, as `Create` and `Join` do). If no roster exists, it
+  creates one. If a roster exists, it leaves it untouched: `Started`,
+  participants, and extensions survive. If a roster exists and the
+  supplied `--parent-session` differs from the stored `ParentSession`
+  (including one side empty), it exits non-zero with a lineage-conflict
+  error and changes nothing. A non-empty `--parent-session` whose roster
+  does not exist is also an error. Lineage is therefore write-once and
+  parent-first by construction, and a plugin restart cannot blank it.
+  A session whose claim is already written (§2.4) is unaffected:
+  `ensure` touches only the roster file, never the active-mission or
+  delegation-binding sidecars.
+
+A session that predates the plugin and never fires a tool or shell call
+stays unregistered. Nothing it does can reach a commit through the
+plugin, and an operator `ethos mission claim` against its id is refused
+as an unknown session. That refusal is fail-closed, and the next tool or
+shell call from that session registers it. This limit is disclosed, not
+hidden: the formal model's `JoinRootSession` fires on creation, and this
+design reaches the same registry state lazily when creation was missed.
 
 ### 2.2 ForkSession
 
@@ -311,6 +354,22 @@ shape the plugin receives over `ctx.event.subscribe()`:
   }
 }
 ```
+
+**Two different "parent" fields (round 5).** The live `session.forked`
+event names the fork source in its `parentID`. The *persisted*
+`Session.Info` record that `ctx.session.get` returns carries two separate
+links (`.tmp/schema-session.ts:33-37`): `parentID` (optional, hierarchy)
+and `fork: { sessionID, boundary }` (optional, fork provenance). A review
+of OpenCode `v2.0.32`'s `SessionProjector.projectFork` reports that a fork
+is stored with `parent_id: null` and the source in `fork_session_id`; that
+projector source is not among this mission's `.tmp/` material, so the
+implementation stage must confirm it against the running release. Whatever
+the projector does, this design reads **only `fork.sessionID`** from a
+persisted record and the event's `parentID` from a live event, and treats
+both as the same relation, "fork source". It never follows the persisted
+`parentID` as lineage: a record read that way would look like a root, and
+a missed fork would never recover its delegation. A persisted record with
+no `fork` is a root.
 
 `.tmp/api.ts:237-239` additionally confirms the request/response shape of
 the `session.fork` RPC operation itself:
@@ -347,12 +406,15 @@ this operation fires from either of two independent triggers against the
 identical guard:
 
 - **Primary: the `session.forked` event itself.** On receipt, the plugin
-  resolves `witness?` as `parentID` (spec §5.6's corrected, round-4 guard:
-  the full ancestor set under transitive closure, not a single hop — see
-  §2.3.1 below for why the implementation can, in practice, stop after one
-  hop). If `witness?` holds an active mission claim, the plugin allocates
-  a new delegation under that mission for the forked child and writes the
-  child's own claim (spec §5.6's `claims' = claims (+) {sid? |-> claims(witness?)}`).
+  calls `ensureRegistered` for the child (§2.1.1), which registers the
+  fork source and any missing ancestors first. It then offers each
+  registered ancestor, nearest first, as `witness?` to `claim-forked`
+  (§5 point 2) until one succeeds (spec §5.6's corrected, round-4 guard:
+  the full ancestor set under transitive closure, not a single hop; see
+  §2.3.1). `claim-forked` refuses a witness that is not an ancestor or
+  holds no claim; on success it allocates a new delegation under the
+  witness's mission for the forked child and writes the child's own claim
+  (spec §5.6's `claims' = claims (+) {sid? |-> claims(witness?)}`).
 
 - **Secondary, trigger-independent: `ctx.tool.hook("execute.before", ...)`.**
   `.tmp/event-manifest.ts` confirms `ctx.event.subscribe()` draws from the
@@ -371,8 +433,15 @@ identical guard:
   (`sid? not-in dom claims`); if not, it reads the session's own record via
   `ctx.session.get({ sessionID })` — part of the hook-plugin's own
   `SessionDomain` (`.tmp/session-effect.ts:153-173`'s `Pick<SessionApi<unknown>,
-  ... "get" ...>`) — for its `parentID`, and applies the identical
-  `AllocateDelegationForkPropagated` guard.
+  ... "get" ...>`) — for its `fork.sessionID` (not `parentID`, see §2.2),
+  and applies the identical `AllocateDelegationForkPropagated` guard.
+  **Correction (round 5).** Round 4 invoked the guard here without
+  registering anything, so for a missed fork the Go side held no roster for
+  the child or for any intermediate ancestor, and its walk from
+  `ss.Load(child)` could not recover the delegation. Both triggers now run
+  the same two steps in the same order: `ensureRegistered(sid)` (which
+  writes the missing rosters and fork links, parent first, preserving any
+  that exist, §2.1.1), then `claim-forked`.
 
 Both triggers invoke the *same* operation with the *same* guard
 (`sid? not-in dom claims`, `id? not-in dom delegations`), so calling it twice
@@ -394,19 +463,35 @@ parent link, not merely the immediate parent — because the spec's own
 spec §"Global Constants"), while the real Registry is unbounded and a
 grandparent's claim must still be reachable.
 
-The real implementation walks this with the identical safeguard
-`internal/process/tree.go`'s `maxWalkDepth` already uses for Claude Code's
-own ancestor walk (`tree.go:16`, `const maxWalkDepth = 10`) — a bounded
-loop, not recursion, following `parentID` upward via repeated
-`ctx.session.get({ sessionID: parentID })` calls until either a claim is
-found, the chain runs out (a session with no `parentID`, i.e. a root), or
-the depth cap is hit. This is the real-code analogue of the spec's inline
-set comprehension restricted to `dom sessions` (spec §5.6: "bounded by the
-currently-live session set... not a global declaration over an unbounded
-carrier"): the real walk is bounded by a fixed small constant for the same
-reason the spec bounds its own comprehension — to guarantee termination
-against a malformed or adversarial chain, not because deep fork lineages
-are expected to be common.
+**Correction (round 5): no depth cap.** Round 4 bounded the walk at ten
+hops, borrowing `internal/process/tree.go:16`'s `maxWalkDepth`. That is
+not equivalent to the spec's guard. The constant bounds a *process-tree*
+walk and says nothing about OpenCode fork depth. With a valid lineage
+whose only claimed ancestor is eleven links away, a ten-hop walk finds no
+claim although the formal operation permits attribution, and the fail-closed
+result is a spurious refusal. The spec bounds its comprehension by
+`dom sessions`, the finite set of live sessions, not by a constant (spec
+§5.6), so a faithful implementation walks the whole ancestor set.
+
+Both walks therefore run to the end of the lineage and terminate by cycle
+detection, not by a depth constant:
+
+- *Plugin side* (`ensureRegistered`, §2.1.1): follows `fork.sessionID`
+  upward through `ctx.session.get`, keeping a set of visited session ids.
+  A repeated id means a malformed lineage; the plugin logs it and registers
+  nothing further for that chain.
+- *Go side* (`claim-forked`, §2.3.2): follows the stored `ParentSession`
+  upward from the child with a visited set. It stops on a match (pass), on
+  an empty `ParentSession` (the witness is not an ancestor: refuse), or on
+  a repeated id (refuse, fail closed). Each step either reaches an empty
+  link or visits a new roster, and the roster set is finite, so the walk
+  terminates. A cycle cannot be written through `ensure` (the parent must
+  already exist and lineage is write-once, §2.1.1), so the visited set
+  guards only against a hand-edited or corrupt roster file.
+
+The walk is upward only, from child toward ancestors, as in §7.1
+alternative B. There is no supported-depth restriction to document and no
+truncation outcome to reconcile with the spec.
 
 #### 2.3.2 Verifying the witness server-side, not trusting the plugin's claim
 
@@ -432,42 +517,42 @@ The fix is a new field on the *session* roster, not the participant:
 forked from, set once, at roster-creation time, and never mutated
 afterward. Two write paths populate it:
 
-- **`ethos session create`** (§2.1) gains an optional `--parent-session
-  <id>` flag. On `ForkSession` (§2.2), the plugin passes the forking
-  session's own `parentID` (confirmed directly on the wire,
-  `.tmp/session-event.ts:187-201`/`.tmp/api.ts:559-571`'s
-  `SessionEvent.Forked` payload) as this flag's value when it first
-  registers the child session's roster — the same roster-registration step
-  §2.1.1 already requires before any claim.
-- A root session (§2.1, no `parentID` on its `session.created` payload) is
-  created with `ParentSession` left empty — there is nothing to record, and
-  an empty value reads unambiguously as "this session has no ethos-known
-  parent," matching the spec's own `noParent` case (spec §5.1).
+- **`ethos session ensure`** (§2.1.1, §5 point 1) takes an optional
+  `--parent-session <id>` flag. On `ForkSession` (§2.2), the plugin passes
+  the fork source (the live event's `parentID`, or a persisted record's
+  `fork.sessionID`, §2.2) as this flag's value when it first registers the
+  child session's roster. The parent's roster must already exist, which is
+  why `ensureRegistered` registers ancestors first. A later `ensure` with a
+  different value is refused, never applied (§2.1.1), so a plugin restart
+  cannot blank or rewrite lineage.
+- A root session (§2.1, no `parentID` on its `session.created` payload, or
+  no `fork` on its persisted record) is registered with `ParentSession`
+  left empty — there is nothing to record, and an empty value reads
+  unambiguously as "this session has no ethos-known parent," matching the
+  spec's own `noParent` case (spec §5.1).
 
 `claim-forked --session <child> --witness <parent>`'s guard then resolves
-`witness?`'s ancestor-set membership the same way §2.3.1's Go walk already
-does — `maxWalkDepth`-bounded, one step at a time — except each step now
-reads `ParentSession` off the *Go-stored* roster (`ss.Load(sessionID)
-.ParentSession`) instead of trusting a caller-supplied chain: starting
-from `child`, follow `ParentSession` upward, checking at each hop whether
-the current session ID equals `witness`, until either a match is found
-(the guard passes), the chain terminates at an empty `ParentSession` (no
-match found anywhere in the ancestor set — the guard refuses), or the depth
-cap is hit (refuse, fail closed, same discipline as §2.3.1). The plugin's
+`witness?`'s ancestor-set membership with the Go walk of §2.3.1, one step
+at a time, with each step reading `ParentSession` off the *Go-stored*
+roster (`ss.Load(sessionID).ParentSession`) instead of trusting a
+caller-supplied chain: starting from `child`, follow `ParentSession`
+upward, checking at each hop whether the current session ID equals
+`witness`, until a match is found (the guard passes), the chain ends at an
+empty `ParentSession` (no match anywhere in the ancestor set: refuse), or
+an id repeats (refuse, fail closed). The plugin's
 own `--witness` argument is now merely *which* session to check for —
 `claim-forked` itself walks the lineage from data it alone wrote via
-`session create`, so a plugin that lies about `--witness` simply gets a
+`session ensure`, so a plugin that lies about `--witness` simply gets a
 refusal: the walk from `child` will not reach a session the plugin never
 registered as an ancestor, regardless of what the flag claims.
 
 This is additive to `Roster`'s existing fields (`internal/session/session.go`'s
 struct, listed in `session.go:25-32`) and requires no change to any
-existing `Create`/`CreateInCheckout` caller that does not pass
-`--parent-session` — an empty string is the correct default for every
-current caller that does not yet record a fork (`ethos session create` run
-without the new flag, and Claude Code's `SessionStart` hook until §2.5's
-wiring lands). Neither the field nor the flag contains any OpenCode-specific
-logic; see §2.5.
+existing `Create`/`CreateInCheckout` caller — an empty string is the
+correct default for every current caller that does not yet record a fork
+(`ethos session create`, which never sets it, and Claude Code's
+`SessionStart` hook until §2.5's wiring lands). Neither the field nor the
+flag contains any OpenCode-specific logic; see §2.5.
 
 ### 2.4 How the plugin itself learns "which mission"
 
@@ -529,9 +614,10 @@ exists anywhere in the codebase. Building `claim-forked` for OpenCode alone
 would therefore itself create a parity difference between the harnesses.
 This design makes the Claude Code wiring in scope for the same
 implementation stage (§5, point 3): Claude Code's `SessionStart` hook, when
-it observes `source: "fork"`, calls `ethos session create --parent-session
-<parent>` and `ethos mission claim-forked`, the same two calls the OpenCode
-plugin makes on `session.forked`. The spec leaves one point open for Claude
+it observes `source: "fork"`, registers lineage with `ethos session ensure
+--parent-session <parent>` (or `Store.Ensure` in-process) and calls `ethos
+mission claim-forked`, the same two steps the OpenCode plugin takes on
+`session.forked`. The spec leaves one point open for Claude
 Code: whether a forked session's own `CLAUDE_PID` resolves to a fresh roster
 entry automatically, or the hook must register one. The implementation stage
 must confirm this against a running Claude Code, as the spec states.
@@ -711,8 +797,8 @@ Concretely, the two places this design could have been tempted to guess,
 and why it does not:
 
 - **Fork-miss reconciliation (§2.3)** resolves `witness?` only by walking
-  `parentID` links the OpenCode event payload (or `ctx.session.get`)
-  itself names — never by picking "the most recently active session" or
+  the fork-source links the OpenCode event payload (`parentID`) or
+  `ctx.session.get` (`fork.sessionID`, §2.2) itself names — never by picking "the most recently active session" or
   any heuristic. A session with no resolvable ancestor chain, or whose
   ancestor set contains no claim, allocates nothing; the tool call
   proceeds unattributed (Tier A-shaped, though this design does not
@@ -753,14 +839,21 @@ ADR rather than introducing unreviewed here.
 This design intentionally minimizes new Go surface. Enumerated so the next
 pipeline stage's write-set is unambiguous:
 
-1. **A `--parent-session` flag on the existing `ethos session create`
-   primitive** (§2.3.2), writing a new `Roster.ParentSession` field. Not a
-   new command — `session create` already exists
-   (`cmd/ethos/session.go:79`, `Hidden: true`) — but the `ParentSession`
-   field itself is new on `internal/session/session.go`'s `Roster` struct,
-   and every reader that walks ancestor chains (§2.3.1's bounded walk,
-   `claim-forked`'s guard below) depends on it being populated correctly
-   by `ForkSession` (§2.2).
+1. **A create-if-absent session primitive, `ethos session ensure`
+   (a hidden command beside `session create`, `cmd/ethos/session.go:79`),
+   backed by a new `session.Store.Ensure`, and a new `Roster.ParentSession`
+   field** (§2.1.1, §2.3.2). `Store.Ensure(sessionID, root, primary, repo,
+   host, parentSession)` takes the per-session roster lock
+   (`Store.withLock`) once and, inside it: creates the roster if none
+   exists; returns without touching an existing roster; returns a
+   lineage-conflict error if an existing roster's `ParentSession` differs
+   from `parentSession`; and returns an error if `parentSession` is
+   non-empty and has no roster. `session create` is unchanged and keeps its
+   replace semantics for its existing callers; the plugin never calls it.
+   The `ParentSession` field is new on `internal/session/session.go`'s
+   `Roster` struct. Every reader that walks ancestor chains (§2.3.1's walk,
+   `claim-forked`'s guard below) depends on it being populated correctly,
+   parent first, by `ForkSession` (§2.2) through `ensureRegistered`.
 2. **A delegation-allocation CLI primitive for `AllocateDelegationForkPropagated`.**
    `ethos mission claim` (§2.1, §2.4) already covers `JoinRootSession` +
    `ClaimMission`. Fork-propagation (§2.3) needs a new, narrow primitive —
@@ -798,8 +891,8 @@ pipeline stage's write-set is unambiguous:
    (§2.5), so two triggers call them: the OpenCode plugin on
    `session.forked` (point 4), and Claude Code's `SessionStart` hook when it
    observes `source: "fork"`. The Claude Code trigger is a change to
-   `internal/hook/session_start.go` that calls `session create
-   --parent-session` and `claim-forked`. It is not a separate future concern:
+   `internal/hook/session_start.go` that registers lineage through
+   `Store.Ensure` with `parentSession` and calls `claim-forked`. It is not a separate future concern:
    shipping only the OpenCode trigger would leave Claude Code's identical gap
    open and reintroduce a parity difference between the harnesses.
 4. **`.opencode/plugins/ethos.ts` (or an npm-published equivalent) —** the
@@ -956,7 +1049,7 @@ ancestor-set membership under transitive closure of the one-step
 own position, closing both historical exploits by construction (spec
 §"AllocateDelegationForkPropagated", the round-4 re-verification against
 both traces). This design's §2.3.1 real-code walk inherits that
-directionality exactly: it walks `parentID` upward only, never downward,
+directionality exactly: it walks fork-source links upward only, never downward,
 so it structurally cannot replay either exploit.
 
 **C — A single live-event trigger only (`ctx.event.subscribe()`), with no
