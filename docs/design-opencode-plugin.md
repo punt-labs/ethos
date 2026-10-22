@@ -330,7 +330,7 @@ enumerating live sessions with `ctx.session.list(...)` and replaying
    new roster with a new `Started` and only the supplied participants
    (`internal/session/store.go:58-93`, see §2.1 step 1). Replaying it after `iam`,
    a `join`, or an extension update loses that state, and replaying it
-   without lineage would blank a fork's `ParentSession` (§2.3.2).
+   without lineage would reset a fork's recorded parent (§2.3.2).
 
 The replacement is one function in the plugin, `ensureRegistered(sid)`,
 and one new Go command, `ethos session ensure` (§5 point 1):
@@ -349,7 +349,7 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   24-hour stale TTL) skips the subprocess. A hit at or past the interval
   is treated as a miss: the plugin calls `ensure` again, which re-verifies
   that the roster exists (re-creating it if a purge removed it) and
-  refreshes the roster's `LastSeen` (below). A failed `ensure` stores
+  refreshes the session's `last-seen` sidecar (below). A failed `ensure` stores
   nothing. The memo is never trusted for a write: `mission claim` and
   `claim-forked` re-check the roster themselves under the session lock
   (`RefuseIfSessionGone`, `cmd/ethos/mission.go:2113`), so a memo that is
@@ -370,68 +370,159 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   record the plugin cannot classify as root or fork, `ensureRegistered`
   registers nothing for that session, logs the reason, and the caller
   proceeds unattributed. It never defaults to "root": a fork registered as
-  a root would get an empty `ParentSession`, and lineage is write-once, so
+  a root would have no recorded parent, and lineage is write-once, so
   the error would be permanent and the fork could never inherit a
-  delegation. There is also no upgrade path from an empty `ParentSession`
-  to a set one; `ensure` refuses it as a lineage conflict (next item). The
+  delegation. There is also no upgrade path from no recorded parent to a
+  set one; `ensure` refuses it as a lineage conflict (next item). The
   repair for a session registered with the wrong lineage is operator
   action: delete its roster (`ethos session delete --session <id>`, which
   also clears its sidecars), after which the next `ensureRegistered`
-  registers it again from OpenCode's record. **One read is conclusive:**
-  when a fork's parent was deleted in OpenCode, `ctx.session.get(parent)`
-  returns "not found", and that is a conclusive answer, not an inconclusive
-  one. The child registers, with `ParentSession` taken from its own
-  persisted `fork.sessionID` or the event's `parentID`. The parent is not
-  ensured. Fork-claim propagation then refuses through the existing
-  ancestor-Load-failure rule (§2.3.1), and an explicit operator `ethos
-  mission claim` on the child still works. Transport errors and timeouts
-  stay inconclusive and abort registration.
+  registers it again from OpenCode's record. **One read is conclusive
+  (round 6):** when a fork's parent was deleted in OpenCode,
+  `ctx.session.get(parent)` returns "not found", and that is a conclusive
+  answer, not an inconclusive one. The plugin then calls `ethos session
+  ensure --session <child> --parent-session <parent> --parent-gone`. The
+  recorded parent is the child's own persisted `fork.sessionID` or the
+  event's `parentID`. The parent is not ensured, and the child's recorded
+  parent dangles by design. `--parent-gone` is the only way to record a
+  parent that has no roster, and the plugin passes it only for that
+  conclusive "not found". Fork-claim propagation then refuses through the
+  existing ancestor-Load-failure rule (§2.3.1), which stays fail-closed,
+  and an explicit operator `ethos mission claim` on the child still
+  works. Transport errors and timeouts stay inconclusive and abort
+  registration, and they never produce `--parent-gone`.
 - `ethos session ensure` runs under the per-session roster lock
-  (`Store.withLock`, as `Create` and `Join` do). If no roster exists, it
-  creates one. If a roster exists, it changes only the roster's
-  `LastSeen` field, which it sets to the current time: `Started`,
-  participants, and extensions survive. If a roster exists and the
-  supplied `--parent-session` differs from the stored `ParentSession`
-  (including one side empty), it exits non-zero with a lineage-conflict
-  error and changes nothing, `LastSeen` included. A non-empty
-  `--parent-session` whose roster does not exist is also an error.
-  Lineage is therefore write-once and parent-first by construction, and a
-  plugin restart cannot blank it. A session whose claim is already
-  written (§2.4) is unaffected: `ensure` touches only the roster file,
-  never the active-mission or delegation-binding sidecars.
+  (`Store.withLock`, as `Create` and `Join` do). Its rules, in order:
+  1. *Parent check, first registration only.* The requirement that a
+     non-empty `--parent-session` name a session with a roster applies
+     only when `ensure` registers the session for the first time (no
+     roster exists and no lineage sidecar records a parent). If it fails,
+     `ensure` exits non-zero and writes nothing. `--parent-gone` (round 6)
+     waives this check for a first registration: it records the dangling
+     parent and is accepted only together with a non-empty
+     `--parent-session`. On an existing roster, `--parent-gone` has no
+     effect.
+  2. *Lineage is write-once.* If a lineage sidecar records a parent, or a
+     roster exists, and the supplied `--parent-session` differs from the
+     recorded one (including one side empty), `ensure` exits non-zero with
+     a lineage-conflict error and changes nothing, `last-seen` included.
+     A matching parent is accepted whether or not the parent's roster
+     still exists: a deleted parent never blocks a refresh.
+  3. *Create or refresh.* If no roster exists, `ensure` writes the lineage
+     sidecar first (when a parent is supplied), then the roster, then
+     `last-seen`. A crash between the steps leaves a sidecar with no
+     roster, and a retry with the same parent completes the registration;
+     the reverse order would leave a fork registered as a root. If a roster
+     exists, `ensure` changes only `last-seen` (set to the current time):
+     `Started`, participants, and extensions survive.
+  A plugin restart therefore cannot reset lineage, and a session whose
+  claim is already written (§2.4) is unaffected: `ensure` never touches the
+  active-mission or delegation-binding sidecars.
+- **Lineage and liveness live in sidecar files, not in the roster
+  (round 6).** Round 5 stored `ParentSession` and `LastSeen` as `Roster`
+  fields. `Join`, `JoinSelf`, `Leave`, and `CreateInCheckout` each load or
+  build a `Roster` and re-marshal it (`store.go:82-93`, `110-196`), so any
+  such call, including one from an older `ethos` binary still serving MCP
+  that does not know the new fields, would drop them. Two files under the
+  session's existing sidecar directory, `sessions/<id>/` (the directory
+  `ActiveMissionPath` and `DelegationBindingPath` already use,
+  `active.go:34-38,342-346`), hold them instead:
+  - `parent-session`: the recorded parent id. It is created once, by
+    writing a temporary file and hard-linking it into place, so a reader
+    never sees a partial file and a second creation fails. It is never
+    rewritten.
+  - `last-seen`: an RFC 3339 timestamp, replaced atomically on every
+    successful `ensure`.
+  Both are written under the roster lock (inside `Ensure`'s `withLock`).
+  Both are removed by `deleteFiles` with the roster, before the roster
+  file, like the mission sidecars, so a removal failure keeps the roster as
+  the retry token (`store.go:278-301`). The directory listing in
+  `Store.List` skips directories (`store.go:360-362`), so the sidecars
+  never show up as sessions. `Store.ParentOf(id)` and `Store.LastSeen(id)`
+  read them without a lock. `Roster` gains no field.
+- **Existing creators respect the sidecar.** `ethos session create`
+  (`Store.CreateInCheckout` called on behalf of the CLI) against an id
+  whose `parent-session` sidecar records a parent refuses and changes
+  nothing, rather than building a fresh roster over a recorded lineage. A
+  Claude Code `SessionStart` with `source: "fork"` calls `Store.Ensure`
+  with the fork's parent, not `createSessionRoster`'s
+  `CreateInCheckout` (`session_start.go:69,194`), so a fork never replaces
+  a roster that already has lineage. A `SessionStart` for any other source
+  keeps today's `CreateInCheckout` path (§2.5).
+- **Repair.** A sidecar left behind with no roster (an older binary's
+  `Delete` does not know to remove it) is authoritative: `ensure` and
+  `create` treat it as the recorded lineage and refuse a different parent.
+  The operator repair is `ethos session delete --session <id>`, whose
+  `deleteFiles` clears the sidecars whether or not the roster exists.
 
-**Purge must not reclaim a live OpenCode session (round 5).** The
-registered roster has root and primary equal to the OpenCode session id,
-so `CreateInCheckout` collapses them to one participant (§2.1 step 1).
-`isStale` (`internal/session/store.go:942-957`) treats a one-participant
-roster as a solo session and ages it out by `Started` alone
-(`store.go:946-948`, `isOlderThan`, `staleTTL = 24h` at line 933). An
-OpenCode session that stays live for more than 24 hours would therefore
-be deleted, with its claim and delegation sidecars, by `ethos session
-purge` (`Store.Purge`, `store.go:385-404`) or by `PurgeTombstoned`
-(`store.go:514`), and every later `mission claim` would be refused. The
-mechanism that keeps a live session out of `isStale`'s reach:
+**Purge must not reclaim a live OpenCode session (round 5, corrected in
+round 6).** The registered roster has root and primary equal to the
+OpenCode session id, so `CreateInCheckout` collapses them to one
+participant (§2.1 step 1). `isStale` (`internal/session/store.go:942-957`)
+treats a one-participant roster as a solo session and ages it out by
+`Started` alone (`store.go:946-948`, `isOlderThan`, `staleTTL = 24h` at
+line 933). An OpenCode session that stays live for more than 24 hours would
+therefore be deleted, with its claim and delegation sidecars, by `ethos
+session purge` (`Store.Purge`, `store.go:385-404`) or by `PurgeTombstoned`
+(`store.go:514`), and every later `mission claim` would be refused. Round 5
+also let an `isOlderThan` change decide only the age base. That left the
+two-participant branch (`store.go:949-956`) in charge: a roster whose
+`Participants[1]` is a dead numeric id would still be stale however fresh
+its `last-seen`. Round 6 puts the sidecar first:
 
-- `Roster` gains `LastSeen` (RFC 3339), written by `Store.Ensure` on
-  create and refreshed on every successful call, under the roster lock.
-- `isOlderThan` measures age from the later of `Started` and `LastSeen`.
-  An absent `LastSeen` (every Claude Code roster, every existing roster)
-  behaves exactly as today, and Claude Code's numeric-primary branch
-  (`store.go:950-956`) is untouched.
+- `isStale` becomes a `Store` method that takes the session id, because it
+  must read the sidecar. It first reads `last-seen`. **When the file is
+  present and parses as RFC 3339, staleness is decided by one test: the
+  age of the later of `Started` and `last-seen` against `staleTTL`. Nothing
+  else is consulted.** The empty-roster, participant-count, and PID
+  branches do not run. An unparseable `Started` counts as the zero time for
+  that maximum, so a parseable `last-seen` still governs.
+- **When `last-seen` is absent or unparseable, the existing logic runs
+  unchanged**, including its handling of an unparseable `Started`
+  (`store.go:962-964`, stale). Every Claude Code roster and every existing
+  roster has no `last-seen` and behaves exactly as today; Claude Code's
+  numeric-primary liveness branch (`store.go:950-956`) is untouched.
+- Both call sites pass the id: `Purge` (`store.go:404`) and
+  `PurgeTombstoned` (`store.go:514`).
 - The memo's 15-minute refresh interval is what drives refreshes: any
   OpenCode session that makes a tool or shell call at least every 24 hours
-  keeps `LastSeen` current. Its observability to `isStale` is that
-  `isStale` reads the field from the roster it already loads.
-- A session idle for more than 24 hours with no event ages out and is
-  purged, as any abandoned session is. That is correct: its next tool call
+  keeps `last-seen` current.
+- **The 24-hour idle purge is intended.** A session idle for more than 24
+  hours with no event ages out and is purged, as any abandoned session is,
+  whatever its roster looks like. That is correct: its next tool call
   re-registers it via `ensureRegistered` (as a root with no claim, or as a
   fork with its lineage re-read). A claim lost this way must be re-made.
   `session.deleted` (§2.6) handles explicit endings; the TTL handles
   missed ones.
 
-`isStale`/`isOlderThan` and `Roster.LastSeen` are therefore implementation
-work, listed in §5 point 1. They are a change to shared session code, not
-OpenCode-specific logic.
+Required tests (implementation stage, `internal/session`), each a case in
+one table-driven `TestIsStale` unless noted:
+
+| Roster | `last-seen` | Expected |
+|---|---|---|
+| two participants, `Participants[1].AgentID` a numeric id with no live process | fresh | **not stale** (the sidecar overrides the PID branch) |
+| two participants, `Participants[1]` a numeric id with a live process, `Started` 25 hours ago | 25 hours ago | stale (idle past the TTL decides, even with a live PID) |
+| one participant, `Started` 25 hours ago | fresh | not stale |
+| one participant, `Started` 25 hours ago | absent | stale |
+| one participant, `Started` fresh | 25 hours ago | not stale (the later time governs) |
+| zero participants | fresh | not stale (sidecar first; `Ensure` never writes such a roster) |
+| zero participants | unparseable | stale (existing empty-roster branch) |
+| two participants, dead numeric `Participants[1]` | unparseable | stale (existing PID branch) |
+| unparseable `Started`, one participant | fresh | not stale |
+
+Separate tests assert: `Join`, `JoinSelf`, `Leave`, and `CreateInCheckout`
+leave both sidecars byte-identical; a hand-written roster re-marshalled
+without any new field (the older-binary case) leaves them intact;
+`deleteFiles` removes both and, when it fails, keeps the roster;
+`ensure` obeys each numbered rule above, including the matching-parent
+refresh with the parent's roster deleted and `--parent-gone` on first
+registration; `session create` refuses an id whose sidecar records a
+parent; and a `SessionStart` with `source: "fork"` against a roster that
+already has lineage changes nothing but `last-seen`.
+
+`isStale`, the two sidecars, `Store.Ensure`, `Store.ParentOf`, and
+`Store.LastSeen` are therefore implementation work, listed in §5 point 1.
+They are a change to shared session code, not OpenCode-specific logic.
 
 A session that predates the plugin and never fires a tool or shell call
 stays unregistered. Nothing it does can reach a commit through the
@@ -599,12 +690,16 @@ detection, not by a depth constant:
   upward through `ctx.session.get`, keeping a set of visited session ids.
   A repeated id means a malformed lineage; the plugin logs it and registers
   nothing further for that chain.
-- *Go side* (`claim-forked`, §2.3.2): follows the stored `ParentSession`
-  upward from the child with a visited set. It stops on a match (pass), on
-  an empty `ParentSession` (the witness is not an ancestor: refuse), on a
+- *Go side* (`claim-forked`, §2.3.2): follows the recorded parent
+  (`Store.ParentOf`, the `parent-session` sidecar of §2.1.1) upward from
+  the child with a visited set. It stops on a match (pass, once the
+  witness's own roster loads, below), on
+  an empty recorded parent (the witness is not an ancestor: refuse), on a
   repeated id (refuse, fail closed), or **when `ss.Load` fails on any
   session in the chain, including a missing roster (refuse, fail
-  closed)**. The last case matches the spec: when an ancestor's record is
+  closed)**. A dangling parent recorded with `--parent-gone` (§2.1.1)
+  falls in the last case: the walk cannot load it, so propagation refuses.
+  The last case matches the spec: when an ancestor's record is
   removed (`EndSession`, a `session.deleted` event, or a purge), "the
   chain is structurally unwalkable past that point" and the relation
   reflects only "as much of the ancestor chain as still has a live,
@@ -612,9 +707,16 @@ detection, not by a depth constant:
   load error that is not "not found" (a corrupt roster) refuses the same
   way and is reported to the caller. Each step either reaches an empty
   link, fails to load, or visits a new roster, and the roster set is
-  finite, so the walk terminates. A cycle cannot be written through `ensure` (the parent must
-  already exist and lineage is write-once, §2.1.1), so the visited set
-  guards only against a hand-edited or corrupt roster file.
+  finite, so the walk terminates. A cycle cannot be written through
+  `ensure` (the parent must exist at first registration and lineage is
+  write-once, §2.1.1), except through a `--parent-gone` parent that is
+  later registered by id and points back at the child. The visited set
+  guards that case and a hand-edited or corrupt sidecar.
+- *The witness's own roster is loaded.* A match is not accepted until
+  `ss.Load(witness)` succeeds, which is the spec's liveness conjunct on
+  `witness?` (`docs/spec-opencode-integration.tex:1007-1009`). The same
+  walk loads the child first (its absence is a different outcome, the
+  "child roster gone" row of §5 point 2).
 
 The walk is upward only, from child toward ancestors, as in §7.1
 alternative B. There is no supported-depth restriction to document and no
@@ -628,7 +730,7 @@ the ancestor-set guard "server side in Go." It did not specify what
 Go-owned data that guard reads. `internal/session/session.go`'s
 `Participant.Parent` (`session.go:10`) is a *within-roster* link — which
 participant, inside one session's own roster, joined on whose behalf
-(`internal/hook/session_start.go:184`'s `root`/`primary` pair, where
+(`internal/hook/session_start.go:187-188`'s `root`/`primary` pair, where
 `primary.Parent = root.AgentID`) — not a link between two different
 sessions' rosters. Confirmed by direct read: nothing else in
 `internal/session/` or `internal/mission/` stores session-to-session
@@ -639,33 +741,38 @@ exist to prevent — a malicious or buggy plugin could name any session as
 `--witness` and the guard would have nothing server-side to check it
 against.
 
-The fix is a new field on the *session* roster, not the participant:
-`Roster.ParentSession string` — the OpenCode `sessionID` this session was
-forked from, set once, at roster-creation time, and never mutated
-afterward. Two write paths populate it:
+The fix is a recorded parent *per session*, not per participant: the
+OpenCode `sessionID` this session was forked from, set once, at
+registration time, and never mutated afterward. **Round 6:** it is stored
+in the `parent-session` sidecar of §2.1.1, not in a `Roster` field, so a
+roster re-marshal cannot erase it. Round 2 introduced it as
+`Roster.ParentSession`; the name survives only in the earlier-round
+notes. Two write paths populate it:
 
 - **`ethos session ensure`** (§2.1.1, §5 point 1) takes an optional
   `--parent-session <id>` flag. On `ForkSession` (§2.2), the plugin passes
   the fork source (the live event's `parentID`, or a persisted record's
   `fork.sessionID`, §2.2) as this flag's value when it first registers the
-  child session's roster. The parent's roster must already exist, which is
-  why `ensureRegistered` registers ancestors first. A later `ensure` with a
+  child session's roster. At first registration the parent's roster must
+  already exist, unless the plugin passes `--parent-gone` for a parent
+  OpenCode conclusively reports deleted (§2.1.1). That is why
+  `ensureRegistered` registers ancestors first. A later `ensure` with a
   different value is refused, never applied (§2.1.1), so a plugin restart
   cannot blank or rewrite lineage.
 - A root session (§2.1, no `parentID` on its `session.created` payload, or
-  no `fork` on its persisted record) is registered with `ParentSession`
-  left empty — there is nothing to record, and an empty value reads
+  no `fork` on its persisted record) is registered with no `parent-session`
+  sidecar — there is nothing to record, and an absent value reads
   unambiguously as "this session has no ethos-known parent," matching the
   spec's own `noParent` case (spec §5.1).
 
 `claim-forked --session <child> --witness <parent>`'s guard then resolves
 `witness?`'s ancestor-set membership with the Go walk of §2.3.1, one step
-at a time, with each step reading `ParentSession` off the *Go-stored*
-roster (`ss.Load(sessionID).ParentSession`) instead of trusting a
-caller-supplied chain: starting from `child`, follow `ParentSession`
+at a time, with each step reading the recorded parent off the *Go-stored*
+sidecar (`Store.ParentOf(sessionID)`) instead of trusting a
+caller-supplied chain: starting from `child`, follow the recorded parent
 upward, checking at each hop whether the current session ID equals
 `witness`, until a match is found (the guard passes), the chain ends at an
-empty `ParentSession` (no match anywhere in the ancestor set: refuse), or
+absent parent (no match anywhere in the ancestor set: refuse), or
 an id repeats (refuse, fail closed). The plugin's
 own `--witness` argument is now merely *which* session to check for —
 `claim-forked` itself walks the lineage from data it alone wrote via
@@ -673,13 +780,12 @@ own `--witness` argument is now merely *which* session to check for —
 refusal: the walk from `child` will not reach a session the plugin never
 registered as an ancestor, regardless of what the flag claims.
 
-This is additive to `Roster`'s existing fields (`internal/session/session.go`'s
-struct, listed in `session.go:25-32`) and requires no change to any
-existing `Create`/`CreateInCheckout` caller — an empty string is the
-correct default for every current caller that does not yet record a fork
-(`ethos session create`, which never sets it, and Claude Code's
-`SessionStart` hook until §2.5's wiring lands). Neither the field nor the
-flag contains any OpenCode-specific logic; see §2.5.
+This leaves `Roster` (`internal/session/session.go:25-32`) unchanged and
+requires no change to any `Join`, `JoinSelf`, or `Leave` caller. Two
+creators change: `ethos session create` refuses an id whose sidecar
+records a parent, and Claude Code's fork `SessionStart` calls `Ensure`
+(§2.1.1, §2.5). Neither the sidecar nor the flag contains any
+OpenCode-specific logic; see §2.5.
 
 ### 2.4 How the plugin itself learns "which mission"
 
@@ -719,9 +825,9 @@ of scope for this design.
 ### 2.5 Fork propagation is harness-neutral: Claude Code needs it too
 
 The machinery in §2.2, §2.3, and §2.3.2 is not OpenCode-specific.
-`claim-forked` and `Roster.ParentSession` are harness-neutral Go primitives
-with no OpenCode-specific logic in them: they take two session IDs and walk
-Go-stored lineage. Only the *trigger* that calls them differs per harness.
+`claim-forked` and the `parent-session` sidecar (§2.1.1) are harness-neutral
+Go primitives with no OpenCode-specific logic in them: they take two session
+IDs and walk Go-stored lineage. Only the *trigger* that calls them differs per harness.
 
 The spec's Harness Instantiation section, Case 2
 (`docs/spec-opencode-integration.tex`, §"Harness Instantiation", Claude Code
@@ -741,13 +847,21 @@ exists anywhere in the codebase. Building `claim-forked` for OpenCode alone
 would therefore itself create a parity difference between the harnesses.
 This design makes the Claude Code wiring in scope for the same
 implementation stage (§5, point 3): Claude Code's `SessionStart` hook, when
-it observes `source: "fork"`, registers lineage with `ethos session ensure
---parent-session <parent>` (or `Store.Ensure` in-process) and calls `ethos
-mission claim-forked`, the same two steps the OpenCode plugin takes on
-`session.forked`. The spec leaves one point open for Claude
-Code: whether a forked session's own `CLAUDE_PID` resolves to a fresh roster
-entry automatically, or the hook must register one. The implementation stage
-must confirm this against a running Claude Code, as the spec states.
+it observes `source: "fork"`, registers lineage with `Store.Ensure`
+(in-process, with the fork's parent) instead of `createSessionRoster`'s
+`CreateInCheckout` (`session_start.go:69,194`), then calls `claim-forked`
+(§5 point 2), the same two steps the OpenCode plugin takes on
+`session.forked`. The two steps run one after the other and are never
+nested (§5 point 2, lock constraint). The `SessionStart` path still writes
+the `CLAUDE_PID` pointer file (`session_start.go:196`) as it does today.
+`Ensure` never overwrites a recorded lineage, so a repeated or resumed
+`SessionStart` for a session that already has one cannot erase it. The spec
+leaves one point open for Claude Code: whether a forked session's own
+`CLAUDE_PID` resolves to a fresh roster entry automatically, or the hook
+must register one. The implementation stage must confirm this against a
+running Claude Code, as the spec states. It must also confirm which field of
+the `SessionStart` payload names the fork's parent session; this design has
+not verified one.
 
 ### 2.6 EndSession: `session.deleted` (round 5)
 
@@ -1003,7 +1117,7 @@ makes the unsafe rows unreachable for every shell the plugin sees:
 |---|---|---|
 | OpenCode plugin correctly propagated it into the committing shell, and that session holds a usable claim | present, names a live session with a claim | Trailers emitted — spec's 4th case. |
 | OpenCode plugin correctly propagated it, but the named session has no claim (unclaimed leader work, a released claim) | present, names a registered session, `candidate? not-in dom claims` | Silent, no trailer, **no diagnostic** — spec's 3rd case, the ordinary "mission-free commit" state. |
-| `ETHOS_SESSION` is non-empty but names a session with no roster: purged, never registered, mistyped, or inherited from a different host or checkout | present, names nothing in the roster store | **The existing reader does not check liveness.** `resolve.SessionID` returns any non-empty trimmed value (`resolve.go:316-318`) without consulting the roster, and `WriteCommitTrailers` reads only the sidecars (`commit_trailers.go:45-68`). With no sidecars: silent, no trailer. With a retained claim-origin sidecar (a sidecar with no roster has no GC path, `internal/mission/active.go:605-608`): **the trailer is emitted for the dead session.** The spec's `ResolveCommitAttribution` requires `alive` and a matching `bornEpoch` (`docs/spec-opencode-integration.tex:1378-1389`); the reader does not implement that guard, and this design does not change the reader. Liveness is enforced on the write side instead (`RefuseIfSessionGone` before any claim, `mission.go:2113`; teardown clears sidecars with the roster). What the plugin guarantees, and what it does not: it sets `ETHOS_SESSION` only to an id for which `ethos session ensure` succeeded within the memo's refresh interval (15 minutes, §2.1.1), and the Unknown arm (§3.2.1) never sets a session id. It cannot see a purge by another process, so a roster deleted inside that window can still be named. Two bounds make that harmless: `Store.Delete`/`Purge` clear the sidecars together with the roster (`deleteFiles`), so a purged session has no trailer to emit, and `LastSeen` (§2.1.1) keeps `isStale` from purging a live session. The residual case is an orphan sidecar (`active.go:605-608`), which the plugin cannot rule out and this design does not claim to. |
+| `ETHOS_SESSION` is non-empty but names a session with no roster: purged, never registered, mistyped, or inherited from a different host or checkout | present, names nothing in the roster store | **The existing reader does not check liveness.** `resolve.SessionID` returns any non-empty trimmed value (`resolve.go:316-318`) without consulting the roster, and `WriteCommitTrailers` reads only the sidecars (`commit_trailers.go:45-68`). With no sidecars: silent, no trailer. With a retained claim-origin sidecar (a sidecar with no roster has no GC path, `internal/mission/active.go:605-608`): **the trailer is emitted for the dead session.** The spec's `ResolveCommitAttribution` requires `alive` and a matching `bornEpoch` (`docs/spec-opencode-integration.tex:1378-1389`); the reader does not implement that guard, and this design does not change the reader. Liveness is enforced on the write side instead (`RefuseIfSessionGone` before any claim, `mission.go:2113`; teardown clears sidecars with the roster). What the plugin guarantees, and what it does not: it sets `ETHOS_SESSION` only to an id for which `ethos session ensure` succeeded within the memo's refresh interval (15 minutes, §2.1.1), and the Unknown arm (§3.2.1) never sets a session id. It cannot see a purge by another process, so a roster deleted inside that window can still be named. Two bounds make that harmless: `Store.Delete`/`Purge` clear the sidecars together with the roster (`deleteFiles`), so a purged session has no trailer to emit, and the `last-seen` sidecar (§2.1.1) keeps `isStale` from purging a live session. The residual case is an orphan sidecar (`active.go:605-608`), which the plugin cannot rule out and this design does not claim to. |
 | Plugin ran the Unknown arm (§3.2.1), or its propagation did not reach this commit path (§3.3's open item) and the shell has no inherited attribution | `ETHOS_SESSION` empty; `CLAUDE_PID`, `CLAUDECODE` cleared by the plugin | `ErrNotUnderClaudeCode` -> **silent**, or, if a `claude`-named process is still an ancestor, **loud `ErrNoSession` diagnostic** on stderr. No trailer either way. |
 | Propagation did not reach this commit path (§3.3's open item) and the shell *inherited* attribution from a launching claimed shell | `ETHOS_SESSION`, `MISSION_ID`, or `DELEGATION_ID` inherited | **A wrong trailer is possible**: the inherited session or the launching worker's mission/delegation is stamped (`resolve.go:316-318`, `commit-msg.sh:55,160-161`). This is the exposure §3.3 discloses. §3.2.1 closes it for every shell that fires `create.before`; it is not closed for shells that do not. |
 | OpenCode shell, unset `ETHOS_SESSION`, and a valid Claude Code ancestor that is *not* cleared (a shell the plugin did not see, running under Claude Code) | unset, `CLAUDE_PID` corroborates | `resolve.SessionID` resolves the *enclosing Claude session* from its pointer file (`resolve.go:320-359`). That is correct for a Claude Code-spawned shell and wrong for an OpenCode one; §3.2.1 clears `CLAUDE_PID` and `CLAUDECODE` for every shell the plugin sees so this row cannot occur there. |
@@ -1078,28 +1192,36 @@ This design intentionally minimizes new Go surface. Enumerated so the next
 pipeline stage's write-set is unambiguous:
 
 1. **A create-if-absent session primitive, `ethos session ensure`
-   (a hidden command beside `session create`, `cmd/ethos/session.go:79`),
-   backed by a new `session.Store.Ensure`, and a new `Roster.ParentSession`
-   field** (§2.1.1, §2.3.2). `Store.Ensure(sessionID, root, primary, repo,
-   host, parentSession)` takes the per-session roster lock
-   (`Store.withLock`) once and, inside it: creates the roster if none
-   exists; on an existing roster changes only `LastSeen`; returns a
-   lineage-conflict error (changing nothing) if an existing roster's
-   `ParentSession` differs from `parentSession`; and returns an error if
-   `parentSession` is non-empty and has no roster. `session create` is
-   unchanged and keeps its replace semantics for its existing callers; the
-   plugin never calls it. The `ParentSession` and `LastSeen` fields are new
-   on `internal/session/session.go`'s `Roster` struct. **`isStale` change
-   (round 5):** `isOlderThan` (`store.go:960-966`) measures age from the
-   later of `Started` and `LastSeen`, so `Purge` and `PurgeTombstoned`
-   (`store.go:404,514`) do not reclaim a live OpenCode session after 24
-   hours (§2.1.1). Rosters with no `LastSeen`, including every Claude Code
-   roster, behave as today. This is a change to shared session code with
-   its own tests: a one-participant roster started 25 hours ago with a
-   fresh `LastSeen` is not stale; the same roster without `LastSeen` is.
+   (a hidden command beside `session create`, `cmd/ethos/session.go:78`),
+   backed by a new `session.Store.Ensure`, and two per-session sidecar
+   files, `parent-session` and `last-seen`** (§2.1.1, §2.3.2).
+   `Store.Ensure(sessionID, root, primary, repo, checkout, host,
+   parentSession, parentGone)` takes the per-session roster lock
+   (`Store.withLock`) once and applies the three rules of §2.1.1 inside it:
+   the parent-exists check on first registration only (waived by
+   `parentGone`, which requires a non-empty `parentSession`); a
+   lineage-conflict error, changing nothing, when the recorded parent (the
+   sidecar, else none) differs from `parentSession`; and otherwise create
+   (sidecar, roster, `last-seen`, in that order) or refresh only
+   `last-seen`. `Roster` gains no field. `Store.ParentOf` and
+   `Store.LastSeen` read the sidecars; `deleteFiles` removes them with the
+   roster. `session create` keeps its replace semantics for an id with no
+   recorded parent and refuses an id whose sidecar records one. The plugin
+   never calls it.
+   **`isStale` change (round 6, replacing round 5's age-base change):**
+   `isStale` becomes a `Store` method taking the session id and consults
+   `last-seen` first; when present and parseable, the age of the later of
+   `Started` and `last-seen` alone decides, before the empty-roster,
+   participant-count, and PID branches (`store.go:942-957`). Both call
+   sites pass the id (`store.go:404,514`). Absent or unparseable `last-seen`
+   leaves today's logic untouched. This is a change to shared session code
+   with the required tests listed in §2.1.1, including a two-participant
+   roster with a dead numeric `Participants[1]` and a fresh `last-seen`,
+   which is not stale. The 24-hour idle purge is intended (§2.1.1).
    Every reader that walks ancestor chains (§2.3.1's walk,
-   `claim-forked`'s guard below) depends on it being populated correctly,
-   parent first, by `ForkSession` (§2.2) through `ensureRegistered`.
+   `claim-forked`'s guard below) depends on the sidecar being populated
+   correctly, parent first, by `ForkSession` (§2.2) through
+   `ensureRegistered`.
 2. **A delegation-allocation CLI primitive for `AllocateDelegationForkPropagated`.**
    `ethos mission claim` (§2.1, §2.4) already covers `JoinRootSession` +
    `ClaimMission`. Fork-propagation (§2.3) needs a new, narrow primitive —
