@@ -12065,8 +12065,9 @@ below — the round-1 decision's shape (three pieces, minimal new Go
 surface) is unchanged, but point 1 below now includes session-roster
 registration before any claim, point 2's propagation mechanism is
 corrected to the actual OpenCode hook that carries a mutable environment,
-and point 3 now includes server-verified fork lineage and an atomic
-delegation-binding write.
+and point 3 now includes server-verified fork lineage and a matching
+delegation-binding write (round 2 called it "atomic"; superseded in
+round 5, which makes it ordered and retryable but not atomic).
 
 **Round 3 correction.** The leader personally verified two further items
 against real sources — context7 against `/anomalyco/opencode`'s dev
@@ -12126,6 +12127,35 @@ and retries from unclaimed partial state, because
 atomic (§5 point 2). (6) The operator's 2026-10-22 enablement ruling
 replaces round 4's usage error: see decision point 4.
 
+Round 5, second pass (evaluator rejection of the first pass; leader
+decisions). (7) *Purge and teardown.* An OpenCode roster collapses to one
+participant, which `isStale` ages out by `Started` after 24 hours, so a
+live session would be purged with its claim. `Roster.LastSeen`, refreshed
+by every `ethos session ensure`, is now the age base (`isOlderThan` uses
+the later of `Started` and `LastSeen`), and the plugin memoizes
+`ensureRegistered` per session id with a 15-minute refresh interval whose
+expiry re-verifies the roster and refreshes `LastSeen`; claims re-check the
+roster themselves, so a stale memo cannot cause a wrong write. The plugin
+also handles `session.deleted` by running `ethos session delete`
+(`EndSession`), and the Go lineage walk refuses on any `Load` failure (spec
+lines 1054-1064). (8) *Lineage.* A failed or inconclusive lineage read
+aborts registration and never defaults to root; empty-to-set is refused;
+the repair is operator roster deletion. (9) *Known and Unknown arms.* The
+Known arm's single-session condition is the plugin option `singleSession`
+(default off); a multi-session server gets no trailers until OpenCode
+PR 54842 merges. (10) *`claim-forked`.* Read phase outside any lock, then the
+child session's dispatch-pending lock outermost, then mission and
+delegation locks; ids from the mission-scoped counter with
+commit-or-rollback; three distinct exit statuses (success, witness refused,
+write failed); no orphan skeleton (abort on reported failure, reuse after a
+crash). Its `DelegationBinding` write deviates from the spec's
+`AllocateDelegationForkPropagated` (`delegationOf' = delegationOf`,
+`spec-opencode-integration.tex:1017-1022`), so the implementation PR must
+amend that spec. (11) *Enablement.* The neutral steps run deposit,
+gitignore, hook chaining, then the marker last, which reorders today's
+`EnableTo` (marker, import, then `chainHooks`); `ethos disable` with
+nothing enabled, or for an already-disabled harness, exits 0 as a no-op.
+
 ### Problem
 
 `docs/spec-opencode-integration.tex` specifies a harness-neutral
@@ -12145,9 +12175,11 @@ OpenCode session without ever being told which harness it is running under.
 Ship the mapping as four pieces, deliberately minimizing new Go surface:
 
 1. **A TypeScript OpenCode plugin** (`.opencode/plugins/ethos.ts`)
-   registering four hooks: `ctx.event.subscribe()` for
-   `session.created`/`session.forked` (the primary trigger for
-   `JoinRootSession`/`ForkSession`), `ctx.tool.hook("execute.before", ...)`
+   registering three hooks (round 5 corrects an earlier count of four):
+   `ctx.event.subscribe()` for `session.created`/`session.forked`
+   (the primary trigger for `JoinRootSession`/`ForkSession`) and
+   `session.deleted` (the OpenCode `EndSession`, which runs `ethos session
+   delete`, mirroring Claude Code's `SessionEnd`), `ctx.tool.hook("execute.before", ...)`
    for a trigger-independent second path for
    `AllocateDelegationForkPropagated` (covering the confirmed volatility of
    `ctx.event.subscribe()`, which can permanently miss a fork event during
@@ -12206,7 +12238,7 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    `Roster.ParentSession` field are harness-neutral. Claude Code needs the
    same fork treatment (`--fork-session`, `/fork`, `/branch` mint genuine new
    sessions; `SessionStart` reports `source: "fork"`), so wiring Claude Code's
-   `SessionStart` hook to call `session create --parent-session` and
+   `SessionStart` hook to call `session ensure --parent-session` and
    `claim-forked` is in scope for the same implementation stage as the
    OpenCode plugin.
 4. **Coequal per-harness enablement**, `ethos enable [claude] [opencode]`.
