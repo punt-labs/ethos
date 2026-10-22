@@ -618,8 +618,8 @@ identical guard:
   registered ancestor, nearest first, as `witness?` to `claim-forked`
   (§5 point 2) until one succeeds (spec §5.6's corrected, round-4 guard:
   the full ancestor set under transitive closure, not a single hop; see
-  §2.3.1). `claim-forked` refuses a witness that is not an ancestor or
-  holds no claim; on success it allocates a new delegation under the
+  §2.3.1). `claim-forked` refuses a witness that is not an ancestor, holds
+  no claim, or holds only a non-`claim`-origin binding (§5 point 2); on success it allocates a new delegation under the
   witness's mission for the forked child and writes the child's own claim
   (spec §5.6's `claims' = claims (+) {sid? |-> claims(witness?)}`).
 
@@ -639,7 +639,7 @@ identical guard:
   checks whether the firing session is already claimed. The plugin has no
   file access, so it does not read the claim itself: it relies on
   `claim-forked`'s own "already claimed, exit 0" outcome (§5 point 2 item
-  5), and it memoizes the per-session outcome so it does not spawn a
+  4, with the plugin action for each exit status), and it memoizes the per-session outcome so it does not spawn a
   subprocess on every tool call. If the session is not yet claimed, it reads the session's own record via
   `ctx.session.get({ sessionID })` — part of the hook-plugin's own
   `SessionDomain` (`.tmp/session-effect.ts:153-173`'s `Pick<SessionApi<unknown>,
@@ -1227,7 +1227,7 @@ pipeline stage's write-set is unambiguous:
    `ClaimMission`. Fork-propagation (§2.3) needs a new, narrow primitive —
    e.g. `ethos mission claim-forked --session <child> --witness <parent>`
    — that performs the spec's own guard (ancestor-set membership via the
-   `Roster.ParentSession` chain from point 1, not the caller's own
+   recorded-parent chain from point 1, not the caller's own
    `--witness` claim; liveness; `sid? not-in dom claims`) server-side in Go,
    not in the TypeScript plugin, so the guard logic lives once, in the same
    package (`internal/mission`) that already owns `WriteActiveMission` and
@@ -1244,7 +1244,7 @@ pipeline stage's write-set is unambiguous:
    with no matching binding produces a `Mission:` trailer but silently no
    `Delegation:` trailer, the same shape Claude Code's own dispatch path
    avoids by writing both (round 2 said "atomically"; superseded below)
-   (`internal/hook/pretooluse_dispatch.go:881-888`'s
+   (`internal/hook/pretooluse_dispatch.go:880-889`'s
    `WriteDelegationBinding` call, alongside the claim and skeleton writes
    in the same critical section). `claim-forked` must also write the
    binding: `mission.WriteDelegationBinding(globalRoot, childSession,
@@ -1274,70 +1274,147 @@ pipeline stage's write-set is unambiguous:
       pair never reads wrong" (`active.go:240-250`). The binding is also
       not trusted alone: `commit_trailers.go:65` emits it only when its
       `MissionID` equals the claimed mission.
-   2. *Lock order and scope.* `claim-forked` splits into an unlocked read
-      phase and a locked write phase.
-      - *Read phase, outside any lock:* read the witness's claim
-        (`ReadActiveMissionBinding`, the same reader `WriteCommitTrailers`
-        uses) and walk the Go-stored lineage (§2.3.1). A refusal here
-        (witness not an ancestor, ancestor roster missing, witness holds no
-        claim) takes no lock and writes nothing.
+   2. *Lock order and scope (round 6).* `claim-forked` splits into an
+      unlocked read phase and a locked write phase.
+      - *Read phase, outside any lock:*
+        1. `ss.Load(child)`. A missing or unreadable child roster is the
+           "child roster gone" outcome (item 4), not a witness refusal.
+        2. Read the witness's claim with `ReadActiveMissionBinding`, the
+           same reader `WriteCommitTrailers` uses. **The binding must have
+           `Origin == mission.BindOriginClaim`** (`active.go:101-119`;
+           `commit_trailers.go:54` and `pretooluse_dispatch.go:222` gate on
+           the same value). A dispatch-origin binding, an unknown-origin
+           binding (`active.go:103-112`), or no binding is "witness
+           refused". Without this test, a leader that merely dispatched a
+           mission, and never claimed it, would pass its mission to every
+           fork: the false-trailer class `commit_trailers.go:32-40`
+           describes.
+        3. Walk the Go-stored lineage (§2.3.1), which `Load`s the witness's
+           own roster (the spec's liveness conjuncts,
+           `docs/spec-opencode-integration.tex:1007-1010`).
+        A refusal here (witness not an ancestor, an ancestor roster
+        missing, the witness's roster missing, witness holds no claim,
+        wrong origin) takes no lock and writes nothing.
       - *Write phase:* the lock is the **child session's** dispatch-pending
         lock (`mission.WithDispatchPendingLock(globalRoot, child, ...)`,
         the one `runMissionClaim` already takes for the same session,
         `cmd/ethos/mission.go:2112`), acquired **first**: that lock is
         always the outermost one, taken before any mission or delegation
         lock and never nested inside one (`active.go:495-497`). Inside it,
-        in this order: `RefuseIfSessionGone(child)`; re-check that the child
-        holds no claim; allocate the id with `NewID` (item 3,
-        `pretooluse_dispatch.go:775`); acquire the mission lock and then
-        the delegation lock (`AcquireMissionLock` and after,
-        `pretooluse_dispatch.go:794-806`), the order `dispatchTierB` uses:
-        `NewID`, mission lock, delegation lock; re-load the mission and confirm
-        it is still open (the TOCTOU re-check at lines 820-836); then the
-        three writes of item 1. The witness is not locked, so its claim can
-        be released between the read phase and the write phase. That window
-        is accepted: the child's claim is written for the mission as read,
-        the open-mission re-check bounds it, and the spec's guard is itself
-        evaluated against the state at the time of the operation.
+        in this order:
+        1. `RefuseIfSessionGone(child)`.
+        2. *Reconcile the pending record* (item 5): close any open
+           fork-propagated skeleton for this child that this call will not
+           reuse, whether or not the child already holds a claim.
+        3. If the child holds a claim, the spec's `sid? not-in dom claims`
+           guard fails: exit success ("already claimed") without writing.
+        4. Allocate the id with `NewID` (item 3,
+           `pretooluse_dispatch.go:775`), unless item 5 reuses one.
+        5. Acquire the mission lock and then the delegation lock
+           (`AcquireMissionLock` through the delegation lock's defer,
+           `pretooluse_dispatch.go:791-808`), the order `dispatchTierB`
+           uses: `NewID`, mission lock, delegation lock.
+        6. Re-load the mission and confirm it is still open (the TOCTOU
+           re-check, `pretooluse_dispatch.go:810-838`).
+        7. Write the `claim-forked-pending` record (item 5), then the three
+           writes of item 1, then remove the record.
+        The witness is not locked, so its claim can be released between the
+        read phase and the write phase. That window is accepted: the child's
+        claim is written for the mission as read, the open-mission re-check
+        bounds it, and the spec's guard is itself evaluated against the
+        state at the time of the operation.
+      - *Lock constraint (round 6).* `Ensure` takes the roster lock
+        (`Store.withLock`) and `claim-forked` takes the child's
+        dispatch-pending lock outermost. They run **one after the other,
+        never nested**, in either direction. The reason is the order
+        `deleteFiles` already imposes: it runs inside the roster lock and
+        then takes the dispatch-pending lock (`store.go:201-203,279`), and
+        no code path takes the dispatch-pending lock and then the roster
+        lock (`active.go:619-625`). A `claim-forked` write phase that called
+        `Ensure`, `Join`, `Leave`, `Delete`, or anything else that takes
+        the roster lock while holding the dispatch-pending lock would
+        invert that order and could deadlock against a concurrent
+        `Delete` or `Purge`. The write phase therefore uses only lock-free
+        roster reads (`Load`, `ParentOf`): it receives a reader interface
+        with those two methods and no others, so the compiler enforces the
+        constraint. Callers run `ensure` to completion, then
+        `claim-forked`.
    3. *Delegation id allocation.* The id comes from the mission-scoped
       counter, `NewID`, with commit-or-rollback exactly as the dispatch
       path does it: a deferred `releaseID(success)` that returns the
       counter if the call fails before the skeleton is on disk, and
       `success = true` the moment `WriteDelegationSkeleton` returns, after
       which the id is never rolled back because reuse of an id whose
-      skeleton exists would collide (`pretooluse_dispatch.go:776-788,
+      skeleton exists would collide (`pretooluse_dispatch.go:775-787,
       853-861`).
-   4. *Distinct exit statuses.* `claim-forked` returns three outcomes the
-      plugin can tell apart, none of them the generic failure status:
-      success (0); **witness refused** (not an ancestor, an ancestor
-      roster failed to load, or the witness holds no claim), on which the
-      plugin tries the *next* ancestor as witness; and **write failed**
-      (any lock or write error in the write phase), on which the plugin
-      retries the *same* witness. The exact numbers are fixed in the
-      implementation PR; the requirement is that all three are distinct
-      from each other and from the usage-error status, and are tested.
-   5. *No orphan skeleton from a retry: reuse or roll back.* Two cases.
-      (i) The write phase fails after the skeleton is on disk and the
-      process survives: it closes that skeleton with verdict `aborted`,
-      as `enforceDelegationDepth` does for a refused spawn
-      (`pretooluse_dispatch.go:863-872`), removes a binding it wrote, and
-      exits "write failed". The counter slot stays consumed (item 3), so
-      the retry allocates a fresh id. (ii) The process dies mid-write and
-      cleanup never runs: the next call, under the same child lock, reads
-      the child's delegation binding; if the child has no claim, the
-      binding names the witness's mission, and a skeleton exists for the
-      binding's delegation id, it **reuses** that id and finishes the
-      missing writes; otherwise it ignores the binding and allocates anew.
-      A child that already holds a claim fails the spec's
-      `sid? not-in dom claims` guard, so nothing fires: the call writes
-      nothing and exits success with an "already claimed" message, because
-      the work is done. Since the claim is written last, that state implies
-      the skeleton and binding were written. The implementation PR tests each interrupt
-      point (after skeleton, after binding, after claim) for both cases.
-   6. *Failure surfaces; it is never swallowed.* The plugin logs a "write
-      failed" exit and retries on the child's next `execute.before`
-      (§2.3), which the claim guard makes safe. Until a retry succeeds the
-      child's commits carry no trailers: the safe direction.
+   4. *Exit statuses (round 6): one status per cause.* Round 5 split the
+      outcomes three ways. That left several real causes unclassified. The
+      table assigns every cause exactly one of four non-success statuses
+      and tells the plugin what to do for each. The numbers are fixed in
+      the implementation PR; the requirement is that all four are distinct
+      from each other, from 0, and from the existing statuses 1 (generic
+      error) and 2 (usage error and `failClosed`, `cmd/ethos/main.go:64-70`),
+      and that a test covers every row.
+
+      | Status | Causes | Plugin action |
+      |---|---|---|
+      | **success** (0) | The child is now claimed and bound. Or the child already held a claim ("already claimed"; the pending record is reconciled first). | Memoize "claimed" for the refresh interval (15 minutes), so a claim lost to a purge is retried after the next re-registration. |
+      | **witness refused** | The child's lineage does not reach the witness; an ancestor roster or the witness's own roster is missing or fails to load; a repeated id; the witness holds no claim; the witness binding's origin is not `claim`. | Try the next ancestor as witness, nearest first. When none is left, log once and memoize "unattributed" for the refresh interval (15 minutes, §2.1.1). |
+      | **write failed** | The child's dispatch-pending lock, the mission lock, or the delegation lock cannot be acquired; the pending record, skeleton, binding, or claim write fails; an earlier orphan skeleton could not be closed (item 5). | Retry the **same** witness on the child's next `execute.before`, with no memo. Each retry reconciles first, so leftover state is cleaned up before a new write. Log each failure. |
+      | **do not retry** | The child's roster is gone (`RefuseIfSessionGone` reports `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`) or unreadable; the mission is not open at the TOCTOU re-check, or the mission or its contract fails to load; `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails. | Do not try another ancestor and do not retry in this call. Log. Memoize the outcome for the refresh interval, so a closed mission costs one subprocess per interval per session. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. |
+
+      Usage errors keep status 2 (bad flags). An error that carries no
+      status maps to the generic status 1, which the plugin treats as
+      "do not retry". The command wraps every failure in a typed error that
+      carries its status, and a test asserts that no return path in
+      `claim-forked` yields an untyped error.
+   5. *No orphan skeleton from a retry (round 6).* Round 5 closed an
+      orphan only when the same process survived, or when the retry named
+      the same mission. A retry with a different witness or a different
+      mission would leave the old open skeleton in place. The rule now:
+      - *Pending record.* Before `WriteDelegationSkeleton`, the write phase
+        writes `sessions/<child>/claim-forked-pending` (YAML: delegation id,
+        mission id, witness) under the child's dispatch-pending lock. It is
+        removed as the last step of a successful write. `deleteFiles` also
+        clears it with the other sidecars; a skeleton it named stays open
+        only until its mission closes, because `Store.Close` sweeps open
+        delegations under the exclusive mission lock
+        (`pretooluse_dispatch.go:810-819`).
+      - *Every call reconciles first, regardless of witness or mission.*
+        If a record exists, the call loads the skeleton it names. It
+        **reuses** the delegation only when all of these hold: the record's
+        mission and witness equal this call's, the skeleton is open, and
+        the child has no claim. Then it finishes the missing writes. In
+        every other case it closes the skeleton with verdict `aborted`
+        before doing anything else. An already-closed skeleton is left as
+        it is, and a skeleton that was never written
+        (`fs.ErrNotExist`: the crash came between the record and the
+        skeleton) needs no close. The record is then overwritten or
+        removed.
+      - *The child already holds a claim.* If the record names the
+        delegation in the child's delegation binding, the claim and the
+        skeleton are in use: remove the record only. If it names a
+        different delegation, close that skeleton `aborted`, then remove
+        the record. This covers an operator `ethos mission claim` made
+        after an interrupted `claim-forked`.
+      - *A close failure is never silent.* The call uses
+        `mission.CloseDelegationSkeleton` directly and propagates its
+        error. It does not use `closeDelegationAborted`
+        (`pretooluse_dispatch.go:991-1014`), which only writes the error to
+        stderr. On a close error the call leaves the record in place and
+        exits "write failed", so the next retry attempts the close again.
+      - *In-process cleanup.* If the write phase fails after the skeleton
+        is on disk and the process survives, it closes the skeleton
+        `aborted` (same function, same error rule), removes a binding it
+        wrote, removes the record, and exits "write failed". The counter
+        slot stays consumed (item 3), so the retry allocates a fresh id.
+      - The implementation PR tests each interrupt point (after the
+        record, after the skeleton, after the binding, after the claim),
+        plus a retry with a different witness and a retry with a different
+        mission, and a close that fails.
+   6. *Failure surfaces; it is never swallowed.* The plugin logs every
+      non-success status. Until a retry succeeds the child's commits carry
+      no trailers: the safe direction.
 
    **Deviation from the spec, stated (round 5).** The spec's
    `AllocateDelegationForkPropagated` leaves `delegationOf' = delegationOf`
@@ -1354,7 +1431,7 @@ pipeline stage's write-set is unambiguous:
    its spec (`docs/development.md`, "internal/mission lifecycle logic").
    No code for this primitive ships before that amendment is in the PR.
 3. **Fork wiring for both harnesses, in the same implementation stage.**
-   `claim-forked` and `Roster.ParentSession` (points 1-2) are harness-neutral
+   `claim-forked` and the `parent-session` sidecar (points 1-2) are harness-neutral
    (§2.5), so two triggers call them: the OpenCode plugin on
    `session.forked` (point 4), and Claude Code's `SessionStart` hook when it
    observes `source: "fork"`. The Claude Code trigger is a change to
