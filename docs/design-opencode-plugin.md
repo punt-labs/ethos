@@ -116,6 +116,23 @@ and enforced by a named test (§5 point 5); (8) DES-078 decision points 2 and
 `pretooluse_dispatch.go:791-808`, and the nearby TOCTOU, `NewID`, binding,
 and `session create` citations were re-checked against source and adjusted.
 
+**Round 7 corrections (mission `m-2026-10-22-030`, PR #536):** the evaluator
+found one blocking defect and six wording defects in round 6. Fixed: (1)
+`Ensure` writes `last-seen` only when the caller passes `touch` (CLI
+`--touch`); the OpenCode plugin passes it on every `ensure`, Claude Code's
+fork `SessionStart` never does, so a Claude Code roster keeps today's PID
+staleness logic, with a new `TestIsStale` row for a Claude fork roster
+(§2.1.1, §5 point 1); (2) the `claim-forked` reconcile close takes the
+record's shared mission lock and the skeleton's delegation lock, and the
+order is stated (§5 point 2); (3) "child roster unreadable" is refused by the
+read-phase `ss.Load`, not `RefuseIfSessionGone`; (4) the outcome of an
+operator claim after an interrupted `claim-forked` that named the same
+delegation is stated; (5) the write-once hard-link temp file has a
+recognizable name that `deleteFiles` removes, and the NTFS requirement is
+stated; (6) every Claude-only part of the shared guide is enumerated, and
+`validate-content` rejects `.claude/` and `Claude Code` in it; (7) the
+`session create` citation is `session.go:79`.
+
 ## 1. Plugin shape and lifecycle hooks
 
 ### 1.1 Entry point
@@ -456,9 +473,21 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   `ActiveMissionPath` and `DelegationBindingPath` already use,
   `active.go:34-38,342-346`), hold them instead:
   - `parent-session`: the recorded parent id. It is created once, by
-    writing a temporary file and hard-linking it into place, so a reader
-    never sees a partial file and a second creation fails. It is never
-    rewritten.
+    writing a temporary file and hard-linking it into place (`os.Link`),
+    so a reader never sees a partial file and a second creation fails. It
+    is never rewritten. **The temporary file has a recognizable name
+    (round 7):** `parent-session.tmp-<random>`, in the same directory as
+    the final file (a hard link must stay on one volume). `Ensure` removes
+    it after the link succeeds or fails, and `deleteFiles` removes every
+    file matching `parent-session.tmp-*` in the session's sidecar
+    directory, so a crash between the write and the link leaves a file
+    that session deletion cleans up and that no reader mistakes for the
+    sidecar. **Platform requirement:** the hard link needs a filesystem
+    that supports links. Unix filesystems do; on Windows, where the
+    session lock is `LockFileEx` (`store_windows.go`), the state directory
+    must be on NTFS, since FAT and exFAT volumes refuse `os.Link`. A
+    failed link for any reason other than "file exists" makes `ensure`
+    exit non-zero and write nothing further.
   - `last-seen`: an RFC 3339 timestamp, replaced atomically on every
     successful `ensure` that passes `--touch` (`Store.Ensure`'s `touch`
     argument). The OpenCode plugin passes it on every call. Claude Code's
@@ -556,7 +585,7 @@ Separate tests assert: `Ensure` without `touch` writes no `last-seen` on
 create and none on refresh, and with `touch` writes it on both; `Join`, `JoinSelf`, `Leave`, and `CreateInCheckout`
 leave both sidecars byte-identical; a hand-written roster re-marshalled
 without any new field (the older-binary case) leaves them intact;
-`deleteFiles` removes both and, when it fails, keeps the roster;
+`deleteFiles` removes both and a leftover `parent-session.tmp-*` file and, when it fails, keeps the roster;
 `ensure` obeys each numbered rule above, including the matching-parent
 refresh with the parent's roster deleted and `--parent-gone` on first
 registration; `session create` refuses an id whose sidecar records a
@@ -1235,7 +1264,7 @@ This design intentionally minimizes new Go surface. Enumerated so the next
 pipeline stage's write-set is unambiguous:
 
 1. **A create-if-absent session primitive, `ethos session ensure`
-   (a hidden command beside `session create`, `cmd/ethos/session.go:78`),
+   (a hidden command beside `session create`, `cmd/ethos/session.go:79`),
    backed by a new `session.Store.Ensure`, and two per-session sidecar
    files, `parent-session` and `last-seen`** (§2.1.1, §2.3.2).
    `Store.Ensure(sessionID, root, primary, repo, checkout, host,
@@ -1598,11 +1627,27 @@ pipeline stage's write-set is unambiguous:
    **The guide is harness-neutral (round 6).** `deposit` writes the guide
    to `.punt-labs/ethos/CLAUDE.md` (`deposit.go:15,87`). That path is the
    org standard's and does not change. Its content does: it carries no
-   instruction that only one harness can follow. Today's guide has some:
-   the `.claude/agents/` generation and "restart Claude Code" note
-   (`guide/CLAUDE.md:20-21`) and the `.claude/agents/` review-agent
-   deployment (`guide/CLAUDE.md:60-61`). Those move to the Claude Code
-   native artifact; the rest stays. Each
+   instruction that only one harness can follow. Today's guide has four such
+   parts, all in `internal/enable/guide/CLAUDE.md`, and each is neutralized
+   or moved to the Claude Code native artifact (round 7 enumerates them):
+   - lines 19-21, the `.claude/agents/<handle>.md` generation and "restart
+     Claude Code" note;
+   - lines 58-67, the Review agents section, which says `ethos seed`
+     deploys the agents to `.claude/agents/`;
+   - lines 69-74, the local review sequence, which invokes those agents;
+   - line 84, the Gotchas entry "Agent types are discovered at
+     SessionStart; restart after adding one", a Claude Code behavior.
+   The shared guide keeps the harness-neutral content: what the review
+   agents are for and the order to run them, reworded without naming a
+   directory or a harness. The Claude Code specifics move to that harness's
+   native artifact. **`validate-content` enforces this (round 7):** a new
+   check rejects the embedded guide
+   (`internal/enable/guide/CLAUDE.md`) and this repo's deposited copy if
+   either contains the string `.claude/` or `Claude Code`. The check runs
+   in `make check` beside "CLAUDE.md guide embed sync", so a harness name
+   cannot return to the shared guide unnoticed. (`CLAUDE.md` as a file name
+   is not a harness name here: the guide's own path is the org standard's.)
+   Each
    harness's native step wires the one shared file in:
    - `ethos enable claude` writes the `@.punt-labs/ethos/CLAUDE.md` import
      into the repo `CLAUDE.md`.

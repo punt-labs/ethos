@@ -12049,7 +12049,8 @@ against pre-fix code before its fix landed.
 **Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
 missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
 `m-2026-10-18-020` (round 3), `m-2026-10-21-003` (round 4), and
-`m-2026-10-22-017` (round 5), and `m-2026-10-22-026` (round 6). Full design:
+`m-2026-10-22-017` (round 5), `m-2026-10-22-026` (round 6), and
+`m-2026-10-22-030` (round 7). Full design:
 `docs/design-opencode-plugin.md`.
 Builds on the formal model in `docs/spec-opencode-integration.tex`
 (PR #534) and its companion research artifact,
@@ -12193,12 +12194,30 @@ never nested, because `deleteFiles` takes the roster lock and then the
 dispatch-pending lock. A four-status table (success, witness refused, write
 failed, do not retry) covers every cause, with a plugin action per status.
 (16) *Guide and enablement.* The deposited guide keeps its path and becomes
-harness-neutral; `enable claude` writes the `@`-import. The `enable
+harness-neutral; `enable claude` writes the `@`-import. `enable
 opencode` appends it to `opencode.json`'s `instructions` array if absent,
 preserving existing entries, and `disable opencode` removes only that entry
 (verified against upstream `instructions.mdx` and `config.mdx`). The harness list is one sorted file with a test that fails on
 any `claude` or `opencode` literal outside it. (17) A citation is fixed:
 `AcquireMissionLock` spans `pretooluse_dispatch.go:791-808`.
+
+**Round 7 correction (mission `m-2026-10-22-030`).** The evaluator found one
+blocking defect and six wording defects in round 6. (18) *`last-seen` is
+opt-in.* `Ensure` writes `last-seen` only when the caller passes `touch`
+(`ethos session ensure --touch`). The OpenCode plugin passes it on every
+call; Claude Code's fork `SessionStart` does not, so a Claude Code roster
+never has `last-seen` and keeps its PID liveness logic (see item 13).
+(19) *`claim-forked` details.* The reconcile close takes the record's shared
+mission lock and the skeleton's delegation lock, which excludes
+`Store.Close`'s sweep and the other record writers. An unreadable child
+roster is refused by the read-phase `ss.Load`; `RefuseIfSessionGone` proceeds
+on any error but not-exist. An operator claim after an interrupted
+`claim-forked` that named the same delegation leaves the skeleton and binding,
+which stamp a `Delegation:` trailer when the missions match and are inert
+otherwise. (20) *Sidecar and guide.* The `parent-session` hard-link temp file
+is named `parent-session.tmp-<random>`, removed by `deleteFiles`, and needs
+NTFS on Windows. Every Claude-only part of the shared guide is enumerated
+(item 16), and `validate-content` rejects `.claude/` and `Claude Code` in it.
 
 ### Problem
 
