@@ -1,0 +1,91 @@
+results:
+    - mission: m-2026-10-22-017
+      round: 1
+      created_at: "2026-10-22T17:34:32Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 465
+          removed: 176
+        - path: DESIGN.md
+          added: 87
+          removed: 27
+      evidence:
+        - name: commit 7e93379 (Effect shape, thread PRRT_kwDORp6BQc6toZVL) - make check exit 0
+          status: pass
+        - name: commit 6888d93 (lazy ensureRegistered, session ensure, no depth cap; threads toZVj, trHLh, trHLr, trHL8, trMIH) - make check exit 0
+          status: pass
+        - name: commit 216420f (env isolation, fail-closed table; threads toZVz, toZWD, trHMF, tteMu) - make check exit 0
+          status: pass
+        - name: commit de6f515 (claim-forked publication order; thread trHML) - make check exit 0
+          status: pass
+        - name: commit 2123b2d (operator enablement ruling) - make check exit 0
+          status: pass
+        - name: commit 1f599be (header round 5 note, DES-078) - make check exit 0
+          status: pass
+        - name: All 11 findings verified against source; 0 rebutted, 11 fixed by amendment
+          status: pass
+      open_questions:
+        - 'Persisted-lineage field: the design reads fork.sessionID (.tmp/schema-session.ts:33-37) and treats SessionProjector.projectFork mapping (parent_id null, fork_session_id) as a reviewer-reported v2.0.32 fact not present in .tmp; the implementation stage must confirm it against the running release.'
+        - 'Choice made inside the finding-5/6 fix: sessions register lazily (ensureRegistered on events and on execute.before/create.before) with no ctx.session.list and no snapshot, rather than declaring a minimum OpenCode version that has session.list. Leader may prefer the baseline option.'
+        - 'claim-forked witness discovery: the plugin offers ancestors nearest-first as --witness until one succeeds; the refusal exit-status protocol is left to the implementation stage.'
+      prose: |
+        Per-thread disposition (all thread IDs PRRT_kwDORp6BQc6...; all FIXED, none rebutted):
+
+        | Thread | Finding | Disposition | Design section / citation |
+        |---|---|---|---|
+        | toZVL | Effect API registration shape | fixed | sec 1.1, 1.2 item 1; .tmp/effect.mdx:5-6,1192-1234,1505-1515 |
+        | toZVj | ten-hop cap vs spec ancestor-set guard | fixed (cap removed, cycle detection) | sec 2.3.1; spec sec 5.6 dom sessions bound; tree.go:16 is a process-tree constant |
+        | toZVz | commit-msg.sh:55 skips lookup if MISSION_ID/DELEGATION_ID set | fixed | sec 3.1, 3.2.1; commit-msg.sh:55,160-161 |
+        | toZWD | resolve.SessionID accepts nonempty ETHOS_SESSION naming missing session | fixed (rows split, reader-vs-model distinction) | sec 4 table; resolve.go:316-318; commit_trailers.go:45-68; spec tex:1378-1389; active.go:605-608 |
+        | trHLh | ctx.session.list absent in v2.0.32 | fixed (dependency removed) | sec 2.1.1 item 1; prfaq-opencode-integration.md:408-418 |
+        | trHLr | snapshot-before-subscribe event-loss window | fixed (no snapshot; idempotent lazy registration) | sec 2.1.1 item 2 |
+        | trHL8 | session create replaces roster, not idempotent | fixed (new create-if-absent Store.Ensure / session ensure, write-once lineage) | sec 2.1 step 1, 2.1.1 item 3, 5 point 1; store.go:58-93 |
+        | trHMF | inherited parent ETHOS_SESSION in shell env | fixed | sec 3.2.1 (two-armed policy), 3.3; resolve.go:316-318,320-359 |
+        | trHML | WithDispatchPendingLock not transactional; WriteCommitTrailers unlocked | fixed (order skeleton, binding, claim; retry rule; tests per interrupt point) | sec 5 point 2; active.go:523-550,626-633; commit_trailers.go:45-72,53-56 |
+        | trMIH | ParentSession lineage missing when live fork event missed | fixed (both triggers ensureRegistered before claim-forked) | sec 2.3, 2.1.1; also sec 2.2 reads fork.sessionID not parentID (.tmp/schema-session.ts:33-37) |
+        | tteMu | leaving event.env untouched not fail-closed | fixed (same policy as trHMF) | sec 3.2.1, 4; tree.go:68-86,124-134,238-254 |
+
+        Operator enablement ruling applied in sec 5 point 5 and DES-078 decision point 4 (prompt with both preselected; explicit forms skip; no TTY plus no harness is usage error naming both; disable mirrors; one supported-harness list; isTTY at cmd/ethos/setup.go:808).
+
+        Note: each commit also carried ethos audit-seal chunks and mission log files that the pre-commit hook adds automatically under .punt-labs/ethos/; no other out-of-scope file was staged by the worker.
+    - mission: m-2026-10-22-017
+      round: 2
+      created_at: "2026-10-22T17:46:04Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 279
+          removed: 64
+        - path: DESIGN.md
+          added: 38
+          removed: 6
+      evidence:
+        - name: commit 29a376b (F1-F8 design doc) - make check exit 0
+          status: pass
+        - name: commit 05dad5d (DES-078 mirror) - make check exit 0 (after fixing an MD018 line-start hash)
+          status: pass
+      open_questions:
+        - 'F1b: isStale/isOlderThan and Roster.LastSeen are named as implementation work in sec 5 point 1; refresh interval 15 minutes is a design constant chosen by the worker (any value well under the 24h stale TTL satisfies the leader decision).'
+        - 'F4: exact exit-status numbers for claim-forked are left to the implementation PR; the design requires three distinct, tested statuses.'
+      prose: |
+        Per-finding disposition (all fixed; section refs are docs/design-opencode-plugin.md):
+
+        | Finding | Disposition | Where |
+        |---|---|---|
+        | F1a Go walk terminates on Load failure | fixed | sec 2.3.1 (Go side bullet), spec tex:1054-1064 |
+        | F1b Ensure must keep live roster non-stale | fixed: Roster.LastSeen refreshed by each ensure; isOlderThan uses later of Started/LastSeen; named as implementation work | sec 2.1.1 "Purge must not reclaim"; sec 5 point 1; store.go:933,942-966,385-404,514 |
+        | F1c memo | fixed: per-id memo, 15 min refresh; expiry re-verifies via ensure; claims re-check roster; overclaim in sec 4 row 3 replaced with the true guarantee | sec 2.1.1; sec 4 table row 3 |
+        | F2 EndSession | fixed: session.deleted handler runs ethos session delete (Store.Delete); verified event name | sec 1.2 item 1, sec 2.6, sec 5 point 4; .tmp/session-event.ts:177-185; session_end.go:57; DES-078 point 1 |
+        | F3 fork registered as root | fixed: inconclusive lineage aborts; no empty-to-set; operator roster deletion is the repair | sec 2.1.1 |
+        | F4 claim-forked | fixed: three distinct exit statuses; mission-scoped NewID with commit-or-rollback; child-session dispatch-pending lock outermost, witness read outside; reuse-or-rollback of skeleton; spec deviation stated and spec amendment required in the implementation PR | sec 5 point 2 items 2-6 and deviation paragraph; pretooluse_dispatch.go:776-788,794-806,820-836,853-872; active.go:495-497; spec tex:1017-1022 |
+        | F5 | fixed: sec 2.1.1 overstatement corrected (registered but unclaimed root); singleSession plugin option, default off, concrete semantics; sec 3.3 states multi-session servers get no trailers until PR 54842 merges | sec 2.1.1, 3.2.1, 3.3 |
+        | F6 EnableTo order | fixed: gitlink guard, deposit, gitignore, chainHooks, marker last; stated as a reorder of enable.go:119-137 | sec 5 point 5 |
+        | F7 ensure memo | folded into F1c | sec 2.1.1 |
+        | F8 disable no-ops | fixed: nothing enabled exits 0 with message; already-disabled harness exits 0 as no-op | sec 5 point 5 |
+
+        DES-078: session create to session ensure fixed; "atomic" wording marked superseded (design header line 30, sec 5 point 2, DESIGN.md round-2 note); hook count corrected to three in design sec 1.2, sec 5 point 4 and DES-078 point 1; second-pass decisions (7)-(11) added.

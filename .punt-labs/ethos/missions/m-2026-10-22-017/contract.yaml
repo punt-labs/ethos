@@ -1,0 +1,28 @@
+mission_id: m-2026-10-22-017
+status: closed
+type: design
+created_at: "2026-10-22T17:22:51Z"
+updated_at: "2026-10-22T17:48:32Z"
+closed_at: "2026-10-22T17:48:32Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-10-22T17:22:51Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/design-opencode-plugin.md
+    - DESIGN.md
+success_criteria:
+    - 'Answer every one of the 11 unresolved Copilot review threads on PR #536 that target docs/design-opencode-plugin.md (fetch them read-only with the gh api graphql reviewThreads query given in the context). For each thread, either amend the design so the finding no longer holds, or, if the finding is wrong, record why in the result evidence with a code/spec/doc citation (file:line). Each must be verified against real source (internal/, plugin/hooks/commit-msg.sh, docs/spec-opencode-integration.tex, .tmp/*.mdx/.ts OpenCode references, context7 for OpenCode) -- never accepted or rejected blind. The 11 cover: Effect-API registration shape; fixed ten-hop cap vs the spec ancestor-set guard; commit-msg.sh:55 skipping commit-trailers when MISSION_ID or DELEGATION_ID is set; resolve.SessionID accepting a nonempty ETHOS_SESSION naming a missing/dead session; ctx.session.list absence in the targeted release; snapshot-before-subscribe event-loss window; session create replacing (not idempotently registering) the roster; inherited parent ETHOS_SESSION in the shell env (two threads); WithDispatchPendingLock not making sidecar writes transactional and WriteCommitTrailers not taking the lock; ParentSession lineage missing when the live fork event was missed.'
+    - 'Apply the operator''s ruling on enablement (2026-10-22), replacing round 4''s usage-error behavior for bare `ethos enable` in Sec5 point 5 and DES-078 decision point 4: (a) `ethos enable` with no harness named, on an interactive terminal, prompts the user to choose which harness(es) to enable, listing every supported harness (claude, opencode) with BOTH preselected as the suggested default; (b) explicit forms `ethos enable claude`, `ethos enable opencode`, and `ethos enable claude opencode` skip the prompt; (c) with no harness named and no interactive terminal (CI, scripts, piped stdin), exit non-zero with a usage error naming both harnesses -- never silently pick one or both; (d) `ethos disable` mirrors this, prompting from the harnesses currently enabled. The supported-harness list is one source of truth that drives the prompt, the usage error, and help text. Neither harness is privileged in any form.'
+    - Update the document header with a round 5 corrections note and DES-078 in DESIGN.md with the round 5 mission ID and changes, in the style of rounds 3 and 4.
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/design-opencode-plugin.md DESIGN.md`. Files outside the write set are already staged or modified in this checkout (.envrc, .punt-labs/vox/vox.md, .punt-labs/ethos/missions.jsonl, staged deletions under .punt-labs/ethos/sessions/); never stage, unstage, restore, or commit them.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'Round 5 of the DES-078 design for ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches, do not touch main. Commit on this branch; do NOT push, do not touch the PR, do not resolve or reply to threads, do not merge -- the leader does all of that. Read-only thread fetch: gh api graphql -f query=''{ repository(owner: "punt-labs", name: "ethos") { pullRequest(number: 536) { reviewThreads(first: 100) { nodes { id isResolved path line comments(first: 10) { nodes { author { login } body } } } } } } }''. The 12th unresolved thread (mission-log directories lacking contract.yaml/results.yaml) is a leader concern, not in scope. The operator principle stands: OpenCode and Claude Code are coequal harnesses.'

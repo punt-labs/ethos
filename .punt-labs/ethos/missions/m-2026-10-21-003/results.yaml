@@ -1,0 +1,32 @@
+results:
+    - mission: m-2026-10-21-003
+      round: 1
+      created_at: "2026-10-21T08:48:18Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 111
+          removed: 30
+        - path: DESIGN.md
+          added: 34
+          removed: 8
+      evidence:
+        - name: commit 4fed665 (a) per-harness enable subcommands; make check exit 0
+          status: pass
+        - name: commit 2d435f9 (b) fork machinery harness-neutral, Claude Code wiring in scope; make check exit 0
+          status: pass
+        - name: commit 58a3f59 (c) neutral wording pass; make check exit 0
+          status: pass
+        - name: commit c46ed55 (d) DES-078 sync in DESIGN.md; make check exit 0
+          status: pass
+        - name: pushed to origin design/opencode-plugin-adapter (01ee06b..c46ed55)
+          status: pass
+      open_questions:
+        - Deprecation window for bare ethos enable is left as an operator ruling.
+        - Whether a forked Claude Code session's CLAUDE_PID resolves to a fresh roster entry is left to implementation-stage verification, as the spec states.
+      prose: |
+        Design doc changes by section. Header: round 4 note added. 1.1: plugin gated on the repo-level marker either enable command writes; plugin file deposited only by ethos enable opencode. 2.1, 2.4 and 4: wording no longer frames Claude Code as the baseline. 2.3.2: closing paragraph corrected, ParentSession has no OpenCode-specific logic. New 2.5: claim-forked and Roster.ParentSession are harness-neutral, with the spec Case 2 facts for Claude Code (source "fork", v2.1.214), and the finding that no such primitive exists in internal/mission or internal/hook today. 5: new point 3 puts Claude Code SessionStart fork wiring in the same implementation stage; points renumbered, enable subcommands are point 5 (neutral repo steps plus one native step per harness, bare enable is a usage error, per-harness disable). 6.1: --opencode replaced by enable opencode.
+        DESIGN.md DES-078: mission list, round 4 correction, Decision now four pieces (fork wiring note on piece 3, new piece 4 for enable subcommands), problem text neutralized, non-goals bullet updated.
+        Note: the repo pre-commit audit-seal hook added sealed audit chunk files under .punt-labs/ethos/ to each commit, and the first commit also swept in the previously staged m-2026-10-21-002 and m-2026-10-21-003 log files. No write-set file outside the two named was edited by me.
