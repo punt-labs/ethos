@@ -109,7 +109,8 @@ install, mirroring `vox`/`z-spec`'s existing per-repo enablement pattern
 (`.punt-labs/vox/CLAUDE.md`, `.punt-labs/z-spec/CLAUDE.md`) — gated on the
 same repo-level `.punt-labs/ethos/enabled` marker that either harness's
 enable command writes (§5, point 5), not a new marker. The plugin file
-itself is deposited only by `ethos enable opencode`.
+itself is deposited only when opencode is selected for enablement
+(`ethos enable opencode`, or chosen at the `ethos enable` prompt, §5 point 5).
 `.tmp/migrate-v1.mdx:38` confirms V2 discovers local plugins from
 `.opencode/plugins/`.
 
@@ -1011,8 +1012,9 @@ pipeline stage's write-set is unambiguous:
    binary, so there is exactly one implementation of the Registry's
    locking and validation discipline (`AcquireDispatchPendingLock`,
    per-session flocks), not two.
-5. **Per-harness enable subcommands: `ethos enable claude` and `ethos
-   enable opencode`, coequal, with no privileged bare form.** Read directly,
+5. **Coequal per-harness enablement: `ethos enable [claude] [opencode]`,
+   with harnesses named explicitly or chosen at a prompt, and neither
+   privileged.** Read directly,
    `internal/enable/enable.go`'s `EnableTo` is not harness-neutral today: its
    deposit step is Claude-Code-specific (`CanonicalImport =
    "@.punt-labs/ethos/CLAUDE.md"`, written by `claudemd.Register` into the
@@ -1028,18 +1030,59 @@ pipeline stage's write-set is unambiguous:
      writes the `CLAUDE.md` import line; `ethos enable opencode` deposits
      `.opencode/plugins/ethos.ts` and registers it in `opencode.json`'s
      `"plugins"` array (`.tmp/plugins-web.mdx:33-38`'s config shape).
-     Neither subcommand writes the other's artifact, and neither skips it:
-     a repo using both harnesses runs both commands explicitly.
+     A harness step writes only its own artifact and never the other's. A
+     repo using both harnesses enables both, by naming both or by accepting
+     the default prompt selection below.
 
-   There is no bare `ethos enable` that means one harness. Bare `ethos
-   enable` exits with a usage error naming both subcommands. `ethos disable
-   claude` and `ethos disable opencode` mirror this: each removes only its
-   own artifact, and the neutral marker and hook chaining are removed only
-   when no harness artifact remains. Existing callers of bare `ethos
-   enable` (docs, scripts, `ETHOS-SETUP.md`, `ethos doctor` hints) are
-   migration work for the implementation stage; whether a deprecation
-   window keeps bare `ethos enable` working is an operator ruling, not
-   decided here. **See §6.1 for a same-repo-only collision the OpenCode
+   **Selecting the harnesses (operator ruling, 2026-10-22; replaces round
+   4's usage error for bare `ethos enable`).** Round 4 made bare `ethos
+   enable` a usage error. The operator ruled that a bare invocation on a
+   terminal should ask instead. `ethos enable` takes zero or more harness
+   names:
+   - *Named:* `ethos enable claude`, `ethos enable opencode`, and `ethos
+     enable claude opencode` (any order, duplicates ignored) enable exactly
+     the named harnesses and never prompt.
+   - *None named, interactive terminal:* `ethos enable` prompts the user to
+     choose which harnesses to enable. The prompt lists every supported
+     harness, `claude` and `opencode`, with **both preselected** as the
+     suggested default; the user confirms or changes the selection. A
+     selection that is empty after the prompt makes no change and exits
+     non-zero with `no harness selected`; it never falls through to a
+     default.
+   - *None named, no interactive terminal* (CI, a script, piped stdin):
+     exit non-zero with a usage error that names both harnesses, for
+     example `ethos enable: no harness named and no terminal to ask; name
+     one or more of: claude, opencode`. It never silently picks one or
+     both.
+   - *Unknown name:* a usage error that lists the supported harnesses.
+
+   "Interactive terminal" is the existing `isTTY` test on standard input
+   (`cmd/ethos/setup.go:808`, `term.IsTerminal`), the check the repo's
+   other prompting command uses.
+
+   **One source of truth.** The supported harnesses are a single ordered
+   list in `internal/enable` (lexical order by name, so position privileges
+   neither), one entry per harness: its name, its enable step, its disable
+   step, and an `enabled?` probe (CLAUDE.md import present; plugin file
+   present and registered). The prompt choices, the usage-error text, the
+   unknown-name error, the command's help text, and `ethos disable`'s
+   prompt all read that list. Adding a harness is one entry. No code path
+   names `claude` or `opencode` outside it, and neither is the value used
+   when the user gives no answer.
+
+   **`ethos disable` mirrors this.** `ethos disable claude`, `ethos disable
+   opencode`, and `ethos disable claude opencode` remove only the named
+   harness artifacts and never prompt. With none named on an interactive
+   terminal, `ethos disable` prompts with the harnesses *currently
+   enabled* (by each entry's `enabled?` probe), all preselected; if none
+   is enabled it reports that and changes nothing. With none named and no
+   terminal it exits non-zero with the same both-harness usage error. Each
+   removal touches only its own artifact, and the neutral marker and hook
+   chaining are removed only when no harness artifact remains. Existing
+   callers of bare `ethos enable` (docs, scripts, `ETHOS-SETUP.md`, `ethos
+   doctor` hints) are migration work for the implementation stage: on a
+   terminal they now meet the prompt, and in CI or scripts they now meet
+   the usage error and must name their harnesses. **See §6.1 for a same-repo-only collision the OpenCode
    subcommand has with one consuming repo's own dev-config gate** — not a
    general incompatibility with projects that use that repo's tooling
    elsewhere.
