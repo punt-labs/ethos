@@ -12049,7 +12049,8 @@ against pre-fix code before its fix landed.
 **Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
 missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
 `m-2026-10-18-020` (round 3), `m-2026-10-21-003` (round 4), and
-`m-2026-10-22-017` (round 5). Full design: `docs/design-opencode-plugin.md`.
+`m-2026-10-22-017` (round 5), and `m-2026-10-22-026` (round 6). Full design:
+`docs/design-opencode-plugin.md`.
 Builds on the formal model in `docs/spec-opencode-integration.tex`
 (PR #534) and its companion research artifact,
 `docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
@@ -12132,7 +12133,8 @@ decisions). (7) *Purge and teardown.* An OpenCode roster collapses to one
 participant, which `isStale` ages out by `Started` after 24 hours, so a
 live session would be purged with its claim. `Roster.LastSeen`, refreshed
 by every `ethos session ensure`, is now the age base (`isOlderThan` uses
-the later of `Started` and `LastSeen`), and the plugin memoizes
+the later of `Started` and `LastSeen`; round 6 replaces this with the
+`last-seen` sidecar, consulted first, see item 13), and the plugin memoizes
 `ensureRegistered` per session id with a 15-minute refresh interval whose
 expiry re-verifies the roster and refreshes `LastSeen`; claims re-check the
 roster themselves, so a stale memo cannot cause a wrong write. The plugin
@@ -12147,14 +12149,50 @@ PR 54842 merges. (10) *`claim-forked`.* Read phase outside any lock, then the
 child session's dispatch-pending lock outermost, then mission and
 delegation locks; ids from the mission-scoped counter with
 commit-or-rollback; three distinct exit statuses (success, witness refused,
-write failed); no orphan skeleton (abort on reported failure, reuse after a
-crash). Its `DelegationBinding` write deviates from the spec's
+write failed; round 6 makes it four, see item 15); no orphan skeleton
+(abort on reported failure, reuse after a crash). Its `DelegationBinding` write deviates from the spec's
 `AllocateDelegationForkPropagated` (`delegationOf' = delegationOf`,
 `spec-opencode-integration.tex:1017-1022`), so the implementation PR must
 amend that spec. (11) *Enablement.* The neutral steps run deposit,
 gitignore, hook chaining, then the marker last, which reorders today's
 `EnableTo` (marker, import, then `chainHooks`); `ethos disable` with
 nothing enabled, or for an already-disabled harness, exits 0 as a no-op.
+
+**Round 6 correction (mission `m-2026-10-22-026`).** Local review of round 5
+(`code-reviewer`, `invariant-completeness-reviewer`) found defects that the
+leader ruled on; `docs/design-opencode-plugin.md` is amended. (12)
+*Lineage and liveness storage.* `Roster.ParentSession` and `Roster.LastSeen`
+are gone. A roster re-marshal by `Join`, `JoinSelf`, `Leave`, or
+`CreateInCheckout` (`store.go:82-93,110-196`), including one by an older
+binary still serving MCP, would erase them. They are now two per-session
+sidecar files, `parent-session` (write-once) and `last-seen` (refreshable),
+written under the roster lock and removed by `deleteFiles` with the roster.
+A Claude Code fork `SessionStart` calls `Ensure`, not `createSessionRoster`,
+and `ethos session create` refuses an id whose sidecar records a parent
+(§2.1.1). (13) *Purge.* `isStale` consults `last-seen` first and, when it
+parses, decides by the age of the later of `Started` and `last-seen` alone,
+before the empty-roster, participant-count, and PID branches; the required
+tests include a two-participant roster with a dead numeric `Participants[1]`
+and a fresh `last-seen`, which is not stale. The 24-hour idle purge is
+intended. (14) *Deleted parent.* The parent-exists check applies at first
+registration only; a matching parent refreshes `last-seen` whether or not
+the parent still exists. `--parent-gone`, passed only after OpenCode
+conclusively reports the parent not found, records the dangling parent, and
+propagation still refuses on the walk's `Load` failure. (15) *`claim-forked`.*
+The witness binding must have `Origin == BindOriginClaim`. A
+`claim-forked-pending` record keyed by the child, written before the
+skeleton, lets every retry close an orphan skeleton it does not reuse, and a
+close failure exits non-zero. `Ensure` and `claim-forked` run sequentially,
+never nested, because `deleteFiles` takes the roster lock and then the
+dispatch-pending lock. A four-status table (success, witness refused, write
+failed, do not retry) covers every cause, with a plugin action per status.
+(16) *Guide and enablement.* The deposited guide keeps its path and becomes
+harness-neutral; `enable claude` writes the `@`-import. The `enable
+opencode` wiring is an open item: the requested `opencode.json`
+`instructions` array could not be verified and a local V2 reference says it
+is inactive. The harness list is one sorted file with a test that fails on
+any `claude` or `opencode` literal outside it. (17) A citation is fixed:
+`AcquireMissionLock` spans `pretooluse_dispatch.go:791-808`.
 
 ### Problem
 
@@ -12202,10 +12240,23 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
 2. **Zero changes to `resolve.SessionID`, `runHookCommitTrailers`,
    `WriteCommitTrailers`, or `plugin/hooks/commit-msg.sh`.** The commit-msg
    hook already resolves the committing session purely from `ETHOS_SESSION`
-   (step 1 of the existing, harness-blind chain) and already fails closed
-   per the existing four-case `ResolveCommitAttribution` split. The entire
+   (step 1 of the existing, harness-blind chain). **Round 6 qualification
+   (replacing "already fails closed"):** `ETHOS_SESSION` alone is
+   insufficient. `commit-msg.sh:55` skips the lookup when `MISSION_ID` or
+   `DELEGATION_ID` is inherited, `resolve.SessionID` accepts any non-empty
+   `ETHOS_SESSION` without checking that the session exists
+   (`resolve.go:316-318`) and falls back to an inherited, corroborated
+   `CLAUDE_PID`, and `WriteCommitTrailers` reads only the sidecars
+   (`commit_trailers.go:45-68`). So the reader is **not** fail-closed
+   against inherited or dead-session state, and this design does not change
+   it. The plugin's two-armed `create.before` policy (Known arm sets
+   `ETHOS_SESSION` and clears `MISSION_ID` and `DELEGATION_ID`; Unknown arm
+   clears all five variables, `docs/design-opencode-plugin.md` §3.2.1)
+   closes the gap for every shell the plugin sees. A shell that never fires
+   `create.before` stays exposed (§3.3). The entire
    OpenCode engineering problem is making `ETHOS_SESSION` land correctly
-   in the committing shell's environment — not teaching the shared
+   in the committing shell's environment, and clearing what would
+   override it — not teaching the shared
    resolver a new, harness-specific discovery step. **Round 3 correction:**
    the `create.before` sessionID-correlation gap is real today against the
    current OpenCode V2 dev-branch API, but it is a narrow, time-bound
@@ -12222,10 +12273,11 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    constant: round 5 removed the `maxWalkDepth`-style ten-hop cap, which
    the spec's full ancestor-set guard does not have) — called by the
    plugin, not reimplemented in TypeScript. **Round 2 corrections:** the
-   guard now verifies ancestry against a new, Go-stored
-   `Roster.ParentSession` field (written by `ethos session ensure
-   --parent-session <id>` at fork-registration time, write-once and parent
-   first) rather than trusting the plugin's own `--witness` argument
+   guard now verifies ancestry against a new, Go-stored recorded parent
+   (round 2 named it `Roster.ParentSession`; round 6 moved it to the
+   `parent-session` sidecar so a roster re-marshal cannot erase it; written
+   by `ethos session ensure --parent-session <id>` at fork-registration
+   time, write-once and parent first) rather than trusting the plugin's own `--witness` argument
    outright — closing a gap where nothing server-side previously existed to
    check a caller-supplied witness against; and the primitive now writes
    the matching `DelegationBinding` sidecar, which round 1 omitted —
@@ -12235,17 +12287,20 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    atomic (`WithDispatchPendingLock` serializes writers, and
    `WriteCommitTrailers` takes no lock), so the order is skeleton, binding,
    then claim, and a retry reuses unclaimed partial state. **Round 4:** this primitive and the
-   `Roster.ParentSession` field are harness-neutral. Claude Code needs the
+   `parent-session` sidecar are harness-neutral. Claude Code needs the
    same fork treatment (`--fork-session`, `/fork`, `/branch` mint genuine new
    sessions; `SessionStart` reports `source: "fork"`), so wiring Claude Code's
    `SessionStart` hook to call `session ensure --parent-session` and
    `claim-forked` is in scope for the same implementation stage as the
    OpenCode plugin.
 4. **Coequal per-harness enablement**, `ethos enable [claude] [opencode]`.
-   Harness-neutral repo steps (vendored deposit, gitignore, marker, hook
-   chaining) run idempotently for any selection; each harness adds only its
-   own native artifact (the `CLAUDE.md` import, or the
-   `.opencode/plugins/ethos.ts` file plus `opencode.json` registration).
+   Harness-neutral repo steps run idempotently for any selection, in this
+   order (round 6): gitlink guard, vendored deposit, gitignore, hook
+   chaining, then the marker last. The deposited guide is harness-neutral.
+   Each harness adds only its own native artifact (the `CLAUDE.md` import,
+   or the `.opencode/plugins/ethos.ts` file plus `opencode.json`
+   registration); how OpenCode reads the guide is an open item
+   (`docs/design-opencode-plugin.md` §5 point 5).
    **Round 5 (operator ruling, 2026-10-22, replacing round 4's usage error
    for bare `ethos enable`):** with no harness named on an interactive
    terminal, `ethos enable` prompts for the harnesses, listing every
@@ -12254,9 +12309,10 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    opencode` skip the prompt; with no harness named and no terminal it
    exits non-zero with a usage error naming both harnesses and never picks
    one silently. `ethos disable` mirrors this, prompting from the harnesses
-   currently enabled. One ordered supported-harness list in
-   `internal/enable` drives the prompt, the usage error, and the help text,
-   so neither harness is privileged. See `docs/design-opencode-plugin.md`
+   currently enabled. One sorted supported-harness list in
+   `internal/enable` generates the prompt, the usage error, and the help
+   text, and a test fails on any `claude` or `opencode` literal outside it
+   (round 6), so neither harness is privileged. See `docs/design-opencode-plugin.md`
    §5 point 5.
 
 Full lifecycle-hook mapping, session-ID mapping, and the commit-trailer

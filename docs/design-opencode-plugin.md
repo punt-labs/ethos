@@ -93,6 +93,29 @@ enable`. DES-078 also carries the second-pass items: `Roster.LastSeen` and
 purge, the `session.deleted` handler (§2.6), the `singleSession` option,
 `claim-forked` locking and exit statuses, and the enable marker reorder.
 
+**Round 6 corrections (mission `m-2026-10-22-026`, PR #536):** local review
+of round 5 found defects, and the leader ruled on each. Fixed: (1) §2.1.1,
+§2.3.2, and §5 point 1 move the recorded parent and the liveness time out
+of the `Roster` struct into two per-session sidecar files, so a roster
+re-marshal, including one by an older `ethos` binary, cannot erase them;
+`ethos session create` refuses an id whose sidecar records a parent, and a
+Claude Code fork `SessionStart` calls `Ensure` (§2.5); (2) `isStale` reads
+`last-seen` first and decides by it alone when it parses, with the required
+tests named, and the 24-hour idle purge is documented as intended; (3) the
+parent-exists check applies at first registration only, and `--parent-gone`
+records a dangling parent after a conclusive "not found" (§2.1.1, reconciled
+with §5 point 1); (4) `claim-forked` requires a claim-origin witness binding,
+keeps a `claim-forked-pending` record so no retry leaves an orphan skeleton,
+and states that `Ensure` and `claim-forked` never nest locks (§5 point 2);
+(5) §5 point 2 item 4 is a complete cause-to-status table with four
+statuses and a plugin action for each; (6) the deposited guide is
+harness-neutral, and how `enable opencode` wires it in is an open item
+awaiting a ruling (§5 point 5); (7) the harness list is generated, sorted,
+and enforced by a named test (§5 point 5); (8) DES-078 decision points 2 and
+4 are corrected; (9) the `AcquireMissionLock` citation is
+`pretooluse_dispatch.go:791-808`, and the nearby TOCTOU, `NewID`, binding,
+and `session create` citations were re-checked against source and adjusted.
+
 ## 1. Plugin shape and lifecycle hooks
 
 ### 1.1 Entry point
