@@ -1,0 +1,2 @@
+{"ts":"2026-10-22T22:22:26.907764859Z","event":"result","actor":"bwk","details":{"confidence":0.8,"evidence_entries":4,"files_changed":3,"round":1,"verdict":"pass"}}
+{"ts":"2026-10-22T22:31:40.699246293Z","event":"close","actor":"claude","details":{"round":1,"status":"failed","verdict":"pass"}}

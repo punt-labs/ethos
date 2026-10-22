@@ -159,6 +159,10 @@ RKIND ::= rkAged | rkNumLive | rkNumDead
 BORIGIN ::= boClaim | boDispatch
 \end{zed}
 
+\begin{zed}
+DKIND ::= dkFork | dkTierB
+\end{zed}
+
 \begin{axdef}
 lcMaxTime : \nat \\
 lcTtl : \nat
@@ -174,7 +178,7 @@ amended operation is a conjunct guarded by its constant, so the two
 versions differ in nothing else.
 
 \begin{axdef}
-fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede : ZBOOL
+fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede, fixOrigin : ZBOOL
 \where
 fixDeleteOrder = ztrue \\
 fixDeleteCloses = ztrue \\
@@ -184,7 +188,8 @@ fixInertBinding = ztrue \\
 fixStaleLive = ztrue \\
 fixCorruptPurge = ztrue \\
 fixPostCheck = ztrue \\
-fixSupersede = ztrue
+fixSupersede = ztrue \\
+fixOrigin = ztrue
 \end{axdef}
 
 \subsection{State}
@@ -269,11 +274,16 @@ used : \power DELEGATIONID
 \begin{schema}{LcSkeleton}
 skel : \power DELEGATIONID \\
 dMis : DELEGATIONID \pfun MISSIONID \\
-dOwn : DELEGATIONID \pfun SESSIONID
+dOwn : DELEGATIONID \pfun SESSIONID \\
+dKind : DELEGATIONID \pfun DKIND
 \end{schema}
 
 \begin{schema}{LcOpen}
 dOpen : \power DELEGATIONID
+\end{schema}
+
+\begin{schema}{LcVerdict}
+dAbort : \power DELEGATIONID
 \end{schema}
 
 \begin{schema}{LcMission}
@@ -293,7 +303,7 @@ leaked : \power SESSIONID
 \end{schema}
 
 \begin{zed}
-Lifecycle \defs LcTime \land LcRoster \land LcKind \land LcStarted \land LcCorrupt \land LcLineage \land LcSeen \land LcClaim \land LcBinding \land LcPending \land LcFlight \land LcUsed \land LcSkeleton \land LcOpen \land LcMission \land LcSealed \land LcPurged \land LcLeak
+Lifecycle \defs LcTime \land LcRoster \land LcKind \land LcStarted \land LcCorrupt \land LcLineage \land LcSeen \land LcClaim \land LcBinding \land LcPending \land LcFlight \land LcUsed \land LcSkeleton \land LcOpen \land LcVerdict \land LcMission \land LcSealed \land LcPurged \land LcLeak
 \end{zed}
 
 
@@ -360,6 +370,11 @@ the well-formedness conditions that validate the model itself. A schema here is 
   \item \field{SweepComplete}: an open skeleton whose mission is closed is
     named by a pending record. This is what \field{Store.Close}'s sweep is
     for.
+  \item \field{NoForeignAbort}: no skeleton written by a Tier B dispatch is
+    ever closed with verdict \field{aborted} by \field{deleteFiles}, a purge or
+    a \field{claim-forked} reconcile. The model has one such writer of a
+    Tier B skeleton (the dispatch), so the invariant is a predicate over the
+    set of aborted skeletons.
 \end{itemize}
 
 \begin{schema}{LcInvLineageStable}
@@ -383,7 +398,13 @@ purgedLive = \emptyset
 \begin{schema}{LcInvNoOrphanOpenSkeleton}
 Lifecycle
 \where
-\forall d : dOpen @ (\exists c : \dom pend @ pend(c) = d) \lor (\exists c : roster \cap \dom binding @ binding(c) = d)
+\forall d : dOpen | (d \mapsto dkFork) \in dKind @ (\exists c : \dom pend @ pend(c) = d) \lor (\exists c : roster \cap \dom binding @ binding(c) = d)
+\end{schema}
+
+\begin{schema}{LcInvNoForeignAbort}
+Lifecycle
+\where
+\forall d : dAbort @ (d \mapsto dkTierB) \notin dKind
 \end{schema}
 
 \begin{schema}{LcInvReconcileOnExit}
@@ -412,6 +433,8 @@ skel \subseteq used \\
 dOpen \subseteq skel \\
 \dom dMis = skel \\
 \dom dOwn = skel \\
+\dom dKind = skel \\
+dAbort \subseteq skel \setminus dOpen \\
 \dom cfM = \dom stage \\
 \dom cfW = \dom stage \\
 \dom cfD \subseteq \dom stage \\
@@ -451,6 +474,8 @@ used' = \emptyset \\
 skel' = \emptyset \\
 dMis' = \emptyset \\
 dOwn' = \emptyset \\
+dKind' = \emptyset \\
+dAbort' = \emptyset \\
 dOpen' = \emptyset \\
 missOpen' = MISSIONID \\
 sealed' = \emptyset \\
@@ -477,6 +502,8 @@ used' = \emptyset \\
 skel' = \emptyset \\
 dMis' = \emptyset \\
 dOwn' = \emptyset \\
+dKind' = \emptyset \\
+dAbort' = \emptyset \\
 dOpen' = \emptyset \\
 missOpen' = MISSIONID \\
 purgedLive' = \emptyset \\
@@ -502,6 +529,8 @@ used' = \emptyset \\
 skel' = \emptyset \\
 dMis' = \emptyset \\
 dOwn' = \emptyset \\
+dKind' = \emptyset \\
+dAbort' = \emptyset \\
 dOpen' = \emptyset \\
 missOpen' = MISSIONID \\
 purgedLive' = \emptyset \\
@@ -519,6 +548,7 @@ becomes unparseable.
 
 \begin{schema}{LcClockSet}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcRoster \\
 \Xi LcKind \\
 \Xi LcStarted \\
@@ -543,6 +573,7 @@ now' = t?
 
 \begin{schema}{LcPidDies}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcStarted \\
@@ -569,6 +600,7 @@ rkind' = rkind \oplus \{ s? \mapsto rkNumDead \}
 
 \begin{schema}{LcCorruptRoster}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -595,6 +627,7 @@ corrupt' = corrupt \cup \{ s? \}
 
 \begin{schema}{LcCorruptSeen}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -636,6 +669,7 @@ which refuses an id whose sidecar records a parent.
 
 \begin{schema}{LcEnsureCreate}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcCorrupt \\
 \Xi LcClaim \\
@@ -671,6 +705,7 @@ sealed' = sealed \oplus \{ s? \mapsto par? \}
 
 \begin{schema}{LcEnsureLineageOnly}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -705,6 +740,7 @@ parentSide' = parentSide \cup (\{ s? \} \cross par?)
 
 \begin{schema}{LcEnsureRefresh}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -734,6 +770,7 @@ seenBad' = seenBad \setminus \{ s? \}
 
 \begin{schema}{LcCreateCli}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcCorrupt \\
 \Xi LcLineage \\
@@ -797,8 +834,7 @@ done? : 1 \upto 7
 \where
 s? \notin \dom stage \\
 s? \in roster \cup \dom parentSide \cup \dom seen \cup seenBad \cup \dom claimed \cup \dom binding \cup \dom pend \\
-fixDeleteCloses = ztrue \implies dOpen' = dOpen \setminus ((pend \limg \{ s? \} \rimg) \cup (binding \limg \{ s? \} \rimg)) \\
-fixDeleteCloses = zfalse \implies dOpen' = dOpen \\
+(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | fixDeleteCloses = ztrue \land d \in (pend \limg \{ s? \} \rimg) \cup (binding \limg \{ s? \} \rimg) \land (fixOrigin = zfalse \lor ((d \mapsto s?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
 done? \geq 2 \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s? \} \ndres corigin) \\
 done? < 2 \implies (claimed' = claimed \land corigin' = corigin) \\
 done? \geq 3 \implies binding' = \{ s? \} \ndres binding \\
@@ -826,8 +862,7 @@ done? : 1 \upto 7
 \where
 s? \notin \dom stage \\
 s? \in roster \cup \dom parentSide \cup \dom seen \cup seenBad \cup \dom claimed \cup \dom binding \cup \dom pend \\
-fixDeleteCloses = ztrue \implies dOpen' = dOpen \setminus ((pend \limg \{ s? \} \rimg) \cup (binding \limg \{ s? \} \rimg)) \\
-fixDeleteCloses = zfalse \implies dOpen' = dOpen \\
+(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | fixDeleteCloses = ztrue \land d \in (pend \limg \{ s? \} \rimg) \cup (binding \limg \{ s? \} \rimg) \land (fixOrigin = zfalse \lor ((d \mapsto s?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
 done? \geq 2 \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s? \} \ndres corigin) \\
 done? < 2 \implies (claimed' = claimed \land corigin' = corigin) \\
 done? \geq 3 \implies binding' = \{ s? \} \ndres binding \\
@@ -849,6 +884,7 @@ s? \in roster \\
 
 \begin{schema}{LcOperatorClaim}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -879,6 +915,7 @@ corigin' = corigin \oplus \{ s? \mapsto o? \}
 
 \begin{schema}{LcReleaseClaim}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -952,12 +989,13 @@ phase is about to overwrite the binding.
 c? : SESSIONID
 \where
 c? \notin \dom stage \\
-(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land dOpen' = dOpen) \lor (fixRefuseReconciles = ztrue \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \})) \\
+(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land dOpen' = dOpen \land dAbort' = dAbort) \lor (fixRefuseReconciles = ztrue \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land (\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X)) \\
 leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfBegin}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1016,7 +1054,7 @@ stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-(fixInertBinding = ztrue \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \})) \lor (fixInertBinding = zfalse \land dOpen' = dOpen \setminus \{ rd : pend \limg \{ c? \} \rimg | (c? \mapsto rd) \notin binding @ rd \}) \\
+(\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land ((fixInertBinding = ztrue \land \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) \lor (fixInertBinding = zfalse \land (c? \mapsto rd) \notin binding)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
 leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \}
 \end{schema}
 
@@ -1043,7 +1081,7 @@ c? : SESSIONID
 (c? \mapsto 0) \in stage \\
 c? \notin \dom claimed \\
 (c? \in \dom pend \land pend(c?) \in dOpen \land (pend(c?) \mapsto cfM(c?)) \in dMis \land pendWit(c?) = cfW(c?) \land cfM(c?) \in missOpen) \\
-(fixSupersede = zfalse \land dOpen' = dOpen) \lor (fixSupersede = ztrue \land dOpen' = dOpen \setminus ((binding \limg \{ c? \} \rimg) \setminus \{ pend(c?) \})) \\
+(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | fixSupersede = ztrue \land d \in binding \limg \{ c? \} \rimg \land d \neq pend(c?) \land (fixOrigin = zfalse \lor ((d \mapsto c?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
 cfD' = cfD \oplus \{ c? \mapsto pend(c?) \} \\
 (c? \mapsto pend(c?)) \in binding \implies stage' = stage \oplus \{ c? \mapsto 5 \} \\
 (c? \mapsto pend(c?)) \notin binding \implies stage' = stage \oplus \{ c? \mapsto 4 \} \\
@@ -1073,7 +1111,7 @@ c? : SESSIONID
 (c? \mapsto 0) \in stage \\
 c? \notin \dom claimed \\
 \lnot (c? \in \dom pend \land pend(c?) \in dOpen \land (pend(c?) \mapsto cfM(c?)) \in dMis \land pendWit(c?) = cfW(c?) \land cfM(c?) \in missOpen) \\
-(fixSupersede = zfalse \land dOpen' = dOpen \setminus (pend \limg \{ c? \} \rimg)) \lor (fixSupersede = ztrue \land dOpen' = dOpen \setminus ((pend \limg \{ c? \} \rimg) \cup (binding \limg \{ c? \} \rimg))) \\
+(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | (d \in pend \limg \{ c? \} \rimg \lor (fixSupersede = ztrue \land d \in binding \limg \{ c? \} \rimg)) \land (fixOrigin = zfalse \lor ((d \mapsto c?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
 pend' = \{ c? \} \ndres pend \\
 pendWit' = \{ c? \} \ndres pendWit \\
 stage' = stage \oplus \{ c? \mapsto 1 \} \\
@@ -1084,6 +1122,7 @@ cfW' = cfW
 
 \begin{schema}{LcCfAlloc}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1115,6 +1154,7 @@ cfW' = cfW
 
 \begin{schema}{LcCfExitNoRetry}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1144,6 +1184,7 @@ leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg 
 
 \begin{schema}{LcCfWriteRecord}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1173,6 +1214,7 @@ cfW' = cfW
 
 \begin{schema}{LcCfWriteSkeleton}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1196,6 +1238,7 @@ skel' = skel \cup \{ cfD(c?) \} \\
 dOpen' = dOpen \cup \{ cfD(c?) \} \\
 dMis' = dMis \oplus \{ cfD(c?) \mapsto cfM(c?) \} \\
 dOwn' = dOwn \oplus \{ cfD(c?) \mapsto c? \} \\
+dKind' = dKind \oplus \{ cfD(c?) \mapsto dkFork \} \\
 cfD' = cfD \\
 cfM' = cfM \\
 cfW' = cfW
@@ -1203,6 +1246,7 @@ cfW' = cfW
 
 \begin{schema}{LcCfWriteBinding}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1232,6 +1276,7 @@ cfW' = cfW
 
 \begin{schema}{LcCfWriteClaim}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1261,6 +1306,7 @@ cfW' = cfW
 
 \begin{schema}{LcCfFinish}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1290,6 +1336,7 @@ leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg 
 
 \begin{schema}{LcCfCrash}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1336,6 +1383,7 @@ c? : SESSIONID
 \where
 stage(c?) \in 3 \upto 5 \\
 dOpen' = dOpen \setminus \{ cfD(c?) \} \\
+dAbort' = dAbort \cup (\{ cfD(c?) \} \cap dOpen) \\
 stage(c?) = 5 \implies binding' = \{ c? \} \ndres binding \\
 stage(c?) < 5 \implies binding' = binding \\
 pend' = \{ c? \} \ndres pend \\
@@ -1347,6 +1395,59 @@ cfW' = \{ c? \} \ndres cfW
 \end{schema}
 
 
+
+\paragraph{Tier B dispatch} (\fpath{pretooluse\_dispatch.go}:775--884).
+\field{LcTierBDispatch} is the path Claude Code already runs when a leader
+spawns a subagent against a mission. It takes the id (\field{NewID}), the
+shared mission lock and the delegation lock, re-reads the mission, and
+writes the skeleton with \field{ParentSession} equal to the \emph{session
+itself}; it then writes the session's own delegation binding, naming the
+new skeleton, over whatever the binding named before. Nothing in the
+dispatch closes the skeleton: \fpath{subagent\_stop.go} does not, and
+\field{CloseDelegation} has no caller outside the tests, so a Tier B
+skeleton stays open until \field{Store.Close} sweeps it
+(\fpath{mission/store.go}:1239 skips only a skeleton that is already not
+open). The operation is atomic here, since it holds the shared mission
+lock; the window in which the unlocked fallback can pass it is that of
+\S\ref{sec:lc-limits}. A Tier B skeleton has kind \field{dkTierB}; the
+skeleton \field{claim-forked} writes has kind \field{dkFork}. In the code
+the kind is the skeleton's \field{BoundVia} (a new value for
+\field{claim-forked}); the binding sidecar carries no field of its own and
+its origin is that of the skeleton it names.
+
+\begin{schema}{LcTierBDispatch}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcVerdict \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+m? : MISSIONID \\
+d? : DELEGATIONID
+\where
+s? \in roster \\
+s? \notin \dom stage \\
+m? \in missOpen \\
+d? \notin used \\
+used' = used \cup \{ d? \} \\
+skel' = skel \cup \{ d? \} \\
+dOpen' = dOpen \cup \{ d? \} \\
+dMis' = dMis \oplus \{ d? \mapsto m? \} \\
+dOwn' = dOwn \oplus \{ d? \mapsto s? \} \\
+dKind' = dKind \oplus \{ d? \mapsto dkTierB \} \\
+binding' = binding \oplus \{ s? \mapsto d? \}
+\end{schema}
 
 \paragraph{Missions.} \field{LcCloseLocked} is \field{Store.Close} with the
 exclusive mission lock: it cannot run while a write phase holds the shared
@@ -1360,6 +1461,7 @@ open skeleton is a defect and not a curiosity.
 
 \begin{schema}{LcCloseLocked}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1386,6 +1488,7 @@ dOpen' = \{ d : dOpen | (d \mapsto m?) \notin dMis @ d \}
 
 \begin{schema}{LcCloseUnlocked}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1411,6 +1514,7 @@ dOpen' = \{ d : dOpen | (d \mapsto m?) \notin dMis @ d \}
 
 \begin{schema}{LcAbandonMission}
 \Delta Lifecycle \\
+\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1561,6 +1665,27 @@ assumed. The last five were not known.
     with no claim, and the plugin's memo expires. \textbf{Amendment}
     \field{fixSupersede}: a reconcile that does not resume the record also
     closes the skeleton named by the child's current binding.
+  \item[\textbf{C10}] \textbf{\field{deleteFiles} and the reconcile closes
+    abort a delegation they do not own.} \field{NoForeignAbort}; found by
+    reading the Claude Code path the model had left out
+    (\fpath{pretooluse\_dispatch.go}:775--884). A Tier B dispatch writes the
+    leader's \emph{own} delegation binding, with \field{ParentSession} equal
+    to the session itself, and leaves the skeleton open until
+    \field{Store.Close} sweeps it. \field{LcTierBDispatch}$(s,m,d)$;
+    \field{LcDeleteSession}$(s,2)$ (run \texttt{T1\_off}, four steps, three
+    states). The step~1 of C5, which closes every open skeleton named by the
+    session's binding, aborts $d$: a running subagent's delegation, which the
+    leader's session ending (or being purged) does not end. The same happens
+    in \field{LcCfReconcileFresh} and \field{LcCfReconcileReuse}, whose
+    supersede close (C9) names the child's binding, which a Tier B dispatch by
+    the child may have written. \textbf{Amendment} \field{fixOrigin}: a
+    skeleton has a kind, \field{dkFork} for the one \field{claim-forked}
+    writes and \field{dkTierB} for the dispatch; every close of
+    \field{deleteFiles}, purge, refusal, claimed case, resume and supersede
+    closes only an open skeleton of kind \field{dkFork} whose owner is the
+    session. In the code the kind is the skeleton's \field{BoundVia}, which
+    \field{claim-forked} sets to a new value; the binding sidecar gains no
+    field, since the skeleton it names carries the kind.
 \end{enumerate}
 
 Of the six invariants, \field{LineageStable} needs only
