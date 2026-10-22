@@ -178,7 +178,7 @@ amended operation is a conjunct guarded by its constant, so the two
 versions differ in nothing else.
 
 \begin{axdef}
-fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede, fixOrigin : ZBOOL
+fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede, fixOrigin, fixReleaseCloses, assumeNoTierBOverFork : ZBOOL
 \where
 fixDeleteOrder = ztrue \\
 fixDeleteCloses = ztrue \\
@@ -189,7 +189,9 @@ fixStaleLive = ztrue \\
 fixCorruptPurge = ztrue \\
 fixPostCheck = ztrue \\
 fixSupersede = ztrue \\
-fixOrigin = ztrue
+fixOrigin = ztrue \\
+fixReleaseCloses = ztrue \\
+assumeNoTierBOverFork = ztrue
 \end{axdef}
 
 \subsection{State}
@@ -915,7 +917,6 @@ corigin' = corigin \oplus \{ s? \mapsto o? \}
 
 \begin{schema}{LcReleaseClaim}
 \Delta Lifecycle \\
-\Xi LcVerdict \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -923,12 +924,10 @@ corigin' = corigin \oplus \{ s? \mapsto o? \}
 \Xi LcCorrupt \\
 \Xi LcLineage \\
 \Xi LcSeen \\
-\Xi LcBinding \\
 \Xi LcPending \\
 \Xi LcFlight \\
 \Xi LcUsed \\
 \Xi LcSkeleton \\
-\Xi LcOpen \\
 \Xi LcMission \\
 \Xi LcSealed \\
 \Xi LcPurged \\
@@ -938,7 +937,9 @@ s? : SESSIONID
 s? \in \dom claimed \\
 s? \notin \dom stage \\
 claimed' = \{ s? \} \ndres claimed \\
-corigin' = \{ s? \} \ndres corigin
+corigin' = \{ s? \} \ndres corigin \\
+binding' = \{ s? \} \ndres binding \\
+(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | fixReleaseCloses = ztrue \land d \in binding \limg \{ s? \} \rimg \land (fixOrigin = zfalse \lor ((d \mapsto s?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X)
 \end{schema}
 
 
@@ -1440,6 +1441,7 @@ s? \in roster \\
 s? \notin \dom stage \\
 m? \in missOpen \\
 d? \notin used \\
+assumeNoTierBOverFork = ztrue \implies (binding \limg \{ s? \} \rimg \cap \{ d : dOpen | (d \mapsto dkFork) \in dKind \}) = \emptyset \\
 used' = used \cup \{ d? \} \\
 skel' = skel \cup \{ d? \} \\
 dOpen' = dOpen \cup \{ d? \} \\
@@ -1447,6 +1449,48 @@ dMis' = dMis \oplus \{ d? \mapsto m? \} \\
 dOwn' = dOwn \oplus \{ d? \mapsto s? \} \\
 dKind' = dKind \oplus \{ d? \mapsto dkTierB \} \\
 binding' = binding \oplus \{ s? \mapsto d? \}
+\end{schema}
+
+\paragraph{Close-time clearing} (\fpath{cmd/ethos/mission.go}:2278--2311;
+\fpath{mission/active.go}:891--955). After \field{ethos mission close} the
+\emph{closing} session runs \field{ClearMissionBindings}: it clears its
+active-mission claim if the claim names the closed mission, and, independently,
+its delegation binding if the binding's mission is the closed one. The two
+tests are separate, so a session that closes a mission other than the one it
+claims can keep a binding for a mission that is not its claim. That is the
+state \field{fixSupersede} exists for (C9), once \field{mission release} no
+longer leaves it behind.
+
+\begin{schema}{LcClearClosed}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcVerdict \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+m? : MISSIONID
+\where
+s? \in roster \\
+s? \notin \dom stage \\
+m? \notin missOpen \\
+(s? \mapsto m?) \in claimed \lor (\exists d : binding \limg \{ s? \} \rimg @ (d \mapsto m?) \in dMis) \\
+(s? \mapsto m?) \in claimed \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s? \} \ndres corigin) \\
+(s? \mapsto m?) \notin claimed \implies (claimed' = claimed \land corigin' = corigin) \\
+(\exists d : binding \limg \{ s? \} \rimg @ (d \mapsto m?) \in dMis) \implies binding' = \{ s? \} \ndres binding \\
+\lnot (\exists d : binding \limg \{ s? \} \rimg @ (d \mapsto m?) \in dMis) \implies binding' = binding
 \end{schema}
 
 \paragraph{Missions.} \field{LcCloseLocked} is \field{Store.Close} with the
@@ -1656,15 +1700,37 @@ assumed. The last five were not known.
   \item[\textbf{C9}] \textbf{A second propagation overwrites the binding of
     the first.} \field{NoOrphanOpenSkeleton} (literal form), found only
     after C1 to C8 were amended. A completed propagation: \field{LcCfBegin}$(b,a)$;
-    reconcile; \field{LcCfAlloc}$(b,d_1)$ and the four writes; \field{LcCfFinish}. Then
-    \field{LcReleaseClaim}$(b)$, the operator releasing the child's claim, and a
-    second \field{claim-forked}: \field{LcCfBegin}$(b,a)$; reconcile (the record is
-    gone); \field{LcCfAlloc}$(b,d_2)$; the writes up to \field{LcCfWriteBinding}. The
+    reconcile; \field{LcCfAlloc}$(b,d_1)$ and the four writes; \field{LcCfFinish}.
+    Then the child's claim is replaced by an operator claim of another
+    mission $m_2$ and $m_2$ is closed by the child's own session
+    (\field{LcOperatorClaim}, \field{LcCloseLocked}, \field{LcClearClosed}):
+    \field{ClearMissionBindings} clears the claim, which names $m_2$, and
+    leaves the binding, which names $d_1$ of $m_1$ (the two tests are
+    independent, \fpath{mission/active.go}:907--935). A second
+    \field{claim-forked}: \field{LcCfBegin}$(b,a)$; reconcile (the record is
+    gone); \field{LcCfAlloc}$(b,d_2)$; the writes up to
+    \field{LcCfWriteBinding} (run \texttt{T3\_nosup}, nineteen steps). The
     binding now names $d_2$; $d_1$ is open, named by no record and no
-    binding. Nothing in DES-078 prevents this: a released child is a child
-    with no claim, and the plugin's memo expires. \textbf{Amendment}
-    \field{fixSupersede}: a reconcile that does not resume the record also
-    closes the skeleton named by the child's current binding.
+    binding. \textbf{Errata (this revision).} The first statement of C9 reached
+    the same state by \field{LcReleaseClaim} leaving the binding in place.
+    That was a defect of the model, not of the code: \field{ethos mission
+    release} clears the binding as well as the claim
+    (\fpath{cmd/ethos/mission.go}:2150--2153), so after a release there is no
+    binding for a second propagation to overwrite. The state is reached by
+    the close-time clearing above, which is why \field{fixSupersede} is
+    still needed (\texttt{T3\_nosup} counterexample, \texttt{T3\_all}
+    holds). \textbf{Amendment} \field{fixSupersede}, with its scope stated
+    exactly: it applies on the two reconcile paths that go on to write, that
+    is \field{LcCfReconcileFresh} and \field{LcCfReconcileReuse}, whether or
+    not a pending record exists, and on no other path. It closes the open
+    \field{dkFork} skeleton the child's binding names when that is not the
+    skeleton the call will use: on the fresh path every such skeleton, on the
+    resume path the one that differs from the record's. It is never applied
+    by \field{LcCfRefuse} or \field{LcCfReconcileClaimed}, whose child either
+    does not write or holds a claim, and may be working under the binding. The
+    earlier wording, ``a reconcile that does not resume the record'',
+    contradicted the schema of \field{LcCfReconcileReuse}, which carries the
+    clause; it is withdrawn.
   \item[\textbf{C10}] \textbf{\field{deleteFiles} and the reconcile closes
     abort a delegation they do not own.} \field{NoForeignAbort}; found by
     reading the Claude Code path the model had left out
@@ -1686,6 +1752,30 @@ assumed. The last five were not known.
     session. In the code the kind is the skeleton's \field{BoundVia}, which
     \field{claim-forked} sets to a new value; the binding sidecar gains no
     field, since the skeleton it names carries the kind.
+  \item[\textbf{C11}] \textbf{\field{mission release} leaves the skeleton it
+    unnames open.} \field{NoOrphanOpenSkeleton}; found by reading the
+    release command that C9 had modelled wrongly. After a completed
+    propagation, \field{LcReleaseClaim}$(b)$ clears the claim and the binding
+    and nothing closes $d_1$ (run \texttt{T2\_norel}: eleven steps). The
+    skeleton is open, named by nothing, and the child that held it has no claim.
+    \textbf{Amendment} \field{fixReleaseCloses}: \field{mission release} closes,
+    \field{aborted}, the open \field{dkFork} skeleton owned by the session that
+    its binding names, before it clears the binding, under the same locks
+    as the other closes. A binding that names a Tier B skeleton is cleared
+    and the skeleton is left open: it is a subagent's delegation.
+  \item[\textbf{C12}] \textbf{A Tier B dispatch by a propagated child buries
+    its fork skeleton.} \field{NoOrphanOpenSkeleton}; open, not amended. The
+    child $b$ completes a propagation (binding $d_1$, kind \field{dkFork}) and
+    then spawns a subagent against the mission: the dispatch writes
+    \emph{its} binding for $b$ over $d_1$ (\fpath{pretooluse\_dispatch.go}:880--884),
+    and $d_1$ is open, named by nothing (\field{LcTierBDispatch}, run
+    \texttt{T2\_all} with \field{assumeNoTierBOverFork} off). No close in the
+    design can find $d_1$ afterwards, since every close is by name. The
+    constant \field{assumeNoTierBOverFork} excludes the dispatch from a session
+    whose binding names an open fork skeleton, so that the other invariants
+    can be checked; it is an assumption of the verification and not a fix.
+    The options are listed in \S\ref{sec:lc-consequences}; the choice belongs
+    to the leader.
 \end{enumerate}
 
 Of the six invariants, \field{LineageStable} needs only
