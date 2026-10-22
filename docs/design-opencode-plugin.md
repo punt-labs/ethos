@@ -89,7 +89,9 @@ and §2.2 reads the persisted `fork.sessionID`, not `parentID`. Separately,
 enable` prompts on a terminal with both harnesses preselected, explicit
 forms skip the prompt, and no terminal with no harness named is a usage
 error naming both. This supersedes round 4's usage error for bare `ethos
-enable`.
+enable`. DES-078 also carries the second-pass items: `Roster.LastSeen` and
+purge, the `session.deleted` handler (§2.6), the `singleSession` option,
+`claim-forked` locking and exit statuses, and the enable marker reorder.
 
 ## 1. Plugin shape and lifecycle hooks
 
@@ -375,7 +377,15 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   repair for a session registered with the wrong lineage is operator
   action: delete its roster (`ethos session delete --session <id>`, which
   also clears its sidecars), after which the next `ensureRegistered`
-  registers it again from OpenCode's record.
+  registers it again from OpenCode's record. **One read is conclusive:**
+  when a fork's parent was deleted in OpenCode, `ctx.session.get(parent)`
+  returns "not found", and that is a conclusive answer, not an inconclusive
+  one. The child registers, with `ParentSession` taken from its own
+  persisted `fork.sessionID` or the event's `parentID`. The parent is not
+  ensured. Fork-claim propagation then refuses through the existing
+  ancestor-Load-failure rule (§2.3.1), and an explicit operator `ethos
+  mission claim` on the child still works. Transport errors and timeouts
+  stay inconclusive and abort registration.
 - `ethos session ensure` runs under the per-session roster lock
   (`Store.withLock`, as `Create` and `Join` do). If no roster exists, it
   creates one. If a roster exists, it changes only the roster's
@@ -535,8 +545,11 @@ identical guard:
   carries that session's own `sessionID`
   (`docs/prfaq-opencode-integration.md` line 255-256, `packages/plugin/src
   /effect/tool.ts`), so on *every* `execute.before` firing, the plugin
-  checks whether the firing session is already claimed
-  (`sid? not-in dom claims`); if not, it reads the session's own record via
+  checks whether the firing session is already claimed. The plugin has no
+  file access, so it does not read the claim itself: it relies on
+  `claim-forked`'s own "already claimed, exit 0" outcome (§5 point 2 item
+  5), and it memoizes the per-session outcome so it does not spawn a
+  subprocess on every tool call. If the session is not yet claimed, it reads the session's own record via
   `ctx.session.get({ sessionID })` — part of the hook-plugin's own
   `SessionDomain` (`.tmp/session-effect.ts:153-173`'s `Pick<SessionApi<unknown>,
   ... "get" ...>`) — for its `fork.sessionID` (not `parentID`, see §2.2),
@@ -744,7 +757,7 @@ two harnesses differed: Claude Code's `SessionEnd` hook deletes the
 session (`internal/hook/session_end.go:57`, `ss.Delete`). The plugin now
 handles `session.deleted` (§1.2 item 1; `.tmp/session-event.ts:177-185`)
 by running `ethos session delete --session <id>` (`runSessionDelete`,
-`cmd/ethos/session.go:699`, wrapping `Store.Delete`, `store.go:200`). That
+`cmd/ethos/session.go:697`, wrapping `Store.Delete`, `store.go:200`). That
 call holds the per-session lock and clears the active-mission claim, the
 delegation binding, and every pending dispatch before removing the roster
 (`deleteFiles`, `store.go`), and the plugin drops the id from its memo
@@ -909,10 +922,15 @@ in the plugin entry of `opencode.json`, `.tmp/effect.mdx:43-46`), **default
 session at a time. When it is `true`, the Known arm applies to a shell
 whose `create.before` event carries no `source.sessionID`, and the session
 is the only id the plugin currently holds in its memo that has not been
-deleted (§2.6). If the plugin holds more than one such id, or none, the
+deleted (§2.6). "Held" means an unexpired memo entry (§2.1.1). If the plugin holds more than one such id, or none, the
 shell takes the Unknown arm: the option never makes the plugin pick among
 sessions. With the option off, no deployment, however small, gets the Known
 arm before #54842.
+
+Residual risk: the first shell from a session the plugin has not yet seen,
+for example a shell typed in the TUI, can be attributed to the sole
+memoized session. The operator's assertion when enabling the option covers
+that risk.
 
 The Unknown arm suppresses attribution; it does not refuse the spawn.
 Refusing would turn a best-effort traceability feature into a gate on the
@@ -1148,9 +1166,11 @@ pipeline stage's write-set is unambiguous:
         always the outermost one, taken before any mission or delegation
         lock and never nested inside one (`active.go:495-497`). Inside it,
         in this order: `RefuseIfSessionGone(child)`; re-check that the child
-        holds no claim; acquire the mission lock and then the delegation
-        lock, in the order `dispatchTierB` uses
-        (`pretooluse_dispatch.go:794-806`); re-load the mission and confirm
+        holds no claim; allocate the id with `NewID` (item 3,
+        `pretooluse_dispatch.go:777`); acquire the mission lock and then
+        the delegation lock (`AcquireMissionLock` and after,
+        `pretooluse_dispatch.go:794-806`), the order `dispatchTierB` uses:
+        `NewID`, mission lock, delegation lock; re-load the mission and confirm
         it is still open (the TOCTOU re-check at lines 820-836); then the
         three writes of item 1. The witness is not locked, so its claim can
         be released between the read phase and the write phase. That window
