@@ -68,18 +68,41 @@ were not re-litigated this round.
 
 ### 1.1 Entry point
 
-A `Plugin.define({ id, setup(ctx) {...} })` module
-(`.tmp/migrate-v1.mdx:62-71`; the Promise-based `Context` shape at
-`.tmp/plugins-index.mdx`'s equivalent interface). Ethos ships the
-Effect-native variant instead — `Plugin.define({ id, effect: (ctx) =>
-Effect.Effect<void, never, Scope.Scope> })`
-(`.tmp/effect-plugin.ts:57-64`) — because every other handler this design
-registers (`ctx.tool.hook`, `ctx.event.subscribe`, `ctx.session.get`) is a
-plain async call either style can make; the Effect variant is chosen only
-because ethos's own install is a single static binary invoked as a
-subprocess from the hook body (§3), so there is no advantage to adopting
-Promise idioms the rest of ethos's Go codebase does not use, and the Effect
-form is what `.tmp/effect.mdx` documents as current.
+A `Plugin.define({ id, effect: (ctx) => Effect.Effect<void, never,
+Scope.Scope> })` module (`.tmp/effect-plugin.ts:57-64`;
+`.tmp/effect.mdx:5-30`). This design uses the Effect-native form
+throughout, and the two OpenCode plugin styles are not interchangeable.
+In the Effect form (`.tmp/effect.mdx:5-6`) "context operations return
+Effects or Streams, callbacks return Effects, and plugin lifetime is
+represented by `Scope`." Concretely, in this design:
+
+- `setup` is an `Effect.gen` program; each registration is a `yield*` on an
+  Effect that must actually run. A hook registration has the type
+  `(name, callback: (input) => Effect<void, Failures>) =>
+  Effect<Registration, never, Scope.Scope>` (`.tmp/effect.mdx:1505-1515`),
+  so calling `ctx.tool.hook(...)` without yielding it registers nothing.
+- `ctx.event.subscribe()` returns a `Stream`, not an `AsyncIterable`
+  (`.tmp/effect.mdx:1192-1234`). The plugin consumes it with
+  `Stream.filter` / `Stream.runForEach` and forks that consumer with
+  `Effect.forkScoped`, so the plugin scope interrupts it on unload
+  (`.tmp/effect.mdx:1194-1195`).
+- `ctx.session.get` and every other session call return Effects
+  (`.tmp/effect.mdx:798`, `yield* session.get({ sessionID })`); the plugin
+  yields them inside the hook callbacks.
+- Every call to the `ethos` binary is wrapped in an Effect (the
+  implementation stage picks the spawn primitive). Each wrapped call
+  recovers every failure (`Effect.catchAll`), logs it, and completes
+  normally. The `execute.before` failure channel is `Tool.Error`
+  (`.tmp/effect.mdx:1492-1495`), and a failed callback blocks the tool
+  call (`.tmp/effect.mdx:1461-1463`), so an `ethos` failure must never
+  surface there: attribution is best-effort and never gates the agent's
+  work.
+
+The Promise-based `Plugin.define({ id, setup(ctx) })` form
+(`.tmp/migrate-v1.mdx:62-71`) is not used. Earlier rounds described both
+forms as differing only in idiom, with `for await` consumption and a
+returned cleanup closure. That was wrong, and the sections below no longer
+use those idioms.
 
 Loaded from `.opencode/plugins/ethos.ts` (project-level) for a per-repo
 install, mirroring `vox`/`z-spec`'s existing per-repo enablement pattern
@@ -90,27 +113,24 @@ itself is deposited only by `ethos enable opencode`.
 `.tmp/migrate-v1.mdx:38` confirms V2 discovers local plugins from
 `.opencode/plugins/`.
 
-The `setup`/`effect` function registers, and returns a cleanup closure that
-disposes all of them (`.tmp/migrate-v1.mdx:290-315`; `.tmp/effect-plugin.ts`'s
-`Effect.Effect<void, never, R>` return carries the same scoped-disposal
-contract via `Scope.Scope`). Registrations are plugin-scoped and clean up
-automatically when the plugin unloads (`.tmp/plugins-index.mdx:1333`
-"Hook and transform registrations are scoped to the plugin and are cleaned
-up automatically").
+The `effect` function returns no cleanup closure. Each registration and the
+forked event consumer live in the plugin `Scope`, which disposes them when
+the plugin unloads (`.tmp/effect.mdx:1238-1239` "Registrations remain
+active for the plugin scope"; `.tmp/effect-plugin.ts:57-60`'s
+`Effect.Effect<void, never, Scope.Scope>`). Cleanup is scope finalization,
+not code the plugin writes.
 
 ### 1.2 Hooks actually registered
 
 Four, no more — corrected in this round from the round-1 count of three,
 which conflated two distinct hook domains (see the correction below):
 
-1. **`ctx.event.subscribe({ signal })`**, consumed with `for await`
-   (`.tmp/migrate-v1.mdx:296-311`; `.tmp/plugins-index.mdx:1303-1311`). This
-   is the primary trigger for `JoinRootSession` and `ForkSession`
-   (spec §5.1-5.2). The subscription delivers the server's whole public
-   event stream (`.tmp/plugins-index.mdx:1318-1320`,
-   `interface EventContext { subscribe(...): AsyncIterable<OpenCodeEvent> }`);
-   the plugin filters for `session.created` and `session.forked` by
-   `event.type`.
+1. **`ctx.event.subscribe()`**, a `Stream` of `OpenCodeEvent` consumed under
+   `Effect.forkScoped` (`.tmp/effect.mdx:1192-1234`, §1.1). This is the
+   primary trigger for `JoinRootSession` and `ForkSession` (spec
+   §5.1-5.2). The subscription delivers the server's whole public event
+   stream; the plugin applies `Stream.filter` for `session.created` and
+   `session.forked` by `item.type` (`.tmp/effect.mdx:1211-1221`).
 
 2. **`ctx.tool.hook("execute.before", callback)`**
    (`.tmp/plugins-index.mdx:1721-1729`, `.tmp/effect.mdx:1453-1467`). This is
