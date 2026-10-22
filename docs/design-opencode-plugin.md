@@ -1513,15 +1513,67 @@ pipeline stage's write-set is unambiguous:
    (`cmd/ethos/setup.go:808`, `term.IsTerminal`), the check the repo's
    other prompting command uses.
 
-   **One source of truth.** The supported harnesses are a single ordered
-   list in `internal/enable` (lexical order by name, so position privileges
-   neither), one entry per harness: its name, its enable step, its disable
-   step, and an `enabled?` probe (CLAUDE.md import present; plugin file
-   present and registered). The prompt choices, the usage-error text, the
-   unknown-name error, the command's help text, and `ethos disable`'s
-   prompt all read that list. Adding a harness is one entry. No code path
-   names `claude` or `opencode` outside it, and neither is the value used
-   when the user gives no answer.
+   **The guide is harness-neutral (round 6).** `deposit` writes the guide
+   to `.punt-labs/ethos/CLAUDE.md` (`deposit.go:15,87`). That path is the
+   org standard's and does not change. Its content does: it carries no
+   instruction that only one harness can follow. Today's guide has some:
+   the `.claude/agents/` generation and "restart Claude Code" note
+   (`guide/CLAUDE.md:20-21`) and the `.claude/agents/` review-agent
+   deployment (`guide/CLAUDE.md:60-61`). Those move to the Claude Code
+   native artifact; the rest stays. Each
+   harness's native step wires the one shared file in:
+   - `ethos enable claude` writes the `@.punt-labs/ethos/CLAUDE.md` import
+     into the repo `CLAUDE.md`.
+   - `ethos enable opencode` must make OpenCode read the same file. **Open
+     item, blocked for a leader ruling.** The requested mechanism is an
+     entry in `opencode.json`'s `instructions` array. This worker could not
+     verify that key. No `.tmp/` reference documents it, and no context7
+     tool was available in this round. The one local OpenCode V2 reference
+     that speaks to it says the opposite: `points/docs/opencode/
+     06-instructions-context.md:5-8,63-65` states that `AGENTS.md` is the
+     sole project-instruction authority, that OpenCode "does not load
+     `CLAUDE.md` as a fallback", and that the V2 `instructions` array is
+     inactive. This design does not choose another mechanism (an
+     `AGENTS.md` import, an MCP instruction, a skill) without a ruling.
+   - Harness-specific operating notes live in each harness's native
+     artifact, not the shared guide: the Claude Code plugin's commands and
+     hook-injected context for Claude Code, and the header of the deposited
+     `.opencode/plugins/ethos.ts` for OpenCode.
+   The embedded source stays `internal/enable/guide/CLAUDE.md`
+   (`enable.go:32`); `validate-content` keeps it in sync with this repo's
+   own deposited copy, so rewriting the guide updates both in one PR.
+
+   **One source of truth, enforced (round 6).** The supported harnesses are
+   a single list in one file, `internal/enable/harnesses.go`, sorted by
+   name (so position privileges neither), one entry per harness: its name,
+   its enable step, its disable step, an `enabled?` probe (CLAUDE.md import
+   present; plugin file present and registered), and every harness-specific
+   literal (the import line, the plugin path, the config key). The prompt
+   choices, the usage-error text, the unknown-name error, the command's
+   help text, and `ethos disable`'s prompt are **generated from that list**
+   by one function; none is a hand-written string that names a harness.
+   Adding a harness is one entry. Neither harness is the value used when
+   the user gives no answer. The implementation stage adds
+   `TestHarnessNamesOnlyInList`, which:
+   - parses every non-test `.go` file in `internal/enable` and
+     `cmd/ethos/enable.go` and `cmd/ethos/disable.go` with `go/parser`;
+   - fails if any string literal, other than an import path, contains
+     `claude` or `opencode` (case-insensitive) in any file except
+     `harnesses.go`. The one literal allowed elsewhere is the org-standard
+     guide path `.punt-labs/ethos/CLAUDE.md`, which names a file, not a
+     harness; a `//go:embed` directive is a comment, not a literal;
+   - fails if the declared list is not sorted by name (`sort.SliceIsSorted`
+     over the exported accessor) or is empty;
+   - and a companion test injects a third entry into the list and asserts
+     that the help text, the usage error, the unknown-name error, and the
+     prompt text all contain its name with no other change.
+   **Migration work this implies.** Today these name Claude outside any
+   list: `CanonicalImport` (`enable.go:46`), `guideRel` (`deposit.go:15`,
+   the allowed path above), the import registration and removal in
+   `EnableTo` and `Disable` (`enable.go:127,173`), and the command help
+   text (`cmd/ethos/enable.go:18-19`). The implementation stage moves each
+   into a `harnesses.go` entry or generates it, and the test above is what
+   proves that none was missed.
 
    **`ethos disable` mirrors this.** `ethos disable claude`, `ethos disable
    opencode`, and `ethos disable claude opencode` remove only the named
