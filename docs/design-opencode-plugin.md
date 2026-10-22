@@ -372,7 +372,9 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   24-hour stale TTL) skips the subprocess. A hit at or past the interval
   is treated as a miss: the plugin calls `ensure` again, which re-verifies
   that the roster exists (re-creating it if a purge removed it) and
-  refreshes the session's `last-seen` sidecar (below). A failed `ensure` stores
+  refreshes the session's `last-seen` sidecar (below). The plugin passes
+  `--touch` on every `ensure` call; `last-seen` is written only when the
+  caller asks for it (round 7, below). A failed `ensure` stores
   nothing. The memo is never trusted for a write: `mission claim` and
   `claim-forked` re-check the roster themselves under the session lock
   (`RefuseIfSessionGone`, `cmd/ethos/mission.go:2113`), so a memo that is
@@ -428,16 +430,19 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   2. *Lineage is write-once.* If a lineage sidecar records a parent, or a
      roster exists, and the supplied `--parent-session` differs from the
      recorded one (including one side empty), `ensure` exits non-zero with
-     a lineage-conflict error and changes nothing, `last-seen` included.
+     a lineage-conflict error and changes nothing, `last-seen` included,
+     whether or not `--touch` was passed.
      A matching parent is accepted whether or not the parent's roster
      still exists: a deleted parent never blocks a refresh.
   3. *Create or refresh.* If no roster exists, `ensure` writes the lineage
-     sidecar first (when a parent is supplied), then the roster, then
-     `last-seen`. A crash between the steps leaves a sidecar with no
-     roster, and a retry with the same parent completes the registration;
-     the reverse order would leave a fork registered as a root. If a roster
-     exists, `ensure` changes only `last-seen` (set to the current time):
-     `Started`, participants, and extensions survive.
+     sidecar first (when a parent is supplied), then the roster, then, only
+     when `--touch` was passed, `last-seen`. A crash between the steps
+     leaves a sidecar with no roster, and a retry with the same parent
+     completes the registration; the reverse order would leave a fork
+     registered as a root. If a roster exists, `ensure` with `--touch`
+     changes only `last-seen` (set to the current time), and `ensure`
+     without `--touch` changes nothing: `Started`, participants, and
+     extensions survive either way.
   A plugin restart therefore cannot reset lineage, and a session whose
   claim is already written (§2.4) is unaffected: `ensure` never touches the
   active-mission or delegation-binding sidecars.
@@ -455,7 +460,10 @@ and one new Go command, `ethos session ensure` (§5 point 1):
     never sees a partial file and a second creation fails. It is never
     rewritten.
   - `last-seen`: an RFC 3339 timestamp, replaced atomically on every
-    successful `ensure`.
+    successful `ensure` that passes `--touch` (`Store.Ensure`'s `touch`
+    argument). The OpenCode plugin passes it on every call. Claude Code's
+    fork `SessionStart` never does, so a Claude Code roster never gets a
+    `last-seen` sidecar (round 7, below).
   Both are written under the roster lock (inside `Ensure`'s `withLock`).
   Both are removed by `deleteFiles` with the roster, before the roster
   file, like the mission sidecars, so a removal failure keeps the roster as
@@ -469,8 +477,9 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   nothing, rather than building a fresh roster over a recorded lineage. A
   Claude Code `SessionStart` with `source: "fork"` calls `Store.Ensure`
   with the fork's parent, not `createSessionRoster`'s
-  `CreateInCheckout` (`session_start.go:69,194`), so a fork never replaces
-  a roster that already has lineage. A `SessionStart` for any other source
+  `CreateInCheckout` (`session_start.go:69,194`), without `touch`, so a
+  fork never replaces a roster that already has lineage and never gets a
+  `last-seen` sidecar. A `SessionStart` for any other source
   keeps today's `CreateInCheckout` path (§2.5).
 - **Repair.** A sidecar left behind with no roster (an older binary's
   `Delete` does not know to remove it) is authoritative: `ensure` and
@@ -502,9 +511,18 @@ its `last-seen`. Round 6 puts the sidecar first:
   that maximum, so a parseable `last-seen` still governs.
 - **When `last-seen` is absent or unparseable, the existing logic runs
   unchanged**, including its handling of an unparseable `Started`
-  (`store.go:962-964`, stale). Every Claude Code roster and every existing
-  roster has no `last-seen` and behaves exactly as today; Claude Code's
-  numeric-primary liveness branch (`store.go:950-956`) is untouched.
+  (`store.go:962-964`, stale). **Round 7 (replacing round 6's claim that
+  every Claude Code roster has no `last-seen`):** `Ensure` writes
+  `last-seen` only when the caller passes `touch` (CLI `--touch`). The
+  OpenCode plugin passes it on every `ensure`. Claude Code's fork
+  `SessionStart` never passes it. Round 6 had `Ensure` write `last-seen`
+  on every call, and that would have given a Claude Code fork roster, which
+  has a live numeric `Participants[1]`, a sidecar that overrides the PID
+  branch: after 24 hours with no refresh, the roster would be purged
+  while its process was alive. With `touch` off, a Claude Code roster, fork
+  or not, has no `last-seen` and behaves exactly as today; its
+  numeric-primary liveness branch (`store.go:950-956`) is untouched. Every
+  existing roster likewise has no `last-seen`.
 - Both call sites pass the id: `Purge` (`store.go:404`) and
   `PurgeTombstoned` (`store.go:514`).
 - The memo's 15-minute refresh interval is what drives refreshes: any
@@ -532,8 +550,10 @@ one table-driven `TestIsStale` unless noted:
 | zero participants | unparseable | stale (existing empty-roster branch) |
 | two participants, dead numeric `Participants[1]` | unparseable | stale (existing PID branch) |
 | unparseable `Started`, one participant | fresh | not stale |
+| Claude fork roster with live numeric `Participants[1]`, `Started` 25 hours ago | absent | not stale (today's PID branch; `Ensure` without `touch` wrote no sidecar) |
 
-Separate tests assert: `Join`, `JoinSelf`, `Leave`, and `CreateInCheckout`
+Separate tests assert: `Ensure` without `touch` writes no `last-seen` on
+create and none on refresh, and with `touch` writes it on both; `Join`, `JoinSelf`, `Leave`, and `CreateInCheckout`
 leave both sidecars byte-identical; a hand-written roster re-marshalled
 without any new field (the older-binary case) leaves them intact;
 `deleteFiles` removes both and, when it fails, keeps the roster;
@@ -541,7 +561,7 @@ without any new field (the older-binary case) leaves them intact;
 refresh with the parent's roster deleted and `--parent-gone` on first
 registration; `session create` refuses an id whose sidecar records a
 parent; and a `SessionStart` with `source: "fork"` against a roster that
-already has lineage changes nothing but `last-seen`.
+already has lineage changes nothing.
 
 `isStale`, the two sidecars, `Store.Ensure`, `Store.ParentOf`, and
 `Store.LastSeen` are therefore implementation work, listed in §5 point 1.
@@ -1219,14 +1239,16 @@ pipeline stage's write-set is unambiguous:
    backed by a new `session.Store.Ensure`, and two per-session sidecar
    files, `parent-session` and `last-seen`** (§2.1.1, §2.3.2).
    `Store.Ensure(sessionID, root, primary, repo, checkout, host,
-   parentSession, parentGone)` takes the per-session roster lock
+   parentSession, parentGone, touch)` takes the per-session roster lock
    (`Store.withLock`) once and applies the three rules of §2.1.1 inside it:
    the parent-exists check on first registration only (waived by
    `parentGone`, which requires a non-empty `parentSession`); a
    lineage-conflict error, changing nothing, when the recorded parent (the
    sidecar, else none) differs from `parentSession`; and otherwise create
-   (sidecar, roster, `last-seen`, in that order) or refresh only
-   `last-seen`. `Roster` gains no field. `Store.ParentOf` and
+   (sidecar, roster, then `last-seen` only if `touch`) or, if `touch`,
+   refresh only `last-seen`. `touch` is the CLI flag `--touch`: the plugin
+   passes it on every `ensure`, and Claude Code's fork `SessionStart` never
+   does. `Roster` gains no field. `Store.ParentOf` and
    `Store.LastSeen` read the sidecars; `deleteFiles` removes them with the
    roster. `session create` keeps its replace semantics for an id with no
    recorded parent and refuses an id whose sidecar records one. The plugin
@@ -1237,7 +1259,10 @@ pipeline stage's write-set is unambiguous:
    `Started` and `last-seen` alone decides, before the empty-roster,
    participant-count, and PID branches (`store.go:942-957`). Both call
    sites pass the id (`store.go:404,514`). Absent or unparseable `last-seen`
-   leaves today's logic untouched. This is a change to shared session code
+   leaves today's logic untouched, and a Claude Code roster never has one
+   because its callers do not pass `touch` (round 7). The required tests
+   include a Claude fork roster with a live numeric `Participants[1]`,
+   `Started` 25 hours ago, and no `last-seen`, which is not stale. This is a change to shared session code
    with the required tests listed in §2.1.1, including a two-participant
    roster with a dead numeric `Participants[1]` and a fresh `last-seen`,
    which is not stale. The 24-hour idle purge is intended (§2.1.1).

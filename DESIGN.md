@@ -12167,14 +12167,20 @@ are gone. A roster re-marshal by `Join`, `JoinSelf`, `Leave`, or
 binary still serving MCP, would erase them. They are now two per-session
 sidecar files, `parent-session` (write-once) and `last-seen` (refreshable),
 written under the roster lock and removed by `deleteFiles` with the roster.
-A Claude Code fork `SessionStart` calls `Ensure`, not `createSessionRoster`,
+`last-seen` is written only when the caller passes `touch` (`ethos session
+ensure --touch`), which the OpenCode plugin does on every call (round 7).
+A Claude Code fork `SessionStart` calls `Ensure` without `touch`, not
+`createSessionRoster`,
 and `ethos session create` refuses an id whose sidecar records a parent
 (§2.1.1). (13) *Purge.* `isStale` consults `last-seen` first and, when it
 parses, decides by the age of the later of `Started` and `last-seen` alone,
 before the empty-roster, participant-count, and PID branches; the required
 tests include a two-participant roster with a dead numeric `Participants[1]`
-and a fresh `last-seen`, which is not stale. The 24-hour idle purge is
-intended. (14) *Deleted parent.* The parent-exists check applies at first
+and a fresh `last-seen`, which is not stale. Round 7: a Claude Code roster
+never has `last-seen` (its callers do not pass `touch`), so it keeps today's
+PID logic (`store.go:950-956`); a required test covers a Claude fork roster
+with a live numeric `Participants[1]`, `Started` 25 hours ago, and no
+`last-seen`, which is not stale. The 24-hour idle purge is intended. (14) *Deleted parent.* The parent-exists check applies at first
 registration only; a matching parent refreshes `last-seen` whether or not
 the parent still exists. `--parent-gone`, passed only after OpenCode
 conclusively reports the parent not found, records the dangling parent, and
