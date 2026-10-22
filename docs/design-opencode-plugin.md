@@ -943,14 +943,56 @@ pipeline stage's write-set is unambiguous:
    avoids by writing both atomically
    (`internal/hook/pretooluse_dispatch.go:881-888`'s
    `WriteDelegationBinding` call, alongside the claim and skeleton writes
-   in the same critical section). `claim-forked` must do the same: inside
-   the one `mission.WithDispatchPendingLock` critical section that writes
-   the child's `WriteActiveMission` claim, also call
-   `mission.WriteDelegationBinding(globalRoot, childSession,
+   in the same critical section). `claim-forked` must also write the
+   binding: `mission.WriteDelegationBinding(globalRoot, childSession,
    mission.DelegationBinding{DelegationID: <newly allocated>, MissionID:
-   <witness's claimed mission>, ParentSession: witness})` — mirroring the
-   existing dispatch path's own three-write pattern (skeleton, claim,
-   binding) rather than writing the claim alone.
+   <witness's claimed mission>, ParentSession: witness})`.
+
+   **Correction (round 5): the lock serializes writers; it does not make the
+   writes atomic.** Round 2 said the three writes happen "atomically"
+   inside one `mission.WithDispatchPendingLock` critical section. That
+   lock is a per-session `flock` (`internal/mission/active.go:523-550,
+   626-633`) that excludes other lock holders. The skeleton
+   (`WriteDelegationSkeleton`), the binding (`WriteDelegationBinding`), and
+   the claim (`WriteActiveMission`) remain three separate file writes, and
+   a failure or process exit between them leaves a partial state on disk.
+   `WriteCommitTrailers` does not take the lock at all
+   (`internal/hook/commit_trailers.go:45-72`), so a commit can read between
+   the writes. The design specifies publication order and recovery instead
+   of claiming atomicity:
+
+   1. *Order: skeleton, then binding, then claim.* The claim is the commit
+      point. Without a claim-origin binding for the session,
+      `WriteCommitTrailers` returns before it reads the delegation binding
+      (`commit_trailers.go:53-56`), so a binding written before the claim is
+      inert and a reader never sees a delegation trailer without its
+      `Mission:` trailer. This is the same ordering principle
+      `WriteActiveMissionOrigin` documents for its own pair: "an interrupted
+      pair never reads wrong" (`active.go:240-250`). The binding is also
+      not trusted alone: `commit_trailers.go:65` emits it only when its
+      `MissionID` equals the claimed mission.
+   2. *Retry reuses the unclaimed partial state.* Under the same lock,
+      `claim-forked` first reads the child's existing delegation binding.
+      If the child has no claim, and the binding names the witness's
+      mission and a skeleton exists for its delegation id, the retry reuses
+      that delegation id, rewrites any missing piece, and then writes the
+      claim. Otherwise it allocates a new id. A child that already holds a
+      claim is refused by the spec's own `sid? not-in dom claims` guard, as
+      before; because the claim is written last, that state implies the
+      skeleton and binding were already written.
+   3. *Failure surfaces; it is never swallowed.* A failed write returns a
+      non-zero exit. The plugin logs it and retries on the child's next
+      `execute.before` (§2.3), which the claim guard makes safe. Until a
+      retry succeeds, the child's commits carry no trailers: the safe
+      direction.
+   4. *Orphans are bounded, not leaked silently.* A skeleton left by an
+      attempt that never reached the claim and is never reused (the
+      mission was released first) is an unreferenced delegation record in
+      the mission's tree. It is inert for attribution. Closing it with
+      verdict `aborted`, as `enforceDelegationDepth` does for a refused
+      spawn (`internal/hook/pretooluse_dispatch.go:863-872`), is the
+      implementation stage's cleanup, and the design requires a test for
+      each interrupt point (after skeleton, after binding, after claim).
 3. **Fork wiring for both harnesses, in the same implementation stage.**
    `claim-forked` and `Roster.ParentSession` (points 1-2) are harness-neutral
    (§2.5), so two triggers call them: the OpenCode plugin on
