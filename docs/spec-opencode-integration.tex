@@ -2304,6 +2304,1349 @@ budget or a narrower probcli invocation (\texttt{-df}, a raised
 here.
 
 % ===================================================================
+\section{Session Lifecycle and \texttt{claim-forked}}
+\label{sec:lifecycle}
+% ===================================================================
+%%LIFECYCLE-BEGIN
+
+The sections above model how a session is \emph{correlated} with a
+delegation. They say nothing about how a session roster comes to exist,
+how it persists or is reclaimed, or how a forked child acquires a
+delegation by a sequence of file writes that a process may abandon at
+any point. Those are the subject of \fpath{docs/design-opencode-plugin.md}
+(DES-078): \S2.1.1 (\field{ensure}, the two sidecars, \field{isStale}),
+\S2.3 and \S2.3.1 (the ancestor walk), \S2.6 (\field{session delete}), and
+\S5 points~1 and~2 (\field{Store.Ensure} and \field{claim-forked}). That prose
+has been through three rounds of review (rounds 5, 6 and 7 of PR \#536),
+and each round found a counterexample the previous one had not. The
+organisation's rule for a defect class that survives two rounds is to stop
+reviewing and model it; this section is that model.
+
+The model is a state machine over the operations \emph{as the design
+document currently states them}. It was written first with every
+amendment switched off, so that ProB could be asked whether the four
+invariants of \S\ref{sec:lc-invariants} hold of the prose as it stood.
+They did not. \S\ref{sec:lc-ledger} records each counterexample, the
+amendment that removes it, and the switch that turns that amendment on.
+The operations below, with every switch on, are the authority the design
+document is to be brought into line with; with a switch off, the
+corresponding operation is the prose of rounds 6 and 7.
+
+\subsection{Method, and two facts about the toolchain}
+\label{sec:lc-method}
+
+\textbf{One machine per file.} \texttt{probcli} reads a \fuzz{} document
+as a single B machine: the state is the schema that \field{Init} primes,
+and every other schema is promoted to an operation. This file already
+contains one machine (\field{Registry}, \S\ref{sec:state}). The machine of
+this section is a second, independent one, so it cannot be explored in
+place; it is extracted by the commands of \S\ref{sec:lc-verification}
+(everything between the two \texttt{LIFECYCLE} markers, together with the
+preamble and the given sets), and the schemas \field{LcInit},
+\field{LcInitPair} and \field{LcInitChain} stand for the \field{Init} of the
+extracted file. Nothing in this section reads or writes a \field{Registry}
+component.
+
+\textbf{State predicates are guards.} \texttt{probcli}'s Z-to-B
+translation puts only the typing of the state schema into the B
+\texttt{INVARIANT}; every predicate in the state schema is conjoined to
+the post-state of each operation, as a guard. An operation that would
+violate such a predicate is not reported as violating it: it is
+silently disabled, and the state is simply not reached. A ``zero
+invariant violations'' report from \texttt{/z-spec:test} therefore says
+nothing about the predicate part of a state schema (the earlier
+\S\ref{sec:validation} figures are of this kind; see
+\S\ref{sec:lc-findings}). The state schema of this section accordingly has
+\emph{no predicate}. Each invariant is stated as its own schema
+(\field{LcInv}\ldots), which \texttt{probcli} never sees, and is checked by
+giving ProB its negation as a \texttt{-goal}: a counterexample is then a
+reachable state satisfying the goal, and ``no counterexample, all states
+visited'' is exhaustive for the instance.
+
+\textbf{Slicing.} The full machine has about thirty operations over
+twenty-six variables; ProB explores about two hundred states a second.
+Each invariant is therefore checked on a \emph{slice}: the same schemas
+with the operations that cannot affect that invariant removed, and a
+scenario \field{Init} where a particular lineage is needed. A removed
+operation leaves its variables at their initial values. The slices are
+named in \S\ref{sec:lc-verification}.
+
+\subsection{Types and constants}
+
+Sessions, missions and delegations are the given sets of
+\S\ref{sec:basic}. The liveness of a roster's numeric participant is
+abstracted to three kinds, because \field{isStale} distinguishes no more:
+a solo or persona-named roster ages out by its \field{Started} time
+(\field{rkAged}); a roster whose primary participant is a numeric id is
+stale exactly when that process is dead (\field{rkNumLive},
+\field{rkNumDead}). A binding's origin is as in \fpath{active.go}:101--119.
+Time is $0 \upto \field{lcMaxTime}$ with a stale-after threshold
+\field{lcTtl}; a last-seen \emph{later} than \field{now} models a clock that
+has stepped backwards, which is the future-dated case.
+
+\begin{zed}
+RKIND ::= rkAged | rkNumLive | rkNumDead
+\end{zed}
+
+\begin{zed}
+BORIGIN ::= boClaim | boDispatch
+\end{zed}
+
+\begin{axdef}
+lcMaxTime : \nat \\
+lcTtl : \nat
+\where
+lcMaxTime = 2 \\
+lcTtl = 1
+\end{axdef}
+
+The eight constants below are the amendments of \S\ref{sec:lc-ledger}.
+Setting a constant to \field{zfalse} yields the operation as written in
+DES-078 rounds 6 and 7; to \field{ztrue}, the amended operation. Each
+amended operation is a conjunct guarded by its constant, so the two
+versions differ in nothing else.
+
+\begin{axdef}
+fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck : ZBOOL
+\where
+fixDeleteOrder = zfalse \\
+fixDeleteCloses = zfalse \\
+fixCycleCheck = zfalse \\
+fixRefuseReconciles = zfalse \\
+fixInertBinding = zfalse \\
+fixStaleLive = zfalse \\
+fixCorruptPurge = zfalse \\
+fixPostCheck = zfalse
+\end{axdef}
+
+\subsection{State}
+\label{sec:lc-state}
+
+The state is the conjunction of seventeen small schemas, so that an
+operation can name the components it leaves alone with $\Xi$ rather than
+by equations. Session level: \field{roster} is the set of existing roster
+files, with \field{rkind}, \field{started} and \field{corrupt} (a roster
+whose file no longer parses). \field{parentSide} is the
+\fpath{parent-session} sidecar; it is a function from a session to its
+recorded parent, and may have an entry for a session with no roster.
+\field{seen} is the \fpath{last-seen} sidecar and \field{seenBad} the
+sessions whose sidecar does not parse. Claim level: \field{claimed} and
+\field{corigin} are the active-mission sidecar, \field{binding} the
+delegation-binding sidecar, \field{pend} and \field{pendWit} the
+\fpath{claim-forked-pending} record (delegation and witness), and
+\field{stage} and its companions are a \field{claim-forked} write phase that
+is \emph{in flight}, holding the child's dispatch-pending lock (stage $k$
+is the next write to perform; \S\ref{sec:lc-ops}). Delegation level:
+\field{used} are the ids ever allocated by \field{NewID}, \field{skel} the
+skeletons on disk, \field{dOpen} those whose verdict is still open,
+\field{dMis} and \field{dOwn} a skeleton's mission and child, and
+\field{missOpen} the missions that are open. The last three schemas are
+ghosts: they record history so that an invariant over a transition can be
+checked as an invariant over a state.
+
+\begin{schema}{LcTime}
+now : 0 \upto lcMaxTime
+\end{schema}
+
+\begin{schema}{LcRoster}
+roster : \power SESSIONID
+\end{schema}
+
+\begin{schema}{LcKind}
+rkind : SESSIONID \pfun RKIND
+\end{schema}
+
+\begin{schema}{LcStarted}
+started : SESSIONID \pfun (0 \upto lcMaxTime)
+\end{schema}
+
+\begin{schema}{LcCorrupt}
+corrupt : \power SESSIONID
+\end{schema}
+
+\begin{schema}{LcLineage}
+parentSide : SESSIONID \pfun SESSIONID
+\end{schema}
+
+\begin{schema}{LcSeen}
+seen : SESSIONID \pfun (0 \upto lcMaxTime) \\
+seenBad : \power SESSIONID
+\end{schema}
+
+\begin{schema}{LcClaim}
+claimed : SESSIONID \pfun MISSIONID \\
+corigin : SESSIONID \pfun BORIGIN
+\end{schema}
+
+\begin{schema}{LcBinding}
+binding : SESSIONID \pfun DELEGATIONID
+\end{schema}
+
+\begin{schema}{LcPending}
+pend : SESSIONID \pfun DELEGATIONID \\
+pendWit : SESSIONID \pfun SESSIONID
+\end{schema}
+
+\begin{schema}{LcFlight}
+stage : SESSIONID \pfun (0 \upto 6) \\
+cfD : SESSIONID \pfun DELEGATIONID \\
+cfM : SESSIONID \pfun MISSIONID \\
+cfW : SESSIONID \pfun SESSIONID
+\end{schema}
+
+\begin{schema}{LcUsed}
+used : \power DELEGATIONID
+\end{schema}
+
+\begin{schema}{LcSkeleton}
+skel : \power DELEGATIONID \\
+dMis : DELEGATIONID \pfun MISSIONID \\
+dOwn : DELEGATIONID \pfun SESSIONID
+\end{schema}
+
+\begin{schema}{LcOpen}
+dOpen : \power DELEGATIONID
+\end{schema}
+
+\begin{schema}{LcMission}
+missOpen : \power MISSIONID
+\end{schema}
+
+\begin{schema}{LcSealed}
+sealed : SESSIONID \pfun \power SESSIONID
+\end{schema}
+
+\begin{schema}{LcPurged}
+purgedLive : \power SESSIONID
+\end{schema}
+
+\begin{schema}{LcLeak}
+leaked : \power SESSIONID
+\end{schema}
+
+\begin{zed}
+Lifecycle \defs LcTime \land LcRoster \land LcKind \land LcStarted \land LcCorrupt \land LcLineage \land LcSeen \land LcClaim \land LcBinding \land LcPending \land LcFlight \land LcUsed \land LcSkeleton \land LcOpen \land LcMission \land LcSealed \land LcPurged \land LcLeak
+\end{zed}
+
+
+
+\field{sealed} records, when a roster is written, the parent that was then
+recorded for it; \field{LineageStable} says the sidecar never departs from
+it while the roster exists. \field{purgedLive} collects every session whose
+roster a purge removed while it was demonstrably live. \field{leaked}
+collects every child for which a \field{claim-forked} call ended with an
+interrupted attempt's skeleton still open and no longer resumable.
+
+
+\subsection{The invariants}
+\label{sec:lc-invariants}
+
+The four invariants of the mission contract, each as a schema over
+\field{Lifecycle}, followed by the two checks needed to state the first
+precisely and the well-formedness conditions that validate the model
+itself. A schema here is a statement, not a guard (\S\ref{sec:lc-method}).
+
+\begin{itemize}
+  \item \field{LineageStable}: while a roster exists, the parent that
+    \field{Store.ParentOf} reports is the one that was recorded when the
+    roster was written.
+  \item \field{Acyclic}: the recorded-parent relation has no cycle. This is
+    the strong form. It is stated of every sidecar, not only of those
+    reachable from some roster, and it makes the visited set of the
+    ancestor walk (\S2.3.1) a defence against a corrupt file rather than a
+    necessity; the walk keeps its visited set and refuses on a repeat.
+  \item \field{NoLiveSessionPurged}: no purge removes a roster whose
+    last-seen is within the TTL, or whose numeric participant is live.
+    ``Live'' is judged from what ethos can read: the participant kind of an
+    unreadable roster is not evidence.
+  \item \field{NoOrphanOpenSkeleton}: every open fork-propagated skeleton is
+    named by a pending record or by the binding of an existing child. This
+    literal form is the first conjunct of the stronger property below.
+  \item \field{ReconcileOnExit} (second conjunct of the stronger
+    \field{NoOrphanOpenSkeleton}): no \field{claim-forked} call ends, other
+    than by ``write failed'', leaving an interrupted attempt's skeleton open
+    when it has not adopted it and its binding is not live. The literal form
+    holds of a crashed attempt for ever, because the record names the
+    skeleton; the harm of an unreconciled attempt is that nothing may ever
+    reconcile it (the child may be refused for good), so the postcondition
+    is on the exit of the call.
+  \item \field{SweepComplete}: an open skeleton whose mission is closed is
+    named by a pending record. This is what \field{Store.Close}'s sweep is
+    for.
+\end{itemize}
+
+\begin{schema}{LcInvLineageStable}
+Lifecycle
+\where
+\forall s : roster @ s \in \dom sealed \land sealed(s) = parentSide \limg \{ s \} \rimg
+\end{schema}
+
+\begin{schema}{LcInvAcyclic}
+Lifecycle
+\where
+\forall s : \dom parentSide @ s \notin (parentSide \plus) \limg \{ s \} \rimg
+\end{schema}
+
+\begin{schema}{LcInvNoLiveSessionPurged}
+Lifecycle
+\where
+purgedLive = \emptyset
+\end{schema}
+
+\begin{schema}{LcInvNoOrphanOpenSkeleton}
+Lifecycle
+\where
+\forall d : dOpen @ (\exists c : \dom pend @ pend(c) = d) \lor (\exists c : roster \cap \dom binding @ binding(c) = d)
+\end{schema}
+
+\begin{schema}{LcInvReconcileOnExit}
+Lifecycle
+\where
+leaked = \emptyset
+\end{schema}
+
+\begin{schema}{LcInvSweepComplete}
+Lifecycle
+\where
+\forall d : dOpen @ (\exists c : \dom pend @ pend(c) = d) \lor (\exists m : missOpen @ (d \mapsto m) \in dMis)
+\end{schema}
+
+\begin{schema}{LcInvWellFormed}
+Lifecycle
+\where
+\dom rkind = roster \\
+\dom started = roster \\
+corrupt \subseteq roster \\
+roster \subseteq \dom sealed \\
+seenBad \cap \dom seen = \emptyset \\
+\dom corigin = \dom claimed \\
+\dom pendWit = \dom pend \\
+skel \subseteq used \\
+dOpen \subseteq skel \\
+\dom dMis = skel \\
+\dom dOwn = skel \\
+\dom cfM = \dom stage \\
+\dom cfW = \dom stage \\
+\dom cfD \subseteq \dom stage \\
+\forall c : \dom stage | stage(c) \geq 3 @ c \in \dom pend \land pend(c) = cfD(c)
+\end{schema}
+
+
+
+\subsection{Initialisation}
+
+\field{LcInit} is the empty system. \field{LcInitPair} is a child with a
+parent that holds an operator claim; \field{LcInitChain} adds a grandparent.
+Both are scenario initialisations for the slices that need a lineage.
+
+\begin{schema}{LcInit}
+Lifecycle'
+\where
+now' = 0 \\
+roster' = \emptyset \\
+rkind' = \emptyset \\
+started' = \emptyset \\
+corrupt' = \emptyset \\
+parentSide' = \emptyset \\
+seen' = \emptyset \\
+seenBad' = \emptyset \\
+claimed' = \emptyset \\
+corigin' = \emptyset \\
+binding' = \emptyset \\
+pend' = \emptyset \\
+pendWit' = \emptyset \\
+stage' = \emptyset \\
+cfD' = \emptyset \\
+cfM' = \emptyset \\
+cfW' = \emptyset \\
+used' = \emptyset \\
+skel' = \emptyset \\
+dMis' = \emptyset \\
+dOwn' = \emptyset \\
+dOpen' = \emptyset \\
+missOpen' = MISSIONID \\
+sealed' = \emptyset \\
+purgedLive' = \emptyset \\
+leaked' = \emptyset
+\end{schema}
+
+\begin{schema}{LcInitChain}
+Lifecycle'
+\where
+\exists a, b, c : SESSIONID; m : MISSIONID | a \neq b \land b \neq c \land a \neq c @ roster' = \{a, b, c\} \land rkind' = \{a \mapsto rkAged, b \mapsto rkAged, c \mapsto rkAged\} \land started' = \{a \mapsto 0, b \mapsto 0, c \mapsto 0\} \land parentSide' = \{b \mapsto a, c \mapsto b\} \land sealed' = \{a \mapsto \emptyset, b \mapsto \{a\}, c \mapsto \{b\}\} \land claimed' = \{a \mapsto m\} \land corigin' = \{a \mapsto boClaim\} \\
+now' = 0 \\
+corrupt' = \emptyset \\
+seen' = \emptyset \\
+seenBad' = \emptyset \\
+binding' = \emptyset \\
+pend' = \emptyset \\
+pendWit' = \emptyset \\
+stage' = \emptyset \\
+cfD' = \emptyset \\
+cfM' = \emptyset \\
+cfW' = \emptyset \\
+used' = \emptyset \\
+skel' = \emptyset \\
+dMis' = \emptyset \\
+dOwn' = \emptyset \\
+dOpen' = \emptyset \\
+missOpen' = MISSIONID \\
+purgedLive' = \emptyset \\
+leaked' = \emptyset
+\end{schema}
+
+\begin{schema}{LcInitPair}
+Lifecycle'
+\where
+\exists a, b : SESSIONID; m : MISSIONID | a \neq b @ roster' = \{a, b\} \land rkind' = \{a \mapsto rkAged, b \mapsto rkAged\} \land started' = \{a \mapsto 0, b \mapsto 0\} \land parentSide' = \{b \mapsto a\} \land sealed' = \{a \mapsto \emptyset, b \mapsto \{a\}\} \land claimed' = \{a \mapsto m\} \land corigin' = \{a \mapsto boClaim\} \\
+now' = 0 \\
+corrupt' = \emptyset \\
+seen' = \emptyset \\
+seenBad' = \emptyset \\
+binding' = \emptyset \\
+pend' = \emptyset \\
+pendWit' = \emptyset \\
+stage' = \emptyset \\
+cfD' = \emptyset \\
+cfM' = \emptyset \\
+cfW' = \emptyset \\
+used' = \emptyset \\
+skel' = \emptyset \\
+dMis' = \emptyset \\
+dOwn' = \emptyset \\
+dOpen' = \emptyset \\
+missOpen' = MISSIONID \\
+purgedLive' = \emptyset \\
+leaked' = \emptyset
+\end{schema}
+
+
+
+\subsection{Operations}
+\label{sec:lc-ops}
+
+\paragraph{Environment.} The clock may be set to any time, so it may step
+backwards; a numeric participant dies; a roster or a last-seen file
+becomes unparseable.
+
+\begin{schema}{LcClockSet}
+\Delta Lifecycle \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+t? : 0 \upto lcMaxTime
+\where
+now' = t?
+\end{schema}
+
+\begin{schema}{LcPidDies}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID
+\where
+s? \in roster \\
+(s? \mapsto rkNumLive) \in rkind \\
+rkind' = rkind \oplus \{ s? \mapsto rkNumDead \}
+\end{schema}
+
+\begin{schema}{LcCorruptRoster}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID
+\where
+s? \in roster \\
+s? \notin corrupt \\
+corrupt' = corrupt \cup \{ s? \}
+\end{schema}
+
+\begin{schema}{LcCorruptSeen}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID
+\where
+s? \in \dom seen \\
+seen' = \{ s? \} \ndres seen \\
+seenBad' = seenBad \cup \{ s? \}
+\end{schema}
+
+
+
+\paragraph{\field{ensure}} (\S2.1.1, \S5 point~1). \field{LcEnsureCreate} is a
+first registration or a registration over a leftover sidecar: the
+lineage sidecar is written first, then the roster, then, if \field{--touch},
+the last-seen. The three rules of the design appear as guards in order:
+a non-empty parent must have a roster unless \field{--parent-gone}; a
+recorded parent must equal the supplied one; and the supplied parent, with
+\field{par?} empty or a singleton, is then recorded. With
+\field{fixCycleCheck} the new edge is refused if the session is already an
+ancestor of the supplied parent. \field{LcEnsureLineageOnly} is the crash
+between the sidecar and the roster. \field{LcEnsureRefresh} is the existing
+roster with \field{--touch}. \field{LcCreateCli} is \field{session create},
+which refuses an id whose sidecar records a parent.
+
+\begin{schema}{LcEnsureCreate}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcCorrupt \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+par? : \power SESSIONID \\
+gone? : ZBOOL \\
+touch? : ZBOOL \\
+k? : RKIND
+\where
+s? \notin roster \\
+\# par? \leq 1 \\
+gone? = ztrue \implies par? \neq \emptyset \\
+parentSide \limg \{s?\} \rimg \neq \emptyset \implies par? = parentSide \limg \{s?\} \rimg \\
+parentSide \limg \{s?\} \rimg = \emptyset \implies (par? \subseteq roster \lor gone? = ztrue) \\
+(fixCycleCheck = ztrue \land parentSide \limg \{s?\} \rimg = \emptyset) \implies s? \notin (par? \cup ((parentSide \plus) \limg par? \rimg)) \\
+roster' = roster \cup \{ s? \} \\
+rkind' = rkind \oplus \{ s? \mapsto k? \} \\
+started' = started \oplus \{ s? \mapsto now \} \\
+parentSide' = parentSide \cup (\{ s? \} \cross par?) \\
+touch? = ztrue \implies (seen' = seen \oplus \{ s? \mapsto now \} \land seenBad' = seenBad \setminus \{ s? \}) \\
+touch? = zfalse \implies (seen' = seen \land seenBad' = seenBad) \\
+sealed' = sealed \oplus \{ s? \mapsto par? \}
+\end{schema}
+
+\begin{schema}{LcEnsureLineageOnly}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+par? : \power SESSIONID \\
+gone? : ZBOOL
+\where
+s? \notin roster \\
+par? \neq \emptyset \\
+parentSide \limg \{s?\} \rimg = \emptyset \\
+\# par? \leq 1 \\
+gone? = ztrue \implies par? \neq \emptyset \\
+parentSide \limg \{s?\} \rimg \neq \emptyset \implies par? = parentSide \limg \{s?\} \rimg \\
+parentSide \limg \{s?\} \rimg = \emptyset \implies (par? \subseteq roster \lor gone? = ztrue) \\
+(fixCycleCheck = ztrue \land parentSide \limg \{s?\} \rimg = \emptyset) \implies s? \notin (par? \cup ((parentSide \plus) \limg par? \rimg)) \\
+parentSide' = parentSide \cup (\{ s? \} \cross par?)
+\end{schema}
+
+\begin{schema}{LcEnsureRefresh}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+par? : \power SESSIONID
+\where
+s? \in roster \\
+s? \notin corrupt \\
+par? = parentSide \limg \{s?\} \rimg \\
+seen' = seen \oplus \{ s? \mapsto now \} \\
+seenBad' = seenBad \setminus \{ s? \}
+\end{schema}
+
+\begin{schema}{LcCreateCli}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+k? : RKIND
+\where
+s? \notin corrupt \\
+parentSide \limg \{s?\} \rimg = \emptyset \\
+s? \notin \dom stage \\
+roster' = roster \cup \{ s? \} \\
+rkind' = rkind \oplus \{ s? \mapsto k? \} \\
+started' = started \oplus \{ s? \mapsto now \} \\
+sealed' = sealed \oplus \{ s? \mapsto \emptyset \}
+\end{schema}
+
+
+
+\paragraph{\field{deleteFiles}} (\S2.6; \fpath{store.go}:278--301). The call
+stops at the first failure, so a failed call has performed a prefix of its
+steps; \field{done?} is the length of that prefix. The steps are numbered
+in the order the code performs them. As written, the last-seen and
+parent-session sidecars precede the roster file, so step~7 is the roster
+removal and a failure there leaves a roster whose lineage sidecar has gone.
+With \field{fixDeleteOrder} the roster is removed at step~6 and the
+lineage sidecar last, so the sidecar can outlive the roster (which the
+design already treats as authoritative) but never the reverse. With
+\field{fixDeleteCloses} step~1 closes, with verdict \field{aborted}, every
+open skeleton named by the session's pending record or binding, before
+either is cleared.
+
+\paragraph{Purge} (\fpath{store.go}:385--404). A purge deletes a roster that
+does not parse, or whose \field{isStale} holds, through the same
+\field{deleteFiles}. When a valid last-seen is present, staleness is decided
+by the later of \field{Started} and last-seen alone (round 6). With
+\field{fixStaleLive} a live numeric participant also protects the roster;
+with \field{fixCorruptPurge} an unreadable roster with a fresh last-seen is
+left alone.
+
+\begin{schema}{LcDeleteSession}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcMission \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+done? : 1 \upto 7
+\where
+s? \notin \dom stage \\
+s? \in roster \cup \dom parentSide \cup \dom seen \cup seenBad \cup \dom claimed \cup \dom binding \cup \dom pend \\
+fixDeleteCloses = ztrue \implies dOpen' = dOpen \setminus ((pend \limg \{ s? \} \rimg) \cup (binding \limg \{ s? \} \rimg)) \\
+fixDeleteCloses = zfalse \implies dOpen' = dOpen \\
+done? \geq 2 \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s? \} \ndres corigin) \\
+done? < 2 \implies (claimed' = claimed \land corigin' = corigin) \\
+done? \geq 3 \implies binding' = \{ s? \} \ndres binding \\
+done? < 3 \implies binding' = binding \\
+done? \geq 4 \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit) \\
+done? < 4 \implies (pend' = pend \land pendWit' = pendWit) \\
+done? \geq 5 \implies (seen' = \{ s? \} \ndres seen \land seenBad' = seenBad \setminus \{ s? \}) \\
+done? < 5 \implies (seen' = seen \land seenBad' = seenBad) \\
+((fixDeleteOrder = ztrue \land done? = 7) \lor (fixDeleteOrder = zfalse \land done? \geq 6)) \implies parentSide' = \{ s? \} \ndres parentSide \\
+\lnot ((fixDeleteOrder = ztrue \land done? = 7) \lor (fixDeleteOrder = zfalse \land done? \geq 6)) \implies parentSide' = parentSide \\
+((fixDeleteOrder = ztrue \land done? \geq 6) \lor (fixDeleteOrder = zfalse \land done? = 7)) \implies (roster' = roster \setminus \{ s? \} \land rkind' = \{ s? \} \ndres rkind \land started' = \{ s? \} \ndres started \land corrupt' = corrupt \setminus \{ s? \} \land sealed' = \{ s? \} \ndres sealed) \\
+\lnot ((fixDeleteOrder = ztrue \land done? \geq 6) \lor (fixDeleteOrder = zfalse \land done? = 7)) \implies (roster' = roster \land rkind' = rkind \land started' = started \land corrupt' = corrupt \land sealed' = sealed)
+\end{schema}
+
+\begin{schema}{LcPurgeSession}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcMission \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+done? : 1 \upto 7
+\where
+s? \notin \dom stage \\
+s? \in roster \cup \dom parentSide \cup \dom seen \cup seenBad \cup \dom claimed \cup \dom binding \cup \dom pend \\
+fixDeleteCloses = ztrue \implies dOpen' = dOpen \setminus ((pend \limg \{ s? \} \rimg) \cup (binding \limg \{ s? \} \rimg)) \\
+fixDeleteCloses = zfalse \implies dOpen' = dOpen \\
+done? \geq 2 \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s? \} \ndres corigin) \\
+done? < 2 \implies (claimed' = claimed \land corigin' = corigin) \\
+done? \geq 3 \implies binding' = \{ s? \} \ndres binding \\
+done? < 3 \implies binding' = binding \\
+done? \geq 4 \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit) \\
+done? < 4 \implies (pend' = pend \land pendWit' = pendWit) \\
+done? \geq 5 \implies (seen' = \{ s? \} \ndres seen \land seenBad' = seenBad \setminus \{ s? \}) \\
+done? < 5 \implies (seen' = seen \land seenBad' = seenBad) \\
+((fixDeleteOrder = ztrue \land done? = 7) \lor (fixDeleteOrder = zfalse \land done? \geq 6)) \implies parentSide' = \{ s? \} \ndres parentSide \\
+\lnot ((fixDeleteOrder = ztrue \land done? = 7) \lor (fixDeleteOrder = zfalse \land done? \geq 6)) \implies parentSide' = parentSide \\
+((fixDeleteOrder = ztrue \land done? \geq 6) \lor (fixDeleteOrder = zfalse \land done? = 7)) \implies (roster' = roster \setminus \{ s? \} \land rkind' = \{ s? \} \ndres rkind \land started' = \{ s? \} \ndres started \land corrupt' = corrupt \setminus \{ s? \} \land sealed' = \{ s? \} \ndres sealed) \\
+\lnot ((fixDeleteOrder = ztrue \land done? \geq 6) \lor (fixDeleteOrder = zfalse \land done? = 7)) \implies (roster' = roster \land rkind' = rkind \land started' = started \land corrupt' = corrupt \land sealed' = sealed) \\
+s? \in roster \\
+(s? \in corrupt \land (fixCorruptPurge = zfalse \lor \lnot (\exists t : 0 \upto lcMaxTime @ (s? \mapsto t) \in seen \land now - t \leq lcTtl))) \lor (s? \notin corrupt \land ((s? \in \dom seen \land now - started(s?) > lcTtl \land (\forall t : 0 \upto lcMaxTime | (s? \mapsto t) \in seen @ now - t > lcTtl) \land (fixStaleLive = zfalse \lor rkind(s?) \neq rkNumLive)) \lor (s? \notin \dom seen \land ((rkind(s?) = rkAged \land now - started(s?) > lcTtl) \lor rkind(s?) = rkNumDead)))) \\
+(((\exists t : 0 \upto lcMaxTime @ (s? \mapsto t) \in seen \land now - t \leq lcTtl) \lor (s? \notin corrupt \land rkind(s?) = rkNumLive)) \land ((fixDeleteOrder = ztrue \land done? \geq 6) \lor (fixDeleteOrder = zfalse \land done? = 7))) \implies purgedLive' = purgedLive \cup \{ s? \} \\
+\lnot (((\exists t : 0 \upto lcMaxTime @ (s? \mapsto t) \in seen \land now - t \leq lcTtl) \lor (s? \notin corrupt \land rkind(s?) = rkNumLive)) \land ((fixDeleteOrder = ztrue \land done? \geq 6) \lor (fixDeleteOrder = zfalse \land done? = 7))) \implies purgedLive' = purgedLive
+\end{schema}
+
+
+\begin{schema}{LcOperatorClaim}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID \\
+m? : MISSIONID \\
+o? : BORIGIN
+\where
+s? \in roster \\
+s? \notin \dom stage \\
+m? \in missOpen \\
+claimed' = claimed \oplus \{ s? \mapsto m? \} \\
+corigin' = corigin \oplus \{ s? \mapsto o? \}
+\end{schema}
+
+\begin{schema}{LcReleaseClaim}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+s? : SESSIONID
+\where
+s? \in \dom claimed \\
+s? \notin \dom stage \\
+claimed' = \{ s? \} \ndres claimed \\
+corigin' = \{ s? \} \ndres corigin
+\end{schema}
+
+
+
+\paragraph{\field{claim-forked}} (\S5 point~2). The read phase takes no lock
+and writes nothing; \field{LcCfBegin} is a read phase that passes (the
+child's roster loads, the witness holds a claim-origin binding, and the
+witness is reached by the walk of \S2.3.1: each hop is read from
+\field{parentSide} and the session reached must have a readable roster) and
+that goes on to take the child's dispatch-pending lock. \field{LcCfRefuse}
+is a read-phase refusal. The write phase reconciles the pending record
+first (stage~0), in one of three ways: the child already holds a claim
+(\field{LcCfReconcileClaimed}), the record is resumable
+(\field{LcCfReconcileReuse}), or it is closed and removed
+(\field{LcCfReconcileFresh}). It then allocates an id and re-checks that
+the mission is open (stage~2), and writes the record, the skeleton, the
+binding and the claim, one stage each (3 to 6), before removing the
+record. A process may \field{LcCfCrash} at any stage, leaving the files
+written so far; or, if it survives a failed write, \field{LcCfAbort}.
+
+With \field{fixRefuseReconciles} a refusal also reconciles. With
+\field{fixInertBinding} the claimed case closes the skeleton unless the
+binding is live, that is, unless the child's claim is for the skeleton's
+mission. With \field{fixPostCheck} the binding is not written unless the
+mission is still open: the check that follows the skeleton write, which
+closes the window the unlocked sweep leaves.
+
+\begin{schema}{LcCfRefuse}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+c? : SESSIONID
+\where
+c? \notin \dom stage \\
+(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land dOpen' = dOpen \land (c? \in \dom pend \land pend(c?) \in dOpen \implies leaked' = leaked \cup \{ c? \}) \land (\lnot (c? \in \dom pend \land pend(c?) \in dOpen) \implies leaked' = leaked)) \lor (fixRefuseReconciles = ztrue \land leaked' = leaked \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \}))
+\end{schema}
+
+\begin{schema}{LcCfBegin}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID \\
+w? : SESSIONID
+\where
+c? \notin \dom stage \\
+c? \in roster \\
+c? \notin corrupt \\
+w? \in \dom claimed \\
+(w? \mapsto boClaim) \in corigin \\
+w? \in (((parentSide \rres (roster \setminus corrupt)) \plus) \limg \{ c? \} \rimg) \\
+stage' = stage \oplus \{ c? \mapsto 0 \} \\
+cfM' = cfM \oplus \{ c? \mapsto claimed(w?) \} \\
+cfW' = cfW \oplus \{ c? \mapsto w? \} \\
+cfD' = \{ c? \} \ndres cfD
+\end{schema}
+
+\begin{schema}{LcCfReconcileClaimed}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+c? : SESSIONID
+\where
+(c? \mapsto 0) \in stage \\
+c? \in \dom claimed \\
+pend' = \{ c? \} \ndres pend \\
+pendWit' = \{ c? \} \ndres pendWit \\
+stage' = \{ c? \} \ndres stage \\
+cfD' = \{ c? \} \ndres cfD \\
+cfM' = \{ c? \} \ndres cfM \\
+cfW' = \{ c? \} \ndres cfW \\
+(fixInertBinding = ztrue \land dOpen' = dOpen \setminus (\{ rd : pend \limg \{ c? \} \rimg | \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ rd \}) \land leaked' = leaked) \lor (fixInertBinding = zfalse \land dOpen' = dOpen \setminus \{ rd : pend \limg \{ c? \} \rimg | (c? \mapsto rd) \notin binding @ rd \} \land (((c? \in \dom pend \land pend(c?) \in dOpen \land (c? \mapsto pend(c?)) \in binding \land \lnot ((c? \mapsto pend(c?)) \in binding \land (\exists m : MISSIONID @ (pend(c?) \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \implies leaked' = leaked \cup \{ c? \}) \land (\lnot ((c? \in \dom pend \land pend(c?) \in dOpen \land (c? \mapsto pend(c?)) \in binding \land \lnot ((c? \mapsto pend(c?)) \in binding \land (\exists m : MISSIONID @ (pend(c?) \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \implies leaked' = leaked))
+\end{schema}
+
+\begin{schema}{LcCfReconcileReuse}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 0) \in stage \\
+c? \notin \dom claimed \\
+(c? \in \dom pend \land pend(c?) \in dOpen \land (pend(c?) \mapsto cfM(c?)) \in dMis \land pendWit(c?) = cfW(c?) \land cfM(c?) \in missOpen) \\
+cfD' = cfD \oplus \{ c? \mapsto pend(c?) \} \\
+(c? \mapsto pend(c?)) \in binding \implies stage' = stage \oplus \{ c? \mapsto 5 \} \\
+(c? \mapsto pend(c?)) \notin binding \implies stage' = stage \oplus \{ c? \mapsto 4 \} \\
+cfM' = cfM \\
+cfW' = cfW
+\end{schema}
+
+\begin{schema}{LcCfReconcileFresh}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 0) \in stage \\
+c? \notin \dom claimed \\
+\lnot (c? \in \dom pend \land pend(c?) \in dOpen \land (pend(c?) \mapsto cfM(c?)) \in dMis \land pendWit(c?) = cfW(c?) \land cfM(c?) \in missOpen) \\
+dOpen' = dOpen \setminus (pend \limg \{ c? \} \rimg) \\
+pend' = \{ c? \} \ndres pend \\
+pendWit' = \{ c? \} \ndres pendWit \\
+stage' = stage \oplus \{ c? \mapsto 1 \} \\
+cfD' = cfD \\
+cfM' = cfM \\
+cfW' = cfW
+\end{schema}
+
+\begin{schema}{LcCfAlloc}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID \\
+d? : DELEGATIONID
+\where
+(c? \mapsto 1) \in stage \\
+d? \notin used \\
+cfM(c?) \in missOpen \\
+used' = used \cup \{ d? \} \\
+stage' = stage \oplus \{ c? \mapsto 2 \} \\
+cfD' = cfD \oplus \{ c? \mapsto d? \} \\
+cfM' = cfM \\
+cfW' = cfW
+\end{schema}
+
+\begin{schema}{LcCfExitNoRetry}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 1) \in stage \\
+used = DELEGATIONID \lor cfM(c?) \notin missOpen \\
+stage' = \{ c? \} \ndres stage \\
+cfD' = \{ c? \} \ndres cfD \\
+cfM' = \{ c? \} \ndres cfM \\
+cfW' = \{ c? \} \ndres cfW
+\end{schema}
+
+\begin{schema}{LcCfWriteRecord}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 2) \in stage \\
+stage' = stage \oplus \{ c? \mapsto 3 \} \\
+pend' = pend \oplus \{ c? \mapsto cfD(c?) \} \\
+pendWit' = pendWit \oplus \{ c? \mapsto cfW(c?) \} \\
+cfD' = cfD \\
+cfM' = cfM \\
+cfW' = cfW
+\end{schema}
+
+\begin{schema}{LcCfWriteSkeleton}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcUsed \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 3) \in stage \\
+stage' = stage \oplus \{ c? \mapsto 4 \} \\
+skel' = skel \cup \{ cfD(c?) \} \\
+dOpen' = dOpen \cup \{ cfD(c?) \} \\
+dMis' = dMis \oplus \{ cfD(c?) \mapsto cfM(c?) \} \\
+dOwn' = dOwn \oplus \{ cfD(c?) \mapsto c? \} \\
+cfD' = cfD \\
+cfM' = cfM \\
+cfW' = cfW
+\end{schema}
+
+\begin{schema}{LcCfWriteBinding}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcPending \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 4) \in stage \\
+fixPostCheck = ztrue \implies cfM(c?) \in missOpen \\
+stage' = stage \oplus \{ c? \mapsto 5 \} \\
+binding' = binding \oplus \{ c? \mapsto cfD(c?) \} \\
+cfD' = cfD \\
+cfM' = cfM \\
+cfW' = cfW
+\end{schema}
+
+\begin{schema}{LcCfWriteClaim}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 5) \in stage \\
+stage' = stage \oplus \{ c? \mapsto 6 \} \\
+claimed' = claimed \oplus \{ c? \mapsto cfM(c?) \} \\
+corigin' = corigin \oplus \{ c? \mapsto boClaim \} \\
+cfD' = cfD \\
+cfM' = cfM \\
+cfW' = cfW
+\end{schema}
+
+\begin{schema}{LcCfFinish}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+(c? \mapsto 6) \in stage \\
+pend' = \{ c? \} \ndres pend \\
+pendWit' = \{ c? \} \ndres pendWit \\
+stage' = \{ c? \} \ndres stage \\
+cfD' = \{ c? \} \ndres cfD \\
+cfM' = \{ c? \} \ndres cfM \\
+cfW' = \{ c? \} \ndres cfW
+\end{schema}
+
+\begin{schema}{LcCfCrash}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+c? \in \dom stage \\
+stage' = \{ c? \} \ndres stage \\
+cfD' = \{ c? \} \ndres cfD \\
+cfM' = \{ c? \} \ndres cfM \\
+cfW' = \{ c? \} \ndres cfW
+\end{schema}
+
+\begin{schema}{LcCfAbort}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcMission \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+c? : SESSIONID
+\where
+stage(c?) \in 3 \upto 5 \\
+dOpen' = dOpen \setminus \{ cfD(c?) \} \\
+stage(c?) = 5 \implies binding' = \{ c? \} \ndres binding \\
+stage(c?) < 5 \implies binding' = binding \\
+pend' = \{ c? \} \ndres pend \\
+pendWit' = \{ c? \} \ndres pendWit \\
+stage' = \{ c? \} \ndres stage \\
+cfD' = \{ c? \} \ndres cfD \\
+cfM' = \{ c? \} \ndres cfM \\
+cfW' = \{ c? \} \ndres cfW
+\end{schema}
+
+
+
+\paragraph{Missions.} \field{LcCloseLocked} is \field{Store.Close} with the
+exclusive mission lock: it cannot run while a write phase holds the shared
+lock (stage $\geq 2$ for that mission). \field{LcCloseUnlocked} is the
+fallback of \fpath{store.go}:1107--1114, taken when the lock cannot be
+acquired: the sweep runs with no exclusion. \field{LcAbandonMission}
+refuses while any skeleton of the mission is open; that guard is
+\field{countBlockingDelegations}
+(\fpath{store.go}:2004--2010) as an observer, and it is why an unaccounted
+open skeleton is a defect and not a curiosity.
+
+\begin{schema}{LcCloseLocked}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+m? : MISSIONID
+\where
+m? \in missOpen \\
+\lnot (\exists c : \dom stage @ stage(c) \geq 2 \land cfM(c) = m?) \\
+missOpen' = missOpen \setminus \{ m? \} \\
+dOpen' = \{ d : dOpen | (d \mapsto m?) \notin dMis @ d \}
+\end{schema}
+
+\begin{schema}{LcCloseUnlocked}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+m? : MISSIONID
+\where
+m? \in missOpen \\
+missOpen' = missOpen \setminus \{ m? \} \\
+dOpen' = \{ d : dOpen | (d \mapsto m?) \notin dMis @ d \}
+\end{schema}
+
+\begin{schema}{LcAbandonMission}
+\Delta Lifecycle \\
+\Xi LcTime \\
+\Xi LcRoster \\
+\Xi LcKind \\
+\Xi LcStarted \\
+\Xi LcCorrupt \\
+\Xi LcLineage \\
+\Xi LcSeen \\
+\Xi LcClaim \\
+\Xi LcBinding \\
+\Xi LcPending \\
+\Xi LcFlight \\
+\Xi LcUsed \\
+\Xi LcSkeleton \\
+\Xi LcOpen \\
+\Xi LcSealed \\
+\Xi LcPurged \\
+\Xi LcLeak \\
+m? : MISSIONID
+\where
+m? \in missOpen \\
+\lnot (\exists d : dOpen @ (d \mapsto m?) \in dMis) \\
+missOpen' = missOpen \setminus \{ m? \}
+\end{schema}
+
+
+
+%%LIFECYCLE-END
+
+% ===================================================================
 \section{Open Dependency: punt-labs/points}
 \label{sec:open-dependency}
 % ===================================================================
