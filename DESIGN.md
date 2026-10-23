@@ -12043,3 +12043,639 @@ that; (3) A's new FAIL path is reached only when
 specifically to avoid — none of those cases exercise the new path, and
 none regressed. Every regression test above was confirmed failing
 against pre-fix code before its fix landed.
+
+## DES-078: OpenCode V2 plugin/adapter design — concrete mapping from the harness-neutral spec to real OpenCode (PROPOSED)
+
+**Status**: Proposed. Design only, no implementation. Bead `ethos-5y4r`,
+missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
+`m-2026-10-18-020` (round 3), `m-2026-10-21-003` (round 4), and
+`m-2026-10-22-017` (round 5), `m-2026-10-22-026` (round 6),
+`m-2026-10-22-030` (round 7), `m-2026-10-22-046` (round 8, which
+reconciles the design to the lifecycle model of `m-2026-10-22-031` and
+`m-2026-10-22-042`), and `m-2026-10-23-005` (round 9, which reconciles it to
+the extended model of `m-2026-10-22-048`). Full design:
+`docs/design-opencode-plugin.md`. The lifecycle operations (session `ensure`,
+`SessionStart`, `deleteFiles`, purge, `claim-forked`, `mission release`, and
+the close-time clearing of the claim) are specified by the model-checked
+`docs/spec-opencode-lifecycle.tex`, which is the authority where it and the
+design disagree.
+Builds on the formal model in `docs/spec-opencode-integration.tex`
+(PR #534) and its companion research artifact,
+`docs/prfaq-opencode-integration.md`. Awaiting leader review and operator
+ratification before an implementation mission is dispatched, per this
+repo's own design-review-before-implementation rule.
+
+**Round 2 correction.** Three independent automated reviewers (Qodo,
+GitHub Copilot, Cursor Bugbot) converged on five defects in round 1's
+PR #536; the leader verified the top three directly against real source
+before routing round 2. All five are fixed in `docs/design-opencode-plugin.md`
+and summarized in the Decision/Rejected-alternatives/Non-goals sections
+below — the round-1 decision's shape (three pieces, minimal new Go
+surface) is unchanged, but point 1 below now includes session-roster
+registration before any claim, point 2's propagation mechanism is
+corrected to the actual OpenCode hook that carries a mutable environment,
+and point 3 now includes server-verified fork lineage and a matching
+delegation-binding write (round 2 called it "atomic"; superseded in
+round 5, which makes it ordered and retryable but not atomic).
+
+**Round 3 correction.** The leader personally verified two further items
+against real sources — context7 against `/anomalyco/opencode`'s dev
+branch, a direct `WebFetch` of a real, open GitHub PR, and a direct read
+of `punt-labs/points`'s own repo — rather than accepting or re-asserting
+round 2's framing. Fixed: (1) the sessionID-correlation gap named in
+round 2 (point 2 below, `docs/design-opencode-plugin.md` §3.2-§3.3) was
+an open-ended design risk; it is now stated as a narrow, time-bound
+window closing specifically on `github.com/anomalyco/opencode/pull/54842`'s
+merge, named by number and link. (2) the `punt-labs/points` conflict
+(Non-goals bullet below, `docs/design-opencode-plugin.md` §6.1) was
+framed as a general incompatibility between `points`-routed repos and
+ethos-OpenCode-integrated repos; it is now stated as a same-repo-only
+collision, confirmed by reading `points`'s own source, which never
+writes a `"plugins"` key in any repo it configures.
+
+**Round 4 correction (mission `m-2026-10-21-003`).** The operator read
+`internal/enable/enable.go` directly and found that `ethos enable`'s
+deposit step is Claude-Code-specific (`CanonicalImport`,
+`claudemd.Register`). Fixed in `docs/design-opencode-plugin.md`: (1) the
+`--opencode` flag is replaced by coequal `ethos enable claude` / `ethos
+enable opencode` subcommands, each depositing only its own harness-native
+artifact, with a usage error for bare `ethos enable` (§5 point 5); (2)
+`claim-forked` and `Roster.ParentSession` are stated to be harness-neutral,
+and Claude Code's own fork wiring (`SessionStart` with `source: "fork"`) is
+in scope for the same implementation stage (new §2.5, §5 point 3), per
+`docs/spec-opencode-integration.tex` §Harness Instantiation, Case 2;
+(3) framing that treated OpenCode as an add-on to a Claude Code baseline
+is corrected.
+
+**Round 5 correction (mission `m-2026-10-22-017`).** Eleven open review
+findings were each verified against real source (`internal/`,
+`plugin/hooks/commit-msg.sh`, `docs/spec-opencode-integration.tex`, the
+`.tmp/` OpenCode references); all eleven held, and
+`docs/design-opencode-plugin.md` is amended. (1) The plugin uses the Effect
+shape throughout: hook registration is an Effect run in the plugin `Scope`,
+`ctx.event.subscribe()` is a `Stream`, and every `ethos` call recovers its
+own failures so attribution never blocks a tool call (§1.1-§1.2). (2) The
+ten-hop cap is gone: the spec's guard is the full ancestor set, so both
+walks run to the end of the lineage and stop on a repeated id (§2.3.1).
+(3) Setting `ETHOS_SESSION` alone is insufficient, because
+`commit-msg.sh:55` skips the session lookup when `MISSION_ID` or
+`DELEGATION_ID` is inherited, and `resolve.SessionID` accepts any inherited
+`ETHOS_SESSION` or corroborated `CLAUDE_PID`. Every `create.before` firing
+now rewrites the attribution variables in a known arm or an unknown arm
+(§3.2.1), and the fail-closed table separates a non-empty `ETHOS_SESSION`
+naming a missing session from a missing propagation (§4). (4) Sessions
+register lazily and idempotently through `ensureRegistered` and a new
+create-if-absent `ethos session ensure`; `ctx.session.list` (absent in
+`v2.0.32`), the snapshot-before-subscribe window, and the replace-semantics
+`session create` replay are removed, and both fork triggers register
+missing rosters and fork links, parent first, before `claim-forked`
+(§2.1.1, §2.3). Persisted lineage is read from `fork.sessionID`, not
+`parentID` (§2.2). (5) `claim-forked` writes skeleton, binding, then claim,
+and retries from unclaimed partial state, because
+`WithDispatchPendingLock` serializes writers without making the writes
+atomic (§5 point 2). (6) The operator's 2026-10-22 enablement ruling
+replaces round 4's usage error: see decision point 4.
+
+Round 5, second pass (evaluator rejection of the first pass; leader
+decisions). (7) *Purge and teardown.* An OpenCode roster collapses to one
+participant, which `isStale` ages out by `Started` after 24 hours, so a
+live session would be purged with its claim. `Roster.LastSeen`, refreshed
+by every `ethos session ensure`, is now the age base (`isOlderThan` uses
+the later of `Started` and `LastSeen`; round 6 replaces this with the
+`last-seen` sidecar, consulted first, see item 13), and the plugin memoizes
+`ensureRegistered` per session id with a 15-minute refresh interval whose
+expiry re-verifies the roster and refreshes `LastSeen`; claims re-check the
+roster themselves, so a stale memo cannot cause a wrong write. The plugin
+also handles `session.deleted` by running `ethos session delete`
+(`EndSession`), and the Go lineage walk refuses on any `Load` failure (spec
+lines 1054-1064). (8) *Lineage.* A failed or inconclusive lineage read
+aborts registration and never defaults to root; empty-to-set is refused;
+the repair is operator roster deletion. (9) *Known and Unknown arms.* The
+Known arm's single-session condition is the plugin option `singleSession`
+(default off); a multi-session server gets no trailers until OpenCode
+PR 54842 merges. (10) *`claim-forked`.* Read phase outside any lock, then the
+child session's dispatch-pending lock outermost, then mission and
+delegation locks; ids from the mission-scoped counter with
+commit-or-rollback; three distinct exit statuses (success, witness refused,
+write failed; round 6 makes it four, see item 15); no orphan skeleton
+(abort on reported failure, reuse after a crash). Its `DelegationBinding` write deviates from the spec's
+`AllocateDelegationForkPropagated` (`delegationOf' = delegationOf`,
+`spec-opencode-integration.tex:1017-1022`), so the implementation PR must
+amend that spec. (11) *Enablement.* The neutral steps run deposit,
+gitignore, hook chaining, then the marker last, which reorders today's
+`EnableTo` (marker, import, then `chainHooks`); `ethos disable` with
+nothing enabled, or for an already-disabled harness, exits 0 as a no-op.
+
+**Round 6 correction (mission `m-2026-10-22-026`).** Local review of round 5
+(`code-reviewer`, `invariant-completeness-reviewer`) found defects that the
+leader ruled on; `docs/design-opencode-plugin.md` is amended. (12)
+*Lineage and liveness storage.* `Roster.ParentSession` and `Roster.LastSeen`
+are gone. A roster re-marshal by `Join`, `JoinSelf`, `Leave`, or
+`CreateInCheckout` (`store.go:82-93,110-196`), including one by an older
+binary still serving MCP, would erase them. They are now two per-session
+sidecar files, `parent-session` (write-once) and `last-seen` (refreshable),
+written under the roster lock and removed by `deleteFiles` with the roster.
+`last-seen` is written only when the caller passes `touch` (`ethos session
+ensure --touch`), which the OpenCode plugin does on every call (round 7).
+A Claude Code fork `SessionStart` calls `Ensure` without `touch`, not
+`createSessionRoster`,
+and `ethos session create` refuses an id whose sidecar records a parent
+(§2.1.1). (13) *Purge.* `isStale` consults `last-seen` first and, when it
+parses, decides by the age of the later of `Started` and `last-seen`,
+before the empty-roster and participant-count branches (round 8, item 23,
+adds one exception: a live numeric participant is never stale); the required
+tests include a two-participant roster with a dead numeric `Participants[1]`
+and a fresh `last-seen`, which is not stale. Round 7: a Claude Code roster
+never has `last-seen` (its callers do not pass `touch`), so it keeps today's
+PID logic (`store.go:950-956`); a required test covers a Claude fork roster
+with a live numeric `Participants[1]`, `Started` 25 hours ago, and no
+`last-seen`, which is not stale. The 24-hour idle purge is intended. (14) *Deleted parent.* The parent-exists check applies at first
+registration only; a matching parent refreshes `last-seen` whether or not
+the parent still exists. `--parent-gone`, passed only after OpenCode
+conclusively reports the parent not found, records the dangling parent, and
+propagation still refuses on the walk's `Load` failure. (15) *`claim-forked`.*
+The witness binding must have `Origin == BindOriginClaim`. A
+`claim-forked-pending` record keyed by the child, written before the
+skeleton, lets every retry close an orphan skeleton it does not reuse, and a
+close failure exits non-zero. `Ensure` and `claim-forked` run sequentially,
+never nested, because `deleteFiles` takes the roster lock and then the
+dispatch-pending lock. A four-status table (success, witness refused, write
+failed, do not retry) covers every cause, with a plugin action per status.
+(16) *Guide and enablement.* The deposited guide keeps its path and becomes
+harness-neutral; `enable claude` writes the `@`-import. `enable
+opencode` appends it to `opencode.json`'s `instructions` array if absent,
+preserving existing entries, and `disable opencode` removes only that entry
+(verified against upstream `instructions.mdx` and `config.mdx`). The harness list is one sorted file with a test that fails on
+any `claude` or `opencode` literal outside it. (17) A citation is fixed:
+`AcquireMissionLock` spans `pretooluse_dispatch.go:791-808`.
+
+**Round 7 correction (mission `m-2026-10-22-030`).** The evaluator found one
+blocking defect and six wording defects in round 6. (18) *`last-seen` is
+opt-in.* `Ensure` writes `last-seen` only when the caller passes `touch`
+(`ethos session ensure --touch`). The OpenCode plugin passes it on every
+call; Claude Code's fork `SessionStart` does not, so a Claude Code roster
+never has `last-seen` and keeps its PID liveness logic (see item 13).
+(19) *`claim-forked` details.* The reconcile close takes the record's shared
+mission lock and then the skeleton's delegation lock. The mission lock
+excludes `Store.Close`'s sweep, and the delegation lock excludes the other
+writers of the same record. An unreadable child roster is refused by the
+read-phase `ss.Load`, because `RefuseIfSessionGone` refuses only when the
+roster is not found and proceeds on any other error. An operator claim after
+an interrupted `claim-forked` that named the same delegation leaves the
+skeleton and the binding in place; they stamp a `Delegation:` trailer when
+the missions match and are inert otherwise (round 8 closes the inert case,
+item 22; round 9 replaces this with the live-record rule, item 28). (20) *Sidecar and guide.* The `parent-session` hard-link temp file
+is named `parent-session.tmp-<random>`, removed by `deleteFiles`, and needs
+NTFS on Windows. Every Claude-only part of the shared guide is enumerated
+(item 16), and `validate-content` rejects `.claude/` and `Claude Code` in it.
+
+**Round 8 correction (missions `m-2026-10-22-031`, `-042`, and `-046`).**
+`docs/spec-opencode-lifecycle.tex` models the session lifecycle and
+`claim-forked` as a state machine, model-checked with ProB (accepted by the
+evaluator jra). It found nine counterexamples in the prose of rounds 6 and 7;
+with all nine amendments on, its operations are the authority for these
+operations, and `docs/design-opencode-plugin.md` is brought into line. (21)
+*Lineage and `deleteFiles`.* `ensure` refuses an edge that closes a cycle,
+which round 6's remark that a cycle needs `--parent-gone` had denied (C3), and
+the ancestor walk keeps its visited set as a mandatory guard, because
+concurrent edge insertion is outside the model (N4). `deleteFiles` runs in
+seven steps: close named skeletons (stopping if that fails, N2; round 9
+narrows this to an open fork skeleton the session owns and its record or
+binding names, item 27), the claim, the binding, the pending record, `last-seen`, the roster,
+and the `parent-session` sidecar last (C2, C5). (22) *`claim-forked`.* Every exit
+other than "write failed" reconciles first, including a read-phase refusal
+(C1). An already-claimed child closes the skeleton unless the skeleton is live
+(C4; the liveness rule is item 28, C17, `fixClaimLive`), and a reconcile that does not resume the record also closes the
+skeleton of the child's current binding (C9; round 9 withdraws that wording,
+item 29). The mission is re-read once the
+skeleton is on disk, before the binding (C6). Every close writes verdict
+`aborted` (N5). The read phase reads the child's claim lock-free first, so a
+claimed child returns success. A corrupt pending record or `record.yaml` is
+"do not retry". A Go panic (status 2) and a signal death are in the status
+table, and `cmd/ethos/main.go:51-71` must map the new statuses with
+`errors.As`, consulted before the prefix test of `isUsageError` (round 9,
+item 33). The lock non-nesting is compiler-enforced only if the write phase
+lives in `internal/mission` and `RefuseIfSessionGone` is re-expressed over the
+reader interface. (23) *Purge.* A roster with a live numeric participant is
+never stale, which **reverses row 2 of the round 6 `TestIsStale` table**
+(C7, a decision of the leader). An unreadable roster with a fresh `last-seen`
+is not purged (C8). A `last-seen` read error is not stale, a future-dated one
+is capped at now, and an older binary's purge, which ignores `last-seen`,
+remains an exposure (N8 covers the unreadable-roster limit). (24) *Claude
+Code fork.* A fork `SessionStart` whose parent has no roster retries `Ensure`
+with `parentGone`, so the fork still gets a roster and its `CLAUDE_PID`
+pointer. (25) *Guide and enablement.* The shared guide's Claude-only parts
+now include line 11 (the `@`-import wording) and lines 43-44 (write-set
+enforcement is carried by Claude Code hooks);
+`validate-content` rejects `Claude`, `SessionStart`, `CLAUDE_`, `subagent`,
+and `.claude/`, allowing only the whole word `CLAUDE.md` (round 9 derives the
+list from the harness list and adds OpenCode terms and any `@`, item 32).
+`TestHarnessNamesOnlyInList` also fails on a harness-specific import or on an
+identifier containing `claude` or `opencode` outside `harnesses.go`, and
+allowed literals match by exact equality (round 9 narrows the allowlist to
+`.punt-labs/ethos/CLAUDE.md` and widens the scan, item 32). `ethos enable opencode` records
+that it added the `opencode.json` `instructions` entry, normalizes `./` and
+equivalent spellings before its absent check, and `ethos disable opencode`
+removes only an entry it added. (26) *Citations and prose.* `Store.Close`
+and `DisclaimDelegation` are `internal/mission/store.go:1107,1217-1246` and
+`:1589`; every spelled-out plugin `ensure` command carries `--touch`; the
+`claim-forked` status prose is success plus three non-success statuses,
+distinct from 0, 1, and 2.
+
+**Round 9 correction (missions `m-2026-10-22-048` and `m-2026-10-23-005`).**
+`docs/spec-opencode-lifecycle.tex` was extended with six more counterexamples
+(C10 to C15) and six more fix switches (nine to fifteen), the sixth being a
+durable pending record, on the leader's ruling; the evaluator (jra) accepted
+it. A later review added C16 and a sixteenth switch, `fixResumeClosed`, and a
+review of PR #536 (Copilot; mission `m-2026-10-23-015`, accepted by jra) added
+C17 and a seventeenth, `fixClaimLive`: the spec now has seventeen
+counterexamples (C1 to C17) and seventeen switches, and limits N3 to N22. With
+all seventeen switches on its operations are the authority, and `docs/design-opencode-plugin.md` is
+brought into line (header note, §2.1.1, §2.5, §2.6, new §2.7, §5 points 1 to
+3 and 5). (27) *Origin discriminator.* A skeleton is a fork skeleton
+(`BoundVia = claim_forked`, a new value) or a Tier B skeleton. `deleteFiles`,
+the purge, every `claim-forked` reconcile close, `mission release`, and the
+close-time clearing close only an open fork skeleton the session owns, as a
+compare-and-set; a binding that names a Tier B skeleton is cleared and the
+skeleton is left open, because it is a subagent's delegation (C10).
+`claim-forked` also writes the store root into the delegation binding as a
+new field (a schema change); a binding without it is Tier B and only
+cleared. (28)
+*Durable pending record.* The `claim-forked-pending` record carries a stage
+(complete or not) and the mission store root, persists for the life of the
+fork claim, and while it is live is removed only by `mission release`, the
+close-time clearing of the claim (`ClearMissionBindings`), or `deleteFiles`,
+each of which first closes the fork skeleton it names. A reconcile removes a
+record that is not live, after closing its skeleton, and in-process cleanup
+removes the record it wrote. This replaces "removed as the last step of
+a successful write" and "the record is then overwritten or removed". A Tier B
+dispatch by a propagated child overwrites its binding
+(`pretooluse_dispatch.go:880-884`, unchanged), and the record keeps the fork
+skeleton named (C12). A complete record is never resumable. A fork skeleton
+(kind `dkFork`, owned by the child) is live when the child's claim names the
+skeleton's mission, whatever the binding names and whether the record is
+complete or not (C17, `fixClaimLive`); this withdraws the rule of C4 and C12
+that an incomplete record is live only if the binding names it, which
+aborted a skeleton the claim still named after a crash between the claim
+write and the completion mark followed by a Tier B dispatch (Copilot,
+PR #536). It applies to the reconcile of a refusal and of the claimed case and
+to the ghosts `leaked` and `liveAborted`; the resume and fresh paths need
+none. Rulings of the leader: `fixClaimLive` ships with the durable record
+(`fixDurableName`), which is required in any case (without it
+`NoOrphanOpenSkeleton` fails both with `fixClaimLive` on, `C17_nodur_nr`, and
+with it off, `C12_off`); `NoLiveForkAborted` holds without it
+(`C17_lfa_nodur`); the binding and
+complete-mark tests stay in the code as defensive tests that the model does
+not exercise (`Own_all`); and (N21) when an operator claim names the
+skeleton's mission after a call died before it wrote its binding, the
+skeleton is live and is adopted, not aborted, and `mission release` or the
+close-time clearing closes it. Copilot's alternative, marking the record
+complete in the Tier B dispatch, was modelled; it closes Copilot's
+claimed-case trace and fails the operator-claim trace in the claimed case too,
+with no dependence on N22, and was not adopted; the Tier B dispatch
+is unchanged. A refusal keeps a live record and never resumes it. Required
+tests: Copilot's trace (a claim written, the call dead before the completion
+mark, the binding replaced by a Tier B dispatch, then a refused and a
+reconciled `claim-forked`: the skeleton is open after the call and the record
+is kept and complete) and the operator-claim trace (C17: the call dead after
+the skeleton, an operator claims the skeleton's mission, the next call adopts
+the skeleton; N21 applies where the call died before its binding). A next
+call that finds the claim at step 2 of the read phase takes the claimed case.
+Copilot's refused variant is induced by removing or corrupting the child's
+roster after the Tier B dispatch. The operator-claim refused variant is
+induced by removing or
+corrupting the child's roster after the operator claim (N22).
+(29) *Reconcile paths.* `fixSupersede` applies on the fresh
+and resume paths only; the resume clause is defensive and unexercised. The
+resume path takes the mission and delegation locks and re-reads the mission
+before it writes (C15). A mission found closed at that re-read first closes the
+fork skeleton the record names (`aborted`, compare-and-set under the delegation
+lock); a failed close ends the call with the record kept as the retry token,
+and the record is removed only after the close succeeds; then the call exits
+"do not retry" (C16, `fixResumeClosed`). "The sweep closes what remains" is
+withdrawn: true of the locked sweep, false of `Store.Close`'s unlocked
+fallback (`internal/mission/store.go:1107-1114`), whose snapshot may precede
+and whose write may follow the exit. (29a) *Delegation id consumed with the
+record.* The id is consumed once the pending record that names it is durably
+written; `releaseID(false)` (`internal/mission/id.go:205-222`) is never called
+on a later failure, since it would return the id to the counter while the
+record still names it and another Tier B dispatch under the mission could take
+it, and the child's retry would bind to that unrelated delegation (Copilot,
+PR #536). This is a review finding, not a ledger entry: the model cannot show
+it (N20). Required tests: a failed skeleton write after the record, then a
+second dispatch (a different id); the child's retry finds the record not
+resumable (its skeleton was never written), removes it, and allocates an id
+different from both the record's and the second dispatch's, never binding to
+the second dispatch's skeleton; a resumed
+record whose mission closes between the reconcile and the re-read, with the
+sweep stopped after its snapshot. Release and close-time clearing close what they
+unname (C11) and must hold the child's dispatch-pending lock around the whole
+close, unname, clear sequence (spec N16). (30) *`SessionStart` and `ensure`.*
+Claude Code `SessionStart` for every source goes through `Store.Ensure`
+without `touch` (C13), passing a named option `refreshRoster` that no other
+caller passes: on an existing roster it rewrites the roster exactly as
+`CreateInCheckout` does today (personas, `Repo`, `Checkout`, `Host`, `Started`,
+participants reset, `Participants[1]` the current `CLAUDE_PID`), so a resumed
+session is not purged as stale while live, and it never touches the
+`parent-session` or `last-seen` sidecars. Roster contents are outside the
+model, which holds the participant kind fixed across `SessionStart`.
+`ensure --touch` does not refresh a roster that fails to load. (31) *Closes and statuses.* Every skeleton close is a
+compare-and-set on verdict `open` under the delegation lock, the `Store.Close`
+sweep included (C14). The exit-status table gains rows for I/O errors on the
+child's and the witness's binding reads, a `ParentOf` error, a
+`ReadDelegationBinding` error in a reconcile, a record-removal failure, and an
+abort whose cleanup close fails; a mission found closed is "do not retry"
+(the spec's `LcCfExitNoRetry`, C15, after the close of C16; if that close
+fails, "write failed"); `ParentOf` and ancestor-roster I/O errors
+are "write failed", as is a failed close of the closed-mission exit (C16); a column states the Claude Code `SessionStart` action. (B2) The
+record stores the store root (a fork-written binding carries it as `StoreRoot`),
+and `deleteFiles` step 1, `release`, the reconcile, and the supersede close use
+the root in the record, or in the binding for a binding-named skeleton; "directory gone" needs a recorded, resolvable root.
+(32) *Guide and tests.* The guide deny list is derived from the harness list
+and adds OpenCode terms and any `@`; the persona-injection sentence (guide
+lines 19-20) is neutralized; the harness-name test scans `cmd/ethos`,
+`internal/doctor`, and `cmd/validate-content` and allowlists one literal.
+(33) *Corrections.* A `last-seen` read error is not stale on every path;
+`Store.Purge` has no production caller and `PurgeTombstoned` refuses an
+unreadable roster without `--force`; `ethos serve` does not age rosters out;
+a child whose roster is gone can have a record; the typed-status `errors.As`
+mapping runs before the prefix test at `main.go:85-100`.
+
+### Problem
+
+`docs/spec-opencode-integration.tex` specifies a harness-neutral
+`Registry`/`SESSION`/`DELEGATION` model covering both Claude Code and
+OpenCode V2 as two instantiations of one state machine, with dedicated
+`ForkSession`/`AllocateDelegationForkPropagated` operations for OpenCode's
+first-class `session.fork`. The spec is explicitly a formal model, not a
+concrete engineering plan: it names the confirmed OpenCode V2 primitives
+(`Plugin.define`, `ctx.event.subscribe`, `SessionEvent.Forked`'s `parentID`
+field) but does not specify which hooks a real plugin registers, how a
+real implementation resolves an unbounded ancestor chain, or how
+`ethos hook commit-trailers` — unchanged — is supposed to resolve an
+OpenCode session without ever being told which harness it is running under.
+
+### Decision
+
+Ship the mapping as four pieces, deliberately minimizing new Go surface:
+
+1. **A TypeScript OpenCode plugin** (`.opencode/plugins/ethos.ts`)
+   registering three hooks (round 5 corrects an earlier count of four):
+   `ctx.event.subscribe()` for `session.created`/`session.forked`
+   (the primary trigger for `JoinRootSession`/`ForkSession`) and
+   `session.deleted` (the OpenCode `EndSession`, which runs `ethos session
+   delete`, mirroring Claude Code's `SessionEnd`), `ctx.tool.hook("execute.before", ...)`
+   for a trigger-independent second path for
+   `AllocateDelegationForkPropagated` (covering the confirmed volatility of
+   `ctx.event.subscribe()`, which can permanently miss a fork event during
+   a disconnection window), and `ctx.shell.hook("create.before", ...)` for
+   `ETHOS_SESSION` propagation into every spawned shell's own environment
+   (round 2 correction: `ToolExecuteBefore` has no mutable `env` field;
+   `ShellCreateBefore` does). Round 5: the plugin is Effect-native
+   throughout, and every `create.before` firing rewrites the attribution
+   variables (`ETHOS_SESSION`, `MISSION_ID`, `DELEGATION_ID`, and for an
+   unknown session `CLAUDE_PID` and `CLAUDECODE`), because
+   `commit-msg.sh:55` skips the lookup when `MISSION_ID` or
+   `DELEGATION_ID` is inherited. Every session is registered, before any
+   `mission claim` is attempted, by `ensureRegistered` calling the
+   create-if-absent `ethos session ensure` (round 2 fix: a brand-new
+   session has no roster entry for the claim's `RefuseIfSessionGone` guard
+   to find otherwise; round 5: `session create` replaces an existing
+   roster, so it is no longer used). Every state-mutating action shells out to the
+   existing `ethos` binary — the plugin holds no direct file access to
+   `.punt-labs/ethos/`.
+2. **Zero changes to `resolve.SessionID`, `runHookCommitTrailers`,
+   `WriteCommitTrailers`, or `plugin/hooks/commit-msg.sh`.** The commit-msg
+   hook already resolves the committing session purely from `ETHOS_SESSION`
+   (step 1 of the existing, harness-blind chain). **Round 6 qualification
+   (replacing "already fails closed"):** `ETHOS_SESSION` alone is
+   insufficient. `commit-msg.sh:55` skips the lookup when `MISSION_ID` or
+   `DELEGATION_ID` is inherited, `resolve.SessionID` accepts any non-empty
+   `ETHOS_SESSION` without checking that the session exists
+   (`resolve.go:316-318`) and falls back to an inherited, corroborated
+   `CLAUDE_PID`, and `WriteCommitTrailers` reads only the sidecars
+   (`commit_trailers.go:45-68`). So the reader is **not** fail-closed
+   against inherited or dead-session state, and this design does not change
+   it. The plugin's two-armed `create.before` policy (Known arm sets
+   `ETHOS_SESSION` and clears `MISSION_ID` and `DELEGATION_ID`; Unknown arm
+   clears all five variables, `docs/design-opencode-plugin.md` §3.2.1)
+   closes the gap for every shell the plugin sees. A shell that never fires
+   `create.before` stays exposed (§3.3). The entire
+   OpenCode engineering problem is making `ETHOS_SESSION` land correctly
+   in the committing shell's environment, and clearing what would
+   override it — not teaching the shared
+   resolver a new, harness-specific discovery step. **Round 3 correction:**
+   the `create.before` sessionID-correlation gap is real today against the
+   current OpenCode V2 dev-branch API, but it is a narrow, time-bound
+   window, not an open-ended design risk — it closes once
+   `github.com/anomalyco/opencode/pull/54842` (OPEN/unmerged, opened
+   2026-10-12) merges and `ShellCreateBefore` starts carrying
+   `source.sessionID` directly. See `docs/design-opencode-plugin.md` §3.2
+   for the full disclosure and the one precondition (#54842's merge) the
+   implementation stage must check.
+3. **One new, narrow Go primitive** — a `claim-forked`-shaped addition to
+   `internal/mission` implementing `AllocateDelegationForkPropagated`'s own
+   guard (ancestor-set membership under the one-step fork-source relation,
+   walked to the end of the lineage with cycle detection, no depth
+   constant: round 5 removed the `maxWalkDepth`-style ten-hop cap, which
+   the spec's full ancestor-set guard does not have) — called by the
+   plugin, not reimplemented in TypeScript. **Round 2 corrections:** the
+   guard now verifies ancestry against a new, Go-stored recorded parent
+   (round 2 named it `Roster.ParentSession`; round 6 moved it to the
+   `parent-session` sidecar so a roster re-marshal cannot erase it; written
+   by `ethos session ensure --parent-session <id> --touch` from the plugin
+   at fork-registration time, write-once and parent first) rather than trusting the plugin's own `--witness` argument
+   outright — closing a gap where nothing server-side previously existed to
+   check a caller-supplied witness against; and the primitive now writes
+   the matching `DelegationBinding` sidecar, which round 1 omitted —
+   without it, `WriteCommitTrailers`'s same-mission cross-check
+   (`commit_trailers.go:65`) finds no binding and the `Delegation:` trailer
+   silently never appears. **Round 5:** the writes are not atomic
+   (`WithDispatchPendingLock` serializes writers, and `WriteCommitTrailers`
+   takes no lock), so they are ordered and retryable. **Round 9 order (rounds
+   8 and 9, replacing round 5's "skeleton, binding, then claim, and a retry
+   reuses unclaimed partial state"):** the pending record (incomplete, with
+   the store root), the skeleton, a post-check that re-reads the mission, the
+   binding, the claim, then the record is marked complete and kept. A retry
+   reuses the record only when it is not complete, its skeleton is open, its
+   mission and witness equal the call's, the mission is open, and the child
+   has no claim, and then takes the mission and delegation locks and
+   re-reads the mission before it writes the missing binding and claim. A
+   live record (on a refusal, or when the child already holds a claim) is kept
+   and marked complete; otherwise the skeleton is closed and the record
+   removed before a fresh write.
+   **Round 4:** this primitive and the `parent-session` sidecar are
+   harness-neutral. Claude Code needs the same fork treatment
+   (`--fork-session`, `/fork`, `/branch` mint genuine new sessions;
+   `SessionStart` reports `source: "fork"`). **Round 9 wiring:** Claude Code's
+   `SessionStart` hook uses `Store.Ensure` in process, without `touch`, for
+   every source (a `fork` source passes the payload's parent and retries with
+   `parentGone` when the parent has no roster; every other source passes the
+   parent `ParentOf` records), and for the `fork` source then calls
+   `claim-forked`. That wiring is in scope for the same implementation stage
+   as the OpenCode plugin.
+4. **Coequal per-harness enablement**, `ethos enable [claude] [opencode]`.
+   Harness-neutral repo steps run idempotently for any selection, in this
+   order (round 6): gitlink guard, vendored deposit, gitignore, hook
+   chaining, then the marker last. The deposited guide is harness-neutral.
+   Each harness adds only its own native artifact (the `CLAUDE.md` import,
+   or the `.opencode/plugins/ethos.ts` file plus `opencode.json`
+   registration); OpenCode reads the guide through the `opencode.json`
+   `instructions` array (`docs/design-opencode-plugin.md` §5 point 5).
+   **Round 5 (operator ruling, 2026-10-22, replacing round 4's usage error
+   for bare `ethos enable`):** with no harness named on an interactive
+   terminal, `ethos enable` prompts for the harnesses, listing every
+   supported harness with both `claude` and `opencode` preselected;
+   `ethos enable claude`, `ethos enable opencode`, and `ethos enable claude
+   opencode` skip the prompt; with no harness named and no terminal it
+   exits non-zero with a usage error naming both harnesses and never picks
+   one silently. `ethos disable` mirrors this, prompting from the harnesses
+   currently enabled. One sorted supported-harness list in
+   `internal/enable` generates the prompt, the usage error, and the help
+   text, and a test fails on any `claude` or `opencode` literal outside it
+   (round 6), so neither harness is privileged. See `docs/design-opencode-plugin.md`
+   §5 point 5.
+
+Full lifecycle-hook mapping, session-ID mapping, and the commit-trailer
+resolution chain (unchanged) are laid out in
+`docs/design-opencode-plugin.md` §1–§4, each claim cited to a specific
+`.tmp/` reference file or the companion PR/FAQ, never asserted from
+training-data memory of OpenCode.
+
+### Rejected alternatives
+
+Full writeups, including two historical exploit traces, are in
+`docs/design-opencode-plugin.md` §7. Summarized:
+
+- **Automatic claim inheritance on fork** — rejected; reopens the exact
+  unattributed/misattributed-commit risk the spec's own
+  `ForkNeverInheritsClaim` theorem exists to close.
+- **Root-equality ("same family") as the fork-propagation witness** —
+  rejected; symmetric, so a descendant's claim can flow backward and
+  attribute an ancestor that never claimed anything (the spec's own
+  round-2/3 exploit traces). Directional ancestor-set membership under
+  transitive closure closes both historical exploits by construction.
+- **A single live-event trigger with no tool-hook fallback** — rejected;
+  `ctx.event.subscribe()` is a confirmed volatile stream with no replay
+  primitive, so a disconnection at the exact moment of a fork
+  permanently loses that fork's event with no recovery path.
+- **Resolving fork lineage via `context.data.session.root`/`.family`**
+  (the CLI-plugin data-cache API) instead of the event payload's own
+  `parentID` — rejected; that surface belongs to the separate
+  `@opencode/plugin/tui` plugin type and is structurally unreachable from
+  the headless hook-plugin this design bundles (confirmed by direct read
+  of the hook-plugin's own `Context` interface, which has no `data`
+  field).
+- **Teaching `resolve.SessionID` a third, OpenCode-specific discovery
+  step** (e.g. an `OPENCODE_SESSION_ID` fallback) — rejected; reopens the
+  exact `ethos-vqwn` risk DES-074 closed for Claude Code (a shared
+  resolver falling back to a mechanism that can resolve a plausible but
+  wrong session) and makes the resolver harness-aware in exactly the
+  place the spec's own `HarnessNeutrality` theorem argues it should not
+  be.
+- **A per-harness commit-msg hook variant** — rejected; duplicates
+  `commit-msg.sh`'s entire idempotency and host-chaining logic for zero
+  behavioral gain, since the existing script already works correctly the
+  moment `ETHOS_SESSION` is set, regardless of which harness's shell
+  spawned it.
+- **Writing Mission/Delegation trailers directly from the OpenCode
+  plugin**, bypassing the git commit-msg hook — rejected; creates a
+  second trailer-writing code path with its own same-mission
+  cross-check to keep in sync, and silently stops working for any commit
+  path the plugin's own tool-call interception does not cover (e.g. a
+  human typing `git commit` directly in an OpenCode terminal).
+
+### What this does NOT cover — stated plainly
+
+- **Circuit's PR-watch workflow state is untouched.** The mutable PR head
+  SHA stays GitHub/Circuit-owned; nothing in this design reads or writes
+  any file Circuit's own tracking interprets.
+- **Whether `ctx.shell.hook`'s `event.env` mutation reaches every commit
+  path OpenCode supports** — confirmed only for the agent-issued
+  tool-call path; whether a human typing `git commit` directly into an
+  OpenCode TUI terminal goes through the same hook is unverified by any
+  source read for this design and is named as a prerequisite for the
+  next pipeline stage to confirm against a running `opencode serve`
+  instance. (Round 2: this bullet's hook name is corrected from
+  `ctx.tool.hook` to `ctx.shell.hook`, per the Decision section's fix.
+  Round 3: the sessionID-correlation gap named there is re-scoped from an
+  open-ended design risk to a narrow window closing on
+  `github.com/anomalyco/opencode/pull/54842`'s merge — see
+  `docs/design-opencode-plugin.md` §3.2-§3.3 — distinct from this bullet's
+  human-typed-commit question, which remains open.)
+- **OpenCode's own restart-liveness signal** — the companion research
+  found no primitive currently confirmed, by direct source or
+  documentation read, to give the bundled hook-plugin a reliable
+  restart-liveness check; this is inherited as an open item, not
+  resolved by this design. (Round 5: restart reconciliation no longer
+  depends on `ctx.session.list`, which `v2.0.32` lacks. A session that
+  predates the plugin is registered at its first tool or shell call; one
+  that never makes either stays unregistered, and an operator claim
+  against it is refused.)
+- **Shells that never fire `create.before`** (round 5) keep the OpenCode
+  server's inherited `ETHOS_SESSION`, `MISSION_ID`, and `DELEGATION_ID`;
+  if the human-typed TUI terminal is such a shell, it can stamp the
+  launching session's trailers. The plugin cannot close this without
+  mixing concurrent sessions; the design records it and gives launch
+  guidance (`docs/design-opencode-plugin.md` §3.3).
+- **A same-repo-only collision between `ethos enable opencode` and
+  `punt-labs/points`'s own dev-config gate** (round 2, finding 6,
+  confirmed directly; re-scoped in round 3 after reading `points`'s own
+  repo). `punt-labs/points`'s `.bin/check-dev-config.sh` — run by `make
+  check-dev`/`make doctor` — fails unconditionally the moment that
+  repo's own `opencode.json` has a `"plugins"` key at all, which `ethos
+  enable opencode` would add if run inside `points`'s own source tree.
+  This is real and confirmed, but it is **not** a general incompatibility
+  between repos that use `points` for model routing and repos that use
+  the ethos OpenCode integration — `points` never writes a `"plugins"`
+  key in any repo it configures (its four commands are
+  route/status/verify/unroute, all routing-only), so the two mechanisms
+  do not collide anywhere except inside `points`'s own checkout. Whether
+  and how to reconcile that one case is an operator decision, not
+  resolved by this design — see `docs/design-opencode-plugin.md` §6.1 for
+  the full disclosure.
+- **What the lifecycle model does not establish** (round 8,
+  `docs/spec-opencode-lifecycle.tex`, "What this model does not establish").
+  The model is exhaustive only slice by slice; the full `claim-forked`
+  machine and the three-session slices are bounded runs. It abstracts the
+  locks (except the shared mission lock and its unlocked fallback), takes the
+  read phase and the start of the write phase as one step, and cannot show
+  concurrent edge insertion, so `Acyclic` holds of a serialised store only
+  (N4). Not represented: `Store.Close`'s sweep skipping a record it cannot
+  load, and a skeleton with no `record.yaml` refusing `Abandon` (N3); the
+  claim as two files and an origin that does not resolve (N7); a live Claude
+  Code session whose roster fails to parse and has no `last-seen`, which is
+  still purged (N8). The model sees one bit per delegation, open or not, so
+  every close must write verdict `aborted` (N5), and the close step of
+  `deleteFiles` must stop the call on failure (N2). **Round 9:** the proofs
+  are exhaustive on named slices (the claim, claim+, delete, sweep, lineage,
+  start, and Tier B slices, at two missions, two delegations, and two or three
+  sessions; the unlocked sweep together with the claim-forked exit is verified
+  exhaustively, with all seventeen switches on, by the rows `U1_*_all`, `U2_*_all`
+  and `U1_leak_d3`; every other row whose slice holds both, and its outcome, is
+  in the spec's results table; no exhaustive chain row contains
+  the sweep: the bounded F3 rows stop at depth 5, so the multi-hop walk and C16
+  have not met in any run) and bounded on the full machine (200,000 states at two sessions,
+  40,000 at three, below depth 12) and for `NoLiveSessionPurged` beyond one session; the table
+  is `docs/design-opencode-plugin.md` §2.7. Also not represented: a Tier B
+  dispatch without a roster, its depth-gate close, and a failed non-fatal
+  binding write (N17); the locks around `release` and the close-time clearing,
+  an implementation constraint (N16); that a release removes the record, which
+  is hygiene, and the guard that a complete record is never resumed, which is
+  defensive and unverified (N18); the dispatch-pending entries that
+  `ClearMissionBindings` clears (N13); and an id returned to the counter (the code's
+  `releaseID(false)`) and the moment of consumption (N20), and who wrote a
+  claim: the adoption of a skeleton by an operator claim is a ruling of the
+  leader, not a result of the model (N21). The model's refusal needs only
+  that the child has no pending stage, so it reaches a refusal with a claim in
+  hand. The design does so, for example, when the child roster is missing or
+  unreadable at the read phase, whose exit reconciles in refusal form with the
+  claim in hand; the list is not exhaustive (N22). Rows ending in a refusal
+  depend on N22;
+  claimed-case rows do not. The model has
+  uniqueness because every operation leaves `used` unchanged or grows it
+  (`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`
+  (`d?` not in `used`), and the initialisations set it empty; the
+  resume guard checks neither the skeleton's owner nor its kind, so uniqueness
+  alone excludes a resume onto a Tier B skeleton; the code rests on the id being
+  consumed once the record is durable (N20).

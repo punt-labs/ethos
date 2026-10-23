@@ -1,0 +1,69 @@
+results:
+    - mission: m-2026-10-22-048
+      round: 1
+      created_at: "2026-10-23T00:27:03Z"
+      author: jms
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 967
+          removed: 209
+      evidence:
+        - name: 'fuzz docs/spec-opencode-lifecycle.tex: clean; make check exit 0 before each of 4 commits (d13a614, 4440d3a, 340b616, 8e01d4d)'
+          status: pass
+        - name: 'F1 NoForeignAbort: F1D/F1P/F1R_off counterexample at 4/5/5 steps; _on holds, all states visited (9953, 29857, 1917); mutants F1D/F1R/F1P_mut killed (probcli -goal negation, -mc -bf -nodead -check_goal, INIT InitPair, S/M/D 2/2/2)'
+          status: pass
+        - name: 'F2/B1 fixSupersede scope + C9 errata: C9_nosup counterexample (243163 states, depth 19), C9_all holds (275989 states, depth 24); mission release clears binding (Fa_orph_norel counterexample, fixReleaseCloses holds); MutSupClaimed killed by LiveSpared; MutSupReuse SURVIVES: Reach_all (275989 states, all visited) shows the resume-path supersede clause is unreachable'
+          status: pass
+        - name: 'F3 SessionStart: S_lin_off counterexample (44 states, depth 4), S_lin_on holds (1025 states), S_acyc_on holds, S_wf_on holds; S_lin_mutC and S_lin_mutR killed'
+          status: pass
+        - name: 'F10 NoVerdictOverwrite: Fv_off counterexample (1198 states, depth 10), Fv_on holds (17393 states, all visited); MutCasFresh killed'
+          status: pass
+        - name: 'F9 LockedWrites: Fa_lockw_off counterexample (1858 states, depth 11), Fa_lockw_all holds (19001 states); MutLockReuse killed'
+          status: pass
+        - name: All six prior invariants re-run with all fixes on and the extended machine; bounded full-machine rows (F2_* 200000 states depth 8, F3_* 40000 states depth 5, Chain_* 200000) found no counterexample but are not exhaustive
+          status: pass
+        - name: 'z-spec test setsize 1: init, animate, cbc_assertions, cbc_deadlock, model_check pass (6496 states, 213008 transitions); coverage fails by design, 17 operations need two sessions'
+          status: pass
+        - name: 'UNRESOLVED: C12 - a Tier B dispatch by a propagated child buries its fork skeleton; NoOrphanOpenSkeleton fails with assumeNoTierBOverFork off (C12_open, 60514 states, depth 11); verified only under the assumption'
+          status: fail
+      open_questions:
+        - 'C12: choose among (a) Tier B dispatch does not overwrite a binding naming an open fork skeleton, (b) close by owner scan of the claimed mission, (c) keep the pending record as durable name.'
+        - 'C11 is new: mission release (cmd/ethos/mission.go:2135-2179) clears the binding and leaves the fork skeleton open; the amendment changes an existing Claude Code command.'
+        - C9 trace of the previous revision was wrong (release clears the binding); errata in the ledger.
+        - The resume-path supersede clause is dead in the model; keep or drop in code is the leader's call.
+      prose: |
+        Four commits on design/opencode-plugin-adapter, write set only docs/spec-opencode-lifecycle.tex.
+        Rows are in section Verification of the spec; harness in .tmp/lc3 (rows3.txt, exp3.sh, r6/*.out).
+    - mission: m-2026-10-22-048
+      round: 2
+      created_at: "2026-10-23T01:36:15Z"
+      author: jms
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 211
+          removed: 153
+      evidence:
+        - name: fuzz clean; make check exit 0 before each of 3 round-2 commits (7d29298, 1bee4b2, e905e0c)
+          status: pass
+        - name: 'C12 off: C12_off NoOrphanOpenSkeleton counterexample, 60514 states, depth 11 (completed propagation, then LcTierBDispatch over the fork binding). On, no assumption (assumeNoTierBOverFork removed): C12_on holds, 257269 states, all visited, depth 24, claim+ slice including Tier B over fork'
+          status: pass
+        - name: 'Record-lifetime invariants with fixDurableName on, claim+ slice 257269 states all visited: ReconcileOnExit (C12_leak), LiveSpared (C9_live_all), LockedWrites and NoForeignAbort (claim and tierb slices: Fa_lockw_all 16601; F1D_on 11073, F1P_on 33217, F1R_on 2013), SweepComplete (Fc2_both 37025); WellFormed with pendDone (C9_wf_all, Fa_wf_all, S_wf_on, L_wf_all)'
+          status: pass
+        - name: 'Mutants killed: MutFinishRec (record removed at finish) NoOrphanOpenSkeleton cex 60514 states; MutLiveNoDone (complete record judged live by binding alone) LiveSpared cex 97540 states; plus the round-1 mutants all re-run and killed (MutA_claimed re-pointed at the new text)'
+          status: pass
+        - name: 'Survivors, stated as unverified: MutSupReuse and MutReuseDone (guard c notin pendDone) hold. Reach_all: 257269 states all visited, no state with a record, no claim and another open fork binding; Reach_nosup (no supersede, record not durable) reaches it (218544 states); Reach_nosup_dur does not. Reuse supersede clause kept as defensive, documented unexercised'
+          status: pass
+        - name: 'With the durable record fixReleaseCloses and fixSupersede are no longer needed for NoOrphanOpenSkeleton: Fa_orph_norel_dur and C9_nosup_dur hold; Fa_orph_norel and C9_nosup (durable off) are counterexamples'
+          status: pass
+        - name: 'All rows re-run on the round-2 model (96 rows in rows4.txt, harness .tmp/lc3); bounded full-machine rows F2_* 200000/depth 8, F3_* 40000/depth 5, Chain_* 200000 found no counterexample, not exhaustive. z-spec test setsize 1: 5/6 checks, 6496 states, 213008 transitions, coverage fails by design'
+          status: pass
+      open_questions:
+        - The durable record needs a stage field (complete or not) in the YAML; the exit-status row for a record that does not parse now applies for the life of the claim.
+        - mission release, ClearMissionBindings and deleteFiles must close and unname the record-named skeleton; ClearMissionBindings is a change to an existing Claude Code path.
+        - Under the durable record, fixReleaseCloses and fixSupersede are subsumed for NoOrphanOpenSkeleton; keep or drop is the leader's call.
+      prose: |
+        Three commits on design/opencode-plugin-adapter; write set docs/spec-opencode-lifecycle.tex only.

@@ -80,6 +80,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Design for native OpenCode integration (DES-078,
+  `docs/design-opencode-plugin.md`).** Design only, no implementation.
+  It maps the formal model in `docs/spec-opencode-integration.tex` onto an
+  OpenCode V2 Effect plugin that shells out to the `ethos` binary, with
+  OpenCode and Claude Code as equal harnesses:
+  - `ethos enable` prompts for the harness(es) to enable when none is
+    named on an interactive terminal, with `claude` and `opencode` both
+    preselected.
+  - `ethos enable claude`, `ethos enable opencode`, and
+    `ethos enable claude opencode` skip the prompt.
+  - With no harness named and no terminal, it exits with a usage error.
+    `ethos disable` mirrors this.
+  - Sessions register lazily through a create-if-absent `session ensure`.
+    Lineage is recorded once and never changed.
+  - Fork claim propagation (`claim-forked`, `Roster.ParentSession`) uses
+    the same Go code for both harnesses, and Claude Code's own `/fork`
+    handling is in the same implementation stage.
+  - Lineage and last-seen live in per-session sidecar files that a
+    roster rewrite cannot erase; `ethos session purge` checks last-seen
+    first and never purges a session with a live participant; a
+    `session.deleted` handler ends OpenCode sessions.
+  - `claim-forked` keeps a durable pending record for the life of the
+    fork claim, closes only fork-propagated delegations (never Tier B
+    dispatch delegations), and every delegation-skeleton close is a
+    compare-and-set on verdict `open`.
+- **Model-checked session and fork-claim lifecycle
+  (`docs/spec-opencode-lifecycle.tex`).** A Z specification of the
+  roster, lineage, purge, delete, and `claim-forked` state machines,
+  checked with ProB. Ten invariants (lineage stable, acyclic, no live
+  session purged, no orphan open skeleton, reconcile on exit, sweep
+  complete, no foreign abort, no verdict overwrite, live spared, no live
+  fork aborted) hold under seventeen amendments; the ledger records
+  seventeen counterexamples found against the earlier prose design (the
+  last two were found in PR review: a resumed claim that exits "do not
+  retry" with its skeleton open, and a live fork skeleton aborted after
+  a crash and a Tier B dispatch), and every invariant is
+  checked as a negated goal with mutants killed, except where the spec
+  records a surviving mutant as unverified defensive code or hygiene. Some
+  rows are
+  bounded rather than exhaustive; the spec states which.
 - **Third-party notice for the imported output styles.**
   `.claude/output-styles/NOTICE.md` reproduces the MIT copyright and
   permission notice of
@@ -120,6 +160,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
+  Notifications fire only for push-triggered failures, which keeps
+  `BIFF_RELAY_TOKEN` away from runs triggered by pull requests. The
+  checkout reads the default branch, so a failing branch cannot redirect
+  the relay. Action pins and the `punt-biff` version are updated.
 - **`docs/spec-mission-lifecycle.tex` is re-baselined to current code.**
   The Abandon operation now models DES-076 semantics (aborted
   delegations never block; `--disclaim` excludes a named delegation),

@@ -1,0 +1,43 @@
+results:
+    - mission: m-2026-10-22-042
+      round: 1
+      created_at: "2026-10-22T22:07:11Z"
+      author: jms
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/spec-opencode-integration.tex
+          added: 25
+          removed: 0
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 1948
+          removed: 0
+      evidence:
+        - name: make check (includes fuzz-check of all docs/*.tex, both files) on commits 1ddcc6a and 5dd198c
+          status: pass
+        - name: 'B2 split: docs/spec-opencode-integration.tex equals 697f82d plus a cross-reference section and one traceability row; /z-spec:test setsize 1 max_ops 5000: 286 states, 3862 transitions, init/animate/cbc_assertions/cbc_deadlock/model_check pass, uncovered only ForkSession and AllocateDelegationForkPropagated (the documented structural reason). Validation figures unchanged, no text update needed.'
+          status: pass
+        - name: 'B2: /z-spec:test of docs/spec-opencode-lifecycle.tex directly, setsize 1 max_ops 1000: 1627 states, 32171 transitions, deadlock-free; 16 operations unfired (need two sessions)'
+          status: pass
+        - name: 'B1 ghost: leaked'' computed from the post-state in both branches of LcCfRefuse, LcCfReconcileClaimed, LcCfExitNoRetry, LcCfFinish. Fa_w 609 states depth 9 CE; Fa_refuse 2758/12 CE; Fa_inert 609/9 CE; Fa_all 24481 states depth 25 holds, all visited (re-run on committed text, same)'
+          status: pass
+        - name: 'Mutant A (fixed LcCfReconcileClaimed with the unfixed dOpen'' expression), claim slice, LcInitPair, 2/2/2, switches fixRefuseReconciles+fixInertBinding, goal leaked /= {}: counterexample, 2758 states, depth 12 (trace is C4)'
+          status: pass
+        - name: 'Mutant B (fixed LcCfRefuse that never closes the skeleton), same slice and goal: counterexample, 609 states, depth 9 (trace is C1)'
+          status: pass
+        - name: 'Lineage/purge/sweep/delete rows re-run on the standalone file (probcli -bf -nodead -check_goal -p MAX_INITIALISATIONS 1000 -p MAX_OPERATIONS 1000, -card MISSIONID 2 -card DELEGATIONID 2): L_lin_w 137/4 CE; L_lin_w_nogone 599/5 CE; L_lin_order 21953/5 holds; L_lin_cycle 95/4 CE; L_lin_all 5489/5 holds; L_acyc_w 2/3 CE; L_acyc_w_nogone 4856/6 CE; L_acyc_order 2/3 CE; L_acyc_cycle 15029/8 holds; L_acyc_all 5489/5 holds; L_wf_w 50654/8 holds; L_wf_all 5489/5 holds (S=3)'
+          status: pass
+        - name: 'Purge rows (S=3 unless noted): P_w 7817/5 CE; P_w_nocorrupt 8633/5 CE; P_stalelive 7817/5 CE; P_corrupt 8957/5 CE; P1_all (S=1) 817/9 holds; P1_wf 817/9 holds; P2_all (S=2, -mc 40000) 40000/7 not exhausted; P_all (S=3, -mc 40000) 40000/5 not exhausted'
+          status: pass
+        - name: 'Claim/delete/sweep rows (S=2, LcInitPair): Fa_orph_w 14212/17 CE; Fa_orph_nosup 9640/17 CE; Fa_orph_all 16681/21 holds; Fa_wf_all 16681/21 holds; Fb2_w 248/9 CE; Fb2_del 2561/20 holds; Fc2_w 1210/10 CE; Fc2_post 1195/10 CE; Fc2_del 1844/11 CE; Fc2_both 9569/20 holds; Fc_w 14163/10 CE; Fc_del 24003/11 CE'
+          status: pass
+        - name: 'N6 claim slice at 2/2/3 (S/M/D), LcInitPair, all nine switches, NoOrphanOpenSkeleton goal: 106881 states, depth 27, no counterexample, ALL states visited (Fa_orph_d3)'
+          status: pass
+        - name: 'N6 LcInitChain (multi-hop walk), all nine switches, S=3: claim slice -mc 300000 NoOrphan 300000 states depth 13 and ReconcileOnExit 300000 states depth 13, no counterexample, not exhausted; claim+delete+close -mc 60000 (ReconcileOnExit, NoOrphan, SweepComplete, WellFormed) 60000 states depth 6, no counterexample, not exhausted; claim+delete+close LcInitPair S=2 -mc 300000 (NoOrphan, ReconcileOnExit, SweepComplete) 300000 states depth 14, no counterexample, not exhausted'
+          status: pass
+        - name: 'Convention: every state-predicate invariant is a negated -goal; stated in section Method of the new file. N2, N4, N5 (consequences), N3, N7, N8 (limits), N9 (the ''four invariants'' miscounts corrected at the invariants intro and the ledger summary), C7 leader decision recorded in the ledger'
+          status: pass
+      open_questions:
+        - The scenario initialisations LcInitPair and LcInitChain remain operations in a direct run (probcli promotes any schema with primed variables); they are uncovered at setsize 1 and the text says no claim rests on a direct run at larger sizes. A guard restricting them to the empty state would make the direct run sound but changes the Init-renaming slice commands.
+        - 'Chain rows are bounded, not exhaustive: 3 sessions on the claim slice is beyond the 5M-state budget I allowed; two earlier 5M-bound attempts had run for about twenty-five minutes without finishing when stopped.'
+        - The 14692 transition figure for the embedded model is jra's measurement, quoted in the text; I did not re-measure it on the withdrawn embedded revision.

@@ -1,0 +1,33 @@
+mission_id: m-2026-10-22-030
+status: closed
+type: design
+created_at: "2026-10-22T18:14:23Z"
+updated_at: "2026-10-22T18:20:16Z"
+closed_at: "2026-10-22T18:20:16Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-10-22T18:14:23Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/design-opencode-plugin.md
+    - DESIGN.md
+success_criteria:
+    - 'B1 (blocking): Ensure writes the last-seen sidecar only when the caller requests it (an explicit flag, e.g. --touch, that the OpenCode plugin passes on every ensure). The Claude Code fork SessionStart path never passes it, so Claude rosters keep today''s isStale PID logic (store.go:950-956). Correct the claim at design ~line 506 that every Claude Code roster has no last-seen, add the test row "Claude fork roster with live numeric Participants[1], Started 25h ago, no last-seen: not stale" to the isStale test table (~524-534), and correct DES-078 item 13.'
+    - 'W1: the claim-forked reconcile close (step 2, design ~1329-1331, ~1386-1387) takes the delegation lock for the skeleton it closes, so it cannot race Store.Close''s skeleton sweep under the mission lock; state the lock and its place in the order.'
+    - 'W2: attribute "child roster unreadable" refusal to the read-phase ss.Load, not RefuseIfSessionGone (which proceeds on non-ErrNotExist errors, pretooluse_dispatch.go:494-508).'
+    - 'W3: state the outcome when an operator mission claim follows an interrupted claim-forked whose pending record and binding name the same delegation: removing only the record leaves the fork-propagated skeleton and binding, which stamp a Delegation trailer when the missions match (correct) and are inert when they differ.'
+    - 'W4: the hard-link write-once temp file has a recognizable name and deleteFiles removes it; note the Windows (NTFS hard link) requirement given LockFileEx platform support.'
+    - 'W5: enumerate every Claude-only part of the shared guide for neutralization -- guide/CLAUDE.md:20-21, 60-61, the Review agents section and local review sequence (~58-72), and the Gotchas line about agent types discovered at SessionStart (~77) -- and require validate-content to reject `.claude/` and "Claude Code" strings in the shared guide.'
+    - 'W6: cite session create at cmd/ethos/session.go:79; fix the grammar of DESIGN.md item 16 ("The enable opencode appends it").'
+    - Update the design header and DES-078 with a round-7 note.
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/design-opencode-plugin.md DESIGN.md`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Round 7, re-scoped successor to m-2026-10-22-026 (closed failed at round cap with one blocking finding B1 and six wording findings from evaluator rsc). DES-078 design, ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge -- the leader does that. Each criterion is a leader decision; if source verification shows one impossible as stated, stop and report.'

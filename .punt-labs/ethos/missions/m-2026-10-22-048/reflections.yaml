@@ -1,0 +1,14 @@
+reflections:
+    - mission: m-2026-10-22-048
+      round: 1
+      created_at: "2026-10-23T00:27:55Z"
+      author: claude
+      converging: true
+      signals:
+        - F1, F2/B1, F3, F9, F10 modelled; each counterexample reproduced with fix off, holds with fix on, mutants killed
+        - new finding C11 (release left fork skeleton open) fixed by fixReleaseCloses
+        - 'C12 open: Tier B dispatch by a propagated child overwrites the binding, orphaning the fork skeleton; NoOrphanOpenSkeleton holds only under assumeNoTierBOverFork'
+        - 'leader ruling C12: option (c) -- the claim-forked-pending record persists for the life of the fork claim as the durable name of the fork skeleton; release, close-time claim clearing, and deleteFiles close by it; Tier B dispatch path unchanged'
+        - 'leader ruling Reuse supersede clause: keep as defensive, document as unexercised by any reachable state'
+      recommendation: continue
+      reason: Round 2 replaces assumeNoTierBOverFork with the option (c) fix and re-checks NoOrphanOpenSkeleton without the assumption

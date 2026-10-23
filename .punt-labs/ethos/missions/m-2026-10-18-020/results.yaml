@@ -1,0 +1,27 @@
+results:
+    - mission: m-2026-10-18-020
+      round: 1
+      created_at: "2026-10-18T18:51:58Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: DESIGN.md
+          added: 53
+          removed: 26
+        - path: docs/design-opencode-plugin.md
+          added: 125
+          removed: 93
+      evidence:
+        - name: 'make check (run after each of 3 commits: 14ef04d, 9c4c31b, e1a013f) -- golangci-lint 0 issues; shellcheck clean; ruff check/format/mypy clean; pytest 8 passed; markdownlint 0 issues in 334 files; go test -race across all packages ok; validate-content all checks passed; fuzz type-check of all 6 Z-spec .tex files succeeded'
+          status: pass
+        - name: Sec3.2/Sec3.3 rewrite -- sessionID-correlation gap now bounded to github.com/anomalyco/opencode/pull/54842 (OPEN/unmerged, opened 2026-10-12), named by number and link; merge-check stated as the one implementation-stage precondition; no claim the gap is closed today for the current V2 dev-branch API; per coordinator's mid-task correction, no V1/@opencode-ai/plugin@1.18.25 fallback language written -- design targets OpenCode V2 exclusively
+          status: pass
+        - name: 'Sec6.1 rewrite -- points-repo conflict narrowed to same-repo-only, confirmed by direct read of /home/jfreeman/Coding/punt-labs/points: check-dev-config.sh''s ''plugins'' gate reads/fails only points''s own opencode.json under points''s own make check-dev/make doctor; grep of points''s .bin/*.sh for the plugins key shows no script writes it anywhere; points''s README confirms its four commands (route/status/verify/unroute) touch model-routing config only; one real finding preserved (don''t run ethos enable --opencode inside points''s own source tree without resolving its area-8 review gate)'
+          status: pass
+        - name: Scope discipline verified -- only Sec3.2, Sec3.3, Sec5 point 4's cross-reference, Sec6.1, the top-of-doc round-3 summary note, and DESIGN.md's DES-078 entry were edited; Sec1, Sec2.1-Sec2.3.2, Sec4, Sec7 untouched, confirmed by reviewing the diff section-by-section
+          status: pass
+        - name: 'Three commits pushed to origin design/opencode-plugin-adapter on top of mission-start HEAD c387fd4: 14ef04d (Sec3.2/3.3), 9c4c31b (Sec6.1 + Sec5 cross-ref), e1a013f (DESIGN.md sync + intro notes); git push origin design/opencode-plugin-adapter succeeded, updating open PR #536; no new branch created, main untouched'
+          status: pass
+      open_questions:
+        - The existing round-2 summary paragraph at the top of docs/design-opencode-plugin.md (lines ~31-32) still describes Sec6.1 as 'a confirmed (not speculative) cross-repo compatibility question' -- accurate but written before round 3's same-repo-only narrowing. Left unedited because it sits in the doc's intro, outside the contract's named sections (Sec1-Sec2.3.2, Sec4, Sec7 off-limits). The new round-3 summary paragraph directly below states the corrected framing, so the doc is substantively consistent, just not perfectly deduplicated across the two summary paragraphs. Flagging for the leader's judgment on whether further cleanup is wanted.

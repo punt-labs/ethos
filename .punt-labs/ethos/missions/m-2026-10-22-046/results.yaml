@@ -1,0 +1,34 @@
+results:
+    - mission: m-2026-10-22-046
+      round: 1
+      created_at: "2026-10-22T22:22:26Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 558
+          removed: 111
+        - path: DESIGN.md
+          added: 82
+          removed: 12
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 14
+          removed: 0
+      evidence:
+        - name: make check green before each of 4 commits (f55bd9f 37ae9c0 6807cba 1102766)
+          status: pass
+        - name: 'npx markdownlint-cli2 docs/design-opencode-plugin.md DESIGN.md: 0 issues'
+          status: pass
+        - name: fuzz docs/spec-opencode-lifecycle.tex type-checks (make check)
+          status: pass
+        - name: 'citations re-read in source: internal/mission/store.go 1107, 1217-1246, 1589, 1973; internal/session/store.go 278-301, 336-348; cmd/ethos/session.go:881; cmd/ethos/main.go:51-70; guide lines 11, 43-44'
+          status: pass
+      open_questions:
+        - 'Criterion 2(f), claimed-child shortcut: the spec has no path where a claimed child skips the witness checks. I specified lock, reconcile, success, and write failed if the claim vanished in the window. Leader to confirm.'
+        - 'Corrupt pending record or record.yaml: deleteFiles step 1 fails loudly (names the file, manual remedy) rather than skipping; the model has no state for corruption (N3). Leader to confirm.'
+        - 'N4: design takes the spec''s second alternative (visited set mandatory, no cross-session edge serialisation). Leader to confirm.'
+        - 'Stale spec citations: spec-opencode-lifecycle.tex cites mission/store.go:2004-2010 and 1994-2000 for countBlockingDelegations; the function is at 1973-2014 (ErrNotExist return near 1995-2000). Not edited (write-set allows two note edits only).'
+        - The pre-commit audit-seal hook added .punt-labs/ethos sealed audit and mission-log files to each commit alongside the write-set path; they were already staged or sealed by the hook, not by me.
+      prose: |
+        Four commits on design/opencode-plugin-adapter. See the per-criterion table in the worker's final report.

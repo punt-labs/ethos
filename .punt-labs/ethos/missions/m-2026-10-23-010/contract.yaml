@@ -1,0 +1,28 @@
+mission_id: m-2026-10-23-010
+status: closed
+type: design
+created_at: "2026-10-23T02:54:53Z"
+updated_at: "2026-10-23T05:01:59Z"
+closed_at: "2026-10-23T05:01:59Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-23T02:54:53Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/spec-opencode-lifecycle.tex
+success_criteria:
+    - 'Reproduce Copilot''s counterexample (PR #536 thread on docs/spec-opencode-lifecycle.tex): from LcInitPair, Begin, ReconcileFresh, Alloc, WriteRecord, WriteSkeleton, Crash, Begin, ReconcileReuse, CloseUnlockedBegin, ExitNoRetry violates ReconcileOnExit with all fifteen fixes on. Record the probcli command and result.'
+    - 'Leader decision: on the resume path, when the mission is found not open, the call closes the resumed fork skeleton with verdict aborted (CAS on open, under the delegation lock) and removes the pending record before exiting do-not-retry. Add this as a new fix switch (e.g. fixResumeClosed), amend LcCfExitNoRetry accordingly, and show the counterexample with the switch off and ReconcileOnExit, NoOrphanOpenSkeleton, NoVerdictOverwrite, SweepComplete holding with it on.'
+    - 'Close the coverage gap that let this through: extend the exhaustive claim and claim+ slices to include the unlocked sweep (LcCloseUnlockedBegin, LcSweepWrite), or add a new exhaustive slice combining claim-forked resume with the unlocked sweep, deep enough to contain this ten-step trace. Re-run every invariant on it; record states, depth, outcome. Kill a mutant per new fix.'
+    - 'Update the ledger (new C16), consequences (design section that must change: §5 point 2 resume path / do-not-retry exit), limits, and the results table.'
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/spec-opencode-lifecycle.tex`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'PR #536 review-cycle defect found by Copilot on the model-checked lifecycle spec. Branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. Prior harness: .tmp/lc3/. Every criterion is a leader decision; if the model shows one impossible, stop and report.'

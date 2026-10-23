@@ -1,0 +1,51 @@
+results:
+    - mission: m-2026-10-23-010
+      round: 1
+      created_at: "2026-10-23T04:39:27Z"
+      author: jms
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 214
+          removed: 65
+      evidence:
+        - name: 'Reproduction (before the fix, fifteen switches on): probcli r6/R1_cex.tex -card SESSIONID 2 -card MISSIONID 2 -card DELEGATIONID 2 -p MAX_INITIALISATIONS 1000 -p MAX_OPERATIONS 1000 -goal ''leaked /= {}'' -mc 5000000 -bf -nodead -check_goal on slice claim-u (claim ops plus LcCloseUnlockedBegin and LcSweepWrite): COUNTER EXAMPLE, 8744 states, depth 12, trace LcCfBegin, ReconcileFresh, Alloc, WriteRecord, WriteSkeleton, Crash, Begin, ReconcileReuse, CloseUnlockedBegin, ExitNoRetry. The same trace with fixResumeClosed off on the amended text: U1_leak_off, 8744 states, depth 12; U2_leak_off (claim+u) counterexample, 145621 states, depth 12'
+          status: pass
+        - name: 'fuzz clean and make check exit 0 before each of 3 commits (c1988e6 model, 0031322 slices/rows/mutants, a9976e4 ledger/consequences/limits); pdflatex builds, 54 pages; z-spec test setsize 1 unchanged: 5/6 checks, 6496 states, 213008 transitions, coverage fails by design (17 operations)'
+          status: pass
+        - name: 'New exhaustive slices claim-u (claim + unlocked sweep) and claim+u (claim+ + unlocked sweep), all sixteen switches on, all states visited: claim-u 120609 states depth 25; claim+u 515801 states depth 24; every invariant: ReconcileOnExit, NoOrphanOpenSkeleton, SweepComplete, NoVerdictOverwrite, LiveSpared, LockedWrites, NoForeignAbort, WellFormed hold (U1_*_all, U2_*_all, 16 rows). Three delegations, claim-u, ReconcileOnExit: holds, 911073 states, depth 32 (U1_leak_d3)'
+          status: pass
+        - name: 'With fixResumeClosed off only ReconcileOnExit distinguishes: NoOrphanOpenSkeleton, SweepComplete, NoVerdictOverwrite, LiveSpared hold on claim-u (162021 states, depth 27) and claim+u (634853 states, depth 27), all visited'
+          status: pass
+        - name: 'All 97 rows of the previous table re-run on the amended text (rows with explicit all-but switch lists gained fixResumeClosed): identical outcome, states and depth to the previous revision, except Fv2_on (bounded at 300000 states) depth 23 where it was 21. Table now 129 rows (110 + 19 mutant rows); harness .tmp/lc3, rows5.txt, table5.py'
+          status: pass
+        - name: 'Mutants for fixResumeClosed: MutResumeCas (exit close without the open test) KILLED by NoVerdictOverwrite, 13784 states, depth 13; MutResumeNoCloseSkel (record removed, skeleton left open) KILLED by ReconcileOnExit, 8744 states, depth 12 (equals the switch off); MutResumeKeepRec (skeleton closed, record kept) SURVIVES NoOrphanOpenSkeleton and WellFormed, 132609 states all visited: record removal at the exit is hygiene, stated unverified as N18/N19'
+          status: pass
+      open_questions:
+        - 'Design section to change: DES-078 section 5 point 2 (claim-forked write phase), the resume path and the exit ''do not retry'' after the step-6 re-read of the mission. The exit must close, aborted, as compare-and-set on open under the delegation lock, the open dkFork skeleton the record names, and remove the record, before returning; it may not leave the skeleton to the sweep, which under the unlocked fallback of Store.Close (store.go:1107-1114) may snapshot before and write after the exit. Consequences item and a required test are in the spec.'
+        - The model takes the exit at stage 1, before cfH is set, where the code takes the locks and then re-reads; and it makes the close and the record removal one step. Both stated in N19. A close that fails must end the call with the record kept.
+        - The bounded full-machine rows (F2_*, F3_*, Chain_*) are still short of depth 12 and not exhaustive; the gap is closed by claim-u and claim+u for the eight invariants, not for the full machine.
+      prose: |
+        Three commits on design/opencode-plugin-adapter, write set docs/spec-opencode-lifecycle.tex only. The pre-commit audit seal added ethos audit and session jsonl files to each commit, as the hook does; none was staged by me. Commit-message trailer: Co-Authored-By Claude Opus 5.5.
+    - mission: m-2026-10-23-010
+      round: 2
+      created_at: "2026-10-23T05:01:42Z"
+      author: jms
+      verdict: pass
+      confidence: 0.88
+      files_changed:
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 12
+          removed: 4
+      evidence:
+        - name: 'Finding 1: MyRelKeepRec had no row. Added and run: mutant of LcReleaseClaim keeping the record, claim+ slice, all sixteen switches, goal NoOrphanOpenSkeleton: no counterexample, ALL states visited, 318189 states, depth 24. Survives; row added to the mutant table; N18 text states slice, size, and survival'
+          status: pass
+        - name: 'Finding 2: consequences item for C16 now states the failure ordering (close first; a failed close ends the call with the record kept as retry token; record removed only after the close succeeds). Ledger C16 now reads step 6 (the re-read, made under the locks of step 5), consistent with the consequences item'
+          status: pass
+        - name: 'Finding 3: gap paragraph now states the unlocked sweep is not combined with InitChain (no chain+sweep row; multi-hop walk and C16 never met) and that full-machine bounded rows stay short (claim+delete+close depth 8, three-session depth 5; Chain claim rows reach 12 without a sweep)'
+          status: pass
+        - name: make check exit 0 (fuzz clean) before commit 4093192; no model schema changed in round 2; the 129 round-1 rows stand, plus the one new row
+          status: pass
+      prose: |
+        One commit (4093192) on design/opencode-plugin-adapter, explicit path. Audit-seal jsonl files rode along from the hook; none staged by me.

@@ -1,0 +1,29 @@
+mission_id: m-2026-10-21-003
+status: closed
+type: design
+created_at: "2026-10-21T06:54:18Z"
+updated_at: "2026-10-21T08:51:07Z"
+closed_at: "2026-10-21T08:51:07Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-10-21T06:54:18Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/design-opencode-plugin.md
+    - DESIGN.md
+success_criteria:
+    - 'Fix a structural harness-parity defect the operator identified by reading internal/enable/enable.go directly: that file''s deposit logic (CanonicalImport = ''@.punt-labs/ethos/CLAUDE.md'', claudemd.Register) is itself Claude-Code-specific, not harness-neutral. The design''s current Sec5 point 4 and Sec1.1 propose ''ethos enable --opencode'' as a flag bolted onto this existing Claude-Code-flavored ''ethos enable'' command. That shape is wrong: it makes Claude Code the unqualified default and OpenCode an opt-in qualifier, which contradicts the spec''s own HarnessNeutrality theorem in spirit even though the Registry data model itself stays neutral. Restructure the design (and DESIGN.md''s DES-078 mirror) so neither harness is privileged: propose something like ''ethos enable claude'' / ''ethos enable opencode'' as coequal subcommands (or an equivalent flagging scheme with NO privileged bare form that silently means Claude Code), each depositing that harness''s own native artifact -- the existing CLAUDE.md import for Claude Code, the opencode.json plugin registration for OpenCode -- with neither implied by the other. A repo using both harnesses runs both commands explicitly; running one must not silently also enable or skip the other.'
+    - 'Add a new subsection (or expand Sec2 appropriately) stating a confirmed fact the operator surfaced and the leader verified directly against docs/spec-opencode-integration.tex Sec''Harness Instantiation'': the design''s fork-propagation machinery (Sec2.2, Sec2.3, Sec2.3.2''s claim-forked primitive) is NOT OpenCode-specific and must not be framed as if it were. The spec''s own Harness Instantiation section, Case 2 (--fork-session, slash-fork, slash-branch), found on direct verification that Claude Code''s own --fork-session, /fork, and /branch commands mint a genuine new top-level session exactly like OpenCode''s session.fork, and a SessionStart hook already reports source: ''fork'' to distinguish it (cited: Claude Code v2.1.214, code.claude.com/docs/en/hooks.md). The spec states Claude Code''s ForkNeverInheritsClaim guarantee is NOT vacuous for this case and needs the SAME session-level claim-isolation treatment OpenCode gets -- but nothing in the current Go codebase (internal/mission/, internal/hook/) implements this for Claude Code today; the leader grepped and confirmed no AllocateDelegationForkPropagated-shaped primitive exists anywhere. State plainly in the design: claim-forked and the Roster.ParentSession field (Sec2.3.2) are harness-neutral Go primitives with NO OpenCode-specific logic in them; wiring Claude Code''s own SessionStart hook to call session create --parent-session and claim-forked when it observes source: ''fork'' is additional, closely related implementation work this design''s Sec5 should name as in-scope for the SAME implementation stage (not a separate future concern), since building claim-forked only for OpenCode and leaving Claude Code''s identical gap open would itself reintroduce a parity difference between harnesses.'
+    - Review the rest of the document (all sections) for any other place where OpenCode is framed as an add-on, extension, or afterthought to a Claude-Code baseline rather than a coequal harness instantiation of the same Registry model, and correct the framing. Do not rewrite content that is already harness-neutral; this is a wording/framing audit, not new technical content, except for the two substantive items above.
+    - Do NOT touch, read, or stage .punt-labs/vox/vox.md -- it has an unrelated uncommitted modification from the vox daemon that must be left alone. If your git add picks it up accidentally, unstage it before committing.
+    - Run make check before each commit and record it in the mission result evidence.
+    - Commit incrementally -- one commit per logical fix. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Round 4 of the design-stage mission for ethos-5y4r''s DES-078, PR #536 (https://github.com/punt-labs/ethos/pull/536), branch design/opencode-plugin-adapter -- already checked out, DO NOT create a new branch or touch main. The operator (not an automated reviewer this time) personally identified this round''s core finding by reading internal/enable/enable.go and pushing back on the leader''s own incorrect assumption that the existing ''ethos enable'' deposit path was harness-neutral. This is an explicit product/design principle from the operator: OpenCode is a first-class, coequal harness, not a secondary option layered onto Claude Code. Push commits to origin design/opencode-plugin-adapter (already tracked) to update the existing PR -- do not open a new PR.'

@@ -1,0 +1,34 @@
+mission_id: m-2026-10-22-026
+status: failed
+type: design
+created_at: "2026-10-22T17:57:43Z"
+updated_at: "2026-10-22T18:14:10Z"
+closed_at: "2026-10-22T18:14:10Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-10-22T17:57:43Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/design-opencode-plugin.md
+    - DESIGN.md
+success_criteria:
+    - 'Lineage and liveness storage: move ParentSession and LastSeen out of the Roster struct into a per-session sidecar file under the sessions directory (write-once parent, refreshable lastSeen), so a roster re-marshal by Join/JoinSelf/Leave/CreateInCheckout -- including an older ethos binary still serving MCP -- cannot erase them (store.go:82-93, 110-196). Sidecar is created/updated under the roster lock and deleted by deleteFiles with the roster. Claude Code SessionStart with source fork calls Ensure (not createSessionRoster) and never overwrites an existing roster lineage (session_start.go:69,194). `ethos session create` against an id whose sidecar records a parent refuses rather than resetting lineage.'
+    - 'Purge: isStale (store.go:942-957) consults the sidecar lastSeen FIRST: when present and parseable, staleness is decided by age of max(Started, lastSeen) alone, before the empty-roster, participant-count, and PID branches. Unparseable lastSeen is treated as absent (existing logic). Name the required tests, including a two-participant roster with a dead numeric Participants[1] and a fresh lastSeen being NOT stale. Document the 24h-idle purge as intended.'
+    - 'Deleted parent: the parent-must-exist check in Ensure applies only when the session is first registered. An existing roster with a matching parent refreshes lastSeen whether or not the parent still exists. Add an explicit --parent-gone mode used only when the OpenCode read conclusively reports the parent not found; it records the dangling parent. The §2.3.1 walk Load-failure refusal keeps propagation fail-closed; explicit operator claim on the child works. Reconcile §2.1.1 lines ~380-397 and §5 point 1 so they agree.'
+    - 'claim-forked read phase: the witness binding must have Origin == BindOriginClaim (commit_trailers.go:54, pretooluse_dispatch.go:222, active.go:101-119); dispatch or unknown origin is "witness refused". The walk Loads the witness own roster (liveness, spec .tex:1003-1006). Orphan prevention: write a claim-forked-pending record keyed by the child before WriteDelegationSkeleton; every retry, regardless of witness or mission, closes any open fork-propagated skeleton for that child it does not reuse with verdict aborted; failure to close is reported with a non-zero status, never silent. State the lock constraint: Ensure (roster lock) and claim-forked (dispatch-pending lock outermost) run sequentially, never nested, because deleteFiles takes roster then dispatch-pending (store.go:279, active.go:622-625).'
+    - 'Exit statuses: replace the three-way split with a complete cause-to-status table covering success, witness refused (try next ancestor), write failed (retry same witness), and a fourth do-not-retry status for child roster gone, mission not open at re-check, contract load failure, NewID exhaustion/globalRoot error. Specify the plugin action for each status. Exit numbers stay for the implementation PR but must be distinct from main.go:64-70 existing 1 and 2.'
+    - 'Harness-neutral guide: the guide deposited at .punt-labs/ethos/CLAUDE.md (deposit.go:15,87) keeps its org-standard path but its content becomes harness-neutral (no Claude-only instructions). Each harness native step wires it in: `enable claude` writes the CLAUDE.md @-import; `enable opencode` adds the guide to opencode.json instructions (verify the opencode.json instructions key against .tmp/ references or context7). Harness-specific operating notes go in each harness native artifact, not the shared guide.'
+    - 'Single source of truth is enforced, not asserted: help text, usage error, unknown-name error, and prompt text are generated from the sorted supported-harness list; name an implementation-stage test that fails if internal/enable or cmd/ethos/{enable,disable}.go contains a claude or opencode literal outside the list, and asserts the list is sorted. Note today CanonicalImport (enable.go:46), guideRel, enable.go:127,173 and cmd/ethos/enable.go:18-19 name Claude outside any list and are migration work.'
+    - 'DES-078 corrections: Decision point 2 (DESIGN.md ~12202-12208) gets a round-6 qualification: ETHOS_SESSION alone is insufficient (commit-msg.sh:55, inherited CLAUDE_PID), the reader is not fail-closed against inherited/dead-session state, and the plugin two-armed create.before policy closes it; drop or qualify "already fails closed". Point 4 lists neutral steps as gitlink guard, vendored deposit, gitignore, hook chaining, then marker last. Mirror all round-6 decisions in DES-078 and add a round-6 corrections note to the design header.'
+    - 'Fix citation docs/design-opencode-plugin.md ~1171-1172: AcquireMissionLock range is pretooluse_dispatch.go:791-808.'
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/design-opencode-plugin.md DESIGN.md`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'Round 6 (successor mission) of the DES-078 design for ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge -- the leader does that. Findings come from leader-run local review (code-reviewer, invariant-completeness-reviewer) after round 5 m-2026-10-22-017 closed; every item above is a leader decision -- if verification against source shows one is impossible as stated, stop and report rather than choosing an alternative. OpenCode and Claude Code are coequal harnesses (operator principle).'

@@ -1,0 +1,13 @@
+reflections:
+    - mission: m-2026-10-23-005
+      round: 1
+      created_at: "2026-10-23T02:29:07Z"
+      author: claude
+      converging: true
+      signals:
+        - 'rsc REJECT narrowly: B1 SessionStart refresh incomplete (Repo, Checkout, Host) and not in Ensure signature; W1-W5 wording'
+        - 'code-reviewer: refresh contradicts ''changes nothing'' text and tests; witness-refused vs spec do-not-retry; DES-078 decision point 3 and item 22/28 wording'
+        - 'invariant reviewer: SessionStart behaviour change understated; deleteFiles record-only close not covered by any run; removed-only-by overstated; status precedence conflict; supersede root unspecified; SessionEnd erases lineage; NoForeignAbort scope; ParentOf I/O error handling'
+        - 'leader decisions: SessionStart rewrites the roster as today minus sidecars via a named Ensure option; binding also carries store root so deleteFiles follows the spec (record or binding); supersede uses write-phase root; ParentOf/ancestor I/O errors are write failed; adopt spec do-not-retry for mission-closed on resume'
+      recommendation: continue
+      reason: All findings are bounded text changes with leader rulings; round 2 applies them

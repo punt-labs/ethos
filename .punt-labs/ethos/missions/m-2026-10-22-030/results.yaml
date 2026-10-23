@@ -1,0 +1,39 @@
+results:
+    - mission: m-2026-10-22-030
+      round: 1
+      created_at: "2026-10-22T18:18:43Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 138
+          removed: 34
+        - path: DESIGN.md
+          added: 30
+          removed: 5
+      evidence:
+        - name: 'B1 (fd68aff): Ensure takes touch (--touch); last-seen written only then; Claude fork SessionStart never passes it; claim at old line 506 corrected; TestIsStale row for Claude fork roster added; DES-078 item 13 corrected'
+          status: pass
+        - name: 'W1 (62a7074): reconcile close takes shared mission lock of the record''s mission then delegation lock, order stated; note the delegation lock alone does not exclude Store.Close sweep (store.go:1107,1217-1246), the mission lock does'
+          status: pass
+        - name: 'W2 (62a7074): unreadable child roster attributed to read-phase ss.Load; RefuseIfSessionGone proceeds on non-ErrNotExist (pretooluse_dispatch.go:494-508)'
+          status: pass
+        - name: 'W3 (62a7074): outcome of operator claim after interrupted claim-forked with matching record and binding stated (commit_trailers.go:65)'
+          status: pass
+        - name: 'W4 (fd5af9f): parent-session.tmp-<random> temp name, deleteFiles removes parent-session.tmp-*, NTFS requirement with LockFileEx stated'
+          status: pass
+        - name: 'W5 (fd5af9f): four Claude-only guide parts enumerated (guide/CLAUDE.md 19-21, 58-67, 69-74, 84); validate-content must reject .claude/ and Claude Code'
+          status: pass
+        - name: 'W6 (fd5af9f): session create cited at session.go:79; DESIGN.md item 16 grammar fixed'
+          status: pass
+        - name: round-7 note in design header and DES-078 (fd5af9f, DES-078 status line and items 18-20)
+          status: pass
+        - name: make check green before each of the three commits
+          status: pass
+      prose: |
+        Commits: fd68aff (B1), 62a7074 (W1-W3), fd5af9f (W4-W6, header and DES-078 notes).
+        Deviations and flags for the leader:
+        1. W1 as worded says the delegation lock excludes Store.Close's sweep. The sweep holds only the exclusive mission lock and takes no delegation lock (store.go:1107, 1217-1246). The exclusion comes from the shared mission lock, so the design names both locks (mission shared, then delegation) in dispatchTierB order. The criterion's intent (no race with the sweep) is met.
+        2. W5: the Gotchas line is guide/CLAUDE.md:84, not ~77; the guide's Who am I paragraph is lines 19-21.
+        3. Each commit swept in ethos audit-seal files (.punt-labs/ethos/missions and sessions *.jsonl) added by the repo pre-commit hook. I did not stage them; the hook did.

@@ -1,0 +1,48 @@
+results:
+    - mission: m-2026-10-18-007
+      round: 1
+      created_at: "2026-10-18T07:14:20Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 525
+          removed: 0
+        - path: DESIGN.md
+          added: 132
+          removed: 0
+      evidence:
+        - name: 'docs/design-opencode-plugin.md: concrete OpenCode V2 plugin/adapter design implementing spec-opencode-integration.tex''s Registry/SESSION/DELEGATION model -- plugin shape and 3 lifecycle hooks, session ID mapping (JoinRootSession/ForkSession/AllocateDelegationForkPropagated with a bounded real-code ancestor walk), commit-trailers resolution without Claude process-tree discovery, fail-closed attribution table, scoped new-Go-surface section, non-goals, and rejected alternatives (4 for fork attribution, 3 for commit-trailer resolution)'
+          status: pass
+        - name: Every OpenCode API claim cites a specific .tmp/ reference file (api.ts, effect.mdx, effect-plugin.ts, plugins-index.mdx, plugins-web.mdx, migrate-v1.mdx, session-event.ts, session-status-event.ts, event-manifest.ts, schema-session.ts, session-effect.ts, schema-AGENTS.md) or docs/prfaq-opencode-integration.md with a line range -- no claim asserted from training-data memory
+          status: pass
+        - name: DESIGN.md DES-078 ADR entry added summarizing the decision and all 7 rejected alternatives with pointers into the full design doc
+          status: pass
+        - name: 'make docs (markdownlint-cli2 on **/*.md) passes: 0 issues in 0 files, confirmed after both commits'
+          status: pass
+        - name: 'Two incremental commits, each matching the mission write_set exactly: f7ff654 (docs/design-opencode-plugin.md only), af02c40 (DESIGN.md only)'
+          status: pass
+      open_questions:
+        - Whether ctx.tool.hook's event.env mutation reaches every OpenCode commit path (vs. only agent-issued tool calls) is unconfirmed by any source read for this design -- flagged in doc section 3.3 as a prerequisite the next pipeline stage must verify against a running opencode serve instance before implementation, not resolved here
+        - OpenCode's own restart-liveness signal remains an open item inherited from the companion research (no primitive confirmed to give the bundled hook-plugin a reliable restart-liveness check) -- named in both documents, not resolved by this design
+      prose: |
+        Wrote docs/design-opencode-plugin.md: the concrete OpenCode V2 plugin
+        design implementing the spec's Registry model, grounded entirely in
+        the .tmp/ reference material (real OpenCode V2 source/docs) and the
+        companion PR/FAQ, never asserted from memory. Covers lifecycle hooks,
+        the parent/child session mapping, commit-trailer resolution (zero
+        changes to existing Go code -- the whole OpenCode engineering problem
+        is correct ETHOS_SESSION propagation, not new resolver logic),
+        fail-closed behavior with an explicit never-guess-a-session-ID
+        section, and rejected alternatives for both named hardest decisions
+        (4 for fork attribution, 3 for commit-trailer resolution), each with
+        its own rejection rationale grounded in either the spec's own
+        documented exploit traces or a real ethos incident (ethos-vqwn,
+        DES-074). Added DESIGN.md's DES-078 ADR recording the decision.
+        Two commits, each scoped exactly to one write_set file, make docs
+        clean after each. Two open items are disclosed rather than guessed
+        past: whether env propagation reaches every OpenCode commit path, and
+        OpenCode's own restart-liveness signal -- both inherited from the
+        companion research's own disclosed gaps, named explicitly in the new
+        doc rather than silently assumed closed.

@@ -2304,6 +2304,25 @@ budget or a narrower probcli invocation (\texttt{-df}, a raised
 here.
 
 % ===================================================================
+\section{Session Lifecycle and \texttt{claim-forked}: a separate document}
+\label{sec:lifecycle}
+% ===================================================================
+
+The session roster's lifecycle (\field{ensure}, the \fpath{last-seen} and
+\fpath{parent-session} sidecars, \field{isStale}, \field{deleteFiles}, the
+purge) and the write phase of \field{claim-forked} are modelled in
+\fpath{docs/spec-opencode-lifecycle.tex}, a second and independent state
+machine over the operations of \fpath{docs/design-opencode-plugin.md}
+(DES-078). It is a separate file for a reason this document's own
+\S\ref{sec:validation} makes plain: \texttt{probcli} reads one document as
+one B machine and promotes every schema other than the state and
+initialisation schemas to an operation, so a second machine placed here
+raises this document's transition count at setsize~1 from 3862 to 14692 and
+forfeits the certified-complete figure above. The two documents share the
+vocabulary of the three given sets and \field{ZBOOL} and nothing else; the
+lifecycle machine reads and writes no \field{Registry} component.
+
+% ===================================================================
 \section{Open Dependency: punt-labs/points}
 \label{sec:open-dependency}
 % ===================================================================
@@ -2397,6 +2416,12 @@ this specification can discharge on its own.
   (\fpath{internal/session/store.go}:200--348) & \\
 \field{AdapterDataMissing} & -- & new; named for a malformed OpenCode
   lifecycle payload, see \S\ref{sec:harness-instantiation} \\
+\textit{lifecycle operations} (\field{Lc}\ldots) &
+  \fpath{internal/session/store.go} (\field{Ensure}, \field{deleteFiles},
+  purge), \fpath{internal/mission/store.go} (\field{Close},
+  \field{countBlockingDelegations}), \field{claim-forked} of DES-078 &
+  modelled in the separate \fpath{docs/spec-opencode-lifecycle.tex}; see
+  \S\ref{sec:lifecycle} \\
 \field{ResolveCommitAttribution} & \field{runHookCommitTrailers}
   (\fpath{cmd/ethos/hook.go}:218--251) via \field{resolve.SessionID}
   (\fpath{internal/resolve/resolve.go}:278--360) and

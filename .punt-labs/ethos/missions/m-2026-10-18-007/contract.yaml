@@ -1,0 +1,31 @@
+mission_id: m-2026-10-18-007
+status: closed
+type: design
+created_at: "2026-10-18T06:25:54Z"
+updated_at: "2026-10-18T07:16:40Z"
+closed_at: "2026-10-18T07:16:40Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-10-18T06:25:54Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/design-opencode-plugin.md
+    - DESIGN.md
+success_criteria:
+    - Propose the concrete OpenCode V2 plugin/adapter design implementing docs/spec-opencode-integration.tex's harness-neutral Registry/SESSION/DELEGATION model
+    - 'Cover: plugin lifecycle hooks used (setup, session events), how OpenCode parent/child session IDs map to Ethos sessions, how ForkSession/AllocateDelegationForkPropagated map to real OpenCode session.fork semantics'
+    - Specify how the existing 'ethos hook commit-trailers' command resolves the committing OpenCode session without Claude process-tree discovery
+    - Address fail-closed behavior for ambiguous attribution (no trailer + visible diagnostic, never guess another session ID)
+    - Ground every claim about OpenCode V2 plugin API behavior in real source/docs (the @opencode/plugin, @opencode/schema, @opencode/protocol packages), not assumption -- cite file/symbol
+    - Do not conflate with Circuit/pr-watch workflow state (sibling circuit bead) -- PR head SHA stays GitHub/Circuit-owned
+    - Enumerate rejected alternatives for at least the two hardest decisions (session-fork attribution strategy, commit-trailer resolution strategy)
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Design stage for ethos-5y4r (OpenCode session traceability), following the merged formal spec (PR #534, docs/spec-opencode-integration.tex) and its mission-closure audit trail (PR #535). This mission produces the design only -- no implementation. Per org rule, the leader (claude) must review this design for substantive issues and the operator must ratify it before any implementation mission is dispatched. Reference OpenCode V2 plugin API material already pulled into .tmp/ (api.ts, effect.mdx, plugins-index.mdx, migrate-v1.mdx, session-event.ts, schema-AGENTS.md, etc.) for grounding real plugin-system behavior.'

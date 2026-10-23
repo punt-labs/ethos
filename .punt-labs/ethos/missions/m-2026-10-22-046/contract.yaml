@@ -1,0 +1,31 @@
+mission_id: m-2026-10-22-046
+status: failed
+type: design
+created_at: "2026-10-22T22:10:52Z"
+updated_at: "2026-10-22T22:31:40Z"
+closed_at: "2026-10-22T22:31:40Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-10-22T22:10:52Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/design-opencode-plugin.md
+    - DESIGN.md
+    - docs/spec-opencode-lifecycle.tex
+success_criteria:
+    - 'Reconcile docs/design-opencode-plugin.md and DES-078 in DESIGN.md to the model-checked amendments in docs/spec-opencode-lifecycle.tex (all nine fix switches ztrue are the authority): C1 fixRefuseReconciles (reconcile runs on every claim-forked exit incl. read-phase refusals), C2 fixDeleteOrder (lineage sidecar removed last in deleteFiles), C3 fixCycleCheck (ensure refuses a parent whose ancestor chain contains the child; no self-parent), C4 fixInertBinding, C5 fixDeleteCloses (deleteFiles closes the pending skeleton first and short-circuits on failure), C6 fixPostCheck (sweep post-check), C7 fixStaleLive (a roster with a live numeric participant is never purged -- leader decision; reverse isStale test-table row 2), C8 fixCorruptPurge, C9 fixSupersede. Follow the spec section listing which design sections must change (lc-consequences). Every amendment closes with verdict aborted (N5). State the limits the spec records (N3, N4, N7, N8) where the design relies on them. Cite the spec, not prose reasoning, for each.'
+    - 'Apply the leader-run local review findings not covered by the model: (a) claim-forked status prose says four statuses = success + three non-success, distinct from 0/1/2; (b) add --touch to every spelled-out plugin ensure command; (c) cite Store.Close and DisclaimDelegation as internal/mission/store.go:1107,1217-1246 and :1589; (d) Claude Code fork SessionStart: on parent-not-found, retry Ensure with --parent-gone (parent conclusively ended in ethos''s own store) so the fork still gets a roster and CLAUDE_PID pointer; add required test; (e) last-seen read error (not ENOENT/parse) is treated as not-stale with a warning, future-dated last-seen is capped at now, and state the older-binary purge exposure (cmd/ethos/session.go:881 ignores last-seen); (f) read the child claim lock-free in the read phase before witness checks so an already-claimed child returns success; corrupt pending record or corrupt record.yaml is do-not-retry, not write-failed; Go panic (exit 2) and signal death are named in the status mapping and the plugin action for each is stated; cmd/ethos/main.go:51-70 must map the new statuses with errors.As -- list it as implementation work; (g) the compiler-enforced non-nesting claim holds only if the write phase lives in internal/mission and RefuseIfSessionGone is re-expressed over the reader interface -- state both; (h) reconcile close: if the record''s mission directory is absent skip the lock and treat the skeleton as gone; fix DES-078 item 19 grammar.'
+    - 'Harness-neutral guide and enforcement: enumerate guide/CLAUDE.md lines 43-44 (write-set enforcement is Claude-hook-only) and line 11 for neutralization; extend the validate-content deny list to Claude, SessionStart, CLAUDE_, subagent with an exact allowlist for the CLAUDE.md filename; TestHarnessNamesOnlyInList also fails on any import of a harness-specific package (internal/claudemd or a future opencode package) and any identifier containing claude/opencode outside harnesses.go, with exact-equality matching for allowed literals. opencode.json instructions: enable records ownership of the entry it added (disable removes only an owned entry) and normalizes ./ and equivalent spellings before the absent check.'
+    - 'In docs/spec-opencode-lifecycle.tex add a one-line header note that LcInitPair/LcInitChain appear as operations in a direct /z-spec:test run and no coverage claim rests on that run, and state the switch set each ledger state count belongs to (jra: Fa_all is 16681 with all nine on, 24481 with only RefuseReconciles+InertBinding).'
+    - Update the design header and DES-078 with a round-8 note naming m-2026-10-22-031/-042 (the model) and this mission.
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/design-opencode-plugin.md DESIGN.md docs/spec-opencode-lifecycle.tex`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Final design-reconcile mission for DES-078, ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. The lifecycle model in docs/spec-opencode-lifecycle.tex was model-checked (m-2026-10-22-031/-042, accepted by jra); where design prose and the spec disagree, the spec wins. Every criterion is a leader decision; if source shows one impossible, stop and report.'

@@ -1,0 +1,31 @@
+mission_id: m-2026-10-22-042
+status: closed
+type: design
+created_at: "2026-10-22T21:21:52Z"
+updated_at: "2026-10-22T22:10:32Z"
+closed_at: "2026-10-22T22:10:32Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-22T21:21:52Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/spec-opencode-integration.tex
+    - docs/spec-opencode-lifecycle.tex
+success_criteria:
+    - 'B2: move the lifecycle model (section sec:lifecycle, added in e47050a/9af5797) out of docs/spec-opencode-integration.tex into a new standalone docs/spec-opencode-lifecycle.tex with its own preamble and given sets, checkable directly by /z-spec:test and probcli without awk/sed extraction. docs/spec-opencode-integration.tex returns to its pre-lifecycle Registry content plus a short cross-reference section; re-run /z-spec:test on it and confirm its Validation claims (baseline 697f82d: 286 states, 3862 transitions, certified complete) hold again, updating the text if any figure changed. Update traceability (~:4042) and cross-references.'
+    - 'B1: compute the ReconcileOnExit ghost (leaked) from the post-state uniformly in both the fix=zfalse and fix=ztrue branches of every operation that can exit a claim-forked call, so the invariant is checked rather than satisfied by construction. Re-run all Fa_* rows. Record mutant checks in the evidence: (a) fixed LcCfReconcileClaimed with the unfixed dOpen expression must produce a counterexample; (b) fixed LcCfRefuse that never closes the skeleton must produce a counterexample.'
+    - 'Add to the consequences/limits text: N2 the close step in deleteFiles must short-circuit (a failed close must not proceed to clear pend/binding, unlike clearMissionSidecarsLocked join-and-continue, session/store.go:336-348); N3 the Close sweep skips unloadable records and only logs close errors (mission/store.go:1236,1242-1244), and a skeleton directory without record.yaml hard-errors countBlockingDelegations (store.go:1994-2000) -- unmodelled; N4 Acyclic depends on serialized edge insertion across sessions or on the mandatory visited set in the walk (Ensure holds only the per-session lock); N5 every non-sweep close in the amendments must write verdict aborted because countBlockingDelegations blocks on any non-aborted, non-disclaimed record; N7 the unknown binding origin and the two-file claim write are not represented; N8 NoLiveSessionPurged judges liveness only from readable rosters, so a live Claude session whose roster fails to parse is still purged as today.'
+    - 'Evidence: N6 add an INIT column to the results table, include a recorded row using LcInitChain (multi-hop ancestor walk), and record breadth-first depth reached for every bounded run; include the 2/2/3 claim-slice result (106881 states, NoOrphan holds). N9 fix "four invariants" at the two places it miscounts. Record the C7 isStale reversal as a leader-accepted decision (leader ruling: a roster with a live numeric participant is never purged regardless of last-seen).'
+    - Every invariant that is a state predicate must be checked as a negated -goal (or LTL), never as a state-schema predicate, per the probcli guard behavior verified in m-2026-10-22-031. State this convention in the new file.
+    - Type-check both files with fuzz; record exact probcli commands, bounds, states, depth, and outcome for every row.
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/spec-opencode-integration.tex docs/spec-opencode-lifecycle.tex`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Re-scoped successor to m-2026-10-22-031 (closed failed: evaluator jra found B1 vacuous ReconcileOnExit and B2 Registry validation regression; the split needs a wider write-set). Branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. jra scratch reproduction scripts are in .tmp/jra-eval/ and the prior worker scratch in .tmp/lc/; reuse them.'
