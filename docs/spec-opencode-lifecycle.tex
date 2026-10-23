@@ -355,7 +355,7 @@ after it was closed; it is computed, by one rule, by every operation that
 writes a verdict, from the \field{dAbort} of the pre- and post-state.
 \field{liveAborted} collects every child whose live binding's skeleton a
 \field{claim-forked} reconcile closed. \field{liveForkAborted} collects every
-child whose claim, after a step of the \field{claim-forked} family, names the
+child whose claim, after a step of the \field{claim-forked} family that carries the ghost, names the
 mission of an open skeleton of kind \field{dkFork} that the child owns and
 that the step closed with verdict \field{aborted}:
 \[
@@ -369,7 +369,11 @@ It is computed in the five operations that close a skeleton on behalf of a
 the mission of the skeleton and the transition from open to aborted. It does
 not read \field{binding}, \field{pend} or \field{pendDone}, and so does not
 share the notion of live of \field{liveAborted} and \field{leaked}
-(\S\ref{sec:lc-ledger}, C17).
+(\S\ref{sec:lc-ledger}, C17). \field{LcCfAbort} also closes a skeleton and
+does not compute it, and that is safe: \field{LcCfAbort} requires stage 3 to 5,
+before the claim write at stage 6, and \field{LcOperatorClaim} requires
+$s?\notin\dom\field{stage}$, so no claim names the skeleton while the abort
+fires. The bound of the ghost is the five instrumented operations.
 
 \field{leaked} is a ghost, and it is only worth anything if it is computed
 by one rule that does not know which amendment is on. Every operation that
@@ -446,6 +450,7 @@ the well-formedness conditions that validate the model itself. A schema here is 
     skeleton of a live binding, that is, one that the child's binding names
     while the child's claim is for the skeleton's mission.
   \item \field{NoLiveForkAborted}: no step of the \field{claim-forked} family
+    that carries the ghost (the five operations named in \S\ref{sec:lc-state})
     closes, with verdict \field{aborted}, an open skeleton of kind
     \field{dkFork} owned by $c$ while $c$'s claim, after the step, is for that
     skeleton's mission. It is stated of the claim, the owner, the kind and
@@ -2237,8 +2242,10 @@ assumed. The rest were not known.
     verdict; without the test (\texttt{MutResumeCas}) the exit overwrites a pass
     verdict the sweep has already written. The same exit on the fresh path, or
     when the identifiers are exhausted, finds the record already removed and
-    closes nothing. With the switch on all eight invariants hold on
-    \emph{claim-u} and \emph{claim+u} (\texttt{U1\_*\_all}, \texttt{U2\_*\_all}).
+    closes nothing. With the switch on all eight invariants then defined hold on
+    \emph{claim-u} and \emph{claim+u}; since C17 the rows
+    \texttt{U1\_*\_all}, \texttt{U2\_*\_all} include a ninth,
+    \field{NoLiveForkAborted}, and all nine hold.
   \item[\textbf{C17}] \textbf{A record whose claim has committed is judged not
     live once a Tier B dispatch has moved the binding.}
     \field{NoLiveForkAborted} (new, \S\ref{sec:lc-invariants}); \S5 point~2
@@ -3086,8 +3093,9 @@ DES-078 is to be brought into line at these places.
     record names only a skeleton that its own call wrote, so for the
     skeletons the reconcile considers the test is the claim alone
     (\texttt{Own\_all}); the record needs its stage field, as above, so that a
-    live record is kept complete. The fix presupposes the durable record
-    (\texttt{C17\_nodur}). Tier B dispatch is not changed, and no write of the dispatch
+    live record is kept complete. The fix presupposes the durable record, and the two ship together
+    (\texttt{C17\_nodur}); the binding and complete-mark tests stay in the code
+    as defensive tests the model does not exercise. Tier B dispatch is not changed, and no write of the dispatch
     path learns about the record. The required test is the trace of C17: a
     child whose \field{claim-forked} wrote the claim and died before it marked
     the record complete, whose binding a Tier B dispatch has since replaced,
@@ -3226,7 +3234,13 @@ whether the code should adopt it: the claim of the model does not record who
 wrote it (\field{BORIGIN} has two values and the operator may choose either),
 so the model cannot tell the claim \field{claim-forked} writes from the
 operator's, and the invariant \field{NoLiveForkAborted} asks that neither be
-treated as the skeleton's abandonment. The alternative of the review
+treated as the skeleton's abandonment. \textbf{Rulings of the leader.} The
+code adopts: an operator claim that names the skeleton's mission makes the
+skeleton live, and \field{mission release} or the close-time clearing closes it.
+\field{fixClaimLive} and \field{fixDurableName} ship together
+(\texttt{C17\_nodur}). The binding and complete-mark tests stay in the code as
+defensive tests, documented as unexercised by the model, which finds them
+subsumed by the claim (\texttt{Own\_all}). The alternative of the review
 (\texttt{Alt\_*}, \S\ref{sec:lc-verification}) does not adopt it, and does not
 satisfy the invariant.
 (N13) \field{ClearMissionBindings} is modelled for the closing session's
