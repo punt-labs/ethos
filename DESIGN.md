@@ -12328,8 +12328,12 @@ written; `releaseID(false)` (`internal/mission/id.go:205-222`) is never called
 on a later failure, since it would return the id to the counter while the
 record still names it and another Tier B dispatch under the mission could take
 it, and the child's retry would bind to that unrelated delegation (Copilot,
-PR #536). Required tests: a failed skeleton write after the record, then a
-second dispatch (a different id) and the child's retry (its own id); a resumed
+PR #536). This is a review finding, not a ledger entry: the model cannot show
+it (N20). Required tests: a failed skeleton write after the record, then a
+second dispatch (a different id); the child's retry finds the record not
+resumable (its skeleton was never written), removes it, and allocates an id
+different from both the record's and the second dispatch's, never binding to
+the second dispatch's skeleton; a resumed
 record whose mission closes between the reconcile and the re-read, with the
 sweep stopped after its snapshot. Release and close-time clearing close what they
 unname (C11) and must hold the child's dispatch-pending lock around the whole
@@ -12348,8 +12352,9 @@ sweep included (C14). The exit-status table gains rows for I/O errors on the
 child's and the witness's binding reads, a `ParentOf` error, a
 `ReadDelegationBinding` error in a reconcile, a record-removal failure, and an
 abort whose cleanup close fails; a mission found closed is "do not retry"
-(the spec's `LcCfExitNoRetry`, C15, after the close of C16); `ParentOf` and ancestor-roster I/O errors
-are "write failed"; a column states the Claude Code `SessionStart` action. (B2) The
+(the spec's `LcCfExitNoRetry`, C15, after the close of C16; if that close
+fails, "write failed"); `ParentOf` and ancestor-roster I/O errors
+are "write failed", as is a failed close of the closed-mission exit (C16); a column states the Claude Code `SessionStart` action. (B2) The
 record stores the store root (a fork-written binding carries it as `StoreRoot`),
 and `deleteFiles` step 1, `release`, the reconcile, and the supersede close use
 the root in the record, or in the binding for a binding-named skeleton; "directory gone" needs a recorded, resolvable root.
@@ -12612,13 +12617,19 @@ Full writeups, including two historical exploit traces, are in
   `deleteFiles` must stop the call on failure (N2). **Round 9:** the proofs
   are exhaustive on named slices (the claim, claim+, delete, sweep, lineage,
   start, and Tier B slices, at two missions, two delegations, and two or three
-  sessions; the unlocked sweep only on the claim-u and claim+u slices, not
-  combined with the chain initialisation) and bounded on the full machine (200,000 states at two sessions,
+  sessions; the unlocked sweep is checked together with the claim-forked exit
+  only on the claim-u and claim+u slices, and no exhaustive chain row contains
+  the sweep: the bounded F3 rows stop at depth 5, so the multi-hop walk and C16
+  have not met in any run) and bounded on the full machine (200,000 states at two sessions,
   40,000 at three, below depth 12) and for `NoLiveSessionPurged` beyond one session; the table
   is `docs/design-opencode-plugin.md` §2.7. Also not represented: a Tier B
   dispatch without a roster, its depth-gate close, and a failed non-fatal
   binding write (N17); the locks around `release` and the close-time clearing,
   an implementation constraint (N16); that a release removes the record, which
   is hygiene, and the guard that a complete record is never resumed, which is
-  defensive and unverified (N18); and the dispatch-pending entries that
-  `ClearMissionBindings` clears (N13).
+  defensive and unverified (N18); the dispatch-pending entries that
+  `ClearMissionBindings` clears (N13); and the id counter, which the model
+  never decrements, so id uniqueness holds by construction and the resume
+  guard, which checks neither the skeleton's owner nor its kind, is excluded
+  from a Tier B skeleton by uniqueness alone; the code rests on the id being
+  consumed once the record is durable (N20).

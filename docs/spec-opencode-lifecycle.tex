@@ -2363,11 +2363,11 @@ space. Every row was run on the text of this file as committed, with a
 the row says \emph{not exhausted}. The rows \texttt{Fc2\_*},
 \texttt{*\_wf\_*} and \texttt{L\_wf\_*} were run again after the goals for
 \field{SweepComplete} and \field{WellFormed} were corrected to the schemas
-of \S\ref{sec:lc-invariants}. All 129 rows were run again on the text with
+of \S\ref{sec:lc-invariants}. All 130 rows were run again on the text with
 \field{fixResumeClosed}. The 97 rows of the previous revision have the same
 outcome, states and depth as before, but for \texttt{Fv2\_on}, a bounded row
 whose depth is now 23 and was 21 (the bound is the state count; the depth is
-where the bound fell). The 32 others are new: the \emph{claim-u} and
+where the bound fell). The 33 others are new: the \emph{claim-u} and
 \emph{claim+u} rows and the mutants of C16.
 
 {\scriptsize
@@ -2645,12 +2645,13 @@ is verified (N18).
     \emph{claim-u} at three delegations, depth 32 (\texttt{U1\_leak\_d3}). With
     it off the counterexample is the ten-operation trace of C16
     (\texttt{U1\_leak\_off}, 8\,744 states, depth 12; \texttt{U2\_leak\_off},
-    145\,621 states). No other invariant tells the switch apart:
-    \field{NoOrphanOpenSkeleton}, \field{SweepComplete},
+    145\,621 states). Of the other invariants only four were run with the switch
+    off: \field{NoOrphanOpenSkeleton}, \field{SweepComplete},
     \field{NoVerdictOverwrite} and \field{LiveSpared} hold with it off on both
     slices, all states visited (\texttt{U1\_*\_off}, \texttt{U2\_*\_off}),
     because the record still names the skeleton and the sweep's snapshot still
-    holds it. With all sixteen on, all eight invariants (the five above,
+    holds it. \field{LockedWrites}, \field{NoForeignAbort} and
+    \field{WellFormed} were not run with the switch off. With all sixteen on, all eight invariants (the five above,
     \field{LockedWrites}, \field{NoForeignAbort}, \field{WellFormed}) hold on
     both slices, all states visited (\texttt{U1\_*\_all}, \texttt{U2\_*\_all}).
   \item \textbf{NoForeignAbort} holds with \field{fixOrigin}: all states of
@@ -2697,8 +2698,11 @@ exhausted, with the invariants of the table. The full-machine rows are still
 bounded and still short of this depth (the \emph{claim+delete+close} rows stop
 at depth 8 and the three-session ones at 5; the \field{LcInitChain} rows of
 \emph{claim} reach 12 but contain no sweep); nothing here claims them exhaustive. Nor is the
-unlocked sweep combined with \field{LcInitChain}: there is no chain row with
-the sweep, so the multi-hop walk and C16 have not met in any run.
+unlocked sweep combined with \field{LcInitChain} in any exhaustive row: no
+exhaustive chain row contains the sweep, and the bounded \texttt{F3\_*} rows
+(\field{LcInitChain} 3/2/2 with \field{LcCloseUnlockedBegin} and
+\field{LcSweepWrite}) stop at depth 5, so the multi-hop walk and C16 have not
+met in any run.
 
 
 \subsection{Consequences for the design document}
@@ -2904,6 +2908,12 @@ the two is not represented. The exit of the model is taken at stage~1, before
 the call is in \field{cfH}, where the code takes the locks and then re-reads;
 the two differ in nothing the invariants read, since \field{LcCloseLocked}
 acts only on an open mission and the exit has found it closed.
+(N20) The model never returns an id to the counter (\field{LcCfAlloc} only
+grows \field{used}), so id uniqueness holds by construction. The resume guard
+checks neither the owner nor the kind of the skeleton, so uniqueness alone
+excludes a resume onto a Tier~B skeleton in the model. The guarantee of the
+code rests on the id being consumed once the record is durable (design \S5
+point~2 item~3) and on its required test.
 (N13) \field{ClearMissionBindings} is modelled for the closing session's
 claim and binding only; the dispatch-pending entries it clears, and the MCP
 path that calls it, are not represented. (N15) The record's stage is one bit, complete or not; the record
