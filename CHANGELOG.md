@@ -164,14 +164,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decided (DES-079, DES-080, DES-081).** By default ethos will commit only
   what `git blame`-style provenance needs: the identity graph, generated
   `.claude/agents/`, and per mission the contract, results and delegation
-  records, plus `missions.jsonl`. Prompts, reflections, event logs and
-  per-tool-call audit stay on the developer's machine unless exported with
+  records, plus `missions.jsonl` and ADRs (which move from
+  `~/.punt-labs/ethos/adrs` into the repository). Prompts, reflections,
+  event logs and per-tool-call audit stay on the developer's machine unless
+  exported with
   `ethos mission export --full` or `record: full`. Every file ethos writes
   into git will be redacted for paths, email addresses and credentials.
   Ethos 2.0 is proposed to move runtime state behind a storage interface,
   with an embedded local backend and an `ethosd` service on Postgres for
-  teams. Implementation is tracked in `ethos-3e3f`, `ethos-g3g3` and
-  `ethos-uag1`.
+  teams. Implementation is tracked in `ethos-3e3f`, `ethos-g3g3`,
+  `ethos-yjh0` and `ethos-uag1`.
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
   workflow_dispatch runs, never for runs triggered by pull requests, which

@@ -12684,9 +12684,10 @@ Full writeups, including two historical exploit traces, are in
 
 ## DES-079: What ethos puts in git — a blame tier by default, a trace tier by opt-in (amends DES-050, DES-054, DES-058, DES-075) (SETTLED)
 
-**Status**: Settled 2026-10-23 by operator ruling. Beads `ethos-g3g3`
-(implementation) and `ethos-3e3f` (redaction, DES-080). Implementation
-pending.
+**Status**: Settled 2026-10-23 by operator ruling; ADRs added to the blame
+tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
+store in the repository) and `ethos-3e3f` (redaction, DES-080).
+Implementation pending.
 
 ### Context
 
@@ -12748,6 +12749,12 @@ Two tiers.
 - Per mission: `contract.yaml`, `results.yaml`,
   `delegations/<d>/record.yaml`.
 - `missions.jsonl`.
+- ADRs, as `.punt-labs/ethos/adrs/<id>.yaml` (operator ruling 2026-10-24).
+  A design decision is part of the provenance of the code it shaped. Today
+  `ethos adr` stores ADRs in `~/.punt-labs/ethos/adrs` (`cmd/ethos/adr.go`,
+  `serve.go`), global and untracked; bead `ethos-yjh0` moves the store into
+  the repository with the repo-first, global-fallback resolution missions
+  use (DES-075), and its writer goes through the DES-080 redactor.
 
 **Trace tier — machine-local by default.**
 
