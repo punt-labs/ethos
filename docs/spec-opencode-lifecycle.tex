@@ -1135,7 +1135,10 @@ mission is still open: the check that follows the skeleton write, which
 closes the window the unlocked sweep leaves. With \field{fixSupersede} a
 reconcile that does not resume the record also closes the skeleton named by
 the child's binding when that is a different delegation, because the write
-phase is about to overwrite the binding.
+phase is about to overwrite the binding. With
+\field{fixResumeClosed} the exit ``do not retry'' closes the skeleton the
+record names, \field{aborted} and compare-and-set, and removes the record
+(C16).
 
 \begin{schema}{LcCfRefuse}
 \Delta Lifecycle \\
@@ -1896,12 +1899,14 @@ Every counterexample below was found by ProB against the operations as
 DES-078 rounds 6 and 7 state them, that is, with the switches \field{zfalse}.
 This section was first committed in that form (revision \texttt{e47050a},
 eight switches); the ninth, \field{fixSupersede}, was added when C9 appeared
-with the other eight on, and five more (\field{fixOrigin},
-\field{fixReleaseCloses}, \field{fixSessionStart}, \field{fixCas},
-\field{fixReuseLocks}) with C10 to C15, which a review of the design
-against the Claude Code paths the model had omitted found; C1 to C9 were run
-again on the final text, and C9 was found to have been reached by a wrong
-model of \field{mission release} (its errata). Each
+with the other eight on, and six more (\field{fixOrigin},
+\field{fixReleaseCloses}, \field{fixDurableName}, \field{fixSessionStart},
+\field{fixCas}, \field{fixReuseLocks}) with C10 to C15, which a review of the
+design against the Claude Code paths the model had omitted found; C1 to C9
+were run again on the final text, and C9 was found to have been reached by a
+wrong model of \field{mission release} (its errata). The sixteenth,
+\field{fixResumeClosed}, belongs to C16, which a reviewer of the pull request
+found and the model had not. Each
 trace is the shortest breadth-first path to a state satisfying the negated
 invariant, in the notation of the operations; ``$a$, $b$'' are sessions,
 $m_1$, $m_2$ missions and $d$ a delegation. The first four are the
@@ -2153,6 +2158,39 @@ assumed. The rest were not known.
     is closed); only then may the binding and the claim be written. The
     exclusion of \field{LcCloseLocked} is now a set of calls that hold the
     locks, \field{cfH}, and not a stage number.
+  \item[\textbf{C16}] \textbf{A resumed attempt exits ``do not retry'' with
+    its skeleton open.} \field{ReconcileOnExit}; \S5 point~2 item~5, the
+    re-read of the mission under the locks (steps~5 and~6) and the exit
+    ``do not retry''. Found by Copilot in review of PR~536 and not by this
+    model: no exhaustive slice held the unlocked sweep and a resume together
+    (\S\ref{sec:lc-verification}, ``The gap that let C16 through''). From
+    \field{LcInitPair}: \field{LcCfBegin}$(b,a)$; \field{LcCfReconcileFresh};
+    \field{LcCfAlloc}$(b,d)$; \field{LcCfWriteRecord}; \field{LcCfWriteSkeleton};
+    \field{LcCfCrash}; \field{LcCfBegin}$(b,a)$; \field{LcCfReconcileReuse};
+    \field{LcCloseUnlockedBegin}$(m_1)$; \field{LcCfExitNoRetry}$(b)$ (run
+    \texttt{U1\_leak\_off}, slice \emph{claim-u}, every switch but
+    \field{fixResumeClosed}: ten operations, 8\,744 states, depth 12; the goal
+    is \texttt{leaked /= \{\}}). The first call crashes with $d$ open and named by
+    the record. The second resumes the record and is left before the locks
+    (C15). The unlocked fallback of \field{Store.Close} then closes the mission
+    $m_1$; its snapshot holds $d$ and its write is yet to come. The call takes
+    the locks, re-reads the mission, finds it closed and exits ``do not retry''
+    with the record in place and $d$ open, not live: the child holds no claim.
+    The locked close does not show this, since it closes $d$ in the one step; nor
+    does the fresh path, which has removed the record and has no skeleton to
+    leave. Only a resumed record names a skeleton at that exit.
+    \textbf{Amendment} \field{fixResumeClosed} (the leader's decision): when the
+    re-read finds the mission closed, the call closes the open skeleton the
+    record names, of kind \field{dkFork} and owned by the child, with verdict
+    \field{aborted}, as a compare-and-set on verdict \field{open} under the
+    delegation lock, removes the record, and then exits ``do not retry''. The
+    compare-and-set is what keeps the close compatible with the sweep (C14): the
+    sweep's later write finds $d$ not open and, with \field{fixCas}, leaves the
+    verdict; without the test (\texttt{MutResumeCas}) the exit overwrites a pass
+    verdict the sweep has already written. The same exit on the fresh path, or
+    when the identifiers are exhausted, finds the record already removed and
+    closes nothing. With the switch on all eight invariants hold on
+    \emph{claim-u} and \emph{claim+u} (\texttt{U1\_*\_all}, \texttt{U2\_*\_all}).
 \end{enumerate}
 
 Of the six original invariants, \field{LineageStable} needs
@@ -2167,7 +2205,8 @@ a run isolates it: \field{NoLiveSessionPurged} needs \field{fixStaleLive} and
 (\texttt{Fb2\_w}, \texttt{Fa\_orph\_norel}, \texttt{C9\_nosup}) or, since C12,
 instead of the last two, \field{fixDurableName};
 \field{ReconcileOnExit} needs \field{fixRefuseReconciles} and
-\field{fixInertBinding} (\texttt{Fa\_inert}, \texttt{Fa\_refuse}); and
+\field{fixInertBinding} (\texttt{Fa\_inert}, \texttt{Fa\_refuse}) and, where the
+unlocked sweep can run, \field{fixResumeClosed} (\texttt{U1\_leak\_off}); and
 \field{SweepComplete} needs \field{fixDeleteCloses} with \field{fixPostCheck}
 (\texttt{Fc2\_del}, \texttt{Fc2\_post}). Of the new ones, \field{NoForeignAbort}
 needs \field{fixOrigin}, \field{NoVerdictOverwrite} needs \field{fixCas},
@@ -2740,6 +2779,20 @@ DES-078 is to be brought into line at these places.
     that the YAML of today does not have, and the "record does not parse"
     row of the exit-status table applies to it for as long as the claim
     lasts.
+  \item \S5 point~2 write phase, step~6 and the exit ``do not retry'' (C16):
+    on the resume path, a mission found closed by the re-read is not an exit
+    that leaves the record and its skeleton for the sweep. Before it returns,
+    the call closes the skeleton the record names (open, kind
+    \field{dkFork}, owned by the child) with verdict \field{aborted}, as a
+    compare-and-set on verdict \field{open} under the delegation lock, and
+    removes the record; then it exits ``do not retry''. Where the design says
+    that a closed mission ends the call and the sweep closes what remains, that
+    is true of the locked sweep and false of the unlocked fallback, whose
+    snapshot may be taken before and written after the exit. A required test: a
+    resumed record whose mission is closed between the reconcile and the
+    re-read, with the sweep stopped after its snapshot; the exit leaves no open
+    skeleton named by the child's record, and a later sweep write leaves the
+    verdict \field{aborted}.
 \end{itemize}
 
 Further consequences are not counterexamples of the model but
@@ -2834,7 +2887,15 @@ depth-gate close with verdict \field{aborted}, and a binding write that fails
 without being fatal are not represented. (N18) That a release removes the
 record is unverified: \texttt{MyRelKeepRec} survives, so it is hygiene and not
 an invariant. The same holds of the guard $c\notin\field{pendDone}$ of
-\field{LcCfReconcileReuse}, stated above (\texttt{MutReuseDone}).
+\field{LcCfReconcileReuse}, stated above (\texttt{MutReuseDone}), and of the
+removal of the record at the exit ``do not retry'' (\texttt{MutResumeKeepRec}).
+(N19) The close and the removal of the record at that exit are one step of the
+model. In the code they are two files: a close that fails must end the call
+with the record kept, as the retry token (compare N2), and a failure between
+the two is not represented. The exit of the model is taken at stage~1, before
+the call is in \field{cfH}, where the code takes the locks and then re-reads;
+the two differ in nothing the invariants read, since \field{LcCloseLocked}
+acts only on an open mission and the exit has found it closed.
 (N13) \field{ClearMissionBindings} is modelled for the closing session's
 claim and binding only; the dispatch-pending entries it clears, and the MCP
 path that calls it, are not represented. (N15) The record's stage is one bit, complete or not; the record
