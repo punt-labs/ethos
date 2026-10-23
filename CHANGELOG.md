@@ -108,13 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model-checked session and fork-claim lifecycle
   (`docs/spec-opencode-lifecycle.tex`).** A Z specification of the
   roster, lineage, purge, delete, and `claim-forked` state machines,
-  checked with ProB. Nine invariants (lineage stable, acyclic, no live
+  checked with ProB. Ten invariants (lineage stable, acyclic, no live
   session purged, no orphan open skeleton, reconcile on exit, sweep
-  complete, no foreign abort, no verdict overwrite, live spared) hold
-  under sixteen amendments; the ledger records sixteen counterexamples
-  found against the earlier prose design (the sixteenth, a resumed
-  claim that exits "do not retry" with its skeleton open, was found in
-  PR review), and every invariant is
+  complete, no foreign abort, no verdict overwrite, live spared, no live
+  fork aborted) hold under seventeen amendments; the ledger records
+  seventeen counterexamples found against the earlier prose design (the
+  last two were found in PR review: a resumed claim that exits "do not
+  retry" with its skeleton open, and a live fork skeleton aborted after
+  a crash and a Tier B dispatch), and every invariant is
   checked as a negated goal with mutants killed. Some rows are bounded
   rather than exhaustive; the spec states which.
 - **Third-party notice for the imported output styles.**
