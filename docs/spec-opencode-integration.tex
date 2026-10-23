@@ -1484,12 +1484,12 @@ implications above is an independent top-level conjunct of this
 schema's predicate, separated by \field{\textbackslash\textbackslash}
 (Z's schema-predicate-list separator, logical AND between whole
 statements) -- NOT chained into one antecedent via nested
-\field{\implies}. Each implication's own consequent is explicitly
+$\implies$. Each implication's own consequent is explicitly
 parenthesized as a single conjunction
 ($\field{A} \implies (\field{B} \land \field{C} \land \field{D})$), so within
 any ONE case, satisfying that case's guard makes its output constraints
-unconditionally mandatory; \field{\implies}'s right-associativity and
-lower precedence than \field{\land} govern only the inside of each
+unconditionally mandatory; $\implies$'s right-associativity and
+lower precedence than $\land$ govern only the inside of each
 single implication, never combine two SEPARATE implications (joined by
 \field{\textbackslash\textbackslash}) into a single larger one. A
 reviewer should verify this against the schema's literal \LaTeX{} source
