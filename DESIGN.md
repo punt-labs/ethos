@@ -12735,33 +12735,48 @@ forensics, not blame.
 
 ### Decision
 
-Every path ethos writes in a repository (`.punt-labs/ethos.yaml`, under
-`.punt-labs/ethos/` and `.punt-labs/local/ethos/`, and under
-`.claude/agents/`) belongs to exactly one of the four classes below. The lists are closed: a path ethos writes
-that is in none of them is a defect, and `ethos doctor` reports it.
+Every file ethos writes inside a repository's working tree belongs to
+exactly one of the four classes below. A class says what a file is; where a
+class-3 file is written depends on the `record` setting (below). The lists
+in this ADR name the paths known on 2026-10-24 and are not the authority.
+The authority is one table in code that maps every path pattern ethos
+writes to its class (bead `ethos-g3g3`), with a test that fails when a
+writer creates a path the table does not classify, and an `ethos doctor`
+check that reports unclassified files under `.punt-labs/`. A prose list
+cannot stay complete as writers are added; a failing test can.
+
+Files ethos writes outside the working tree are out of scope: git hooks
+in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`.
 
 **1. Source and configuration — tracked.**
 
 - The identity graph: `identities/<handle>.yaml` and
   `identities/<handle>.ext/<tool>.yaml`, `personalities/`,
-  `writing-styles/`, `talents/`, `roles/`, `teams/`, `agents/`.
+  `writing-styles/`, `talents/`, `roles/`, `teams/`, `agents/`, and the
+  repo-layer `archetypes/` and `pipelines/`.
 - Configuration and manifests: `.punt-labs/ethos.yaml` (the legacy
   `.punt-labs/ethos/config.yaml` is read as a fallback and never written,
   `internal/resolve/resolve.go:497`), `.punt-labs/ethos/.vendor.yaml`,
   `.punt-labs/ethos/.vendored-manifest`. This repository also carries a
   stray `.punt-labs/ethos/ethos.yaml` that no code reads or writes; bead
   `ethos-g3g3` removes it.
-- Files `ethos enable` deposits: `.punt-labs/ethos/CLAUDE.md`,
-  `.punt-labs/ethos/ETHOS-SETUP.md`, `.punt-labs/ethos/enabled`.
-- `.claude/agents/<handle>.md` written by the SessionStart generator
-  (DES-026), and the review agents `ethos seed` writes there (DES-070:
+- Files `ethos enable` writes: `.punt-labs/ethos/CLAUDE.md`,
+  `.punt-labs/ethos/ETHOS-SETUP.md`, `.punt-labs/ethos/enabled`, the
+  `@`-import line in the repository's root `CLAUDE.md`, and its rules in
+  the root `.gitignore`.
+- `.claude/agents/<name>.md`, from three writers: the SessionStart
+  generator (DES-026), the review agents `ethos seed` writes (DES-070:
   `code-reviewer.md`, `silent-failure-hunter.md`,
-  `invariant-completeness-reviewer.md`). Committed, so a fresh clone has its
-  agents before the first session. Generator output must be deterministic,
-  and `ethos doctor` fails when a committed generated file differs from what
-  the generator produces; a diff there then always means the source
-  changed. Seeded files are compared against the seed manifest (DES-065)
-  instead.
+  `invariant-completeness-reviewer.md`), and `InstallAgentDefinitions`
+  (`internal/hook/agent_installer.go`). Committed, so a fresh clone has its
+  agents before the first session. Every writer's output must be
+  deterministic, and `ethos doctor` fails when a committed file differs from
+  what its writer would produce now: generated files against the
+  generator's output, seeded and installed files against the content
+  embedded in the binary. The seed manifest (DES-065) lives in the home
+  directory and is absent on a fresh clone, so it is not the comparison
+  source. A diff in `.claude/agents/` then always means the source or the
+  binary changed.
 
 **2. Blame tier — tracked by default.** The record `git blame` provenance
 needs:
@@ -12770,8 +12785,17 @@ needs:
   `delegations/<d>/record.yaml`, and `corrections.yaml` — a projection of
   the mission's DES-072 correction events, written by the same operation
   that appends the event, so a correction to a closed mission's outcome
-  reaches every clone.
+  reaches every clone. This supersedes two DES-072 clauses: that a
+  correction is "not a new file format" (it now also writes
+  `corrections.yaml`), and that `Correct` seals its own write into the
+  tracked tree (under `record: blame` that seal goes to the archive, and
+  `corrections.yaml` is the tracked record).
 - `missions.jsonl`.
+- The output of plain `ethos mission export <id>` at its default
+  directory: `missions/<id>.contract.yaml` and `missions/<id>.result.yaml`
+  (`cmd/ethos/mission.go:964`). The same content as the mission's
+  `contract.yaml` and final result, redacted. With `--dir`, the output
+  location is the caller's choice and outside this classification.
 - ADRs, as `.punt-labs/ethos/adrs/<id>.yaml` (operator ruling 2026-10-24).
   A design decision is part of the provenance of the code it shaped. Today
   `ethos adr` stores ADRs in `~/.punt-labs/ethos/adrs` (`cmd/ethos/adr.go`,
@@ -12782,32 +12806,52 @@ needs:
 **3. Trace tier — machine-local by default.**
 
 - Per mission: `delegations/<d>/prompt.md`, `reflections.yaml`,
-  `artifacts/*.md`, sealed event-log chunks `log-<sid>-<t0>-<t1>.jsonl`,
-  and the frozen pre-DES-058 `log.jsonl`.
-- Per session: sealed audit chunks `sessions/<date>-<sid>/audit-*.jsonl`,
-  the frozen pre-DES-058 `audit.jsonl`, and seal quarantine artifacts
-  (`*.quarantine`, `*.jsonl.corrupt`).
+  `artifacts/*.md`, the live event log, sealed event-log chunks
+  `log-<sid>-<t0>-<t1>.jsonl`, the frozen pre-DES-058 `log.jsonl`, and
+  event-log quarantine artifacts (`log-*.quarantine`, `*.jsonl.corrupt`,
+  `*.jsonl.corrupt-<hash>`).
+- Per session: the live audit file, sealed audit chunks
+  `sessions/<date>-<sid>/audit-*.jsonl`, the frozen pre-DES-058
+  `audit.jsonl`, and audit quarantine artifacts.
 
-The pre-commit seal keeps its DES-058 role (live file to immutable chunk)
-but seals into a machine-local archive under `.punt-labs/local/`, not into
-the tracked tree. The commit-msg trailer hook is unchanged.
+The live event log and live audit file stay in the machine-local zone
+`.punt-labs/local/ethos/` in every mode (`internal/audit/paths.go:26`).
+Where every other class-3 file is written is set by `record` in
+`.punt-labs/ethos.yaml`:
 
-**4. Never tracked.** `.punt-labs/**/local/**`, `.punt-labs/**/*.local.*`,
-and every lock file ethos creates: `.punt-labs/ethos/missions/**/*.lock`
-(which also matches `missions/.create.lock`),
-`.punt-labs/ethos/missions.jsonl.lock`, and
-`.punt-labs/ethos/identities/*.yaml.lock`. `ethos enable`'s rules
-(`internal/enable/gitignore.go:68-93`) cover only the first; this
-repository ignores `missions.jsonl.lock` by a hand-written `.gitignore`
-line and the identity locks not at all, so a consumer repo can commit
-both. `ethos enable` must write all of them, each with a probe.
+- `record: blame` (the default): under the machine-local archive
+  `.punt-labs/local/ethos/trace/`, keeping each file's path relative to
+  `.punt-labs/ethos/`. The pre-commit seal keeps its DES-058 role (live
+  file to immutable chunk) but seals into the archive. The class-4 rule
+  `.punt-labs/**/local/**` is what keeps the archive untracked; the
+  archive's files are still class 3.
+- `record: full`: at their paths under `.punt-labs/ethos/`, tracked, as
+  sealed chunks are today.
+
+Today every class-3 file except the live files is written into the tracked
+tree; `delegations/<d>/prompt.md`, `reflections.yaml` and `artifacts/` are
+committed in this repository, not only sealed chunks. The commit-msg
+trailer hook is unchanged.
+
+**4. Never tracked, in any mode.** Files that are transient or specific to
+one machine: `.punt-labs/**/*.local.*`, every lock file ethos creates
+(`.punt-labs/ethos/missions/**/*.lock`, which also matches
+`missions/.create.lock`; `.punt-labs/ethos/missions.jsonl.lock`;
+`.punt-labs/ethos/identities/*.yaml.lock`), and the temporary files
+writers create for an atomic rename. The ignore rule
+`.punt-labs/**/local/**` also covers the `record: blame` trace archive.
+`ethos enable`'s rules (`internal/enable/gitignore.go:68-93`) cover only
+`missions/**/*.lock`; this repository ignores `missions.jsonl.lock` by a
+hand-written `.gitignore` line and the identity locks not at all, so a
+consumer repository can commit both. `ethos enable` must write a rule for
+every class-4 pattern, each with a probe.
 
 **Opting in to the trace tier.** `ethos mission export <id> --full` writes
-one mission's trace tier into the tracked tree, through the redactor
-(DES-080). A repository that wants every trace committed sets
-`record: full` in `.punt-labs/ethos.yaml`; the default is `record: blame`,
-under which `ethos enable` also writes ignore rules for the trace-tier
-paths. Plain `ethos mission export <id> [--dir]` keeps its current output
+one mission's class-3 files from the archive to their tracked paths,
+through the redactor (DES-080). `record: full` does the same for every
+mission as it is written. Under `record: blame`, `ethos enable` also writes
+ignore rules for the tracked class-3 paths, so a file written there by an
+older binary is not committed by accident. Plain `ethos mission export <id> [--dir]` keeps its current output
 (the contract and the final result) for publishing a mission elsewhere, and
 now goes through the redactor; existing callers, such as a workspace that
 exports closed missions with `--dir`, are unaffected. For a repository that
@@ -12822,12 +12866,17 @@ is a backstop). `prfaq.tex` is corrected to match.
 
 ### Consequences
 
-- Tracked files change only at mission, delegation and ADR lifecycle
-  operations, never per tool call: mission create and update, round advance
-  (`contract.yaml`), result (`results.yaml`), close and abandon
-  (`contract.yaml`, `missions.jsonl`), delegation spawn and stop, disclaim,
-  write-set force-release (`record.yaml`, `contract.yaml`), correction
-  (`corrections.yaml`), and ADR create and update.
+- Under `record: blame`, class-2 files change only at mission, delegation
+  and ADR lifecycle operations, never per tool call: mission create and
+  update, round advance (`contract.yaml`), result (`results.yaml`), close
+  and abandon (`contract.yaml`, `missions.jsonl`), delegation spawn and
+  stop, disclaim, write-set force-release (`record.yaml`,
+  `contract.yaml`), correction (`corrections.yaml`), plain export, ADR
+  create and update, and `ethos mission migrate`, which copies a legacy
+  global mission into the repository (`internal/mission/migrate.go:73`).
+  Class-1 files change when a person edits the identity graph or
+  configuration, when `ethos enable` or `ethos seed` runs, or when the
+  agent generator's input or the binary changes.
 - A teammate's clone shows blame, intent, outcome and corrections for every
   mission, but not another developer's prompts, reflections, timeline or
   tool-call trail. Shared forensics across machines is the job of a central
@@ -12853,7 +12902,7 @@ is a backstop). `prfaq.tex` is corrected to match.
 
 ---
 
-## DES-080: Mission-record and audit writers redact — paths, addresses and credentials (amends DES-054, DES-058) (SETTLED)
+## DES-080: Mission-record and audit writers redact — paths, addresses and credentials (amends DES-050, DES-054) (SETTLED)
 
 **Status**: Settled 2026-10-23, scope corrected 2026-10-24 after review.
 Bead `ethos-3e3f` (P1, security), mission `m-2026-10-23-025`.
@@ -12887,10 +12936,17 @@ command, prompt or contract was committed verbatim.
 1. **Scope: the mission record and the audit trail.** The in-scope writers
    are those that write the mission tree (`contract.yaml`, `results.yaml`,
    `reflections.yaml`, `corrections.yaml`, `delegations/*/prompt.md` and
-   `record.yaml`, `artifacts/`, the live and sealed event log), the trace
-   log `missions.jsonl`, the live and sealed audit files, `ethos mission
-   export`, and the ADR store once it is in the repository (DES-079,
-   `ethos-yjh0`). The identity graph, generated and seeded
+   `record.yaml`, `artifacts/`, the live event log), the trace log
+   `missions.jsonl`, the live audit file, the audit sentinel
+   (`internal/hook/audit_log.go:99,134`, `audit_sentinel.go`, which today
+   stores a write error's text, absolute paths included), the legacy-audit
+   migration (`appendRawAuditLines`, `internal/hook/audit_migrate.go:203`,
+   which today copies lines byte for byte), `ethos mission migrate`
+   (`internal/mission/migrate.go`, which today copies legacy global files
+   byte for byte), `ethos mission export`, and the ADR store once it is in
+   the repository (DES-079, `ethos-yjh0`). Sealed chunks are not a separate
+   writer: DES-058 makes the seal a byte copy of live files that were
+   redacted when written, and that stays true. The identity graph, generated and seeded
    `.claude/agents/` files, `.punt-labs/ethos.yaml` and the vendor
    manifests are out of scope: they carry identity data on purpose, and an
    identity's `email:` is its beadle binding.
@@ -12905,19 +12961,27 @@ command, prompt or contract was committed verbatim.
    audit writer, which by design never blocks a tool call
    (`audit_entry.go:157-171`): it drops the input and still writes the
    line. Whenever a redactor exists, the audit path applies all three
-   passes.
+   passes. The `missions.jsonl` write is non-fatal and runs after the close
+   commits (DES-050), so a redactor failure there would drop the index line
+   without refusing anything. This amends DES-050: `Close` builds the
+   redactor before it takes the mission lock, as `Abandon` does, and a
+   failure refuses the close before any state changes.
 4. **The invariant is structural, not a comment.** Every in-scope write
    goes through one write function that applies the redactor, and a
    source-scanning test fails when any other code writes to an in-scope
    path. A writer added later therefore fails the build.
-5. **Hashes.** `tool_input_hash` (DES-054; DES-058's "hash over the stored
+5. **Hashes.** `tool_input_hash` (DES-054: "the hash is over the stored
    form") stays computed over the redacted, stored form: the new passes run
    before the hash, so a line that contains a credential hashes differently
    from before. Evaluator pinning (DES-033) hashes identity content, which
    is out of scope, and is unchanged.
-6. **History is scrubbed forward only.** Existing tracked files are rewritten
-   once through the new redactor in a normal commit; past commits are not
-   rewritten (operator ruling 2026-10-23).
+6. **History is scrubbed forward only.** The mutable tracked records
+   (`contract.yaml`, `results.yaml`, `reflections.yaml`,
+   `delegations/*/record.yaml` and `prompt.md`, `missions.jsonl`) are
+   rewritten once through the new redactor in a normal commit. Sealed
+   chunks are not rewritten: DES-058 makes them immutable, and about 760
+   are tracked in this repository alone. Past commits are not rewritten
+   (operator ruling 2026-10-23).
 
 ### Consequences
 

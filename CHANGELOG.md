@@ -160,8 +160,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **What ethos puts in git, and the ethos 2.0 storage direction, are
-  decided (DES-079, DES-080, DES-081).** Besides the identity graph,
+- **What ethos puts in git is decided (DES-079, DES-080), and an ethos 2.0
+  storage direction is proposed (DES-081).** Besides the identity graph,
   configuration and `.claude/agents/`, ethos will by default commit only
   the record `git blame`-style provenance needs: per mission the contract,
   results, delegation records and corrections, plus `missions.jsonl` and
@@ -170,7 +170,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the developer's machine unless exported with
   `ethos mission export --full` or `record: full`. Every mission-record and
   audit file ethos writes will be redacted for paths, email addresses and
-  credentials; identity files keep their email bindings.
+  credentials; identity files keep their email bindings. Already-sealed
+  chunks are not rewritten.
   Ethos 2.0 is proposed to move runtime state behind a storage interface,
   with an embedded local backend and an `ethosd` service on Postgres for
   teams. Implementation is tracked in `ethos-3e3f`, `ethos-g3g3`,
