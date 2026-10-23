@@ -175,14 +175,14 @@ lcMaxTime = 2 \\
 lcTtl = 1
 \end{axdef}
 
-The sixteen constants below are the amendments of \S\ref{sec:lc-ledger}.
+The seventeen constants below are the amendments of \S\ref{sec:lc-ledger}.
 Setting a constant to \field{zfalse} yields the operation as written in
 DES-078 rounds 6 and 7; to \field{ztrue}, the amended operation. Each
 amended operation is a conjunct guarded by its constant, so the two
 versions differ in nothing else.
 
 \begin{axdef}
-fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede, fixOrigin, fixReleaseCloses, fixSessionStart, fixCas, fixReuseLocks, fixDurableName, fixResumeClosed : ZBOOL
+fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede, fixOrigin, fixReleaseCloses, fixSessionStart, fixCas, fixReuseLocks, fixDurableName, fixResumeClosed, fixClaimLive : ZBOOL
 \where
 fixDeleteOrder = ztrue \\
 fixDeleteCloses = ztrue \\
@@ -199,7 +199,8 @@ fixSessionStart = ztrue \\
 fixCas = ztrue \\
 fixReuseLocks = ztrue \\
 fixDurableName = ztrue \\
-fixResumeClosed = ztrue
+fixResumeClosed = ztrue \\
+fixClaimLive = ztrue
 \end{axdef}
 
 \subsection{State}
@@ -1195,11 +1196,11 @@ record names, \field{aborted} and compare-and-set, and removes the record
 c? : SESSIONID
 \where
 c? \notin \dom stage \\
-(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \land dOpen' = dOpen \land dAbort' = dAbort) \lor (fixRefuseReconciles = ztrue \land (((fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \cup \{ c? \}) \lor (\lnot (fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ c? \})) \land (\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land \lnot (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X)) \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \land dOpen' = dOpen \land dAbort' = dAbort) \lor (fixRefuseReconciles = ztrue \land (((fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \cup \{ c? \}) \lor (\lnot (fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ c? \})) \land (\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land \lnot (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X)) \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone') \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn' \land (rd \mapsto dkFork) \in dKind')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 unlocked' = unlocked \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
 liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
@@ -1262,17 +1263,17 @@ c? : SESSIONID
 \where
 (c? \mapsto 0) \in stage \\
 c? \in \dom claimed \\
-(((fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \cup \{ c? \}) \lor (\lnot (fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ c? \})) \\
+(((fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \cup \{ c? \}) \lor (\lnot (fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ c? \})) \\
 stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-(\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land ((fixInertBinding = ztrue \land \lnot (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) \lor (fixInertBinding = zfalse \land (c? \mapsto rd) \notin binding)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+(\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land ((fixInertBinding = ztrue \land \lnot (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) \lor (fixInertBinding = zfalse \land (c? \mapsto rd) \notin binding)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone') \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn' \land (rd \mapsto dkFork) \in dKind')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
 liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
@@ -1310,7 +1311,7 @@ cfM' = cfM \\
 cfW' = cfW \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
 liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
@@ -1347,7 +1348,7 @@ cfM' = cfM \\
 cfW' = cfW \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
 liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
@@ -1448,11 +1449,11 @@ stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone') \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn' \land (rd \mapsto dkFork) \in dKind')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone) \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
 liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
@@ -1622,7 +1623,7 @@ stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone') \lor (fixClaimLive = ztrue \land (rd \mapsto c?) \in dOwn' \land (rd \mapsto dkFork) \in dKind')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked
 \end{schema}
