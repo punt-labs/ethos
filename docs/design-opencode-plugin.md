@@ -1535,10 +1535,11 @@ the resume path's supersede clause and the guard that a complete record is
 never resumed are unexercised and unverified (`MutSupReuse`, `MutReuseDone`
 survive).
 
-The unlocked sweep and the claim-forked exit are checked together
-exhaustively (all states visited, all sixteen switches on) only on the claim-u
-and claim+u slices (C16). The bounded rows `Fv2_on`, `F2_*` and `F3_*` and the
-counterexample rows `Fc_w` and `Fc_del` also contain both. No exhaustive chain row contains the sweep;
+Only the claim-u and claim+u rows exhaust the state space with the unlocked
+sweep and the claim-forked exit in the slice and all sixteen switches on
+(C16). Every other row whose slice contains both is bounded, a switches-off
+counterexample run, or a mutant, and the bounded rows do not cover every
+operation; the spec's results table lists them. No exhaustive chain row contains the sweep;
 the bounded F3 rows (`LcInitChain` with `LcCloseUnlockedBegin` and
 `LcSweepWrite`) stop at depth 5, so the multi-hop walk and C16 have not met
 in any run, and the full-machine
@@ -1582,7 +1583,8 @@ the "do not retry" exit the close of the record's skeleton and the removal of
 the record are one step in the model and two files in the code, so a failed
 close keeps the record as the retry token (§5 point 2 write phase step 6); N20,
 every operation of the model leaves `used` unchanged or grows it
-(`LcCfAlloc`, `LcTierBDispatch`) and the initialisations set it empty, so id uniqueness holds by construction, and the resume guard checks neither the
+(`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`
+(`d?` not in `used`), and the initialisations set it empty, so id uniqueness holds by construction, and the resume guard checks neither the
 skeleton's owner nor its kind, so uniqueness alone excludes a resume onto a
 Tier B skeleton in the model; the code's guarantee rests on the id being
 consumed once the record is durable (§5 point 2 item 3) and its required test. The

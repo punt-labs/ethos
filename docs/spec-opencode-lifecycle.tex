@@ -2690,7 +2690,10 @@ propagations of C9 and C11 are exercised by the exhaustive \emph{claim} and
 \paragraph{The gap that let C16 through.} The exhaustive \emph{claim} and
 \emph{claim+} slices had no unlocked sweep; \emph{sweep} had it but not the
 exit \field{LcCfExitNoRetry}; \emph{verdict} had both but was run only for
-\field{NoVerdictOverwrite}, and bounded; and the bounded full-machine rows stop at depth 8, short of
+\field{NoVerdictOverwrite}, and bounded; \emph{sweep+ensure} had both but its
+two rows (\texttt{Fc\_w} with no switch, \texttt{Fc\_del} with
+\field{fixDeleteCloses} only) found counterexamples to
+\field{SweepComplete} and were not run with the switches on; and the bounded full-machine rows stop at depth 8, short of
 the ten operations of C16, which need a crash, a resume, the snapshot and the
 exit. No row contained the trace, and the document said so only for the
 second propagation, not for this one. \emph{claim-u} and \emph{claim+u} add
@@ -2910,8 +2913,8 @@ the call is in \field{cfH}, where the code takes the locks and then re-reads;
 the two differ in nothing the invariants read, since \field{LcCloseLocked}
 acts only on an open mission and the exit has found it closed.
 (N20) Every operation of the model leaves \field{used} unchanged or grows it
-(\field{LcCfAlloc}, \field{LcTierBDispatch}), and the initialisations set it
-empty, so id uniqueness holds by construction. The resume guard
+(\field{LcCfAlloc}, \field{LcTierBDispatch}), each allocates only an id not in
+\field{used} ($d?\notin\field{used}$), and the initialisations set it empty, so id uniqueness holds by construction. The resume guard
 checks neither the owner nor the kind of the skeleton, so uniqueness alone
 excludes a resume onto a Tier~B skeleton in the model. The guarantee of the
 code rests on the id being consumed once the record is durable (design \S5
