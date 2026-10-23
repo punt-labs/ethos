@@ -12679,3 +12679,248 @@ Full writeups, including two historical exploit traces, are in
   resume guard checks neither the skeleton's owner nor its kind, so uniqueness
   alone excludes a resume onto a Tier B skeleton; the code rests on the id being
   consumed once the record is durable (N20).
+
+---
+
+## DES-079: What ethos puts in git — a blame tier by default, a trace tier by opt-in (amends DES-050, DES-054, DES-058, DES-075) (SETTLED)
+
+**Status**: Settled 2026-10-23 by operator ruling. Beads `ethos-g3g3`
+(implementation) and `ethos-3e3f` (redaction, DES-080). Implementation
+pending.
+
+### Context
+
+Ethos began as a local-only tool: identity in YAML, runtime state on the
+developer's machine (DES-023). DES-050 added one light, git-tracked
+artifact, the `missions.jsonl` trace, and rejected automatic export of full
+mission records because it "produces multi-file diffs per close". DES-054
+and DES-058 then moved the mission record and a sealed per-tool-call audit
+trail into the repository, to give agent-written code a git-blame-style
+provenance. The result is the layout DES-075 describes, plus a pre-commit
+hook that adds sealed audit and mission-log chunks to almost every commit.
+
+Three problems followed:
+
+1. **Churn.** Nearly every commit carries one or more new chunk files.
+   Agents report them as anomalies, and in one case a working tree held
+   about 70 staged deletions of sealed chunks that nobody intended, which
+   blocked `git checkout main`.
+2. **Confusion.** No artifact the product deposits states which ethos files
+   belong in git. The deposited guides mention the seal in one line and
+   imply the rest; `prfaq.tex` says "all data is local" in one FAQ and
+   "git is the durable layer" in another; F23 still describes
+   `ethos mission export` as the way missions reach git, which the tracked
+   store has made redundant.
+3. **Exposure.** The largest committed artifacts are free text: tool inputs,
+   commands, prompts. They are the hardest to redact (DES-080).
+
+### What blame needs
+
+The traceability UI (`internal/ui`) answers "who changed this line, under
+which mission, by which agent, asked to do what, with what verdict" from:
+
+| Need | Source |
+|---|---|
+| line → commit → mission, delegation | `git blame` plus the `Mission:` / `Delegation:` commit trailers; fallback: bead ID in the subject → `missions.jsonl` |
+| agent | `missions/<id>/delegations/<d>/record.yaml` (`agent_type`) |
+| intent | `missions/<id>/contract.yaml` |
+| outcome | `missions/<id>/results.yaml` |
+| index, dashboard | `missions.jsonl` |
+
+The prompt, reflections, event timeline and per-tool-call audit answer a
+different question — "exactly what happened, step by step". That is
+forensics, not blame.
+
+### Decision
+
+Two tiers.
+
+**Blame tier — tracked by default.**
+
+- The identity graph: `identities/` (excluding `*.local.*`),
+  `personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`,
+  `agents/`, and `.punt-labs/ethos.yaml`.
+- Generated `.claude/agents/<handle>.md` (DES-026). Committed, so a fresh
+  clone has its agents before the first session. Generation must be
+  deterministic, and `ethos doctor` fails when the committed files differ
+  from what the generator produces; a diff there then always means the
+  source changed.
+- Per mission: `contract.yaml`, `results.yaml`,
+  `delegations/<d>/record.yaml`.
+- `missions.jsonl`.
+
+**Trace tier — machine-local by default.**
+
+- `delegations/<d>/prompt.md`, `reflections.yaml`.
+- Sealed mission event-log chunks and sealed per-tool-call audit chunks.
+
+The pre-commit seal keeps its DES-058 role (live file to immutable chunk)
+but seals into a machine-local archive under `.punt-labs/local/`, not into
+the tracked tree. The commit-msg trailer hook is unchanged.
+
+**Opt-in to the trace tier.** `ethos mission export <id> --full` promotes
+one mission's trace tier into the tracked tree, through the redactor
+(DES-080). A repository that wants every trace committed sets
+`record: full` in `.punt-labs/ethos.yaml`; the default is
+`record: blame`. Export without `--full` is retired: the blame tier is
+already tracked.
+
+**Never tracked**, unchanged: `.punt-labs/**/local/**`,
+`.punt-labs/ethos/missions/**/*.lock`, `.punt-labs/**/*.local.*`, plus the
+trace-tier paths when `record: blame`. `ethos enable` writes these rules;
+for a repository that already tracks trace-tier files, `ethos doctor`
+prints the one-time `git rm --cached` command and does not run it.
+
+**The product says so.** The deposited guide (`internal/enable/guide/
+CLAUDE.md`) gains a "What ethos puts in git" section stating both tiers,
+the never-tracked set, and that a regenerated `.claude/agents/` file is an
+expected change. `prfaq.tex` is corrected to match.
+
+### Consequences
+
+- Commits grow tracked files only when a mission is created, receives a
+  result, or closes.
+- A teammate's clone shows blame, intent and outcome for every mission, but
+  not another developer's tool-call trail. Shared forensics across machines
+  is the job of a central store (DES-081), not git.
+- Existing committed chunks stay in history (operator ruling 2026-10-23: no
+  history rewrite); new ones stop arriving.
+- The UI's audit and timeline sections read the local archive and show data
+  only on the machine that did the work, unless the mission was exported
+  with `--full`.
+
+### Rejected alternatives
+
+- **Keep everything tracked, document it better.** Leaves the churn and the
+  largest redaction surface in place; documentation does not stop a hook
+  from adding files to every commit.
+- **Track nothing; ethos is local-only again.** Loses the provenance that
+  justified DES-054.
+- **A dedicated `ethos/` branch for traces** (the Entire.io checkpoint-branch
+  shape). Avoids churn on the working branch but adds a second history to
+  keep in sync and does not reduce exposure; a central store does both
+  better (DES-081).
+
+---
+
+## DES-080: Every git-tracked writer redacts — paths, addresses and credentials (amends DES-058) (SETTLED)
+
+**Status**: Settled 2026-10-23. Bead `ethos-3e3f` (P1, security),
+mission `m-2026-10-23-025`. Implementation in progress.
+
+### Context
+
+`internal/mission/redact.go` states that every artifact ethos writes into a
+git-tracked tree passes through `PathRedactor`. Measured 2026-10-23, that
+was false: the audit path (`internal/hook/audit_entry.go`,
+`audit_content.go`) and the delegation writer (`delegation.go`) redact, but
+`Store.Create` (`contract.yaml`), `AppendResult` (`results.yaml`),
+`AppendReflection` (`reflections.yaml`), the trace writer
+(`missions.jsonl`) and `ethos mission export` do not. Sixteen tracked
+mission files in this repository contained an absolute home path. No pass
+anywhere recognised credentials: an API key in a command, prompt or
+contract was committed verbatim.
+
+### Decision
+
+1. **One redactor, every tracked writer.** Every function that writes under
+   a git-tracked `.punt-labs/ethos/` path goes through the shared redactor
+   and fails closed (refuses the write) when the redactor cannot be built,
+   as the delegation writer already does.
+2. **Three passes, one definition each:** paths (`$HOME` → `~`, repository
+   root → `<repo>`), email addresses (the existing pattern, shared rather
+   than copied), and credentials (token shapes such as `ghp_`, `github_pat_`,
+   `sk-`, AWS key IDs, `Bearer`, PEM private-key blocks, and
+   `name=value` pairs whose name denotes a secret), replaced by
+   `[redacted-secret]`.
+3. **The invariant is a test, not a comment.** A test enumerates every
+   git-tracked writer and fails when one bypasses the redactor, including
+   one added later.
+4. **Pinned hashes are unchanged.** Evaluator pinning (DES-033) and
+   `tool_input_hash` (DES-052) keep their current inputs.
+5. **History is scrubbed forward only.** Existing tracked files are rewritten
+   once through the new redactor in a normal commit; past commits are not
+   rewritten (operator ruling 2026-10-23).
+
+### Consequences
+
+- Under DES-079 the default tracked set is short, structured YAML, so this
+  redactor carries most of the protection; the trace tier, which is mostly
+  free text, stays local unless exported, and export goes through the same
+  redactor.
+- Pattern-based redaction has false positives (an address-shaped
+  `git@github.com`) and false negatives (a credential with no recognisable
+  shape). The deposited guide states that contracts and commands must not
+  carry credentials; the redactor is a backstop, not a licence.
+
+---
+
+## DES-081: Ethos 2.0 — a storage interface with an embedded local backend and an `ethosd` service (PROPOSED)
+
+**Status**: Proposed 2026-10-23. Epic `ethos-uag1`. Design only: a design
+mission produces the full design and a PR/FAQ amendment for ratification
+before any code. This ADR records the direction and the constraints.
+
+### Context
+
+Ethos stores runtime state as files across three zones (repository,
+`.punt-labs/local/`, `~/.punt-labs/ethos/`), coordinated by about ten kinds
+of lock file plus per-session sidecars. DES-075's triage found one storage
+ambiguity underneath four of the five bugs in its cluster. The DES-078
+lifecycle model needed seventeen fix switches
+(C1–C17) to make sequences of separate file writes — record, skeleton,
+binding, claim, mark, sweep — behave like one transaction; nearly every
+counterexample was a crash or a race between two of those writes. Queries
+such as `find missions`, blame lookups and audit by delegation are
+directory scans. Stale locks accumulate in the thousands.
+
+The operator also intends ethos for team use, up to about 2,000 developers
+at one company.
+
+### Direction
+
+- **Source stays files.** The identity graph remains YAML in the repository:
+  human-authored, reviewed in PRs, and read at known paths by other tools
+  (the PR/FAQ's filesystem integration surface).
+- **State moves behind one storage interface** in the binary, with two
+  backends selected by configuration:
+  - **Local** (default): an embedded SQLite database per developer machine.
+    Transactions replace the lock files and sidecars; counters become
+    sequences; the mission lifecycle becomes constrained rows; the trace log
+    becomes a query. No daemon.
+  - **Remote**: a client for `ethosd`.
+- **`ethosd`** is a stateless network service backed by Postgres, shipped as
+  one container image deployable as a single-host compose stack, on fly.io,
+  or on Kubernetes (the biff-relay deployment shape). In remote mode it is
+  the system of record; there is no local database of record and no two-way
+  sync. Append-only events (audit, mission event log) spool locally and ship
+  asynchronously, so hooks on the per-tool-call path never wait on the
+  network; lifecycle transitions (create, write-set admission, ID
+  allocation, claim, close) are synchronous transactions on `ethosd`.
+- **Git is a projection.** The DES-079 blame tier is written into the
+  repository from whichever backend is active; `export --full` projects one
+  mission's trace tier.
+
+### Open questions for the design mission
+
+1. Authentication and authorization (OIDC, developer and CI tokens, roles).
+2. Tenancy: organisation, team, repository, and repository identity across
+   forks, worktrees and remote renames.
+3. Server-side redaction, retention and data-residency obligations for a
+   central store of agent session trails.
+4. Availability policy when `ethosd` is unreachable: append-only events
+   spool; whether lifecycle operations fail closed or queue.
+5. Migration from the file layout and from a local store to a remote one.
+6. Reuse of biff-relay's deployment and authentication.
+7. PR/FAQ direction: Won't Do currently excludes cloud sync and
+   authentication; remote mode reverses both and needs a PR/FAQ amendment.
+
+### Consequences
+
+- The local backend removes the file-coordination defect class for solo
+  users without introducing a server.
+- DES-023 (sessions are local-only) and DES-075 (storage layers) are
+  superseded for the remote backend once it ships; they remain the
+  description of the file layout until then.
+- Ethos 1.x completes DES-079 and DES-080 on the file layout first, so the
+  2.0 migration starts from a small, documented tracked set.
