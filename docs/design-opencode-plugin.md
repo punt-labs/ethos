@@ -1742,8 +1742,8 @@ pipeline stage's write-set is unambiguous:
    the writes. The design specifies publication order and recovery instead
    of claiming atomicity:
 
-   1. *Order: skeleton, then binding, then claim.* The claim is the commit
-      point. Without a claim-origin binding for the session,
+   1. *Order: record, skeleton, post-check, binding, claim, then the record
+      is marked complete.* The claim is the commit point. Without a claim-origin binding for the session,
       `WriteCommitTrailers` returns before it reads the delegation binding
       (`commit_trailers.go:53-56`), so a binding written before the claim is
       inert and a reader never sees a delegation trailer without its
@@ -1757,7 +1757,9 @@ pipeline stage's write-set is unambiguous:
       skeleton, **post-check**, binding, claim. After
       `WriteDelegationSkeleton` returns, the write phase loads the mission
       again and, if it is no longer open, aborts (item 5, in-process
-      cleanup) and exits "do not retry". The reason is
+      cleanup) and exits "witness refused" (item 4: a witness whose
+      mission is closed is refused, so the plugin offers the next ancestor).
+      The reason is
       `Store.Close`'s fallback: when the exclusive mission lock cannot be
       taken it sweeps open skeletons with no exclusion
       (`internal/mission/store.go:1107`, "a narrow TOCTOU window remains"),
@@ -1814,7 +1816,12 @@ pipeline stage's write-set is unambiguous:
         not return before it reconciles (round 8; lifecycle spec ledger C1,
         `fixRefuseReconciles`).** Every exit other than "write failed"
         takes the child's dispatch-pending lock first, runs the reconcile of
-        item 5, releases the lock, and then returns its status. The round 7
+        item 5 in its refusal form, releases the lock, and then returns its
+        status. **A refusal never resumes the record (round 9):** resuming
+        is a write-phase outcome (item 5, the resume path), because it
+        writes the missing binding and claim, and a refusal writes neither.
+        A refusal keeps a live record, marking it complete, and closes and
+        removes any other. The round 7
         statement that every call reconciles first was true of the write
         phase only: a call that crashed after its skeleton and was then
         refused for good, for example because its witness's roster was
@@ -1825,9 +1832,20 @@ pipeline stage's write-set is unambiguous:
         itself fails, the call exits "write failed" instead of the refusal
         status, so the plugin retries. When the child's sidecar directory
         does not exist there is no record and nothing to reconcile, and the
-        refusal returns without taking a lock; `deleteFiles` clears the
-        record before it removes the roster (§2.1.1), so a child whose
-        roster is gone cannot have one.
+        refusal returns without taking a lock. **Correction (round 9, review
+        finding F12).** Round 8 added "`deleteFiles` clears the record
+        before it removes the roster (§2.1.1), so a child whose roster is
+        gone cannot have one." That is false. An older `ethos` binary's
+        `deleteFiles` does not know the record: it removes the roster and
+        leaves the record and its open fork skeleton. A roster removed by
+        hand does the same. The model allows the state too: `LcDeleteSession`
+        ranges over a session that has a record and no roster. A child with
+        no roster can therefore have a record, so the "child roster gone"
+        exit takes the same path as every other exit: if the sidecar
+        directory exists it takes the lock and reconciles (the reconcile
+        needs the record, not the roster), and `ethos session delete` for
+        that id closes the skeleton and clears the record
+        (§2.1.1, `deleteFiles` works whether or not the roster exists).
       - *Write phase:* the lock is the **child session's** dispatch-pending
         lock (`mission.WithDispatchPendingLock(globalRoot, child, ...)`,
         the one `runMissionClaim` already takes for the same session,
@@ -1838,35 +1856,46 @@ pipeline stage's write-set is unambiguous:
         1. `RefuseIfSessionGone(child)`. It refuses only when the roster
            is gone (`fs.ErrNotExist`); it proceeds on any other `Load`
            error (`pretooluse_dispatch.go:494-508`).
-        2. *Reconcile the pending record* (item 5): close any open
-           fork-propagated skeleton for this child that this call will not
-           reuse, whether or not the child already holds a claim. **The
-           close takes its own locks (round 7), after the child's
-           dispatch-pending lock and before step 5's.** For the skeleton the
-           record names, it acquires the shared mission lock of the
-           *record's* mission (`AcquireMissionLock`; that mission can differ
-           from this call's), then that skeleton's delegation lock
-           (`AcquireDelegationLock`), the order `dispatchTierB` uses, and
-           releases both as soon as `CloseDelegationSkeleton` returns, before
-           step 4. `Store.Close` sweeps open skeletons holding only the
-           exclusive mission lock
-           (`internal/mission/store.go:1107,1217-1246`), and the
-           shared mission lock is what excludes that sweep: the sweep either
-           finishes first (the skeleton is already closed, so the reconcile
-           leaves it alone) or waits for the reconcile. The delegation lock
-           excludes every other writer of the same `record.yaml` (the
-           refusal-close paths and `DisclaimDelegation`,
-           `internal/mission/store.go:1589`),
-           so the reconcile never rewrites a stale copy of the record. The
-           order is the existing global, repo, mission (shared), delegation
-           order (`delegation.go:462-466`); the reconcile's locks and
-           step 5's are taken one after the other, never nested. **If the
-           record's mission directory is gone (round 8), the close takes no
-           mission lock and treats the skeleton as gone:** there is no
-           `record.yaml` to rewrite and no sweep to exclude, and a lock on a
-           directory that does not exist would create it. The same close
-           routine serves `deleteFiles` step 1 (§2.1.1) and the in-process
-           cleanup, and every use writes verdict `aborted` (spec N5, item 5).
+        2. *Reconcile the pending record* (item 5): one of three outcomes
+           (the child already holds a claim; the record is resumed; or it is
+           closed and removed), chosen by the rules of item 5. A close
+           closes only an open fork skeleton the child owns, as a
+           compare-and-set on verdict `open` (item 5). **The close takes its
+           own locks (round 7), after the child's dispatch-pending lock and
+           before step 5's.** For the skeleton the record names, it acquires
+           the shared mission lock of the *record's* mission under the store
+           root *recorded in the record* (`AcquireMissionLock(recordedRoot,
+           recordMission)`; that mission can differ from this call's, and
+           the working directory is never consulted: B2, §2.1.1), then that
+           skeleton's delegation lock (`AcquireDelegationLock`), the order
+           `dispatchTierB` uses, and releases both as soon as
+           `CloseDelegationSkeleton` returns, before step 4. `Store.Close`
+           sweeps open skeletons holding only the exclusive mission lock
+           (`internal/mission/store.go:1107,1217-1246`), and the shared
+           mission lock is what excludes that sweep when the sweep holds the
+           lock: the sweep either finishes first (the skeleton is already
+           closed, so the reconcile leaves it alone) or waits for the
+           reconcile. The delegation lock excludes every other writer of the
+           same `record.yaml` (the refusal-close paths and
+           `DisclaimDelegation`, `internal/mission/store.go:1589`), and,
+           since round 9, the sweep's own close of that skeleton (item 5,
+           compare-and-set), so the reconcile never rewrites a stale copy of
+           the record. The order is the existing global, repo, mission
+           (shared), delegation order (`delegation.go:462-466`); the
+           reconcile's locks and step 5's are taken one after the other,
+           never nested. **If the mission directory under the recorded root
+           is gone (round 8, amended in round 9), the close takes no mission
+           lock and treats the skeleton as gone:** there is no `record.yaml`
+           to rewrite and no sweep to exclude, and a lock on a directory
+           that does not exist would create it. "Gone" is concluded only
+           from a recorded root that is non-empty and resolvable. A record
+           whose recorded root is empty, absent, or unresolvable fails the
+           reconcile with "do not retry" (item 4): the error names the record
+           and the remedy, and the call never reads it as "gone". The same
+           close routine serves `deleteFiles` step 1 (§2.1.1), `mission
+           release` and the close-time clearing (item 5), and the in-process
+           cleanup, and every use writes verdict `aborted` (spec N5, item
+           5).
         3. If the child holds a claim, the spec's `sid? not-in dom claims`
            guard fails: exit success ("already claimed") without writing,
            after the reconcile of step 2. If this call entered through the
@@ -1875,17 +1904,37 @@ pipeline stage's write-set is unambiguous:
            writing, so the plugin's next call runs the full read phase. The
            call never allocates a delegation on witness checks it skipped.
         4. Allocate the id with `NewID` (item 3,
-           `pretooluse_dispatch.go:775`), unless item 5 reuses one.
+           `pretooluse_dispatch.go:775`), unless item 5 resumes a record, in
+           which case there is no allocation and the delegation is the
+           record's.
         5. Acquire the mission lock and then the delegation lock
            (`AcquireMissionLock` through the delegation lock's defer,
            `pretooluse_dispatch.go:791-808`), the order `dispatchTierB`
-           uses: `NewID`, mission lock, delegation lock.
+           uses: `NewID`, mission lock, delegation lock. **The resume path
+           takes this step too (round 9; ledger C15, `fixReuseLocks`).**
+           Round 8 let a resumed call go straight from the reconcile to the
+           missing binding and claim writes, with the mission and delegation
+           locks of this step not held. The reconcile releases the locks of
+           its own close before it returns, so between the reconcile and the
+           writes a locked `Store.Close` could run and sweep the mission; the
+           model treats the shared mission lock as held for a binding or
+           claim write (`LockedWrites`, run `Fa_lockw_off`). The resume path
+           therefore takes the locks of this step and re-reads the mission
+           (step 6) before it writes anything.
         6. Re-load the mission and confirm it is still open (the TOCTOU
-           re-check, `pretooluse_dispatch.go:810-838`).
-        7. Write the `claim-forked-pending` record (item 5), then the
-           skeleton, then **re-read the mission (the post-check of item 1,
-           ledger C6)**, then the binding and the claim of item 1, then
-           remove the record.
+           re-check, `pretooluse_dispatch.go:810-838`). On the resume path
+           this is the re-read that the locks of step 5 make meaningful: a
+           mission found closed ends the call with "witness refused" (item
+           4) and writes nothing, and the next reconcile closes the
+           skeleton the record names if the sweep missed it.
+        7. Write the `claim-forked-pending` record (item 5), incomplete and
+           carrying the store root, then the skeleton, then **re-read the
+           mission (the post-check of item 1, ledger C6)**, then the binding
+           and the claim of item 1, then **mark the record complete**. The
+           record is not removed here (round 9; ledger C12, item 5). On the
+           resume path the record and the skeleton already exist, and this
+           step writes only the missing binding and claim, then marks the
+           record complete.
         The witness is not locked, so its claim can be released between the
         read phase and the write phase. That window is accepted: the child's
         claim is written for the mission as read, the open-mission re-check
@@ -1968,108 +2017,261 @@ pipeline stage's write-set is unambiguous:
       The exit statuses stay a plugin-facing contract: a panic (status 2)
       and a signal death are the only outcomes the command cannot classify
       itself, which is why the table names them.
-   5. *No orphan skeleton from a retry (round 6, amended in round 8).*
-      Round 5 closed an orphan only when the same process survived, or when
-      the retry named the same mission. A retry with a different witness or
-      a different mission would leave the old open skeleton in place. The
-      rule now is the amended operations of the lifecycle model
-      (`docs/spec-opencode-lifecycle.tex`: `LcCfRefuse`,
+   5. *No orphan skeleton from a retry; the pending record is durable (round
+      6, amended in rounds 8 and 9).* Round 5 closed an orphan only when the
+      same process survived, or when the retry named the same mission. A
+      retry with a different witness or a different mission would leave the
+      old open skeleton in place. The rule now is the amended operations of
+      the lifecycle model (`docs/spec-opencode-lifecycle.tex`: `LcCfRefuse`,
       `LcCfReconcileClaimed`, `LcCfReconcileReuse`, `LcCfReconcileFresh`,
-      `LcCfAbort`):
-      - *Pending record.* Before `WriteDelegationSkeleton`, the write phase
-        writes `sessions/<child>/claim-forked-pending` (YAML: delegation id,
-        mission id, witness) under the child's dispatch-pending lock. It is
-        removed as the last step of a successful write. `deleteFiles`
-        **closes the skeleton the record names, `aborted`, before it clears
-        the record** (step 1, §2.1.1; ledger C5). Round 6 left that skeleton
-        open "only until its mission closes", relying on `Store.Close`'s
-        sweep; the model refutes that, because an open skeleton named by no
-        record and no binding blocks `Abandon` of its mission
-        (`countBlockingDelegations`, `internal/mission/store.go:1973`) and
-        nothing else will ever close it while the mission stays open (run
-        `Fb2_w`; `Fb2_del` holds).
-      - *Every exit reconciles first, regardless of witness or mission
-        (ledger C1, C4, C9).* If a record exists, the call loads the
-        skeleton it names. It **reuses** the delegation only when all of
-        these hold: the record's mission and witness equal this call's, the
-        skeleton is open, the mission is open, and the child has no claim.
-        Then it finishes the missing writes (the binding, if the child's
-        binding does not already name it, then the claim). In every other
-        case it closes the skeleton with verdict `aborted` before doing
-        anything else. An already-closed skeleton is left as it is, and a
-        skeleton that was never written (`fs.ErrNotExist`: the crash came
-        between the record and the skeleton) needs no close. The record is
-        then overwritten or removed. A reconcile that does **not** resume
-        the record also closes the skeleton named by the child's current
-        delegation binding when that is a different delegation (**ledger C9,
-        `fixSupersede`**), because the write phase is about to overwrite
-        that binding. Without this, a completed propagation, a release of
-        the child's claim by the operator, and a second propagation leave
-        the first delegation open and named by nothing: the plugin's memo
-        expires and a released child is a child with no claim (run
-        `Fa_orph_nosup`; `Fa_orph_all`, with all nine amendments, holds).
-      - *The child already holds a claim (ledger C4,
-        `fixInertBinding`).* The call removes the record and closes the
-        skeleton it names, `aborted`, **unless the binding is live**. The
-        binding is live when the child's delegation binding names that
-        delegation and the child's claim is for the mission the skeleton
-        belongs to. A live binding means the claim and the skeleton are in
-        use: remove the record only. A binding that is not live is inert, so
-        the skeleton is closed. This replaces round 7's paragraph on a
-        record and a binding that name the same delegation, which accepted
-        that when the operator had claimed a different mission the skeleton
-        "stays open only until its own mission closes". The model refutes
-        that for the same reason as above: the skeleton blocks `Abandon` and
-        is named by nothing that will be read again (run `Fa_inert`:
-        `fixInertBinding` alone leaves C1; `Fa_all` holds with both). The
-        trailer outcome of round 7 is unchanged and still correct: if the
-        operator claimed the same mission, the binding is live, the
-        `Delegation:` trailer is stamped from it
-        (`commit_trailers.go:65`), and the child is working under that
-        delegation; if a different mission, the binding is inert, the
-        `Mission:` trailer names the operator's mission, there is no
-        `Delegation:` trailer, and the skeleton is now closed.
-      - *Every close writes verdict `aborted` (spec N5).* The model has one
-        bit, open or not. `countBlockingDelegations`
+      `LcCfLockReuse`, `LcCfFinish`, `LcCfAbort`, `LcReleaseClaim`,
+      `LcClearClosed`).
+      - *The pending record is durable (round 9; ledger C12,
+        `fixDurableName`, the leader's ruling).* Before
+        `WriteDelegationSkeleton`, the write phase writes
+        `sessions/<child>/claim-forked-pending` (YAML: delegation id,
+        mission id, witness, **stage**, and the **mission store root**) under
+        the child's dispatch-pending lock. The stage is one bit, *complete*
+        or not (the model's `pendDone`). The record is written not complete
+        and is marked complete as the last step of a successful write, after
+        the claim. **It is not removed at a successful finish.** It persists
+        for the life of the fork claim and is the durable name of the fork
+        skeleton. Round 8 removed it "as the last step of a successful
+        write", which left the delegation binding as the only name of a
+        completed propagation. The child's own Tier B dispatch writes its
+        binding over that one (`pretooluse_dispatch.go:880-884`, which this
+        design does not change), and the fork skeleton is then open and named
+        by nothing (C12, run `C12_off`, eleven steps; `C12_on` holds, 257,269
+        states, all visited). Every close of the design is by name, so the
+        name must outlive the binding. The record is removed **only** by
+        `mission release`, by the close-time clearing of the claim, and by
+        `deleteFiles` (step 4), and each of the three first closes the fork
+        skeleton the record names (an open skeleton of kind `dkFork`
+        that the session owns, closed `aborted` as a compare-and-set on
+        verdict `open`, below) and then unnames it. The record also names the
+        store root it was written under (B2, §2.1.1), which every one of those
+        closes uses. The record file is written through `writeSidecarFile`,
+        so a crash leaves `claim-forked-pending.*.tmp`, which `deleteFiles`
+        removes (§2.1.1 step 4). A record that does not parse is "do not
+        retry" (item 4) for as long as the claim lasts, not only during a
+        write; the error names the file and the remedy is to remove it by
+        hand, or `ethos session delete`, which fails at step 1 for the same
+        reason until it is removed. This durable record is the single
+        mechanism the design relies on. The release-close and supersede
+        logic below are retained as defensive measures only, and are labelled
+        unexercised where the model shows them so.
+      - *Live, and the three outcomes of a reconcile (ledger C4, C9, C12).*
+        A record is **live** when the child's claim is for the mission the
+        skeleton belongs to **and** either the record is complete or the
+        child's delegation binding names the skeleton. A complete record is
+        live whatever the binding names, because a Tier B dispatch by the
+        child may have moved the binding; an incomplete record is live only if
+        the binding names it too. Every exit that reconciles (item 2) does one
+        of three things:
+        - *The call is a refusal (read phase), or the child already holds a
+          claim (the claimed case; `fixInertBinding`).* If the record is
+          live, it is **kept and marked complete**: the claim and the
+          skeleton are in use, and an incomplete live record means the crash
+          fell between the claim write and the mark. Otherwise the call
+          closes the skeleton the record names, `aborted`, and removes the
+          record. The binding of a record that is not live is inert (it
+          names a mission that is not the child's claim), so the skeleton is
+          closed. A refusal never resumes the record (item 2). The old
+          statement that a skeleton "stays open only until its own mission
+          closes" is withdrawn: the skeleton blocks `Abandon` and is named by
+          nothing that will be read again (run `Fa_inert`;
+          `MutLiveNoDone` shows that judging a complete record by the
+          binding alone would close a fork skeleton that a child is working
+          under, as soon as a Tier B dispatch had moved its binding).
+        - *The child holds no claim and the record is resumable
+          (`LcCfReconcileReuse`).* The record is **resumable** only when all
+          of these hold: it is not complete, its skeleton is open, the
+          record's mission and witness equal this call's, the mission is open,
+          and the child has no claim. A **complete record is never
+          resumable.** That state (a complete record, a child with no claim,
+          an open skeleton, an open mission) is unreachable with every
+          amendment on, because release, close-time clearing and
+          `deleteFiles` each close the skeleton and remove the record in one
+          step; the guard is defensive and unexercised (spec N18;
+          `MutReuseDone` survives). If it were ever met, the record would be
+          closed and removed like any other that is not resumable. The call
+          reuses the delegation: it takes the locks of step 5 and re-reads
+          the mission (step 6; C15), then writes only the missing binding (if
+          the child's binding does not already name the delegation) and the
+          claim, and marks the record complete.
+        - *The child holds no claim and the record is not resumable
+          (`LcCfReconcileFresh`).* The call closes the skeleton the record
+          names (an already-closed skeleton is left as it is; a skeleton
+          that was never written, `fs.ErrNotExist`, because the crash fell
+          between the record and the skeleton, needs no close), removes the
+          record, and goes on to allocate an id and write afresh.
+      - *Supersede, with its scope stated exactly (ledger C9,
+        `fixSupersede`).* On the two paths that go on to write, the fresh
+        path and the resume path, with or without a record, the reconcile also
+        closes the open fork skeleton that the child's delegation binding
+        names when it is not the skeleton the call will use: on the fresh
+        path every such skeleton, on the resume path the one that differs from
+        the record's. It is **never** applied by a refusal or in the claimed
+        case, whose child either does not write or holds a claim and may be
+        working under the binding (`MutSupClaimed`). Round 8 worded this as
+        "a reconcile that does not resume the record"; that contradicted the
+        resume path's own clause and is withdrawn. Round 8 also traced the
+        need to a completed propagation, a release of the child's claim, and
+        a second propagation. That trace is withdrawn: `mission release`
+        clears the binding as well as the claim (`cmd/ethos/mission.go:2145-
+        2153`), so after a release there is no binding to overwrite. The state
+        is reached by the close-time clearing of another mission instead
+        (run `C9_nosup`): the child's operator claim of a second mission is
+        closed by the child's own session, `ClearMissionBindings` clears the
+        claim, which names the closed mission, and leaves the binding, which
+        names the first fork skeleton of the first mission (the two tests are
+        independent, `active.go:907-935`), and a second `claim-forked` then
+        overwrites that binding. **With the durable record the clause is
+        redundant for `NoOrphanOpenSkeleton`:** the record names the first
+        skeleton, so `C9_nosup_dur` holds and `Reach_nosup_dur` shows the state
+        is unreachable without the clause. The resume path's clause is
+        **unexercised**: with every amendment on, no state has a record, a
+        child with no claim, and a binding that names an open fork skeleton
+        other than the record's (`Reach_all`, 257,269 states, all visited,
+        none), and removing the clause changes no invariant (`MutSupReuse`
+        survives). It is kept as defensive code at the leader's ruling and is
+        **not verified by the model**.
+      - *Release and close-time clearing close what they unname (ledger C11,
+        C12; spec N16).* `mission release` (`cmd/ethos/mission.go:2135-2179`)
+        and the close-time clearing of the claim (`ClearMissionBindings`,
+        `internal/mission/active.go:907-957`, called by `clearClosedSessionBindings`,
+        `mission.go:2289-2312`, and by the MCP close path,
+        `internal/mcp/mission_tools.go:555`) are changes to
+        existing Claude Code paths and belong to the implementation PR. Each,
+        for a session that has a record, **first closes** the open fork
+        skeleton the record names (kind `dkFork`, owned by the session,
+        `aborted`, compare-and-set on `open`, using the recorded store root
+        and the locks of step 2), **then clears the binding, then removes the
+        record**. The close-time clearing does this only when the claim it
+        clears names the mission being closed (`LcClearClosed`); a close of
+        some other mission leaves the claim and the record alone, and clears
+        the binding independently only if the binding names the closed mission
+        (the existing test). Before this round `release` left the skeleton
+        open after it cleared the claim and the binding (C11, run
+        `Fa_orph_norel`, eleven steps). A binding that names a Tier B skeleton
+        is cleared and the skeleton is left open: it is a subagent's
+        delegation. `release` stays idempotent: with no claim and no record it
+        closes nothing and succeeds. The model also closes what the
+        *binding* names at release (`fixReleaseCloses`); with the durable
+        record both name the same skeleton (`Fa_orph_norel_dur` holds without
+        the binding-named close), so that close is defensive and unexercised.
+        That a release removes the record is hygiene, not an invariant (spec
+        N18, `MyRelKeepRec` survives). **Implementation constraint (spec
+        N16):** both commands must hold the **child session's
+        dispatch-pending lock around the whole close, unname, clear
+        sequence.** Today both clear unlocked: `runMissionRelease` calls
+        `ClearActiveMission` and `ClearDelegationBinding` with no lock and
+        takes the lock only for `ClearDispatchPending`
+        (`mission.go:2145-2171`), and `ClearMissionBindings` takes it only
+        for `ConsumeDispatchPending` (`active.go:951`). Without the lock the
+        closes of C11 and C12 race a write phase of `claim-forked`, and the
+        model, whose operations are atomic, cannot show it.
+        `WithDispatchPendingLock` is not reentrant (a second acquire from the
+        holding process blocks on itself; its doc comment and
+        `clearMissionSidecarsLocked` say so), so both are restructured to take
+        the lock once at the top and call the unlocked
+        `ClearDispatchPending` or `ConsumeDispatchPending` inside, as
+        `deleteFiles` does (`store.go:278-301`). The lock order is the
+        write phase's: dispatch-pending outermost, then the shared mission
+        lock, then the delegation lock; never the roster lock.
+      - *Every skeleton close is a compare-and-set on verdict `open`, under
+        the delegation lock (round 9; ledger C14, `fixCas`).*
+        `CloseDelegationSkeleton` (`internal/mission/delegation.go:649-692`)
+        loads the record and rewrites it with the verdict it is given,
+        whatever the record now says. `Store.Close` sweeps open skeletons
+        holding the exclusive mission lock, but when it cannot take it
+        (`store.go:1107-1114`) it sweeps with no exclusion, and
+        `closeDelegationSkeletons` (`store.go:1217-1246`) reads a record,
+        finds it open, and calls the close later: a reconcile can close the
+        same skeleton `aborted` in between, and the sweep then writes its own
+        verdict over it (run `Fv_off`, ten steps). The close is therefore
+        amended to load the record **under the skeleton's delegation lock**
+        and write only if the verdict is still `open`; a record that is not
+        open is left untouched and the caller treats it as closed. The sweep,
+        in the locked and the unlocked branch alike, takes the delegation lock
+        of each skeleton it closes (after the mission lock when it holds one,
+        the order of this item); it needs the global root, which `Store`
+        holds as `s.root` (`DisclaimDelegation` passes it,
+        `store.go:1589`). A verdict, once not open, never changes. Every
+        caller gets the compare-and-set, the depth-gate close of
+        `dispatchTierB` (`pretooluse_dispatch.go:870`) included. Test: a
+        reconcile close and the unlocked sweep forced to interleave (a seam
+        between the sweep's read and its write) leave verdict `aborted`.
+      - *Every close writes verdict `aborted` (spec N5), except the sweep's.*
+        The model has one bit, open or not, and since C14 one more, aborted
+        or not. `countBlockingDelegations`
         (`internal/mission/store.go:1973`) counts every delegation that is
         neither `aborted` nor disclaimed, so each of the closes above (the
         reconcile, the refusal, the claimed case, the supersede, the
-        post-check abort, and `deleteFiles` step 1) must write verdict
-        `aborted`. A close with any other verdict removes the skeleton from
-        the model's open set and leaves it blocking `Abandon` in the code.
-        A test per close site asserts the verdict.
+        post-check abort, `release`, the close-time clearing, and
+        `deleteFiles` step 1) must write verdict `aborted`. A close with any
+        other verdict removes the skeleton from the model's open set and
+        leaves it blocking `Abandon` in the code. The sweep of
+        `Store.Close` writes the mission's own verdict (`pass`, `fail`, or
+        `aborted` for an escalation). A test per close site asserts the
+        verdict.
       - *A close failure is never silent.* The call uses
         `mission.CloseDelegationSkeleton` directly and propagates its
         error. It does not use `closeDelegationAborted`
         (`pretooluse_dispatch.go:991-1014`), which only writes the error to
         stderr. On a close error the call leaves the record in place and
         exits "write failed" (or "do not retry" for a record that does not
-        parse, item 4), so the next retry attempts the close again.
+        parse, item 4), so the next retry attempts the close again. A failure
+        to remove the record after a successful close is likewise "write
+        failed" (item 4); the next call finds the skeleton closed and removes
+        the record.
       - *In-process cleanup.* If the write phase fails after the skeleton
         is on disk and the process survives (including the post-check abort
         of item 1), it closes the skeleton `aborted` (same function, same
         error rule), removes a binding it wrote, removes the record, and
-        exits "write failed" (or "do not retry" when the cause is a mission
-        that is no longer open). The counter slot stays consumed (item 3),
-        so the retry allocates a fresh id.
-      - *What the model leaves out (spec N3).* `Store.Close`'s sweep skips a
-        delegation record it cannot load and only logs a failure to close one
+        exits "write failed", or "witness refused" when the cause is a
+        mission that is no longer open. If the cleanup close itself fails, the
+        call exits "write failed" whatever the cause (item 4): the record
+        stays in place, and the retry reconciles it first. A failure to mark
+        the record complete, after the claim is written, writes nothing else
+        to undo: the call exits "write failed", the next call finds the child
+        claimed and the record live, and marks it complete. The counter slot
+        stays consumed (item 3), so the retry allocates a fresh id.
+      - *What the model leaves out (spec N3, N16, N17, N18).*
+        `Store.Close`'s sweep skips a delegation record it cannot load and
+        only logs a failure to close one
         (`internal/mission/store.go:1236,1242-1244`), so a skeleton the sweep
         misses is not an error anywhere. A skeleton directory with no
         `record.yaml` makes `countBlockingDelegations` return an error
         (`internal/mission/store.go:1994-2000`), which refuses `Abandon` for
         a reason the model has no state for. The design's closes do not rely
         on the sweep; this item records that the sweep itself is
-        best-effort.
+        best-effort. The Tier B dispatch is modelled as one atomic step
+        (N9, N17): a dispatch without a roster, the depth-gate close of its
+        own skeleton with verdict `aborted` (`pretooluse_dispatch.go:870`),
+        and a binding write that fails without being fatal (`:880-889`) are
+        not represented.
       - The implementation PR tests each interrupt point (after the
-        record, after the skeleton, after the binding, after the claim),
-        plus a retry with a different witness and a retry with a different
-        mission, a close that fails, a refusal after a crash (C1), an
-        operator claim of a different mission after a crash at the binding
-        (C4), a second propagation after the operator released the first
-        (C9), a mission closed by the unlocked sweep between the record and
-        the skeleton (C6), a mission directory that is gone (item 2 step 2),
-        and a record or `record.yaml` that does not parse.
+        record, after the skeleton, after the binding, after the claim,
+        after the claim but before the mark), plus a retry with a different
+        witness and a retry with a different mission, a close that fails, a
+        refusal after a crash (C1), an operator claim of a different
+        mission after a crash at the binding (C4), an operator claim of the
+        same mission after a crash at the binding (the record is live and is
+        marked complete, the skeleton stays open and in use), a Tier B
+        dispatch by a propagated child over its completed fork claim, then
+        `release`, `deleteFiles`, and the close-time clearing each closing the
+        fork skeleton the record still names (C12), a complete record that a
+        later call finds with a live claim and one whose claim was replaced
+        (live and not live), a second propagation after the close-time
+        clearing of another mission (C9), a mission closed by the unlocked
+        sweep between the record and the skeleton (C6), the sweep and a
+        reconcile close interleaved (C14), the resume path taking the step-5
+        locks before it writes (C15), a mission directory that is gone
+        (item 2 step 2), a record with an empty or unresolvable store root and
+        one run from a different working directory (B2), `release` and the
+        close-time clearing racing a write phase (N16), and a record or
+        `record.yaml` that does not parse.
    6. *Failure surfaces; it is never swallowed.* The plugin logs every
       non-success status. Until a retry succeeds the child's commits carry
       no trailers: the safe direction.
