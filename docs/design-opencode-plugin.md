@@ -127,10 +127,12 @@ record's shared mission lock and the skeleton's delegation lock, and the
 order is stated (§5 point 2); (3) "child roster unreadable" is refused by the
 read-phase `ss.Load`, not `RefuseIfSessionGone`; (4) the outcome of an
 operator claim after an interrupted `claim-forked` that named the same
-delegation is stated; (5) the write-once hard-link temp file has a
+delegation is stated (superseded in round 9 by the live-record rule, §5 point
+2 item 5); (5) the write-once hard-link temp file has a
 recognizable name that `deleteFiles` removes, and the NTFS requirement is
 stated; (6) every Claude-only part of the shared guide is enumerated, and
-`validate-content` rejects `.claude/` and `Claude Code` in it; (7) the
+`validate-content` rejects `.claude/` and `Claude Code` in it (widened in
+rounds 8 and 9); (7) the
 `session create` citation is `session.go:79`.
 
 **Round 8 corrections (missions `m-2026-10-22-031` and `m-2026-10-22-042`,
@@ -145,13 +147,15 @@ Fixed: (1) a `claim-forked` read-phase refusal reconciles first (C1,
 `fixRefuseReconciles`; §5 point 2); (2) `deleteFiles` removes the roster
 before the `parent-session` sidecar (C2, `fixDeleteOrder`), closes the
 skeletons its session names first and stops if that fails (C5,
-`fixDeleteCloses`; spec N2) (§2.1.1, §2.6); (3) `ensure` refuses an edge
+`fixDeleteCloses`; spec N2) (§2.1.1, §2.6) (round 9 narrows this to an open
+fork skeleton the session owns and its record names, C10); (3) `ensure` refuses an edge
 that closes a cycle (C3, `fixCycleCheck`), and the visited set of the
 ancestor walk stays mandatory (spec N4) (§2.1.1, §2.3.1); (4) an
 already-claimed child closes its skeleton unless the binding is live (C4,
 `fixInertBinding`), and a reconcile that does not resume the record also
 closes the skeleton of the child's current binding (C9, `fixSupersede`)
-(§5 point 2 item 5); (5) the mission is re-read after the skeleton is on
+(§5 point 2 item 5) (round 9: that wording is withdrawn; the clause applies
+on the fresh and resume paths only); (5) the mission is re-read after the skeleton is on
 disk, before the binding (C6, `fixPostCheck`) (§5 point 2 item 1); (6) a
 roster with a live numeric participant is never purged, which **reverses
 row 2 of the `TestIsStale` table**, and an unreadable roster with a fresh
@@ -173,18 +177,93 @@ exposure is stated (`cmd/ethos/session.go:881`) (§2.1.1); (f) the read phase
 reads the child's claim lock-free first so an already-claimed child returns
 success, a corrupt pending record or `record.yaml` is "do not retry", a Go
 panic (status 2) and a signal death are in the status table, and
-`cmd/ethos/main.go:51-70` must map the new statuses with `errors.As` (§5
-point 2 items 2 and 4); (g) the compiler enforces the lock non-nesting only
+`cmd/ethos/main.go:51-71` must map the new statuses with `errors.As` (§5
+point 2 items 2 and 4; round 9 adds that it is consulted before the prefix
+test); (g) the compiler enforces the lock non-nesting only
 if the write phase lives in `internal/mission` and `RefuseIfSessionGone` is
 re-expressed over the reader interface (§5 point 2); (h) a reconcile close
 whose mission directory is gone takes no lock and treats the skeleton as
-gone. The shared guide's Claude-only parts now include lines 11 and 43-44,
+gone (round 9: only from a recorded, resolvable store root). The shared guide's Claude-only parts now include lines 11 and 43-44,
 `validate-content` rejects `Claude`, `SessionStart`, `CLAUDE_`, `subagent`,
-and `.claude/` (allowing the whole word `CLAUDE.md`), `TestHarnessNamesOnlyInList`
+and `.claude/` (allowing the whole word `CLAUDE.md`; round 9 derives the list
+from the harness list), `TestHarnessNamesOnlyInList`
 also fails on a harness-specific import or identifier outside
-`harnesses.go` and matches allowed literals by exact equality, and
+`harnesses.go` and matches allowed literals by exact equality (round 9
+allows only `.punt-labs/ethos/CLAUDE.md`), and
 `opencode.json` ownership and spelling normalization are specified (§5 point
 5).
+
+**Round 9 corrections (missions `m-2026-10-22-048`, the model's second pass,
+and `m-2026-10-23-005`, this reconciliation; PR #536):**
+`docs/spec-opencode-lifecycle.tex` was extended after a review of the design
+against the Claude Code paths the first model omitted. It now has fifteen
+counterexamples (C1 to C15), fifteen fix switches, and, on the leader's
+ruling, a durable pending record; the evaluator (jra) accepted it after
+`m-2026-10-22-048`. **With all fifteen switches `ztrue` the spec's operations
+are the authority, and where this document and the spec disagree the spec
+wins** (round 8 said nine). Each amendment below cites the spec's ledger.
+Fixed: (1) the **origin discriminator**: a skeleton is a fork skeleton
+(`BoundVia = claim_forked`, a new value) or a Tier B skeleton, and
+`deleteFiles`, the purge, every reconcile close, `mission release`, and the
+close-time clearing close only an open fork skeleton the session owns; a
+binding that names a Tier B skeleton is cleared and the skeleton is left open
+(C10; §2.1.1, §5 point 2 item 5); (2) the **`claim-forked-pending` record is
+durable** (C12, the leader's ruling): it carries a stage (complete or not)
+and the mission store root, persists for the life of the fork claim, and is
+removed only by `mission release`, the close-time clearing of the claim
+(`ClearMissionBindings`), or `deleteFiles`, each of which first closes the
+fork skeleton it names; a complete record is never resumable, and the
+"record does not parse" status now applies for the claim's lifetime (§5
+point 2 items 4 and 5); (3) `mission release` and the close-time clearing
+**close what they unname** (C11, C12), and must hold the child's
+dispatch-pending lock around the whole close, unname, clear sequence (spec
+N16); (4) **`SessionStart` for every source** goes through `Ensure` without
+`touch` (C13; §2.1.1, §2.5, §5 point 3); (5) **every skeleton close is a
+compare-and-set** on verdict `open` under the delegation lock, the
+`Store.Close` sweep included (C14; §5 point 2 item 5); (6) the **resume path
+takes the step-5 locks** and re-reads the mission before it writes (C15; §5
+point 2 write phase); (7) **`fixSupersede` applies only on the fresh and resume
+paths**, and the resume clause is defensive and unexercised (C9; §5 point 2
+item 5). Review findings not covered by the model: (a) **B2**: the record
+stores the mission store root (`resolve.StoreRepoRoot()` at write time) and
+`deleteFiles` step 1, `release`, and every reconcile close use it;
+"directory gone" is concluded only from a recorded, resolvable root (§2.1.1);
+(b) `ensure --touch` does not refresh a roster that fails to load (spec
+`LcEnsureRefresh`; §2.1.1); (c) the exit-status table gains rows for I/O
+errors on the child's and the witness's binding reads, a `ParentOf` error, a
+`ReadDelegationBinding` error in a reconcile, a record-removal failure, and
+an abort whose cleanup close fails, a mission-closed witness is "witness
+refused", and a column states the Claude Code `SessionStart` action; the
+`errors.As` mapping is consulted before the prefix test at
+`cmd/ethos/main.go:85-100` (§5 point 2 item 4); (d) the guide deny list is
+derived from the harness list and covers OpenCode terms and any `@`, the
+persona-injection sentence (guide lines 19-20) is named, and the harness-name
+test scans all of `cmd/ethos`, `internal/doctor`, and `cmd/validate-content`
+with one allowlisted literal (§5 point 5); (e) the last-seen read-error branch
+is "not stale, warn" on every path, `Store.Purge` has no production caller
+and `PurgeTombstoned` refuses an unreadable roster without `--force`
+(`store.go:469-503`), and the claim that `ethos serve` ages rosters out is
+deleted (§2.1.1); (f) "a child whose roster is gone cannot have a record" is
+false and is corrected (§5 point 2 item 2); (g) crash-leftover temp files
+(`last-seen.*.tmp`, `claim-forked-pending.*.tmp`, `active.go:289`) are
+removed by `deleteFiles`; (h) a refusal never resumes the record, and the
+purge paragraph of §2.1.1 points to the round 8 and 9 bullets that state the
+rules in force. §2.7 states which invariants the model proves exhaustively
+and which only to a bound, and the limits N3 to N18 the design relies on.
+**Round 9 supersedes these earlier statements**, each also marked where it
+appears: round 7's "an operator claim of the same delegation after an
+interrupted `claim-forked` leaves the skeleton and binding in place" (now the
+live-record rule, §5 point 2 item 5); round 8's "a reconcile that does not
+resume the record also closes the skeleton of the child's current binding"
+(now exactly the fresh and resume paths); round 8's "closes the skeletons its
+session names" (now only an open fork skeleton the session owns and its record
+names); round 8's "`SessionStart` for any other source keeps today's
+`CreateInCheckout`" (now `Ensure` for every source); round 8's "removed as the
+last step of a successful write" and "the record is then overwritten or
+removed" (the record is durable); round 8's reconcile close "treats the
+skeleton as gone" whenever the mission directory is missing (now only from a
+recorded, resolvable root); round 8's allowlist of the base name `CLAUDE.md`
+for the harness-name test; and the round 8 deny list of five hand-written terms.
 
 ## 1. Plugin shape and lifecycle hooks
 
@@ -1345,6 +1424,71 @@ ancestor was deleted becomes unwalkable past that ancestor, and
 refreshed and `isStale` reclaims it (§2.1.1). Deleting an unknown id is not
 an error the plugin acts on; it logs and continues.
 
+### 2.7 What the lifecycle model proves, and how far (round 9)
+
+`docs/spec-opencode-lifecycle.tex` checks each invariant as the negation of a
+goal given to ProB, on a slice of the machine (the operations that can affect
+that invariant), at the instance named. "Exhaustive" below means ProB visited
+every reachable state of that slice and found no counterexample; "bounded"
+means it stopped at a state limit with levels still open and found none in the
+states it saw. The instance is two missions and two delegations, and two
+sessions for the `claim-forked` slices and three for the lineage and purge
+slices, unless stated. Time takes three values with a threshold of one, and
+the participant kinds are three. A claim that an invariant holds is a claim
+about the slice and instance in the table, and nothing wider.
+
+| Invariant | Exhaustive | Bounded |
+|---|---|---|
+| `LineageStable` (with `fixDeleteOrder`, `fixSessionStart`) | lineage slice, three sessions (21,953 states); start slice (1,025) | none |
+| `Acyclic` (strong form, every sidecar; `fixCycleCheck`) | lineage slice, three sessions (15,029); start slice (1,025) | none; but see N4 below |
+| `NoLiveSessionPurged` (`fixStaleLive`, `fixCorruptPurge`) | one session (817) | two and three sessions (40,000 states, not exhausted) |
+| `NoOrphanOpenSkeleton`, fork skeletons (`fixDurableName`) | claim slice (16,601; 106,881 at three delegations); claim+ slice, which includes a Tier B dispatch over a completed fork claim, the operator claim, the mission close and the close-time clearing (257,269); delete slice (4,877) | claim+delete+close, two sessions (200,000 states, depth 8) and three (40,000, depth 5); claim, three sessions (200,000, depth 12) |
+| `ReconcileOnExit` | claim slice (16,601); claim+ (257,269) | the same full-machine runs |
+| `SweepComplete` (`fixDeleteCloses`, `fixPostCheck`) | sweep slice (37,025) | the same full-machine runs |
+| `NoForeignAbort` (`fixOrigin`) | the three Tier B slices (11,073; 33,217; 2,013) | the same full-machine runs |
+| `NoVerdictOverwrite` (`fixCas`) | sweep slice (19,697) | verdict slice (300,000 states); full-machine runs |
+| `LiveSpared` | claim slice (16,601); claim+ (257,269) | full-machine runs |
+| `LockedWrites` (a condition of the model's lock assumption, not an invariant of the design; `fixReuseLocks`) | claim slice (16,601) | full-machine runs |
+| `WellFormed` (the model's own well-formedness) | every run in which it is checked | the three-session full-machine run |
+
+No invariant has an open counterexample. The limit is coverage: the full
+`claim-forked` machine, with the deletes, purges and closes interleaved, is
+exhausted only slice by slice, and the second propagations of C9 and C11 are
+exercised by the exhaustive claim and claim+ slices, not by the bounded
+full-machine rows. The three-session rows exercise the multi-hop ancestor walk
+and are bounded at 40,000 and 200,000 states. A switch is shown necessary
+where a run isolates it (the ledger's rows); the amendments that the durable
+record makes redundant for `NoOrphanOpenSkeleton` (the binding-named close at
+release, `fixSupersede`) are labelled defensive in §5 point 2 item 5, and
+the resume path's supersede clause and the guard that a complete record is
+never resumed are unexercised and unverified (`MutSupReuse`, `MutReuseDone`
+survive).
+
+**Limits the design relies on.** The model's operations are atomic except
+where a process can die or a removal can fail, so it cannot show any race. The
+limits the spec states and where this design meets them: N2, `deleteFiles`
+step 1 short-circuits (§2.1.1); N3, `Store.Close`'s sweep is best-effort and a
+skeleton with no `record.yaml` refuses `Abandon` (§5 point 2 item 5); N4,
+`Acyclic` holds of a serialised store only, so the visited set of the walk is
+mandatory (§2.1.1 rule 3, §2.3.1); N5, every close but the sweep writes
+`aborted` (§5 point 2 item 5); N7, the child's claim is two files (§5 point 2
+item 1); N8, a live Claude Code session whose roster does not parse and has no
+`last-seen` is still purged (§2.1.1); N9 and N17, the Tier B dispatch is one
+atomic step and three of its paths are not represented (§5 point 2 item 5);
+N10, the compare-and-set is taken to be atomic as the delegation lock is; N11,
+a `SessionStart` for a roster that does not parse is a no-op (§2.1.1); N12,
+the owner test of the origin filter is vacuous in the model, whose only
+writers of a binding are the session itself; N13, the dispatch-pending
+entries `ClearMissionBindings` clears and the MCP path that calls it are not
+represented; N15, the record's stage is one bit and a record that no longer
+parses while the claim lasts is outside the model; N16, the lock around
+`release` and the close-time clearing is an implementation constraint (§5
+point 2 item 5); N18, that a release removes the record is hygiene and the
+`pendDone` guard of the resume path is defensive (§5 point 2 item 5). The
+read phase and the start of the write phase are one step in the model, so the
+window in which the witness releases its claim between them is accepted and
+not examined.
+
 ## 3. `ethos hook commit-trailers` without Claude process-tree discovery
 
 ### 3.1 The existing resolution chain, unchanged
@@ -1668,7 +1812,8 @@ pipeline stage's write-set is unambiguous:
    changing nothing, when a new edge would close a cycle (round 8, ledger
    C3); and otherwise create
    (sidecar, roster, then `last-seen` only if `touch`) or, if `touch`,
-   refresh only `last-seen`. A parent that is absent from the store makes
+   refresh only `last-seen` (round 9: and only if the existing roster loads;
+   one that fails to load writes nothing and exits non-zero, §2.1.1 rule 4). A parent that is absent from the store makes
    `Ensure` return a typed `ErrParentNotFound`, so a caller that has a
    conclusive "not found" can retry with `parentGone` (§2.5). `touch` is the CLI flag `--touch`: the plugin
    passes it on every `ensure`, and Claude Code's fork `SessionStart` never
