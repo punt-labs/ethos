@@ -2433,8 +2433,8 @@ them. By the convention of \S\ref{sec:lc-method} every state predicate is a
 \texttt{-goal}; the \texttt{GOAL}s, in B, are the negations of the invariant
 schemas, with three exceptions that are not negations of an invariant
 schema: \texttt{G\_orph\_nb}, at the end of the list, is a narrowed
-\texttt{NoOrphanOpenSkeleton} goal; \texttt{Own} checks that a record names
-only a skeleton its own call wrote; and \texttt{Adopt} is a reachability goal,
+\texttt{NoOrphanOpenSkeleton} goal; \texttt{Own} checks that every open
+skeleton a record names is a fork skeleton owned by the record's session; and \texttt{Adopt} is a reachability goal,
 whose counterexample shows that a state is reachable:
 
 \begin{verbatim}

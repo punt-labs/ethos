@@ -2665,8 +2665,7 @@ pipeline stage's write-set is unambiguous:
         refused `claim-forked`) cannot be reached that way, because step 2
         reads the claim first. The Copilot trace's refused variant is induced
         by removing or corrupting the child's roster after the Tier B
-        dispatch, not after the crash: removing it earlier makes the dispatch
-        refuse via `RefuseIfSessionGone`, and the binding is never replaced.
+        dispatch.
         The operator-claim trace's refused variant is induced by removing or
         corrupting the child's roster after the operator claim, so that the
         call is refused with the claim in hand (spec N22). The
