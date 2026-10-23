@@ -117,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retry" with its skeleton open, and a live fork skeleton aborted after
   a crash and a Tier B dispatch), and every invariant is
   checked as a negated goal with mutants killed, except where the spec
-  records a surviving mutant as unverified defensive code. Some rows are
+  records a surviving mutant as unverified defensive code or hygiene. Some
+  rows are
   bounded rather than exhaustive; the spec states which.
 - **Third-party notice for the imported output styles.**
   `.claude/output-styles/NOTICE.md` reproduces the MIT copyright and
