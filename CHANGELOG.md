@@ -111,8 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checked with ProB. Nine invariants (lineage stable, acyclic, no live
   session purged, no orphan open skeleton, reconcile on exit, sweep
   complete, no foreign abort, no verdict overwrite, live spared) hold
-  under fifteen amendments; the ledger records fifteen counterexamples
-  found against the earlier prose design, and every invariant is
+  under sixteen amendments; the ledger records sixteen counterexamples
+  found against the earlier prose design (the sixteenth, a resumed
+  claim that exits "do not retry" with its skeleton open, was found in
+  PR review), and every invariant is
   checked as a negated goal with mutants killed. Some rows are bounded
   rather than exhaustive; the spec states which.
 - **Third-party notice for the imported output styles.**
