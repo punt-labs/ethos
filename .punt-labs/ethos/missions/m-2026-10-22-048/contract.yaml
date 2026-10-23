@@ -1,0 +1,30 @@
+mission_id: m-2026-10-22-048
+status: closed
+type: design
+created_at: "2026-10-22T22:32:00Z"
+updated_at: "2026-10-23T01:55:58Z"
+closed_at: "2026-10-23T01:55:58Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-22T22:32:00Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/spec-opencode-lifecycle.tex
+success_criteria:
+    - 'F1 (critical): model the existing Claude Code Tier B dispatch path that writes the leader''s own delegation binding (internal/hook/pretooluse_dispatch.go:880-884, ParentSession == the session itself) and leaves its skeleton open until Store.Close sweeps it (store.go:1239 skips non-open). Add an origin discriminator to bindings/skeletons distinguishing fork-propagated (written by claim-forked) from Tier B dispatch. Amend deleteFiles step 1 and every reconcile/supersede close to close only fork-propagated skeletons owned by the session. New invariant NoForeignAbort: no Tier B (non-fork-propagated) delegation is ever closed aborted by deleteFiles, purge, or a claim-forked reconcile. Show the counterexample with the fix off and holding with it on.'
+    - 'F2/B1: fixSupersede applies exactly on the write-proceeding reconcile paths (LcCfReconcileReuse and LcCfReconcileFresh), whether or not a pending record exists, and never on LcCfRefuse or LcCfReconcileClaimed; correct the ledger C9 prose (currently contradicts its own schema). Confirm a resumed record also closes a different binding-named fork-propagated skeleton.'
+    - 'F3: model SessionStart for every source (startup, resume, compact, clear, fork) on an id that already has a roster or lineage sidecar: it routes through Ensure (create-if-absent, no touch), never through the replacing create; the replacing create (CLI session create) refuses when a lineage sidecar exists. Re-check LineageStable and Acyclic with these operations included; add operations for SessionStart(resume) and SessionStart(compact) of a fork.'
+    - 'F10: the Store.Close unlocked fallback (internal/mission/store.go:1107-1114) can race a reconcile close. Leader decision: every skeleton close (CloseDelegationSkeleton) is compare-and-set on verdict == open under the delegation lock, and the sweep''s close does the same. New invariant NoVerdictOverwrite: a skeleton''s verdict, once non-open, never changes. Model and check it, with a mutant showing the overwrite without CAS.'
+    - 'F9: the claim-forked reuse path performs its remaining writes only after acquiring the step-5 locks (dispatch-pending, shared mission, delegation); model this ordering so LcCloseLocked''s lock assumption holds on reuse.'
+    - Re-run every invariant (the existing six plus NoForeignAbort and NoVerdictOverwrite) with all fixes on; record commands, bounds, INIT, states, depth, outcome; include a mutant row per new fix. Check every invariant as a negated -goal (never a state-schema predicate). Update the ledger, consequences (list design sections that must change), and limits. Keep docs/spec-opencode-integration.tex untouched.
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/spec-opencode-lifecycle.tex`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'Spec extension for DES-078 (ethos-5y4r, PR #536) after leader-run local review of the round-8 design (m-2026-10-22-046 closed failed) found interactions with existing Claude Code paths the lifecycle model never included. Branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. Prior harness and scratch: .tmp/lc2/ (yours), .tmp/jra-eval/ (evaluator). Every criterion is a leader decision; if source shows one impossible, stop and report.'

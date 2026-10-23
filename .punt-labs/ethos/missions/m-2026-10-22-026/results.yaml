@@ -1,0 +1,76 @@
+results:
+    - mission: m-2026-10-22-026
+      round: 1
+      created_at: "2026-10-22T18:09:59Z"
+      author: bwk
+      verdict: escalate
+      confidence: 0.85
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 451
+          removed: 177
+        - path: DESIGN.md
+          added: 75
+          removed: 19
+      evidence:
+        - name: 'make check after commit 612e63d (sidecars, purge, deleted parent): all gates pass'
+          status: pass
+        - name: 'make check after commit 21043e0 (claim-forked origin, pending record, locks, exit table, citation): all gates pass'
+          status: pass
+        - name: 'make check after commit e6a7afc (neutral guide, single source of harness names): all gates pass'
+          status: pass
+        - name: 'make check after commit 4d689e3 (DES-078 mirror, points 2 and 4, header note): all gates pass'
+          status: pass
+        - name: 'citations verified against source: store.go, session_start.go, pretooluse_dispatch.go, commit_trailers.go, active.go, main.go, enable.go, deposit.go, tree.go, commit-msg.sh, spec .tex'
+          status: pass
+        - name: opencode.json instructions key verification (.tmp references, context7)
+          status: fail
+      open_questions:
+        - 'BLOCKED criterion 6 (opencode half): enable opencode adds the guide to opencode.json instructions. No .tmp reference documents the key and no context7 tool was available to the worker. points/docs/opencode/06-instructions-context.md:5-8,63-65 says OpenCode V2 treats AGENTS.md as the sole project-instruction authority, does not load CLAUDE.md, and that the V2 instructions array is inactive. The design records this as an open item and picks no alternative. Leader ruling needed.'
+        - Criterion 4 cited the spec at .tex:1003-1006 for the witness liveness load. Those lines are the sid-not-in-claims guard and the ancestor-set comprehension. Witness liveness is at .tex:1007-1010. The design cites 1007-1010.
+        - The design could not verify which field of the Claude Code SessionStart payload names a fork's parent session; section 2.5 records it as an implementation-stage confirmation.
+      prose: |
+        Four commits, each preceded by a passing make check. The ethos audit-seal
+        pre-commit hook appended one audit chunk under .punt-labs/ethos/sessions/
+        to each commit automatically; I staged no file other than the two in the
+        write set.
+
+        Criterion table:
+        1 lineage and liveness storage: done (612e63d).
+        2 purge: done (612e63d), tests named, 24h idle purge documented as intended.
+        3 deleted parent: done (612e63d), section 2.1.1 and section 5 point 1 reconciled.
+        4 claim-forked read phase, orphan prevention, lock constraint: done (21043e0).
+        5 exit statuses: done (21043e0), four-status table with plugin actions.
+        6 harness-neutral guide: partly done (e6a7afc). Neutral content and the
+          enable claude import are specified. The enable opencode half is an open
+          item, escalated here.
+        7 single source of truth: done (e6a7afc), TestHarnessNamesOnlyInList named.
+        8 DES-078 corrections: done (4d689e3).
+        9 AcquireMissionLock citation 791-808: done (21043e0).
+        10 and 11 commit discipline: done, explicit paths only, trailer on every commit.
+    - mission: m-2026-10-22-026
+      round: 2
+      created_at: "2026-10-22T18:11:31Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 16
+          removed: 13
+        - path: DESIGN.md
+          added: 5
+          removed: 5
+      evidence:
+        - name: 'make check after commit f1c5457: all gates pass'
+          status: pass
+        - name: section 5 point 5 open item resolved per leader context7 verification; DES-078 mirror and round-6 header note updated
+          status: pass
+        - name: grep for .tex:1003-1006 in design and DESIGN.md finds none; witness liveness cites 1007-1010
+          status: pass
+      prose: |
+        Round 2 commit f1c5457. enable opencode appends .punt-labs/ethos/CLAUDE.md
+        to opencode.json instructions if absent, preserving entries and order;
+        disable opencode removes only that entry. Upstream doc paths cited. Rounds
+        1 commits 612e63d, 21043e0, e6a7afc, 4d689e3 cover the other criteria. All
+        10 criteria are met.

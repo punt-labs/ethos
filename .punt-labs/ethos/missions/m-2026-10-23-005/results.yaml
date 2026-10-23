@@ -1,0 +1,67 @@
+results:
+    - mission: m-2026-10-23-005
+      round: 1
+      created_at: "2026-10-23T02:15:25Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 831
+          removed: 254
+        - path: DESIGN.md
+          added: 106
+          removed: 26
+      evidence:
+        - name: make check green before each of the 8 commits (lint, docs, go test -race, validate-content, fuzz-check)
+          status: pass
+        - name: 'criterion 1: origin discriminator, SessionStart every source, CAS, reuse locks, fixSupersede scope, release and close-time closes: design 2.1.1, 2.5, 5 point 2 item 5, commits 7149cc5 a4ffe90 2967e0d'
+          status: pass
+        - name: 'criterion 2: C12 durable record with stage, kept for claim lifetime, removed by release, ClearMissionBindings, deleteFiles after closing; N16 lock constraint: commit 2967e0d'
+          status: pass
+        - name: 'criterion 3: B2 store root in the record, recorded-root rule, different-cwd test: commits a4ffe90 2967e0d'
+          status: pass
+        - name: 'criterion 4: code-reviewer findings (DESIGN.md decision point 3, ensure refresh guard and test): commits 7149cc5 f4948d5'
+          status: pass
+        - name: 'criterion 5: F4 table rows and caller column, F5 derived deny list, F7, F8, F12, temp names, exhaustive versus bounded section 2.7: commits a583307 727f1eb a4ffe90 33e5900'
+          status: pass
+        - name: 'criterion 6: rsc wording (refusal never resumes, purge paragraph pointer): commits 2967e0d a4ffe90'
+          status: pass
+        - name: 'criterion 7: grep for superseded claims, round-9 note in header and DES-078 naming m-2026-10-22-048: commits 33e5900 f4948d5'
+          status: pass
+        - name: 'criteria 8 and 9: one commit per logical step, committed by explicit path'
+          status: pass
+      open_questions:
+        - Criterion 5 F8 scans all of cmd/ethos with one allowlisted literal; that sweeps in non-harness literals (COO handle claude, claude-md export format). The design says the allowlist does not grow and the implementation stage brings them to the leader.
+        - A mission-closed witness is now witness refused (criterion 5 F4); spec label LcCfExitNoRetry and C15 prose say do not retry. Effects on state are identical; only the plugin action differs.
+        - Spec limit N1 cited in the contract does not exist in the spec; the N16 constraint was applied.
+        - A resumed Claude Code session under Ensure keeps a stale primary PID in its roster (not modelled); stated as a limit and escalated.
+      prose: |
+        Eight commits on design/opencode-plugin-adapter, 7149cc5 through 14de3ea.
+        See the final report for the per-criterion table.
+    - mission: m-2026-10-23-005
+      round: 2
+      created_at: "2026-10-23T02:34:07Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: docs/design-opencode-plugin.md
+          added: 176
+          removed: 102
+        - path: DESIGN.md
+          added: 29
+          removed: 19
+      evidence:
+        - name: make check exit 0 before each of the 3 round-2 commits (1ba7b3a, 0abfccb, 9c776ea)
+          status: pass
+        - name: 'item 1 refreshRoster: 1ba7b3a'
+          status: pass
+        - name: 'items 2, 3, 4 binding StoreRoot, live-record removal, decision point 3: 0abfccb'
+          status: pass
+        - name: 'items 5 to 11 statuses, precedence, supersede root, SessionEnd lineage, NoForeignAbort scope, wording: 9c776ea'
+          status: pass
+      open_questions:
+        - A present-but-unparseable ancestor roster stays witness refused; only I/O errors are write failed (item 8 read as I/O).
+      prose: |
+        See the final report for the per-item table.

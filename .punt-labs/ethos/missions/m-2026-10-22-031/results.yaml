@@ -1,0 +1,43 @@
+results:
+    - mission: m-2026-10-22-031
+      round: 1
+      created_at: "2026-10-22T20:49:30Z"
+      author: jms
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: docs/spec-opencode-integration.tex
+          added: 1715
+          removed: 0
+      evidence:
+        - name: 'commits: e47050a (model as written in DES-078 rounds 6-7, eight switches off), 9af5797 (amended, switches on, ledger, verification record). make check green before each.'
+          status: pass
+        - name: 'fuzz: make check runs fuzz on docs/spec-opencode-integration.tex, 0 errors, both commits'
+          status: pass
+        - name: 'Command: probcli S.tex -card SESSIONID s -card MISSIONID m -card DELEGATIONID d -p MAX_INITIALISATIONS 1000 -p MAX_OPERATIONS 1000 -goal GOAL -mc N -bf -nodead -check_goal (S.tex extracted from the committed file by the awk and sed commands in the Verification subsection; GOAL is the negated invariant in B; probcli 1.15.1). Instance: lineage and purge slices 3 sessions/2 missions/2 delegations; claim-forked slices 2/2/2 exhaustive and 3/2/2 bounded.'
+          status: pass
+        - name: 'LineageStable: as written, counterexample (C2, 137 states, 4 steps; 599 states without parent-gone). With fixDeleteOrder holds, all 21953 states (3/2/2). Holds with both lineage amendments, 5489 states.'
+          status: pass
+        - name: 'Acyclic (strong form: no cycle in any sidecar): as written, counterexample (C3, 2 states with parent-gone, 4856 states / 6 steps without). With fixCycleCheck holds, all 15029 states; 5489 with both lineage amendments.'
+          status: pass
+        - name: 'NoLiveSessionPurged: as written, counterexamples C7 (live-PID roster with old last-seen, 8633 states) and C8 (unreadable roster with fresh last-seen, 7817 states). Each amendment alone leaves the other counterexample. With both: holds, all 817 states at 1 session; at 2 sessions 40000 states and 3 sessions 40000 states explored, no counterexample, NOT exhausted.'
+          status: pass
+        - name: 'NoOrphanOpenSkeleton literal form: as written, counterexamples C5 (deleteFiles on the child, 248 states) and C9 (binding overwrite after release, 14212 states). With fixDeleteCloses and fixSupersede holds: claim slice 16681 states and delete slice 2561 states, all visited. Full 2-session machine 300000 states and 3-session machine 60000 states explored, no counterexample, NOT exhausted.'
+          status: pass
+        - name: 'ReconcileOnExit (exit postcondition): as written, counterexamples C1 (609 states) and C4 (operator claim of another mission, 2758 states with only fixRefuseReconciles). With fixRefuseReconciles and fixInertBinding holds, all 24481 states (2/2/2).'
+          status: pass
+        - name: 'SweepComplete (Store.Close sweep incl. unlocked fallback): as written, counterexample C6 (1210 states). Needs both fixDeleteCloses and fixPostCheck: each alone leaves a counterexample (1844 and 1195 states); both hold, all 9569 states.'
+          status: pass
+        - name: 'Model validation (WellFormed): holds on every slice checked: lineage as written 50654 states and amended 5489; claim 16681; purge 1-session 817; 3-session claim machine 60000 bounded.'
+          status: pass
+        - name: 'Reviewer counterexamples reproduced against the as-written operations: round-known four (reconcile skipped on read-phase refusal = C1; parent sidecar removed before failed roster remove = C2; re-registration cycle A->B->A = C3; operator claim of another mission = C4). Five new: C5 C6 C7 C8 C9.'
+          status: pass
+        - name: 'Toolchain finding: probcli turns Z state-schema predicates into operation guards, not invariants, so zero-violation reports of /z-spec:test say nothing about them; invariants here are separate schemas checked as negated -goal (cross-checked with -ltlformula G not(goal): agrees). Adding this second machine to the file makes /z-spec:test of the whole file promote its schemas to operations: Registry run goes from 3862 to 14977 transitions and is no longer certified complete at MAX_OPERATIONS 5000.'
+          status: pass
+      open_questions:
+        - 'Design decision for the leader: C7 reverses row 2 of the DES-078 isStale table (a live numeric participant now protects a roster whatever its last-seen says). The contract invariant requires it; confirm.'
+        - 'Design decision: NoLiveSessionPurged is judged on readable evidence only; an unreadable roster with no fresh last-seen is still purged (the participant kind cannot be read).'
+        - 'Recommend moving this model to docs/spec-opencode-lifecycle.tex in round 2 (needs a wider write-set): it removes the interference with the Registry model-check.'
+        - 'Not exhausted: purge at 2 and 3 sessions, and the full claim-forked machine at 2 and 3 sessions, are bounded searches. The slices are exhaustive.'
+      prose: |
+        Extension of docs/spec-opencode-integration.tex with a lifecycle and claim-forked machine (sec:lifecycle), nine amendment switches, six invariant schemas plus a well-formedness schema, nine ledgered counterexamples, extraction commands and results. The ethos pre-commit hook added sealed audit chunks to both commits; the file I committed is the only path I named.

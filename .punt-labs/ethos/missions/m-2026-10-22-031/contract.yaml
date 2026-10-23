@@ -1,0 +1,30 @@
+mission_id: m-2026-10-22-031
+status: failed
+type: design
+created_at: "2026-10-22T18:25:49Z"
+updated_at: "2026-10-22T21:20:43Z"
+closed_at: "2026-10-22T21:20:43Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-22T18:25:49Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/spec-opencode-integration.tex
+success_criteria:
+    - 'Extend docs/spec-opencode-integration.tex with a state model of the session lifecycle the DES-078 design (docs/design-opencode-plugin.md, rounds 6-7) specifies: roster existence, the write-once parent-session sidecar, the last-seen sidecar (written only on ensure --touch), ensure (first registration, refresh, lineage conflict, --parent-gone), session delete / deleteFiles (including the order of sidecar vs roster removal and a failed roster remove), purge via isStale (last-seen first when present; PID/TTL branch otherwise; read error; future-dated last-seen), and re-registration after deletion.'
+    - 'Model claim-forked as a state machine over: pending record, delegation skeleton (open/closed verdicts), child delegation binding, child claim, witness binding origin, and mission open/closed. Include crash points after each write, the read-phase refusals, the write-phase reconcile, an operator mission claim on the child, Store.Close''s skeleton sweep (including its unlocked fallback, internal/mission/store.go:1107-1114), deleteFiles on the child, and countBlockingDelegations (internal/mission/store.go:2004-2010) as the observer of open skeletons.'
+    - 'State and model-check these invariants with ProB over a bounded instance (at least 3 sessions, 2 missions, 2 delegations): NoOrphanOpenSkeleton -- every open fork-propagated skeleton is named by a pending record or by a binding of an existing child; LineageStable -- a roster''s recorded parent never changes while the roster exists; NoLiveSessionPurged -- purge never removes a roster whose last-seen is within TTL or whose numeric participant is live; Acyclic -- the recorded parent relation has no cycle reachable by the ancestor walk, or the walk terminates on a visited set (state which). Each invariant either holds, or the counterexample ProB finds is recorded and the operation is amended in the spec until it holds.'
+    - 'The model must reflect the reviewer counterexamples already known: reconcile skipped on read-phase refusals leaving an open skeleton; deleteFiles removing the parent sidecar before a roster remove that then fails; re-registration after deletion closing a cycle A->B->A; an operator claim of a different mission leaving the skeleton open. The amended operations are the authority the design doc will be reconciled to.'
+    - Type-check with fuzz (make check runs fuzz on docs/*.tex) and run ProB model checking; record the exact probcli command, the bounds, states explored, and the result for each invariant in the mission result evidence.
+    - 'Respect ProB constraints: flat schemas, bounded integer ranges, prefixed free types, no B keywords.'
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/spec-opencode-integration.tex`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Formal-class escalation: the claim-forked / session-lifecycle defect class has survived rounds 5, 6, and 7 of prose design review on PR #536 (DES-078, ethos-5y4r). Per org workflow, stop empirical rounds and model-check. Branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. Read docs/design-opencode-plugin.md sections 2.1.1, 2.3, 2.3.1, 2.6 and 5 points 1-2 for the operations to model, and the existing spec''s Registry model for the base state.'
