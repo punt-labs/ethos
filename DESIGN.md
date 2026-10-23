@@ -12342,9 +12342,8 @@ the skeleton, an operator claims the skeleton's mission, the next call adopts
 the skeleton; N21 applies where the call died before its binding). A next
 call that finds the claim at step 2 of the read phase takes the claimed case.
 Copilot's refused variant is induced by removing or corrupting the child's
-roster after the Tier B dispatch, not after the crash: removing it earlier
-makes the dispatch refuse via `RefuseIfSessionGone`, and the binding is never
-replaced. The operator-claim refused variant is induced by removing or
+roster after the Tier B dispatch. The operator-claim refused variant is
+induced by removing or
 corrupting the child's roster after the operator claim (N22).
 (29) *Reconcile paths.* `fixSupersede` applies on the fresh
 and resume paths only; the resume clause is defensive and unexercised. The
