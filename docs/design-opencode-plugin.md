@@ -587,32 +587,51 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   - `last-seen`: an RFC 3339 timestamp, replaced atomically on every
     successful `ensure` that passes `--touch` (`Store.Ensure`'s `touch`
     argument). The OpenCode plugin passes it on every call. Claude Code's
-    fork `SessionStart` never does, so a Claude Code roster never gets a
-    `last-seen` sidecar (round 7, below).
+    `SessionStart` never does, so a Claude Code roster never gets a
+    `last-seen` sidecar (round 7, below). The replacement goes through
+    `writeSidecarFile` (`active.go:279-315`), whose temp file is named
+    `last-seen.*.tmp`; a crash between its write and the rename leaves that
+    file, and `deleteFiles` removes it (step 5).
   Both are written under the roster lock (inside `Ensure`'s `withLock`).
   Both are removed by `deleteFiles` (`store.go:278-301`), in the order of
   the next item. The directory listing in
   `Store.List` skips directories (`store.go:360-362`), so the sidecars
   never show up as sessions. `Store.ParentOf(id)` and `Store.LastSeen(id)`
   read them without a lock. `Roster` gains no field.
-- **`deleteFiles` order (round 8; lifecycle spec ledger C2, C5,
-  `fixDeleteOrder`, `fixDeleteCloses`; spec N2).** The one primitive that
-  `Delete`, `Purge`, and `PurgeTombstoned` funnel through performs seven
-  steps in this order and stops at the first failure
-  (`LcDeleteSession`, steps 1 to 7):
-  1. Close, with verdict `aborted`, every open skeleton named by the
-     session's `claim-forked-pending` record or by its delegation binding
-     (§5 point 2 item 5 specifies the close, its locks, and the rule for a
-     mission directory that is gone). Without this step the record, the only
-     name a crashed `claim-forked` gave its skeleton, is cleared at step 4
-     and the skeleton stays open and unnamed (C5), which blocks `Abandon`
-     of its mission (`countBlockingDelegations`,
-     `internal/mission/store.go:1973`).
+- **`deleteFiles` order (round 8, amended in round 9; lifecycle spec ledger
+  C2, C5, C10, C12, `fixDeleteOrder`, `fixDeleteCloses`, `fixOrigin`,
+  `fixDurableName`; spec N2).** The one primitive that `Delete`, `Purge`, and
+  `PurgeTombstoned` funnel through performs seven steps in this order and
+  stops at the first failure (`LcDeleteSession`, `LcPurgeSession`, steps 1 to
+  7):
+  1. Close, with verdict `aborted`, every open skeleton that the session's
+     `claim-forked-pending` record names **and that is a fork skeleton the
+     session owns** (the origin discriminator, below). The close is a
+     compare-and-set on verdict `open` under the skeleton's delegation lock,
+     and it uses the **mission store root recorded in the record**, never the
+     working directory (B2, below). §5 point 2 item 5 specifies the close and
+     its locks. Without this step the record, which since round 9 names the
+     skeleton for the life of the claim, is cleared at step 4 and the
+     skeleton stays open and unnamed (C5), which blocks `Abandon` of its
+     mission (`countBlockingDelegations`, `internal/mission/store.go:1973`).
+     A delegation binding names a skeleton here only to be cleared at step 3:
+     if the binding names a Tier B skeleton, the binding is cleared and the
+     skeleton is **left open** (C10), because it is a subagent's delegation
+     and a session ending does not end it. The model also lets this step
+     close a fork skeleton that only the binding names. With the durable
+     record no such state is reachable (`Fa_orph_norel_dur` holds without
+     the binding-named close), and a binding carries no store root, so the
+     implementation closes on the record alone: a binding that no record
+     accompanies is treated as a Tier B binding and only cleared.
   2. The active-mission claim and its origin file.
   3. The delegation binding.
-  4. The pending record, with the dispatch-pending entries that
-     `clearMissionSidecarsLocked` already clears in this position.
-  5. `last-seen`.
+  4. The pending record and `claim-forked-pending.*.tmp`, the crash-leftover
+     temp files of its write (`writeSidecarFile` names its temp file
+     `<name>.*.tmp`, `internal/mission/active.go:289`), with the
+     dispatch-pending entries that `clearMissionSidecarsLocked` already
+     clears in this position.
+  5. `last-seen` and `last-seen.*.tmp`, the crash-leftover temp files of its
+     replacement.
   6. The roster file.
   7. The `parent-session` sidecar and every `parent-session.tmp-*` file,
      last.
@@ -627,7 +646,7 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   steps 1 to 6 leaves the roster as the retry token for a later purge, as
   today (`store.go:230-245`).
   **Step 1 short-circuits (spec N2).** Every later step assumes step 1
-  succeeded, because step 4 clears the only names an open skeleton has. A
+  succeeded, because step 4 clears the only name an open fork skeleton has. A
   failed close therefore ends the call at step 1 with nothing cleared and
   the roster kept. This is unlike `clearMissionSidecarsLocked`
   (`internal/session/store.go:336-348`), which joins its errors and
@@ -637,6 +656,56 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   that names the file and the manual remedy (remove it), and does not clear
   past it. Nothing in the model represents a corrupt record (spec N3); the
   choice here is the loud one.
+  **The origin discriminator (round 9; ledger C10, `fixOrigin`).** The model
+  gives a skeleton a kind: `dkFork` for the one `claim-forked` writes and
+  `dkTierB` for the one a Tier B dispatch writes
+  (`pretooluse_dispatch.go:775-884`). A Tier B dispatch writes the leader's
+  own delegation binding, with `ParentSession` equal to the session itself,
+  and nothing in the dispatch closes the skeleton (`subagent_stop.go` does
+  not, and `CloseDelegationSkeleton` has no caller outside the tests), so it
+  stays open until `Store.Close` sweeps it. A step 1 that closed everything
+  the binding names would abort a running subagent's delegation when its
+  leader's session ended or was purged (run `F1D_off`, four steps). In the
+  code the kind is the skeleton's `BoundVia`: `claim-forked` writes a new
+  value, `claim_forked` (a new constant beside `BoundViaSidecarClaim`,
+  `internal/mission/delegation.go:59-62`), and every existing value is Tier
+  B. The skeleton's `ParentSession` is the owning child for a fork skeleton
+  (the model's `dOwn`). The binding sidecar gains no field: it carries the
+  origin of the skeleton it names. The close routine loads the skeleton's
+  `record.yaml` and checks `BoundVia == claim_forked` and `ParentSession ==
+  <the session>` before it closes. **Every** close that this design adds
+  applies the same test and touches only an open `dkFork` skeleton owned by
+  the session: `deleteFiles` step 1, the purge (which reaches it through
+  `deleteFiles`), the reconcile closes of §5 point 2 item 5 (refusal,
+  claimed case, resume, supersede, abort), `mission release`, and the
+  close-time clearing of the claim. Tests: `F1D`, `F1P`, `F1R` as cases
+  (the Tier B skeleton survives `deleteFiles`, a purge, and a reconcile, with
+  its binding cleared where the operation clears bindings).
+  **The mission store root is recorded (round 9; review finding B2).** The
+  record stores `resolve.StoreRepoRoot()` as it was when the record was
+  written (`internal/resolve/resolve.go:729`; the root under which
+  `RepoStatePath(root, "missions", ...)` holds the mission and
+  `AcquireMissionLock(root, ...)` takes its lock). `deleteFiles` step 1,
+  `mission release`, the close-time clearing, and every reconcile close use
+  that recorded root. They never call `StoreRepoRoot()` for a skeleton that a
+  record names, because `Delete`, `Purge`, `release`, and `close` run from any
+  working directory, and a different working directory resolves a different
+  root, or none (`StoreRepoRoot` returns `""` outside a repository). "The
+  mission directory is gone" is concluded **only** from a recorded root that
+  is non-empty and resolvable, and whose mission directory then does not
+  exist; the close then takes no lock and treats the skeleton as gone. A
+  record whose root is empty, absent, or not resolvable (the root path
+  itself does not exist or cannot be read) is a **step 1 failure**: nothing
+  is cleared, the roster is kept as the retry token, and the error names the
+  record and the remedy (restore the checkout, or remove the record by hand).
+  It is never read as "gone": an unmounted volume or a moved checkout would
+  otherwise strand an open skeleton with its only name deleted. A write phase
+  that cannot resolve a non-empty root writes no record (§5 point 2 item 4,
+  root resolution fails: "do not retry"). Required test: `Delete`, `release`,
+  and a reconcile run from a working directory other than the repository's,
+  and from one outside any repository, still close the skeleton; a record
+  with an empty root, and one whose root does not exist, fail step 1 with the
+  roster, claim, binding, and record all still present.
 - **Existing creators respect the sidecar.** `ethos session create`
   (`Store.CreateInCheckout` called on behalf of the CLI) against an id
   whose `parent-session` sidecar records a parent refuses and changes
@@ -692,7 +761,11 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   (lifecycle spec, consequences list).
 
 **Purge must not reclaim a live OpenCode session (round 5, corrected in
-round 6).** The registered roster has root and primary equal to the
+round 6, amended in rounds 8 and 9).** The rules in force are the bullets
+that follow this opening (round 8's, with round 9's additions); the opening
+records how they were reached, and where it states an earlier round's rule
+(the sidecar alone decides, an unreadable roster is purged on any
+`last-seen`) the bullets replace it. The registered roster has root and primary equal to the
 OpenCode session id, so `CreateInCheckout` collapses them to one
 participant (§2.1 step 1). `isStale` (`internal/session/store.go:942-957`)
 treats a one-participant roster as a solo session and ages it out by
@@ -706,7 +779,7 @@ two-participant branch (`store.go:949-956`) in charge: a roster whose
 `Participants[1]` is a dead numeric id would still be stale however fresh
 its `last-seen`. Round 6 puts the sidecar first, and round 8 amends the
 result where the lifecycle model found two counterexamples (C7, C8,
-`docs/spec-opencode-lifecycle.tex`):
+`docs/spec-opencode-lifecycle.tex`); the bullets below state the result:
 
 - `isStale` becomes a `Store` method that takes the session id, because it
   must read the sidecar. It first reads `last-seen`. **When the file is
@@ -736,7 +809,11 @@ result where the lifecycle model found two counterexamples (C7, C8,
   failure (permission denied, I/O error) is treated as **not stale**, with
   one warning on stderr naming the file: failing to read evidence of
   liveness is not evidence of death, and purging on it would delete a live
-  session's claim. (2) A `last-seen` later than the current time (a clock
+  session's claim. **The same rule holds on every branch (round 9):** when
+  the roster itself fails to load and its `last-seen` cannot be read, the
+  roster is likewise **not purged**, with one warning naming the file; only
+  an absent or unparseable `last-seen`, or one older than the TTL, lets the
+  purge proceed (next bullet). (2) A `last-seen` later than the current time (a clock
   that stepped backwards, or a hand-written file) is capped at now, so its
   age is zero and it counts as fresh; the roster is kept until the clock
   passes the stored time plus the TTL. A far-future stamp therefore
@@ -749,7 +826,15 @@ result where the lifecycle model found two counterexamples (C7, C8,
   (`store.go:391-397` and the unreadable-roster branch of
   `PurgeTombstoned`). Both now read `last-seen` first; a valid `last-seen`
   within the TTL leaves the unreadable roster alone, and any other case
-  (absent, unparseable, older than the TTL) purges it as today. **Limit
+  (absent, unparseable, older than the TTL) purges it as today, and a
+  `last-seen` that cannot be read leaves it alone with a warning (previous
+  bullet). **Reachability (round 9).** `Store.Purge` has no production
+  caller: only tests call it, and the one production purge is `ethos session
+  purge`, which calls `PurgeTombstoned` (`cmd/ethos/session.go:881`).
+  `PurgeTombstoned` refuses an unreadable roster unless `--force` is given
+  (`store.go:469-503`), so the C8 amendment changes behavior in production
+  only under `--force`. The amendment is made in both functions so that the
+  two never disagree. **Limit
   (spec N8).** `NoLiveSessionPurged` judges liveness only from what ethos
   can read. A live Claude Code session whose roster fails to parse and has
   no valid `last-seen` is still purged, as it is today; Claude Code rosters
@@ -758,9 +843,14 @@ result where the lifecycle model found two counterexamples (C7, C8,
 - **The older-binary exposure (round 8).** Both sidecars survive an older
   `ethos` binary's roster re-marshal, but an older binary's `isStale`
   ignores `last-seen`. `ethos session purge` from such a binary
-  (`cmd/ethos/session.go:881` calls `PurgeTombstoned`), or a long-running
-  `ethos serve` started before the upgrade, ages a one-participant
-  OpenCode roster out by `Started` alone at 24 hours, with its claim. The
+  (`cmd/ethos/session.go:881` calls `PurgeTombstoned`) ages a
+  one-participant OpenCode roster out by `Started` alone at 24 hours, with
+  its claim. Nothing else ages a roster out: `ethos serve` runs no purge, and
+  `PurgeCurrent` (`session_start.go:159`, `session.go:868`) removes PID
+  pointer files only. An older binary's `deleteFiles` also does not know the
+  `claim-forked-pending` record: it removes the roster and leaves the record
+  and its open fork skeleton, which a later `ethos session delete` by a
+  current binary closes (the record names it). The
   plugin re-registers the session on its next `ensure` (as a root with no
   claim, or as a fork with its lineage re-read), so the damage is a lost
   claim, not a stale trailer. The design cannot prevent a purge by another
@@ -780,8 +870,8 @@ result where the lifecycle model found two counterexamples (C7, C8,
   or not, has no `last-seen` and behaves exactly as today; its
   numeric-primary liveness branch (`store.go:950-956`) is untouched. Every
   existing roster likewise has no `last-seen`.
-- Both call sites pass the id: `Purge` (`store.go:404`) and
-  `PurgeTombstoned` (`store.go:514`).
+- Both call sites pass the id: `Purge` (`store.go:404`, no production
+  caller) and `PurgeTombstoned` (`store.go:514`).
 - The memo's 15-minute refresh interval is what drives refreshes: any
   OpenCode session that makes a tool or shell call at least every 24 hours
   keeps `last-seen` current.
@@ -813,24 +903,35 @@ one table-driven `TestIsStale` unless noted:
 | unparseable `Started`, one participant | fresh | not stale |
 | Claude fork roster with live numeric `Participants[1]`, `Started` 25 hours ago | absent | not stale (today's PID branch; `Ensure` without `touch` wrote no sidecar) |
 
-Purge tests (round 8, ledger C8), against `Purge` and `PurgeTombstoned`: a
-roster that fails to parse with a fresh `last-seen` is not purged; the same
-roster with no `last-seen`, an unparseable one, or one older than the TTL
-is purged.
+Purge tests (round 8, ledger C8; round 9), against `Purge` and
+`PurgeTombstoned` (the latter with `--force`, since without it an unreadable
+roster is refused whatever its `last-seen` says): a roster that fails to
+parse with a fresh `last-seen` is not purged; the same roster with no
+`last-seen`, an unparseable one, or one older than the TTL is purged; the
+same roster with a `last-seen` that cannot be read (permission denied) is
+not purged and a warning names the file. Without `--force`, `PurgeTombstoned`
+refuses the unreadable roster in every case.
 
 Separate tests assert: `Ensure` without `touch` writes no `last-seen` on
 create and none on refresh, and with `touch` writes it on both; `Join`, `JoinSelf`, `Leave`, and `CreateInCheckout`
 leave both sidecars byte-identical; a hand-written roster re-marshalled
 without any new field (the older-binary case) leaves them intact;
-`deleteFiles` removes both and a leftover `parent-session.tmp-*` file and, when it fails, keeps the roster;
+`deleteFiles` removes both sidecars and the crash-leftover temp files
+(`parent-session.tmp-*`, `last-seen.*.tmp`, `claim-forked-pending.*.tmp`)
+and, when it fails, keeps the roster;
 `deleteFiles` performs its steps in the order of the `deleteFiles` order
 item, and a fault injected at each of the seven steps leaves the state the
 model gives for that prefix (round 8, ledger C2: a failure at step 6 leaves
 the roster and its `parent-session` sidecar; a failure at step 7 leaves a
 sidecar with no roster, and `ensure` for that id with a different parent is
 refused); a `deleteFiles` on a session whose pending record names an open
-skeleton closes it `aborted` before clearing anything, and when that close
-fails the claim, binding, and record are all still present (ledger C5, N2);
+fork skeleton the session owns closes it `aborted` before clearing anything,
+and when that close fails the claim, binding, and record are all still
+present (ledger C5, N2); a `deleteFiles` on a session whose binding names a
+Tier B skeleton clears the binding and leaves the skeleton open (ledger C10);
+a `deleteFiles` run from a working directory other than the repository's
+still closes the skeleton, and one whose record has an empty or unresolvable
+store root fails step 1 and clears nothing (B2);
 `ensure` obeys each numbered rule above, including the cycle refusal for a
 self-parent, a two-session loop, and the delete-then-re-register loop
 (ledger C3), the matching-parent
@@ -1224,12 +1325,15 @@ handles `session.deleted` (§1.2 item 1; `.tmp/session-event.ts:177-185`)
 by running `ethos session delete --session <id>` (`runSessionDelete`,
 `cmd/ethos/session.go:697`, wrapping `Store.Delete`, `store.go:200`). That
 call holds the per-session lock and runs `deleteFiles` (`store.go:278-301`):
-it first closes, `aborted`, any open skeleton the session's pending record
-or binding names, then clears the active-mission claim, the delegation
-binding, and every pending dispatch, then removes `last-seen`, the roster,
-and last the `parent-session` sidecar (round 8, order and short-circuit in
-§2.1.1). A failed close keeps the roster and everything else as the retry
-token for a later `session delete` or purge; the plugin logs the failure.
+it first closes, `aborted`, the open fork skeleton the session owns and its
+pending record names (round 9: a Tier B skeleton that the session's binding
+names is not closed, only unnamed; the close uses the store root recorded in
+the record), then clears the active-mission claim, the delegation binding,
+the pending record, and every pending dispatch, then removes `last-seen`, the
+roster, and last the `parent-session` sidecar (order, origin discriminator,
+and short-circuit in §2.1.1). A failed close keeps the roster and everything
+else as the retry token for a later `session delete` or purge; the plugin
+logs the failure.
 The plugin drops the id from its memo
 (§2.1.1). This instantiates the spec's `EndSession`. A forked child whose
 ancestor was deleted becomes unwalkable past that ancestor, and
@@ -1568,8 +1672,8 @@ pipeline stage's write-set is unambiguous:
    does. `Roster` gains no field. `Store.ParentOf` and
    `Store.LastSeen` read the sidecars; `deleteFiles` removes them in the
    seven-step order of §2.1.1 (`last-seen` at step 5, `parent-session` last
-   at step 7, ledger C2), after closing the skeletons its session names
-   (step 1, ledger C5). `session create` keeps its replace semantics for an id with no
+   at step 7, ledger C2), after closing the open fork skeleton its record
+   names and its session owns (step 1, ledger C5, C10, C12). `session create` keeps its replace semantics for an id with no
    recorded parent and refuses an id whose sidecar records one. The plugin
    never calls it.
    **`isStale` change (round 6, replacing round 5's age-base change):**
