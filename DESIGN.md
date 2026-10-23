@@ -12320,16 +12320,19 @@ aborted a skeleton the claim still named after a crash between the claim
 write and the completion mark followed by a Tier B dispatch (Copilot,
 PR #536). It applies to the reconcile of a refusal and of the claimed case and
 to the ghosts `leaked` and `liveAborted`; the resume and fresh paths need
-none. Rulings of the leader: `fixClaimLive` depends on the durable record
-(`fixDurableName`) for `NoOrphanOpenSkeleton` and they ship together
-(`C17_nodur`; `NoLiveForkAborted` holds without it, `C17_lfa_nodur`); the binding and
+none. Rulings of the leader: `fixClaimLive` ships with the durable record
+(`fixDurableName`), which is required in any case (without it
+`NoOrphanOpenSkeleton` fails whether `fixClaimLive` is on or off, C12; with
+`fixClaimLive` on the failure is shorter, by adoption, `C17_nodur`);
+`NoLiveForkAborted` holds without it (`C17_lfa_nodur`); the binding and
 complete-mark tests stay in the code as defensive tests that the model does
 not exercise (`Own_all`); and (N21) when an operator claim names the
 skeleton's mission after a call died before it wrote its binding, the
 skeleton is live and is adopted, not aborted, and `mission release` or the
 close-time clearing closes it. Copilot's alternative, marking the record
-complete in the Tier B dispatch, was modelled and closes only Copilot's
-trace, not the operator-claim trace, and was not adopted; the Tier B dispatch
+complete in the Tier B dispatch, was modelled; it closes Copilot's
+claimed-case trace and fails the operator-claim trace in the claimed case too,
+with no dependence on N22, and was not adopted; the Tier B dispatch
 is unchanged. A refusal keeps a live record and never resumes it. Required
 tests: Copilot's trace (a claim written, the call dead before the completion
 mark, the binding replaced by a Tier B dispatch, then a refused and a
@@ -12337,9 +12340,12 @@ reconciled `claim-forked`: the skeleton is open after the call and the record
 is kept and complete) and the operator-claim trace (C17: the call dead after
 the skeleton, an operator claims the skeleton's mission, the next call adopts
 the skeleton; N21 applies where the call died before its binding). A next
-call that finds the claim at step 2 of the read phase takes the claimed case;
-the refused variant of each trace is induced by writing the claim after that
-lock-free read and before the dispatch-pending lock (N22). (29) *Reconcile paths.* `fixSupersede` applies on the fresh
+call that finds the claim at step 2 of the read phase takes the claimed case.
+The refused variant of Copilot's trace is induced by N22 route (a), removing or
+corrupting the child's roster after the crash; the refused variant of the
+operator-claim trace by route (b), writing the claim after the lock-free read
+and before the dispatch-pending lock, and the witness check must also refuse.
+(29) *Reconcile paths.* `fixSupersede` applies on the fresh
 and resume paths only; the resume clause is defensive and unexercised. The
 resume path takes the mission and delegation locks and re-reads the mission
 before it writes (C15). A mission found closed at that re-read first closes the
@@ -12661,8 +12667,9 @@ Full writeups, including two historical exploit traces, are in
   `releaseID(false)`) and the moment of consumption (N20), and who wrote a
   claim: the adoption of a skeleton by an operator claim is a ruling of the
   leader, not a result of the model (N21). The model's refusal can be reached
-  with a claim in hand; the design reaches that only between the lock-free read
-  and the dispatch-pending lock (N22). The model has
+  with a claim in hand; the design reaches that by two routes: a missing or
+  unreadable child roster at step 1, and the window between the lock-free
+  claim read and the dispatch-pending lock (N22). The model has
   uniqueness because every operation leaves `used` unchanged or grows it
   (`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`
   (`d?` not in `used`), and the initialisations set it empty; the
