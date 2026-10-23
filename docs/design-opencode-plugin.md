@@ -120,7 +120,7 @@ and `session create` citations were re-checked against source and adjusted.
 found one blocking defect and six wording defects in round 6. Fixed: (1)
 `Ensure` writes `last-seen` only when the caller passes `touch` (CLI
 `--touch`); the OpenCode plugin passes it on every `ensure`, Claude Code's
-fork `SessionStart` never does, so a Claude Code roster keeps today's PID
+`SessionStart` never does (round 9: for every source, not only fork), so a Claude Code roster keeps today's PID
 staleness logic, with a new `TestIsStale` row for a Claude fork roster
 (§2.1.1, §5 point 1); (2) the `claim-forked` reconcile close takes the
 record's shared mission lock and the skeleton's delegation lock, and the
@@ -618,7 +618,9 @@ and one new Go command, `ethos session ensure` (§5 point 1):
      registered as a root. If a roster exists, `ensure` with `--touch`
      changes only `last-seen` (set to the current time), and `ensure`
      without `--touch` changes nothing: `Started`, participants, and
-     extensions survive either way.
+     extensions survive either way. The one exception is the `refreshRoster`
+     option, which only the Claude Code `SessionStart` hook passes (below);
+     the plugin and the CLI `ensure` never do.
      **A roster that fails to load is not refreshed (round 9; lifecycle
      spec `LcEnsureRefresh`, whose guard excludes the `corrupt` set).**
      `ensure --touch`
@@ -801,9 +803,10 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   no lineage over a sidecar that records one, and the roster says root
   while the sidecar says child (run `S_lin_off`, four steps; `S_lin_on`
   holds, 1,025 states, all visited). The hook therefore calls
-  `Store.Ensure` in process for **every** source, without `touch`: for a
-  session that has a roster it changes nothing, and for one that has not it
-  registers it as `ensure` does. The `fork` source supplies the parent from
+  `Store.Ensure` in process for **every** source, without `touch` and with
+  `refreshRoster` (below): for a session that has no roster it registers it
+  as `ensure` does, and for one that has a roster it rewrites the roster as
+  `CreateInCheckout` does today and changes nothing else. The `fork` source supplies the parent from
   the payload; every other source supplies the parent `Store.ParentOf`
   already records (none, if none), which is what the write-once rule of
   `Ensure` requires of a caller that is not creating lineage. The
@@ -814,29 +817,39 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   `Ensure` for every source, as `createSessionRoster` does today (§2.5).
   Required tests: a `SessionStart` with source `resume`, and one with source
   `compact`, against a fork that has a roster and a `parent-session`
-  sidecar, change neither.
-  **Limit (spec N11; not modelled further).** A `SessionStart` for a roster
-  that exists but does not parse is a no-op under `Ensure`, where
-  `CreateInCheckout` rewrote it. The purge reclaims such a roster, and
-  whether the hook should heal it is not decided here.
-  **The primary participant is refreshed on an existing roster (round 9,
-  leader decision; outside the model).** A resumed session gets a new
-  `claudePID`, and `CreateInCheckout` recorded it as the roster's numeric
-  primary participant on every `SessionStart`. Under create-if-absent
-  `Ensure` an existing roster would keep the old, dead id, and `isStale`
-  would treat the roster as stale by its PID branch (`store.go:950-956`)
-  while the new process is alive: a regression this design would introduce.
-  The `Ensure` call that `SessionStart` makes, for any source, therefore
-  also **updates the primary participant of an existing roster to the current
-  `CLAUDE_PID`, under the roster lock** (`Ensure`'s `withLock`). It touches
-  nothing else: never the `parent-session` sidecar, never `last-seen`, and it
-  never writes `touch`. Lineage stays safe because it lives in the sidecar,
-  not the roster. The OpenCode plugin and the CLI `ensure` do not pass this
-  refresh. The spec holds the participant kind fixed across `SessionStart`
-  (`LcSessionStart`, `rkind' = rkind`), so this is not modelled (§2.7).
-  Required test: a roster whose primary participant is a dead numeric id,
-  resumed by a `SessionStart` from a live process, is not stale afterwards,
-  and its `parent-session` sidecar and `last-seen` are byte-identical.
+  sidecar, leave the `parent-session` and `last-seen` sidecars
+  byte-identical, and the roster afterwards equals what `CreateInCheckout`
+  would write for the same inputs.
+  **Limit (spec N11).** The model makes a `SessionStart` for a roster that
+  exists but does not parse a no-op. With `refreshRoster` the hook rewrites
+  such a roster as `CreateInCheckout` did, so the hook heals it; that is
+  outside the model.
+  **`SessionStart` rewrites an existing roster (round 9, leader decision;
+  outside the model).** Today `CreateInCheckout` rewrites the roster on every
+  `SessionStart` (`session_start.go:169-198`): the root participant and its
+  persona, the primary participant with `agentPersona` from the repo config
+  and the current `CLAUDE_PID` as `AgentID`, `Repo`, `Checkout`, `Host`, and
+  `Started`, with the participants reset to `[root, primary]`. A resumed
+  session gets a new `claudePID`, and a create-if-absent `Ensure` would keep
+  the old, dead one, so `isStale` would purge a live session by its PID
+  branch (`store.go:950-956`); it would also keep a stale `Checkout` and
+  persona, which `session_start.go:304-309` and the audit vacuum read.
+  `Store.Ensure` therefore takes a named option, **`refreshRoster`**, in its
+  signature (§5 point 1). **Only the Claude Code `SessionStart` hook passes
+  it; the OpenCode plugin and the CLI `ensure` never do.** On an existing
+  roster, under the roster lock, it rewrites the roster exactly as
+  `CreateInCheckout` does for the same inputs (root persona, primary persona,
+  `Repo`, `Checkout`, `Host`, participants reset to `[root, primary]`,
+  `Participants[1]` set to the current `CLAUDE_PID`). It **never touches** the
+  `parent-session` or `last-seen` sidecars and never writes `touch`. Lineage
+  stays safe because it lives in the sidecar, not the roster. This preserves
+  today's checkout and persona behaviour. The spec holds the participant kind
+  fixed across `SessionStart` (`LcSessionStart`, `rkind' = rkind`), so roster
+  contents are outside the model (§2.7). Required tests: a roster whose
+  primary participant is a dead numeric id, resumed by a `SessionStart` from a
+  live process, is not stale afterwards; the roster afterwards equals what
+  `CreateInCheckout` would write; and the `parent-session` sidecar and
+  `last-seen` are byte-identical before and after.
 - **Repair.** A sidecar left behind with no roster (an older binary's
   `Delete` does not know to remove it, or a failure at step 7 of
   `deleteFiles`) is authoritative: `ensure` and
@@ -946,8 +959,8 @@ result where the lifecycle model found two counterexamples (C7, C8,
   (`store.go:962-964`, stale). **Round 7 (replacing round 6's claim that
   every Claude Code roster has no `last-seen`):** `Ensure` writes
   `last-seen` only when the caller passes `touch` (CLI `--touch`). The
-  OpenCode plugin passes it on every `ensure`. Claude Code's fork
-  `SessionStart` never passes it. Round 6 had `Ensure` write `last-seen`
+  OpenCode plugin passes it on every `ensure`. Claude Code's
+  `SessionStart`, for every source, never passes it. Round 6 had `Ensure` write `last-seen`
   on every call, and that would have given a Claude Code fork roster, which
   has a live numeric `Participants[1]`, a sidecar that overrides the PID
   branch: after 24 hours with no refresh, the roster would be purged
@@ -1023,7 +1036,8 @@ self-parent, a two-session loop, and the delete-then-re-register loop
 refresh with the parent's roster deleted and `--parent-gone` on first
 registration; `session create` refuses an id whose sidecar records a
 parent; and a `SessionStart` with `source: "fork"` against a roster that
-already has lineage changes nothing.
+already has lineage leaves both sidecars byte-identical and rewrites the
+roster as `CreateInCheckout` would.
 
 `isStale`, the two sidecars, `Store.Ensure`, `Store.ParentOf`, and
 `Store.LastSeen` are therefore implementation work, listed in §5 point 1.
@@ -1297,7 +1311,7 @@ registered as an ancestor, regardless of what the flag claims.
 This leaves `Roster` (`internal/session/session.go:25-32`) unchanged and
 requires no change to any `Join`, `JoinSelf`, or `Leave` caller. Two
 creators change: `ethos session create` refuses an id whose sidecar
-records a parent, and Claude Code's fork `SessionStart` calls `Ensure`
+records a parent, and Claude Code's `SessionStart` (every source) calls `Ensure`
 (§2.1.1, §2.5). Neither the sidecar nor the flag contains any
 OpenCode-specific logic; see §2.5.
 
@@ -1370,11 +1384,13 @@ the `fork` source the hook then calls `claim-forked` (§5 point 2), the same
 two steps the OpenCode plugin takes on `session.forked`. The two steps run
 one after the other and are never nested (§5 point 2, lock constraint). The
 `SessionStart` path still writes the `CLAUDE_PID` pointer file
-(`session_start.go:196`) as it does today. On an existing roster, that
-`Ensure` call also sets the primary participant to the current `CLAUDE_PID`
-under the roster lock, so a resumed session does not keep its dead old id
-and get purged while live; it never changes the `parent-session` sidecar or
-`last-seen` and never writes `touch` (§2.1.1).
+(`session_start.go:196`) as it does today. That `Ensure` call passes
+`refreshRoster` (§2.1.1, §5 point 1): on an existing roster it rewrites the
+roster exactly as `CreateInCheckout` does (personas, `Repo`, `Checkout`,
+`Host`, participants reset to `[root, primary]`, `Participants[1]` the
+current `CLAUDE_PID`), so a resumed session does not keep its dead old id
+and get purged while live. It never changes the `parent-session` or
+`last-seen` sidecars and never writes `touch`. Only this hook passes it.
 **A fork whose parent has no roster (round 8).** The pointer file is written
 only after the roster was created (`session_start.go:194-197`), and `Ensure`
 refuses a first registration whose parent has no roster (§2.1.1 rule 1). A
@@ -1486,10 +1502,10 @@ item 1); N8, a live Claude Code session whose roster does not parse and has no
 `last-seen` is still purged (§2.1.1); N9 and N17, the Tier B dispatch is one
 atomic step and three of its paths are not represented (§5 point 2 item 5);
 N10, the compare-and-set is taken to be atomic as the delegation lock is; N11,
-a `SessionStart` for a roster that does not parse is a no-op (§2.1.1); the
-primary-participant refresh of `SessionStart` on an existing roster is outside
-the model, which holds the participant kind fixed across `SessionStart`
-(§2.1.1); N12,
+a `SessionStart` for a roster that does not parse is a no-op (§2.1.1); roster
+contents, and the rewrite of an existing roster that `refreshRoster` performs
+for `SessionStart`, are outside the model, which holds the participant kind
+fixed across `SessionStart` (§2.1.1); N12,
 the owner test of the origin filter is vacuous in the model, whose only
 writers of a binding are the session itself; N13, the dispatch-pending
 entries `ClearMissionBindings` clears and the MCP path that calls it are not
@@ -1816,8 +1832,12 @@ pipeline stage's write-set is unambiguous:
    backed by a new `session.Store.Ensure`, and two per-session sidecar
    files, `parent-session` and `last-seen`** (§2.1.1, §2.3.2).
    `Store.Ensure(sessionID, root, primary, repo, checkout, host,
-   parentSession, parentGone, touch)` takes the per-session roster lock
-   (`Store.withLock`) once and applies the four rules of §2.1.1 inside it:
+   parentSession, parentGone, touch, refreshRoster)` takes the per-session
+   roster lock (`Store.withLock`) once and applies the four rules of §2.1.1
+   inside it. `refreshRoster` (round 9) is passed only by the Claude Code
+   `SessionStart` hook, never by the plugin or the CLI `ensure`: on an
+   existing roster it rewrites the roster as `CreateInCheckout` does and
+   touches neither sidecar (§2.1.1). The four rules:
    the parent-exists check on first registration only (waived by
    `parentGone`, which requires a non-empty `parentSession`); a
    lineage-conflict error, changing nothing, when the recorded parent (the
@@ -1829,8 +1849,8 @@ pipeline stage's write-set is unambiguous:
    one that fails to load writes nothing and exits non-zero, §2.1.1 rule 4). A parent that is absent from the store makes
    `Ensure` return a typed `ErrParentNotFound`, so a caller that has a
    conclusive "not found" can retry with `parentGone` (§2.5). `touch` is the CLI flag `--touch`: the plugin
-   passes it on every `ensure`, and Claude Code's fork `SessionStart` never
-   does. `Roster` gains no field. `Store.ParentOf` and
+   passes it on every `ensure`, and Claude Code's `SessionStart`, for every
+   source, never does. `Roster` gains no field. `Store.ParentOf` and
    `Store.LastSeen` read the sidecars; `deleteFiles` removes them in the
    seven-step order of §2.1.1 (`last-seen` at step 5, `parent-session` last
    at step 7, ledger C2), after closing the open fork skeleton its record
@@ -2473,7 +2493,9 @@ pipeline stage's write-set is unambiguous:
    `touch`, in place of `createSessionRoster`'s `CreateInCheckout`
    (`session_start.go:69,194`): the `fork` source passes the payload's
    parent as `parentSession` (with the `parentGone` retry of §2.5), every
-   other source passes the parent `Store.ParentOf` records. For the `fork`
+   other source passes the parent `Store.ParentOf` records, and the call passes
+   `refreshRoster` so an existing roster is rewritten as `CreateInCheckout`
+   does (§2.1.1). For the `fork`
    source it then calls `claim-forked`. It is not a separate future concern:
    shipping only the OpenCode trigger would leave Claude Code's identical gap
    open and reintroduce a parity difference between the harnesses.
