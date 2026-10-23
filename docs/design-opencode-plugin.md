@@ -741,8 +741,8 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   (`pretooluse_dispatch.go:775-884`). A Tier B dispatch writes the leader's
   own delegation binding, with `ParentSession` equal to the session itself,
   and nothing in the dispatch closes the skeleton (`subagent_stop.go` does
-  not, and `CloseDelegationSkeleton` has no caller outside the tests), so it
-  stays open until `Store.Close` sweeps it. A step 1 that closed everything
+  not, and `CloseDelegation` (`delegation.go:584`) has no caller outside the
+  tests), so it stays open until `Store.Close` sweeps it. A step 1 that closed everything
   the binding names would abort a running subagent's delegation when its
   leader's session ended or was purged (run `F1D_off`, four steps). In the
   code the kind is the skeleton's `BoundVia`: `claim-forked` writes a new
@@ -924,9 +924,8 @@ result where the lifecycle model found two counterexamples (C7, C8,
   ignores `last-seen`. `ethos session purge` from such a binary
   (`cmd/ethos/session.go:881` calls `PurgeTombstoned`) ages a
   one-participant OpenCode roster out by `Started` alone at 24 hours, with
-  its claim. Nothing else ages a roster out: `ethos serve` runs no purge, and
-  `PurgeCurrent` (`session_start.go:159`, `session.go:868`) removes PID
-  pointer files only. An older binary's `deleteFiles` also does not know the
+  its claim. Nothing else ages a roster out: `PurgeCurrent`
+  (`session_start.go:159`, `session.go:868`) removes PID pointer files only. An older binary's `deleteFiles` also does not know the
   `claim-forked-pending` record: it removes the roster and leaves the record
   and its open fork skeleton, which a later `ethos session delete` by a
   current binary closes (the record names it). The
