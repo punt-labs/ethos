@@ -381,9 +381,12 @@ branches of every switch, from the \emph{post}-state:
 \field{leaked}' = \field{leaked} \cup \{ c? \mid \exists rd \in \field{pend}(\{c?\}) \bullet
   rd \in \field{dOpen}' \land \lnot\,\field{live}'(c?, rd) \}
 \]
-where $\field{live}'(c, rd)$ says $c \mapsto rd$ is in \field{binding}$'$ and the
-child's claim in \field{claimed}$'$ is for the mission that \field{dMis}$'$
-gives $rd$. The record read is the pre-state one, because that is the
+where $\field{live}'(c, rd)$ says that the child's claim in
+\field{claimed}$'$ is for the mission that \field{dMis}$'$ gives $rd$ and
+that $rd$ is named by the child: $c \mapsto rd$ is in \field{binding}$'$, or
+the record is complete (\field{fixDurableName}), or, with
+\field{fixClaimLive}, $rd$ is a skeleton of kind \field{dkFork} that $c$
+owns. The record read is the pre-state one, because that is the
 attempt being exited; whether its skeleton was closed is read off
 \field{dOpen}$'$, which the operation's own predicate determined. A mutant
 operation that omits its closing step therefore leaks, and the invariant is
@@ -1173,7 +1176,10 @@ the child's binding when that is a different delegation, because the write
 phase is about to overwrite the binding. With
 \field{fixResumeClosed} the exit ``do not retry'' closes the skeleton the
 record names, \field{aborted} and compare-and-set, and removes the record
-(C16).
+(C16). With \field{fixClaimLive} a skeleton of kind \field{dkFork} that the
+child owns is live, in the refusal and in the claimed case, whenever the
+child's claim is for the skeleton's mission, whatever the binding names and
+whether or not the record is complete (C17).
 
 \begin{schema}{LcCfRefuse}
 \Delta Lifecycle \\
@@ -1945,8 +1951,9 @@ with the other eight on, and six more (\field{fixOrigin},
 design against the Claude Code paths the model had omitted found; C1 to C9
 were run again on the final text, and C9 was found to have been reached by a
 wrong model of \field{mission release} (its errata). The sixteenth,
-\field{fixResumeClosed}, belongs to C16, which a reviewer of the pull request
-found and the model had not. Each
+\field{fixResumeClosed}, belongs to C16, and the seventeenth,
+\field{fixClaimLive}, to C17; a reviewer of the pull request found each and
+the model had not. Each
 trace is the shortest breadth-first path to a state satisfying the negated
 invariant, in the notation of the operations; ``$a$, $b$'' are sessions,
 $m_1$, $m_2$ missions and $d$ a delegation. The first four are the
@@ -2140,7 +2147,8 @@ assumed. The rest were not known.
     record is never resumable (\field{LcCfReconcileReuse} requires
     $c\notin\field{pendDone}$), and it is live, whatever the binding names,
     when the child's claim is for the skeleton's mission; an incomplete record
-    is live only if the binding names it as well, as in C4. In the refusal and
+    is live only if the binding names it as well, as in C4 (\textbf{errata}:
+    C17 shows this last clause to be wrong and withdraws it). In the refusal and
     the claimed case a live record is kept and marked complete, and any other
     is closed and removed. The ghosts \field{leaked} and \field{liveAborted}
     use the same notion of live. With the switch on and no assumption,
@@ -2209,7 +2217,7 @@ assumed. The rest were not known.
     \field{LcCfCrash}; \field{LcCfBegin}$(b,a)$; \field{LcCfReconcileReuse};
     \field{LcCloseUnlockedBegin}$(m_1)$; \field{LcCfExitNoRetry}$(b)$ (run
     \texttt{U1\_leak\_off}, slice \emph{claim-u}, every switch but
-    \field{fixResumeClosed}: ten operations, 8\,744 states, depth 12; the goal
+    \field{fixResumeClosed}: ten operations, 8\,924 states, depth 12; the goal
     is \texttt{leaked /= \{\}}). The first call crashes with $d$ open and named by
     the record. The second resumes the record and is left before the locks
     (C15). The unlocked fallback of \field{Store.Close} then closes the mission
@@ -2231,6 +2239,79 @@ assumed. The rest were not known.
     when the identifiers are exhausted, finds the record already removed and
     closes nothing. With the switch on all eight invariants hold on
     \emph{claim-u} and \emph{claim+u} (\texttt{U1\_*\_all}, \texttt{U2\_*\_all}).
+  \item[\textbf{C17}] \textbf{A record whose claim has committed is judged not
+    live once a Tier B dispatch has moved the binding.}
+    \field{NoLiveForkAborted} (new, \S\ref{sec:lc-invariants}); \S5 point~2
+    items~2 and~5, the liveness of a record in the refusal and in the claimed
+    case. Found by Copilot in review of PR~536, on the head \texttt{036a5da},
+    and not by this model: \field{LiveSpared}, \field{ReconcileOnExit} and
+    \field{NoOrphanOpenSkeleton} all held of the text with the sixteen
+    switches on, and still do (\texttt{C17\_live\_off},
+    \texttt{C17\_leak\_off}, \texttt{C17\_orph\_off}, 314\,389 states of
+    \emph{claim+}, all visited). From \field{LcInitPair}:
+    \field{LcCfBegin}$(b,a)$; \field{LcCfReconcileFresh}; \field{LcCfAlloc}$(b,d_1)$;
+    \field{LcCfWriteRecord}; \field{LcCfWriteSkeleton}; \field{LcCfWriteBinding};
+    \field{LcCfWriteClaim}; \field{LcCfCrash}; \field{LcTierBDispatch}$(b,m_1,d_2)$;
+    \field{LcCfBegin}$(b,a)$; \field{LcCfReconcileClaimed}$(b)$ (run
+    \texttt{C17\_off\_nr}: \emph{claim+} without \field{LcOperatorClaim} and
+    \field{LcCfRefuse}, every switch but \field{fixClaimLive}; 11\,618 states,
+    depth 13; the goal is \texttt{liveForkAborted /= \{\}}). The first call
+    died after it had written the claim and before it marked the record
+    complete (\field{LcCfFinish}). The child's claim is for $m_1$ and
+    $d_1$, the fork skeleton, is open and named by the record. The Tier B
+    dispatch then writes the child's binding over $d_1$ with $d_2$, as it must
+    (C12: the dispatch is unchanged). The second call finds a record that is
+    not complete and a binding that names another delegation, so by the rule
+    of C12 and C4 the record is not live: the reconcile closes $d_1$ \field{aborted}
+    and removes the record, though the child's claim still names $m_1$. The
+    refusal does the same without the second \field{LcCfBegin}
+    (\texttt{C17\_off\_noop}, 9\,642 states, depth 12, with the operator claim
+    removed from the slice only). The rule of C12 was stated by the one step
+    that the model had not separated: a complete record is live whatever the
+    binding names, an incomplete one only when the binding names it, and the
+    interval between \field{LcCfWriteClaim} and \field{LcCfFinish} is exactly
+    where the claim is committed and the record is not complete. The ghosts
+    \field{liveAborted} and \field{leaked}, and with them \field{LiveSpared}
+    and \field{ReconcileOnExit}, judged ``live'' by the same
+    binding-or-complete predicate that the operations used, so they could not
+    fail for a skeleton that predicate misjudged; the new ghost
+    \field{liveForkAborted} reads the claim, the owner, the kind and the
+    transition only. Without the operator claim in the slice the trace above is
+    the shortest; with it, there is a shorter one of eight operations
+    (\texttt{C9\_lfa\_off}, 48\,840 states, depth 10; also \texttt{Fa\_lfa\_off} on
+    \emph{claim}, 1\,118 states, and \texttt{U1\_lfa\_off} on \emph{claim-u},
+    2\,796 states, at the same depth): the call dies after the skeleton and before
+    the binding, an operator claims $m_1$ by hand (\field{LcOperatorClaim}$(b,m_1)$),
+    and the next call is refused (\field{LcCfRefuse}$(b)$): the claim names the
+    mission of $d_1$, and $d_1$ is closed. \textbf{Amendment}
+    \field{fixClaimLive} (the leader's decision; Tier B dispatch unchanged): a
+    skeleton of kind \field{dkFork} that the child owns is live whenever the
+    child's claim is for the skeleton's mission, whatever the binding names and
+    whether the record is complete or not. The amendment is applied in the one
+    predicate that judges liveness, in the refusal, in the claimed case and in
+    the ghosts \field{leaked} and \field{liveAborted}. The resume path and the
+    fresh path need none, since the child holds no claim there
+    (\field{LcCfReconcileReuse} and \field{LcCfReconcileFresh} require
+    $c\notin\dom\field{claimed}$), and \field{mission release}, the
+    close-time clearing and \field{deleteFiles} clear the claim in the call
+    that closes the skeleton. With it on, \field{NoLiveForkAborted} holds, with every other
+    invariant, on all four exhaustive slices (\texttt{Fa\_lfa\_all}, \texttt{C9\_lfa\_all},
+    \texttt{U1\_lfa\_all}, \texttt{U2\_lfa\_all}) and on the slices without an
+    operator claim (\texttt{C17\_all\_noop}, \texttt{C17\_all\_nr}). Two
+    consequences. First, for a skeleton that the record names the three tests
+    (the binding, the complete mark, the owned fork skeleton) are now one: a
+    record names only a skeleton that its own call wrote, so the owner and the
+    kind hold of every open skeleton a record names (\texttt{Own\_all},
+    271\,253 states of \emph{claim+}, all visited), and the test reduces to the
+    claim; the other two are kept in the text because the amendment is a
+    switch, and the mutant \texttt{MutLiveNoDone} of C12, which leaves the
+    binding alone, now switches off the complete mark and the owned fork
+    skeleton together. Second, \field{fixClaimLive} needs
+    \field{fixDurableName}: the kept record is marked complete only under the
+    durable name, and with the record removed the adopted skeleton is
+    named by nothing (\texttt{C17\_nodur}, 48\,840 states, depth 10). A skeleton that is adopted although its binding was never
+    written (the second trace above, after an operator claim of its mission) is
+    N21.
 \end{enumerate}
 
 Of the six original invariants, \field{LineageStable} needs
@@ -2252,6 +2333,9 @@ unlocked sweep can run, \field{fixResumeClosed} (\texttt{U1\_leak\_off}); and
 needs \field{fixOrigin}, \field{NoVerdictOverwrite} needs \field{fixCas},
 \field{LockedWrites} needs \field{fixReuseLocks}, and \field{LiveSpared}
 needs the scope of \field{fixSupersede} (\texttt{MutSupClaimed}).
+\field{NoLiveForkAborted} needs \field{fixClaimLive}, and, for the record not to
+be removed under the adopted skeleton, \field{fixDurableName}
+(\texttt{C9\_lfa\_off}, \texttt{C17\_off\_nr}, \texttt{C17\_nodur}).
 
 \paragraph{Decision recorded: the reversal of C7.} The leader has accepted
 C7 as stated: a roster with a live numeric participant is never purged,
@@ -2279,7 +2363,7 @@ cp F S.tex
 for n in fixDeleteOrder fixDeleteCloses fixCycleCheck fixRefuseReconciles \
          fixInertBinding fixStaleLive fixCorruptPurge fixPostCheck fixSupersede \
          fixOrigin fixReleaseCloses fixSessionStart fixCas fixReuseLocks fixDurableName \
-         fixResumeClosed; do
+         fixResumeClosed fixClaimLive; do
   sed -E -i "s/^$n = z(true|false)( [\\\\][\\\\])?\$/$n = V_$n\2/" S.tex
 done
 sed -i '/^[\\]begin{schema}{LcInv/,/^[\\]end{schema}/d' S.tex
@@ -2316,6 +2400,10 @@ NoVerdictOverwrite   overwritten /= {}
 LockedWrites         unlocked /= {}
 LiveSpared           liveAborted /= {}
 NoLiveForkAborted    liveForkAborted /= {}
+Own                  #c.(c:dom(pend) & #rd.(rd:pend[{c}] & rd:dOpen &
+                         not((rd|->c):dOwn & (rd|->dkFork):dKind)))
+Adopt                #c.(c:pendDone & c/:dom(binding) & c:dom(claimed) & pend(c):dOpen &
+                         dMis(pend(c))=claimed(c))
 WellFormed           not(dom(rkind)=roster & dom(started)=roster & corrupt<:roster &
                          roster<:dom(sealed) & seenBad/\dom(seen)={} &
                          dom(corigin)=dom(claimed) & dom(pendWit)=dom(pend) &
@@ -2339,7 +2427,7 @@ no extraction, at setsize~1 (\field{MAX\_OPERATIONS} 1000): \texttt{init},
 \texttt{animate}, \texttt{cbc\_assertions}, \texttt{cbc\_deadlock} and the
 model check pass, the last over 6\,496 states and 213\,008 transitions with no
 state-schema violation and no deadlock (the figures are unchanged by
-\field{fixResumeClosed}: the operation it amends needs two sessions and does not fire). The coverage check fails, as it must:
+\field{fixResumeClosed} and by \field{fixClaimLive} and its ghost: the operations they amend need two sessions and do not fire). The coverage check fails, as it must:
 seventeen operations never fire, for a structural reason. Every
 \field{LcCf}\ldots operation except \field{LcCfRefuse}
 (fourteen of them), \field{LcEnsureLineageOnly} and the two scenario
@@ -2365,7 +2453,11 @@ operations (with \field{LcCfLockReuse}), \field{LcOperatorClaim} and
 \field{LcClearClosed} and \field{LcCloseLocked}. \emph{claim-u} is
 \emph{claim} with \field{LcCloseUnlockedBegin} and \field{LcSweepWrite}, and
 \emph{claim+u} is \emph{claim+} with the same two; C16 passed through the
-want of them. \emph{delete} is \emph{claim}
+want of them. \emph{claim+, no operator claim} is \emph{claim+} without
+\field{LcOperatorClaim}, and \emph{claim+, no operator claim, no refusal} is
+that slice without \field{LcCfRefuse} as well: the only claim in either is the
+one \field{claim-forked} writes, and in the second the only reconcile that
+meets it is \field{LcCfReconcileClaimed}. They exist for C17. \emph{delete} is \emph{claim}
 without \field{LcOperatorClaim}, \field{LcReleaseClaim}, \field{LcCfRefuse},
 \field{LcCfReconcileClaimed}, \field{LcCfAbort} and \field{LcCfExitNoRetry},
 plus \field{LcDeleteSession}. \emph{sweep} is \emph{delete} with
@@ -2376,7 +2468,7 @@ plus \field{LcDeleteSession}. \emph{sweep} is \emph{delete} with
 operation, \field{LcEnsureCreate}, \field{LcDeleteSession},
 \field{LcCloseLocked} and both halves of the unlocked sweep. The two slices
 are the same operation set under two names: the input files of
-\texttt{Fc\_w} and \texttt{Fv2\_on} differ only in the lines of the sixteen
+\texttt{Fc\_w} and \texttt{Fv2\_on} differ only in the lines of the seventeen
 switches. The table labels the \texttt{Fc\_*} rows \emph{sweep+ensure} and the
 \texttt{Fv2\_*} rows \emph{verdict}.
 \emph{tierb-delete}, \emph{tierb-purge} and \emph{tierb-reconcile} keep the
@@ -2418,13 +2510,30 @@ corrected. The goal that the ten \field{WellFormed} rows
 \texttt{U1\_wf\_all}, \texttt{U2\_wf\_all}, \texttt{MutResumeKeepRec\_wf})
 passed to probcli already carried the conjunct, so the printed list and not
 the runs was wrong; all ten were run again with the corrected goal and have
-the same outcome, states and depth as in the table. All 130 rows were run again on the text with
-\field{fixResumeClosed}. The 97 rows of the previous revision have the same
-outcome, states and depth as before, but for \texttt{Fv2\_on}, a bounded row
-whose depth is now 23 and was 21 (the bound is the state count; the depth is
-where the bound fell). The 33 others are new: the \emph{claim-u} and
-\emph{claim+u} rows, the mutants of C16, and \texttt{MyRelKeepRec}, the
-release mutant of N18.
+the same outcome, states and depth as in the table. All 163 rows were run
+again on the text with \field{fixClaimLive}, the ghost
+\field{liveForkAborted} and the invariant \field{NoLiveForkAborted}. The 130
+rows of the previous revision have the same outcome as before, none
+excepted: no counterexample appeared in a row that held, and none vanished
+from a row that failed. In 65 of them the states and the depth are also
+unchanged. In the other 65 the number of states has changed, because the new
+ghost multiplies the states in which it is not empty and, with the switch on,
+the refusal and the claimed case keep a skeleton they used to close; nine of
+the 65 also changed depth (\texttt{Fa\_all}, \texttt{Fa\_leak\_all},
+\texttt{Fa\_orph\_norel\_dur}, \texttt{Fa\_orph\_all}, \texttt{Fa\_wf\_all},
+\texttt{Fa\_live\_all}, \texttt{Fa\_lockw\_all}, \texttt{Fa\_orph\_d3} and
+\texttt{MutLiveNoDone}). The rows that name an isolating experiment with the
+pending record not durable (\texttt{C12\_off}, \texttt{C9\_nosup},
+\texttt{Fa\_orph\_norel}) have \field{fixClaimLive} off as well, so that they
+are the experiments the ledger describes; with it on they fail sooner and by
+another trace (\texttt{C17\_nodur}, C17). The 33 rows that are new are those
+of C17: \field{NoLiveForkAborted} with the switch on and off on the four
+exhaustive slices (eight rows) and on the two slices without an operator
+claim (four); the other four invariants with the switch off
+(\texttt{C17\_*\_off}, five rows); \texttt{C17\_nodur}; the two mutants of
+\field{fixClaimLive}; the ten rows of the alternative of the review (the last
+two kinds in the second table); and \texttt{Own\_all}, \texttt{Adopt\_all} and
+\texttt{Adopt\_off}.
 
 {\scriptsize
 \begin{center}
@@ -2458,31 +2567,31 @@ release mutant of N18.
 \texttt{S\_acyc\_nocycle} & Acyclic & Init & 3/2/2 & DeleteOrder, SessionStart & counterexample & start & 2 & 3 \\
 \texttt{S\_wf\_on} & WellFormed & Init & 3/2/2 & DeleteOrder, CycleCheck, SessionStart & holds, all states visited & start & 1\,025 & 5 \\
 \texttt{Fa\_w} & ReconcileOnExit & InitPair & 2/2/2 & none & counterexample & claim & 609 & 9 \\
-\texttt{Fa\_refuse} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles & counterexample & claim & 2\,818 & 12 \\
-\texttt{Fa\_all} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & holds, all states visited & claim & 50\,321 & 27 \\
+\texttt{Fa\_refuse} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles & counterexample & claim & 2\,966 & 12 \\
+\texttt{Fa\_all} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & holds, all states visited & claim & 68\,961 & 28 \\
 \texttt{Fa\_inert} & ReconcileOnExit & InitPair & 2/2/2 & InertBinding & counterexample & claim & 609 & 9 \\
-\texttt{Fa\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim & 16\,601 & 21 \\
+\texttt{Fa\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim & 19\,481 & 22 \\
 \texttt{Fa\_orph\_w} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & none & counterexample & claim & 1\,936 & 11 \\
-\texttt{Fa\_orph\_norel\_dur} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ReleaseCloses & holds, all states visited & claim & 16\,601 & 21 \\
-\texttt{Fa\_orph\_norel} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ReleaseCloses, DurableName & counterexample & claim & 1\,822 & 11 \\
-\texttt{Fa\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim & 16\,601 & 21 \\
-\texttt{Fa\_wf\_all} & WellFormed & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim & 16\,601 & 21 \\
-\texttt{Fa\_orph\_d3} & NoOrphanOpenSkeleton & InitPair & 2/2/3 & all sixteen & holds, all states visited & claim & 106\,881 & 27 \\
-\texttt{Fa\_live\_all} & LiveSpared & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim & 16\,601 & 21 \\
-\texttt{Fa\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim & 16\,601 & 21 \\
-\texttt{Fa\_lockw\_off} & LockedWrites & InitPair & 2/2/2 & all but ReuseLocks & counterexample & claim & 1\,857 & 11 \\
-\texttt{C9\_nosup\_dur} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but Supersede & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{C9\_nosup} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but Supersede, DurableName & counterexample & claim+ & 60\,514 & 11 \\
-\texttt{C9\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{C12\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but DurableName & counterexample & claim+ & 60\,514 & 11 \\
-\texttt{C9\_wf\_all} & WellFormed & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{C9\_live\_all} & LiveSpared & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
+\texttt{Fa\_orph\_norel\_dur} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ReleaseCloses & holds, all states visited & claim & 19\,481 & 22 \\
+\texttt{Fa\_orph\_norel} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive, ReleaseCloses, DurableName & counterexample & claim & 1\,854 & 11 \\
+\texttt{Fa\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim & 19\,481 & 22 \\
+\texttt{Fa\_wf\_all} & WellFormed & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim & 19\,481 & 22 \\
+\texttt{Fa\_orph\_d3} & NoOrphanOpenSkeleton & InitPair & 2/2/3 & all seventeen & holds, all states visited & claim & 129\,921 & 29 \\
+\texttt{Fa\_live\_all} & LiveSpared & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim & 19\,481 & 22 \\
+\texttt{Fa\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim & 19\,481 & 22 \\
+\texttt{Fa\_lockw\_off} & LockedWrites & InitPair & 2/2/2 & all but ReuseLocks & counterexample & claim & 1\,893 & 11 \\
+\texttt{C9\_nosup\_dur} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but Supersede & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{C9\_nosup} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive, Supersede, DurableName & counterexample & claim+ & 60\,546 & 11 \\
+\texttt{C9\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{C12\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive, DurableName & counterexample & claim+ & 60\,546 & 11 \\
+\texttt{C9\_wf\_all} & WellFormed & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{C9\_live\_all} & LiveSpared & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
 \texttt{F1D\_off} & NoForeignAbort & InitPair & 2/2/2 & all but Origin & counterexample & tierb-delete & 84 & 4 \\
-\texttt{F1D\_on} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & holds, all states visited & tierb-delete & 11\,073 & 19 \\
+\texttt{F1D\_on} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & holds, all states visited & tierb-delete & 10\,977 & 19 \\
 \texttt{F1P\_off} & NoForeignAbort & InitPair & 2/2/2 & all but Origin & counterexample & tierb-purge & 337 & 5 \\
-\texttt{F1P\_on} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & holds, all states visited & tierb-purge & 33\,217 & 21 \\
+\texttt{F1P\_on} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & holds, all states visited & tierb-purge & 32\,929 & 21 \\
 \texttt{F1R\_off} & NoForeignAbort & InitPair & 2/2/2 & all but Origin & counterexample & tierb-reconcile & 191 & 5 \\
-\texttt{F1R\_on} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & holds, all states visited & tierb-reconcile & 2\,013 & 18 \\
+\texttt{F1R\_on} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & holds, all states visited & tierb-reconcile & 1\,981 & 18 \\
 \texttt{Fb2\_w} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & none & counterexample & delete & 248 & 9 \\
 \texttt{Fb2\_del} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & DeleteCloses & holds, all states visited & delete & 4\,877 & 23 \\
 \texttt{Fc2\_w} & SweepComplete & InitPair & 2/2/2 & none & counterexample & sweep & 1\,247 & 10 \\
@@ -2492,56 +2601,77 @@ release mutant of N18.
 \texttt{Fc\_w} & SweepComplete & InitPair & 2/2/2 & none & counterexample & sweep+ensure & 14\,217 & 10 \\
 \texttt{Fc\_del} & SweepComplete & InitPair & 2/2/2 & DeleteCloses & counterexample & sweep+ensure & 24\,477 & 11 \\
 \texttt{Fv\_off} & NoVerdictOverwrite & InitPair & 2/2/2 & all but Cas & counterexample & sweep & 1\,198 & 10 \\
-\texttt{Fv\_on} & NoVerdictOverwrite & InitPair & 2/2/2 & all sixteen & holds, all states visited & sweep & 19\,697 & 23 \\
+\texttt{Fv\_on} & NoVerdictOverwrite & InitPair & 2/2/2 & all seventeen & holds, all states visited & sweep & 19\,697 & 23 \\
 \texttt{Fv2\_off} & NoVerdictOverwrite & InitPair & 2/2/2 & all but Cas & counterexample & verdict & 5\,838 & 10 \\
-\texttt{Fv2\_on} & NoVerdictOverwrite & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & verdict & 300\,000 & 23 \\
-\texttt{F2\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
-\texttt{F2\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
-\texttt{F2\_sweep\_all} & SweepComplete & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
-\texttt{F2\_foreign\_all} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
-\texttt{F2\_owr\_all} & NoVerdictOverwrite & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
-\texttt{F2\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
-\texttt{F2\_live\_all} & LiveSpared & InitPair & 2/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
-\texttt{F3\_orph\_all} & NoOrphanOpenSkeleton & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
-\texttt{F3\_leak\_all} & ReconcileOnExit & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
-\texttt{F3\_sweep\_all} & SweepComplete & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
-\texttt{F3\_wf\_all} & WellFormed & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
-\texttt{F3\_foreign\_all} & NoForeignAbort & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
-\texttt{F3\_owr\_all} & NoVerdictOverwrite & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
-\texttt{Chain\_orph} & NoOrphanOpenSkeleton & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim & 200\,000 & 12 \\
-\texttt{Chain\_leak} & ReconcileOnExit & InitChain & 3/2/2 & all sixteen & no counterexample in states explored; not exhausted & claim & 200\,000 & 12 \\
-\texttt{Reach\_all} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{Reach\_nosup} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all but Supersede and DurableName & counterexample & claim+ & 218\,544 & 17 \\
-\texttt{Reach\_nosup\_dur} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all but Supersede & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{C12\_on} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{C12\_leak} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{U1\_leak\_off} & ReconcileOnExit & InitPair & 2/2/2 & all but ResumeClosed & counterexample & claim-u & 8\,744 & 12 \\
-\texttt{U1\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_sweep\_all} & SweepComplete & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_owr\_all} & NoVerdictOverwrite & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_live\_all} & LiveSpared & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_foreign\_all} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_wf\_all} & WellFormed & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 120\,609 & 25 \\
-\texttt{U1\_orph\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 162\,021 & 27 \\
-\texttt{U1\_sweep\_off} & SweepComplete & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 162\,021 & 27 \\
-\texttt{U1\_owr\_off} & NoVerdictOverwrite & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 162\,021 & 27 \\
-\texttt{U1\_live\_off} & LiveSpared & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 162\,021 & 27 \\
-\texttt{U2\_leak\_off} & ReconcileOnExit & InitPair & 2/2/2 & all but ResumeClosed & counterexample & claim+u & 145\,621 & 12 \\
-\texttt{U2\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_sweep\_all} & SweepComplete & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_owr\_all} & NoVerdictOverwrite & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_live\_all} & LiveSpared & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_foreign\_all} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_wf\_all} & WellFormed & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+u & 515\,801 & 24 \\
-\texttt{U2\_orph\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 634\,853 & 27 \\
-\texttt{U2\_sweep\_off} & SweepComplete & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 634\,853 & 27 \\
-\texttt{U2\_owr\_off} & NoVerdictOverwrite & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 634\,853 & 27 \\
-\texttt{U2\_live\_off} & LiveSpared & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 634\,853 & 27 \\
-\texttt{U1\_leak\_d3} & ReconcileOnExit & InitPair & 2/2/3 & all sixteen & holds, all states visited & claim-u & 911\,073 & 32 \\
+\texttt{Fv2\_on} & NoVerdictOverwrite & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & verdict & 300\,000 & 23 \\
+\texttt{F2\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
+\texttt{F2\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
+\texttt{F2\_sweep\_all} & SweepComplete & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
+\texttt{F2\_foreign\_all} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
+\texttt{F2\_owr\_all} & NoVerdictOverwrite & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
+\texttt{F2\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
+\texttt{F2\_live\_all} & LiveSpared & InitPair & 2/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 200\,000 & 8 \\
+\texttt{F3\_orph\_all} & NoOrphanOpenSkeleton & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
+\texttt{F3\_leak\_all} & ReconcileOnExit & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
+\texttt{F3\_sweep\_all} & SweepComplete & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
+\texttt{F3\_wf\_all} & WellFormed & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
+\texttt{F3\_foreign\_all} & NoForeignAbort & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
+\texttt{F3\_owr\_all} & NoVerdictOverwrite & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim+delete+close & 40\,000 & 5 \\
+\texttt{Chain\_orph} & NoOrphanOpenSkeleton & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim & 200\,000 & 12 \\
+\texttt{Chain\_leak} & ReconcileOnExit & InitChain & 3/2/2 & all seventeen & no counterexample in states explored; not exhausted & claim & 200\,000 & 12 \\
+\texttt{Reach\_all} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{Reach\_nosup} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all but Supersede, DurableName & counterexample & claim+ & 227\,422 & 17 \\
+\texttt{Reach\_nosup\_dur} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all but Supersede & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{C12\_on} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{C12\_leak} & ReconcileOnExit & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{U1\_leak\_off} & ReconcileOnExit & InitPair & 2/2/2 & all but ResumeClosed & counterexample & claim-u & 8\,924 & 12 \\
+\texttt{U1\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_sweep\_all} & SweepComplete & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_owr\_all} & NoVerdictOverwrite & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_live\_all} & LiveSpared & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_foreign\_all} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_wf\_all} & WellFormed & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_orph\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 176\,613 & 27 \\
+\texttt{U1\_sweep\_off} & SweepComplete & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 176\,613 & 27 \\
+\texttt{U1\_owr\_off} & NoVerdictOverwrite & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 176\,613 & 27 \\
+\texttt{U1\_live\_off} & LiveSpared & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim-u & 176\,613 & 27 \\
+\texttt{U2\_leak\_off} & ReconcileOnExit & InitPair & 2/2/2 & all but ResumeClosed & counterexample & claim+u & 145\,916 & 12 \\
+\texttt{U2\_leak\_all} & ReconcileOnExit & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_orph\_all} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_sweep\_all} & SweepComplete & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_owr\_all} & NoVerdictOverwrite & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_live\_all} & LiveSpared & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_lockw\_all} & LockedWrites & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_foreign\_all} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_wf\_all} & WellFormed & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_orph\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 654\,021 & 27 \\
+\texttt{U2\_sweep\_off} & SweepComplete & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 654\,021 & 27 \\
+\texttt{U2\_owr\_off} & NoVerdictOverwrite & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 654\,021 & 27 \\
+\texttt{U2\_live\_off} & LiveSpared & InitPair & 2/2/2 & all but ResumeClosed & holds, all states visited & claim+u & 654\,021 & 27 \\
+\texttt{U1\_leak\_d3} & ReconcileOnExit & InitPair & 2/2/3 & all seventeen & holds, all states visited & claim-u & 1\,029\,729 & 32 \\
+\texttt{Fa\_lfa\_all} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim & 19\,481 & 22 \\
+\texttt{Fa\_lfa\_off} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim & 1\,118 & 10 \\
+\texttt{C9\_lfa\_all} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{C9\_lfa\_off} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim+ & 48\,840 & 10 \\
+\texttt{U1\_lfa\_all} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 134\,433 & 25 \\
+\texttt{U1\_lfa\_off} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim-u & 2\,796 & 10 \\
+\texttt{U2\_lfa\_all} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+u & 534\,201 & 24 \\
+\texttt{U2\_lfa\_off} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim+u & 92\,530 & 10 \\
+\texttt{C17\_off\_noop} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim+, no operator claim & 9\,642 & 12 \\
+\texttt{C17\_off\_nr} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim+, no operator claim, no refusal & 11\,618 & 13 \\
+\texttt{C17\_all\_noop} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+, no operator claim & 20\,277 & 21 \\
+\texttt{C17\_all\_nr} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+, no operator claim, no refusal & 18\,181 & 22 \\
+\texttt{C17\_live\_off} & LiveSpared & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{C17\_orph\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{C17\_leak\_off} & ReconcileOnExit & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{C17\_wf\_off} & WellFormed & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{C17\_live\_off\_noop} & LiveSpared & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+, no operator claim & 21\,237 & 21 \\
+\texttt{C17\_nodur} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but DurableName & counterexample & claim+ & 48\,840 & 10 \\
+\texttt{Own\_all} & Own & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{Adopt\_all} & Adopt & InitPair & 2/2/2 & all seventeen & counterexample & claim+ & 48\,840 & 10 \\
+\texttt{Adopt\_off} & Adopt & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim+ & 99\,140 & 13 \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -2569,7 +2699,13 @@ live binding; \texttt{MutSupReuse}: supersede removed from the resume path),
 and \field{fixResumeClosed} three, on \emph{claim-u} (\texttt{MutResumeCas}:
 the close at the do-not-retry exit written without the open test;
 \texttt{MutResumeNoCloseSkel}: the record removed and the skeleton not
-closed; \texttt{MutResumeKeepRec}: the skeleton closed and the record kept).
+closed; \texttt{MutResumeKeepRec}: the skeleton closed and the record kept),
+and \field{fixClaimLive} two, on \emph{claim+} (\texttt{MutClaimLiveClaimed}:
+the owned fork skeleton not live in the claimed case;
+\texttt{MutClaimLiveRefuse}: not live in the refusal). The ten rows
+\texttt{Alt\_*} are not mutants: they are the alternative of the review,
+finalising a matching record in \field{LcTierBDispatch}, run with
+\field{fixClaimLive} off (below).
 
 {\scriptsize
 \begin{center}
@@ -2579,28 +2715,64 @@ closed; \texttt{MutResumeKeepRec}: the skeleton closed and the record kept).
 \midrule
 \texttt{S\_lin\_mutC} & LineageStable & Init & 3/2/2 & DeleteOrder, CycleCheck, SessionStart & counterexample & start & 44 & 4 \\
 \texttt{S\_lin\_mutR} & LineageStable & Init & 3/2/2 & DeleteOrder, CycleCheck, SessionStart & counterexample & start & 44 & 4 \\
-\texttt{MutSupReuse} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{MutSupClaimed} & LiveSpared & InitPair & 2/2/2 & all sixteen & counterexample & claim+ & 75\,636 & 12 \\
-\texttt{MutLockReuse} & LockedWrites & InitPair & 2/2/2 & all sixteen & counterexample & claim & 2\,818 & 12 \\
-\texttt{F1D\_mut} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & counterexample & tierb-delete & 84 & 4 \\
-\texttt{F1R\_mut} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & counterexample & tierb-reconcile & 191 & 5 \\
-\texttt{F1P\_mut} & NoForeignAbort & InitPair & 2/2/2 & all sixteen & counterexample & tierb-purge & 337 & 5 \\
-\texttt{MutCasFresh} & NoVerdictOverwrite & InitPair & 2/2/2 & all sixteen & counterexample & verdict & 9\,888 & 11 \\
-\texttt{MutA\_claimed} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & counterexample & claim & 2\,818 & 12 \\
+\texttt{MutSupReuse} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{MutSupClaimed} & LiveSpared & InitPair & 2/2/2 & all seventeen & counterexample & claim+ & 75\,894 & 12 \\
+\texttt{MutLockReuse} & LockedWrites & InitPair & 2/2/2 & all seventeen & counterexample & claim & 2\,960 & 12 \\
+\texttt{F1D\_mut} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & counterexample & tierb-delete & 84 & 4 \\
+\texttt{F1R\_mut} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & counterexample & tierb-reconcile & 191 & 5 \\
+\texttt{F1P\_mut} & NoForeignAbort & InitPair & 2/2/2 & all seventeen & counterexample & tierb-purge & 337 & 5 \\
+\texttt{MutCasFresh} & NoVerdictOverwrite & InitPair & 2/2/2 & all seventeen & counterexample & verdict & 9\,888 & 11 \\
+\texttt{MutA\_claimed} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & counterexample & claim & 2\,966 & 12 \\
 \texttt{MutB\_refuse} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & counterexample & claim & 609 & 9 \\
-\texttt{MutFinishRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & counterexample & claim+ & 60\,514 & 11 \\
-\texttt{MutLiveNoDone} & LiveSpared & InitPair & 2/2/2 & all sixteen & counterexample & claim+ & 97\,540 & 13 \\
-\texttt{MutReuseDone} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{MutResumeCas} & NoVerdictOverwrite & InitPair & 2/2/2 & all sixteen & counterexample & claim-u & 13\,784 & 13 \\
-\texttt{MutResumeCas\_leak} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 131\,621 & 29 \\
-\texttt{MutResumeKeepRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 132\,609 & 26 \\
-\texttt{MutResumeKeepRec\_wf} & WellFormed & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 132\,609 & 26 \\
-\texttt{MyRelKeepRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 318\,189 & 24 \\
-\texttt{MutResumeNoCloseSkel} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & counterexample & claim-u & 8\,744 & 12 \\
+\texttt{MutFinishRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & counterexample & claim+ & 60\,546 & 11 \\
+\texttt{MutLiveNoDone} & LiveSpared & InitPair & 2/2/2 & all seventeen & counterexample & claim+ & 60\,622 & 11 \\
+\texttt{MutReuseDone} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 271\,253 & 24 \\
+\texttt{MutResumeCas} & NoVerdictOverwrite & InitPair & 2/2/2 & all seventeen & counterexample & claim-u & 14\,266 & 13 \\
+\texttt{MutResumeCas\_leak} & ReconcileOnExit & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 145\,701 & 29 \\
+\texttt{MutResumeKeepRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 146\,433 & 26 \\
+\texttt{MutResumeKeepRec\_wf} & WellFormed & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim-u & 146\,433 & 26 \\
+\texttt{MutResumeNoCloseSkel} & ReconcileOnExit & InitPair & 2/2/2 & all seventeen & counterexample & claim-u & 8\,924 & 12 \\
+\texttt{MyRelKeepRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+ & 332\,173 & 24 \\
+\texttt{MutClaimLiveClaimed} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & counterexample & claim+ & 60\,622 & 11 \\
+\texttt{MutClaimLiveRefuse} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & counterexample & claim+ & 48\,840 & 10 \\
+\texttt{Alt\_lfa} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim+ & 48\,840 & 10 \\
+\texttt{Alt\_lfa\_noop} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+, no operator claim & 20\,149 & 21 \\
+\texttt{Alt\_orph} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{Alt\_orph\_noop} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+, no operator claim & 20\,149 & 21 \\
+\texttt{Alt\_leak} & ReconcileOnExit & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{Alt\_leak\_noop} & ReconcileOnExit & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+, no operator claim & 20\,149 & 21 \\
+\texttt{Alt\_live} & LiveSpared & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{Alt\_live\_noop} & LiveSpared & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+, no operator claim & 20\,149 & 21 \\
+\texttt{Alt\_wf} & WellFormed & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+ & 314\,389 & 27 \\
+\texttt{Alt\_wf\_noop} & WellFormed & InitPair & 2/2/2 & all but ClaimLive & holds, all states visited & claim+, no operator claim & 20\,149 & 21 \\
 \bottomrule
 \end{tabularx}
 \end{center}
 }
+
+\noindent The mutants of \field{fixClaimLive} are killed by
+\field{NoLiveForkAborted} (\texttt{MutClaimLiveRefuse}, 48\,840 states, depth
+10, the second trace of C17 with the refusal; \texttt{MutClaimLiveClaimed},
+60\,622 states, depth 11, the same with the second \field{LcCfBegin} and the
+claimed case), each with the other path of the amendment intact. The
+alternative of the review is modelled as the edit that a Tier B dispatch,
+under the dispatch-pending lock, marks complete (\field{pendDone}) the
+record of the child it is about to rebind when the binding names the record's
+skeleton, that skeleton is open and the child's claim is for its mission, and
+leaves the binding write as it is. It is run with every other switch on and
+\field{fixClaimLive} off. It closes the trace of Copilot's comment:
+\field{NoLiveForkAborted} holds on \emph{claim+} without an operator claim
+(\texttt{Alt\_lfa\_noop}, 20\,149 states, all visited), as do
+\field{NoOrphanOpenSkeleton}, \field{ReconcileOnExit}, \field{LiveSpared} and
+\field{WellFormed} (\texttt{Alt\_*\_noop}, and \texttt{Alt\_orph},
+\texttt{Alt\_leak}, \texttt{Alt\_live}, \texttt{Alt\_wf} on \emph{claim+}, 314\,389
+states). It does not close the second trace of C17: with the operator claim in
+the slice \field{NoLiveForkAborted} fails at depth 10
+(\texttt{Alt\_lfa}), because no dispatch is involved and the record is
+incomplete when the operator claims its mission. The alternative is therefore
+sound for the invariants of the table and does not satisfy the new one; it is
+not what the document adopts, and nothing here chooses between the two beyond
+the leader's decision for \field{fixClaimLive}.
 
 \noindent \texttt{MutSupReuse} \emph{survives}, and the leader's ruling is
 to keep the clause as defensive code and to say so. The resume path of the
@@ -2608,7 +2780,7 @@ reconcile carries the supersede clause (it closes the fork skeleton the
 child's binding names when that is not the record's). No reachable state
 exercises it: with every amendment on, no state has a pending
 record, a child with no claim and a binding that names an open fork
-skeleton other than the record's (\texttt{Reach\_all}, 257\,269 states, all
+skeleton other than the record's (\texttt{Reach\_all}, 271\,253 states, all
 visited, none). Removing the clause changes no invariant, so it is \emph{not}
 verified by this model, and nothing here claims that it is. Without
 \field{fixSupersede} on the fresh path such a state is reachable
@@ -2633,14 +2805,14 @@ distinction itself is checked where it can fail: the claimed case
 \noindent The mutants of \field{fixResumeClosed} are run on \emph{claim-u}.
 \texttt{MutResumeCas} (the exit closing every skeleton the record names,
 open or not) is killed by \field{NoVerdictOverwrite} in 13 levels
-(13\,784 states): the unlocked sweep has written its pass verdict for the
+(14\,266 states): the unlocked sweep has written its pass verdict for the
 resumed skeleton and the exit then writes \field{aborted} over it. Its
 \field{ReconcileOnExit} row holds, as it should, since the mutant closes more
 and not less. \texttt{MutResumeNoCloseSkel} (the record removed, the skeleton
 not closed) is killed by \field{ReconcileOnExit} with the trace of C16; it is
 the amendment taken out again, and kills nothing the switch off does not.
 \texttt{MutResumeKeepRec} (the skeleton closed, the record kept) \emph{survives}
-\field{NoOrphanOpenSkeleton} and \field{WellFormed} (132\,609 states, all
+\field{NoOrphanOpenSkeleton} and \field{WellFormed} (146\,433 states, all
 visited): that the exit removes the record is hygiene, a later call reconciles
 a record whose skeleton is closed on the fresh path, and nothing here claims it
 is verified (N18).
@@ -2671,47 +2843,51 @@ is verified (N18).
     (\texttt{P\_stalelive}, \texttt{P\_corrupt}).
   \item \textbf{NoOrphanOpenSkeleton}, for skeletons of kind \field{dkFork},
     holds in its literal form, with no assumption, when the pending record is
-    durable (\field{fixDurableName}): 257\,269 states of \emph{claim+}, all
+    durable (\field{fixDurableName}): 271\,253 states of \emph{claim+}, all
     visited, a space that includes the Tier B dispatch over a completed fork
     claim, the operator claim, the mission close and the close-time clearing;
-    16\,601 states of the \emph{claim} slice (106\,881 at three
-    delegations, depth 27), and 4\,877 of the \emph{delete} slice,
+    19\,481 states of the \emph{claim} slice (129\,921 at three
+    delegations, depth 29), and 4\,877 of the \emph{delete} slice,
     exhaustively; and in the full two-session and three-session machines no
     counterexample in the bounded runs, which are not exhaustive. With the
     switch off it fails (\texttt{C12\_off}, eleven steps, C12). The earlier
     amendments are necessary where a run isolates them: \texttt{Fb2\_w}
     (\field{fixDeleteCloses}); \texttt{Fa\_orph\_norel} (C11) and
-    \texttt{C9\_nosup} (C9) with the record not durable. \textbf{With the record
+    \texttt{C9\_nosup} (C9) with the record not durable (and
+    \field{fixClaimLive} off, which adopts a skeleton whose record it then
+    removes: \texttt{C17\_nodur}). \textbf{With the record
     durable they are no longer needed for this invariant}:
     \texttt{Fa\_orph\_norel\_dur} and \texttt{C9\_nosup\_dur} hold, since the
     record names the skeleton and the release and the clearing close what it
     names. The design may take either set; the durable record subsumes them.
     With \field{fixRefuseReconciles} and \field{fixInertBinding} the exit
-    postcondition \field{ReconcileOnExit} holds as well (50\,321 states with the
-    two switches, 16\,601 with all sixteen, all visited, and 257\,269 in
+    postcondition \field{ReconcileOnExit} holds as well (68\,961 states with the
+    two switches, 19\,481 with all seventeen, all visited, and 271\,253 in
     \emph{claim+}), the ghost being computed with the notion of live that a
     complete record needs. \field{SweepComplete} holds with \field{fixDeleteCloses} and
     \field{fixPostCheck} (37\,025 states of the \emph{sweep} slice, all
     visited), stated of the skeletons the sweep has not yet written.
   \item \textbf{ReconcileOnExit} holds with \field{fixRefuseReconciles},
     \field{fixInertBinding} and, since C16, \field{fixResumeClosed}. The last
-    shows only where the unlocked sweep is in the slice: 120\,609 states of
-    \emph{claim-u} and 515\,801 of \emph{claim+u}, all visited
-    (\texttt{U1\_leak\_all}, \texttt{U2\_leak\_all}), and 911\,073 states of
+    shows only where the unlocked sweep is in the slice: 134\,433 states of
+    \emph{claim-u} and 534\,201 of \emph{claim+u}, all visited
+    (\texttt{U1\_leak\_all}, \texttt{U2\_leak\_all}), and 1\,029\,729 states of
     \emph{claim-u} at three delegations, depth 32 (\texttt{U1\_leak\_d3}). With
     it off the counterexample is the ten-operation trace of C16
-    (\texttt{U1\_leak\_off}, 8\,744 states, depth 12; \texttt{U2\_leak\_off},
-    145\,621 states). Of the other invariants only four were run with the switch
+    (\texttt{U1\_leak\_off}, 8\,924 states, depth 12; \texttt{U2\_leak\_off},
+    145\,916 states). Of the other invariants only four were run with the switch
     off: \field{NoOrphanOpenSkeleton}, \field{SweepComplete},
     \field{NoVerdictOverwrite} and \field{LiveSpared} hold with it off on both
     slices, all states visited (\texttt{U1\_*\_off}, \texttt{U2\_*\_off}),
     because the record still names the skeleton and the sweep's snapshot still
     holds it. \field{LockedWrites}, \field{NoForeignAbort} and
-    \field{WellFormed} were not run with the switch off. With all sixteen on, all eight invariants (the five above,
-    \field{LockedWrites}, \field{NoForeignAbort}, \field{WellFormed}) hold on
-    both slices, all states visited (\texttt{U1\_*\_all}, \texttt{U2\_*\_all}).
+    \field{WellFormed} were not run with the switch off. With all seventeen on, all nine invariants (the five above,
+    \field{LockedWrites}, \field{NoForeignAbort}, \field{WellFormed} and
+    \field{NoLiveForkAborted}) hold on both slices, all states visited
+    (\texttt{U1\_*\_all}, \texttt{U2\_*\_all}); \field{NoLiveForkAborted} was not
+    run with \field{fixResumeClosed} off.
   \item \textbf{NoForeignAbort} holds with \field{fixOrigin}: all states of
-    the three Tier B slices are visited (11\,073, 33\,217 and 2\,013 states),
+    the three Tier B slices are visited (10\,977, 32\,929 and 1\,981 states),
     and fails without it in four, five and five steps (\texttt{F1D\_off},
     \texttt{F1P\_off}, \texttt{F1R\_off}): through \field{deleteFiles}, through a
     purge, and through the supersede close of a reconcile.
@@ -2719,11 +2895,29 @@ is verified (N18).
     the \emph{sweep} slice, all visited, and no counterexample in the first
     300\,000 of \emph{verdict}; it fails without it in 10 steps
     (\texttt{Fv\_off}), the trace of C14.
-  \item \textbf{LockedWrites} holds with \field{fixReuseLocks} (16\,601 states
+  \item \textbf{LockedWrites} holds with \field{fixReuseLocks} (19\,481 states
     of \emph{claim}, all visited) and fails without it in 11 steps
     (\texttt{Fa\_lockw\_off}), the trace of C15.
-  \item \textbf{LiveSpared} holds: 16\,601 states of \emph{claim}, all visited,
-    and 257\,269 of \emph{claim+}.
+  \item \textbf{LiveSpared} holds: 19\,481 states of \emph{claim}, all visited,
+    and 271\,253 of \emph{claim+}. It also holds with \field{fixClaimLive}
+    off (314\,389 states of \emph{claim+}, \texttt{C17\_live\_off}), which is
+    why it did not find C17.
+  \item \textbf{NoLiveForkAborted} holds with \field{fixClaimLive} (and
+    \field{fixDurableName}) on all four exhaustive slices, all states visited:
+    19\,481 states of \emph{claim} (\texttt{Fa\_lfa\_all}), 271\,253 of
+    \emph{claim+} (\texttt{C9\_lfa\_all}), 134\,433 of \emph{claim-u}
+    (\texttt{U1\_lfa\_all}) and 534\,201 of \emph{claim+u}
+    (\texttt{U2\_lfa\_all}); and on the slices without an operator claim
+    (\texttt{C17\_all\_noop}, 20\,277 states; \texttt{C17\_all\_nr}, 18\,181).
+    With the switch off it fails on each of the four at depth 10
+    (\texttt{Fa\_lfa\_off}, 1\,118 states; \texttt{C9\_lfa\_off}, 48\,840;
+    \texttt{U1\_lfa\_off}, 2\,796; \texttt{U2\_lfa\_off}, 92\,530) by the trace of the
+    operator claim, and on the slices without it at depth 12 and 13
+    (\texttt{C17\_off\_noop}, \texttt{C17\_off\_nr}) by the trace of Copilot's
+    comment (C17). The mutants of the amendment are killed
+    (\S\ref{sec:lc-mutants}). The other invariants hold with the amendment on:
+    \texttt{C9\_wf\_all}, \texttt{C12\_on}, \texttt{C12\_leak},
+    \texttt{C9\_live\_all} and the rows of the table named \texttt{*\_all}.
   \item \textbf{WellFormed} holds in every run in which it is checked,
     including the new components (\texttt{L\_wf\_all}, \texttt{S\_wf\_on},
     \texttt{P1\_wf}, \texttt{Fa\_wf\_all}, \texttt{C9\_wf\_all}).
@@ -2741,6 +2935,21 @@ sessions are bounded at 200\,000 states and reach a depth of eight, which is
 the depth of the first propagation and not of a second one; the second
 propagations of C9 and C11 are exercised by the exhaustive \emph{claim} and
 \emph{claim+} rows.
+
+\paragraph{The gap that let C17 through.} The invariants \field{LiveSpared},
+\field{ReconcileOnExit} and, through the keep-or-close choice of the
+reconcile, \field{NoOrphanOpenSkeleton} were each computed from the
+predicate that the operations used to decide whether to close, so a
+skeleton that the predicate misjudged was misjudged by the check as well. The
+exhaustive slices contained the trace (\emph{claim+} has the crash, the Tier B
+dispatch and the claimed case; 314\,389 states of it, all visited,
+without the amendment) and the check could not see it. Copilot's comment is a review of the prose of the
+predicate and not of any slice. The remedy is the ghost
+\field{liveForkAborted}, which asks the question in terms of the claim and
+the ownership of the skeleton, the facts that the design states
+independently of the predicate; it is the only one of the ghosts that does.
+\field{leaked} and \field{liveAborted} still use the predicate, and nothing
+here claims that they would catch a defect of the predicate itself.
 
 \paragraph{The gap that let C16 through.} The exhaustive \emph{claim} and
 \emph{claim+} slices had no unlocked sweep; \emph{sweep} had it but not the
@@ -2865,6 +3074,28 @@ DES-078 is to be brought into line at these places.
     re-read, with the sweep stopped after its snapshot; the exit leaves no open
     skeleton named by the child's record, and a later sweep write leaves the
     verdict \field{aborted}.
+  \item \S5 point~2 item~2 and item~5, the liveness of a record in the refusal
+    and the claimed case (C17, the leader's decision; amends C12 and C4). The
+    rule that an \emph{incomplete} record is live only if the binding names
+    its skeleton as well is withdrawn. A fork skeleton that the child owns
+    (kind \field{dkFork}, owner the child, found through the record) is live,
+    and is kept, whenever the child's claim is for the skeleton's mission,
+    whatever the binding names and whether the record is complete or not. A
+    record that is live is kept and marked complete; any other is closed
+    \field{aborted} and removed. The binding does not enter the judgement: a
+    record names only a skeleton that its own call wrote, so for the
+    skeletons the reconcile considers the test is the claim alone
+    (\texttt{Own\_all}); the record needs its stage field, as above, so that a
+    live record is kept complete. The fix presupposes the durable record
+    (\texttt{C17\_nodur}). Tier B dispatch is not changed, and no write of the dispatch
+    path learns about the record. The required test is the trace of C17: a
+    child whose \field{claim-forked} wrote the claim and died before it marked
+    the record complete, whose binding a Tier B dispatch has since replaced,
+    then a refused or reconciled \field{claim-forked}: the skeleton is open
+    after the call and the record is kept and complete. A second required test
+    pins the consequence stated in N21: an operator claim of the skeleton's
+    mission, made after a call that died before it wrote the binding, adopts
+    the skeleton.
 \end{itemize}
 
 Further consequences are not counterexamples of the model but
@@ -2957,7 +3188,7 @@ closes of C11 and C12 can race a write phase, and the model cannot show it.
 (N17) Three omissions in the Tier B dispatch: a dispatch without a roster, the
 depth-gate close with verdict \field{aborted}, and a binding write that fails
 without being fatal are not represented. (N18) That a release removes the
-record is unverified: \texttt{MyRelKeepRec} (the release clearing the claim and the binding but keeping the record; \emph{claim+}, 318\,189 states, depth 24, all visited, no orphan) survives, so it is hygiene and not
+record is unverified: \texttt{MyRelKeepRec} (the release clearing the claim and the binding but keeping the record; \emph{claim+}, 332\,173 states, depth 24, all visited, no orphan) survives, so it is hygiene and not
 an invariant. The same holds of the guard $c\notin\field{pendDone}$ of
 \field{LcCfReconcileReuse}, stated above (\texttt{MutReuseDone}), and of the
 removal of the record at the exit ``do not retry'' (\texttt{MutResumeKeepRec}).
@@ -2978,6 +3209,26 @@ point~2 item~3) and on its required test. The model does not represent an id
 returned to the counter (the code's \texttt{releaseID(false)}) or the moment
 of consumption: \field{used} never shrinks, and an id is consumed at
 \field{LcCfAlloc}, not at a durable record.
+(N21) With \field{fixClaimLive} the reconcile of the refusal and the claimed
+case adopts, rather than closes, a fork skeleton whose claim names its mission
+even when the binding was never written: a call that died after the skeleton
+and before the binding, and an operator claim of the skeleton's mission made
+afterwards by hand. The skeleton is then open, named by a complete record, and
+bound to nothing. The state is not new: a complete record, an open skeleton, a
+claim for its mission and no binding is reached also, without \field{claim-forked}
+adopting anything, when the close-time clearing removes the binding of another,
+closed mission (\texttt{Adopt\_off}: a completed propagation, a Tier B
+dispatch for a second mission, that mission's close and its clearing; depth 13,
+99\,140 states; with the switch on the state is reached at depth 10 by the
+adoption, \texttt{Adopt\_all}); and every invariant holds with the adoption
+(\S\ref{sec:lc-verification}). What the model does not decide is
+whether the code should adopt it: the claim of the model does not record who
+wrote it (\field{BORIGIN} has two values and the operator may choose either),
+so the model cannot tell the claim \field{claim-forked} writes from the
+operator's, and the invariant \field{NoLiveForkAborted} asks that neither be
+treated as the skeleton's abandonment. The alternative of the review
+(\texttt{Alt\_*}, \S\ref{sec:lc-verification}) does not adopt it, and does not
+satisfy the invariant.
 (N13) \field{ClearMissionBindings} is modelled for the closing session's
 claim and binding only; the dispatch-pending entries it clears, and the MCP
 path that calls it, are not represented. (N15) The record's stage is one bit, complete or not; the record
