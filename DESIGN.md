@@ -12240,8 +12240,8 @@ which round 6's remark that a cycle needs `--parent-gone` had denied (C3), and
 the ancestor walk keeps its visited set as a mandatory guard, because
 concurrent edge insertion is outside the model (N4). `deleteFiles` runs in
 seven steps: close named skeletons (stopping if that fails, N2; round 9
-narrows this to an open fork skeleton the session owns and its record names,
-item 27), the claim, the binding, the pending record, `last-seen`, the roster,
+narrows this to an open fork skeleton the session owns and its record or
+binding names, item 27), the claim, the binding, the pending record, `last-seen`, the roster,
 and the `parent-session` sidecar last (C2, C5). (22) *`claim-forked`.* Every exit
 other than "write failed" reconciles first, including a read-phase refusal
 (C1). An already-claimed child closes the skeleton unless the binding is live
@@ -12293,12 +12293,17 @@ brought into line (header note, §2.1.1, §2.5, §2.6, new §2.7, §5 points 1 t
 the purge, every `claim-forked` reconcile close, `mission release`, and the
 close-time clearing close only an open fork skeleton the session owns, as a
 compare-and-set; a binding that names a Tier B skeleton is cleared and the
-skeleton is left open, because it is a subagent's delegation (C10). (28)
+skeleton is left open, because it is a subagent's delegation (C10).
+`claim-forked` also writes the store root into the delegation binding as a
+new field (a schema change); a binding without it is Tier B and only
+cleared. (28)
 *Durable pending record.* The `claim-forked-pending` record carries a stage
 (complete or not) and the mission store root, persists for the life of the
-fork claim, and is removed only by `mission release`, the close-time clearing
-of the claim (`ClearMissionBindings`), or `deleteFiles`, each of which first
-closes the fork skeleton it names. This replaces "removed as the last step of
+fork claim, and while it is live is removed only by `mission release`, the
+close-time clearing of the claim (`ClearMissionBindings`), or `deleteFiles`,
+each of which first closes the fork skeleton it names. A reconcile removes a
+record that is not live, after closing its skeleton, and in-process cleanup
+removes the record it wrote. This replaces "removed as the last step of
 a successful write" and "the record is then overwritten or removed". A Tier B
 dispatch by a propagated child overwrites its binding
 (`pretooluse_dispatch.go:880-884`, unchanged), and the record keeps the fork
@@ -12437,8 +12442,10 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    reuses the record only when it is not complete, its skeleton is open, its
    mission and witness equal the call's, the mission is open, and the child
    has no claim, and then takes the mission and delegation locks and
-   re-reads the mission before it writes the missing binding and claim; in
-   every other case it closes the skeleton and removes the record first.
+   re-reads the mission before it writes the missing binding and claim. A
+   live record (on a refusal, or when the child already holds a claim) is kept
+   and marked complete; otherwise the skeleton is closed and the record
+   removed before a fresh write.
    **Round 4:** this primitive and the `parent-session` sidecar are
    harness-neutral. Claude Code needs the same fork treatment
    (`--fork-session`, `/fork`, `/branch` mint genuine new sessions;

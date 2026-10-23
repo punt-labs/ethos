@@ -209,10 +209,12 @@ close-time clearing close only an open fork skeleton the session owns; a
 binding that names a Tier B skeleton is cleared and the skeleton is left open
 (C10; §2.1.1, §5 point 2 item 5); (2) the **`claim-forked-pending` record is
 durable** (C12, the leader's ruling): it carries a stage (complete or not)
-and the mission store root, persists for the life of the fork claim, and is
-removed only by `mission release`, the close-time clearing of the claim
-(`ClearMissionBindings`), or `deleteFiles`, each of which first closes the
-fork skeleton it names; a complete record is never resumable, and the
+and the mission store root, persists for the life of the fork claim, and
+while it is live is removed only by `mission release`, the close-time
+clearing of the claim (`ClearMissionBindings`), or `deleteFiles`, each of
+which first closes the fork skeleton it names (a reconcile removes a record
+that is not live, after closing its skeleton; in-process cleanup removes the
+record it wrote); a complete record is never resumable, and the
 "record does not parse" status now applies for the claim's lifetime (§5
 point 2 items 4 and 5); (3) `mission release` and the close-time clearing
 **close what they unname** (C11, C12), and must hold the child's
@@ -686,24 +688,30 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   stops at the first failure (`LcDeleteSession`, `LcPurgeSession`, steps 1 to
   7):
   1. Close, with verdict `aborted`, every open skeleton that the session's
-     `claim-forked-pending` record names **and that is a fork skeleton the
-     session owns** (the origin discriminator, below). The close is a
-     compare-and-set on verdict `open` under the skeleton's delegation lock,
-     and it uses the **mission store root recorded in the record**, never the
-     working directory (B2, below). §5 point 2 item 5 specifies the close and
-     its locks. Without this step the record, which since round 9 names the
-     skeleton for the life of the claim, is cleared at step 4 and the
-     skeleton stays open and unnamed (C5), which blocks `Abandon` of its
-     mission (`countBlockingDelegations`, `internal/mission/store.go:1973`).
-     A delegation binding names a skeleton here only to be cleared at step 3:
-     if the binding names a Tier B skeleton, the binding is cleared and the
-     skeleton is **left open** (C10), because it is a subagent's delegation
-     and a session ending does not end it. The model also lets this step
-     close a fork skeleton that only the binding names. With the durable
-     record no such state is reachable (`Fa_orph_norel_dur` holds without
-     the binding-named close), and a binding carries no store root, so the
-     implementation closes on the record alone: a binding that no record
-     accompanies is treated as a Tier B binding and only cleared.
+     `claim-forked-pending` record **or** its delegation binding names **and
+     that is a fork skeleton the session owns** (the origin discriminator,
+     below; spec `LcDeleteSession` and `LcPurgeSession`). The close is a
+     compare-and-set on verdict `open` under the skeleton's delegation lock.
+     It uses the **mission store root recorded in the record** for a record-named
+     skeleton and the root **recorded in the binding** for a binding-named
+     one, never the working directory (B2, below). §5 point 2 item 5
+     specifies the close and its locks. Without this step the record, which
+     since round 9 names the skeleton for the life of the claim, is cleared
+     at step 4 and the skeleton stays open and unnamed (C5), which blocks
+     `Abandon` of its mission (`countBlockingDelegations`,
+     `internal/mission/store.go:1973`). **The binding gains a field
+     (round 9; a schema change).** `claim-forked` writes the store root into
+     the delegation binding as a fourth line, `StoreRoot`, beside
+     `DelegationID`, `MissionID`, and `ParentSession`
+     (`DelegationBinding`, `internal/mission/active.go:334-338`;
+     `WriteDelegationBinding` writes `active.go:357`, and
+     `ReadDelegationBinding` already ignores lines it does not know, so an
+     older reader reads the first three). A binding **without** `StoreRoot`,
+     or whose named skeleton is not `BoundVia == claim_forked`, is a **Tier B
+     binding: it is cleared at step 3 and its skeleton is left open** (C10),
+     because it is a subagent's delegation and a session ending does not
+     end it. The Tier B dispatch writes bindings without the field and is
+     unchanged.
   2. The active-mission claim and its origin file.
   3. The delegation binding.
   4. The pending record and `claim-forked-pending.*.tmp`, the crash-leftover
@@ -2236,12 +2244,16 @@ pipeline stage's write-set is unambiguous:
         design does not change), and the fork skeleton is then open and named
         by nothing (C12, run `C12_off`, eleven steps; `C12_on` holds, 257,269
         states, all visited). Every close of the design is by name, so the
-        name must outlive the binding. The record is removed **only** by
+        name must outlive the binding. **A live record is removed only** by
         `mission release`, by the close-time clearing of the claim, and by
         `deleteFiles` (step 4), and each of the three first closes the fork
         skeleton the record names (an open skeleton of kind `dkFork`
         that the session owns, closed `aborted` as a compare-and-set on
-        verdict `open`, below) and then unnames it. The record also names the
+        verdict `open`, below) and then unnames it. Two other paths remove a
+        record, and neither removes a live one: a reconcile removes a record
+        that is **not** live, after closing its skeleton (below), and the
+        in-process cleanup of a failed write removes the record that call
+        wrote. The record also names the
         store root it was written under (B2, §2.1.1), which every one of those
         closes uses. The record file is written through `writeSidecarFile`,
         so a crash leaves `claim-forked-pending.*.tmp`, which `deleteFiles`
@@ -2350,7 +2362,8 @@ pipeline stage's write-set is unambiguous:
         is cleared and the skeleton is left open: it is a subagent's
         delegation. `release` stays idempotent: with no claim and no record it
         closes nothing and succeeds. The model also closes what the
-        *binding* names at release (`fixReleaseCloses`); with the durable
+        *binding* names at release (`fixReleaseCloses`), using the binding's
+        `StoreRoot` (§2.1.1); with the durable
         record both name the same skeleton (`Fa_orph_norel_dur` holds without
         the binding-named close), so that close is defensive and unexercised.
         That a release removes the record is hygiene, not an invariant (spec
