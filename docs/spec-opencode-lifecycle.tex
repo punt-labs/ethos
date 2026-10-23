@@ -119,7 +119,7 @@ reachable state satisfying the goal, and ``no counterexample, all states
 visited'' is exhaustive for the instance.
 
 \textbf{Slicing.} The full machine has thirty-four operations over
-thirty-three variables; ProB explores about two hundred states a second.
+thirty-five variables; ProB explores about two hundred states a second.
 Each invariant is therefore checked on a \emph{slice}: the same schemas
 with the operations that cannot affect that invariant removed, and a
 scenario \field{Init} where a particular lineage is needed. A removed
@@ -232,8 +232,9 @@ unlocked sweep that has been taken and not yet written. \field{cfH} is the
 set of in-flight \field{claim-forked} calls that hold the locks of step~5
 of \S5 point~2 (the shared mission lock and the delegation lock). The
 ghosts are \field{sealed}, \field{purgedLive}, \field{leaked},
-\field{unlocked}, \field{overwritten} and \field{liveAborted}: they record history so that an invariant over a transition can be
-checked as an invariant over a state.
+\field{unlocked}, \field{overwritten}, \field{liveAborted} and
+\field{liveForkAborted}: they record history so that an invariant over a
+transition can be checked as an invariant over a state.
 
 \begin{schema}{LcTime}
 now : 0 \upto lcMaxTime
@@ -308,7 +309,8 @@ overwritten : \power DELEGATIONID
 \end{schema}
 
 \begin{schema}{LcLive}
-liveAborted : \power SESSIONID
+liveAborted : \power SESSIONID \\
+liveForkAborted : \power SESSIONID
 \end{schema}
 
 \begin{schema}{LcSweep}
@@ -351,7 +353,22 @@ wrote a binding or a claim without holding the locks of step~5.
 after it was closed; it is computed, by one rule, by every operation that
 writes a verdict, from the \field{dAbort} of the pre- and post-state.
 \field{liveAborted} collects every child whose live binding's skeleton a
-\field{claim-forked} reconcile closed.
+\field{claim-forked} reconcile closed. \field{liveForkAborted} collects every
+child whose claim, after a step of the \field{claim-forked} family, names the
+mission of an open skeleton of kind \field{dkFork} that the child owns and
+that the step closed with verdict \field{aborted}:
+\[
+\field{liveForkAborted}' = \field{liveForkAborted} \cup \{ c? \mid \exists rd \in \field{dOpen} \setminus \field{dOpen}' \bullet
+  rd \in \field{dAbort}' \land (rd \mapsto c?) \in \field{dOwn} \land (rd \mapsto \field{dkFork}) \in \field{dKind} \land \field{claimed}'(c?) = \field{dMis}(rd) \}
+\]
+It is computed in the five operations that close a skeleton on behalf of a
+\field{claim-forked} call (\field{LcCfRefuse}, \field{LcCfReconcileClaimed},
+\field{LcCfReconcileReuse}, \field{LcCfReconcileFresh} and
+\field{LcCfExitNoRetry}) and reads nothing but the claim, the owner, the kind,
+the mission of the skeleton and the transition from open to aborted. It does
+not read \field{binding}, \field{pend} or \field{pendDone}, and so does not
+share the notion of live of \field{liveAborted} and \field{leaked}
+(\S\ref{sec:lc-ledger}, C17).
 
 \field{leaked} is a ghost, and it is only worth anything if it is computed
 by one rule that does not know which amendment is on. Every operation that
@@ -424,6 +441,14 @@ the well-formedness conditions that validate the model itself. A schema here is 
   \item \field{LiveSpared}: no \field{claim-forked} reconcile closes the
     skeleton of a live binding, that is, one that the child's binding names
     while the child's claim is for the skeleton's mission.
+  \item \field{NoLiveForkAborted}: no step of the \field{claim-forked} family
+    closes, with verdict \field{aborted}, an open skeleton of kind
+    \field{dkFork} owned by $c$ while $c$'s claim, after the step, is for that
+    skeleton's mission. It is stated of the claim, the owner, the kind and
+    the transition from open to aborted, and not of the binding or the pending
+    record: \field{LiveSpared} judges ``live'' by the predicate the operations
+    themselves use, binding-or-complete, and so cannot fail for a skeleton
+    that predicate misjudges (C17).
 \end{itemize}
 
 \begin{schema}{LcInvLineageStable}
@@ -472,6 +497,12 @@ unlocked = \emptyset
 Lifecycle
 \where
 liveAborted = \emptyset
+\end{schema}
+
+\begin{schema}{LcInvNoLiveForkAborted}
+Lifecycle
+\where
+liveForkAborted = \emptyset
 \end{schema}
 
 \begin{schema}{LcInvReconcileOnExit}
@@ -550,6 +581,7 @@ dKind' = \emptyset \\
 dAbort' = \emptyset \\
 overwritten' = \emptyset \\
 liveAborted' = \emptyset \\
+liveForkAborted' = \emptyset \\
 todo' = \emptyset \\
 dOpen' = \emptyset \\
 missOpen' = MISSIONID \\
@@ -584,6 +616,7 @@ dKind' = \emptyset \\
 dAbort' = \emptyset \\
 overwritten' = \emptyset \\
 liveAborted' = \emptyset \\
+liveForkAborted' = \emptyset \\
 todo' = \emptyset \\
 dOpen' = \emptyset \\
 missOpen' = MISSIONID \\
@@ -617,6 +650,7 @@ dKind' = \emptyset \\
 dAbort' = \emptyset \\
 overwritten' = \emptyset \\
 liveAborted' = \emptyset \\
+liveForkAborted' = \emptyset \\
 todo' = \emptyset \\
 dOpen' = \emptyset \\
 missOpen' = MISSIONID \\
@@ -1165,7 +1199,8 @@ c? \notin \dom stage \\
 leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 unlocked' = unlocked \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfBegin}
@@ -1237,7 +1272,8 @@ leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg 
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfReconcileReuse}
@@ -1274,7 +1310,8 @@ cfM' = cfM \\
 cfW' = cfW \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfReconcileFresh}
@@ -1310,7 +1347,8 @@ cfM' = cfM \\
 cfW' = cfW \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfLockReuse}
@@ -1414,7 +1452,8 @@ leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg 
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \} \\
+liveForkAborted' = liveForkAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ rd \in dAbort' \land (rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed')) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfWriteRecord}
@@ -2275,6 +2314,7 @@ NoForeignAbort       #d.(d:dAbort & (d|->dkTierB):dKind)
 NoVerdictOverwrite   overwritten /= {}
 LockedWrites         unlocked /= {}
 LiveSpared           liveAborted /= {}
+NoLiveForkAborted    liveForkAborted /= {}
 WellFormed           not(dom(rkind)=roster & dom(started)=roster & corrupt<:roster &
                          roster<:dom(sealed) & seenBad/\dom(seen)={} &
                          dom(corigin)=dom(claimed) & dom(pendWit)=dom(pend) &
