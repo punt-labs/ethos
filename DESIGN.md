@@ -1625,7 +1625,7 @@ information. `ethos identity list` shows identity definitions —
 static data, not runtime state. Mixing the two produced a column
 that was wrong most of the time.
 
-## DES-026: Generate agent definitions from identity data (SETTLED)
+## DES-026: Generate agent definitions from identity data (SETTLED; AMENDED 2026-10-24 by DES-079)
 
 **Status**: Settled. Implemented in PR #146.
 
@@ -4213,7 +4213,7 @@ emits `ticket` only. Reject both keys simultaneously to prevent ambiguity.
 - New contracts and event logs use `ticket`.
 - A future major release removes the `bead` alias.
 
-## DES-050: Automatic mission traceability via repo-local JSONL (SETTLED)
+## DES-050: Automatic mission traceability via repo-local JSONL (SETTLED; AMENDED 2026-10-24 by DES-079, DES-080)
 
 **Context**: `ethos mission close` writes contract and result data to the
 global missions directory (`~/.punt-labs/ethos/missions/`). This data
@@ -4873,7 +4873,7 @@ change it.
   3.4/3.5/3.6 enforcement.** DES-052 is purely a write-set
   authorization extension.
 
-## DES-054: Audited delegation — Tier A audit + Tier B contracts (SETTLED)
+## DES-054: Audited delegation — Tier A audit + Tier B contracts (SETTLED; AMENDED 2026-10-24 by DES-079, DES-080)
 
 **Status**: Settled. Shipped across PRs #326–#328 (2026-05-22/23); hardened in v4.9.0 by the mission-lifecycle cluster (#415, DES-067). Bead `ethos-98u9`. Supersedes `ethos-717p`, `ethos-gqg3`. Reviewed across four rounds (rop minimalism / rsc compatibility / jra formal invariants). Round 4 verdict: 3× APPROVE — converged. Design converged at v5; the revision history below is retained for provenance.
 
@@ -5725,7 +5725,7 @@ Design missions (specialist drafts preserved in branch history):
 
 ---
 
-## DES-058: Live audit write path and sealed committed record (amends DES-054) (SETTLED)
+## DES-058: Live audit write path and sealed committed record (amends DES-054) (SETTLED; AMENDED 2026-10-24 by DES-079)
 
 **Status**: Settled. Shipped in v4.8.0. Bead `ethos-t5b6`. Amends DES-054 v5 storage.
 Cross-repo request from punt-kit (clean-tree gate on `punt release`
@@ -7192,7 +7192,7 @@ gate should bind workers is deferred to a separate ADR.
 - Bead `ethos-7b6c`; PR #424; mission `m-2026-08-05-001` (design),
   `m-2026-08-06-002` (implementation)
 
-## DES-070: Seeded review agents — a new sidecar category for personaless checklists (IMPLEMENTED)
+## DES-070: Seeded review agents — a new sidecar category for personaless checklists (IMPLEMENTED; AMENDED 2026-10-24 by DES-079)
 
 **Status**: Implemented. Full design in `docs/seeded-review-agents.md`; the
 three agents live in `internal/seed/sidecar/agents/`, deployed via
@@ -7475,7 +7475,7 @@ has a marker in this repo but ships no guide (§ 2.6 lets a global
 tool register user-scope only); tracked as a biff-repo bug, not an
 ethos-repo compliance gap.
 
-## DES-072: Correction events — an additive-only annotation mechanism for closed missions (SETTLED)
+## DES-072: Correction events — an additive-only annotation mechanism for closed missions (SETTLED; AMENDED 2026-10-24 by DES-079)
 
 **Context.** Two open beads (`ethos-11fy`, filed 2026-08-07; `ethos-lpub`,
 filed 2026-08-09) independently hit the same gap from different angles.
@@ -8891,7 +8891,7 @@ directly above, and exists so a future, well-intentioned fallback
 cannot reintroduce the collision this ruling explicitly rejected without
 first deleting or rewriting this test.
 
-## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08)
+## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08; 2026-10-24 by DES-079)
 
 **Context.** `internal/mission` (DES-054 phase 1) stores a mission in one
 of two trees and locks it through one of two lock files, and different call
