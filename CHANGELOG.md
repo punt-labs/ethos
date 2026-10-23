@@ -166,7 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the record `git blame`-style provenance needs: per mission the contract,
   results, delegation records and corrections, plus `missions.jsonl` and
   ADRs (which move from `~/.punt-labs/ethos/adrs` into the repository).
-  Prompts, reflections, artifacts, event logs and per-tool-call audit stay
+  Prompts, reflections, agent-written artifacts, event logs and
+  per-tool-call audit stay
   on the developer's machine unless exported with
   `ethos mission export --full` or `record: full`. Every mission-record and
   audit file ethos writes will be redacted for paths, email addresses and
