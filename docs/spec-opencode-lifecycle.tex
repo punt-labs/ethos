@@ -2312,10 +2312,8 @@ assumed. The rest were not known.
     2\,796 states, at the same depth): the call dies after the skeleton and before
     the binding, an operator claims $m_1$ by hand (\field{LcOperatorClaim}$(b,m_1)$),
     and the next call is refused (\field{LcCfRefuse}$(b)$): the claim names the
-    mission of $d_1$, and $d_1$ is closed. (The refusal with a claim in hand is
-    reached in the design by two routes, a missing or unreadable child roster
-    at step~1 and a claim written between the lock-free read of step~2 and the
-    dispatch-pending lock; N22. The operator-claim trace through the claimed
+    mission of $d_1$, and $d_1$ is closed. (The model reaches a refusal with a claim in hand;
+    N22 gives examples of how the design does. The operator-claim trace through the claimed
     case, with no refusal in the slice, is \texttt{C17\_off\_nrf}: 60\,541
     states, depth 11.) \textbf{Amendment}
     \field{fixClaimLive} (the leader's decision; Tier B dispatch unchanged): a
@@ -2341,27 +2339,16 @@ assumed. The rest were not known.
     switch, and the mutant \texttt{MutLiveNoDone} of C12, which leaves the
     binding alone, now switches off the complete mark and the owned fork
     skeleton together. Second, \field{fixClaimLive} ships with
-    \field{fixDurableName}, and the rows show less than ``needs'', which an
-    earlier revision said. The kept record is marked complete only under the
+    \field{fixDurableName}. The kept record is marked complete only under the
     durable name, and with the record removed an adopted skeleton is named by
-    nothing. But \field{NoOrphanOpenSkeleton} needs the durable name whatever
-    \field{fixClaimLive} says: with both off it fails at depth 11 by the trace
-    of C12 (\texttt{C17\_nodur\_off}, 60\,546 states), and on the slice
-    without the operator claim and the refusal the counterexample is that
-    trace with the switch on and off alike (\texttt{C17\_nodur\_nr},
-    \texttt{C17\_nodur\_nr\_off}, 7\,654 states, depth 11), so that slice does
-    not isolate \field{fixClaimLive}. What \field{fixClaimLive} adds is a
-    shorter failure when the durable name is off, by the adoption: at depth 10
-    through the refusal (\texttt{C17\_nodur}, 48\,840 states; the trace is an
-    operator claim and \field{LcCfRefuse}, and depends on N22), and at depth 11
-    through the claimed case, with no refusal in the slice
-    (\texttt{C17\_nodur\_nrf}, 60\,542 states; the goal is an open fork
-    skeleton named by nothing with the binding table empty, which the C12
-    trace does not reach; the control with \field{fixClaimLive} off,
-    \texttt{C17\_nodur\_nrf\_off}, 75\,278 states, needs depth 12 and goes by
-    the C12 trace). The ruling that the two ship together therefore rests on
-    the durable name being required in any case (C12), and not on a failure
-    that only \field{fixClaimLive} causes. \field{NoLiveForkAborted} itself does not need
+    nothing. Without the durable record \field{NoOrphanOpenSkeleton} fails
+    both with \field{fixClaimLive} on (\texttt{C17\_nodur\_nr}, 7\,654 states,
+    depth 11) and with it off (\texttt{C12\_off}, 60\,546 states, depth 11),
+    so the two ship together. Two further rows are recorded as data:
+    \texttt{C17\_nodur\_nrf} (60\,542 states, depth 11) and
+    \texttt{C17\_nodur\_nrf\_off} (75\,278 states, depth 12) have as goal an
+    open fork skeleton named by nothing, with an empty binding; the control
+    reaches that state by the C12 trace plus a release. \field{NoLiveForkAborted} itself does not need
     it: the ghost reads the claim and not the record, and it holds with the
     durable name off (\texttt{C17\_lfa\_nodur}, 320\,713 states, depth 27). A skeleton that is adopted although its binding was never
     written (the second trace above, after an operator claim of its mission) is
@@ -2394,8 +2381,7 @@ the record not durable and the other sixteen switches on
 durable name is needed by \field{NoOrphanOpenSkeleton} in any case (C12);
 when \field{fixClaimLive} is on, the failure without it is also reached by
 the adoption, which removes the record under the adopted skeleton
-(\texttt{C17\_nodur}, through the refusal; \texttt{C17\_nodur\_nrf}, through
-the claimed case).
+(\texttt{C17\_nodur}).
 
 \paragraph{Decision recorded: the reversal of C7.} The leader has accepted
 C7 as stated: a roster with a live numeric participant is never purged,
@@ -2445,7 +2431,8 @@ every roster is gone, which is not a violation. The invariant schemas are
 deleted only because they are not operations and the goals below replace
 them. By the convention of \S\ref{sec:lc-method} every state predicate is a
 \texttt{-goal}; the \texttt{GOAL}s, in B, are the negations of the invariant
-schemas:
+schemas, with one exception: \texttt{G\_orph\_nb}, at the end of the list, is
+a narrowed goal and not the negation of an invariant schema:
 
 \begin{verbatim}
 LineageStable        not(!s.(s:roster => (s:dom(sealed) & sealed(s)=parentSide[{s}])))
@@ -2471,7 +2458,13 @@ WellFormed           not(dom(rkind)=roster & dom(started)=roster & corrupt<:rost
                          dom(dKind)=skel & dAbort<:skel-dOpen & todo<:skel & cfH<:dom(stage) &
                          dom(cfM)=dom(stage) & dom(cfW)=dom(stage) & dom(cfD)<:dom(stage) &
                          !c.(c:dom(stage) & stage(c)>=3 => (c:dom(pend) & pend(c)=cfD(c))))
+G_orph_nb            #d.(d:dOpen & (d|->dkFork):dKind & binding={} & not((#c.(c:dom(pend) & pend(c)=d)) or
+                         (#c.(c:roster & c:dom(binding) & binding(c)=d))))
 \end{verbatim}
+
+\noindent \texttt{G\_orph\_nb} is the goal of \texttt{NoOrphanOpenSkeleton}
+with the binding table required to be empty. It is used by
+\texttt{C17\_nodur\_nrf} and \texttt{C17\_nodur\_nrf\_off}.
 
 \noindent A goal that reports ``no counterexample'' is also followed by
 ProB's own message that the goal was ``unknown'' in the root state, which
@@ -2570,7 +2563,7 @@ corrected. The goal that the ten \field{WellFormed} rows
 \texttt{U1\_wf\_all}, \texttt{U2\_wf\_all}, \texttt{MutResumeKeepRec\_wf})
 passed to probcli already carried the conjunct, so the printed list and not
 the runs was wrong; all ten were run again with the corrected goal and have
-the same outcome, states and depth as in the table. All 173 rows were run
+the same outcome, states and depth as in the table. All 172 rows were run
 again on the text with \field{fixClaimLive}, the ghost
 \field{liveForkAborted} and the invariant \field{NoLiveForkAborted}. The 130
 rows of the previous revision have the same outcome as before, none
@@ -2589,13 +2582,13 @@ are the experiments the ledger describes; with it on they fail sooner and by
 another trace (\texttt{C17\_nodur}, C17). \texttt{Reach\_nosup}, which also
 has the record not durable, is stated with the switch off as well: 240\,800
 states, depth 17, a counterexample; with the switch on it reaches the same
-kind of state at the same depth in 227\,422 states. The 43 rows that are new are those
+kind of state at the same depth in 227\,422 states. The 42 rows that are new are those
 of C17: \field{NoLiveForkAborted} with the switch on and off on the four
 exhaustive slices (eight rows), on the two slices without an operator
 claim (four) and on the slice without the refusal (two); the other four invariants with the switch off
 (\texttt{C17\_*\_off}, five rows); \texttt{C17\_nodur},
-\texttt{C17\_lfa\_nodur} and the five rows that test the dependence on the
-durable name (\texttt{C17\_nodur\_off}, \texttt{C17\_nodur\_nr},
+\texttt{C17\_lfa\_nodur} and the four rows that test the dependence on the
+durable name (\texttt{C17\_nodur\_nr},
 \texttt{C17\_nodur\_nr\_off}, \texttt{C17\_nodur\_nrf},
 \texttt{C17\_nodur\_nrf\_off}); the two mutants of
 \field{fixClaimLive}; the twelve rows of the alternative of the review (the last
@@ -2739,7 +2732,6 @@ two kinds in the second table); and \texttt{Own\_all}, \texttt{Adopt\_all} and
 \texttt{C17\_lfa\_nodur} & NoLiveForkAborted & InitPair & 2/2/2 & all but DurableName & holds, all states visited & claim+ & 320\,713 & 27 \\
 \texttt{C17\_off\_nrf} & NoLiveForkAborted & InitPair & 2/2/2 & all but ClaimLive & counterexample & claim+, no refusal & 60\,541 & 11 \\
 \texttt{C17\_all\_nrf} & NoLiveForkAborted & InitPair & 2/2/2 & all seventeen & holds, all states visited & claim+, no refusal & 271\,189 & 29 \\
-\texttt{C17\_nodur\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive and DurableName & counterexample & claim+ & 60\,546 & 11 \\
 \texttt{C17\_nodur\_nr} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but DurableName & counterexample & claim+, no operator claim, no refusal & 7\,654 & 11 \\
 \texttt{C17\_nodur\_nr\_off} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all but ClaimLive and DurableName & counterexample & claim+, no operator claim, no refusal & 7\,654 & 11 \\
 \texttt{C17\_nodur\_nrf} & NoOrphanOpenSkeleton, binding empty & InitPair & 2/2/2 & all but DurableName & counterexample & claim+, no refusal & 60\,542 & 11 \\
@@ -2846,7 +2838,7 @@ leaves the binding write as it is. It is run with every other switch on and
 states). It does not close the second trace of C17: with the operator claim in
 the slice \field{NoLiveForkAborted} fails at depth 10
 (\texttt{Alt\_lfa}), because no dispatch is involved and the record is
-incomplete when the operator claims its mission. That row ends in the
+incomplete when the operator claims its mission. That row ends in a
 refusal, so it depends on N22; the claimed case does not: on the slice with
 the operator claim and without the refusal it fails at depth 11
 (\texttt{Alt\_lfa\_nrf}, 60\,543 states, the operator claim and then
@@ -3180,25 +3172,21 @@ DES-078 is to be brought into line at these places.
     record names only a skeleton that its own call wrote, so for the
     skeletons the reconcile considers the test is the claim alone
     (\texttt{Own\_all}); the record needs its stage field, as above, so that a
-    live record is kept complete. The fix presupposes the durable record, and the two ship together
-    (\texttt{C17\_nodur}, \texttt{C17\_nodur\_nrf}; the durable name is required
-    for \field{NoOrphanOpenSkeleton} in any case, C12); the binding and complete-mark tests stay in the code
+    live record is kept complete. Without the durable record \field{NoOrphanOpenSkeleton} fails both with the
+    fix on (\texttt{C17\_nodur\_nr}) and with it off (\texttt{C12\_off}), so the two ship together; the binding and complete-mark tests stay in the code
     as defensive tests the model does not exercise. Tier B dispatch is not changed, and no write of the dispatch
     path learns about the record. The required test is the trace of C17: a
     child whose \field{claim-forked} wrote the claim and died before it marked
     the record complete, whose binding a Tier B dispatch has since replaced,
     then a reconciled \field{claim-forked} (the claimed case): the skeleton is
     open after the call and the record is kept and complete. The refused
-    variant of the same trace is induced by route (a) of N22: remove or corrupt
-    the child's roster after the crash, so that the read phase reports ``child
-    roster gone'' and reconciles in refusal form with the claim in hand; the
-    skeleton is again open and the record kept and complete. A second required
+    variant of the same trace is induced by removing or corrupting the child's
+    roster after the crash, so that the call is refused with the claim in
+    hand; the skeleton is again open and the record kept and complete. A second required
     test pins the consequence stated in N21: an operator claim of the
     skeleton's mission, made after a call that died before it wrote the
-    binding, adopts the skeleton. Its refused variant is induced by route~(b)
-    of N22, a claim written between the lock-free read of step~2 and the
-    dispatch-pending lock, and in it the witness check must itself refuse,
-    since the refusal form is what is under test.
+    binding, adopts the skeleton. Its refused variant is induced by removing or corrupting the child's
+    roster after the operator claim.
 \end{itemize}
 
 Further consequences are not counterexamples of the model but
@@ -3333,37 +3321,23 @@ treated as the skeleton's abandonment. \textbf{Rulings of the leader.} The
 code adopts: an operator claim that names the skeleton's mission makes the
 skeleton live, and \field{mission release} or the close-time clearing closes it.
 \field{fixClaimLive} and \field{fixDurableName} ship together
-(\texttt{C17\_nodur}, \texttt{C17\_nodur\_nrf}). The binding and complete-mark tests stay in the code as
+(\texttt{C17\_nodur\_nr}, \texttt{C12\_off}). The binding and complete-mark tests stay in the code as
 defensive tests, documented as unexercised by the model, which finds them
 subsumed by the claim (\texttt{Own\_all}). The alternative of the review
 (\texttt{Alt\_*}, \S\ref{sec:lc-verification}) does not adopt it, and does not
 satisfy the invariant.
 (N22) \field{LcCfRefuse} over-approximates the read phase of the design. Its
 guard is $c?\notin\dom\field{stage}$ and nothing more, so the model reaches a
-refusal while the child holds a claim. In the design that happens by two
-routes. (a) Step~1 of the read phase, \texttt{ss.Load(child)}, runs before the
-claim is read, and a missing or unreadable child roster is the ``child roster
-gone'' exit, which reconciles under the lock in refusal form; a child that
-holds a claim and whose roster is missing or unreadable reaches
-\field{LcCfRefuse} with the claim and no interleaving at all. (b) The claim
-is written between the lock-free read of step~2, which found none, and the
-taking of the dispatch-pending lock; this is an interleaving, which the design
-does not exclude and the model does not otherwise examine (compare the read
-phase and the start of the write phase being one step, above). Otherwise
-step~2 finds the claim and takes the claimed case. The rows whose
-counterexample or kill is a refusal with a claim depend on these routes. The
-rows that end \field{LcOperatorClaim}; \field{LcCfRefuse} at depth 10
-(\texttt{C9\_lfa\_off}, \texttt{Fa\_lfa\_off}, \texttt{U1\_lfa\_off},
-\texttt{U2\_lfa\_off}, \texttt{MutClaimLiveRefuse}, \texttt{C17\_nodur},
-\texttt{Alt\_lfa}, \texttt{Adopt\_all}) model route~(b). \texttt{C17\_off\_noop}
-does not model the window: its claim was written by the call that died, before
-any later read, so the route by which it is reachable in the design is~(a).
-The rows whose trace goes through the claimed case do not depend on either
-(\texttt{C17\_off\_nr}, \texttt{C17\_off\_nrf}, \texttt{C17\_nodur\_nrf},
-\texttt{Alt\_lfa\_nrf}, on slices without \field{LcCfRefuse}, and
-\texttt{MutClaimLiveClaimed}); the ruling to ship \field{fixClaimLive} and the
-rejection of the alternative of the review are stated on them as well as on
-the refusal rows (C17). The invariants that hold with \field{LcCfRefuse} in the
+refusal while the child holds a claim. The design reaches one in cases such as
+these, and the list is not claimed to be exhaustive: the child roster is
+missing or unreadable at the read phase, or at \field{RefuseIfSessionGone} of
+the write phase; or a claim is written after the read of step~2 and before the
+dispatch-pending lock. The rows whose counterexample or kill ends in a refusal
+depend on N22. The claimed-case rows do not (\texttt{C17\_off\_nr},
+\texttt{C17\_off\_nrf}, \texttt{Alt\_lfa\_nrf}, \texttt{Alt\_lfa\_nr}, and
+\texttt{MutClaimLiveClaimed}). The ruling to ship \field{fixClaimLive} and the
+rejection of the alternative of the review are stated on the claimed-case
+rows as well as on the refusal rows (C17). The invariants that hold with \field{LcCfRefuse} in the
 slice hold of the larger behaviour and so, for them, the over-approximation
 is sound; a counterexample that uses it is a counterexample of the design only
 if the interleaving can occur.
