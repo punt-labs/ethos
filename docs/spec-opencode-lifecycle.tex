@@ -2160,7 +2160,7 @@ assumed. The rest were not known.
     locks, \field{cfH}, and not a stage number.
   \item[\textbf{C16}] \textbf{A resumed attempt exits ``do not retry'' with
     its skeleton open.} \field{ReconcileOnExit}; \S5 point~2 item~5, the
-    re-read of the mission under the locks (steps~5 and~6) and the exit
+    re-read of the mission (step~6, made under the locks of step~5) and the exit
     ``do not retry''. Found by Copilot in review of PR~536 and not by this
     model: no exhaustive slice held the unlocked sweep and a resume together
     (\S\ref{sec:lc-verification}, ``The gap that let C16 through''). From
@@ -2539,6 +2539,7 @@ closed; \texttt{MutResumeKeepRec}: the skeleton closed and the record kept).
 \texttt{MutResumeCas\_leak} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 131\,621 & 29 \\
 \texttt{MutResumeKeepRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 132\,609 & 26 \\
 \texttt{MutResumeKeepRec\_wf} & WellFormed & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim-u & 132\,609 & 26 \\
+\texttt{MyRelKeepRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all sixteen & holds, all states visited & claim+ & 318\,189 & 24 \\
 \texttt{MutResumeNoCloseSkel} & ReconcileOnExit & InitPair & 2/2/2 & all sixteen & counterexample & claim-u & 8\,744 & 12 \\
 \bottomrule
 \end{tabularx}
@@ -2693,7 +2694,11 @@ exit. No row contained the trace, and the document said so only for the
 second propagation, not for this one. \emph{claim-u} and \emph{claim+u} add
 the two halves of the unlocked sweep to the exhaustive slices and are
 exhausted, with the invariants of the table. The full-machine rows are still
-bounded and still short of this depth; nothing here claims them exhaustive.
+bounded and still short of this depth (the \emph{claim+delete+close} rows stop
+at depth 8 and the three-session ones at 5; the \field{LcInitChain} rows of
+\emph{claim} reach 12 but contain no sweep); nothing here claims them exhaustive. Nor is the
+unlocked sweep combined with \field{LcInitChain}: there is no chain row with
+the sweep, so the multi-hop walk and C16 have not met in any run.
 
 
 \subsection{Consequences for the design document}
@@ -2785,7 +2790,10 @@ DES-078 is to be brought into line at these places.
     the call closes the skeleton the record names (open, kind
     \field{dkFork}, owned by the child) with verdict \field{aborted}, as a
     compare-and-set on verdict \field{open} under the delegation lock, and
-    removes the record; then it exits ``do not retry''. Where the design says
+    removes the record; then it exits ``do not retry''. The order is the
+    failure ordering: the close comes first, and a close that fails ends the
+    call with the record kept, as the retry token (compare N2); the record is
+    removed only after the close has succeeded. Where the design says
     that a closed mission ends the call and the sweep closes what remains, that
     is true of the locked sweep and false of the unlocked fallback, whose
     snapshot may be taken before and written after the exit. A required test: a
@@ -2885,7 +2893,7 @@ closes of C11 and C12 can race a write phase, and the model cannot show it.
 (N17) Three omissions in the Tier B dispatch: a dispatch without a roster, the
 depth-gate close with verdict \field{aborted}, and a binding write that fails
 without being fatal are not represented. (N18) That a release removes the
-record is unverified: \texttt{MyRelKeepRec} survives, so it is hygiene and not
+record is unverified: \texttt{MyRelKeepRec} (the release clearing the claim and the binding but keeping the record; \emph{claim+}, 318\,189 states, depth 24, all visited, no orphan) survives, so it is hygiene and not
 an invariant. The same holds of the guard $c\notin\field{pendDone}$ of
 \field{LcCfReconcileReuse}, stated above (\texttt{MutReuseDone}), and of the
 removal of the record at the exit ``do not retry'' (\texttt{MutResumeKeepRec}).
