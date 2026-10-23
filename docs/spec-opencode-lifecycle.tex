@@ -2368,7 +2368,8 @@ of \S\ref{sec:lc-invariants}. All 130 rows were run again on the text with
 outcome, states and depth as before, but for \texttt{Fv2\_on}, a bounded row
 whose depth is now 23 and was 21 (the bound is the state count; the depth is
 where the bound fell). The 33 others are new: the \emph{claim-u} and
-\emph{claim+u} rows and the mutants of C16.
+\emph{claim+u} rows, the mutants of C16, and \texttt{MyRelKeepRec}, the
+release mutant of N18.
 
 {\scriptsize
 \begin{center}
@@ -2908,8 +2909,9 @@ the two is not represented. The exit of the model is taken at stage~1, before
 the call is in \field{cfH}, where the code takes the locks and then re-reads;
 the two differ in nothing the invariants read, since \field{LcCloseLocked}
 acts only on an open mission and the exit has found it closed.
-(N20) The model never returns an id to the counter (\field{LcCfAlloc} only
-grows \field{used}), so id uniqueness holds by construction. The resume guard
+(N20) Every operation of the model leaves \field{used} unchanged or grows it
+(\field{LcCfAlloc}, \field{LcTierBDispatch}), and the initialisations set it
+empty, so id uniqueness holds by construction. The resume guard
 checks neither the owner nor the kind of the skeleton, so uniqueness alone
 excludes a resume onto a Tier~B skeleton in the model. The guarantee of the
 code rests on the id being consumed once the record is durable (design \S5

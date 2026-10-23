@@ -12617,8 +12617,10 @@ Full writeups, including two historical exploit traces, are in
   `deleteFiles` must stop the call on failure (N2). **Round 9:** the proofs
   are exhaustive on named slices (the claim, claim+, delete, sweep, lineage,
   start, and Tier B slices, at two missions, two delegations, and two or three
-  sessions; the unlocked sweep is checked together with the claim-forked exit
-  only on the claim-u and claim+u slices, and no exhaustive chain row contains
+  sessions; the unlocked sweep and the claim-forked exit are checked together
+  exhaustively (all states visited, all sixteen switches on) only on the
+  claim-u and claim+u slices; the bounded rows Fv2_on, F2_*, F3_* and the
+  counterexample rows Fc_w, Fc_del also contain both; no exhaustive chain row contains
   the sweep: the bounded F3 rows stop at depth 5, so the multi-hop walk and C16
   have not met in any run) and bounded on the full machine (200,000 states at two sessions,
   40,000 at three, below depth 12) and for `NoLiveSessionPurged` beyond one session; the table
@@ -12628,8 +12630,9 @@ Full writeups, including two historical exploit traces, are in
   an implementation constraint (N16); that a release removes the record, which
   is hygiene, and the guard that a complete record is never resumed, which is
   defensive and unverified (N18); the dispatch-pending entries that
-  `ClearMissionBindings` clears (N13); and the id counter, which the model
-  never decrements, so id uniqueness holds by construction and the resume
-  guard, which checks neither the skeleton's owner nor its kind, is excluded
-  from a Tier B skeleton by uniqueness alone; the code rests on the id being
+  `ClearMissionBindings` clears (N13); and the id counter: every operation
+  leaves `used` unchanged or grows it (`LcCfAlloc`, `LcTierBDispatch`) and the
+  initialisations set it empty, so id uniqueness holds by construction; the
+  resume guard checks neither the skeleton's owner nor its kind, so uniqueness
+  alone excludes a resume onto a Tier B skeleton; the code rests on the id being
   consumed once the record is durable (N20).

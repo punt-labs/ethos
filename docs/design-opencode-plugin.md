@@ -244,7 +244,7 @@ without `StoreRoot` is Tier B, cleared and never closed;
 errors on the child's and the witness's binding reads, a `ParentOf` error, a
 `ReadDelegationBinding` error in a reconcile, a record-removal failure, and
 an abort whose cleanup close fails, a mission found closed is "do not
-retry" (the spec's `LcCfExitNoRetry`, C15, after the close of C16), `ParentOf` and ancestor-roster
+retry" (the spec's `LcCfExitNoRetry`, C15, after the close of C16; if that close fails, "write failed"), `ParentOf` and ancestor-roster
 I/O errors are "write failed", and a column states the Claude Code
 `SessionStart` action (Ensure-step failures are separate, §2.5); the
 `errors.As` mapping is consulted before the prefix test at
@@ -1165,7 +1165,8 @@ identical guard:
   registered ancestor, nearest first, as `witness?` to `claim-forked`
   (§5 point 2) until one succeeds, moving to the next ancestor only on
   "witness refused" (§5 point 2 item 4); a mission found closed is "do not
-  retry" and ends the iteration. The guard is spec §5.6's corrected, round-4
+  retry" (after the close of C16; if that close fails, "write failed") and
+  ends the iteration. The guard is spec §5.6's corrected, round-4
   guard: the full ancestor set under transitive closure, not a single hop
   (§2.3.1). `claim-forked` refuses a witness that is not an ancestor, holds
   no claim, or holds only a non-`claim`-origin binding (§5 point 2); on
@@ -1534,8 +1535,10 @@ the resume path's supersede clause and the guard that a complete record is
 never resumed are unexercised and unverified (`MutSupReuse`, `MutReuseDone`
 survive).
 
-The unlocked sweep is checked together with the claim-forked exit only on the
-claim-u and claim+u slices (C16). No exhaustive chain row contains the sweep;
+The unlocked sweep and the claim-forked exit are checked together
+exhaustively (all states visited, all sixteen switches on) only on the claim-u
+and claim+u slices (C16). The bounded rows `Fv2_on`, `F2_*` and `F3_*` and the
+counterexample rows `Fc_w` and `Fc_del` also contain both. No exhaustive chain row contains the sweep;
 the bounded F3 rows (`LcInitChain` with `LcCloseUnlockedBegin` and
 `LcSweepWrite`) stop at depth 5, so the multi-hop walk and C16 have not met
 in any run, and the full-machine
@@ -1578,8 +1581,8 @@ point 2 item 5); N18, that a release removes the record is hygiene and the
 the "do not retry" exit the close of the record's skeleton and the removal of
 the record are one step in the model and two files in the code, so a failed
 close keeps the record as the retry token (§5 point 2 write phase step 6); N20,
-the model never returns an id to the counter (`LcCfAlloc` only grows `used`),
-so id uniqueness holds by construction, and the resume guard checks neither the
+every operation of the model leaves `used` unchanged or grows it
+(`LcCfAlloc`, `LcTierBDispatch`) and the initialisations set it empty, so id uniqueness holds by construction, and the resume guard checks neither the
 skeleton's owner nor its kind, so uniqueness alone excludes a resume onto a
 Tier B skeleton in the model; the code's guarantee rests on the id being
 consumed once the record is durable (§5 point 2 item 3) and its required test. The
