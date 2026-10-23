@@ -1621,15 +1621,13 @@ operator's, so the invariant `NoLiveForkAborted` treats neither as the
 skeleton's abandonment. The leader's ruling is to adopt (§5 point 2 item 5).
 N22, `LcCfRefuse` over-approximates the read phase: its guard is only that the
 child has no pending stage, so the model reaches a refusal while the child holds
-a claim. In the design a refusal with a claim in hand arises by two routes.
-(a) Step 1 of the read phase: the child roster is missing or unreadable, and
-that exit reconciles in refusal form. (b) The window between the step-2 claim
-read, which found none, and the dispatch-pending lock; otherwise step 2 finds
-the claim and takes the claimed case. The rows whose counterexample ends in an
-operator claim and then a refusal model route (b); the refused form of
-Copilot's trace is reachable by route (a); the claimed-case rows depend on
-neither. The invariants that hold with `LcCfRefuse` in the slice
-hold of the larger behaviour (spec N22).
+a claim. The design reaches one in cases such as these, and the list is not
+exhaustive: the child roster is missing or unreadable at the read phase, or at
+`RefuseIfSessionGone` of the write phase; or a claim is written after the
+step-2 read and before the dispatch-pending lock. The rows whose counterexample
+or kill ends in a refusal depend on N22; the claimed-case rows do not. The
+invariants that hold with `LcCfRefuse` in the slice hold of the larger
+behaviour (spec N22).
 
 ## 3. `ethos hook commit-trailers` without Claude process-tree discovery
 
@@ -2426,11 +2424,10 @@ pipeline stage's write-set is unambiguous:
         skeleton its own call wrote, so for the skeletons a reconcile
         considers the test is the claim alone (`Own_all`). Three rulings of
         the leader. (a) `fixClaimLive` ships with the durable record
-        (`fixDurableName`). The durable record is required in any case:
-        without it `NoOrphanOpenSkeleton` fails whether `fixClaimLive` is on
-        or off (C12). With `fixClaimLive` on, the failure is shorter, by the
-        adoption (`C17_nodur`; the spec's table). `NoLiveForkAborted` does
-        not need the durable name (`C17_lfa_nodur`). (b) The
+        (`fixDurableName`). Without the durable record `NoOrphanOpenSkeleton`
+        fails both with `fixClaimLive` on (`C17_nodur_nr`) and with it off
+        (`C12_off`). `NoLiveForkAborted` holds without the durable name
+        (`C17_lfa_nodur`). (b) The
         binding test and the complete-mark test stay in the code as
         defensive tests, documented as unexercised by the model, which finds
         them subsumed by the claim (`Own_all`). (c) N21, adopt: when an
@@ -2667,15 +2664,10 @@ pipeline stage's write-set is unambiguous:
         reach the reconcile of the claimed case. The refused variant of each
         (the Copilot trace and the operator-claim trace, each ending in a
         refused `claim-forked`) cannot be reached that way, because step 2
-        reads the claim first; the spec's limit N22 names two routes. The
-        refused variant of the Copilot trace is induced by route (a):
-        remove or corrupt the child's roster after the crash, so that step 1
-        exits as "child roster gone" and reconciles in refusal form with the
-        claim in hand. The refused variant of the operator-claim trace is
-        induced by route (b): write the claim after the lock-free read of
-        step 2 and before the dispatch-pending lock (a hook between the two,
-        or a second process timed to that window), and the witness check
-        must itself refuse, since the refusal form is what is under test. The
+        reads the claim first. Both refused variants, the Copilot trace and
+        the operator-claim trace, are induced by removing or corrupting the
+        child's roster after the crash or after the operator claim, so that
+        the call is refused with the claim in hand (spec N22). The
         expected outcome of both is the same: the skeleton is open after the
         call and the record is kept and complete. Also tested: a Tier B
         dispatch by a propagated child over its completed fork claim, then

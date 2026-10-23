@@ -12322,9 +12322,9 @@ PR #536). It applies to the reconcile of a refusal and of the claimed case and
 to the ghosts `leaked` and `liveAborted`; the resume and fresh paths need
 none. Rulings of the leader: `fixClaimLive` ships with the durable record
 (`fixDurableName`), which is required in any case (without it
-`NoOrphanOpenSkeleton` fails whether `fixClaimLive` is on or off, C12; with
-`fixClaimLive` on the failure is shorter, by adoption, `C17_nodur`);
-`NoLiveForkAborted` holds without it (`C17_lfa_nodur`); the binding and
+`NoOrphanOpenSkeleton` fails both with `fixClaimLive` on, `C17_nodur_nr`, and
+with it off, `C12_off`); `NoLiveForkAborted` holds without it
+(`C17_lfa_nodur`); the binding and
 complete-mark tests stay in the code as defensive tests that the model does
 not exercise (`Own_all`); and (N21) when an operator claim names the
 skeleton's mission after a call died before it wrote its binding, the
@@ -12341,10 +12341,9 @@ is kept and complete) and the operator-claim trace (C17: the call dead after
 the skeleton, an operator claims the skeleton's mission, the next call adopts
 the skeleton; N21 applies where the call died before its binding). A next
 call that finds the claim at step 2 of the read phase takes the claimed case.
-The refused variant of Copilot's trace is induced by N22 route (a), removing or
-corrupting the child's roster after the crash; the refused variant of the
-operator-claim trace by route (b), writing the claim after the lock-free read
-and before the dispatch-pending lock, and the witness check must also refuse.
+Both refused variants, Copilot's trace and the operator-claim trace, are
+induced by removing or corrupting the child's roster after the crash or after
+the operator claim (N22).
 (29) *Reconcile paths.* `fixSupersede` applies on the fresh
 and resume paths only; the resume clause is defensive and unexercised. The
 resume path takes the mission and delegation locks and re-reads the mission
@@ -12666,10 +12665,13 @@ Full writeups, including two historical exploit traces, are in
   `ClearMissionBindings` clears (N13); and an id returned to the counter (the code's
   `releaseID(false)`) and the moment of consumption (N20), and who wrote a
   claim: the adoption of a skeleton by an operator claim is a ruling of the
-  leader, not a result of the model (N21). The model's refusal can be reached
-  with a claim in hand; the design reaches that by two routes: a missing or
-  unreadable child roster at step 1, and the window between the lock-free
-  claim read and the dispatch-pending lock (N22). The model has
+  leader, not a result of the model (N21). The model's refusal needs only
+  that the child has no pending stage, so it reaches a refusal with a claim in
+  hand. The design does so in cases such as a child roster missing or
+  unreadable at the read phase or at write-phase `RefuseIfSessionGone`, or a
+  claim written after the step-2 read and before the dispatch-pending lock; the
+  list is not exhaustive (N22). Rows ending in a refusal depend on N22;
+  claimed-case rows do not. The model has
   uniqueness because every operation leaves `used` unchanged or grows it
   (`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`
   (`d?` not in `used`), and the initialisations set it empty; the
