@@ -12050,11 +12050,13 @@ against pre-fix code before its fix landed.
 missions `m-2026-10-18-007` (round 1), `m-2026-10-18-008` (round 2), and
 `m-2026-10-18-020` (round 3), `m-2026-10-21-003` (round 4), and
 `m-2026-10-22-017` (round 5), `m-2026-10-22-026` (round 6),
-`m-2026-10-22-030` (round 7), and `m-2026-10-22-046` (round 8, which
+`m-2026-10-22-030` (round 7), `m-2026-10-22-046` (round 8, which
 reconciles the design to the lifecycle model of `m-2026-10-22-031` and
-`m-2026-10-22-042`). Full design: `docs/design-opencode-plugin.md`. The
-lifecycle operations (session `ensure`, `deleteFiles`, purge,
-`claim-forked`) are specified by the model-checked
+`m-2026-10-22-042`), and `m-2026-10-23-005` (round 9, which reconciles it to
+the extended model of `m-2026-10-22-048`). Full design:
+`docs/design-opencode-plugin.md`. The lifecycle operations (session `ensure`,
+`SessionStart`, `deleteFiles`, purge, `claim-forked`, `mission release`, and
+the close-time clearing of the claim) are specified by the model-checked
 `docs/spec-opencode-lifecycle.tex`, which is the authority where it and the
 design disagree.
 Builds on the formal model in `docs/spec-opencode-integration.tex`
@@ -12222,7 +12224,7 @@ roster is not found and proceeds on any other error. An operator claim after
 an interrupted `claim-forked` that named the same delegation leaves the
 skeleton and the binding in place; they stamp a `Delegation:` trailer when
 the missions match and are inert otherwise (round 8 closes the inert case,
-item 22). (20) *Sidecar and guide.* The `parent-session` hard-link temp file
+item 22; round 9 replaces this with the live-record rule, item 28). (20) *Sidecar and guide.* The `parent-session` hard-link temp file
 is named `parent-session.tmp-<random>`, removed by `deleteFiles`, and needs
 NTFS on Windows. Every Claude-only part of the shared guide is enumerated
 (item 16), and `validate-content` rejects `.claude/` and `Claude Code` in it.
@@ -12237,19 +12239,22 @@ operations, and `docs/design-opencode-plugin.md` is brought into line. (21)
 which round 6's remark that a cycle needs `--parent-gone` had denied (C3), and
 the ancestor walk keeps its visited set as a mandatory guard, because
 concurrent edge insertion is outside the model (N4). `deleteFiles` runs in
-seven steps: close named skeletons (stopping if that fails, N2), the claim,
-the binding, the pending record, `last-seen`, the roster, and the
-`parent-session` sidecar last (C2, C5). (22) *`claim-forked`.* Every exit
+seven steps: close named skeletons (stopping if that fails, N2; round 9
+narrows this to an open fork skeleton the session owns and its record names,
+item 27), the claim, the binding, the pending record, `last-seen`, the roster,
+and the `parent-session` sidecar last (C2, C5). (22) *`claim-forked`.* Every exit
 other than "write failed" reconciles first, including a read-phase refusal
 (C1). An already-claimed child closes the skeleton unless the binding is live
 (C4), and a reconcile that does not resume the record also closes the
-skeleton of the child's current binding (C9). The mission is re-read once the
+skeleton of the child's current binding (C9; round 9 withdraws that wording,
+item 29). The mission is re-read once the
 skeleton is on disk, before the binding (C6). Every close writes verdict
 `aborted` (N5). The read phase reads the child's claim lock-free first, so a
 claimed child returns success. A corrupt pending record or `record.yaml` is
 "do not retry". A Go panic (status 2) and a signal death are in the status
-table, and `cmd/ethos/main.go:51-70` must map the new statuses with
-`errors.As`. The lock non-nesting is compiler-enforced only if the write phase
+table, and `cmd/ethos/main.go:51-71` must map the new statuses with
+`errors.As`, consulted before the prefix test of `isUsageError` (round 9,
+item 31). The lock non-nesting is compiler-enforced only if the write phase
 lives in `internal/mission` and `RefuseIfSessionGone` is re-expressed over the
 reader interface. (23) *Purge.* A roster with a live numeric participant is
 never stale, which **reverses row 2 of the round 6 `TestIsStale` table**
@@ -12263,10 +12268,12 @@ pointer. (25) *Guide and enablement.* The shared guide's Claude-only parts
 now include line 11 (the `@`-import wording) and lines 43-44 (write-set
 enforcement is carried by Claude Code hooks);
 `validate-content` rejects `Claude`, `SessionStart`, `CLAUDE_`, `subagent`,
-and `.claude/`, allowing only the whole word `CLAUDE.md`.
+and `.claude/`, allowing only the whole word `CLAUDE.md` (round 9 derives the
+list from the harness list and adds OpenCode terms and any `@`, item 32).
 `TestHarnessNamesOnlyInList` also fails on a harness-specific import or on an
 identifier containing `claude` or `opencode` outside `harnesses.go`, and
-allowed literals match by exact equality. `ethos enable opencode` records
+allowed literals match by exact equality (round 9 narrows the allowlist to
+`.punt-labs/ethos/CLAUDE.md` and widens the scan, item 32). `ethos enable opencode` records
 that it added the `opencode.json` `instructions` entry, normalizes `./` and
 equivalent spellings before its absent check, and `ethos disable opencode`
 removes only an entry it added. (26) *Citations and prose.* `Store.Close`
@@ -12274,6 +12281,56 @@ and `DisclaimDelegation` are `internal/mission/store.go:1107,1217-1246` and
 `:1589`; every spelled-out plugin `ensure` command carries `--touch`; the
 `claim-forked` status prose is success plus three non-success statuses,
 distinct from 0, 1, and 2.
+
+**Round 9 correction (missions `m-2026-10-22-048` and `m-2026-10-23-005`).**
+`docs/spec-opencode-lifecycle.tex` was extended with six more counterexamples
+(C10 to C15), five more fix switches, and, on the leader's ruling, a durable
+pending record; the evaluator (jra) accepted it. With all fifteen switches on
+its operations are the authority, and `docs/design-opencode-plugin.md` is
+brought into line (header note, §2.1.1, §2.5, §2.6, new §2.7, §5 points 1 to
+3 and 5). (27) *Origin discriminator.* A skeleton is a fork skeleton
+(`BoundVia = claim_forked`, a new value) or a Tier B skeleton. `deleteFiles`,
+the purge, every `claim-forked` reconcile close, `mission release`, and the
+close-time clearing close only an open fork skeleton the session owns, as a
+compare-and-set; a binding that names a Tier B skeleton is cleared and the
+skeleton is left open, because it is a subagent's delegation (C10). (28)
+*Durable pending record.* The `claim-forked-pending` record carries a stage
+(complete or not) and the mission store root, persists for the life of the
+fork claim, and is removed only by `mission release`, the close-time clearing
+of the claim (`ClearMissionBindings`), or `deleteFiles`, each of which first
+closes the fork skeleton it names. This replaces "removed as the last step of
+a successful write" and "the record is then overwritten or removed". A Tier B
+dispatch by a propagated child overwrites its binding
+(`pretooluse_dispatch.go:880-884`, unchanged), and the record keeps the fork
+skeleton named (C12). A complete record is never resumable and is live when
+the child's claim is for the skeleton's mission; an incomplete record is live
+only if the binding names it too (C4). A refusal keeps a live record and
+never resumes it. (29) *Reconcile paths.* `fixSupersede` applies on the fresh
+and resume paths only; the resume clause is defensive and unexercised. The
+resume path takes the mission and delegation locks and re-reads the mission
+before it writes (C15). Release and close-time clearing close what they
+unname (C11) and must hold the child's dispatch-pending lock around the whole
+close, unname, clear sequence (spec N16). (30) *`SessionStart` and `ensure`.*
+Claude Code `SessionStart` for every source goes through `Store.Ensure`
+without `touch` (C13), and `ensure --touch` does not refresh a roster that
+fails to load. (31) *Closes and statuses.* Every skeleton close is a
+compare-and-set on verdict `open` under the delegation lock, the `Store.Close`
+sweep included (C14). The exit-status table gains rows for I/O errors on the
+child's and the witness's binding reads, a `ParentOf` error, a
+`ReadDelegationBinding` error in a reconcile, a record-removal failure, and an
+abort whose cleanup close fails; a mission-closed witness is "witness
+refused"; a column states the Claude Code `SessionStart` action. (B2) The
+record stores the store root, and `deleteFiles` step 1, `release`, and every
+reconcile close use it; "directory gone" needs a recorded, resolvable root.
+(32) *Guide and tests.* The guide deny list is derived from the harness list
+and adds OpenCode terms and any `@`; the persona-injection sentence (guide
+lines 19-20) is neutralized; the harness-name test scans `cmd/ethos`,
+`internal/doctor`, and `cmd/validate-content` and allowlists one literal.
+(33) *Corrections.* A `last-seen` read error is not stale on every path;
+`Store.Purge` has no production caller and `PurgeTombstoned` refuses an
+unreadable roster without `--force`; `ethos serve` does not age rosters out;
+a child whose roster is gone can have a record; the typed-status `errors.As`
+mapping runs before the prefix test at `main.go:85-100`.
 
 ### Problem
 
@@ -12357,23 +12414,35 @@ Ship the mapping as four pieces, deliberately minimizing new Go surface:
    guard now verifies ancestry against a new, Go-stored recorded parent
    (round 2 named it `Roster.ParentSession`; round 6 moved it to the
    `parent-session` sidecar so a roster re-marshal cannot erase it; written
-   by `ethos session ensure --parent-session <id>` at fork-registration
-   time, write-once and parent first) rather than trusting the plugin's own `--witness` argument
+   by `ethos session ensure --parent-session <id> --touch` from the plugin
+   at fork-registration time, write-once and parent first) rather than trusting the plugin's own `--witness` argument
    outright — closing a gap where nothing server-side previously existed to
    check a caller-supplied witness against; and the primitive now writes
    the matching `DelegationBinding` sidecar, which round 1 omitted —
    without it, `WriteCommitTrailers`'s same-mission cross-check
    (`commit_trailers.go:65`) finds no binding and the `Delegation:` trailer
-   silently never appears. **Round 5:** the three sidecar writes are not
-   atomic (`WithDispatchPendingLock` serializes writers, and
-   `WriteCommitTrailers` takes no lock), so the order is skeleton, binding,
-   then claim, and a retry reuses unclaimed partial state. **Round 4:** this primitive and the
-   `parent-session` sidecar are harness-neutral. Claude Code needs the
-   same fork treatment (`--fork-session`, `/fork`, `/branch` mint genuine new
-   sessions; `SessionStart` reports `source: "fork"`), so wiring Claude Code's
-   `SessionStart` hook to call `session ensure --parent-session` and
-   `claim-forked` is in scope for the same implementation stage as the
-   OpenCode plugin.
+   silently never appears. **Round 5:** the writes are not atomic
+   (`WithDispatchPendingLock` serializes writers, and `WriteCommitTrailers`
+   takes no lock), so they are ordered and retryable. **Round 9 order (rounds
+   8 and 9, replacing round 5's "skeleton, binding, then claim, and a retry
+   reuses unclaimed partial state"):** the pending record (incomplete, with
+   the store root), the skeleton, a post-check that re-reads the mission, the
+   binding, the claim, then the record is marked complete and kept. A retry
+   reuses the record only when it is not complete, its skeleton is open, its
+   mission and witness equal the call's, the mission is open, and the child
+   has no claim, and then takes the mission and delegation locks and
+   re-reads the mission before it writes the missing binding and claim; in
+   every other case it closes the skeleton and removes the record first.
+   **Round 4:** this primitive and the `parent-session` sidecar are
+   harness-neutral. Claude Code needs the same fork treatment
+   (`--fork-session`, `/fork`, `/branch` mint genuine new sessions;
+   `SessionStart` reports `source: "fork"`). **Round 9 wiring:** Claude Code's
+   `SessionStart` hook uses `Store.Ensure` in process, without `touch`, for
+   every source (a `fork` source passes the payload's parent and retries with
+   `parentGone` when the parent has no roster; every other source passes the
+   parent `ParentOf` records), and for the `fork` source then calls
+   `claim-forked`. That wiring is in scope for the same implementation stage
+   as the OpenCode plugin.
 4. **Coequal per-harness enablement**, `ethos enable [claude] [opencode]`.
    Harness-neutral repo steps run idempotently for any selection, in this
    order (round 6): gitlink guard, vendored deposit, gitignore, hook
@@ -12507,4 +12576,15 @@ Full writeups, including two historical exploit traces, are in
   Code session whose roster fails to parse and has no `last-seen`, which is
   still purged (N8). The model sees one bit per delegation, open or not, so
   every close must write verdict `aborted` (N5), and the close step of
-  `deleteFiles` must stop the call on failure (N2).
+  `deleteFiles` must stop the call on failure (N2). **Round 9:** the proofs
+  are exhaustive on named slices (the claim, claim+, delete, sweep, lineage,
+  start, and Tier B slices, at two missions, two delegations, and two or three
+  sessions) and bounded on the full machine (200,000 states at two sessions,
+  40,000 at three) and for `NoLiveSessionPurged` beyond one session; the table
+  is `docs/design-opencode-plugin.md` §2.7. Also not represented: a Tier B
+  dispatch without a roster, its depth-gate close, and a failed non-fatal
+  binding write (N17); the locks around `release` and the close-time clearing,
+  an implementation constraint (N16); that a release removes the record, which
+  is hygiene, and the guard that a complete record is never resumed, which is
+  defensive and unverified (N18); and the dispatch-pending entries that
+  `ClearMissionBindings` clears (N13).
