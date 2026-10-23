@@ -12286,9 +12286,11 @@ distinct from 0, 1, and 2.
 `docs/spec-opencode-lifecycle.tex` was extended with six more counterexamples
 (C10 to C15) and six more fix switches (nine to fifteen), the sixth being a
 durable pending record, on the leader's ruling; the evaluator (jra) accepted
-it. A later review added C16 and a sixteenth switch, `fixResumeClosed`: the
-spec now has sixteen counterexamples (C1 to C16) and sixteen switches. With all sixteen switches on
-its operations are the authority, and `docs/design-opencode-plugin.md` is
+it. A later review added C16 and a sixteenth switch, `fixResumeClosed`, and a
+review of PR #536 (Copilot; mission `m-2026-10-23-015`, accepted by jra) added
+C17 and a seventeenth, `fixClaimLive`: the spec now has seventeen
+counterexamples (C1 to C17) and seventeen switches, and limits N3 to N21. With
+all seventeen switches on its operations are the authority, and `docs/design-opencode-plugin.md` is
 brought into line (header note, §2.1.1, §2.5, §2.6, new §2.7, §5 points 1 to
 3 and 5). (27) *Origin discriminator.* A skeleton is a fork skeleton
 (`BoundVia = claim_forked`, a new value) or a Tier B skeleton. `deleteFiles`,
@@ -12309,10 +12311,31 @@ removes the record it wrote. This replaces "removed as the last step of
 a successful write" and "the record is then overwritten or removed". A Tier B
 dispatch by a propagated child overwrites its binding
 (`pretooluse_dispatch.go:880-884`, unchanged), and the record keeps the fork
-skeleton named (C12). A complete record is never resumable and is live when
-the child's claim is for the skeleton's mission; an incomplete record is live
-only if the binding names it too (C4). A refusal keeps a live record and
-never resumes it. (29) *Reconcile paths.* `fixSupersede` applies on the fresh
+skeleton named (C12). A complete record is never resumable. A fork skeleton
+(kind `dkFork`, owned by the child) is live when the child's claim names the
+skeleton's mission, whatever the binding names and whether the record is
+complete or not (C17, `fixClaimLive`); this withdraws the rule of C4 and C12
+that an incomplete record is live only if the binding names it, which
+aborted a skeleton the claim still named after a crash between the claim
+write and the completion mark followed by a Tier B dispatch (Copilot,
+PR #536). It applies to the reconcile of a refusal and of the claimed case and
+to the ghosts `leaked` and `liveAborted`; the resume and fresh paths need
+none. Rulings of the leader: `fixClaimLive` depends on the durable record
+(`fixDurableName`) and they ship together (`C17_nodur`); the binding and
+complete-mark tests stay in the code as defensive tests that the model does
+not exercise (`Own_all`); and (N21) when an operator claim names the
+skeleton's mission after a call died before it wrote its binding, the
+skeleton is live and is adopted, not aborted, and `mission release` or the
+close-time clearing closes it. Copilot's alternative, marking the record
+complete in the Tier B dispatch, was modelled and closes only Copilot's
+trace, not the operator-claim trace, and was not adopted; the Tier B dispatch
+is unchanged. A refusal keeps a live record and never resumes it. Required
+tests: Copilot's trace (a claim written, the call dead before the completion
+mark, the binding replaced by a Tier B dispatch, then a refused and a
+reconciled `claim-forked`: the skeleton is open after the call and the record
+is kept and complete) and the operator-claim trace (N21: the call dead before
+its binding, an operator claims the mission, the next call adopts the
+skeleton). (29) *Reconcile paths.* `fixSupersede` applies on the fresh
 and resume paths only; the resume clause is defensive and unexercised. The
 resume path takes the mission and delegation locks and re-reads the mission
 before it writes (C15). A mission found closed at that re-read first closes the
@@ -12618,7 +12641,7 @@ Full writeups, including two historical exploit traces, are in
   are exhaustive on named slices (the claim, claim+, delete, sweep, lineage,
   start, and Tier B slices, at two missions, two delegations, and two or three
   sessions; the unlocked sweep together with the claim-forked exit is verified
-  exhaustively, with all sixteen switches on, by the rows `U1_*_all`, `U2_*_all`
+  exhaustively, with all seventeen switches on, by the rows `U1_*_all`, `U2_*_all`
   and `U1_leak_d3`; every other row whose slice holds both, and its outcome, is
   in the spec's results table; no exhaustive chain row contains
   the sweep: the bounded F3 rows stop at depth 5, so the multi-hop walk and C16
@@ -12631,7 +12654,9 @@ Full writeups, including two historical exploit traces, are in
   is hygiene, and the guard that a complete record is never resumed, which is
   defensive and unverified (N18); the dispatch-pending entries that
   `ClearMissionBindings` clears (N13); and an id returned to the counter (the code's
-  `releaseID(false)`) and the moment of consumption (N20). The model has
+  `releaseID(false)`) and the moment of consumption (N20); and who wrote a
+claim: the adoption of a skeleton by an operator claim is a ruling of the
+leader, not a result of the model (N21). The model has
   uniqueness because every operation leaves `used` unchanged or grows it
   (`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`
   (`d?` not in `used`), and the initialisations set it empty; the
