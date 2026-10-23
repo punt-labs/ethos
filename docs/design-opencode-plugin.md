@@ -540,6 +540,22 @@ and one new Go command, `ethos session ensure` (§5 point 1):
      changes only `last-seen` (set to the current time), and `ensure`
      without `--touch` changes nothing: `Started`, participants, and
      extensions survive either way.
+     **A roster that fails to load is not refreshed (round 9; lifecycle
+     spec `LcEnsureRefresh`, whose guard excludes the `corrupt` set).**
+     `ensure --touch`
+     loads the existing roster before it writes `last-seen`. If the load
+     fails (the file exists and does not parse), `ensure` writes nothing,
+     leaves any existing `last-seen` as it was, and exits non-zero with an
+     error naming the roster file. The reason is C8: an unreadable roster
+     with a fresh `last-seen` is protected from purge, so a refresh would
+     let a corrupt roster outlive the purge for as long as the plugin kept
+     touching it. A roster that cannot be read is reclaimed by the purge
+     once its `last-seen` ages out, or by `ethos session delete`. `ensure`
+     without `--touch` does not read the roster and changes nothing, so a
+     roster that exists but does not parse is a no-op for it (spec N11).
+     Required test: `ensure --touch` against an unparseable roster that
+     already has a `last-seen` exits non-zero and leaves that file
+     byte-identical; against one with no `last-seen`, it creates none.
   A plugin restart therefore cannot reset lineage, and a session whose
   claim is already written (§2.4) is unaffected: `ensure` never touches the
   active-mission or delegation-binding sidecars.
@@ -624,13 +640,48 @@ and one new Go command, `ethos session ensure` (§5 point 1):
 - **Existing creators respect the sidecar.** `ethos session create`
   (`Store.CreateInCheckout` called on behalf of the CLI) against an id
   whose `parent-session` sidecar records a parent refuses and changes
-  nothing, rather than building a fresh roster over a recorded lineage. A
-  Claude Code `SessionStart` with `source: "fork"` calls `Store.Ensure`
-  with the fork's parent, not `createSessionRoster`'s
-  `CreateInCheckout` (`session_start.go:69,194`), without `touch`, so a
-  fork never replaces a roster that already has lineage and never gets a
-  `last-seen` sidecar. A `SessionStart` for any other source
-  keeps today's `CreateInCheckout` path (§2.5).
+  nothing, rather than building a fresh roster over a recorded lineage.
+  **Claude Code `SessionStart` for every source goes through `Store.Ensure`
+  (round 9; lifecycle spec ledger C13, `fixSessionStart`,
+  `LcSessionStart`).** The hook reports a `source`, and
+  `createSessionRoster` (`session_start.go:69,194`) reads none: for every
+  source it calls `CreateInCheckout`, which writes a new roster over any
+  existing one (`store.go:58-94`). Round 8 replaced that call for the
+  `fork` source only and kept it for the others. The model refutes that:
+  a fork that is later resumed or compacted gets a `SessionStart` with
+  source `resume` or `compact`, `CreateInCheckout` rewrites its roster with
+  no lineage over a sidecar that records one, and the roster says root
+  while the sidecar says child (run `S_lin_off`, four steps; `S_lin_on`
+  holds, 1,025 states, all visited). The hook therefore calls
+  `Store.Ensure` in process for **every** source, without `touch`: for a
+  session that has a roster it changes nothing, and for one that has not it
+  registers it as `ensure` does. The `fork` source supplies the parent from
+  the payload; every other source supplies the parent `Store.ParentOf`
+  already records (none, if none), which is what the write-once rule of
+  `Ensure` requires of a caller that is not creating lineage. The
+  replacing create is reached only by the CLI `session create`, which
+  refuses an id whose sidecar records a parent (`LcCreateCli`, unchanged).
+  A fork never replaces a roster that already has lineage and never gets a
+  `last-seen` sidecar. The `CLAUDE_PID` pointer file is written after
+  `Ensure` for every source, as `createSessionRoster` does today (§2.5).
+  Required tests: a `SessionStart` with source `resume`, and one with source
+  `compact`, against a fork that has a roster and a `parent-session`
+  sidecar, change neither.
+  **Limit (spec N11; not modelled further).** A `SessionStart` for a roster
+  that exists but does not parse is a no-op under `Ensure`, where
+  `CreateInCheckout` rewrote it. The purge reclaims such a roster, and
+  whether the hook should heal it is not decided here.
+  **Limit (not modelled).** A resumed session gets a new `claudePID`, and
+  `CreateInCheckout` recorded it as the roster's numeric primary
+  participant. Under `Ensure` an existing roster is left as it is, so a
+  session whose `SessionEnd` never ran (a crash) and is then resumed keeps
+  the old, dead primary id, and `isStale` treats the roster as stale by its
+  PID branch (`store.go:950-956`) while the new process is alive. The model
+  holds the participant kind fixed across `SessionStart` (spec
+  `LcSessionStart`, `rkind' = rkind`) and does not examine this. The
+  implementation stage must decide whether the hook refreshes the primary
+  participant of an existing Claude Code roster, and it is escalated to the
+  leader with this design.
 - **Repair.** A sidecar left behind with no roster (an older binary's
   `Delete` does not know to remove it, or a failure at step 7 of
   `deleteFiles`) is authoritative: `ensure` and
@@ -1120,14 +1171,17 @@ Claude Code today: no `AllocateDelegationForkPropagated`-shaped primitive
 exists anywhere in the codebase. Building `claim-forked` for OpenCode alone
 would therefore itself create a parity difference between the harnesses.
 This design makes the Claude Code wiring in scope for the same
-implementation stage (§5, point 3): Claude Code's `SessionStart` hook, when
-it observes `source: "fork"`, registers lineage with `Store.Ensure`
-(in-process, with the fork's parent) instead of `createSessionRoster`'s
-`CreateInCheckout` (`session_start.go:69,194`), then calls `claim-forked`
-(§5 point 2), the same two steps the OpenCode plugin takes on
-`session.forked`. The two steps run one after the other and are never
-nested (§5 point 2, lock constraint). The `SessionStart` path still writes
-the `CLAUDE_PID` pointer file (`session_start.go:196`) as it does today.
+implementation stage (§5, point 3): Claude Code's `SessionStart` hook
+registers the session with `Store.Ensure` in process, **for every source and
+without `touch`** (round 9; ledger C13, §2.1.1), instead of
+`createSessionRoster`'s `CreateInCheckout` (`session_start.go:69,194`). When
+the source is `fork`, `Ensure` is given the fork's parent from the payload;
+for every other source it is given the parent `Store.ParentOf` records. For
+the `fork` source the hook then calls `claim-forked` (§5 point 2), the same
+two steps the OpenCode plugin takes on `session.forked`. The two steps run
+one after the other and are never nested (§5 point 2, lock constraint). The
+`SessionStart` path still writes the `CLAUDE_PID` pointer file
+(`session_start.go:196`) as it does today.
 **A fork whose parent has no roster (round 8).** The pointer file is written
 only after the roster was created (`session_start.go:194-197`), and `Ensure`
 refuses a first registration whose parent has no roster (§2.1.1 rule 1). A
@@ -1148,8 +1202,11 @@ the fork, a `parent-session` sidecar naming the missing parent, and the
 `CLAUDE_PID` pointer, and `claim-forked` for it exits "witness refused";
 a second test with a parent roster that exists but fails to parse does
 not retry with `parentGone` and writes no pointer.
-`Ensure` never overwrites a recorded lineage, so a repeated or resumed
-`SessionStart` for a session that already has one cannot erase it. The spec
+`Ensure` never overwrites a recorded lineage, so a repeated, resumed, or
+compacted `SessionStart` for a session that already has one cannot erase it.
+This holds of every source because every source calls `Ensure` (round 9;
+round 8 had kept `CreateInCheckout` for the other sources, which erased the
+lineage of a resumed fork, C13). The spec
 leaves one point open for Claude Code: whether a forked session's own
 `CLAUDE_PID` resolves to a fresh roster entry automatically, or the hook
 must register one. The implementation stage must confirm this against a
@@ -1932,8 +1989,13 @@ pipeline stage's write-set is unambiguous:
    (§2.5), so two triggers call them: the OpenCode plugin on
    `session.forked` (point 4), and Claude Code's `SessionStart` hook when it
    observes `source: "fork"`. The Claude Code trigger is a change to
-   `internal/hook/session_start.go` that registers lineage through
-   `Store.Ensure` with `parentSession` and calls `claim-forked`. It is not a separate future concern:
+   `internal/hook/session_start.go`. For **every** source (round 9; ledger
+   C13) it registers the session through `Store.Ensure` in process, without
+   `touch`, in place of `createSessionRoster`'s `CreateInCheckout`
+   (`session_start.go:69,194`): the `fork` source passes the payload's
+   parent as `parentSession` (with the `parentGone` retry of §2.5), every
+   other source passes the parent `Store.ParentOf` records. For the `fork`
+   source it then calls `claim-forked`. It is not a separate future concern:
    shipping only the OpenCode trigger would leave Claude Code's identical gap
    open and reintroduce a parity difference between the harnesses.
 4. **`.opencode/plugins/ethos.ts` (or an npm-published equivalent) —** the
