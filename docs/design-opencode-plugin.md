@@ -196,11 +196,11 @@ allows only `.punt-labs/ethos/CLAUDE.md`), and
 **Round 9 corrections (missions `m-2026-10-22-048`, the model's second pass,
 and `m-2026-10-23-005`, this reconciliation; PR #536):**
 `docs/spec-opencode-lifecycle.tex` was extended after a review of the design
-against the Claude Code paths the first model omitted. It now has fifteen
-counterexamples (C1 to C15) and fifteen fix switches (six more than round
+against the Claude Code paths the first model omitted. It now has sixteen
+counterexamples (C1 to C16) and sixteen fix switches (seven more than round
 8's nine, the sixth being the durable pending record, on the leader's
-ruling); the evaluator (jra) accepted it after
-`m-2026-10-22-048`. **With all fifteen switches `ztrue` the spec's operations
+ruling, and the sixteenth `fixResumeClosed`, C16); the evaluator (jra) accepted
+it after `m-2026-10-22-048`. **With all sixteen switches `ztrue` the spec's operations
 are the authority, and where this document and the spec disagree the spec
 wins** (round 8 said nine). Each amendment below cites the spec's ledger.
 Fixed: (1) the **origin discriminator**: a skeleton is a fork skeleton
@@ -225,7 +225,14 @@ N16); (4) **`SessionStart` for every source** goes through `Ensure` without
 compare-and-set** on verdict `open` under the delegation lock, the
 `Store.Close` sweep included (C14; §5 point 2 item 5); (6) the **resume path
 takes the step-5 locks** and re-reads the mission before it writes (C15; §5
-point 2 write phase); (7) **`fixSupersede` applies only on the fresh and resume
+point 2 write phase), and a mission found closed there **first closes the
+fork skeleton the record names** (`aborted`, compare-and-set), keeping the
+record on a failed close and removing it only after a successful one, before
+the "do not retry" exit (C16, `fixResumeClosed`; the unlocked sweep of
+`Store.Close` can write after the exit, so "the sweep closes what remains" is
+withdrawn); the **delegation id is consumed once the pending record is
+durably written**, never released by `releaseID(false)` on a later failure
+(Copilot, PR #536; §5 point 2 item 3); (7) **`fixSupersede` applies only on the fresh and resume
 paths**, and the resume clause is defensive and unexercised (C9; §5 point 2
 item 5). Review findings not covered by the model: (a) **B2**: the record
 stores the mission store root (`resolve.StoreRepoRoot()` at write time), a
@@ -239,7 +246,7 @@ without `StoreRoot` is Tier B, cleared and never closed;
 errors on the child's and the witness's binding reads, a `ParentOf` error, a
 `ReadDelegationBinding` error in a reconcile, a record-removal failure, and
 an abort whose cleanup close fails, a mission found closed is "do not
-retry" (the spec's `LcCfExitNoRetry`, C15), `ParentOf` and ancestor-roster
+retry" (the spec's `LcCfExitNoRetry`, C15, after the close of C16), `ParentOf` and ancestor-roster
 I/O errors are "write failed", and a column states the Claude Code
 `SessionStart` action (Ensure-step failures are separate, §2.5); the
 `errors.As` mapping is consulted before the prefix test at
@@ -257,7 +264,7 @@ false and is corrected (§5 point 2 item 2); (g) crash-leftover temp files
 removed by `deleteFiles`; (h) a refusal never resumes the record, and the
 purge paragraph of §2.1.1 points to the round 8 and 9 bullets that state the
 rules in force. §2.7 states which invariants the model proves exhaustively
-and which only to a bound, and the limits N3 to N18 the design relies on.
+and which only to a bound, and the limits N3 to N19 the design relies on.
 **Round 9 supersedes these earlier statements**, each also marked where it
 appears: round 7's "an operator claim of the same delegation after an
 interrupted `claim-forked` leaves the skeleton and binding in place" (now the
@@ -1500,7 +1507,7 @@ about the slice and instance in the table, and nothing wider.
 | `Acyclic` (strong form, every sidecar; `fixCycleCheck`) | lineage slice, three sessions (15,029); start slice (1,025) | none; but see N4 below |
 | `NoLiveSessionPurged` (`fixStaleLive`, `fixCorruptPurge`) | one session (817) | two and three sessions (40,000 states, not exhausted) |
 | `NoOrphanOpenSkeleton`, fork skeletons (`fixDurableName`) | claim slice (16,601; 106,881 at three delegations); claim+ slice, which includes a Tier B dispatch over a completed fork claim, the operator claim, the mission close and the close-time clearing (257,269); delete slice (4,877) | claim+delete+close, two sessions (200,000 states, depth 8) and three (40,000, depth 5); claim, three sessions (200,000, depth 12) |
-| `ReconcileOnExit` | claim slice (16,601); claim+ (257,269) | the same full-machine runs |
+| `ReconcileOnExit` (`fixRefuseReconciles`, `fixInertBinding`, `fixResumeClosed`) | claim slice (16,601); claim+ (257,269); with the unlocked sweep, claim-u (120,609) and claim+u (515,801); claim-u at three delegations (911,073, depth 32) | the same full-machine runs, which stop below depth 12 |
 | `SweepComplete` (`fixDeleteCloses`, `fixPostCheck`) | sweep slice (37,025) | the same full-machine runs |
 | `NoForeignAbort` (`fixOrigin`), holds over every abort the model performs (including `release` and close-time clearing); three closes outside the model are not covered (§2.7) | the three Tier B slices (11,073; 33,217; 2,013) | the same full-machine runs |
 | `NoVerdictOverwrite` (`fixCas`) | sweep slice (19,697) | verdict slice (300,000 states); full-machine runs |
@@ -1525,6 +1532,12 @@ release, `fixSupersede`) are labelled defensive in §5 point 2 item 5, and
 the resume path's supersede clause and the guard that a complete record is
 never resumed are unexercised and unverified (`MutSupReuse`, `MutReuseDone`
 survive).
+
+The unlocked sweep is exhaustively checked on the claim-u and claim+u slices
+only (C16). It is not combined with the chain initialisation (`LcInitChain`),
+so the multi-hop walk and C16 have not met in any run, and the full-machine
+rows, which stop at depth 8 (two sessions) and 5 (three), remain bounded below
+the depth 12 the ten operations of C16 need.
 
 **Limits the design relies on.** The model's operations are atomic except
 where a process can die or a removal can fail, so it cannot show any race. The
@@ -1558,7 +1571,10 @@ represented; N15, the record's stage is one bit and a record that no longer
 parses while the claim lasts is outside the model; N16, the lock around
 `release` and the close-time clearing is an implementation constraint (§5
 point 2 item 5); N18, that a release removes the record is hygiene and the
-`pendDone` guard of the resume path is defensive (§5 point 2 item 5). The
+`pendDone` guard of the resume path is defensive (§5 point 2 item 5); N19, at
+the "do not retry" exit the close of the record's skeleton and the removal of
+the record are one step in the model and two files in the code, so a failed
+close keeps the record as the retry token (§5 point 2 write phase step 6). The
 read phase and the start of the write phase are one step in the model, so the
 window in which the witness releases its claim between them is accepted and
 not examined.
@@ -2151,8 +2167,26 @@ pipeline stage's write-set is unambiguous:
            re-check, `pretooluse_dispatch.go:810-838`). On the resume path
            this is the re-read that the locks of step 5 make meaningful: a
            mission found closed ends the call with "do not retry" (item
-           4; the spec's `LcCfExitNoRetry`, C15) and writes nothing, and the next reconcile closes the
-           skeleton the record names if the sweep missed it.
+           4; the spec's `LcCfExitNoRetry`, C15) and writes no binding or
+           claim. **Before it exits, the call closes the skeleton the record
+           names (round 9; ledger C16, `fixResumeClosed`).** It closes the
+           open `dkFork` skeleton the record names, owned by the child, with
+           verdict `aborted`, as a compare-and-set on verdict `open` under the
+           delegation lock (item 5), and only then removes the record; then it
+           exits "do not retry". The order is the failure ordering: a close
+           that fails ends the call with the record kept, as the retry token
+           (spec N2, exit "write failed"), and the record is removed only
+           after the close has succeeded (spec N19: the close and the removal
+           are one step). The older statement that the sweep closes what
+           remains after a closed-mission exit is withdrawn: it is true of the
+           locked sweep and false of the unlocked fallback of `Store.Close`
+           (`internal/mission/store.go:1107-1114`), whose snapshot may be
+           taken before the exit and whose write may land after it (run
+           `U1_leak_off`, ten operations). Required test: a resumed record
+           whose mission is closed between the reconcile and the re-read,
+           with the sweep stopped after its snapshot; the exit leaves no open
+           skeleton named by the child's record, and a later sweep write
+           leaves the verdict `aborted`.
         7. Write the `claim-forked-pending` record (item 5), incomplete and
            carrying the store root, then the skeleton, then **re-read the
            mission (the post-check of item 1, ledger C6)**, then the binding
@@ -2205,11 +2239,30 @@ pipeline stage's write-set is unambiguous:
    3. *Delegation id allocation.* The id comes from the mission-scoped
       counter, `NewID`, with commit-or-rollback exactly as the dispatch
       path does it: a deferred `releaseID(success)` that returns the
-      counter if the call fails before the skeleton is on disk, and
-      `success = true` the moment `WriteDelegationSkeleton` returns, after
-      which the id is never rolled back because reuse of an id whose
-      skeleton exists would collide (`pretooluse_dispatch.go:775-787,
-      853-861`).
+      counter if the call fails before anything on disk names the id.
+      **The id is consumed when the `claim-forked-pending` record is durably
+      written, not when the skeleton is (PR #536 review).** The dispatch path
+      sets `success = true` when `WriteDelegationSkeleton` returns
+      (`pretooluse_dispatch.go:775-787,853-861`); that is too late here,
+      because this call writes the record, which names the id, before the
+      skeleton. `releaseID(false)` decrements the counter whenever the
+      counter still equals the allocated value (`internal/mission/id.go:
+      205-222`). If the record write succeeds, the skeleton write fails, and
+      the id is released, another Tier B dispatch under the same mission
+      (`NewID` is mission-scoped) can allocate the same id; the child's
+      retry then finds an open record whose delegation, in the sense of the
+      resume checks, is that other dispatch's skeleton, and binds itself to
+      an unrelated delegation. So the call sets `success = true` the moment
+      the record write returns without error, and on every later failure
+      path (skeleton write, post-check, binding, claim, mark, in-process
+      cleanup) the id stays consumed: `releaseID(false)` is never called
+      once a durable record references the id, a burned id being harmless
+      and a reused one not. A record write that itself fails (no record
+      durable) still releases the id. Required test: the record write
+      succeeds and the skeleton write fails; a second dispatch under the same
+      mission allocates an id, which must differ from the first; the child's
+      retry resumes its own id (the record's) and does not bind to the
+      other delegation.
    4. *Exit statuses (round 6, amended in round 9): one status per cause.*
       Round 5 split the outcomes three ways. That left several real causes
       unclassified. The table assigns every cause exactly one of four
@@ -2230,7 +2283,7 @@ pipeline stage's write-set is unambiguous:
       | **success** (0) | The child is now claimed and bound. Or the child already held a claim ("already claimed"; the pending record is reconciled first, and a live record is kept and marked complete). | Memoize "claimed" for the refresh interval (15 minutes), so a claim lost to a purge is retried after the next re-registration. | Nothing to do. |
       | **witness refused** | The child's lineage does not reach the witness; an ancestor roster or the witness's own roster is missing (not found) or is present and does not parse; a repeated id; the witness holds no claim; the witness binding's origin is not `claim`; and nothing else. | Try the next ancestor as witness, nearest first. When none is left, log once and memoize "unattributed" for the refresh interval (15 minutes, §2.1.1). | Offer each ancestor in the recorded chain in turn, nearest first. When none is left, log one line to stderr and leave the fork unclaimed; the hook does not retry. |
       | **write failed** | The child's dispatch-pending lock, the mission lock, or the delegation lock cannot be acquired; the mission or delegation lock for an orphan skeleton's close cannot be acquired; the pending record, skeleton, binding, or claim write fails, or the final mark-complete write fails; an earlier orphan skeleton could not be closed for a reason a retry can cure, such as a lock or an I/O error (item 5), including the close that a refusal or an already-claimed exit performs first; the record could not be removed after its skeleton was closed (item 5; the next call finds the skeleton closed and removes the record); the post-check abort or in-process cleanup of item 5 failed to close the skeleton, whatever caused the abort; the child's claim vanished between the read phase's claimed-child check and the lock (write phase step 3). **Reads that fail with an I/O error rather than "absent":** `Store.ParentOf` and the `Load` of an ancestor roster (an error other than not-found that is not a parse failure), `ReadActiveMissionBinding` on the child's own claim (read phase step 2) or on the witness's binding (step 3), and `ReadDelegationBinding` on the child's binding during a reconcile. An unreadable file is not an absent one: the call has written nothing, and classifying a witness binding read error as "witness refused" would try a more distant ancestor and could attribute the child to that ancestor's mission instead of the nearest's. **Process death by a signal** (OOM kill, a spawn timeout enforced by the plugin) has no exit status at all and is classified here: it is the model's crash (`LcCfCrash`), which leaves whatever was written. | Retry the **same** witness on the child's next `execute.before`, with no memo. Each retry reconciles first, so leftover state is cleaned up before a new write. Log each failure, and for a signal death log the signal. | Log one line to stderr naming the cause. The hook does not retry (it fires once per start, and only the `fork` source calls `claim-forked`), so the fork is unclaimed until an operator runs `ethos mission claim-forked` for it or `ethos mission claim`. The next `claim-forked` call reconciles whatever this one left. |
-      | **do not retry** | The child's roster is gone (the read-phase `ss.Load` or the write phase's `RefuseIfSessionGone` reports `fs.ErrNotExist`) or unreadable (only the read-phase `ss.Load` refuses on this: `RefuseIfSessionGone` warns and proceeds on any error other than `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`, so a roster that exists but fails to parse is caught in the read phase, not the write phase); the mission or its contract fails to load, **or the mission is found not open** (at the re-check of write phase step 6, on the resume path as on the fresh one, at the step-6 re-check the spec's `LcCfExitNoRetry`, C15; or at the post-check after the skeleton, item 1: the call has reconciled and cleaned up first, and if that cleanup close fails the status is "write failed" instead; the spec's `LcCfAbort`, followed by this status); `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails, including `resolve.StoreRepoRoot()` returning no root when the record is to be written, and **a record whose recorded store root is empty or does not resolve** at a reconcile (B2, §2.1.1); **the `claim-forked-pending` record does not parse, or a skeleton's `record.yaml` does not parse** (round 8: retrying cannot repair a corrupt file, and "write failed" would retry it on every tool call for ever; the error names the file, and the remedy is to remove it by hand; the record can now fail to parse for as long as the fork claim lasts, item 5). **Exit status 1 (generic error) and exit status 2** (usage error, `failClosed`, **and a Go runtime panic, which exits 2** and cannot be told from a usage error by its status). | Do not try another ancestor and do not retry in this call. Log; for status 2 log the captured stderr, which carries the panic trace if there was one. Memoize the outcome for the refresh interval, so a broken record costs one subprocess per interval per session; the memo expiring is the retry, and the next call reconciles whatever a panic left. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. | Log one line to stderr; do not retry and do not offer another ancestor. The hook runs the write phase behind a `recover`, so a Go panic in process is logged and treated as this status, and it runs under the shell wrapper's fail-open guard (`session_start.go:60-62`), so no status can fail the session start. |
+      | **do not retry** | The child's roster is gone (the read-phase `ss.Load` or the write phase's `RefuseIfSessionGone` reports `fs.ErrNotExist`) or unreadable (only the read-phase `ss.Load` refuses on this: `RefuseIfSessionGone` warns and proceeds on any error other than `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`, so a roster that exists but fails to parse is caught in the read phase, not the write phase); the mission or its contract fails to load, **or the mission is found not open** (at the re-check of write phase step 6, on the resume path as on the fresh one, at the step-6 re-check the spec's `LcCfExitNoRetry`, C15, which first closes the skeleton the record names, C16; or at the post-check after the skeleton, item 1: the call has reconciled and cleaned up first, and if that cleanup close fails the status is "write failed" instead; the spec's `LcCfAbort`, followed by this status); `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails, including `resolve.StoreRepoRoot()` returning no root when the record is to be written, and **a record whose recorded store root is empty or does not resolve** at a reconcile (B2, §2.1.1); **the `claim-forked-pending` record does not parse, or a skeleton's `record.yaml` does not parse** (round 8: retrying cannot repair a corrupt file, and "write failed" would retry it on every tool call for ever; the error names the file, and the remedy is to remove it by hand; the record can now fail to parse for as long as the fork claim lasts, item 5). **Exit status 1 (generic error) and exit status 2** (usage error, `failClosed`, **and a Go runtime panic, which exits 2** and cannot be told from a usage error by its status). | Do not try another ancestor and do not retry in this call. Log; for status 2 log the captured stderr, which carries the panic trace if there was one. Memoize the outcome for the refresh interval, so a broken record costs one subprocess per interval per session; the memo expiring is the retry, and the next call reconciles whatever a panic left. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. | Log one line to stderr; do not retry and do not offer another ancestor. The hook runs the write phase behind a `recover`, so a Go panic in process is logged and treated as this status, and it runs under the shell wrapper's fail-open guard (`session_start.go:60-62`), so no status can fail the session start. |
 
       Usage errors keep status 2 (bad flags). An error that carries no
       status maps to the generic status 1, which the plugin treats as
@@ -2519,7 +2572,11 @@ pipeline stage's write-set is unambiguous:
         clearing of another mission (C9), a mission closed by the unlocked
         sweep between the record and the skeleton (C6), the sweep and a
         reconcile close interleaved (C14), the resume path taking the step-5
-        locks before it writes (C15), a mission directory that is gone
+        locks before it writes (C15), the resume path's closed-mission exit
+        closing the record's skeleton against a stopped unlocked sweep (C16),
+        a failed skeleton write after the record followed by a second
+        dispatch and the child's retry (the id stays consumed), a mission
+        directory that is gone
         (item 2 step 2), a record with an empty or unresolvable store root and
         one run from a different working directory (B2), `release` and the
         close-time clearing racing a write phase (N16), and a record or

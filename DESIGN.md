@@ -12285,7 +12285,9 @@ distinct from 0, 1, and 2.
 **Round 9 correction (missions `m-2026-10-22-048` and `m-2026-10-23-005`).**
 `docs/spec-opencode-lifecycle.tex` was extended with six more counterexamples
 (C10 to C15) and six more fix switches (nine to fifteen), the sixth being a
-durable pending record, on the leader's ruling; the evaluator (jra) accepted it. With all fifteen switches on
+durable pending record, on the leader's ruling; the evaluator (jra) accepted
+it. A later review added C16 and a sixteenth switch, `fixResumeClosed`: the
+spec now has sixteen counterexamples (C1 to C16) and sixteen switches. With all sixteen switches on
 its operations are the authority, and `docs/design-opencode-plugin.md` is
 brought into line (header note, §2.1.1, §2.5, §2.6, new §2.7, §5 points 1 to
 3 and 5). (27) *Origin discriminator.* A skeleton is a fork skeleton
@@ -12313,7 +12315,23 @@ only if the binding names it too (C4). A refusal keeps a live record and
 never resumes it. (29) *Reconcile paths.* `fixSupersede` applies on the fresh
 and resume paths only; the resume clause is defensive and unexercised. The
 resume path takes the mission and delegation locks and re-reads the mission
-before it writes (C15). Release and close-time clearing close what they
+before it writes (C15). A mission found closed at that re-read first closes the
+fork skeleton the record names (`aborted`, compare-and-set under the delegation
+lock); a failed close ends the call with the record kept as the retry token,
+and the record is removed only after the close succeeds; then the call exits
+"do not retry" (C16, `fixResumeClosed`). "The sweep closes what remains" is
+withdrawn: true of the locked sweep, false of `Store.Close`'s unlocked
+fallback (`internal/mission/store.go:1107-1114`), whose snapshot may precede
+and whose write may follow the exit. (29a) *Delegation id consumed with the
+record.* The id is consumed once the pending record that names it is durably
+written; `releaseID(false)` (`internal/mission/id.go:205-222`) is never called
+on a later failure, since it would return the id to the counter while the
+record still names it and another Tier B dispatch under the mission could take
+it, and the child's retry would bind to that unrelated delegation (Copilot,
+PR #536). Required tests: a failed skeleton write after the record, then a
+second dispatch (a different id) and the child's retry (its own id); a resumed
+record whose mission closes between the reconcile and the re-read, with the
+sweep stopped after its snapshot. Release and close-time clearing close what they
 unname (C11) and must hold the child's dispatch-pending lock around the whole
 close, unname, clear sequence (spec N16). (30) *`SessionStart` and `ensure`.*
 Claude Code `SessionStart` for every source goes through `Store.Ensure`
@@ -12330,7 +12348,7 @@ sweep included (C14). The exit-status table gains rows for I/O errors on the
 child's and the witness's binding reads, a `ParentOf` error, a
 `ReadDelegationBinding` error in a reconcile, a record-removal failure, and an
 abort whose cleanup close fails; a mission found closed is "do not retry"
-(the spec's `LcCfExitNoRetry`, C15); `ParentOf` and ancestor-roster I/O errors
+(the spec's `LcCfExitNoRetry`, C15, after the close of C16); `ParentOf` and ancestor-roster I/O errors
 are "write failed"; a column states the Claude Code `SessionStart` action. (B2) The
 record stores the store root (a fork-written binding carries it as `StoreRoot`),
 and `deleteFiles` step 1, `release`, the reconcile, and the supersede close use
@@ -12594,8 +12612,9 @@ Full writeups, including two historical exploit traces, are in
   `deleteFiles` must stop the call on failure (N2). **Round 9:** the proofs
   are exhaustive on named slices (the claim, claim+, delete, sweep, lineage,
   start, and Tier B slices, at two missions, two delegations, and two or three
-  sessions) and bounded on the full machine (200,000 states at two sessions,
-  40,000 at three) and for `NoLiveSessionPurged` beyond one session; the table
+  sessions; the unlocked sweep only on the claim-u and claim+u slices, not
+  combined with the chain initialisation) and bounded on the full machine (200,000 states at two sessions,
+  40,000 at three, below depth 12) and for `NoLiveSessionPurged` beyond one session; the table
   is `docs/design-opencode-plugin.md` §2.7. Also not represented: a Tier B
   dispatch without a roster, its depth-gate close, and a failed non-fatal
   binding write (N17); the locks around `release` and the close-time clearing,
