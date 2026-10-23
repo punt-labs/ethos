@@ -2406,7 +2406,8 @@ of \S\ref{sec:lc-invariants}.
 \texttt{Chain\_orph} & NoOrphanOpenSkeleton & InitChain & 3/2/2 & all fifteen & no counterexample in states explored; not exhausted & claim & 200\,000 & 12 \\
 \texttt{Chain\_leak} & ReconcileOnExit & InitChain & 3/2/2 & all fifteen & no counterexample in states explored; not exhausted & claim & 200\,000 & 12 \\
 \texttt{Reach\_all} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all fifteen & holds, all states visited & claim+ & 257\,269 & 24 \\
-\texttt{Reach\_nosup} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all but Supersede & holds, all states visited & claim+ & 257\,269 & 24 \\
+\texttt{Reach\_nosup} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all but Supersede and DurableName & counterexample & claim+ & 218\,544 & 17 \\
+\texttt{Reach\_nosup\_dur} & Reach (record, no claim, other open fork binding) & InitPair & 2/2/2 & all but Supersede & holds, all states visited & claim+ & 257\,269 & 24 \\
 \texttt{C12\_on} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all fifteen & holds, all states visited & claim+ & 257\,269 & 24 \\
 \texttt{C12\_leak} & ReconcileOnExit & InitPair & 2/2/2 & all fifteen & holds, all states visited & claim+ & 257\,269 & 24 \\
 \bottomrule
@@ -2449,7 +2450,7 @@ live binding; \texttt{MutSupReuse}: supersede removed from the resume path).
 \texttt{F1R\_mut} & NoForeignAbort & InitPair & 2/2/2 & all fifteen & counterexample & tierb-reconcile & 191 & 5 \\
 \texttt{F1P\_mut} & NoForeignAbort & InitPair & 2/2/2 & all fifteen & counterexample & tierb-purge & 337 & 5 \\
 \texttt{MutCasFresh} & NoVerdictOverwrite & InitPair & 2/2/2 & all fifteen & counterexample & verdict & 9\,888 & 11 \\
-\texttt{MutA\_claimed} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & holds, all states visited & claim & 50\,321 & 27 \\
+\texttt{MutA\_claimed} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & counterexample & claim & 2\,818 & 12 \\
 \texttt{MutB\_refuse} & ReconcileOnExit & InitPair & 2/2/2 & RefuseReconciles, InertBinding & counterexample & claim & 609 & 9 \\
 \texttt{MutFinishRec} & NoOrphanOpenSkeleton & InitPair & 2/2/2 & all fifteen & counterexample & claim+ & 60\,514 & 11 \\
 \texttt{MutLiveNoDone} & LiveSpared & InitPair & 2/2/2 & all fifteen & counterexample & claim+ & 97\,540 & 13 \\
@@ -2732,6 +2733,20 @@ the purge reclaims it, and whether the hook should heal it is not decided
 here. (N12) The owner test of the origin filter is vacuous in the model,
 whose only writers of a binding are the session itself; it is kept because
 the amendment is stated in terms of it.
+(N16) The code's \field{mission release}
+(\fpath{cmd/ethos/mission.go}:2135--2179) and the close-time clearing
+(\fpath{internal/mission/active.go}:907--957) clear the claim and the binding
+without a lock, and release is idempotent when no claim exists.
+\field{LcReleaseClaim} and \field{LcClearClosed} are atomic, are taken under
+the lock, and require a claim. The implementation must hold the child's
+dispatch-pending lock around the whole close, unname, clear sequence, or the
+closes of C11 and C12 can race a write phase, and the model cannot show it.
+(N17) Three omissions in the Tier B dispatch: a dispatch without a roster, the
+depth-gate close with verdict \field{aborted}, and a binding write that fails
+without being fatal are not represented. (N18) That a release removes the
+record is unverified: \texttt{MyRelKeepRec} survives, so it is hygiene and not
+an invariant. The same holds of the guard $c\notin\field{pendDone}$ of
+\field{LcCfReconcileReuse}, stated above (\texttt{MutReuseDone}).
 (N13) \field{ClearMissionBindings} is modelled for the closing session's
 claim and binding only; the dispatch-pending entries it clears, and the MCP
 path that calls it, are not represented. (N15) The record's stage is one bit, complete or not; the record
