@@ -1625,8 +1625,10 @@ a claim. In the design a refusal with a claim in hand arises by two routes.
 (a) Step 1 of the read phase: the child roster is missing or unreadable, and
 that exit reconciles in refusal form. (b) The window between the step-2 claim
 read, which found none, and the dispatch-pending lock; otherwise step 2 finds
-the claim and takes the claimed case. The rows whose counterexample is a
-refusal model route (b); the invariants that hold with `LcCfRefuse` in the slice
+the claim and takes the claimed case. The rows whose counterexample ends in an
+operator claim and then a refusal model route (b); the refused form of
+Copilot's trace is reachable by route (a); the claimed-case rows depend on
+neither. The invariants that hold with `LcCfRefuse` in the slice
 hold of the larger behaviour (spec N22).
 
 ## 3. `ethos hook commit-trailers` without Claude process-tree discovery
