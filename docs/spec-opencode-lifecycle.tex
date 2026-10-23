@@ -175,16 +175,14 @@ lcMaxTime = 2 \\
 lcTtl = 1
 \end{axdef}
 
-The fourteen constants beginning \field{fix} below are the amendments of
-\S\ref{sec:lc-ledger}; the fifteenth, \field{assumeNoTierBOverFork}, is an
-assumption of the verification and not an amendment (C12).
+The fifteen constants below are the amendments of \S\ref{sec:lc-ledger}.
 Setting a constant to \field{zfalse} yields the operation as written in
 DES-078 rounds 6 and 7; to \field{ztrue}, the amended operation. Each
 amended operation is a conjunct guarded by its constant, so the two
 versions differ in nothing else.
 
 \begin{axdef}
-fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede, fixOrigin, fixReleaseCloses, fixSessionStart, fixCas, fixReuseLocks, assumeNoTierBOverFork : ZBOOL
+fixDeleteOrder, fixDeleteCloses, fixCycleCheck, fixRefuseReconciles, fixInertBinding, fixStaleLive, fixCorruptPurge, fixPostCheck, fixSupersede, fixOrigin, fixReleaseCloses, fixSessionStart, fixCas, fixReuseLocks, fixDurableName : ZBOOL
 \where
 fixDeleteOrder = ztrue \\
 fixDeleteCloses = ztrue \\
@@ -200,7 +198,7 @@ fixReleaseCloses = ztrue \\
 fixSessionStart = ztrue \\
 fixCas = ztrue \\
 fixReuseLocks = ztrue \\
-assumeNoTierBOverFork = ztrue
+fixDurableName = ztrue
 \end{axdef}
 
 \subsection{State}
@@ -276,7 +274,8 @@ binding : SESSIONID \pfun DELEGATIONID
 
 \begin{schema}{LcPending}
 pend : SESSIONID \pfun DELEGATIONID \\
-pendWit : SESSIONID \pfun SESSIONID
+pendWit : SESSIONID \pfun SESSIONID \\
+pendDone : \power SESSIONID
 \end{schema}
 
 \begin{schema}{LcFlight}
@@ -496,6 +495,7 @@ roster \subseteq \dom sealed \\
 seenBad \cap \dom seen = \emptyset \\
 \dom corigin = \dom claimed \\
 \dom pendWit = \dom pend \\
+pendDone \subseteq \dom pend \\
 skel \subseteq used \\
 dOpen \subseteq skel \\
 \dom dMis = skel \\
@@ -535,6 +535,7 @@ corigin' = \emptyset \\
 binding' = \emptyset \\
 pend' = \emptyset \\
 pendWit' = \emptyset \\
+pendDone' = \emptyset \\
 stage' = \emptyset \\
 cfD' = \emptyset \\
 cfM' = \emptyset \\
@@ -568,6 +569,7 @@ seenBad' = \emptyset \\
 binding' = \emptyset \\
 pend' = \emptyset \\
 pendWit' = \emptyset \\
+pendDone' = \emptyset \\
 stage' = \emptyset \\
 cfD' = \emptyset \\
 cfM' = \emptyset \\
@@ -600,6 +602,7 @@ seenBad' = \emptyset \\
 binding' = \emptyset \\
 pend' = \emptyset \\
 pendWit' = \emptyset \\
+pendDone' = \emptyset \\
 stage' = \emptyset \\
 cfD' = \emptyset \\
 cfM' = \emptyset \\
@@ -994,8 +997,8 @@ done? \geq 2 \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s?
 done? < 2 \implies (claimed' = claimed \land corigin' = corigin) \\
 done? \geq 3 \implies binding' = \{ s? \} \ndres binding \\
 done? < 3 \implies binding' = binding \\
-done? \geq 4 \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit) \\
-done? < 4 \implies (pend' = pend \land pendWit' = pendWit) \\
+done? \geq 4 \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ s? \}) \\
+done? < 4 \implies (pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone) \\
 done? \geq 5 \implies (seen' = \{ s? \} \ndres seen \land seenBad' = seenBad \setminus \{ s? \}) \\
 done? < 5 \implies (seen' = seen \land seenBad' = seenBad) \\
 ((fixDeleteOrder = ztrue \land done? = 7) \lor (fixDeleteOrder = zfalse \land done? \geq 6)) \implies parentSide' = \{ s? \} \ndres parentSide \\
@@ -1025,8 +1028,8 @@ done? \geq 2 \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s?
 done? < 2 \implies (claimed' = claimed \land corigin' = corigin) \\
 done? \geq 3 \implies binding' = \{ s? \} \ndres binding \\
 done? < 3 \implies binding' = binding \\
-done? \geq 4 \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit) \\
-done? < 4 \implies (pend' = pend \land pendWit' = pendWit) \\
+done? \geq 4 \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ s? \}) \\
+done? < 4 \implies (pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone) \\
 done? \geq 5 \implies (seen' = \{ s? \} \ndres seen \land seenBad' = seenBad \setminus \{ s? \}) \\
 done? < 5 \implies (seen' = seen \land seenBad' = seenBad) \\
 ((fixDeleteOrder = ztrue \land done? = 7) \lor (fixDeleteOrder = zfalse \land done? \geq 6)) \implies parentSide' = \{ s? \} \ndres parentSide \\
@@ -1076,8 +1079,8 @@ corigin' = corigin \oplus \{ s? \mapsto o? \}
 
 \begin{schema}{LcReleaseClaim}
 \Delta Lifecycle \\
-\Xi LcLive \\
 \Xi LcSweep \\
+\Xi LcLive \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1085,7 +1088,6 @@ corigin' = corigin \oplus \{ s? \mapsto o? \}
 \Xi LcCorrupt \\
 \Xi LcLineage \\
 \Xi LcSeen \\
-\Xi LcPending \\
 \Xi LcFlight \\
 \Xi LcUsed \\
 \Xi LcSkeleton \\
@@ -1100,7 +1102,9 @@ s? \notin \dom stage \\
 claimed' = \{ s? \} \ndres claimed \\
 corigin' = \{ s? \} \ndres corigin \\
 binding' = \{ s? \} \ndres binding \\
-(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | fixReleaseCloses = ztrue \land d \in binding \limg \{ s? \} \rimg \land (fixOrigin = zfalse \lor ((d \mapsto s?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
+(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | ((fixReleaseCloses = ztrue \land d \in binding \limg \{ s? \} \rimg) \lor (fixDurableName = ztrue \land d \in pend \limg \{ s? \} \rimg)) \land (fixOrigin = zfalse \lor ((d \mapsto s?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
+(fixDurableName = ztrue \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ s? \})) \\
+(fixDurableName = zfalse \implies (pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone)) \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \}
 \end{schema}
 
@@ -1153,11 +1157,11 @@ phase is about to overwrite the binding.
 c? : SESSIONID
 \where
 c? \notin \dom stage \\
-(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land dOpen' = dOpen \land dAbort' = dAbort) \lor (fixRefuseReconciles = ztrue \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land (\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X)) \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+(fixRefuseReconciles = zfalse \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \land dOpen' = dOpen \land dAbort' = dAbort) \lor (fixRefuseReconciles = ztrue \land (((fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \cup \{ c? \}) \lor (\lnot (fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ c? \})) \land (\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land \lnot (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X)) \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 unlocked' = unlocked \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfBegin}
@@ -1219,18 +1223,17 @@ c? : SESSIONID
 \where
 (c? \mapsto 0) \in stage \\
 c? \in \dom claimed \\
-pend' = \{ c? \} \ndres pend \\
-pendWit' = \{ c? \} \ndres pendWit \\
+(((fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \cup \{ c? \}) \lor (\lnot (fixDurableName = ztrue \land (\exists rd : pend \limg \{ c? \} \rimg @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)))) \land pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ c? \})) \\
 stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-(\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land ((fixInertBinding = ztrue \land \lnot ((c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) \lor (fixInertBinding = zfalse \land (c? \mapsto rd) \notin binding)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+(\exists X : \power DELEGATIONID @ X = \{ rd : dOpen | rd \in pend \limg \{ c? \} \rimg \land ((fixInertBinding = ztrue \land \lnot (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) \lor (fixInertBinding = zfalse \land (c? \mapsto rd) \notin binding)) \land (fixOrigin = zfalse \lor ((rd \mapsto c?) \in dOwn \land (rd \mapsto dkFork) \in dKind)) @ rd \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfReconcileReuse}
@@ -1256,6 +1259,7 @@ c? : SESSIONID
 \where
 (c? \mapsto 0) \in stage \\
 c? \notin \dom claimed \\
+c? \notin pendDone \\
 (c? \in \dom pend \land pend(c?) \in dOpen \land (pend(c?) \mapsto cfM(c?)) \in dMis \land pendWit(c?) = cfW(c?) \land cfM(c?) \in missOpen) \\
 (\exists X : \power DELEGATIONID @ X = \{ d : dOpen | fixSupersede = ztrue \land d \in binding \limg \{ c? \} \rimg \land d \neq pend(c?) \land (fixOrigin = zfalse \lor ((d \mapsto c?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
 cfD' = cfD \oplus \{ c? \mapsto pend(c?) \} \\
@@ -1266,7 +1270,7 @@ cfM' = cfM \\
 cfW' = cfW \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfReconcileFresh}
@@ -1295,13 +1299,14 @@ c? \notin \dom claimed \\
 (\exists X : \power DELEGATIONID @ X = \{ d : dOpen | (d \in pend \limg \{ c? \} \rimg \lor (fixSupersede = ztrue \land d \in binding \limg \{ c? \} \rimg)) \land (fixOrigin = zfalse \lor ((d \mapsto c?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
 pend' = \{ c? \} \ndres pend \\
 pendWit' = \{ c? \} \ndres pendWit \\
+pendDone' = pendDone \setminus \{ c? \} \\
 stage' = stage \oplus \{ c? \mapsto 1 \} \\
 cfD' = cfD \\
 cfM' = cfM \\
 cfW' = cfW \\
 overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \} \\
 cfH' = cfH \\
-liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (c? \mapsto rd) \in binding \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed)) @ x \}
+liveAborted' = liveAborted \cup \{ x : \{ c? \} | (\exists rd : dOpen \setminus dOpen' @ (((c? \mapsto rd) \in binding \lor (fixDurableName = ztrue \land c? \in pendDone)) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis \land (c? \mapsto m) \in claimed))) @ x \}
 \end{schema}
 
 \begin{schema}{LcCfLockReuse}
@@ -1404,7 +1409,7 @@ stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked
 \end{schema}
@@ -1439,7 +1444,8 @@ pendWit' = pendWit \oplus \{ c? \mapsto cfW(c?) \} \\
 cfD' = cfD \\
 cfM' = cfM \\
 cfW' = cfW \\
-cfH' = cfH
+cfH' = cfH \\
+pendDone' = pendDone \setminus \{ c? \}
 \end{schema}
 
 \begin{schema}{LcCfWriteSkeleton}
@@ -1568,13 +1574,13 @@ unlocked' = unlocked \cup (\{ c? \} \setminus cfH)
 c? : SESSIONID
 \where
 (c? \mapsto 6) \in stage \\
-pend' = \{ c? \} \ndres pend \\
-pendWit' = \{ c? \} \ndres pendWit \\
+(fixDurableName = ztrue \implies (pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone \cup \{ c? \})) \\
+(fixDurableName = zfalse \implies (pend' = \{ c? \} \ndres pend \land pendWit' = \{ c? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ c? \})) \\
 stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
 cfW' = \{ c? \} \ndres cfW \\
-leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot ((c? \mapsto rd) \in binding' \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
+leaked' = leaked \cup \{ x : \{ c? \} | (\exists rd : pend \limg \{ c? \} \rimg @ rd \in dOpen' \land \lnot (((c? \mapsto rd) \in binding' \lor (fixDurableName = ztrue \land c? \in pendDone')) \land (\exists m : MISSIONID @ (rd \mapsto m) \in dMis' \land (c? \mapsto m) \in claimed'))) @ x \} \\
 cfH' = cfH \setminus \{ c? \} \\
 unlocked' = unlocked
 \end{schema}
@@ -1638,6 +1644,7 @@ stage(c?) = 5 \implies binding' = \{ c? \} \ndres binding \\
 stage(c?) < 5 \implies binding' = binding \\
 pend' = \{ c? \} \ndres pend \\
 pendWit' = \{ c? \} \ndres pendWit \\
+pendDone' = pendDone \setminus \{ c? \} \\
 stage' = \{ c? \} \ndres stage \\
 cfD' = \{ c? \} \ndres cfD \\
 cfM' = \{ c? \} \ndres cfM \\
@@ -1694,7 +1701,6 @@ s? \in roster \\
 s? \notin \dom stage \\
 m? \in missOpen \\
 d? \notin used \\
-assumeNoTierBOverFork = ztrue \implies (binding \limg \{ s? \} \rimg \cap \{ d : dOpen | (d \mapsto dkFork) \in dKind \}) = \emptyset \\
 used' = used \cup \{ d? \} \\
 skel' = skel \cup \{ d? \} \\
 dOpen' = dOpen \cup \{ d? \} \\
@@ -1716,8 +1722,8 @@ longer leaves it behind.
 
 \begin{schema}{LcClearClosed}
 \Delta Lifecycle \\
-\Xi LcLive \\
 \Xi LcSweep \\
+\Xi LcLive \\
 \Xi LcTime \\
 \Xi LcRoster \\
 \Xi LcKind \\
@@ -1725,12 +1731,9 @@ longer leaves it behind.
 \Xi LcCorrupt \\
 \Xi LcLineage \\
 \Xi LcSeen \\
-\Xi LcPending \\
 \Xi LcFlight \\
 \Xi LcUsed \\
 \Xi LcSkeleton \\
-\Xi LcOpen \\
-\Xi LcVerdict \\
 \Xi LcMission \\
 \Xi LcSealed \\
 \Xi LcPurged \\
@@ -1745,7 +1748,11 @@ m? \notin missOpen \\
 (s? \mapsto m?) \in claimed \implies (claimed' = \{ s? \} \ndres claimed \land corigin' = \{ s? \} \ndres corigin) \\
 (s? \mapsto m?) \notin claimed \implies (claimed' = claimed \land corigin' = corigin) \\
 (\exists d : binding \limg \{ s? \} \rimg @ (d \mapsto m?) \in dMis) \implies binding' = \{ s? \} \ndres binding \\
-\lnot (\exists d : binding \limg \{ s? \} \rimg @ (d \mapsto m?) \in dMis) \implies binding' = binding
+\lnot (\exists d : binding \limg \{ s? \} \rimg @ (d \mapsto m?) \in dMis) \implies binding' = binding \\
+(\exists X : \power DELEGATIONID @ X = \{ d : dOpen | fixDurableName = ztrue \land (s? \mapsto m?) \in claimed \land d \in pend \limg \{ s? \} \rimg \land (fixOrigin = zfalse \lor ((d \mapsto s?) \in dOwn \land (d \mapsto dkFork) \in dKind)) @ d \} \land dOpen' = dOpen \setminus X \land dAbort' = dAbort \cup X) \\
+((fixDurableName = ztrue \land (s? \mapsto m?) \in claimed) \implies (pend' = \{ s? \} \ndres pend \land pendWit' = \{ s? \} \ndres pendWit \land pendDone' = pendDone \setminus \{ s? \})) \\
+((fixDurableName = zfalse \lor (s? \mapsto m?) \notin claimed) \implies (pend' = pend \land pendWit' = pendWit \land pendDone' = pendDone)) \\
+overwritten' = overwritten \cup \{ d : skel \setminus dOpen | (d \in dAbort \iff d \notin dAbort') @ d \}
 \end{schema}
 
 \paragraph{Missions.} \field{LcCloseLocked} is \field{Store.Close} with the
@@ -2066,18 +2073,33 @@ assumed. The rest were not known.
     as the other closes. A binding that names a Tier B skeleton is cleared
     and the skeleton is left open: it is a subagent's delegation.
   \item[\textbf{C12}] \textbf{A Tier B dispatch by a propagated child buries
-    its fork skeleton.} \field{NoOrphanOpenSkeleton}; open, not amended. The
-    child $b$ completes a propagation (binding $d_1$, kind \field{dkFork}) and
-    then spawns a subagent against the mission: the dispatch writes
-    \emph{its} binding for $b$ over $d_1$ (\fpath{pretooluse\_dispatch.go}:880--884),
-    and $d_1$ is open, named by nothing (\field{LcTierBDispatch}, run
-    \texttt{T2\_all} with \field{assumeNoTierBOverFork} off). No close in the
-    design can find $d_1$ afterwards, since every close is by name. The
-    constant \field{assumeNoTierBOverFork} excludes the dispatch from a session
-    whose binding names an open fork skeleton, so that the other invariants
-    can be checked; it is an assumption of the verification and not a fix.
-    The options are listed in \S\ref{sec:lc-consequences}; the choice belongs
-    to the leader.
+    its fork skeleton.} \field{NoOrphanOpenSkeleton}. The child $b$ completes
+    a propagation (binding $d_1$, kind \field{dkFork}) and then spawns a
+    subagent against the mission: the dispatch writes \emph{its} binding for
+    $b$ over $d_1$ (\fpath{pretooluse\_dispatch.go}:880--884, unchanged by
+    this design), and $d_1$ is open, named by nothing
+    (\field{LcTierBDispatch}, run \texttt{C12\_off}, eleven steps). Every close
+    of the design is by name, and the binding was the only name a completed
+    propagation had, since the pending record was removed at \field{LcCfFinish}.
+    \textbf{Amendment} \field{fixDurableName} (the leader's ruling, option
+    (c)): the \field{claim-forked-pending} record persists for the life of the
+    claim and is the durable name of the fork skeleton. \field{LcCfFinish}
+    keeps it, marked complete (\field{pendDone}, the record's stage); it is
+    removed only together with the skeleton it names, by \field{mission
+    release} (C11), by the close-time clearing of the claim
+    (\field{LcClearClosed}) and by \field{deleteFiles}, each of which closes
+    the skeleton first (kind \field{dkFork}, owned, compare-and-set on
+    verdict \field{open}). Reconcile changes meaning with it, because a record
+    now also exists for a propagation that succeeded. A \emph{complete}
+    record is never resumable (\field{LcCfReconcileReuse} requires
+    $c\notin\field{pendDone}$), and it is live, whatever the binding names,
+    when the child's claim is for the skeleton's mission; an incomplete record
+    is live only if the binding names it as well, as in C4. In the refusal and
+    the claimed case a live record is kept and marked complete, and any other
+    is closed and removed. The ghosts \field{leaked} and \field{liveAborted}
+    use the same notion of live. With the switch on and no assumption,
+    \field{NoOrphanOpenSkeleton} holds including the Tier B over fork case
+    (\texttt{C12\_on}).
   \item[\textbf{C13}] \textbf{\field{SessionStart} on a resumed or compacted
     fork replaces its roster.} \field{LineageStable}; \S2.1.1 (``a
     \field{SessionStart} for any other source keeps today's
@@ -2191,8 +2213,7 @@ probcli S.tex -card SESSIONID s -card MISSIONID m -card DELEGATIONID d \
 \end{verbatim}
 
 \noindent The switch sed is written once per switch, with the value that
-switch is to have; the assumption \field{assumeNoTierBOverFork} is left
-\field{ztrue} except in the rows marked \emph{assumption off}. \texttt{-bf} makes a trace the shortest and makes the
+switch is to have. \texttt{-bf} makes a trace the shortest and makes the
 reported depth the breadth-first level. \texttt{-nodead} is needed because a
 slice with the operations that re-register a session removed deadlocks when
 every roster is gone, which is not a violation. The invariant schemas are
@@ -2584,20 +2605,24 @@ DES-078 is to be brought into line at these places.
     claim are written, exactly as on the fresh path; a mission found closed
     exits ``do not retry''. The statement that the resume ``finishes the
     missing writes'' omits the locks.
-  \item \textbf{C12, to be decided by the leader.} A Tier B dispatch by a
-    child that has completed a propagation overwrites the child's binding and
-    leaves the fork skeleton open and named by nothing. The model cannot
-    close it without a choice that is not the model's to make: (a) the Tier B
-    dispatch does not overwrite a binding that names an open fork skeleton
-    (a change to \fpath{pretooluse\_dispatch.go}:880--884; this is what
-    \field{assumeNoTierBOverFork} assumes); (b) \field{deleteFiles} and
-    \field{mission release} close by owner, scanning the delegations of the
-    session's claimed mission, in place of by name, which also needs the
-    operator's claim and the close-time clearing to close what they unname;
-    or (c) the pending record is kept for the life of the claim as the durable
-    name. Until one is chosen, \field{NoOrphanOpenSkeleton} is verified of
-    the design only on the runs where the assumption is on, and fails
-    (\texttt{C12\_open}) where it is off.
+  \item \S5 point~2 item~5 and \S2.1.1 (C12, the leader's ruling): the
+    \field{claim-forked-pending} record is \emph{not} removed as the last step
+    of a successful write. It stays, marked complete, for the life of the
+    claim, and is the durable name of the fork skeleton. It is removed only
+    with the skeleton it names: \field{mission release}, the close-time
+    clearing of the claim (\field{ClearMissionBindings}, which today clears
+    the claim and the binding and must also close and unname the
+    record-named skeleton) and \field{deleteFiles} (step~4, after step~1 has
+    closed it). The sentences ``removed as the last step of a successful
+    write'' and ``the record is then overwritten or removed'' change
+    accordingly; the dispatch path of \fpath{pretooluse\_dispatch.go} is not
+    changed. Reconcile must distinguish the two lives of a record: a
+    complete record is never resumed and is live when the child's claim is
+    for the skeleton's mission, whatever the binding names; an incomplete one
+    keeps the rule of C4. The record needs a stage field (complete or not)
+    that the YAML of today does not have, and the "record does not parse"
+    row of the exit-status table applies to it for as long as the claim
+    lasts.
 \end{itemize}
 
 Further consequences are not counterexamples of the model but
