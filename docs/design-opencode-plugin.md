@@ -2397,14 +2397,22 @@ pipeline stage's write-set is unambiguous:
    `deposit` writes the guide
    to `.punt-labs/ethos/CLAUDE.md` (`deposit.go:15,87`). That path is the
    org standard's and does not change. Its content does: it carries no
-   instruction that only one harness can follow. Today's guide has six such
+   instruction that only one harness can follow. Today's guide has seven such
    parts, all in `internal/enable/guide/CLAUDE.md`, and each is neutralized
    or moved to the Claude Code native artifact (rounds 7 and 8 enumerate
    them):
    - line 11, "deliberately not `@`-imported here": `@`-import is Claude
      Code's include syntax. Reworded without it, for example "is
      deliberately not loaded into agent context here";
-   - lines 19-21, the `.claude/agents/<handle>.md` generation and "restart
+   - lines 19-20, the persona-injection sentence, "Session hooks inject your
+     persona into context at start and after compaction." The injection is
+     done by Claude Code's `SessionStart` and `PreCompact` hooks. The
+     OpenCode plugin registers no session hook (§1.2 item 4) and injects
+     nothing, so in an OpenCode session the sentence is false. It moves to
+     the Claude Code native artifact, and the shared guide keeps only what is
+     true of both harnesses: `ethos whoami` and `ethos iam` resolve and
+     declare an identity;
+   - lines 20-21, the `.claude/agents/<handle>.md` generation and "restart
      Claude Code" note;
    - lines 43-44, "the write-set is enforced at runtime, so an edit outside
      it fails the mission". Write-set enforcement is carried by Claude Code
@@ -2424,24 +2432,41 @@ pipeline stage's write-set is unambiguous:
    agents are for and the order to run them, reworded without naming a
    directory or a harness. The Claude Code specifics move to that harness's
    native artifact. **`validate-content` enforces this (round 7, widened in
-   round 8):** a check rejects the embedded guide
-   (`internal/enable/guide/CLAUDE.md`) and this repo's deposited copy if
-   either contains any of the **deny list**: `.claude/`, `Claude`,
-   `SessionStart`, `CLAUDE_`, `subagent`. Round 7's list was `.claude/` and
-   `Claude Code`, which missed the `@`-import wording, a bare `SessionStart`
-   or `CLAUDE_PID`, and the word `subagent`. Matching is case-insensitive.
-   The single **allowlist** entry is the file name `CLAUDE.md`, matched by
-   exact equality of the whole word: the guide's own path is the org
-   standard's (`.punt-labs/ethos/CLAUDE.md`) and the code-reviewer
-   description says "CLAUDE.md-compliance". The check strips each occurrence
-   of `CLAUDE.md` that is a whole word (the character before it and the
-   character after it are not a letter, a digit, or an underscore) before it
-   looks for the deny list. So `CLAUDE_PID`, `Claude Code`, `OLDCLAUDE.md`,
-   and `CLAUDE.mdx` fail, while `.punt-labs/ethos/CLAUDE.md` and
-   `CLAUDE.md-compliance` pass. A test feeds each of these strings to the
-   check. The check runs in `make check` beside "CLAUDE.md
-   guide embed sync", so a harness name cannot return to the shared guide
-   unnoticed.
+   round 8, derived from the harness list in round 9):** a check rejects the
+   embedded guide (`internal/enable/guide/CLAUDE.md`) and this repo's
+   deposited copy if either contains any term of the **deny list**. Round
+   8's list was written by hand (`.claude/`, `Claude`, `SessionStart`,
+   `CLAUDE_`, `subagent`). It named no OpenCode term, so `opencode.json`, a
+   `.opencode/plugins/` path, or the word `OpenCode` could enter the shared
+   guide unnoticed, and a hand-written list drifts the day a harness is
+   added. The deny list is therefore **computed from the harness list**
+   (`internal/enable/harnesses.go`, below) by an exported accessor that
+   `validate-content` calls: for every entry, its name (`claude`,
+   `opencode`), every harness-specific literal the entry carries (Claude
+   Code's import line and `.claude/` directory; OpenCode's `opencode.json`,
+   `.opencode/plugins`, and the plugin file name), and the entry's
+   **vocabulary**, a list of terms of that harness that are neither a name
+   nor a path (Claude Code: `SessionStart`, `PreCompact`, `CLAUDE_`,
+   `subagent`; OpenCode: `Plugin.define`, `ctx.`). A harness entry that
+   adds a term adds it to the deny list with no other edit, and the
+   companion test below injects a third entry and asserts that its terms
+   are denied. The list also carries one **pattern**: any `@`. `@`-import
+   is Claude Code's include syntax, the guide has no other use of the
+   character (an email address or a handle does not appear in it), and
+   line 11's "`@`-imported" is the case it exists for. Matching is
+   case-insensitive. The single **allowlist** entry is the file name
+   `CLAUDE.md`, matched by exact equality of the whole word: the guide's own
+   path is the org standard's (`.punt-labs/ethos/CLAUDE.md`) and the
+   code-reviewer description says "CLAUDE.md-compliance". The check strips
+   each occurrence of `CLAUDE.md` that is a whole word (the character before
+   it and the character after it are not a letter, a digit, or an
+   underscore) before it looks for the deny list. So `CLAUDE_PID`, `Claude
+   Code`, `OLDCLAUDE.md`, `CLAUDE.mdx`, `opencode.json`,
+   `.opencode/plugins/ethos.ts`, `OpenCode`, and `@.punt-labs/ethos/CLAUDE.md`
+   fail, while `.punt-labs/ethos/CLAUDE.md` and `CLAUDE.md-compliance` pass.
+   A test feeds each of these strings to the check. The check runs in `make
+   check` beside "CLAUDE.md guide embed sync", so a harness name cannot
+   return to the shared guide unnoticed.
    Each
    harness's native step wires the one shared file in:
    - `ethos enable claude` writes the `@.punt-labs/ethos/CLAUDE.md` import
@@ -2498,18 +2523,23 @@ pipeline stage's write-set is unambiguous:
    Adding a harness is one entry. Neither harness is the value used when
    the user gives no answer. The implementation stage adds
    `TestHarnessNamesOnlyInList`, which:
-   - parses every non-test `.go` file in `internal/enable` and
-     `cmd/ethos/enable.go` and `cmd/ethos/disable.go` with `go/parser`;
+   - parses every non-test `.go` file in `internal/enable`, **all of
+     `cmd/ethos`**, **`internal/doctor`**, and **`cmd/validate-content`**
+     (round 9; round 8 scanned `cmd/ethos/enable.go` and
+     `cmd/ethos/disable.go` only, which left the other places that name a
+     harness unscanned) with `go/parser`;
    - fails if any string literal contains `claude` or `opencode`
      (case-insensitive) in any file except `harnesses.go`. **Round 8:** an
      import path is no longer exempt (next item), and a literal is allowed
      elsewhere only by **exact equality** with an entry of a short explicit
-     allowlist in the test, never by substring or prefix. The allowlist is
-     the org-standard guide path `.punt-labs/ethos/CLAUDE.md` and its base
-     name `CLAUDE.md`, which name a file, not a harness; a `//go:embed`
-     directive is a comment, not a literal. A literal such as
-     `"@.punt-labs/ethos/CLAUDE.md"` or `".claude/agents"` is not equal to
-     an entry and fails;
+     allowlist in the test, never by substring or prefix. **The allowlist is
+     the one literal `.punt-labs/ethos/CLAUDE.md`** (round 9; round 8 also
+     allowed the base name `CLAUDE.md`, which any remedy text can contain),
+     the org-standard guide path, which names a file and not a harness; a
+     `//go:embed` directive is a comment, not a literal. A literal such as
+     `"@.punt-labs/ethos/CLAUDE.md"`, `".claude/agents"`, or
+     `"...internal/enable/guide/CLAUDE.md..."` is not equal to the entry and
+     fails;
    - **fails on any import of a harness-specific package** outside
      `harnesses.go`: `internal/claudemd` today (`enable.go` imports it for
      `claudemd.Register`), and any future package whose import path
@@ -2531,8 +2561,28 @@ pipeline stage's write-set is unambiguous:
    list: `CanonicalImport` (`enable.go:46`), `guideRel` (`deposit.go:15`,
    the allowed path above), the import registration and removal in
    `EnableTo` and `Disable` (`enable.go:127,173`), and the command help
-   text (`cmd/ethos/enable.go:18-19`). The implementation stage moves each
-   into a `harnesses.go` entry or generates it, and the test above is what
+   text (`cmd/ethos/enable.go:18-19`). The wider scan of round 9 adds
+   places that no earlier round listed: `ethos uninstall`, which looks up
+   the `claude` CLI and prints "claude CLI not found" and "Removed Claude
+   Code plugin." (`cmd/ethos/uninstall.go:37-49`); the doctor's glob over
+   `.claude/agents` (`internal/doctor/doctor.go:198`, whose literal is the
+   path element `".claude"`) and any remedy string of the checks that builds
+   on it and names a harness path; and the `validate-content` guide-sync check, whose label
+   "enable: CLAUDE.md guide embed sync" and remedy text ("...
+   internal/enable/guide/CLAUDE.md have drifted ...",
+   `cmd/validate-content/main.go:81,88`) embed the base name, which the
+   narrowed allowlist no longer passes. Each moves into a `harnesses.go`
+   entry or is generated from the list (for the uninstall step, the
+   entry's own uninstall hook), or is reworded to name the guide by its full
+   path. **The scan also finds literals that name no harness**: the COO's
+   identity handle `"claude"` (`cmd/ethos/setup.go`, `mission.go`), the
+   `claude-md` export format (`export.go`), the `--pid` flag help "Claude
+   PID" (`session.go`), and Claude Code's `.claude/skills` and
+   `.claude/agents` roots (`seed.go`, `setup.go`, `create.go`). The
+   allowlist does not grow to cover them. The implementation stage runs the
+   scan first, lists every hit, and brings the non-harness ones to the
+   leader as a design question (rename, or move into the list) before any
+   code changes; the design does not decide it here. The test above is what
    proves that none was missed.
 
    **`ethos disable` mirrors this.** `ethos disable claude`, `ethos disable
