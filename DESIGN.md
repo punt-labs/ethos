@@ -12669,9 +12669,10 @@ Full writeups, including two historical exploit traces, are in
   claim: the adoption of a skeleton by an operator claim is a ruling of the
   leader, not a result of the model (N21). The model's refusal needs only
   that the child has no pending stage, so it reaches a refusal with a claim in
-  hand. The design does so in cases such as, for example, the child roster
-  missing or unreadable at the read phase, whose exit reconciles in refusal
-  form with the claim in hand; the list is not exhaustive (N22). Rows ending in a refusal depend on N22;
+  hand. The design does so, for example, when the child roster is missing or
+  unreadable at the read phase, whose exit reconciles in refusal form with the
+  claim in hand; the list is not exhaustive (N22). Rows ending in a refusal
+  depend on N22;
   claimed-case rows do not. The model has
   uniqueness because every operation leaves `used` unchanged or grows it
   (`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`
