@@ -97,8 +97,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fork claim propagation (`claim-forked`, `Roster.ParentSession`) uses
     the same Go code for both harnesses, and Claude Code's own `/fork`
     handling is in the same implementation stage.
-  - `Roster.LastSeen` keeps `ethos session purge` from deleting live
-    OpenCode sessions, and a `session.deleted` handler ends them.
+  - Lineage and last-seen live in per-session sidecar files that a
+    roster rewrite cannot erase; `ethos session purge` checks last-seen
+    first and never purges a session with a live participant; a
+    `session.deleted` handler ends OpenCode sessions.
+  - `claim-forked` keeps a durable pending record for the life of the
+    fork claim, closes only fork-propagated delegations (never Tier B
+    dispatch delegations), and every delegation-skeleton close is a
+    compare-and-set on verdict `open`.
+- **Model-checked session and fork-claim lifecycle
+  (`docs/spec-opencode-lifecycle.tex`).** A Z specification of the
+  roster, lineage, purge, delete, and `claim-forked` state machines,
+  checked with ProB. Nine invariants (lineage stable, acyclic, no live
+  session purged, no orphan open skeleton, reconcile on exit, sweep
+  complete, no foreign abort, no verdict overwrite, live spared) hold
+  under fifteen amendments; the ledger records fifteen counterexamples
+  found against the earlier prose design, and every invariant is
+  checked as a negated goal with mutants killed. Some rows are bounded
+  rather than exhaustive; the spec states which.
 - **Third-party notice for the imported output styles.**
   `.claude/output-styles/NOTICE.md` reproduces the MIT copyright and
   permission notice of
