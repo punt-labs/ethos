@@ -2333,7 +2333,11 @@ plus \field{LcDeleteSession}. \emph{sweep} is \emph{delete} with
 \field{LcCfReconcileClaimed}, \field{LcCfExitNoRetry} and
 \field{LcCloseLocked}. \emph{verdict} keeps every \field{LcCf}\ldots
 operation, \field{LcEnsureCreate}, \field{LcDeleteSession},
-\field{LcCloseLocked} and both halves of the unlocked sweep.
+\field{LcCloseLocked} and both halves of the unlocked sweep. The two slices
+are the same operation set under two names: the input files of
+\texttt{Fc\_w} and \texttt{Fv2\_on} differ only in the lines of the sixteen
+switches. The table labels the \texttt{Fc\_*} rows \emph{sweep+ensure} and the
+\texttt{Fv2\_*} rows \emph{verdict}.
 \emph{tierb-delete}, \emph{tierb-purge} and \emph{tierb-reconcile} keep the
 \field{LcCf}\ldots operations, \field{LcTierBDispatch}, the operator claim and
 release, and one of \field{LcDeleteSession}, \field{LcPurgeSession} with
@@ -2689,11 +2693,12 @@ propagations of C9 and C11 are exercised by the exhaustive \emph{claim} and
 
 \paragraph{The gap that let C16 through.} The exhaustive \emph{claim} and
 \emph{claim+} slices had no unlocked sweep; \emph{sweep} had it but not the
-exit \field{LcCfExitNoRetry}; \emph{verdict} had both but was run only for
-\field{NoVerdictOverwrite}, and bounded; \emph{sweep+ensure} had both but its
-two rows (\texttt{Fc\_w} with no switch, \texttt{Fc\_del} with
-\field{fixDeleteCloses} only) found counterexamples to
-\field{SweepComplete} and were not run with the switches on; and the bounded full-machine rows stop at depth 8, short of
+exit \field{LcCfExitNoRetry}; \emph{verdict} and \emph{sweep+ensure}, one
+operation set under two names, had both, but that set was run with all
+sixteen switches on only for \field{NoVerdictOverwrite}, and bounded
+(\texttt{Fv2\_on}), and never for \field{SweepComplete} with the switches on
+(\texttt{Fc\_w} with no switch and \texttt{Fc\_del} with
+\field{fixDeleteCloses} only, both counterexamples); and the bounded full-machine rows stop at depth 8, short of
 the ten operations of C16, which need a crash, a resume, the snapshot and the
 exit. No row contained the trace, and the document said so only for the
 second propagation, not for this one. \emph{claim-u} and \emph{claim+u} add
@@ -2918,7 +2923,10 @@ acts only on an open mission and the exit has found it closed.
 checks neither the owner nor the kind of the skeleton, so uniqueness alone
 excludes a resume onto a Tier~B skeleton in the model. The guarantee of the
 code rests on the id being consumed once the record is durable (design \S5
-point~2 item~3) and on its required test.
+point~2 item~3) and on its required test. The model does not represent an id
+returned to the counter (the code's \texttt{releaseID(false)}) or the moment
+of consumption: \field{used} never shrinks, and an id is consumed at
+\field{LcCfAlloc}, not at a durable record.
 (N13) \field{ClearMissionBindings} is modelled for the closing session's
 claim and binding only; the dispatch-pending entries it clears, and the MCP
 path that calls it, are not represented. (N15) The record's stage is one bit, complete or not; the record

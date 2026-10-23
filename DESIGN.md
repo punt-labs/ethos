@@ -12617,11 +12617,10 @@ Full writeups, including two historical exploit traces, are in
   `deleteFiles` must stop the call on failure (N2). **Round 9:** the proofs
   are exhaustive on named slices (the claim, claim+, delete, sweep, lineage,
   start, and Tier B slices, at two missions, two delegations, and two or three
-  sessions; only the claim-u and claim+u rows exhaust the state space with the
-  unlocked sweep and the claim-forked exit in the slice and all sixteen
-  switches on; every other row whose slice contains both is bounded, a
-  switches-off counterexample run, or a mutant, and the bounded rows do not
-  cover every operation, the spec's results table listing them; no exhaustive chain row contains
+  sessions; the unlocked sweep together with the claim-forked exit is verified
+  exhaustively, with all sixteen switches on, by the rows `U1_*_all`, `U2_*_all`
+  and `U1_leak_d3`; every other row whose slice holds both, and its outcome, is
+  in the spec's results table; no exhaustive chain row contains
   the sweep: the bounded F3 rows stop at depth 5, so the multi-hop walk and C16
   have not met in any run) and bounded on the full machine (200,000 states at two sessions,
   40,000 at three, below depth 12) and for `NoLiveSessionPurged` beyond one session; the table

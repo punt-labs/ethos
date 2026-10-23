@@ -1535,11 +1535,10 @@ the resume path's supersede clause and the guard that a complete record is
 never resumed are unexercised and unverified (`MutSupReuse`, `MutReuseDone`
 survive).
 
-Only the claim-u and claim+u rows exhaust the state space with the unlocked
-sweep and the claim-forked exit in the slice and all sixteen switches on
-(C16). Every other row whose slice contains both is bounded, a switches-off
-counterexample run, or a mutant, and the bounded rows do not cover every
-operation; the spec's results table lists them. No exhaustive chain row contains the sweep;
+The unlocked sweep together with the claim-forked exit is verified
+exhaustively, with all sixteen switches on, by the rows `U1_*_all`,
+`U2_*_all` and `U1_leak_d3`; every other row whose slice holds both, and its
+outcome, is in the spec's results table. No exhaustive chain row contains the sweep;
 the bounded F3 rows (`LcInitChain` with `LcCloseUnlockedBegin` and
 `LcSweepWrite`) stop at depth 5, so the multi-hop walk and C16 have not met
 in any run, and the full-machine
@@ -1587,7 +1586,10 @@ every operation of the model leaves `used` unchanged or grows it
 (`d?` not in `used`), and the initialisations set it empty, so id uniqueness holds by construction, and the resume guard checks neither the
 skeleton's owner nor its kind, so uniqueness alone excludes a resume onto a
 Tier B skeleton in the model; the code's guarantee rests on the id being
-consumed once the record is durable (§5 point 2 item 3) and its required test. The
+consumed once the record is durable (§5 point 2 item 3) and its required test.
+The model does not represent an id returned to the counter (the code's
+`releaseID(false)`) or the moment of consumption: `used` never shrinks, and an
+id is consumed at `LcCfAlloc`, not at a durable record. The
 read phase and the start of the write phase are one step in the model, so the
 window in which the witness releases its claim between them is accepted and
 not examined.
