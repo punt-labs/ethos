@@ -270,9 +270,9 @@ rules in force; (i) the **delegation id is consumed once the pending record
 is durably written**, never released by `releaseID(false)` on a later failure
 (Copilot, PR #536; §5 point 2 item 3; the model cannot show it, N20). §2.7
 states which invariants the model proves exhaustively
-and which only to a bound, and the limits N3 to N21 the design relies on.
+and which only to a bound, and the limits N3 to N22 the design relies on.
 **Round 10 note (mission `m-2026-10-23-015`; Copilot, PR #536; ledger C17,
-limit N21).** Copilot found that a call which died after the claim write and
+limits N21 and N22).** Copilot found that a call which died after the claim write and
 before the completion mark, followed by a Tier B dispatch that overwrote the
 child's binding, left a record that the next reconcile judged not live, so
 the reconcile aborted a fork skeleton that the child's claim still named. The
@@ -1526,7 +1526,7 @@ about the slice and instance in the table, and nothing wider.
 | `NoLiveSessionPurged` (`fixStaleLive`, `fixCorruptPurge`) | one session (817) | two and three sessions (40,000 states, not exhausted) |
 | `NoOrphanOpenSkeleton`, fork skeletons (`fixDurableName`) | claim slice (19,481; 129,921 at three delegations); claim+ slice, which includes a Tier B dispatch over a completed fork claim, the operator claim, the mission close and the close-time clearing (271,253); delete slice (4,877) | claim+delete+close, two sessions (200,000 states, depth 8) and three (40,000, depth 5); claim, three sessions (200,000, depth 12) |
 | `ReconcileOnExit` (`fixRefuseReconciles`, `fixInertBinding`, `fixResumeClosed`) | claim slice (19,481); claim+ (271,253); with the unlocked sweep, claim-u (134,433) and claim+u (534,201); claim-u at three delegations (1,029,729, depth 32) | the same full-machine runs, which stop below depth 12 |
-| `NoLiveForkAborted` (`fixClaimLive`, with `fixDurableName`; the ghost reads the claim, owner and kind only) | claim, claim+, claim-u and claim+u; on claim-u and claim+u, with the unlocked sweep, all nine invariants defined on those slices hold (state counts: the spec's results table, rows `*_lfa_all`) | none |
+| `NoLiveForkAborted` (`fixClaimLive`, which it holds without `fixDurableName`, `C17_lfa_nodur`; the ghost reads the claim, the owner, the kind, the skeleton's mission and the change from open to aborted) | claim, claim+, claim-u and claim+u; on claim-u and claim+u, with the unlocked sweep, all nine invariants defined on those slices hold: `NoOrphanOpenSkeleton`, `ReconcileOnExit`, `SweepComplete`, `NoVerdictOverwrite`, `LiveSpared`, `LockedWrites`, `NoForeignAbort`, `WellFormed` and `NoLiveForkAborted` (state counts: the spec's results table, rows `*_lfa_all`); not run with `fixResumeClosed` off | not run on the full-machine rows |
 | `SweepComplete` (`fixDeleteCloses`, `fixPostCheck`) | sweep slice (37,025) | the same full-machine runs |
 | `NoForeignAbort` (`fixOrigin`), holds over every abort the model performs (including `release` and close-time clearing); three closes outside the model are not covered (§2.7) | the three Tier B slices (10,977; 32,929; 1,981) | the same full-machine runs |
 | `NoVerdictOverwrite` (`fixCas`) | sweep slice (19,697) | verdict slice (300,000 states); full-machine runs |
@@ -1618,6 +1618,14 @@ mission by hand. The skeleton is open, named by a complete record and bound to
 nothing; the model cannot tell the claim `claim-forked` writes from the
 operator's, so the invariant `NoLiveForkAborted` treats neither as the
 skeleton's abandonment. The leader's ruling is to adopt (§5 point 2 item 5).
+N22, `LcCfRefuse` over-approximates the read phase: its guard is only that the
+child has no pending stage, so the model reaches a refusal while the child holds
+a claim. Step 2 of the read phase (§5 point 2 item 2) reads the child's claim
+first and takes the claimed case, so in the design a refusal with a claim in
+hand arises only if the claim is written after that lock-free read and before
+the dispatch-pending lock. The rows whose counterexample is such a refusal
+model that interleaving; the invariants that hold with `LcCfRefuse` in the slice
+hold of the larger behaviour (spec N22).
 
 ## 3. `ethos hook commit-trailers` without Claude process-tree discovery
 
@@ -2414,9 +2422,11 @@ pipeline stage's write-set is unambiguous:
         skeleton its own call wrote, so for the skeletons a reconcile
         considers the test is the claim alone (`Own_all`). Three rulings of
         the leader. (a) `fixClaimLive` depends on the durable record
-        (`fixDurableName`): the kept record is marked complete only under the
-        durable name, and with the record removed the adopted skeleton would
-        be named by nothing, so the two ship together (`C17_nodur`). (b) The
+        (`fixDurableName`) for `NoOrphanOpenSkeleton`: the kept record is
+        marked complete only under the durable name, and with the record
+        removed the adopted skeleton would be named by nothing, so the two
+        ship together (`C17_nodur`). `NoLiveForkAborted` does not need the
+        durable name (`C17_lfa_nodur`). (b) The
         binding test and the complete-mark test stay in the code as
         defensive tests, documented as unexercised by the model, which finds
         them subsumed by the claim (`Own_all`). (c) N21, adopt: when an
@@ -2431,9 +2441,11 @@ pipeline stage's write-set is unambiguous:
         - *The call is a refusal (read phase), or the child already holds a
           claim (the claimed case; `fixInertBinding`).* If the record is
           live, it is **kept and marked complete**: the claim and the
-          skeleton are in use, and an incomplete live record means the crash
-          fell between the claim write and the mark, or the call died before
-          its binding and an operator claimed the mission (N21). Otherwise the
+          skeleton are in use, and an incomplete live record means, for example,
+          that the crash fell between the claim write and the mark; or that
+          the call died before its binding and an operator claimed the mission
+          (N21); or that it died after its binding and before its claim and an
+          operator then claimed the same mission. Otherwise the
           call closes the skeleton the record names, `aborted`, and removes
           the record. The binding of a record that is not live is inert (it
           names a mission that is not the child's claim), so the skeleton is
@@ -2632,20 +2644,30 @@ pipeline stage's write-set is unambiguous:
         record, after the skeleton, after the binding, after the claim,
         after the claim but before the mark), plus a retry with a different
         witness and a retry with a different mission, a close that fails, a
-        refusal after a crash (C1), an operator claim of a different
-        mission after a crash at the binding (C4), an operator claim of the
-        same mission after a crash at the binding (the record is live and is
-        marked complete, the skeleton stays open and in use; C17, N21: the
-        skeleton is adopted, not aborted), the trace of Copilot's comment
-        (C17: a child whose `claim-forked` wrote the claim and died before it
-        marked the record complete, whose binding a Tier B dispatch has since
-        replaced, then a refused `claim-forked` and, in a second case, a
-        reconciled one: the skeleton is open after the call and the record is
-        kept and complete), the operator-claim trace (C17, N21: the call dies
-        after the skeleton and before the binding, an operator claims the
-        skeleton's mission by hand, the next call is refused: the skeleton is
-        open, the record is kept and complete, and `mission release` or the
-        close-time clearing then closes it), a Tier B
+        refusal after a crash with no claim in hand (C1), an operator claim
+        of a different mission after a crash at the binding (C4), the trace
+        of Copilot's comment (C17: a child whose `claim-forked` wrote the
+        claim and died before it marked the record complete, whose binding a
+        Tier B dispatch has since replaced, then a next call: the skeleton is
+        open after the call and the record is kept and complete), and the
+        operator-claim trace (C17: the call died after the skeleton, and an
+        operator then claimed the skeleton's mission by hand, the binding
+        being absent, or being written first and the claim never reached; the
+        next call finds the claim, the record is live and is kept and marked
+        complete, the skeleton stays open and in use, and `mission release`
+        or the close-time clearing then closes it; N21 applies to the case
+        where the call died before it wrote its binding, in which the
+        skeleton is adopted, not aborted). A next call that finds the claim at
+        step 2 of the read phase takes the claimed case, so these traces
+        reach the reconcile of the claimed case. The refused variant of each
+        (the Copilot trace and the operator-claim trace, each ending in a
+        refused `claim-forked`) cannot be reached that way, because step 2
+        reads the claim first. A test induces it by writing the claim after
+        the lock-free read of step 2 and before the dispatch-pending lock
+        (a hook between the two, or a second process timed to that window);
+        this is the interleaving the spec's limit N22 names, and the
+        expected outcome is the same: the skeleton is open after the call and
+        the record is kept and complete. Also tested: a Tier B
         dispatch by a propagated child over its completed fork claim, then
         `release`, `deleteFiles`, and the close-time clearing each closing the
         fork skeleton the record still names (C12), a complete record that a

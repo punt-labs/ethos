@@ -12244,8 +12244,8 @@ narrows this to an open fork skeleton the session owns and its record or
 binding names, item 27), the claim, the binding, the pending record, `last-seen`, the roster,
 and the `parent-session` sidecar last (C2, C5). (22) *`claim-forked`.* Every exit
 other than "write failed" reconciles first, including a read-phase refusal
-(C1). An already-claimed child closes the skeleton unless the binding is live
-(C4), and a reconcile that does not resume the record also closes the
+(C1). An already-claimed child closes the skeleton unless the skeleton is live
+(C4; the liveness rule is item 28, C17, `fixClaimLive`), and a reconcile that does not resume the record also closes the
 skeleton of the child's current binding (C9; round 9 withdraws that wording,
 item 29). The mission is re-read once the
 skeleton is on disk, before the binding (C6). Every close writes verdict
@@ -12289,7 +12289,7 @@ durable pending record, on the leader's ruling; the evaluator (jra) accepted
 it. A later review added C16 and a sixteenth switch, `fixResumeClosed`, and a
 review of PR #536 (Copilot; mission `m-2026-10-23-015`, accepted by jra) added
 C17 and a seventeenth, `fixClaimLive`: the spec now has seventeen
-counterexamples (C1 to C17) and seventeen switches, and limits N3 to N21. With
+counterexamples (C1 to C17) and seventeen switches, and limits N3 to N22. With
 all seventeen switches on its operations are the authority, and `docs/design-opencode-plugin.md` is
 brought into line (header note, §2.1.1, §2.5, §2.6, new §2.7, §5 points 1 to
 3 and 5). (27) *Origin discriminator.* A skeleton is a fork skeleton
@@ -12321,7 +12321,8 @@ write and the completion mark followed by a Tier B dispatch (Copilot,
 PR #536). It applies to the reconcile of a refusal and of the claimed case and
 to the ghosts `leaked` and `liveAborted`; the resume and fresh paths need
 none. Rulings of the leader: `fixClaimLive` depends on the durable record
-(`fixDurableName`) and they ship together (`C17_nodur`); the binding and
+(`fixDurableName`) for `NoOrphanOpenSkeleton` and they ship together
+(`C17_nodur`; `NoLiveForkAborted` holds without it, `C17_lfa_nodur`); the binding and
 complete-mark tests stay in the code as defensive tests that the model does
 not exercise (`Own_all`); and (N21) when an operator claim names the
 skeleton's mission after a call died before it wrote its binding, the
@@ -12333,9 +12334,12 @@ is unchanged. A refusal keeps a live record and never resumes it. Required
 tests: Copilot's trace (a claim written, the call dead before the completion
 mark, the binding replaced by a Tier B dispatch, then a refused and a
 reconciled `claim-forked`: the skeleton is open after the call and the record
-is kept and complete) and the operator-claim trace (N21: the call dead before
-its binding, an operator claims the mission, the next call adopts the
-skeleton). (29) *Reconcile paths.* `fixSupersede` applies on the fresh
+is kept and complete) and the operator-claim trace (C17: the call dead after
+the skeleton, an operator claims the skeleton's mission, the next call adopts
+the skeleton; N21 applies where the call died before its binding). A next
+call that finds the claim at step 2 of the read phase takes the claimed case;
+the refused variant of each trace is induced by writing the claim after that
+lock-free read and before the dispatch-pending lock (N22). (29) *Reconcile paths.* `fixSupersede` applies on the fresh
 and resume paths only; the resume clause is defensive and unexercised. The
 resume path takes the mission and delegation locks and re-reads the mission
 before it writes (C15). A mission found closed at that re-read first closes the
@@ -12654,9 +12658,11 @@ Full writeups, including two historical exploit traces, are in
   is hygiene, and the guard that a complete record is never resumed, which is
   defensive and unverified (N18); the dispatch-pending entries that
   `ClearMissionBindings` clears (N13); and an id returned to the counter (the code's
-  `releaseID(false)`) and the moment of consumption (N20); and who wrote a
-claim: the adoption of a skeleton by an operator claim is a ruling of the
-leader, not a result of the model (N21). The model has
+  `releaseID(false)`) and the moment of consumption (N20), and who wrote a
+  claim: the adoption of a skeleton by an operator claim is a ruling of the
+  leader, not a result of the model (N21). The model's refusal can be reached
+  with a claim in hand; the design reaches that only between the lock-free read
+  and the dispatch-pending lock (N22). The model has
   uniqueness because every operation leaves `used` unchanged or grows it
   (`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`
   (`d?` not in `used`), and the initialisations set it empty; the
