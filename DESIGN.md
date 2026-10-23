@@ -12254,7 +12254,7 @@ claimed child returns success. A corrupt pending record or `record.yaml` is
 "do not retry". A Go panic (status 2) and a signal death are in the status
 table, and `cmd/ethos/main.go:51-71` must map the new statuses with
 `errors.As`, consulted before the prefix test of `isUsageError` (round 9,
-item 31). The lock non-nesting is compiler-enforced only if the write phase
+item 33). The lock non-nesting is compiler-enforced only if the write phase
 lives in `internal/mission` and `RefuseIfSessionGone` is re-expressed over the
 reader interface. (23) *Purge.* A roster with a live numeric participant is
 never stale, which **reverses row 2 of the round 6 `TestIsStale` table**
@@ -12284,8 +12284,8 @@ distinct from 0, 1, and 2.
 
 **Round 9 correction (missions `m-2026-10-22-048` and `m-2026-10-23-005`).**
 `docs/spec-opencode-lifecycle.tex` was extended with six more counterexamples
-(C10 to C15), five more fix switches, and, on the leader's ruling, a durable
-pending record; the evaluator (jra) accepted it. With all fifteen switches on
+(C10 to C15) and six more fix switches (nine to fifteen), the sixth being a
+durable pending record, on the leader's ruling; the evaluator (jra) accepted it. With all fifteen switches on
 its operations are the authority, and `docs/design-opencode-plugin.md` is
 brought into line (header note, §2.1.1, §2.5, §2.6, new §2.7, §5 points 1 to
 3 and 5). (27) *Origin discriminator.* A skeleton is a fork skeleton
@@ -12329,8 +12329,9 @@ compare-and-set on verdict `open` under the delegation lock, the `Store.Close`
 sweep included (C14). The exit-status table gains rows for I/O errors on the
 child's and the witness's binding reads, a `ParentOf` error, a
 `ReadDelegationBinding` error in a reconcile, a record-removal failure, and an
-abort whose cleanup close fails; a mission-closed witness is "witness
-refused"; a column states the Claude Code `SessionStart` action. (B2) The
+abort whose cleanup close fails; a mission found closed is "do not retry"
+(the spec's `LcCfExitNoRetry`, C15); `ParentOf` and ancestor-roster I/O errors
+are "write failed"; a column states the Claude Code `SessionStart` action. (B2) The
 record stores the store root, and `deleteFiles` step 1, `release`, and every
 reconcile close use it; "directory gone" needs a recorded, resolvable root.
 (32) *Guide and tests.* The guide deny list is derived from the harness list

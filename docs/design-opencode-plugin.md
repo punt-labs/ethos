@@ -197,8 +197,9 @@ allows only `.punt-labs/ethos/CLAUDE.md`), and
 and `m-2026-10-23-005`, this reconciliation; PR #536):**
 `docs/spec-opencode-lifecycle.tex` was extended after a review of the design
 against the Claude Code paths the first model omitted. It now has fifteen
-counterexamples (C1 to C15), fifteen fix switches, and, on the leader's
-ruling, a durable pending record; the evaluator (jra) accepted it after
+counterexamples (C1 to C15) and fifteen fix switches (six more than round
+8's nine, the sixth being the durable pending record, on the leader's
+ruling); the evaluator (jra) accepted it after
 `m-2026-10-22-048`. **With all fifteen switches `ztrue` the spec's operations
 are the authority, and where this document and the spec disagree the spec
 wins** (round 8 said nine). Each amendment below cites the spec's ledger.
@@ -234,8 +235,10 @@ stores the mission store root (`resolve.StoreRepoRoot()` at write time) and
 `LcEnsureRefresh`; §2.1.1); (c) the exit-status table gains rows for I/O
 errors on the child's and the witness's binding reads, a `ParentOf` error, a
 `ReadDelegationBinding` error in a reconcile, a record-removal failure, and
-an abort whose cleanup close fails, a mission-closed witness is "witness
-refused", and a column states the Claude Code `SessionStart` action; the
+an abort whose cleanup close fails, a mission found closed is "do not
+retry" (the spec's `LcCfExitNoRetry`, C15), `ParentOf` and ancestor-roster
+I/O errors are "write failed", and a column states the Claude Code
+`SessionStart` action (Ensure-step failures are separate, §2.5); the
 `errors.As` mapping is consulted before the prefix test at
 `cmd/ethos/main.go:85-100` (§5 point 2 item 4); (d) the guide deny list is
 derived from the harness list and covers OpenCode terms and any `@`, the
@@ -1144,8 +1147,8 @@ identical guard:
   fork source and any missing ancestors first. It then offers each
   registered ancestor, nearest first, as `witness?` to `claim-forked`
   (§5 point 2) until one succeeds, moving to the next ancestor only on
-  "witness refused", which includes a witness whose claimed mission is
-  closed (§5 point 2 item 4). The guard is spec §5.6's corrected, round-4
+  "witness refused" (§5 point 2 item 4); a mission found closed is "do not
+  retry" and ends the iteration. The guard is spec §5.6's corrected, round-4
   guard: the full ancestor set under transitive closure, not a single hop
   (§2.3.1). `claim-forked` refuses a witness that is not an ancestor, holds
   no claim, or holds only a non-`claim`-origin binding (§5 point 2); on
@@ -1234,8 +1237,11 @@ detection, not by a depth constant:
   chain is structurally unwalkable past that point" and the relation
   reflects only "as much of the ancestor chain as still has a live,
   readable record" (`docs/spec-opencode-integration.tex:1054-1064`). A
-  load error that is not "not found" (a corrupt roster) refuses the same
-  way and is reported to the caller. Each step either reaches an empty
+  load error that is not "not found" and is not an I/O error (a roster that
+  is present and does not parse) refuses the same way and is reported to the
+  caller. An I/O error on a roster or on `ParentOf` (permission denied, EIO)
+  is "write failed", not a refusal (§5 point 2 item 4): it says nothing about
+  the witness, and refusing would send the plugin to a more distant ancestor. Each step either reaches an empty
   link, fails to load, or visits a new roster, and the roster set is
   finite, so the walk terminates. **Round 8 (replacing round 5's
   "a cycle cannot be written through `ensure` except through a
@@ -1423,7 +1429,14 @@ not retry with `parentGone` and writes no pointer.
 compacted `SessionStart` for a session that already has one cannot erase it.
 This holds of every source because every source calls `Ensure` (round 9;
 round 8 had kept `CreateInCheckout` for the other sources, which erased the
-lineage of a resumed fork, C13). The spec
+lineage of a resumed fork, C13). **This protects a session whose roster still
+exists, and only that.** Claude Code's `SessionEnd` calls `Delete`
+(`session_end.go:57`), which removes the roster and, as its last step, the
+`parent-session` sidecar (§2.1.1 step 7). A fork that ended cleanly and is
+later resumed therefore has no lineage left: its `SessionStart` registers it
+anew, with source `resume` and an empty `ParentOf`, as an **unclaimed root**.
+That is fail-closed (it gets no trailers until an operator claims it), not a
+lineage error. The spec
 leaves one point open for Claude Code: whether a forked session's own
 `CLAUDE_PID` resolves to a fresh roster entry automatically, or the hook
 must register one. The implementation stage must confirm this against a
@@ -1479,13 +1492,18 @@ about the slice and instance in the table, and nothing wider.
 | `NoOrphanOpenSkeleton`, fork skeletons (`fixDurableName`) | claim slice (16,601; 106,881 at three delegations); claim+ slice, which includes a Tier B dispatch over a completed fork claim, the operator claim, the mission close and the close-time clearing (257,269); delete slice (4,877) | claim+delete+close, two sessions (200,000 states, depth 8) and three (40,000, depth 5); claim, three sessions (200,000, depth 12) |
 | `ReconcileOnExit` | claim slice (16,601); claim+ (257,269) | the same full-machine runs |
 | `SweepComplete` (`fixDeleteCloses`, `fixPostCheck`) | sweep slice (37,025) | the same full-machine runs |
-| `NoForeignAbort` (`fixOrigin`) | the three Tier B slices (11,073; 33,217; 2,013) | the same full-machine runs |
+| `NoForeignAbort` (`fixOrigin`), scoped to `deleteFiles`, the purge, a reconcile, `release`, and the close-time clearing | the three Tier B slices (11,073; 33,217; 2,013) | the same full-machine runs |
 | `NoVerdictOverwrite` (`fixCas`) | sweep slice (19,697) | verdict slice (300,000 states); full-machine runs |
 | `LiveSpared` | claim slice (16,601); claim+ (257,269) | full-machine runs |
 | `LockedWrites` (a condition of the model's lock assumption, not an invariant of the design; `fixReuseLocks`) | claim slice (16,601) | full-machine runs |
-| `WellFormed` (the model's own well-formedness) | every run in which it is checked | the three-session full-machine run |
+| `WellFormed` (the model's own well-formedness) | holds in every run in which it is checked | the three-session full-machine run (`F3_wf_all`): no counterexample in the states explored, not exhausted |
 
-No invariant has an open counterexample. The limit is coverage: the full
+Of the invariants, nine are the design's (`LineageStable`, `Acyclic`,
+`NoLiveSessionPurged`, `NoOrphanOpenSkeleton`, `ReconcileOnExit`,
+`SweepComplete`, `NoForeignAbort`, `NoVerdictOverwrite`, and `LiveSpared`, the
+ninth, added with the durable record); `LockedWrites` is a condition of the
+model's lock assumption, not an invariant of the design. No invariant has an
+open counterexample. The limit is coverage: the full
 `claim-forked` machine, with the deletes, purges and closes interleaved, is
 exhausted only slice by slice, and the second propagations of C9 and C11 are
 exercised by the exhaustive claim and claim+ slices, not by the bounded
@@ -1509,7 +1527,16 @@ mandatory (§2.1.1 rule 3, §2.3.1); N5, every close but the sweep writes
 item 1); N8, a live Claude Code session whose roster does not parse and has no
 `last-seen` is still purged (§2.1.1); N9 and N17, the Tier B dispatch is one
 atomic step and three of its paths are not represented (§5 point 2 item 5);
-N10, the compare-and-set is taken to be atomic as the delegation lock is; N11,
+N10, the compare-and-set is taken to be atomic as the delegation lock is;
+**`NoForeignAbort` is scoped** to the operations the model has, `deleteFiles`,
+the purge, a reconcile, `release`, and the close-time clearing, and three
+closes of a Tier B skeleton are outside it: the SubagentStart hash-refusal
+close (`subagent_start.go:987`, verdict `aborted`), the `Store.Close`
+escalation-verdict sweep (`store.go:1091-1092`, which closes every open
+skeleton of the mission, Tier B included, `aborted` for an escalation), and
+the unlocked Tier B dispatch fallback taken when the dispatch-pending lock
+cannot be acquired (`pretooluse_dispatch.go:103-115`, which reaches
+`dispatchTierB` through `pretooluse_inherit.go:268` without the lock); N11,
 a `SessionStart` for a roster that does not parse is a no-op (§2.1.1); roster
 contents, and the rewrite of an existing roster that `refreshRoster` performs
 for `SessionStart`, are outside the model, which holds the participant kind
@@ -1946,8 +1973,8 @@ pipeline stage's write-set is unambiguous:
       skeleton, **post-check**, binding, claim. After
       `WriteDelegationSkeleton` returns, the write phase loads the mission
       again and, if it is no longer open, aborts (item 5, in-process
-      cleanup) and exits "witness refused" (item 4: a witness whose
-      mission is closed is refused, so the plugin offers the next ancestor).
+      cleanup) and exits "do not retry" (item 4; the spec's
+      `LcCfExitNoRetry`, C15).
       The reason is
       `Store.Close`'s fallback: when the exclusive mission lock cannot be
       taken it sweeps open skeletons with no exclusion
@@ -2113,8 +2140,8 @@ pipeline stage's write-set is unambiguous:
         6. Re-load the mission and confirm it is still open (the TOCTOU
            re-check, `pretooluse_dispatch.go:810-838`). On the resume path
            this is the re-read that the locks of step 5 make meaningful: a
-           mission found closed ends the call with "witness refused" (item
-           4) and writes nothing, and the next reconcile closes the
+           mission found closed ends the call with "do not retry" (item
+           4; the spec's `LcCfExitNoRetry`, C15) and writes nothing, and the next reconcile closes the
            skeleton the record names if the sweep missed it.
         7. Write the `claim-forked-pending` record (item 5), incomplete and
            carrying the store root, then the skeleton, then **re-read the
@@ -2188,12 +2215,12 @@ pipeline stage's write-set is unambiguous:
       runs the same two steps once per fork start (§2.5) and has no second
       trigger.
 
-      | Status | Causes | Plugin action | Claude Code `SessionStart` action |
+      | Status | Causes | Plugin action | Claude Code `SessionStart` action (failures of the Ensure step are separate, §2.5) |
       |---|---|---|---|
       | **success** (0) | The child is now claimed and bound. Or the child already held a claim ("already claimed"; the pending record is reconciled first, and a live record is kept and marked complete). | Memoize "claimed" for the refresh interval (15 minutes), so a claim lost to a purge is retried after the next re-registration. | Nothing to do. |
-      | **witness refused** | The child's lineage does not reach the witness; an ancestor roster or the witness's own roster is missing or fails to load; `Store.ParentOf` fails with an error other than not-found (an unreadable sidecar: the chain cannot be established, so it fails closed and the error is reported, as for a roster that fails to load); a repeated id; the witness holds no claim; the witness binding's origin is not `claim`; **the witness's claimed mission is not open** (found closed at the re-check of write phase step 6, on the resume path as on the fresh one, or at the post-check after the skeleton, item 1: the call has reconciled and cleaned up first, and a claim on a closed mission is a stale claim, which a more distant ancestor may not share). | Try the next ancestor as witness, nearest first. When none is left, log once and memoize "unattributed" for the refresh interval (15 minutes, §2.1.1). | Offer each ancestor in the recorded chain in turn, nearest first. When none is left, log one line to stderr and leave the fork unclaimed; the hook does not retry. |
-      | **write failed** | The child's dispatch-pending lock, the mission lock, or the delegation lock cannot be acquired; the mission or delegation lock for an orphan skeleton's close cannot be acquired; the pending record, skeleton, binding, or claim write fails, or the final mark-complete write fails; an earlier orphan skeleton could not be closed for a reason a retry can cure, such as a lock or an I/O error (item 5), including the close that a refusal or an already-claimed exit performs first; the record could not be removed after its skeleton was closed (item 5; the next call finds the skeleton closed and removes the record); the post-check abort or in-process cleanup of item 5 failed to close the skeleton, whatever caused the abort; the child's claim vanished between the read phase's claimed-child check and the lock (write phase step 3). **Reads that fail with an I/O error rather than "absent":** `ReadActiveMissionBinding` on the child's own claim (read phase step 2) or on the witness's binding (step 3), and `ReadDelegationBinding` on the child's binding during a reconcile. An unreadable file is not an absent one: the call has written nothing, and classifying a witness binding read error as "witness refused" would try a more distant ancestor and could attribute the child to that ancestor's mission instead of the nearest's. **Process death by a signal** (OOM kill, a spawn timeout enforced by the plugin) has no exit status at all and is classified here: it is the model's crash (`LcCfCrash`), which leaves whatever was written. | Retry the **same** witness on the child's next `execute.before`, with no memo. Each retry reconciles first, so leftover state is cleaned up before a new write. Log each failure, and for a signal death log the signal. | Log one line to stderr naming the cause. The hook does not retry (it fires once per start, and only the `fork` source calls `claim-forked`), so the fork is unclaimed until an operator runs `ethos mission claim-forked` for it or `ethos mission claim`. The next `claim-forked` call reconciles whatever this one left. |
-      | **do not retry** | The child's roster is gone (the read-phase `ss.Load` or the write phase's `RefuseIfSessionGone` reports `fs.ErrNotExist`) or unreadable (only the read-phase `ss.Load` refuses on this: `RefuseIfSessionGone` warns and proceeds on any error other than `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`, so a roster that exists but fails to parse is caught in the read phase, not the write phase); the mission or its contract fails to load (a mission that loads and is not open is "witness refused", above); `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails, including `resolve.StoreRepoRoot()` returning no root when the record is to be written, and **a record whose recorded store root is empty or does not resolve** at a reconcile (B2, §2.1.1); **the `claim-forked-pending` record does not parse, or a skeleton's `record.yaml` does not parse** (round 8: retrying cannot repair a corrupt file, and "write failed" would retry it on every tool call for ever; the error names the file, and the remedy is to remove it by hand; the record can now fail to parse for as long as the fork claim lasts, item 5). **Exit status 1 (generic error) and exit status 2** (usage error, `failClosed`, **and a Go runtime panic, which exits 2** and cannot be told from a usage error by its status). | Do not try another ancestor and do not retry in this call. Log; for status 2 log the captured stderr, which carries the panic trace if there was one. Memoize the outcome for the refresh interval, so a broken record costs one subprocess per interval per session; the memo expiring is the retry, and the next call reconciles whatever a panic left. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. | Log one line to stderr; do not retry and do not offer another ancestor. The hook runs the write phase behind a `recover`, so a Go panic in process is logged and treated as this status, and it runs under the shell wrapper's fail-open guard (`session_start.go:60-62`), so no status can fail the session start. |
+      | **witness refused** | The child's lineage does not reach the witness; an ancestor roster or the witness's own roster is missing (not found) or is present and does not parse; a repeated id; the witness holds no claim; the witness binding's origin is not `claim`; and nothing else. | Try the next ancestor as witness, nearest first. When none is left, log once and memoize "unattributed" for the refresh interval (15 minutes, §2.1.1). | Offer each ancestor in the recorded chain in turn, nearest first. When none is left, log one line to stderr and leave the fork unclaimed; the hook does not retry. |
+      | **write failed** | The child's dispatch-pending lock, the mission lock, or the delegation lock cannot be acquired; the mission or delegation lock for an orphan skeleton's close cannot be acquired; the pending record, skeleton, binding, or claim write fails, or the final mark-complete write fails; an earlier orphan skeleton could not be closed for a reason a retry can cure, such as a lock or an I/O error (item 5), including the close that a refusal or an already-claimed exit performs first; the record could not be removed after its skeleton was closed (item 5; the next call finds the skeleton closed and removes the record); the post-check abort or in-process cleanup of item 5 failed to close the skeleton, whatever caused the abort; the child's claim vanished between the read phase's claimed-child check and the lock (write phase step 3). **Reads that fail with an I/O error rather than "absent":** `Store.ParentOf` and the `Load` of an ancestor roster (an error other than not-found that is not a parse failure), `ReadActiveMissionBinding` on the child's own claim (read phase step 2) or on the witness's binding (step 3), and `ReadDelegationBinding` on the child's binding during a reconcile. An unreadable file is not an absent one: the call has written nothing, and classifying a witness binding read error as "witness refused" would try a more distant ancestor and could attribute the child to that ancestor's mission instead of the nearest's. **Process death by a signal** (OOM kill, a spawn timeout enforced by the plugin) has no exit status at all and is classified here: it is the model's crash (`LcCfCrash`), which leaves whatever was written. | Retry the **same** witness on the child's next `execute.before`, with no memo. Each retry reconciles first, so leftover state is cleaned up before a new write. Log each failure, and for a signal death log the signal. | Log one line to stderr naming the cause. The hook does not retry (it fires once per start, and only the `fork` source calls `claim-forked`), so the fork is unclaimed until an operator runs `ethos mission claim-forked` for it or `ethos mission claim`. The next `claim-forked` call reconciles whatever this one left. |
+      | **do not retry** | The child's roster is gone (the read-phase `ss.Load` or the write phase's `RefuseIfSessionGone` reports `fs.ErrNotExist`) or unreadable (only the read-phase `ss.Load` refuses on this: `RefuseIfSessionGone` warns and proceeds on any error other than `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`, so a roster that exists but fails to parse is caught in the read phase, not the write phase); the mission or its contract fails to load, **or the mission is found not open** (at the re-check of write phase step 6, on the resume path as on the fresh one, or at the post-check after the skeleton, item 1: the call has reconciled and cleaned up first, and if that cleanup close fails the status is "write failed" instead; the spec's `LcCfExitNoRetry`, C15); `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails, including `resolve.StoreRepoRoot()` returning no root when the record is to be written, and **a record whose recorded store root is empty or does not resolve** at a reconcile (B2, §2.1.1); **the `claim-forked-pending` record does not parse, or a skeleton's `record.yaml` does not parse** (round 8: retrying cannot repair a corrupt file, and "write failed" would retry it on every tool call for ever; the error names the file, and the remedy is to remove it by hand; the record can now fail to parse for as long as the fork claim lasts, item 5). **Exit status 1 (generic error) and exit status 2** (usage error, `failClosed`, **and a Go runtime panic, which exits 2** and cannot be told from a usage error by its status). | Do not try another ancestor and do not retry in this call. Log; for status 2 log the captured stderr, which carries the panic trace if there was one. Memoize the outcome for the refresh interval, so a broken record costs one subprocess per interval per session; the memo expiring is the retry, and the next call reconciles whatever a panic left. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. | Log one line to stderr; do not retry and do not offer another ancestor. The hook runs the write phase behind a `recover`, so a Go panic in process is logged and treated as this status, and it runs under the shell wrapper's fail-open guard (`session_start.go:60-62`), so no status can fail the session start. |
 
       Usage errors keep status 2 (bad flags). An error that carries no
       status maps to the generic status 1, which the plugin treats as
@@ -2314,7 +2341,12 @@ pipeline stage's write-set is unambiguous:
         `fixSupersede`).* On the two paths that go on to write, the fresh
         path and the resume path, with or without a record, the reconcile also
         closes the open fork skeleton that the child's delegation binding
-        names when it is not the skeleton the call will use: on the fresh
+        names when it is not the skeleton the call will use, **using the
+        write phase's own resolved store root** (this call's
+        `resolve.StoreRepoRoot()`, which is the root the new record is about
+        to carry): a mission directory missing under that root means "not
+        found, skip", **never** "gone". "Gone" is concluded only from a
+        recorded, resolvable root (§2.1.1), and this close has none. On the fresh
         path every such skeleton, on the resume path the one that differs from
         the record's. It is **never** applied by a refusal or in the claimed
         case, whose child either does not write or holds a claim and may be
@@ -2426,8 +2458,9 @@ pipeline stage's write-set is unambiguous:
         error. It does not use `closeDelegationAborted`
         (`pretooluse_dispatch.go:991-1014`), which only writes the error to
         stderr. On a close error the call leaves the record in place and
-        exits "write failed" (or "do not retry" for a record that does not
-        parse, item 4), so the next retry attempts the close again. A failure
+        exits "write failed", or "do not retry" when item 4 assigns the cause
+        there (a record that does not parse), so the next retry attempts the
+        close again. A failure
         to remove the record after a successful close is likewise "write
         failed" (item 4); the next call finds the skeleton closed and removes
         the record.
@@ -2435,10 +2468,13 @@ pipeline stage's write-set is unambiguous:
         is on disk and the process survives (including the post-check abort
         of item 1), it closes the skeleton `aborted` (same function, same
         error rule), removes a binding it wrote, removes the record, and
-        exits "write failed", or "witness refused" when the cause is a
-        mission that is no longer open. If the cleanup close itself fails, the
-        call exits "write failed" whatever the cause (item 4): the record
-        stays in place, and the retry reconciles it first. A failure to mark
+        exits "write failed", or "do not retry" when item 4 assigns the cause
+        there (a mission that is no longer open). If the cleanup close itself
+        fails, the call exits "write failed" whatever the cause (item 4): the
+        record stays in place, and the retry reconciles it first. The status
+        precedence is therefore: a failed cleanup or reconcile close is
+        "write failed" and outranks every other cause; otherwise the cause's
+        own row decides. A failure to mark
         the record complete, after the claim is written, writes nothing else
         to undo: the call exits "write failed", the next call finds the child
         claimed and the record live, and marks it complete. The counter slot
@@ -2775,8 +2811,11 @@ pipeline stage's write-set is unambiguous:
    allowlist does not grow to cover them. The implementation stage runs the
    scan first, lists every hit, and brings the non-harness ones to the
    leader as a design question (rename, or move into the list) before any
-   code changes; the design does not decide it here. The test above is what
-   proves that none was missed.
+   code changes; the design does not decide it here. **Until the leader
+   rules on those hits the test stays red:** it is not merged with a
+   widened allowlist or a skip, and the implementation PR does not go green
+   on it before the ruling. The test above is what proves that none was
+   missed.
 
    **`ethos disable` mirrors this.** `ethos disable claude`, `ethos disable
    opencode`, and `ethos disable claude opencode` remove only the named
