@@ -116,8 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last two were found in PR review: a resumed claim that exits "do not
   retry" with its skeleton open, and a live fork skeleton aborted after
   a crash and a Tier B dispatch), and every invariant is
-  checked as a negated goal with mutants killed. Some rows are bounded
-  rather than exhaustive; the spec states which.
+  checked as a negated goal with mutants killed, except where the spec
+  records a surviving mutant as unverified defensive code. Some rows are
+  bounded rather than exhaustive; the spec states which.
 - **Third-party notice for the imported output styles.**
   `.claude/output-styles/NOTICE.md` reproduces the MIT copyright and
   permission notice of
