@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{3}{3}
+\prfaqversion{3}{4}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -260,9 +260,17 @@ Free and open-source under the MIT license. Ethos is infrastructure, designed fo
 \end{faqpair}
 
 \begin{faqpair}{What happens to my data?}\label{faq:data}
-All data is local:
-{\small\texttt{\textasciitilde/.punt-labs/ethos/}}.
-No server, no telemetry, no cloud sync. Identity files are plain YAML, human-readable, editable with any text editor. Mission contracts and audit logs are local JSONL. The privacy surface is equivalent to
+Ethos has no server, no telemetry, and no cloud sync. Nothing leaves your machine except through git, which you control. Where data is stored depends on what it is:
+
+\begin{itemize}[nosep]
+  \item \textbf{In the repository, traveling with git.} The identity graph (identities, personalities, writing styles, talents, roles, teams) and the mission blame record: each mission's contract, structured result, and delegation records, plus the {\small\texttt{missions.jsonl}} trace log. Identity files are plain YAML, editable with any text editor.
+  \item \textbf{On your machine only.} Live session state and the trace tier: delegation prompts, reflections, mission event logs, and per-tool-call audit records. These stay under {\small\texttt{.punt-labs/local/}} unless you opt in (see \faqref{faq:audit-trails}).
+  \item \textbf{In your home directory.} Global starter content (roles, talents, pipelines, team bundles) lives in {\small\texttt{\textasciitilde/.punt-labs/ethos/}}.
+\end{itemize}
+
+\textbf{In progress.} This split is decided (DES-079) but not yet implemented: today the sealed trace chunks are still committed by default. Also decided and in progress (DES-080): every writer that puts a file in a git-tracked path will redact absolute paths, email addresses, and credentials, and will refuse the write if it cannot. Today some writers do not. Redaction is pattern-based and is a backstop. Contracts and commands should not contain credentials.
+
+The repository record has the privacy of the repository. Machine-local data has the privacy of
 {\small\texttt{\textasciitilde/.gitconfig}}. 90\% of organizations see local storage as inherently safer, and 64\% worry about sharing sensitive data with cloud GenAI tools~\cite{cisco2025privacy}.
 \end{faqpair}
 
@@ -395,9 +403,9 @@ None. Ethos is a standalone Go binary with zero runtime dependencies. It does no
 \begin{faqpair}{What is the development status?}
 v4.9.0 shipped. 45 KLOC production Go, 65 KLOC tests, golangci-lint clean.
 
-\textbf{Shipped (v4.9.0):} Identity, sessions, persona animation, teams, roles, anti-responsibilities, all~7 workflow primitives, safety constraints, audit logging (live write path plus committed sealed chunks), ADRs, archetypes, import\slash export, team bundles with three-layer resolution, foundation and gstack bundles, the CEO/COO default team structure (human CEO, {\small\texttt{claude}} COO), {\small\texttt{ethos setup}} wizard, CLI-only install ({\small\texttt{--no-plugin}}), the {\small\texttt{schema}} subcommand ({\small\texttt{ethos identity\slash role\slash team schema}}), 13 pipeline templates, mission dispatch one-liner, automatic mission traceability, self-standing repos ({\small\texttt{ethos vendor}}, {\small\texttt{resolution: repo-only}}, ext {\small\texttt{.local}}), committed-PII redaction, the mission-lifecycle-cluster correctness fixes, PR/FAQ pipeline integration (LaTeX output, meeting personas, peer review).
+\textbf{Shipped (v4.9.0):} Identity, sessions, persona animation, teams, roles, anti-responsibilities, all~7 workflow primitives, safety constraints, audit logging (live write path plus sealed chunks; committed by default today, moving to machine-local under DES-079), ADRs, archetypes, import\slash export, team bundles with three-layer resolution, foundation and gstack bundles, the CEO/COO default team structure (human CEO, {\small\texttt{claude}} COO), {\small\texttt{ethos setup}} wizard, CLI-only install ({\small\texttt{--no-plugin}}), the {\small\texttt{schema}} subcommand ({\small\texttt{ethos identity\slash role\slash team schema}}), 13 pipeline templates, mission dispatch one-liner, automatic mission traceability, self-standing repos ({\small\texttt{ethos vendor}}, {\small\texttt{resolution: repo-only}}, ext {\small\texttt{.local}}), committed-PII redaction, the mission-lifecycle-cluster correctness fixes, PR/FAQ pipeline integration (LaTeX output, meeting personas, peer review).
 
-\textbf{In progress:} Per-agent mission memory: quarry already supports agent-scoped {\small\texttt{remember}} and {\small\texttt{find}}. Remaining: ethos-side hooks for mission-close takeaways and mission-dispatch prior-work search (ethos-d17).
+\textbf{In progress:} Per-agent mission memory: quarry already supports agent-scoped {\small\texttt{remember}} and {\small\texttt{find}}. Remaining: ethos-side hooks for mission-close takeaways and mission-dispatch prior-work search (ethos-d17). Git tiers (DES-079, ethos-g3g3): the blame tier is tracked by default and the trace tier moves to machine-local storage with opt-in export. Redaction of paths, email addresses, and credentials in every git-tracked writer (DES-080, ethos-3e3f). Both are decided, not shipped.
 
 Remaining work is integration-driven: ethos-side hooks for quarry agent memory, and third-party tool integrations. Customer validation interviews are the next adoption gate.
 \end{faqpair}
@@ -409,9 +417,11 @@ Ethos is a local tool: no server, no database. Scaling means identities on one m
 \begin{faqpair}{How does ethos capture intent and maintain audit trails?}\label{faq:audit-trails}
 Three layers, each independent:
 
-\textbf{Git (durable, shared).} Mission contracts, structured results, typed ADRs, the mission trace log, and sealed per-tool-call audit chunks live under {\small\texttt{.punt-labs/ethos/}} in the repository. The contract captures intent before delegation: what was specified, what files are owned, what success looks like. The result captures outcome: what was delivered, what passed, what didn't. ADRs capture design decisions with a status lifecycle (proposed $\to$ settled $\to$ superseded), rejected alternatives, and links to the missions where decisions were made~\cite{promptpals2026adrsai}. A pre-commit hook seals pending audit lines into immutable, timestamp-named chunks so the tool-call record lands in the same commit as the work. All travel with the code in version control.
+\textbf{Git (durable, shared): the blame tier.} Commit trailers ({\small\texttt{Mission:}}, {\small\texttt{Delegation:}}), mission contracts, structured results, delegation records, the {\small\texttt{missions.jsonl}} trace log, and typed ADRs live in the repository. The contract captures intent before delegation: what was specified, what files are owned, what success looks like. The result captures outcome: what was delivered, what passed, what didn't. ADRs capture design decisions with a status lifecycle (proposed $\to$ settled $\to$ superseded), rejected alternatives, and links to the missions where decisions were made~\cite{promptpals2026adrsai}. Together with {\small\texttt{git blame}}, these answer which mission, agent, and contract produced a line. All travel with the code in version control and are tracked automatically.
 
-\textbf{Local (operational).} While a session runs, per-tool-call audit lines write to a machine-local, gitignored live file (so a repo with an active session keeps a clean {\small\texttt{git status}}); the pre-commit seal promotes them into the git layer. Per-mission event JSONL logs stay on the developer's machine for debugging and post-mortems.
+\textbf{Local (operational): the trace tier.} While a session runs, per-tool-call audit lines write to a machine-local, gitignored live file (so a repo with an active session keeps a clean {\small\texttt{git status}}). The pre-commit seal turns them into immutable, timestamp-named chunks. Delegation prompts, reflections, mission event logs, and sealed audit chunks form the trace tier, which stays on the developer's machine by default for debugging and post-mortems. It enters git only by choice: {\small\texttt{ethos mission export <id> --full}} promotes one mission's trace tier, and {\small\texttt{record: full}} in the repo config promotes all of them. Either way the content passes through the redactor first.
+
+\textbf{In progress.} This two-tier split is decided (DES-079, DES-080) but not yet implemented. Today the sealed audit and event-log chunks are still committed by default, and some writers do not yet redact. Existing chunks stay in git history.
 
 \textbf{Quarry (optional, semantic).} When Quarry is installed, conversation transcripts are captured before context compaction and tagged with the active mission ID. Semantic search across sessions finds the reasoning behind decisions: ``why did we choose conventions over enforcement?'' retrieves the conversation where DES-041 was discussed. Quarry adds the unstructured ``why'' layer that structured artifacts cannot capture.
 
@@ -452,7 +462,7 @@ Two strategic exclusions deserve explanation (see also \featureref{feat:no-runti
 
 \textbf{Runtime enforcement.} Write-sets are conventions: declared in the mission contract, surfaced to the agent, and verified in review. Ethos does not enforce them at the filesystem level. This is deliberate. Agent runtimes (Claude Code, Codex CLI) do not expose a sandboxing API today. Building kernel-level containment would mean shipping a sandbox product, not an identity product; a different problem with different customers. If agent runtimes add scoped filesystem access in the future, ethos can emit the constraints for them to enforce. Until then, convention-plus-review is the only mechanism that works across all runtimes.
 
-\textbf{Cloud sync.} All identity and mission state is local. This blocks the most obvious enterprise adoption path (centralized team management, SSO-provisioned identities) but keeps the tool simple, private, and zero-dependency. The tradeoff is intentional: local-only means no authentication, no trust model, no server infrastructure, and no data privacy concerns. If enterprise demand materializes and requires centralized identity, the right answer is a separate sync layer that reads ethos's local state, not cloud features grafted onto the core binary.
+\textbf{Cloud sync.} Ethos has no server. The identity graph and the mission blame record live in the repository and reach other machines only through git; live session state and the trace tier stay on the developer's machine (\faqref{faq:data}). A team service (ethosd) is under design in DES-081 and is not part of this PR/FAQ's scope until it is amended. This blocks the most obvious enterprise adoption path (centralized team management, SSO-provisioned identities) but keeps the tool simple, private, and zero-dependency. The tradeoff is intentional: local-only means no authentication, no trust model, no server infrastructure, and no data privacy concerns. If enterprise demand materializes and requires centralized identity, the right answer is a separate sync layer that reads ethos's local state, not cloud features grafted onto the core binary.
 \end{faqpair}
 
 \begin{faqpair}{Why now?}
@@ -481,7 +491,7 @@ Five shifts converged:
 \midrule
 Value      & \textcolor{RiskAmber}{Medium} & The identity gap is structurally confirmed (253 CLAUDE.md files, 466 SoulSpec projects, OWASP top 10). The delegation gap is confirmed (93\% unscoped credentials, 48.9\% blind to M2M traffic). The combined product (identity + workflow + integration in one layer) is untested with customers. SoulSpec validates identity demand but only for agents. Missions validated in practice (12m55s end-to-end) but not by external users. The ``pull'' signal is untested: do developers want a unified layer, or do they expect identity and delegation from separate tools? \\
 Usability  & \textcolor{RiskAmber}{Medium} & Identity onboarding is simple (three commands, five minutes). The mission workflow introduces 7 primitives that have not been tested with external users. The live example demonstrates feasibility, not usability; it was operated by the builder. \\
-Feasibility & \textcolor{RiskGreen}{Low} & Shipped through v4.9.0. 45 KLOC production Go, 65 KLOC tests, golangci-lint clean. All 7 workflow primitives, 7 lifecycle hooks, audit logging (live plus sealed), safety constraints, team bundles, setup wizard, 13 pipeline templates, 10 archetypes, and 2 embedded bundles are implemented and tested. Self-standing repos ({\small\texttt{ethos vendor}}, repo-only resolution) ship in v4.9.0. No unsolved technical problems. \\
+Feasibility & \textcolor{RiskGreen}{Low} & Shipped through v4.9.0. 45 KLOC production Go, 65 KLOC tests, golangci-lint clean. All 7 workflow primitives, 7 lifecycle hooks, audit logging (live plus sealed; the git-tier change in DES-079 is in progress), safety constraints, team bundles, setup wizard, 13 pipeline templates, 10 archetypes, and 2 embedded bundles are implemented and tested. Self-standing repos ({\small\texttt{ethos vendor}}, repo-only resolution) ship in v4.9.0. No unsolved technical problems. \\
 Viability  & \textcolor{RiskAmber}{Medium} & Ethos is free infrastructure whose viability depends on adoption and downstream tool value. Maintenance cost is low (40--80 hrs/year). If SoulSpec captures agent identity and a dominant tool ships native delegation, both pillars face competition. The cross-tool integration pattern is the most defensible value: it is the only structural advantage that requires a shared layer rather than per-tool features. \\
 \bottomrule
 \end{tabularx}
@@ -510,7 +520,7 @@ Three scenarios would cause ethos to fail:
   \featureitem{Identity CRUD}{create, read, update, delete personas: same schema for humans and agents}\label{feat:crud}
   \featureitem{Persona animation}{SessionStart, PreCompact, and SubagentStart hooks inject personality, writing style, and talents automatically}\label{feat:animation}
   \featureitem{Teams and roles}{team graph with collaboration edges, role-based tool restrictions, anti-responsibility derivation from reports\_to edges}\label{feat:teams}
-  \featureitem{Agent file generation}{SessionStart generates .claude/agents/<handle>.md from identity, personality, role, and team data}\label{feat:agentgen}
+  \featureitem{Agent file generation}{SessionStart generates .claude/agents/<handle>.md from identity, personality, role, and team data. The generated files are committed so a fresh clone has its agents before the first session, and generation is deterministic so a diff means the source changed. {\small\texttt{ethos doctor}} failing on drift is decided (DES-079), not yet shipped}\label{feat:agentgen}
   \featureitem{Mission contracts}{typed delegation with leader, worker, evaluator, write-set, success criteria, and round budget}\label{feat:missions}
   \featureitem{Write-set admission}{segment-prefix conflict scan refuses overlapping file claims between open missions}\label{feat:writeset}
   \featureitem{Frozen evaluator}{sha256 content hash pinned at mission launch; SubagentStart refuses verifier spawns if the hash drifts}\label{feat:frozen}
@@ -529,7 +539,7 @@ Three scenarios would cause ethos to fail:
   \featureitem{Lossy export}{{\small\texttt{ethos export --to soulspec|claude-md}} compiles identities to portable formats. Structural data drops; the loss signals what ethos adds}\label{feat:lossy-export}
   \featureitem{SoulSpec and CLAUDE.md ingestion}{{\small\texttt{ethos import --from soulspec}} reads SoulSpec files and creates a hardened ethos identity. LLM-assisted {\small\texttt{ethos create}} fine-tunes starter content from existing CLAUDE.md}\label{feat:importers}
   \featureitem{Typed ADRs}{Architecture Decision Records as ethos artifacts with schema validation, lifecycle status (proposed/settled/superseded), CLI, and MCP tool~\cite{promptpals2026adrsai}}\label{feat:typed-adrs}
-  \featureitem{Git-tracked mission export}{{\small\texttt{ethos mission export}} copies contracts and results to the repo for version control. Lightweight alternative to Entire.io's checkpoint branch~\cite{entireio2026docs}}\label{feat:git-missions}
+  \featureitem{Git-tracked mission export}{{\small\texttt{ethos mission export}} copies a mission's records to the repo for version control. Under DES-079 (in progress) the blame tier (contract, results, delegation records, {\small\texttt{missions.jsonl}}) is tracked automatically, and export becomes the trace-tier opt-in: {\small\texttt{ethos mission export <id> --full}} promotes one mission's prompts, reflections, event log, and audit chunks, after redaction. Lightweight alternative to Entire.io's checkpoint branch~\cite{entireio2026docs}}\label{feat:git-missions}
   \featureitem{Integration guides}{filesystem, CLI, and MCP guides with working examples for third-party tools}\label{feat:guides}
   \featureitem{Team bundles}{config-driven switchable starter teams. Three-layer resolution: repo-local $\to$ active bundle $\to$ global. {\small\texttt{ethos team activate/deactivate/available}} ({\small\texttt{migrate}} shipped here too but removed post-ship, see DESIGN.md's DES-051 reversal note)}\label{feat:bundles}
   \featureitem{Foundation bundle}{general-purpose team for any codebase: a CEO/COO leadership pair (human CEO, {\small\texttt{claude}} COO) over 4 specialists (architect, implementer, reviewer, security) that report to the COO. Language-agnostic. Ships embedded alongside gstack}\label{feat:foundation}
@@ -540,7 +550,7 @@ Three scenarios would cause ethos to fail:
   \featureitem{PR/FAQ pipeline integration}{product pipeline's prfaq stage invokes the full Working Backwards workflow: research, structured discovery, meeting personas, peer review, LaTeX output}\label{feat:prfaq-integration}
   \featureitem{Release externalization}{{\small\texttt{/prfaq:externalize}} generates a release-scoped press release from CHANGELOG entries}\label{feat:externalize}
   \featureitem{Self-standing repos}{{\small\texttt{ethos vendor}} snapshots a resolvable identity set into the repo (following team-membership edges to a fixed point, planning by default); {\small\texttt{resolution: repo-only}} drops the global fallback so a missing reference is a hard error, not silent home-directory resolution; {\small\texttt{<handle>.ext/<ns>.local.yaml}} keeps secrets out of git. {\small\texttt{ethos doctor}} is the completeness gate}\label{feat:self-standing}
-  \featureitem{Sealed audit record}{per-tool-call audit lines write to a gitignored live file during a session and seal into immutable, timestamp-named chunks at pre-commit, so the audit trail lands in the same commit as the work and merges without conflict}\label{feat:sealed-audit}
+  \featureitem{Sealed audit record}{per-tool-call audit lines write to a gitignored live file during a session and seal into immutable, timestamp-named chunks at pre-commit, which merge without conflict. Today the chunks are committed with the work. Decided and in progress (DES-079): the seal writes to a machine-local archive under {\small\texttt{.punt-labs/local/}} by default, and chunks reach git only through {\small\texttt{ethos mission export --full}} or {\small\texttt{record: full}}}\label{feat:sealed-audit}
 \end{enumerate}
 
 \subsection*{Should Do}
@@ -548,13 +558,14 @@ Three scenarios would cause ethos to fail:
 \begin{enumerate}[nosep,leftmargin=2.5em]
   \featureitem{Per-agent mission memory (ethos hooks)}{quarry already supports agent-scoped {\small\texttt{remember}} and {\small\texttt{find}} with {\small\texttt{agent\_handle}}. Remaining: ethos-side hooks: mission close prompts the agent for takeaways, mission dispatch searches the agent's collection for prior work}\label{feat:agent-memory}
   \featureitem{Quarry transcript tagging}{conversation transcripts captured before context compaction are tagged with the active mission ID. Semantic search retrieves the reasoning behind specific missions}\label{feat:quarry-tag}
+  \featureitem{Storage interface with an embedded local backend (ethos 2.0)}{runtime state moves behind one storage interface with an embedded local database per developer machine, replacing file locks and per-session sidecars with transactions. No daemon. The identity graph stays YAML in the repository. Proposed in DES-081; design only, nothing implemented}\label{feat:storage-interface}
 \end{enumerate}
 
 \subsection*{Won't Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Cloud sync or remote identity}{ethos is local-only. Remote identity introduces trust, authentication, and privacy concerns that are out of scope for this layer.}\label{feat:no-remote}
-  \featureitem{Authentication or authorization}{ethos provides identity (who is this?), not access control (what can they do?). A different layer.}\label{feat:no-auth}
+  \featureitem{Cloud sync or remote identity}{ethos is local-only. Remote identity introduces trust, authentication, and privacy concerns that are out of scope for this layer. A team service (ethosd) is under design in DES-081; this item changes only through an amendment to this PR/FAQ.}\label{feat:no-remote}
+  \featureitem{Authentication or authorization}{ethos provides identity (who is this?), not access control (what can they do?). A different layer. A team service (ethosd) is under design in DES-081; this item changes only through an amendment to this PR/FAQ.}\label{feat:no-auth}
   \featureitem{Consumer-specific fields}{the extension model exists for per-tool data. Ethos will never add fields for one consumer.}\label{feat:no-consumer}
   \featureitem{Runtime delegation enforcement}{write-set and safety constraints are surfaced to the agent and verified in review, not enforced at the filesystem level. Kernel-level sandboxing is a different product.}\label{feat:no-runtime-enforce}
   \featureitem{Telemetry or analytics}{no usage data collected. Metrics measured externally.}\label{feat:no-telemetry}
