@@ -12341,9 +12341,11 @@ is kept and complete) and the operator-claim trace (C17: the call dead after
 the skeleton, an operator claims the skeleton's mission, the next call adopts
 the skeleton; N21 applies where the call died before its binding). A next
 call that finds the claim at step 2 of the read phase takes the claimed case.
-Both refused variants, Copilot's trace and the operator-claim trace, are
-induced by removing or corrupting the child's roster after the crash or after
-the operator claim (N22).
+Copilot's refused variant is induced by removing or corrupting the child's
+roster after the Tier B dispatch, not after the crash: removing it earlier
+makes the dispatch refuse via `RefuseIfSessionGone`, and the binding is never
+replaced. The operator-claim refused variant is induced by removing or
+corrupting the child's roster after the operator claim (N22).
 (29) *Reconcile paths.* `fixSupersede` applies on the fresh
 and resume paths only; the resume clause is defensive and unexercised. The
 resume path takes the mission and delegation locks and re-reads the mission
@@ -12667,10 +12669,9 @@ Full writeups, including two historical exploit traces, are in
   claim: the adoption of a skeleton by an operator claim is a ruling of the
   leader, not a result of the model (N21). The model's refusal needs only
   that the child has no pending stage, so it reaches a refusal with a claim in
-  hand. The design does so in cases such as a child roster missing or
-  unreadable at the read phase or at write-phase `RefuseIfSessionGone`, or a
-  claim written after the step-2 read and before the dispatch-pending lock; the
-  list is not exhaustive (N22). Rows ending in a refusal depend on N22;
+  hand. The design does so in cases such as, for example, the child roster
+  missing or unreadable at the read phase, whose exit reconciles in refusal
+  form with the claim in hand; the list is not exhaustive (N22). Rows ending in a refusal depend on N22;
   claimed-case rows do not. The model has
   uniqueness because every operation leaves `used` unchanged or grows it
   (`LcCfAlloc`, `LcTierBDispatch`), each allocates only an id not in `used`

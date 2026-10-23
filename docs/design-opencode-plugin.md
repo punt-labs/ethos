@@ -1622,9 +1622,8 @@ skeleton's abandonment. The leader's ruling is to adopt (§5 point 2 item 5).
 N22, `LcCfRefuse` over-approximates the read phase: its guard is only that the
 child has no pending stage, so the model reaches a refusal while the child holds
 a claim. The design reaches one in cases such as these, and the list is not
-exhaustive: the child roster is missing or unreadable at the read phase, or at
-`RefuseIfSessionGone` of the write phase; or a claim is written after the
-step-2 read and before the dispatch-pending lock. The rows whose counterexample
+exhaustive: for example, the child roster missing or unreadable at the read
+phase, whose exit reconciles in refusal form with the claim in hand. The rows whose counterexample
 or kill ends in a refusal depend on N22; the claimed-case rows do not. The
 invariants that hold with `LcCfRefuse` in the slice hold of the larger
 behaviour (spec N22).
@@ -2664,10 +2663,13 @@ pipeline stage's write-set is unambiguous:
         reach the reconcile of the claimed case. The refused variant of each
         (the Copilot trace and the operator-claim trace, each ending in a
         refused `claim-forked`) cannot be reached that way, because step 2
-        reads the claim first. Both refused variants, the Copilot trace and
-        the operator-claim trace, are induced by removing or corrupting the
-        child's roster after the crash or after the operator claim, so that
-        the call is refused with the claim in hand (spec N22). The
+        reads the claim first. The Copilot trace's refused variant is induced
+        by removing or corrupting the child's roster after the Tier B
+        dispatch, not after the crash: removing it earlier makes the dispatch
+        refuse via `RefuseIfSessionGone`, and the binding is never replaced.
+        The operator-claim trace's refused variant is induced by removing or
+        corrupting the child's roster after the operator claim, so that the
+        call is refused with the claim in hand (spec N22). The
         expected outcome of both is the same: the skeleton is open after the
         call and the record is kept and complete. Also tested: a Tier B
         dispatch by a propagated child over its completed fork claim, then

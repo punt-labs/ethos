@@ -2431,8 +2431,11 @@ every roster is gone, which is not a violation. The invariant schemas are
 deleted only because they are not operations and the goals below replace
 them. By the convention of \S\ref{sec:lc-method} every state predicate is a
 \texttt{-goal}; the \texttt{GOAL}s, in B, are the negations of the invariant
-schemas, with one exception: \texttt{G\_orph\_nb}, at the end of the list, is
-a narrowed goal and not the negation of an invariant schema:
+schemas, with three exceptions that are not negations of an invariant
+schema: \texttt{G\_orph\_nb}, at the end of the list, is a narrowed
+\texttt{NoOrphanOpenSkeleton} goal; \texttt{Own} checks that a record names
+only a skeleton its own call wrote; and \texttt{Adopt} is a reachability goal,
+whose counterexample shows that a state is reachable:
 
 \begin{verbatim}
 LineageStable        not(!s.(s:roster => (s:dom(sealed) & sealed(s)=parentSide[{s}])))
@@ -3181,7 +3184,7 @@ DES-078 is to be brought into line at these places.
     then a reconciled \field{claim-forked} (the claimed case): the skeleton is
     open after the call and the record is kept and complete. The refused
     variant of the same trace is induced by removing or corrupting the child's
-    roster after the crash, so that the call is refused with the claim in
+    roster after the Tier B dispatch, so that the call is refused with the claim in
     hand; the skeleton is again open and the record kept and complete. A second required
     test pins the consequence stated in N21: an operator claim of the
     skeleton's mission, made after a call that died before it wrote the
@@ -3329,10 +3332,9 @@ satisfy the invariant.
 (N22) \field{LcCfRefuse} over-approximates the read phase of the design. Its
 guard is $c?\notin\dom\field{stage}$ and nothing more, so the model reaches a
 refusal while the child holds a claim. The design reaches one in cases such as
-these, and the list is not claimed to be exhaustive: the child roster is
-missing or unreadable at the read phase, or at \field{RefuseIfSessionGone} of
-the write phase; or a claim is written after the read of step~2 and before the
-dispatch-pending lock. The rows whose counterexample or kill ends in a refusal
+these, and the list is not claimed to be exhaustive: for example, the child
+roster missing or unreadable at the read phase, whose exit reconciles in
+refusal form with the claim in hand. The rows whose counterexample or kill ends in a refusal
 depend on N22. The claimed-case rows do not (\texttt{C17\_off\_nr},
 \texttt{C17\_off\_nrf}, \texttt{Alt\_lfa\_nrf}, \texttt{Alt\_lfa\_nr}, and
 \texttt{MutClaimLiveClaimed}). The ruling to ship \field{fixClaimLive} and the
