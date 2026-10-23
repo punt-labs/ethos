@@ -1,0 +1,28 @@
+mission_id: m-2026-10-23-015
+status: closed
+type: design
+created_at: "2026-10-23T05:54:24Z"
+updated_at: "2026-10-23T08:57:03Z"
+closed_at: "2026-10-23T08:57:03Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-10-23T05:54:24Z"
+    hash: cb72d896b7903fe779161f618fca5457e70caa42cc185a48becab0ab2731815a
+inputs:
+    ticket: ethos-5y4r
+write_set:
+    - docs/spec-opencode-lifecycle.tex
+success_criteria:
+    - 'Reproduce Copilot''s counterexample (PR #536 threads on docs/spec-opencode-lifecycle.tex:1235 and docs/design-opencode-plugin.md:2561): with all sixteen switches on, LcCfWriteClaim, LcCfCrash (before LcCfFinish), LcTierBDispatch for the child, LcCfBegin, LcCfReconcileClaimed aborts the fork skeleton and removes its record although the child''s claim still names the fork''s mission. Record the probcli command, states, depth, trace.'
+    - 'Add an independent invariant (e.g. NoLiveForkAborted, ghost liveForkAborted) that does NOT reuse the binding-or-complete liveness predicate: no open dkFork skeleton owned by c is aborted while c''s claim names that skeleton''s mission (claimed(c) = dMis(d)). Show it detects the trace with the current text, and that LiveSpared does not.'
+    - 'Leader decision, fix direction: Tier B dispatch stays unchanged (C12 ruling). A fork record whose claim has committed is live while the child''s claim names the skeleton''s mission, whatever the binding names. Introduce switch fixClaimLive amending the liveness predicate used by reconcile, refuse, release and the leaked/liveAborted ghosts. If the model shows this fix unsound (any invariant breaks, or a stale-record leak appears because a pre-claim claim for the same mission can exist), model Copilot''s alternative (finalise a matching incomplete record under the dispatch-pending lock in LcTierBDispatch) as the fallback and report both; do not choose between them silently.'
+    - 'With the fix on, re-run every invariant on every exhaustive slice (claim, claim+, claim-u, claim+u) and the new invariant; kill a mutant per new fix; record the counterexample with the switch off. Update ledger (new C17), consequences (the design sections that must change: incomplete-record liveness rule, reconcile rules), limits, results table, and every switch/counterexample count.'
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: `git commit -m <msg> -- docs/spec-opencode-lifecycle.tex`. Never stage, unstage, restore, or commit any other file.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'PR #536 review-cycle defect found by Copilot on head 036a5da. Branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. Harness: .tmp/lc3/. Every criterion is a leader decision; if the model shows one impossible, stop and report.'

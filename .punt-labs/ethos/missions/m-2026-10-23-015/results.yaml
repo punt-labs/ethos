@@ -1,0 +1,52 @@
+results:
+    - mission: m-2026-10-23-015
+      round: 1
+      created_at: "2026-10-23T08:28:55Z"
+      author: jms
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 440
+          removed: 148
+      evidence:
+        - name: 'Reproduction (C17): claim+ without LcOperatorClaim and LcCfRefuse, all sixteen old switches, goal liveForkAborted /= {} (row C17_off_nr): counterexample, 11618 states, depth 13: CfBegin, ReconcileFresh, Alloc, WriteRecord, WriteSkeleton, WriteBinding, WriteClaim, CfCrash, TierBDispatch(b,m1,d2), CfBegin, ReconcileClaimed. With the refusal (C17_off_noop) depth 12; with the operator claim (C9_lfa_off) a shorter trace, depth 10, 48840 states: crash after skeleton, OperatorClaim(b,m1), CfRefuse.'
+          status: pass
+        - name: 'Independent invariant NoLiveForkAborted (ghost liveForkAborted, five claim-forked operations; reads claimed'', dOwn, dKind, dMis and the open-to-aborted transition only) detects the trace; LiveSpared, ReconcileOnExit, NoOrphanOpenSkeleton and WellFormed hold with the switch off (C17_live_off, C17_leak_off, C17_orph_off, C17_wf_off: claim+ 314389 states all visited)'
+          status: pass
+        - name: 'fixClaimLive (leader''s fix) holds: NoLiveForkAborted on claim 19481, claim+ 271253, claim-u 134433, claim+u 534201 states, all visited; and on the two slices without an operator claim. Every invariant re-run on every exhaustive slice with the switch on; all 130 prior rows have the same outcome (no flip), 65 same states and depth. 163 rows in all, run on the committed model text (environments identical to commit 9a768e7)'
+          status: pass
+        - name: 'Mutants killed: MutClaimLiveClaimed (depth 11, 60622 states) and MutClaimLiveRefuse (depth 10, 48840) by NoLiveForkAborted'
+          status: pass
+        - name: 'Fallback modelled (Copilot''s alternative, ten Alt_* rows): closes Copilot''s trace (Alt_lfa_noop holds, 20149 states) but not the operator-claim trace (Alt_lfa fails at depth 10); other invariants hold. Reported, not chosen'
+          status: pass
+        - name: 'Finding: fixClaimLive presupposes fixDurableName: with the record not durable it adopts the skeleton and removes its only name (C17_nodur, depth 10). Isolating rows C12_off, C9_nosup, Fa_orph_norel run with fixClaimLive off so the ledger traces stand'
+          status: pass
+        - name: 'Finding: with the fix the binding and complete-mark tests are subsumed by the claim test for any skeleton a record names (Own_all holds, 271253 states); adoption without a binding (N21) is a state already reachable without adoption (Adopt_off, depth 13)'
+          status: pass
+        - name: make check exit 0 before each of commits e180977, 9a768e7, 02fe13e; fuzz clean; pdflatex compiles; z-spec test setsize 1 unchanged (6496 states, 213008 transitions)
+          status: pass
+      open_questions:
+        - 'Operator claim of the skeleton''s mission after a call that died before the binding: fixClaimLive adopts the skeleton (open, complete record, no binding); the review''s alternative aborts it. The model cannot tell the claim claim-forked writes from the operator''s. Which is intended is the leader''s decision (N21).'
+      prose: |
+        Three commits on design/opencode-plugin-adapter, explicit path: e180977 (ghost and invariant), 9a768e7 (switch fixClaimLive), 02fe13e (ledger C17, tables, prose, N21). The ethos pre-commit hook added audit and mission-log chunks to commits e180977 and 02fe13e; none staged by me. Harness: .tmp/lc3 (rows6.txt, exp3.sh, table6.py, mutC1.py, mutC2.py, mutAlt.py).
+    - mission: m-2026-10-23-015
+      round: 2
+      created_at: "2026-10-23T08:56:39Z"
+      author: jms
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/spec-opencode-lifecycle.tex
+          added: 21
+          removed: 7
+      evidence:
+        - name: 'F1: C16 now says eight invariants then defined, nine since C17 (NoLiveForkAborted) on U1_*_all, U2_*_all'
+          status: pass
+        - name: 'F2: ghost scope stated (five instrumented operations); LcCfAbort omitted safely: requires stage 3-5, before claim write at stage 6, and LcOperatorClaim requires s? not in dom stage'
+          status: pass
+        - name: 'Leader rulings recorded in N21 and the consequences bullet: fixClaimLive and fixDurableName ship together; binding and complete-mark tests defensive, unexercised by model; adopt on operator claim, release or clearing closes'
+          status: pass
+        - name: make check exit 0; model environments unchanged
+          status: pass
+      prose: One commit 01a1d22, explicit path, not pushed. Hook added audit chunks, not staged by me.
