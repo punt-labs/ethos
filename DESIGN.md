@@ -12312,7 +12312,11 @@ before it writes (C15). Release and close-time clearing close what they
 unname (C11) and must hold the child's dispatch-pending lock around the whole
 close, unname, clear sequence (spec N16). (30) *`SessionStart` and `ensure`.*
 Claude Code `SessionStart` for every source goes through `Store.Ensure`
-without `touch` (C13), and `ensure --touch` does not refresh a roster that
+without `touch` (C13); on an existing roster that call also updates the
+primary participant to the current `CLAUDE_PID` under the roster lock, so a
+resumed session is not purged as stale while live, and never changes the
+`parent-session` sidecar or `last-seen` (outside the model, which holds the
+participant kind fixed across `SessionStart`), and `ensure --touch` does not refresh a roster that
 fails to load. (31) *Closes and statuses.* Every skeleton close is a
 compare-and-set on verdict `open` under the delegation lock, the `Store.Close`
 sweep included (C14). The exit-status table gains rows for I/O errors on the

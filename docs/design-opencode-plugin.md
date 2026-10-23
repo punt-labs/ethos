@@ -819,17 +819,24 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   that exists but does not parse is a no-op under `Ensure`, where
   `CreateInCheckout` rewrote it. The purge reclaims such a roster, and
   whether the hook should heal it is not decided here.
-  **Limit (not modelled).** A resumed session gets a new `claudePID`, and
-  `CreateInCheckout` recorded it as the roster's numeric primary
-  participant. Under `Ensure` an existing roster is left as it is, so a
-  session whose `SessionEnd` never ran (a crash) and is then resumed keeps
-  the old, dead primary id, and `isStale` treats the roster as stale by its
-  PID branch (`store.go:950-956`) while the new process is alive. The model
-  holds the participant kind fixed across `SessionStart` (spec
-  `LcSessionStart`, `rkind' = rkind`) and does not examine this. The
-  implementation stage must decide whether the hook refreshes the primary
-  participant of an existing Claude Code roster, and it is escalated to the
-  leader with this design.
+  **The primary participant is refreshed on an existing roster (round 9,
+  leader decision; outside the model).** A resumed session gets a new
+  `claudePID`, and `CreateInCheckout` recorded it as the roster's numeric
+  primary participant on every `SessionStart`. Under create-if-absent
+  `Ensure` an existing roster would keep the old, dead id, and `isStale`
+  would treat the roster as stale by its PID branch (`store.go:950-956`)
+  while the new process is alive: a regression this design would introduce.
+  The `Ensure` call that `SessionStart` makes, for any source, therefore
+  also **updates the primary participant of an existing roster to the current
+  `CLAUDE_PID`, under the roster lock** (`Ensure`'s `withLock`). It touches
+  nothing else: never the `parent-session` sidecar, never `last-seen`, and it
+  never writes `touch`. Lineage stays safe because it lives in the sidecar,
+  not the roster. The OpenCode plugin and the CLI `ensure` do not pass this
+  refresh. The spec holds the participant kind fixed across `SessionStart`
+  (`LcSessionStart`, `rkind' = rkind`), so this is not modelled (§2.7).
+  Required test: a roster whose primary participant is a dead numeric id,
+  resumed by a `SessionStart` from a live process, is not stale afterwards,
+  and its `parent-session` sidecar and `last-seen` are byte-identical.
 - **Repair.** A sidecar left behind with no roster (an older binary's
   `Delete` does not know to remove it, or a failure at step 7 of
   `deleteFiles`) is authoritative: `ensure` and
@@ -1363,7 +1370,11 @@ the `fork` source the hook then calls `claim-forked` (§5 point 2), the same
 two steps the OpenCode plugin takes on `session.forked`. The two steps run
 one after the other and are never nested (§5 point 2, lock constraint). The
 `SessionStart` path still writes the `CLAUDE_PID` pointer file
-(`session_start.go:196`) as it does today.
+(`session_start.go:196`) as it does today. On an existing roster, that
+`Ensure` call also sets the primary participant to the current `CLAUDE_PID`
+under the roster lock, so a resumed session does not keep its dead old id
+and get purged while live; it never changes the `parent-session` sidecar or
+`last-seen` and never writes `touch` (§2.1.1).
 **A fork whose parent has no roster (round 8).** The pointer file is written
 only after the roster was created (`session_start.go:194-197`), and `Ensure`
 refuses a first registration whose parent has no roster (§2.1.1 rule 1). A
@@ -1475,7 +1486,10 @@ item 1); N8, a live Claude Code session whose roster does not parse and has no
 `last-seen` is still purged (§2.1.1); N9 and N17, the Tier B dispatch is one
 atomic step and three of its paths are not represented (§5 point 2 item 5);
 N10, the compare-and-set is taken to be atomic as the delegation lock is; N11,
-a `SessionStart` for a roster that does not parse is a no-op (§2.1.1); N12,
+a `SessionStart` for a roster that does not parse is a no-op (§2.1.1); the
+primary-participant refresh of `SessionStart` on an existing roster is outside
+the model, which holds the participant kind fixed across `SessionStart`
+(§2.1.1); N12,
 the owner test of the origin filter is vacuous in the model, whose only
 writers of a binding are the session itself; N13, the dispatch-pending
 entries `ClearMissionBindings` clears and the MCP path that calls it are not
