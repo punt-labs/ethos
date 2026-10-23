@@ -2018,7 +2018,7 @@ assumed. The rest were not known.
     independent, \fpath{mission/active.go}:907--935). A second
     \field{claim-forked}: \field{LcCfBegin}$(b,a)$; reconcile (the record is
     gone); \field{LcCfAlloc}$(b,d_2)$; the writes up to
-    \field{LcCfWriteBinding} (run \texttt{T3\_nosup}, nineteen steps). The
+    \field{LcCfWriteBinding} (run \texttt{C9\_nosup}, nineteen steps). The
     binding now names $d_2$; $d_1$ is open, named by no record and no
     binding. \textbf{Errata (this revision).} The first statement of C9 reached
     the same state by \field{LcReleaseClaim} leaving the binding in place.
@@ -2027,8 +2027,8 @@ assumed. The rest were not known.
     (\fpath{cmd/ethos/mission.go}:2150--2153), so after a release there is no
     binding for a second propagation to overwrite. The state is reached by
     the close-time clearing above, which is why \field{fixSupersede} is
-    still needed (\texttt{T3\_nosup} counterexample, \texttt{T3\_all}
-    holds). \textbf{Amendment} \field{fixSupersede}, with its scope stated
+    still needed (\texttt{C9\_nosup} counterexample, \texttt{C9\_all}
+    holds). With the durable pending record of C12 the clearing closes the record-named skeleton itself, and the row without \field{fixSupersede} holds (\texttt{C9\_nosup\_dur}); the amendment is then redundant for this invariant. \textbf{Amendment} \field{fixSupersede}, with its scope stated
     exactly: it applies on the two reconcile paths that go on to write, that
     is \field{LcCfReconcileFresh} and \field{LcCfReconcileReuse}, whether or
     not a pending record exists, and on no other path. It closes the open
@@ -2047,7 +2047,7 @@ assumed. The rest were not known.
     leader's \emph{own} delegation binding, with \field{ParentSession} equal
     to the session itself, and leaves the skeleton open until
     \field{Store.Close} sweeps it. \field{LcTierBDispatch}$(s,m,d)$;
-    \field{LcDeleteSession}$(s,2)$ (run \texttt{T1\_off}, four steps, three
+    \field{LcDeleteSession}$(s,2)$ (run \texttt{F1D\_off}, four steps, three
     states). The step~1 of C5, which closes every open skeleton named by the
     session's binding, aborts $d$: a running subagent's delegation, which the
     leader's session ending (or being purged) does not end. The same happens
@@ -2065,12 +2065,13 @@ assumed. The rest were not known.
     unnames open.} \field{NoOrphanOpenSkeleton}; found by reading the
     release command that C9 had modelled wrongly. After a completed
     propagation, \field{LcReleaseClaim}$(b)$ clears the claim and the binding
-    and nothing closes $d_1$ (run \texttt{T2\_norel}: eleven steps). The
+    and nothing closes $d_1$ (run \texttt{Fa\_orph\_norel}: eleven steps). The
     skeleton is open, named by nothing, and the child that held it has no claim.
     \textbf{Amendment} \field{fixReleaseCloses}: \field{mission release} closes,
     \field{aborted}, the open \field{dkFork} skeleton owned by the session that
-    its binding names, before it clears the binding, under the same locks
-    as the other closes. A binding that names a Tier B skeleton is cleared
+    its binding names (and, with \field{fixDurableName}, the one its pending
+    record names, removing the record), before it clears the binding, under
+    the same locks as the other closes. A binding that names a Tier B skeleton is cleared
     and the skeleton is left open: it is a subagent's delegation.
   \item[\textbf{C12}] \textbf{A Tier B dispatch by a propagated child buries
     its fork skeleton.} \field{NoOrphanOpenSkeleton}. The child $b$ completes
@@ -2108,7 +2109,7 @@ assumed. The rest were not known.
     resumed, or compacted, and the hook, which for these sources is
     \field{createSessionRoster}, writes a new roster with no lineage over the
     sidecar that records one. \field{LcSessionStart}$(b,\mathit{fork},\{a\})$;
-    \field{LcSessionStart}$(b,\mathit{resume})$ (run \texttt{T4\_off}: with
+    \field{LcSessionStart}$(b,\mathit{resume})$ (run \texttt{S\_lin\_off}: with
     the first step an \field{LcEnsureCreate}, two). The roster says root, the
     sidecar says child. The design's remark that \field{Ensure} never
     overwrites a recorded lineage, ``so a repeated or resumed
@@ -2145,7 +2146,7 @@ assumed. The rest were not known.
     \field{LcCfBegin}; \field{LcCfReconcileFresh}; \field{LcCfAlloc};
     \field{LcCfWriteRecord}; \field{LcCfWriteSkeleton}; \field{LcCfCrash};
     \field{LcCfBegin}; \field{LcCfReconcileReuse}; \field{LcCfWriteBinding}
-    (run \texttt{T5\_off}): a write of the phase made with the step~5 locks
+    (run \texttt{Fa\_lockw\_off}): a write of the phase made with the step~5 locks
     not held. \textbf{Amendment} \field{fixReuseLocks}: the resume leaves the
     call at the stage before the allocation; \field{LcCfLockReuse} takes the
     locks and re-reads the mission (and the call exits ``do not retry'' if it
@@ -2163,8 +2164,8 @@ a run isolates it: \field{NoLiveSessionPurged} needs \field{fixStaleLive} and
 (\texttt{P\_stalelive}, \texttt{P\_corrupt});
 \field{NoOrphanOpenSkeleton} needs \field{fixDeleteCloses},
 \field{fixReleaseCloses} and \field{fixSupersede} for its literal form
-(\texttt{Fb2\_w}, \texttt{Fa\_orph\_norel}, \texttt{C9\_nosup}), and, until C12
-is decided, the assumption \field{assumeNoTierBOverFork};
+(\texttt{Fb2\_w}, \texttt{Fa\_orph\_norel}, \texttt{C9\_nosup}) or, since C12,
+instead of the last two, \field{fixDurableName};
 \field{ReconcileOnExit} needs \field{fixRefuseReconciles} and
 \field{fixInertBinding} (\texttt{Fa\_inert}, \texttt{Fa\_refuse}); and
 \field{SweepComplete} needs \field{fixDeleteCloses} with \field{fixPostCheck}
@@ -2583,7 +2584,7 @@ DES-078 is to be brought into line at these places.
     record, and never on a refusal or the claimed case. The trace is no longer
     ``completed propagation, release, second propagation'', since release
     clears the binding; it is a close-time clearing of another mission
-    (\texttt{T3\_nosup}).
+    (\texttt{C9\_nosup}).
   \item \S2.1.1 (``Existing creators respect the sidecar'') and \S2.5 (C13):
     \field{SessionStart} for \emph{every} source calls \field{Store.Ensure}
     without \field{--touch}, in process; the sources other than \field{fork}
@@ -2706,7 +2707,12 @@ whose only writers of a binding are the session itself; it is kept because
 the amendment is stated in terms of it.
 (N13) \field{ClearMissionBindings} is modelled for the closing session's
 claim and binding only; the dispatch-pending entries it clears, and the MCP
-path that calls it, are not represented. (N14) \field{LcSessionStart} for
+path that calls it, are not represented. (N15) The record's stage is one bit, complete or not; the record
+of the code also carries the delegation, mission and witness, which the model
+keeps in \field{pend}, \field{cfM} and \field{pendWit}, and the mission of a
+complete record is not re-checked against the claim except through
+\field{live}. A record that no longer parses while the claim lasts is outside
+the model (N3). (N14) \field{LcSessionStart} for
 the sources \field{startup} and \field{clear} adds nothing to
 \field{resume}: both name an id that has no roster unless it was registered
 by another channel. Time is three values with a threshold of one, and the
