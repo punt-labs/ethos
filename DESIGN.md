@@ -12319,7 +12319,7 @@ close, unname, clear sequence (spec N16). (30) *`SessionStart` and `ensure`.*
 Claude Code `SessionStart` for every source goes through `Store.Ensure`
 without `touch` (C13), passing a named option `refreshRoster` that no other
 caller passes: on an existing roster it rewrites the roster exactly as
-`CreateInCheckout` does today (personas, `Repo`, `Checkout`, `Host`,
+`CreateInCheckout` does today (personas, `Repo`, `Checkout`, `Host`, `Started`,
 participants reset, `Participants[1]` the current `CLAUDE_PID`), so a resumed
 session is not purged as stale while live, and it never touches the
 `parent-session` or `last-seen` sidecars. Roster contents are outside the
@@ -12332,8 +12332,9 @@ child's and the witness's binding reads, a `ParentOf` error, a
 abort whose cleanup close fails; a mission found closed is "do not retry"
 (the spec's `LcCfExitNoRetry`, C15); `ParentOf` and ancestor-roster I/O errors
 are "write failed"; a column states the Claude Code `SessionStart` action. (B2) The
-record stores the store root, and `deleteFiles` step 1, `release`, and every
-reconcile close use it; "directory gone" needs a recorded, resolvable root.
+record stores the store root (a fork-written binding carries it as `StoreRoot`),
+and `deleteFiles` step 1, `release`, the reconcile, and the supersede close use
+the root in the record, or in the binding for a binding-named skeleton; "directory gone" needs a recorded, resolvable root.
 (32) *Guide and tests.* The guide deny list is derived from the harness list
 and adds OpenCode terms and any `@`; the persona-injection sentence (guide
 lines 19-20) is neutralized; the harness-name test scans `cmd/ethos`,

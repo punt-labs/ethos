@@ -148,7 +148,7 @@ Fixed: (1) a `claim-forked` read-phase refusal reconciles first (C1,
 before the `parent-session` sidecar (C2, `fixDeleteOrder`), closes the
 skeletons its session names first and stops if that fails (C5,
 `fixDeleteCloses`; spec N2) (§2.1.1, §2.6) (round 9 narrows this to an open
-fork skeleton the session owns and its record names, C10); (3) `ensure` refuses an edge
+fork skeleton the session owns and its record or binding names, C10); (3) `ensure` refuses an edge
 that closes a cycle (C3, `fixCycleCheck`), and the visited set of the
 ancestor walk stays mandatory (spec N4) (§2.1.1, §2.3.1); (4) an
 already-claimed child closes its skeleton unless the binding is live (C4,
@@ -228,9 +228,12 @@ takes the step-5 locks** and re-reads the mission before it writes (C15; §5
 point 2 write phase); (7) **`fixSupersede` applies only on the fresh and resume
 paths**, and the resume clause is defensive and unexercised (C9; §5 point 2
 item 5). Review findings not covered by the model: (a) **B2**: the record
-stores the mission store root (`resolve.StoreRepoRoot()` at write time) and
-`deleteFiles` step 1, `release`, and every reconcile close use it;
-"directory gone" is concluded only from a recorded, resolvable root (§2.1.1);
+stores the mission store root (`resolve.StoreRepoRoot()` at write time), a
+fork-written delegation binding carries it as `StoreRoot`, and `deleteFiles`
+step 1, `release`, the reconcile, and the supersede close use the root recorded
+in the record, or in the binding for a binding-named skeleton; "directory
+gone" is concluded only from a recorded, resolvable root (§2.1.1); a binding
+without `StoreRoot` is Tier B, cleared and never closed;
 (b) `ensure --touch` does not refresh a roster that fails to load (spec
 `LcEnsureRefresh`; §2.1.1); (c) the exit-status table gains rows for I/O
 errors on the child's and the witness's binding reads, a `ParentOf` error, a
@@ -261,8 +264,8 @@ interrupted `claim-forked` leaves the skeleton and binding in place" (now the
 live-record rule, §5 point 2 item 5); round 8's "a reconcile that does not
 resume the record also closes the skeleton of the child's current binding"
 (now exactly the fresh and resume paths); round 8's "closes the skeletons its
-session names" (now only an open fork skeleton the session owns and its record
-names); round 8's "`SessionStart` for any other source keeps today's
+session names" (now only an open fork skeleton the session owns and its record or
+binding names); round 8's "`SessionStart` for any other source keeps today's
 `CreateInCheckout`" (now `Ensure` for every source); round 8's "removed as the
 last step of a successful write" and "the record is then overwritten or
 removed" (the record is durable); round 8's reconcile close "treats the
@@ -762,8 +765,9 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   value, `claim_forked` (a new constant beside `BoundViaSidecarClaim`,
   `internal/mission/delegation.go:59-62`), and every existing value is Tier
   B. The skeleton's `ParentSession` is the owning child for a fork skeleton
-  (the model's `dOwn`). The binding sidecar gains no field: it carries the
-  origin of the skeleton it names. The close routine loads the skeleton's
+  (the model's `dOwn`). The binding gains one field, `StoreRoot` (step 1
+  above). It carries no origin; origin is the named skeleton's `BoundVia`, and
+  a binding without `StoreRoot` is Tier B. The close routine loads the skeleton's
   `record.yaml` and checks `BoundVia == claim_forked` and `ParentSession ==
   <the session>` before it closes. **Every** close that this design adds
   applies the same test and touches only an open `dkFork` skeleton owned by
@@ -843,14 +847,15 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   `Started`, with the participants reset to `[root, primary]`. A resumed
   session gets a new `claudePID`, and a create-if-absent `Ensure` would keep
   the old, dead one, so `isStale` would purge a live session by its PID
-  branch (`store.go:950-956`); it would also keep a stale `Checkout` and
-  persona, which `session_start.go:304-309` and the audit vacuum read.
+  branch (`store.go:950-956`); it would also keep a stale `Checkout`, which
+  `internal/session/store.go:567-568`, `internal/hook/audit_vacuum.go:62-63`
+  and `:98-108`, and `cmd/ethos/audit.go:239` read.
   `Store.Ensure` therefore takes a named option, **`refreshRoster`**, in its
   signature (§5 point 1). **Only the Claude Code `SessionStart` hook passes
   it; the OpenCode plugin and the CLI `ensure` never do.** On an existing
   roster, under the roster lock, it rewrites the roster exactly as
   `CreateInCheckout` does for the same inputs (root persona, primary persona,
-  `Repo`, `Checkout`, `Host`, participants reset to `[root, primary]`,
+  `Repo`, `Checkout`, `Host`, `Started`, participants reset to `[root, primary]`,
   `Participants[1]` set to the current `CLAUDE_PID`). It **never touches** the
   `parent-session` or `last-seen` sidecars and never writes `touch`. Lineage
   stays safe because it lives in the sidecar, not the roster. This preserves
@@ -859,7 +864,8 @@ and one new Go command, `ethos session ensure` (§5 point 1):
   contents are outside the model (§2.7). Required tests: a roster whose
   primary participant is a dead numeric id, resumed by a `SessionStart` from a
   live process, is not stale afterwards; the roster afterwards equals what
-  `CreateInCheckout` would write; and the `parent-session` sidecar and
+  `CreateInCheckout` would write, except for the `Started` and `Joined`
+  timestamps, which the test exempts; and the `parent-session` sidecar and
   `last-seen` are byte-identical before and after.
 - **Repair.** A sidecar left behind with no roster (an older binary's
   `Delete` does not know to remove it, or a failure at step 7 of
@@ -959,7 +965,7 @@ result where the lifecycle model found two counterexamples (C7, C8,
   (`session_start.go:159`, `session.go:868`) removes PID pointer files only. An older binary's `deleteFiles` also does not know the
   `claim-forked-pending` record: it removes the roster and leaves the record
   and its open fork skeleton, which a later `ethos session delete` by a
-  current binary closes (the record names it). The
+  current binary closes (the record or binding names it). The
   plugin re-registers the session on its next `ensure` (as a root with no
   claim, or as a fork with its lineage re-read), so the damage is a lost
   claim, not a stale trailer. The design cannot prevent a purge by another
@@ -1040,7 +1046,10 @@ present (ledger C5, N2); a `deleteFiles` on a session whose binding names a
 Tier B skeleton clears the binding and leaves the skeleton open (ledger C10);
 a `deleteFiles` run from a working directory other than the repository's
 still closes the skeleton, and one whose record has an empty or unresolvable
-store root fails step 1 and clears nothing (B2);
+store root fails step 1 and clears nothing (B2); a `deleteFiles` where only
+the binding names a fork skeleton (no record) closes it using the binding's
+`StoreRoot`; a `deleteFiles` where the binding has no `StoreRoot` clears the
+binding and leaves its skeleton open (Tier B);
 `ensure` obeys each numbered rule above, including the cycle refusal for a
 self-parent, a two-session loop, and the delete-then-re-register loop
 (ledger C3), the matching-parent
@@ -1401,7 +1410,7 @@ one after the other and are never nested (§5 point 2, lock constraint). The
 (`session_start.go:196`) as it does today. That `Ensure` call passes
 `refreshRoster` (§2.1.1, §5 point 1): on an existing roster it rewrites the
 roster exactly as `CreateInCheckout` does (personas, `Repo`, `Checkout`,
-`Host`, participants reset to `[root, primary]`, `Participants[1]` the
+`Host`, `Started`, participants reset to `[root, primary]`, `Participants[1]` the
 current `CLAUDE_PID`), so a resumed session does not keep its dead old id
 and get purged while live. It never changes the `parent-session` or
 `last-seen` sidecars and never writes `touch`. Only this hook passes it.
@@ -1455,9 +1464,10 @@ by running `ethos session delete --session <id>` (`runSessionDelete`,
 `cmd/ethos/session.go:697`, wrapping `Store.Delete`, `store.go:200`). That
 call holds the per-session lock and runs `deleteFiles` (`store.go:278-301`):
 it first closes, `aborted`, the open fork skeleton the session owns and its
-pending record names (round 9: a Tier B skeleton that the session's binding
-names is not closed, only unnamed; the close uses the store root recorded in
-the record), then clears the active-mission claim, the delegation binding,
+pending record or its binding names (round 9: a Tier B skeleton, including
+one named by a binding without `StoreRoot`, is not closed, only unnamed; the
+close uses the store root recorded in the record, or in the binding for a
+binding-named skeleton), then clears the active-mission claim, the delegation binding,
 the pending record, and every pending dispatch, then removes `last-seen`, the
 roster, and last the `parent-session` sidecar (order, origin discriminator,
 and short-circuit in §2.1.1). A failed close keeps the roster and everything
@@ -1492,7 +1502,7 @@ about the slice and instance in the table, and nothing wider.
 | `NoOrphanOpenSkeleton`, fork skeletons (`fixDurableName`) | claim slice (16,601; 106,881 at three delegations); claim+ slice, which includes a Tier B dispatch over a completed fork claim, the operator claim, the mission close and the close-time clearing (257,269); delete slice (4,877) | claim+delete+close, two sessions (200,000 states, depth 8) and three (40,000, depth 5); claim, three sessions (200,000, depth 12) |
 | `ReconcileOnExit` | claim slice (16,601); claim+ (257,269) | the same full-machine runs |
 | `SweepComplete` (`fixDeleteCloses`, `fixPostCheck`) | sweep slice (37,025) | the same full-machine runs |
-| `NoForeignAbort` (`fixOrigin`), scoped to `deleteFiles`, the purge, a reconcile, `release`, and the close-time clearing | the three Tier B slices (11,073; 33,217; 2,013) | the same full-machine runs |
+| `NoForeignAbort` (`fixOrigin`), holds over every abort the model performs (including `release` and close-time clearing); three closes outside the model are not covered (§2.7) | the three Tier B slices (11,073; 33,217; 2,013) | the same full-machine runs |
 | `NoVerdictOverwrite` (`fixCas`) | sweep slice (19,697) | verdict slice (300,000 states); full-machine runs |
 | `LiveSpared` | claim slice (16,601); claim+ (257,269) | full-machine runs |
 | `LockedWrites` (a condition of the model's lock assumption, not an invariant of the design; `fixReuseLocks`) | claim slice (16,601) | full-machine runs |
@@ -1528,9 +1538,9 @@ item 1); N8, a live Claude Code session whose roster does not parse and has no
 `last-seen` is still purged (§2.1.1); N9 and N17, the Tier B dispatch is one
 atomic step and three of its paths are not represented (§5 point 2 item 5);
 N10, the compare-and-set is taken to be atomic as the delegation lock is;
-**`NoForeignAbort` is scoped** to the operations the model has, `deleteFiles`,
-the purge, a reconcile, `release`, and the close-time clearing, and three
-closes of a Tier B skeleton are outside it: the SubagentStart hash-refusal
+**`NoForeignAbort` holds over every abort the model performs** (including
+`release` and the close-time clearing); three closes of a Tier B skeleton
+outside the model are not covered: the SubagentStart hash-refusal
 close (`subagent_start.go:987`, verdict `aborted`), the `Store.Close`
 escalation-verdict sweep (`store.go:1091-1092`, which closes every open
 skeleton of the mission, Tier B included, `aborted` for an escalation), and
@@ -1889,7 +1899,7 @@ pipeline stage's write-set is unambiguous:
    `Store.LastSeen` read the sidecars; `deleteFiles` removes them in the
    seven-step order of §2.1.1 (`last-seen` at step 5, `parent-session` last
    at step 7, ledger C2), after closing the open fork skeleton its record
-   names and its session owns (step 1, ledger C5, C10, C12). `session create` keeps its replace semantics for an id with no
+   or binding names and its session owns (step 1, ledger C5, C10, C12). `session create` keeps its replace semantics for an id with no
    recorded parent and refuses an id whose sidecar records one. The plugin
    never calls it.
    **`isStale` change (round 6, replacing round 5's age-base change):**
@@ -1973,8 +1983,8 @@ pipeline stage's write-set is unambiguous:
       skeleton, **post-check**, binding, claim. After
       `WriteDelegationSkeleton` returns, the write phase loads the mission
       again and, if it is no longer open, aborts (item 5, in-process
-      cleanup) and exits "do not retry" (item 4; the spec's
-      `LcCfExitNoRetry`, C15).
+      cleanup) and exits "do not retry" (item 4; the spec's `LcCfAbort`,
+      followed by the "do not retry" status).
       The reason is
       `Store.Close`'s fallback: when the exclusive mission lock cannot be
       taken it sweeps open skeletons with no exclusion
@@ -2220,7 +2230,7 @@ pipeline stage's write-set is unambiguous:
       | **success** (0) | The child is now claimed and bound. Or the child already held a claim ("already claimed"; the pending record is reconciled first, and a live record is kept and marked complete). | Memoize "claimed" for the refresh interval (15 minutes), so a claim lost to a purge is retried after the next re-registration. | Nothing to do. |
       | **witness refused** | The child's lineage does not reach the witness; an ancestor roster or the witness's own roster is missing (not found) or is present and does not parse; a repeated id; the witness holds no claim; the witness binding's origin is not `claim`; and nothing else. | Try the next ancestor as witness, nearest first. When none is left, log once and memoize "unattributed" for the refresh interval (15 minutes, §2.1.1). | Offer each ancestor in the recorded chain in turn, nearest first. When none is left, log one line to stderr and leave the fork unclaimed; the hook does not retry. |
       | **write failed** | The child's dispatch-pending lock, the mission lock, or the delegation lock cannot be acquired; the mission or delegation lock for an orphan skeleton's close cannot be acquired; the pending record, skeleton, binding, or claim write fails, or the final mark-complete write fails; an earlier orphan skeleton could not be closed for a reason a retry can cure, such as a lock or an I/O error (item 5), including the close that a refusal or an already-claimed exit performs first; the record could not be removed after its skeleton was closed (item 5; the next call finds the skeleton closed and removes the record); the post-check abort or in-process cleanup of item 5 failed to close the skeleton, whatever caused the abort; the child's claim vanished between the read phase's claimed-child check and the lock (write phase step 3). **Reads that fail with an I/O error rather than "absent":** `Store.ParentOf` and the `Load` of an ancestor roster (an error other than not-found that is not a parse failure), `ReadActiveMissionBinding` on the child's own claim (read phase step 2) or on the witness's binding (step 3), and `ReadDelegationBinding` on the child's binding during a reconcile. An unreadable file is not an absent one: the call has written nothing, and classifying a witness binding read error as "witness refused" would try a more distant ancestor and could attribute the child to that ancestor's mission instead of the nearest's. **Process death by a signal** (OOM kill, a spawn timeout enforced by the plugin) has no exit status at all and is classified here: it is the model's crash (`LcCfCrash`), which leaves whatever was written. | Retry the **same** witness on the child's next `execute.before`, with no memo. Each retry reconciles first, so leftover state is cleaned up before a new write. Log each failure, and for a signal death log the signal. | Log one line to stderr naming the cause. The hook does not retry (it fires once per start, and only the `fork` source calls `claim-forked`), so the fork is unclaimed until an operator runs `ethos mission claim-forked` for it or `ethos mission claim`. The next `claim-forked` call reconciles whatever this one left. |
-      | **do not retry** | The child's roster is gone (the read-phase `ss.Load` or the write phase's `RefuseIfSessionGone` reports `fs.ErrNotExist`) or unreadable (only the read-phase `ss.Load` refuses on this: `RefuseIfSessionGone` warns and proceeds on any error other than `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`, so a roster that exists but fails to parse is caught in the read phase, not the write phase); the mission or its contract fails to load, **or the mission is found not open** (at the re-check of write phase step 6, on the resume path as on the fresh one, or at the post-check after the skeleton, item 1: the call has reconciled and cleaned up first, and if that cleanup close fails the status is "write failed" instead; the spec's `LcCfExitNoRetry`, C15); `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails, including `resolve.StoreRepoRoot()` returning no root when the record is to be written, and **a record whose recorded store root is empty or does not resolve** at a reconcile (B2, §2.1.1); **the `claim-forked-pending` record does not parse, or a skeleton's `record.yaml` does not parse** (round 8: retrying cannot repair a corrupt file, and "write failed" would retry it on every tool call for ever; the error names the file, and the remedy is to remove it by hand; the record can now fail to parse for as long as the fork claim lasts, item 5). **Exit status 1 (generic error) and exit status 2** (usage error, `failClosed`, **and a Go runtime panic, which exits 2** and cannot be told from a usage error by its status). | Do not try another ancestor and do not retry in this call. Log; for status 2 log the captured stderr, which carries the panic trace if there was one. Memoize the outcome for the refresh interval, so a broken record costs one subprocess per interval per session; the memo expiring is the retry, and the next call reconciles whatever a panic left. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. | Log one line to stderr; do not retry and do not offer another ancestor. The hook runs the write phase behind a `recover`, so a Go panic in process is logged and treated as this status, and it runs under the shell wrapper's fail-open guard (`session_start.go:60-62`), so no status can fail the session start. |
+      | **do not retry** | The child's roster is gone (the read-phase `ss.Load` or the write phase's `RefuseIfSessionGone` reports `fs.ErrNotExist`) or unreadable (only the read-phase `ss.Load` refuses on this: `RefuseIfSessionGone` warns and proceeds on any error other than `fs.ErrNotExist`, `pretooluse_dispatch.go:494-508`, so a roster that exists but fails to parse is caught in the read phase, not the write phase); the mission or its contract fails to load, **or the mission is found not open** (at the re-check of write phase step 6, on the resume path as on the fresh one, at the step-6 re-check the spec's `LcCfExitNoRetry`, C15; or at the post-check after the skeleton, item 1: the call has reconciled and cleaned up first, and if that cleanup close fails the status is "write failed" instead; the spec's `LcCfAbort`, followed by this status); `NewID` fails or its counter is exhausted; `tierBGlobalRoot` or another root resolution fails, including `resolve.StoreRepoRoot()` returning no root when the record is to be written, and **a record whose recorded store root is empty or does not resolve** at a reconcile (B2, §2.1.1); **the `claim-forked-pending` record does not parse, or a skeleton's `record.yaml` does not parse** (round 8: retrying cannot repair a corrupt file, and "write failed" would retry it on every tool call for ever; the error names the file, and the remedy is to remove it by hand; the record can now fail to parse for as long as the fork claim lasts, item 5). **Exit status 1 (generic error) and exit status 2** (usage error, `failClosed`, **and a Go runtime panic, which exits 2** and cannot be told from a usage error by its status). | Do not try another ancestor and do not retry in this call. Log; for status 2 log the captured stderr, which carries the panic trace if there was one. Memoize the outcome for the refresh interval, so a broken record costs one subprocess per interval per session; the memo expiring is the retry, and the next call reconciles whatever a panic left. For "child roster gone", also drop the session's `ensureRegistered` memo, so the next call re-registers it first. | Log one line to stderr; do not retry and do not offer another ancestor. The hook runs the write phase behind a `recover`, so a Go panic in process is logged and treated as this status, and it runs under the shell wrapper's fail-open guard (`session_start.go:60-62`), so no status can fail the session start. |
 
       Usage errors keep status 2 (bad flags). An error that carries no
       status maps to the generic status 1, which the plugin treats as
@@ -2342,11 +2352,11 @@ pipeline stage's write-set is unambiguous:
         path and the resume path, with or without a record, the reconcile also
         closes the open fork skeleton that the child's delegation binding
         names when it is not the skeleton the call will use, **using the
-        write phase's own resolved store root** (this call's
-        `resolve.StoreRepoRoot()`, which is the root the new record is about
-        to carry): a mission directory missing under that root means "not
-        found, skip", **never** "gone". "Gone" is concluded only from a
-        recorded, resolvable root (§2.1.1), and this close has none. On the fresh
+        binding's recorded `StoreRoot`** (§2.1.1), never this call's
+        `resolve.StoreRepoRoot()`: a mission directory missing under that
+        recorded root is "gone", as everywhere else (§2.1.1). "Not found,
+        skip" applies only to a binding with no `StoreRoot`, which is Tier B
+        and is cleared, never closed. On the fresh
         path every such skeleton, on the resume path the one that differs from
         the record's. It is **never** applied by a refusal or in the claimed
         case, whose child either does not write or holds a claim and may be

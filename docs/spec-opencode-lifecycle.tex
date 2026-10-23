@@ -408,8 +408,8 @@ the well-formedness conditions that validate the model itself. A schema here is 
     named by a pending record. This is what \field{Store.Close}'s sweep is
     for.
   \item \field{NoForeignAbort}: no skeleton written by a Tier B dispatch is
-    ever closed with verdict \field{aborted} by \field{deleteFiles}, a purge or
-    a \field{claim-forked} reconcile. The model has one such writer of a
+    ever closed with verdict \field{aborted} by any operation of the model
+    (including release and the close-time clearing). The model has one such writer of a
     Tier B skeleton (the dispatch), so the invariant is a predicate over the
     set of aborted skeletons.
   \item \field{NoVerdictOverwrite}: the verdict of a skeleton, once not open,
