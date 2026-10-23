@@ -2694,8 +2694,8 @@ propagations of C9 and C11 are exercised by the exhaustive \emph{claim} and
 \paragraph{The gap that let C16 through.} The exhaustive \emph{claim} and
 \emph{claim+} slices had no unlocked sweep; \emph{sweep} had it but not the
 exit \field{LcCfExitNoRetry}; \emph{verdict} and \emph{sweep+ensure}, one
-operation set under two names, had both, but that set was run with all
-sixteen switches on only for \field{NoVerdictOverwrite}, and bounded
+operation set under two names, had both, but that set was run with every
+switch then defined on (fifteen; sixteen in the re-run) only for \field{NoVerdictOverwrite}, and bounded
 (\texttt{Fv2\_on}), and never for \field{SweepComplete} with the switches on
 (\texttt{Fc\_w} with no switch and \texttt{Fc\_del} with
 \field{fixDeleteCloses} only, both counterexamples); and the bounded full-machine rows stop at depth 8, short of
