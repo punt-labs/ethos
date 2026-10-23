@@ -2278,7 +2278,7 @@ LiveSpared           liveAborted /= {}
 WellFormed           not(dom(rkind)=roster & dom(started)=roster & corrupt<:roster &
                          roster<:dom(sealed) & seenBad/\dom(seen)={} &
                          dom(corigin)=dom(claimed) & dom(pendWit)=dom(pend) &
-                         skel<:used & dOpen<:skel & dom(dMis)=skel & dom(dOwn)=skel &
+                         pendDone<:dom(pend) & skel<:used & dOpen<:skel & dom(dMis)=skel & dom(dOwn)=skel &
                          dom(dKind)=skel & dAbort<:skel-dOpen & todo<:skel & cfH<:dom(stage) &
                          dom(cfM)=dom(stage) & dom(cfW)=dom(stage) & dom(cfD)<:dom(stage) &
                          !c.(c:dom(stage) & stage(c)>=3 => (c:dom(pend) & pend(c)=cfD(c))))
@@ -2367,7 +2367,17 @@ space. Every row was run on the text of this file as committed, with a
 the row says \emph{not exhausted}. The rows \texttt{Fc2\_*},
 \texttt{*\_wf\_*} and \texttt{L\_wf\_*} were run again after the goals for
 \field{SweepComplete} and \field{WellFormed} were corrected to the schemas
-of \S\ref{sec:lc-invariants}. All 130 rows were run again on the text with
+of \S\ref{sec:lc-invariants}. Copilot, in review of PR~536, found that the
+\field{WellFormed} goal printed above omitted the conjunct
+$\field{pendDone}\subseteq\dom\field{pend}$ of
+\field{LcInvWellFormed}; it was the only conjunct missing, and the goal is
+corrected. The goal that the ten \field{WellFormed} rows
+(\texttt{L\_wf\_w}, \texttt{L\_wf\_all}, \texttt{P1\_wf}, \texttt{S\_wf\_on},
+\texttt{Fa\_wf\_all}, \texttt{C9\_wf\_all}, \texttt{F3\_wf\_all},
+\texttt{U1\_wf\_all}, \texttt{U2\_wf\_all}, \texttt{MutResumeKeepRec\_wf})
+passed to probcli already carried the conjunct, so the printed list and not
+the runs was wrong; all ten were run again with the corrected goal and have
+the same outcome, states and depth as in the table. All 130 rows were run again on the text with
 \field{fixResumeClosed}. The 97 rows of the previous revision have the same
 outcome, states and depth as before, but for \texttt{Fv2\_on}, a bounded row
 whose depth is now 23 and was 21 (the bound is the state count; the depth is
