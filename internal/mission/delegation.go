@@ -86,10 +86,10 @@ const MaxDelegationDepthDefault = 16
 // through to MISSION_ID-explicit dispatch or Tier A rather than
 // silently matching every spawn.
 type DelegationTemplate struct {
-	Role             string   `yaml:"role" json:"role"`
-	SpawnPattern     string   `yaml:"spawn_pattern" json:"spawn_pattern"`
+	Role             string   `yaml:"role" json:"role" redact:"path"`
+	SpawnPattern     string   `yaml:"spawn_pattern" json:"spawn_pattern" redact:"path"`
 	InheritsContract bool     `yaml:"inherits_contract,omitempty" json:"inherits_contract,omitempty"`
-	ExtractInto      []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`
+	ExtractInto      []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty" redact:"path"`
 }
 
 // Delegation is the on-disk record for one Agent spawn. Tier B
@@ -107,19 +107,19 @@ type DelegationTemplate struct {
 // `ethos mission` close, or the depth/hash-gate refusal path which
 // sets verdict=aborted before the worker ever runs.
 type Delegation struct {
-	ID               string `yaml:"id" json:"id"`
-	Tier             string `yaml:"tier" json:"tier"`
-	Mission          string `yaml:"mission,omitempty" json:"mission,omitempty"`
-	ContractID       string `yaml:"contract_id,omitempty" json:"contract_id,omitempty"`
-	ParentDelegation string `yaml:"parent_delegation,omitempty" json:"parent_delegation,omitempty"`
+	ID               string `yaml:"id" json:"id" redact:"keep"`
+	Tier             string `yaml:"tier" json:"tier" redact:"keep"`
+	Mission          string `yaml:"mission,omitempty" json:"mission,omitempty" redact:"keep"`
+	ContractID       string `yaml:"contract_id,omitempty" json:"contract_id,omitempty" redact:"keep"`
+	ParentDelegation string `yaml:"parent_delegation,omitempty" json:"parent_delegation,omitempty" redact:"keep"`
 	ParentSession    string `yaml:"parent_session,omitempty" json:"parent_session,omitempty"`
 	Session          string `yaml:"session,omitempty" json:"session,omitempty"`
 	AgentType        string `yaml:"agent_type" json:"agent_type"`
 	SpawnPattern     string `yaml:"spawn_pattern,omitempty" json:"spawn_pattern,omitempty"`
-	CreatedAt        string `yaml:"created_at" json:"created_at"`
-	ClosedAt         string `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
-	Verdict          string `yaml:"verdict" json:"verdict"`
-	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty"`
+	CreatedAt        string `yaml:"created_at" json:"created_at" redact:"keep"`
+	ClosedAt         string `yaml:"closed_at,omitempty" json:"closed_at,omitempty" redact:"keep"`
+	Verdict          string `yaml:"verdict" json:"verdict" redact:"keep"`
+	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty" redact:"keep"`
 	Reason           string `yaml:"reason,omitempty" json:"reason,omitempty"`
 
 	// BoundVia, DisclaimedAt, and DisclaimedReason are DES-076 round 2
@@ -128,8 +128,8 @@ type Delegation struct {
 	// this change; a decode of an old record leaves them at their zero
 	// value, which DisclaimDelegationRecord and countBlockingDelegations
 	// (store.go) both treat as "not disclaimed, not disclaimable."
-	BoundVia         string `yaml:"bound_via,omitempty" json:"bound_via,omitempty"`
-	DisclaimedAt     string `yaml:"disclaimed_at,omitempty" json:"disclaimed_at,omitempty"`
+	BoundVia         string `yaml:"bound_via,omitempty" json:"bound_via,omitempty" redact:"keep"`
+	DisclaimedAt     string `yaml:"disclaimed_at,omitempty" json:"disclaimed_at,omitempty" redact:"keep"`
 	DisclaimedReason string `yaml:"disclaimed_reason,omitempty" json:"disclaimed_reason,omitempty"`
 }
 
@@ -372,28 +372,27 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	// Every field the caller supplies is redacted; the fields this
-	// writer stamps (ID, Mission, CreatedAt, Verdict) are generated
-	// values that cannot carry a path. Redacting the struct rather than
-	// the marshaled YAML avoids a value that reduces to exactly "~"
-	// round-tripping back as a null.
+	// Every string field is redacted except the generated IDs, hashes,
+	// enums and timestamps tagged redact:"keep" on Delegation. Redacting
+	// the struct rather than the marshaled YAML avoids a value that
+	// reduces to exactly "~" round-tripping back as a null.
 	d := Delegation{
 		ID:               filepath.Base(delegationID),
-		Tier:             redact.Text(payload.Tier),
+		Tier:             payload.Tier,
 		Mission:          filepath.Base(missionID),
-		ParentDelegation: redact.Text(payload.ParentDelegation),
-		ParentSession:    redact.Text(payload.ParentSession),
-		Session:          redact.Text(payload.Session),
-		AgentType:        redact.Text(payload.AgentType),
-		SpawnPattern:     redact.Text(payload.SpawnPattern),
+		ParentDelegation: payload.ParentDelegation,
+		ParentSession:    payload.ParentSession,
+		Session:          payload.Session,
+		AgentType:        payload.AgentType,
+		SpawnPattern:     payload.SpawnPattern,
 		PromptHash:       payload.PromptHash,
 		CreatedAt:        now,
 		Verdict:          DelegationVerdictOpen,
-		BoundVia:         redact.Text(payload.BoundVia),
+		BoundVia:         payload.BoundVia,
 	}
-	data, err := yaml.Marshal(&d)
+	data, err := RedactedYAML(repoRoot, d)
 	if err != nil {
-		return "", fmt.Errorf("marshaling delegation: %w", err)
+		return "", fmt.Errorf("delegation skeleton: %w", err)
 	}
 	recordPath := filepath.Join(dir, "record.yaml")
 	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
@@ -600,25 +599,36 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	d.Verdict = verdict
 	d.ClosedAt = time.Now().UTC().Format(time.RFC3339)
 	if reason != "" {
-		// The reason is free text and the record is git-tracked, so it
-		// gets the same treatment as the prompt. Only the repo root is
-		// unavailable here — a bare record path does not name the
-		// checkout it belongs to — and <repo> is portability polish, not
-		// the username leak (NewPathRedactor doc).
-		redact, rErr := NewPathRedactor("")
-		if rErr != nil {
-			return fmt.Errorf("close delegation: %w", rErr)
-		}
-		d.Reason = redact.Text(reason)
+		d.Reason = reason
 	}
-	data, err := yaml.Marshal(d)
+	data, err := RedactedYAML(repoRootOfRecord(recordPath), *d)
 	if err != nil {
-		return fmt.Errorf("close delegation: marshaling record: %w", err)
+		return fmt.Errorf("close delegation: %w", err)
 	}
 	if err := writeAtomicFile(filepath.Dir(recordPath), "record-*.yaml.tmp", recordPath, data); err != nil {
 		return fmt.Errorf("close delegation: %w", err)
 	}
 	return nil
+}
+
+// repoRootOfRecord recovers the checkout root from a record path of the
+// form <root>/.punt-labs/ethos/..., so a free-text field gets the <repo>
+// token as well as the home substitution. A path without that segment
+// yields "": <repo> is portability polish, not the username leak
+// (NewPathRedactor doc). So does a record under the global ~/.punt-labs
+// tree, whose "root" is the home directory: it is no repo, and tagging it
+// <repo> would shadow the ~ substitution.
+func repoRootOfRecord(recordPath string) string {
+	marker := string(filepath.Separator) + ".punt-labs" + string(filepath.Separator)
+	i := strings.Index(recordPath, marker)
+	if i <= 0 {
+		return ""
+	}
+	root := recordPath[:i]
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == filepath.Clean(root) {
+		return ""
+	}
+	return root
 }
 
 // CloseDelegationSkeleton rewrites a Tier B delegation record's
@@ -681,9 +691,9 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	}
 	d.Verdict = verdict
 	d.ClosedAt = closedAt
-	data, err := yaml.Marshal(d)
+	data, err := RedactedYAML(repoRoot, *d)
 	if err != nil {
-		return fmt.Errorf("close delegation skeleton: marshaling record: %w", err)
+		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
 	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
@@ -778,10 +788,10 @@ func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact P
 		)
 	}
 	d.DisclaimedAt = disclaimedAt
-	d.DisclaimedReason = redact.Text(reason)
-	data, err := yaml.Marshal(d)
+	d.DisclaimedReason = redact.Content(reason)
+	data, err := RedactedYAML(repoRoot, *d)
 	if err != nil {
-		return nil, fmt.Errorf("disclaim: marshaling record: %w", err)
+		return nil, fmt.Errorf("disclaim: %w", err)
 	}
 	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
 		return nil, fmt.Errorf("disclaim: %w", err)

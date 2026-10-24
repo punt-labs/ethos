@@ -42,7 +42,7 @@ success_criteria:
     - Implement DES-074 in DESIGN.md exactly as written. Read it first, end to end. It records measured evidence, four rejected alternatives, and the reasoning for each; do not re-litigate them and do not adopt a rejected alternative.
     - FindClaudePID is replaced by a per-call resolver that prefers the CLAUDE_PID environment variable over the process-tree walk. The walk remains as fallback for when the variable is absent (headless, CI, SDK, Claude Code older than 2.1.234).
     - The sync.Once caching in internal/process/tree.go:31 is REMOVED. Resolution happens per call. A long-lived process (ethos serve) outlives the session it first observed, so a cached PID is wrong by construction. Do not replace it with any other process-lifetime memoization.
-    - 'An env-sourced PID is corroborated before being trusted: verify it is present in the caller''s CURRENT live ancestry, re-derived at call time, and fall back to the walk if it is not. CLAUDE_PID is captured at spawn and never re-observed, so a dead-and-recycled PID would otherwise resolve to a real but wrong live process. Port the behaviour of biff''s is_live_ancestor (see /home/jfreeman/Coding/punt-labs/biff/DESIGN.md:6687).'
+    - 'An env-sourced PID is corroborated before being trusted: verify it is present in the caller''s CURRENT live ancestry, re-derived at call time, and fall back to the walk if it is not. CLAUDE_PID is captured at spawn and never re-observed, so a dead-and-recycled PID would otherwise resolve to a real but wrong live process. Port the behaviour of biff''s is_live_ancestor (see ~/Coding/punt-labs/biff/DESIGN.md:6687).'
     - 'resolve.SessionID no longer returns an empty string on failure. It returns a named error. Callers must NOT fall through to the git/OS identity when the session cannot be identified. The user-facing message states the remedy, e.g. ''ethos: cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`''. Exit status is non-zero.'
     - Do NOT use CLAUDE_CODE_SESSION_ID as the session id. It is frozen at subprocess spawn and is stale after /clear in any long-lived process. This is a tested failure in biff (DESIGN.md:6722) and is a rejected alternative in DES-074.
     - 'Regression test: two concurrent sessions in DIFFERENT repos sharing one daemon PID must resolve to their OWN session each. This is the bug; without this test the fix is unverified. A table test with injected PIDs and a temp store root is acceptable — do not require two real Claude Code sessions.'
@@ -73,7 +73,7 @@ context: |
     the same walk in ethos, mcp-proxy and lux, propagated by citation rather
     than re-derivation. biff already fixed it (DES-058, 2026-08-22) and the fix
     never propagated. Read biff's DES-058 in full before starting:
-    /home/jfreeman/Coding/punt-labs/biff/DESIGN.md:6627-6783. It contains the
+    ~/Coding/punt-labs/biff/DESIGN.md:6627-6783. It contains the
     mechanism you are porting, the two alternatives that were tried and failed,
     and the test names to model yours on.
 

@@ -10,10 +10,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 // maxAuditLineBytes is the per-line ceiling for collectContractIDs.
@@ -472,6 +476,13 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 		return "", fmt.Errorf("creating %s: %w", repoDir, err)
 	}
 
+	// The repo root is unknown here, so only the home substitution and
+	// the content passes apply; <repo> is portability, not privacy.
+	r, err := NewPathRedactor("")
+	if err != nil {
+		return "", fmt.Errorf("migrate %s: %w", id, err)
+	}
+
 	staging, err := os.MkdirTemp(repoDir, "."+id+".migrate-")
 	if err != nil {
 		return "", fmt.Errorf("creating staging dir: %w", err)
@@ -488,7 +499,7 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 	for _, a := range missionArtifacts {
 		src := filepath.Join(legacyDir, id+a.legacySuffix)
 		dst := filepath.Join(staging, a.repoName)
-		if err := copyIfExists(src, dst); err != nil {
+		if err := copyIfExists(r, src, dst); err != nil {
 			return "", fmt.Errorf("staging %s: %w", a.repoName, err)
 		}
 	}
@@ -518,39 +529,437 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 	return fmt.Sprintf("migrate %s -> %s", id, relRepoPath(repoMissionDir)), nil
 }
 
-// copyIfExists copies src to dst when src exists. A missing src is
-// not an error — sibling artifacts (log.jsonl, results.yaml,
-// reflections.yaml) are optional. The copy is whole-file: open both
-// fds, io.Copy, fsync, close. The destination is created with mode
-// 0o600 to match the contract file mode used by writeContract.
-func copyIfExists(src, dst string) error {
-	in, err := os.Open(src)
+// copyIfExists copies src to dst through the redactor when src exists. A
+// missing src is not an error — sibling artifacts (log.jsonl,
+// results.yaml, reflections.yaml) are optional. The destination is
+// created with mode 0o600 to match the contract file mode used by
+// writeContract.
+//
+// The legacy tree is untracked and was written by an older ethos, the
+// repo tree is tracked, so the copy is where unredacted content would
+// cross over. The redaction is structural, not a regexp over the bytes:
+// a credential pattern that ran to the next whitespace would swallow a
+// closing quote and corrupt the file. A file that cannot be parsed
+// cannot be redacted and is not copied.
+func copyIfExists(r PathRedactor, src, dst string) error {
+	data, err := os.ReadFile(src)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("opening %s: %w", src, err)
+		return fmt.Errorf("reading %s: %w", src, err)
 	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	hint := "fix the file and re-run `ethos mission migrate`"
+	var red []byte
+	switch {
+	case strings.HasSuffix(src, ".jsonl"):
+		hint = "fix or remove the line and re-run `ethos mission migrate`"
+		red, _, err = redactJSONLines(r.Content, data)
+	default:
+		// The record's type gives the modes, as in the writer: enforcement
+		// fields get the path pass only and IDs and enums are kept.
+		red, _, err = redactYAMLDoc(r.Content, r.Path, artifactType(filepath.Base(dst)), data)
+		if err == nil && filepath.Base(dst) == "contract.yaml" {
+			err = checkScrubbedContract(data, red)
+		}
+	}
+	data = red
 	if err != nil {
-		return fmt.Errorf("creating %s: %w", dst, err)
+		return fmt.Errorf("redacting %s: %w; %s", src, err, hint)
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	return writeSyncedFile(dst, data)
+}
+
+// writeSyncedFile creates path at 0o600 with data, fsynced.
+func writeSyncedFile(path string, data []byte) error {
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", path, err)
+	}
+	if _, err := out.Write(data); err != nil {
 		_ = out.Close()
-		return fmt.Errorf("copying %s -> %s: %w", src, dst, err)
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
-		return fmt.Errorf("syncing %s: %w", dst, err)
+		return fmt.Errorf("syncing %s: %w", path, err)
 	}
 	// Check Close() explicitly: a failed close after a successful
 	// Sync would otherwise be silently dropped by the deferred
 	// pattern, and the migration would report success on a file
 	// that's not fully committed to disk (Copilot on PR #328).
 	if err := out.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", dst, err)
+		return fmt.Errorf("closing %s: %w", path, err)
+	}
+	return nil
+}
+
+// redactMode says how the redactor treats a YAML value, taken from the
+// redact tag of the struct field it decodes into.
+type redactMode int
+
+const (
+	modeContent redactMode = iota // the content pass (f)
+	modePath                      // the path pass (p) alone
+	modeKeep                      // left byte-for-byte
+)
+
+// redactYAMLDoc re-encodes a YAML document with f applied to every
+// string scalar and comment, and p to those under a `redact:"path"`
+// field. Keys, numbers, booleans and structure are untouched. It reports
+// whether anything changed; a caller that rewrites in place skips an
+// unchanged file so its formatting is left alone. An empty document stays
+// empty. A file holding more than one document is refused: re-encoding
+// the first would drop the others.
+//
+// typ is the Go type the document decodes into, or nil when it has none.
+// The modes come from its redact tags, the same ones the record writers
+// read, so a value the system relies on (an ID, an enum, a path) is
+// treated exactly as the writer treats it. Keys typ does not know take
+// the mode of their parent. With p == f and typ == nil every string gets
+// the one pass.
+func redactYAMLDoc(f, p func(string) string, typ reflect.Type, data []byte) ([]byte, bool, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return data, false, nil
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var doc yaml.Node
+	if err := dec.Decode(&doc); err != nil {
+		return nil, false, fmt.Errorf("parsing yaml: %w", err)
+	}
+	var extra yaml.Node
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return nil, false, fmt.Errorf("parsing yaml: %w", err)
+		}
+		return nil, false, fmt.Errorf("parsing yaml: multiple documents (only one is supported)")
+	}
+	w := yamlRedactor{f: f, p: p}
+	w.walk(&doc, typ, modeContent)
+	if !w.changed {
+		return data, false, nil
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return nil, false, fmt.Errorf("encoding yaml: %w", err)
+	}
+	return out, true, nil
+}
+
+type yamlRedactor struct {
+	f, p    func(string) string
+	changed bool
+}
+
+func (w *yamlRedactor) pass(mode redactMode) func(string) string {
+	if mode == modePath {
+		return w.p
+	}
+	return w.f
+}
+
+// comments applies the content pass to n's head, line and foot comments.
+// A comment is prose, never a value the system acts on, even beside a path
+// or kept field; and yaml.v3 attaches a trailing comment to the preceding
+// key, so the field's own pass would let it leak.
+func (w *yamlRedactor) comments(n *yaml.Node) {
+	for _, c := range []*string{&n.HeadComment, &n.LineComment, &n.FootComment} {
+		if v := w.f(*c); v != *c {
+			*c, w.changed = v, true
+		}
+	}
+}
+
+func (w *yamlRedactor) walk(n *yaml.Node, t reflect.Type, mode redactMode) {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	w.comments(n)
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if mode == modeKeep || n.Tag != "!!str" {
+			return
+		}
+		if v := w.pass(mode)(n.Value); v != n.Value {
+			n.Value, w.changed = v, true
+		}
+	case yaml.MappingNode:
+		w.walkMapping(n, t, mode)
+	case yaml.SequenceNode:
+		var et reflect.Type
+		if t != nil && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+			et = t.Elem()
+		}
+		for _, c := range n.Content {
+			w.walk(c, et, mode)
+		}
+	default:
+		for _, c := range n.Content {
+			w.walk(c, t, mode)
+		}
+	}
+}
+
+func (w *yamlRedactor) walkMapping(n *yaml.Node, t reflect.Type, mode redactMode) {
+	fields := yamlFields(t)
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, val := n.Content[i], n.Content[i+1]
+		km, vt := mode, reflect.Type(nil)
+		if t != nil && t.Kind() == reflect.Map {
+			vt = t.Elem()
+		}
+		if sf, ok := fields[k.Value]; ok && k.Kind == yaml.ScalarNode {
+			vt = sf.Type
+			switch tag := sf.Tag.Get("redact"); {
+			case mode == modeKeep:
+			case tag == "keep":
+				km = modeKeep
+			case tag == "path":
+				km = modePath
+			}
+		}
+		if km != modeKeep && k.Kind == yaml.ScalarNode && redact.IsSecretKey(k.Value) && secretYAMLValue(val) {
+			*val = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: redact.SecretToken}
+			w.changed = true
+			continue
+		}
+		w.comments(k)
+		w.walk(val, vt, km)
+	}
+}
+
+// yamlFields maps each YAML key of struct type t to its field. Other
+// types, and nil, have none.
+func yamlFields(t reflect.Type) map[string]reflect.StructField {
+	if t == nil || t.Kind() != reflect.Struct {
+		return nil
+	}
+	out := make(map[string]reflect.StructField, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		sf := t.Field(i)
+		if !sf.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(sf.Tag.Get("yaml"), ",")
+		switch name {
+		case "-":
+			continue
+		case "":
+			name = strings.ToLower(sf.Name)
+		}
+		out[name] = sf
+	}
+	return out
+}
+
+// checkScrubbedContract refuses a redacted contract file that no longer
+// validates, as the contract writer does. It judges only a contract that
+// was valid to begin with: an archetype may relax rules Validate applies
+// without one, and a file that was already invalid cannot be made worse.
+func checkScrubbedContract(orig, red []byte) error {
+	var before, after Contract
+	if yaml.Unmarshal(orig, &before) != nil || before.Validate() != nil {
+		return nil
+	}
+	if err := yaml.Unmarshal(red, &after); err != nil {
+		return fmt.Errorf("redacted contract does not parse: %w", err)
+	}
+	return checkRedactedContract(after)
+}
+
+// secretYAMLValue reports whether the value under a credential-named key
+// is replaced whole: a non-empty string or number, or a non-empty list.
+// Booleans, nulls, empty values, mappings and already-redacted values are
+// not.
+func secretYAMLValue(v *yaml.Node) bool {
+	switch v.Kind {
+	case yaml.ScalarNode:
+		switch v.Tag {
+		case "!!bool", "!!null":
+			return false
+		}
+		return v.Value != "" && v.Value != redact.SecretToken
+	case yaml.SequenceNode:
+		return len(v.Content) > 0
+	}
+	return false
+}
+
+// redactJSONLines applies f to every string value of every line of a
+// JSONL body, and to nothing else; a string under a credential-named key
+// is replaced whole. A line that f leaves alone keeps its original
+// bytes, and a changed line keeps its key order, so redacting a sealed
+// log changes only the lines that leaked and only the leaked strings.
+// It reports whether any line changed.
+func redactJSONLines(f func(string) string, data []byte) ([]byte, bool, error) {
+	lines := bytes.Split(data, []byte("\n"))
+	changed := false
+	for i, line := range lines {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(line))
+		dec.UseNumber()
+		v, err := readOrdered(dec)
+		if err != nil {
+			return nil, false, fmt.Errorf("line %d: parsing json: %w", i+1, err)
+		}
+		if _, err := dec.Token(); err != io.EOF {
+			return nil, false, fmt.Errorf("line %d: parsing json: trailing content", i+1)
+		}
+		red, c := redactOrdered(f, v, "")
+		if !c {
+			continue
+		}
+		var b bytes.Buffer
+		if err := writeOrdered(&b, red); err != nil {
+			return nil, false, fmt.Errorf("line %d: encoding json: %w", i+1, err)
+		}
+		lines[i], changed = b.Bytes(), true
+	}
+	if !changed {
+		return data, false, nil
+	}
+	return bytes.Join(lines, []byte("\n")), true, nil
+}
+
+// ojson is a decoded JSON value that remembers object key order.
+type ojson struct {
+	kind byte // 'o' object, 'a' array, 's' string, 'l' literal (number, bool, null)
+	keys []string
+	vals []*ojson
+	str  string
+	lit  string
+}
+
+func readOrdered(dec *json.Decoder) (*ojson, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	switch t := tok.(type) {
+	case json.Delim:
+		switch t {
+		case '{':
+			o := &ojson{kind: 'o'}
+			for dec.More() {
+				kt, err := dec.Token()
+				if err != nil {
+					return nil, err
+				}
+				k, ok := kt.(string)
+				if !ok {
+					return nil, fmt.Errorf("object key %v is not a string", kt)
+				}
+				v, err := readOrdered(dec)
+				if err != nil {
+					return nil, err
+				}
+				o.keys, o.vals = append(o.keys, k), append(o.vals, v)
+			}
+			if _, err := dec.Token(); err != nil {
+				return nil, err
+			}
+			return o, nil
+		case '[':
+			a := &ojson{kind: 'a'}
+			for dec.More() {
+				v, err := readOrdered(dec)
+				if err != nil {
+					return nil, err
+				}
+				a.vals = append(a.vals, v)
+			}
+			if _, err := dec.Token(); err != nil {
+				return nil, err
+			}
+			return a, nil
+		}
+		return nil, fmt.Errorf("unexpected delimiter %v", t)
+	case string:
+		return &ojson{kind: 's', str: t}, nil
+	case json.Number:
+		return &ojson{kind: 'l', lit: t.String()}, nil
+	case bool:
+		return &ojson{kind: 'l', lit: fmt.Sprint(t)}, nil
+	case nil:
+		return &ojson{kind: 'l', lit: "null"}, nil
+	}
+	return nil, fmt.Errorf("unexpected token %v", tok)
+}
+
+// redactOrdered returns v with f applied to every string. key is the
+// object key v sits under, which makes a non-empty string under a
+// credential-named key a secret by name.
+func redactOrdered(f func(string) string, v *ojson, key string) (*ojson, bool) {
+	switch v.kind {
+	case 's':
+		r := f(v.str)
+		if key != "" && v.str != "" && redact.IsSecretKey(key) {
+			r = redact.SecretToken
+		}
+		return &ojson{kind: 's', str: r}, r != v.str
+	case 'l':
+		if key != "" && redact.IsSecretKey(key) && v.lit != "null" && v.lit != "true" && v.lit != "false" {
+			return &ojson{kind: 's', str: redact.SecretToken}, true
+		}
+	case 'o', 'a':
+		if v.kind == 'a' && key != "" && len(v.vals) > 0 && redact.IsSecretKey(key) {
+			return &ojson{kind: 's', str: redact.SecretToken}, true
+		}
+		out := &ojson{kind: v.kind, keys: v.keys, vals: make([]*ojson, len(v.vals))}
+		changed := false
+		for i, c := range v.vals {
+			k := ""
+			if v.kind == 'o' {
+				k = v.keys[i]
+			}
+			rc, cc := redactOrdered(f, c, k)
+			out.vals[i], changed = rc, changed || cc
+		}
+		return out, changed
+	}
+	return v, false
+}
+
+func writeOrdered(b *bytes.Buffer, v *ojson) error {
+	switch v.kind {
+	case 's':
+		s, err := json.Marshal(v.str)
+		if err != nil {
+			return err
+		}
+		b.Write(s)
+	case 'l':
+		b.WriteString(v.lit)
+	case 'a':
+		b.WriteByte('[')
+		for i, c := range v.vals {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			if err := writeOrdered(b, c); err != nil {
+				return err
+			}
+		}
+		b.WriteByte(']')
+	case 'o':
+		b.WriteByte('{')
+		for i, c := range v.vals {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			k, err := json.Marshal(v.keys[i])
+			if err != nil {
+				return err
+			}
+			b.Write(k)
+			b.WriteByte(':')
+			if err := writeOrdered(b, c); err != nil {
+				return err
+			}
+		}
+		b.WriteByte('}')
 	}
 	return nil
 }

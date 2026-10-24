@@ -28,4 +28,4 @@ budget:
     rounds: 2
     reflection_after_each: true
 current_round: 1
-context: 'Re-scoped successor to m-2026-10-22-031 (closed failed: evaluator jra found B1 vacuous ReconcileOnExit and B2 Registry validation regression; the split needs a wider write-set). Branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. jra scratch reproduction scripts are in .tmp/jra-eval/ and the prior worker scratch in .tmp/lc/; reuse them.'
+context: 'Re-scoped successor to m-2026-10-22-031 (closed failed: evaluator jra found B1 vacuous ReconcileOnExit and B2 Registry validation regression; the split needs a wider write-set). Branch design/opencode-plugin-adapter, already checked out in ~/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. jra scratch reproduction scripts are in .tmp/jra-eval/ and the prior worker scratch in .tmp/lc/; reuse them.'

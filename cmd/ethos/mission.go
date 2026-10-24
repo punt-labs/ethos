@@ -17,7 +17,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // missionStore returns a bare mission store rooted at
@@ -858,6 +857,87 @@ Exit codes:
 	},
 }
 
+// --- mission scrub ---
+
+var missionScrubApply bool
+
+var missionScrubCmd = &cobra.Command{
+	Use:   "scrub",
+	Short: "Redact the tracked mission records an older ethos wrote unredacted",
+	Long: `Redact the tracked mission records an older ethos wrote unredacted.
+
+Runs the shared redactor (credentials, addresses, home paths) over the
+mutable mission records git tracks under .punt-labs/ethos: each mission's
+contract.yaml, results.yaml and reflections.yaml, each delegation's
+record.yaml and prompt.md, missions.jsonl, and the plain output of
+'ethos mission export' (missions/<id>.contract.yaml and
+missions/<id>.result.yaml). Exports written with a non-default --dir are
+not covered; scrub them by hand. Every file is processed; a file that cannot
+be parsed is reported and left untouched, and the rest are still scrubbed.
+
+Sealed audit chunks, sealed mission-log chunks, and the legacy log.jsonl
+and audit.jsonl files are never touched: sealed chunks are immutable
+(DES-058) and history is not rewritten. A tracked file deleted from the
+worktree is skipped with a note.
+
+By default nothing is written: the command lists the files that would
+change. Pass --apply to rewrite them in place, then commit the result.
+
+Flags:
+  --apply   rewrite the files (default is a dry run)
+
+Exit codes:
+  0  completed (a dry run that lists files is still 0)
+  1  one or more files failed
+  2  must run inside a repo`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionScrub(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
+// runMissionScrub handles `ethos mission scrub`. It resolves the current
+// checkout, not the shared store root: the files to scrub are the tracked
+// ones in the tree the operator will commit from.
+func runMissionScrub(out, errOut io.Writer) error {
+	repoRoot := resolve.EnvRepoRoot()
+	if repoRoot == "" {
+		fmt.Fprintln(errOut, "ethos: mission scrub must run inside a repo")
+		return usageError{}
+	}
+	rels, err := mission.TrackedRecordFiles(repoRoot)
+	if err != nil {
+		return fmt.Errorf("mission scrub: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("mission scrub: resolving the global store root: %w", err)
+	}
+	res, err := mission.ScrubFiles(repoRoot, filepath.Join(home, ".punt-labs", "ethos"), rels, !missionScrubApply)
+	for _, rel := range res.Skipped {
+		fmt.Fprintf(errOut, "ethos: mission scrub: skipping %s: tracked but missing from the worktree\n", rel)
+	}
+	verb := "rewrote"
+	if !missionScrubApply {
+		verb = "would rewrite"
+	}
+	for _, rel := range res.Changed {
+		fmt.Fprintf(out, "%s %s\n", verb, rel)
+	}
+	if err != nil {
+		return fmt.Errorf("mission scrub: %w", err)
+	}
+	switch {
+	case len(res.Changed) == 0:
+		fmt.Fprintln(out, "mission scrub: nothing to change")
+	case missionScrubApply:
+		fmt.Fprintf(out, "mission scrub: %d file(s) rewritten\n", len(res.Changed))
+	default:
+		fmt.Fprintf(out, "mission scrub: %d file(s) would change (dry run; use --apply to rewrite)\n", len(res.Changed))
+	}
+	return nil
+}
+
 // --- mission claim / release (active-mission sidecar) ---
 //
 // `claim` writes the active-mission sidecar for the caller's session;
@@ -981,6 +1061,9 @@ func init() {
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,
 		"Print per-mission decisions to stdout")
 
+	missionScrubCmd.Flags().BoolVar(&missionScrubApply, "apply", false,
+		"Rewrite the files in place (default is a dry run)")
+
 	missionScaffoldCmd.AddCommand(
 		missionScaffoldContractCmd,
 		missionScaffoldResultCmd,
@@ -1002,6 +1085,7 @@ func init() {
 		missionLintCmd,
 		missionDispatchCmd,
 		missionMigrateCmd,
+		missionScrubCmd,
 		missionClaimCmd,
 		missionReleaseCmd,
 		missionScaffoldCmd,
@@ -1978,9 +2062,13 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating export directory %q: %w", dir, err)
 	}
 
-	contractData, err := yaml.Marshal(c)
+	// The export directory is tracked, so records are redacted on the way
+	// out as well: a record an older ethos wrote unredacted must not be
+	// republished verbatim.
+	repoRoot := resolve.StoreRepoRoot()
+	contractData, err := mission.RedactedYAML(repoRoot, *c)
 	if err != nil {
-		return fmt.Errorf("marshaling contract: %w", err)
+		return fmt.Errorf("exporting contract %s: %w", id, err)
 	}
 	contractPath := filepath.Join(dir, id+".contract.yaml")
 	if err := os.WriteFile(contractPath, contractData, 0o644); err != nil {
@@ -1998,9 +2086,9 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 	}
 
 	last := results[len(results)-1]
-	resultData, err := yaml.Marshal(&last)
+	resultData, err := mission.RedactedYAML(repoRoot, last)
 	if err != nil {
-		return fmt.Errorf("marshaling result: %w", err)
+		return fmt.Errorf("exporting result for %s: %w", id, err)
 	}
 	resultPath := filepath.Join(dir, id+".result.yaml")
 	if err := os.WriteFile(resultPath, resultData, 0o644); err != nil {

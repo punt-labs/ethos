@@ -747,7 +747,7 @@ func TestBuildAuditEntry_BashCommandNoAddressUnchanged(t *testing.T) {
 // so the redaction they now receive is a known property rather than a
 // surprise a future reader diagnoses as a bug.
 //
-// The pattern is deliberately not narrowed to exclude them: emailPattern
+// The pattern is deliberately not narrowed to exclude them: redact.EmailPattern
 // is shared by every key and by the send_email keep-list sweep, so a
 // carve-out to keep `git@github.com` legible in a Bash line would open
 // the same hole in a mail subject. One over-eager pattern in a log beats
@@ -785,4 +785,81 @@ func TestEmailPattern_AddressShapedNonAddresses(t *testing.T) {
 		assert.Equal(t, "gopkg.in/yaml.v3@v3.0.1", got)
 		assert.False(t, changed)
 	})
+}
+
+// TestBuildAuditEntry_Credentials: a credential in any string of
+// tool_input is replaced, the line is stamped redacted:true, and the
+// stored hash is over the stored (redacted) form.
+func TestBuildAuditEntry_Credentials(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	ghp := "ghp_" + strings.Repeat("a1B2", 9)
+	tests := []struct {
+		name  string
+		tool  string
+		input map[string]any
+		key   string
+		want  string
+	}{
+		{"github token in command", "Bash", map[string]any{"command": "curl -H 'Authorization: Bearer " + ghp + "'"}, "command", "curl -H 'Authorization: Bearer [redacted-secret]'"},
+		{"env assignment", "Bash", map[string]any{"command": "GITHUB_TOKEN=abc go test"}, "command", "GITHUB_TOKEN=[redacted-secret] go test"},
+		{"secret in a structured key", "Read", map[string]any{"file_path": "x", "note": "AKIA" + "IOSFODNN7EXAMPLE"}, "note", "[redacted-secret]"},
+		{"secret-named key", "mcp__x__set", map[string]any{"password": "hunter2"}, "password", "[redacted-secret]"},
+		{"kept subject of an enrolled tool", "mcp__plugin_beadle_email__send_email", map[string]any{"subject": "key " + ghp}, "subject", "key [redacted-secret]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := buildAuditEntry(map[string]any{"tool_name": tt.tool, "tool_input": tt.input}, "s", "", now)
+			assert.Equal(t, tt.want, entry.ToolInput[tt.key])
+			assert.True(t, entry.Redacted)
+			line, err := json.Marshal(entry)
+			require.NoError(t, err)
+			assert.NotContains(t, string(line), ghp)
+			assert.Equal(t, hashToolInput(map[string]any{"tool_input": entry.ToolInput}), entry.ToolInputHash)
+		})
+	}
+
+	t.Run("clean input is not stamped", func(t *testing.T) {
+		entry := buildAuditEntry(map[string]any{"tool_name": "Read", "tool_input": map[string]any{"file_path": "/etc/hosts"}}, "s", "", now)
+		assert.False(t, entry.Redacted)
+	})
+}
+
+// TestRedactSensitiveContent_CredentialsBeforeAddresses: the credential
+// pass runs first, so a URL password holding '@' or '#' is taken whole
+// instead of being cut by the address sweep.
+func TestRedactSensitiveContent_CredentialsBeforeAddresses(t *testing.T) {
+	in := map[string]any{"command": "git clone https://alice:p!ss#word@example.com/repo"}
+	out, changed := redactSensitiveContent("Bash", in)
+	assert.True(t, changed)
+	got, _ := out["command"].(string)
+	assert.Equal(t, "git clone https://alice:[redacted-secret]@example.com/repo", got)
+	for _, leak := range []string{"p!ss", "word"} {
+		assert.NotContains(t, got, leak)
+	}
+
+	// The same holds on an enrolled tool's kept field.
+	in = map[string]any{"subject": "https://alice:p!ss#word@example.com/repo"}
+	out, _ = redactSensitiveContent("send_email", in)
+	got, _ = out["subject"].(string)
+	assert.NotContains(t, got, "p!ss")
+	assert.NotContains(t, got, "word")
+}
+
+// TestRedactSensitiveContent_ReadTargetsKeepTheirValue: a file path is
+// compared byte-for-byte by the precondition evaluator, so the credential
+// pass must not rewrite it; the rest of the line is still swept.
+func TestRedactSensitiveContent_ReadTargetsKeepTheirValue(t *testing.T) {
+	in := map[string]any{
+		"file_path":     "cfg/token=abc",
+		"path":          "cfg/token=abc",
+		"notebook_path": "cfg/password: x.ipynb",
+		"command":       "GITHUB_TOKEN=abc12345",
+	}
+	out, changed := redactSensitiveContent("Read", in)
+	assert.True(t, changed)
+	assert.Equal(t, "cfg/token=abc", out["file_path"])
+	assert.Equal(t, "cfg/token=abc", out["path"])
+	assert.Equal(t, "cfg/password: x.ipynb", out["notebook_path"])
+	assert.Equal(t, "GITHUB_TOKEN=[redacted-secret]", out["command"])
+	assert.Equal(t, "GITHUB_TOKEN=abc12345", in["command"], "the input is not mutated")
 }

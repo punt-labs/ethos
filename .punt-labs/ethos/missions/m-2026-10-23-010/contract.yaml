@@ -25,4 +25,4 @@ budget:
     rounds: 2
     reflection_after_each: true
 current_round: 2
-context: 'PR #536 review-cycle defect found by Copilot on the model-checked lifecycle spec. Branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. Prior harness: .tmp/lc3/. Every criterion is a leader decision; if the model shows one impossible, stop and report.'
+context: 'PR #536 review-cycle defect found by Copilot on the model-checked lifecycle spec. Branch design/opencode-plugin-adapter, already checked out in ~/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. Prior harness: .tmp/lc3/. Every criterion is a leader decision; if the model shows one impossible, stop and report.'

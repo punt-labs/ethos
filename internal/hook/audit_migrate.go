@@ -1,8 +1,10 @@
 package hook
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // MigrateAudit copies legacy global audit JSONL files (the
@@ -129,6 +133,17 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 		return "", fmt.Errorf("reading legacy %s: %w", legacyPath, err)
 	}
 
+	// Legacy lines predate the redaction policy, and repoDir is tracked.
+	// Redact them before the dedupe below so its keys are computed over the
+	// form that lands on disk; a re-run then finds its own earlier output.
+	// A redactor failure refuses the migration and leaves the legacy file
+	// in place: unlike the audit hook, this is an operator command and may
+	// refuse.
+	legacyLines, err = redactLegacyLines(legacyLines, filepath.Dir(filepath.Dir(filepath.Dir(sessionsBase))))
+	if err != nil {
+		return "", fmt.Errorf("redacting legacy %s: %w", legacyPath, err)
+	}
+
 	repoPath := filepath.Join(repoDir, "audit.jsonl")
 	repoLines, err := readRawAuditLines(repoPath)
 	if err != nil {
@@ -194,6 +209,104 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 		return "", fmt.Errorf("removing legacy %s: %w", legacyPath, err)
 	}
 	return fmt.Sprintf("migrate %s -> %s (%d new entries)", sessionID, rel, len(newLines)), nil
+}
+
+// redactLegacyLines applies the audit path's redaction to legacy lines and
+// recomputes each dedupe key over the redacted form. A line the policy
+// leaves unchanged keeps its exact bytes, so unknown fields and sentinels
+// survive a migration as before.
+func redactLegacyLines(lines []rawAuditLine, repoRoot string) ([]rawAuditLine, error) {
+	r, err := mission.NewPathRedactor(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]rawAuditLine, len(lines))
+	for i, l := range lines {
+		raw, changed, err := redactLegacyLine(l.raw, repoRoot, r)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		if !changed {
+			out[i] = l
+			continue
+		}
+		e, err := decodeAuditLine(raw)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		out[i] = rawAuditLine{key: rawAuditLineKey(e, raw), raw: raw}
+	}
+	return out, nil
+}
+
+// redactLegacyLine redacts one legacy audit line. tool_input goes through
+// redactToolInput, exactly as a fresh line does, and tool_input_hash and
+// tool_input_preview are recomputed over the stored form when it changed
+// (DES-054). Free-text fields that carry no tool_input (a preview-only
+// line, a sentinel's audit_error) are redacted as text.
+func redactLegacyLine(raw []byte, repoRoot string, r mission.PathRedactor) ([]byte, bool, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		return nil, false, fmt.Errorf("decoding: %w", err)
+	}
+	changed := false
+	tool, _ := m["tool"].(string)
+	if before, ok := m["tool_input"].(map[string]any); ok {
+		// Compare the stored form, not redactToolInput's bool: that bool
+		// reports content removed and ignores the path rewrite.
+		red, removed := redactToolInput(map[string]any{"tool_input": before}, tool, repoRoot)
+		wasJSON, err := json.Marshal(before)
+		if err != nil {
+			return nil, false, fmt.Errorf("encoding tool_input: %w", err)
+		}
+		isJSON, err := json.Marshal(red)
+		if err != nil {
+			return nil, false, fmt.Errorf("encoding redacted tool_input: %w", err)
+		}
+		if !bytes.Equal(wasJSON, isJSON) {
+			m["tool_input"] = red
+			env := map[string]any{"tool_input": red}
+			if _, ok := m["tool_input_hash"]; ok {
+				m["tool_input_hash"] = hashToolInput(env)
+			}
+			if _, ok := m["tool_input_preview"]; ok {
+				m["tool_input_preview"] = toolInputPreview(env)
+			}
+			if removed {
+				m["redacted"] = true
+			}
+			changed = true
+		}
+	}
+	// A preview is recomputed when tool_input changed, so it is swept only
+	// when tool_input did not. audit_error is free text beside tool_input,
+	// not derived from it, and is swept either way.
+	textKeys := []string{"audit_error"}
+	if !changed {
+		textKeys = append(textKeys, "tool_input_preview")
+	}
+	textChanged := false
+	for _, k := range textKeys {
+		if s, ok := m[k].(string); ok {
+			if red := r.Content(s); red != s {
+				m[k], textChanged = red, true
+			}
+		}
+	}
+	if textChanged {
+		m["redacted"] = true
+		changed = true
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, false, fmt.Errorf("encoding: %w", err)
+	}
+	return out, true, nil
 }
 
 // appendRawAuditLines appends each raw JSONL line (newline-terminated) to path

@@ -32,7 +32,7 @@ type Reflection struct {
 	// Required on submission. On read, a blank field in a file written
 	// before the field existed is back-filled from the containing
 	// mission directory (decodeReflectionsFile).
-	Mission string `yaml:"mission" json:"mission"`
+	Mission string `yaml:"mission" json:"mission" redact:"keep"`
 
 	// Round is the round this reflection covers (the round that just
 	// ended). Reflections are 1-indexed: the reflection submitted at
@@ -41,10 +41,10 @@ type Reflection struct {
 
 	// CreatedAt is the RFC3339 timestamp at which the leader recorded
 	// this reflection. Set by ReflectionStore.Append, not the caller.
-	CreatedAt string `yaml:"created_at" json:"created_at"`
+	CreatedAt string `yaml:"created_at" json:"created_at" redact:"keep"`
 
 	// Author is the handle of the leader recording the reflection.
-	Author string `yaml:"author" json:"author"`
+	Author string `yaml:"author" json:"author" redact:"keep"`
 
 	// Converging reports whether the work in round N appears to be
 	// approaching success. A reflection that says converging=false
@@ -68,7 +68,7 @@ type Reflection struct {
 	//   stop     → advance refused; the mission must be closed
 	//   escalate → advance refused; the mission must be re-scoped or
 	//              escalated to the human operator
-	Recommendation string `yaml:"recommendation" json:"recommendation"`
+	Recommendation string `yaml:"recommendation" json:"recommendation" redact:"keep"`
 
 	// Reason is the prose justification for the recommendation. It
 	// is surfaced verbatim in the round-advance gate's refusal

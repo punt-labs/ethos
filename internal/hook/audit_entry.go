@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 // auditEntry is a single JSONL line in the session audit log.
@@ -173,5 +174,8 @@ func redactToolInput(input map[string]any, toolName, repoRoot string) (map[strin
 			"ethos: audit-log: %v; storing tool=%s without its input\n", err, toolName)
 		return nil, true
 	}
-	return redactSensitiveContent(toolName, r.Map(extractToolInput(input)))
+	// r.Map knows this machine's home and repo; HomePathsValue adds any
+	// other user's home, as every mission record gets (redact.Prose).
+	in, _ := redact.HomePathsValue(r.Map(extractToolInput(input))).(map[string]any)
+	return redactSensitiveContent(toolName, in)
 }

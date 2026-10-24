@@ -627,3 +627,38 @@ func TestEvaluatePreconditions_HandleAuditLogIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, deny, "audit log written via HandleAuditLog must satisfy precondition: %s", reason)
 }
+
+// TestEvaluatePreconditions_ReadOfCredentialShapedPathClears: a Read of a
+// file whose name looks like a credential assignment is recorded as it was
+// read, so the require_read entry that names it is satisfied. Without the
+// audited Read the write stays blocked.
+func TestEvaluatePreconditions_ReadOfCredentialShapedPathClears(t *testing.T) {
+	repo, global := t.TempDir(), t.TempDir()
+	const sess = "sess-cred"
+	c := makeContractWithPreconditions(
+		[]mission.Precondition{{
+			Form:        mission.PreconditionFormExplicit,
+			RequireRead: []string{"cfg/token=abc"},
+			Message:     "read the config first",
+		}},
+		mission.Inputs{}, nil,
+	)
+	write := map[string]any{"file_path": "internal/x.go"}
+
+	_, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+	require.NoError(t, err)
+	require.True(t, deny, "no Read yet: blocked")
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sess,
+		"tool_name":  "Read",
+		"tool_input": map[string]any{"file_path": "cfg/token=abc"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, HandleAuditLog(bytes.NewReader(payload), repo, global))
+
+	reason, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+	require.NoError(t, err)
+	assert.False(t, deny, "the recorded Read must clear the precondition")
+	assert.Empty(t, reason)
+}
