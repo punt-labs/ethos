@@ -29,20 +29,27 @@ import (
 
 // Handler groups MCP tool handlers with shared stores.
 type Handler struct {
-	store         identity.IdentityStore
-	sessionStore  *session.Store
-	talents       *attribute.Store
-	personalities *attribute.Store
-	writingStyles *attribute.Store
-	roles         *role.LayeredStore
-	teams         *team.LayeredStore
-	missionStore  *mission.Store
-	adrStore      *adr.Store
-	vendor        VendorRunner
+	store                   identity.IdentityStore
+	sessionStore            *session.Store
+	talents                 *attribute.Store
+	personalities           *attribute.Store
+	writingStyles           *attribute.Store
+	roles                   *role.LayeredStore
+	teams                   *team.LayeredStore
+	missionStore            *mission.Store
+	adrStore                *adr.Store
+	vendor                  VendorRunner
+	opencodeSessionMetadata bool
 }
 
 // Option configures optional Handler fields.
 type Option func(*Handler)
+
+// WithOpenCodeSessionMetadata opts into request-local OpenCode caller routing.
+// It is disabled by default for compatibility with existing MCP consumers.
+func WithOpenCodeSessionMetadata(enabled bool) Option {
+	return func(h *Handler) { h.opencodeSessionMetadata = enabled }
+}
 
 // WithSessionStore sets the session store on the handler.
 func WithSessionStore(ss *session.Store) Option {
@@ -201,7 +208,7 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 	if persona == "" {
 		return mcplib.NewToolResultError("persona is required for iam"), nil
 	}
-	if sid, present, err := metadataSessionID(req); present {
+	if sid, present, err := h.metadataSessionID(req); present {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
@@ -261,7 +268,7 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 }
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	if sid, present, err := metadataSessionID(req); present {
+	if sid, present, err := h.metadataSessionID(req); present {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
@@ -523,7 +530,7 @@ func (h *Handler) sessionTool() mcplib.Tool {
 // cause for the former while keeping the plain, actionable message for
 // the latter, mirroring cmd/ethos/iam.go's split.
 func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
-	sid, present, metaErr := metadataSessionID(req)
+	sid, present, metaErr := h.metadataSessionID(req)
 	if present {
 		if metaErr != nil {
 			return "", metaErr

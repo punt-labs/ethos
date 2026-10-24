@@ -15,8 +15,8 @@ var callerSessionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // metadataSessionID distinguishes an absent caller from an invalid explicit
 // caller. Never normalize an ID: doing so could select a different session.
-func metadataSessionID(req mcplib.CallToolRequest) (string, bool, error) {
-	if req.Params.Meta == nil {
+func (h *Handler) metadataSessionID(req mcplib.CallToolRequest) (string, bool, error) {
+	if !h.opencodeSessionMetadata || req.Params.Meta == nil {
 		return "", false, nil
 	}
 	v, present := req.Params.Meta.AdditionalFields[opencodeSessionKey]
@@ -54,7 +54,7 @@ func (h *Handler) callerParticipant(sid string) (*session.Participant, error) {
 		}
 	}
 	if caller == nil {
-		return nil, fmt.Errorf("caller participant %q not found in roster; create the session explicitly", sid)
+		return nil, fmt.Errorf("caller participant %q not found in roster; run `ethos session join --session %s --agent-id %s --persona AGENT_HANDLE` with an existing identity handle", sid, sid, sid)
 	}
 	return caller, nil
 }

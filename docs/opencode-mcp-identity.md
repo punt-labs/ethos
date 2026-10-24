@@ -1,7 +1,24 @@
 # Native OpenCode MCP identity pilot
 
+**Opt-in only.** Default `ethos serve` ignores OpenCode session metadata,
+including malformed values, and retains the existing environment/process-tree
+resolution behavior for all identity and session operations. Existing native
+OpenCode consumers need no configuration changes.
+
+Start the pilot server with:
+
+```sh
+ethos serve --opencode-session-metadata
+```
+
+In the native MCP server configuration, include the flag in the command array:
+
+```json
+{"type": "local", "command": ["ethos", "serve", "--opencode-session-metadata"]}
+```
+
 For native MCP calls, OpenCode supplies the caller's session ID in
-`params._meta["ai.opencode/sessionID"]`. Ethos uses that request-local ID for
+`params._meta["ai.opencode/sessionID"]`. With the flag, Ethos uses that request-local ID for
 `identity whoami`, implicit `session roster`, and `session iam`, instead of
 the MCP server process's environment or process ancestry.
 
@@ -20,6 +37,15 @@ ethos session create --session ses_EXAMPLE \
 **Create only an absent roster.** `session create` overwrites an existing
 roster, including its participants. Check for an existing roster with
 `ethos session show ses_EXAMPLE` first; do not recreate a live session.
+If the roster exists but lacks the caller participant, join it instead:
+
+```sh
+ethos session join --session ses_EXAMPLE \
+  --agent-id ses_EXAMPLE --persona AGENT_HANDLE
+```
+
+Metadata identifies the caller for routing; it is **not authentication** or
+an authorization boundary. Only use this opt-in with trusted local callers.
 
 Ethos does not register callers or auto-create rosters. A metadata caller
 with a missing, malformed, or mismatched roster, or no exact participant,

@@ -47,6 +47,7 @@ func metadataHandler(t *testing.T) (*Handler, string) {
 		attribute.NewStore(repo.Root(), attribute.Talents),
 		attribute.NewStore(repo.Root(), attribute.Personalities),
 		attribute.NewStore(repo.Root(), attribute.WritingStyles), ss)
+	WithOpenCodeSessionMetadata(true)(h)
 	return h, root
 }
 
@@ -245,4 +246,65 @@ func TestMetadataCaller_UnrelatedMetaPreservesLegacy(t *testing.T) {
 	roster, err := h.sessionStore.Load("ses_A")
 	require.NoError(t, err)
 	assert.Equal(t, "legacy-unregistered-persona", roster.FindParticipant("ses_A").Persona)
+}
+
+func TestMetadataCaller_MissingParticipantRemedy(t *testing.T) {
+	h, _ := metadataHandler(t)
+	require.NoError(t, h.sessionStore.Leave("ses_A", "ses_A"))
+	result, err := h.handleIdentity(context.Background(), metadataCall(t, "ses_A", map[string]any{"method": "whoami"}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, "ethos session join --session ses_A --agent-id ses_A --persona AGENT_HANDLE")
+	assert.NotContains(t, text, "create")
+	roster, err := h.sessionStore.Load("ses_A")
+	require.NoError(t, err)
+	require.Len(t, roster.Participants, 1)
+	assert.Equal(t, "human", roster.Participants[0].AgentID)
+}
+
+func TestMetadataCaller_DefaultIgnoresMetadata(t *testing.T) {
+	for _, sid := range []any{"ses_B", "ses_unregistered", nil, 123, "", "../ses_B"} {
+		t.Run(stringifyMetadata(t, sid), func(t *testing.T) {
+			h, _ := metadataHandler(t)
+			WithOpenCodeSessionMetadata(false)(h)
+			t.Setenv("ETHOS_SESSION", "ses_A")
+			t.Setenv("ETHOS_AGENT_ID", "ses_A")
+			for _, method := range []string{"whoami", "roster", "iam"} {
+				args := map[string]any{"method": method, "persona": "legacy-unregistered-persona"}
+				req := metadataCall(t, sid, args)
+				var result, baseline *mcplib.CallToolResult
+				var err error
+				if method == "whoami" {
+					baseline, err = h.handleIdentity(context.Background(), callTool(args))
+					require.NoError(t, err)
+					result, err = h.handleIdentity(context.Background(), req)
+				} else {
+					baseline, err = h.handleSession(context.Background(), callTool(args))
+					require.NoError(t, err)
+					result, err = h.handleSession(context.Background(), req)
+				}
+				require.NoError(t, err)
+				assert.False(t, result.IsError, method)
+				assert.Equal(t, baseline, result, "default must ignore metadata for %s", method)
+			}
+			roster, err := h.sessionStore.Load("ses_A")
+			require.NoError(t, err)
+			assert.Equal(t, "legacy-unregistered-persona", roster.FindParticipant("ses_A").Persona)
+			roster, err = h.sessionStore.Load("ses_B")
+			require.NoError(t, err)
+			assert.Equal(t, "bob", roster.FindParticipant("ses_B").Persona)
+		})
+	}
+}
+
+func TestMetadataCaller_ConstructorsDefaultDisabled(t *testing.T) {
+	h := testHandler(t)
+	_, present, err := h.metadataSessionID(metadataCall(t, nil, nil))
+	require.NoError(t, err)
+	assert.False(t, present)
+	h = NewHandlerWithOptions(h.store, h.talents, h.personalities, h.writingStyles)
+	_, present, err = h.metadataSessionID(metadataCall(t, "ses_A", nil))
+	require.NoError(t, err)
+	assert.False(t, present)
 }

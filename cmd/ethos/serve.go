@@ -13,7 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func runServeImpl() error {
+func runServeImpl(opencodeSessionMetadata bool) error {
 	s := server.NewMCPServer(
 		"ethos",
 		// resolveVersion, not the raw `version` var: `version` is only
@@ -43,6 +43,7 @@ func runServeImpl() error {
 	}
 	adrs := adr.NewStore(filepath.Join(home, ".punt-labs", "ethos", "adrs"))
 	mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles,
+		mcp.WithOpenCodeSessionMetadata(opencodeSessionMetadata),
 		mcp.WithSessionStore(sessionStore()),
 		mcp.WithRoleStore(roles),
 		mcp.WithTeamStore(teams),
