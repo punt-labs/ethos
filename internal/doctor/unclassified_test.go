@@ -3,6 +3,7 @@ package doctor
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -100,4 +101,27 @@ func countOccurrences(s, sub string) int {
 		}
 	}
 	return n
+}
+
+// TestCheckUnclassifiedFiles_InTreeHookFilesAreClassified: with core.hooksPath
+// inside a scanned zone, the hook files ethos wrote there have a class, and
+// another file beside them does not.
+func TestCheckUnclassifiedFiles_InTreeHookFilesAreClassified(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"config", "core.hooksPath", ".punt-labs/ethos/hooks"},
+	} {
+		out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	touch(t, root, ".punt-labs/ethos/hooks/pre-commit")
+	touch(t, root, ".punt-labs/ethos/hooks/commit-msg")
+	assert.Equal(t, "PASS", CheckUnclassifiedFiles(root, root).Status)
+
+	touch(t, root, ".punt-labs/ethos/hooks/post-merge")
+	r := CheckUnclassifiedFiles(root, root)
+	assert.Equal(t, "WARN", r.Status)
+	assert.Contains(t, r.Detail, ".punt-labs/ethos/hooks/post-merge")
+	assert.NotContains(t, r.Detail, "pre-commit")
 }

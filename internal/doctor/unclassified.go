@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
@@ -36,8 +37,10 @@ func CheckUnclassifiedFiles(repoRoot, storeRoot string) Result {
 
 	seen := make(map[string]bool)
 	for _, root := range roots {
+		hooksDir, _ := githook.HooksDir(root)
+		table := layout.TableFor(root, hooksDir)
 		for _, zone := range unclassifiedZones {
-			if err := collectUnclassified(root, zone, seen); err != nil {
+			if err := collectUnclassified(table, root, zone, seen); err != nil {
 				return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("scanning %s: %v", filepath.Join(root, zone), err)}
 			}
 		}
@@ -84,7 +87,7 @@ func distinctRoots(roots ...string) []string {
 
 // collectUnclassified adds to seen every file under root/zone that no table
 // entry matches, as a path relative to root. A missing zone is not an error.
-func collectUnclassified(root, zone string, seen map[string]bool) error {
+func collectUnclassified(table []layout.Entry, root, zone string, seen map[string]bool) error {
 	dir := filepath.Join(root, zone)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
@@ -101,7 +104,7 @@ func collectUnclassified(root, zone string, seen map[string]bool) error {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if _, _, ok := layout.Classify(rel); !ok {
+		if _, _, ok := layout.ClassifyIn(table, rel); !ok {
 			seen[rel] = true
 		}
 		return nil

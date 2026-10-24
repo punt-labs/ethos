@@ -35,6 +35,65 @@ func TestMatch(t *testing.T) {
 	}
 }
 
+func TestOverlap(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		// The pair the round-1 witnesses missed.
+		{"**/pre-commit", ".punt-labs/ethos/missions/*/artifacts/**", true},
+		{".punt-labs/ethos/missions/*/artifacts/**", "**/pre-commit", true},
+		{"a/b", "a/b", true},
+		{"a/b", "a/c", false},
+		{"a/*", "a/*/b", false},
+		{"a/**", "a", true},
+		{"a/**", "b/**", false},
+		{"**/x", "a/**/y", false},
+		{"**/x", "a/**/x", true},
+		{"*.yaml", "contract.*", true},
+		{"*.yaml", "*.md", false},
+		{"log-*.jsonl", "log.jsonl", false},
+		{"log-*.jsonl", "log-*.jsonl.corrupt*", true}, // log-x.jsonl.corrupt.jsonl matches both
+		{"audit-*.jsonl", "audit-*", true},
+		{"a?c", "abc", true},
+		{"a?c", "ac", false},
+		{"*", "**", true},
+		{"a/*/c", "**/c", true},
+		{`\*`, "*", true},
+		{`\*`, "x", false},
+	}
+	for _, tt := range tests {
+		if got := layout.Overlap(tt.a, tt.b); got != tt.want {
+			t.Errorf("Overlap(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+// witness returns a concrete path matching pattern.
+func witness(pattern string) string {
+	segs := strings.Split(pattern, "/")
+	for i, s := range segs {
+		if s == "**" {
+			segs[i] = "x/y"
+			continue
+		}
+		segs[i] = strings.ReplaceAll(s, "*", "x")
+	}
+	return strings.Join(segs, "/")
+}
+
+// TestOverlapAgreesWithMatch checks Overlap is sound against Match: when a
+// witness of one pattern matches the other, they overlap.
+func TestOverlapAgreesWithMatch(t *testing.T) {
+	for _, a := range layout.Table {
+		for _, b := range layout.Table {
+			if layout.Match(a.Pattern, witness(b.Pattern)) && !layout.Overlap(a.Pattern, b.Pattern) {
+				t.Errorf("%q matches a witness of %q but Overlap says disjoint", a.Pattern, b.Pattern)
+			}
+		}
+	}
+}
+
 func TestClassify(t *testing.T) {
 	tests := []struct {
 		path string
@@ -45,7 +104,6 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/identities/bwk.ext/quarry.yaml", layout.Source, true},
 		{".punt-labs/ethos.yaml", layout.Source, true},
 		{".claude/agents/bwk.md", layout.Source, true},
-		{".githooks/pre-commit", layout.Source, true},
 		{".punt-labs/ethos/missions/m-1/contract.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions/m-1/delegations/d-1/record.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions/m-1/corrections.yaml", layout.Blame, true},
@@ -66,6 +124,7 @@ func TestClassify(t *testing.T) {
 		// No entry.
 		{".punt-labs/ethos/ethos.yaml", 0, false},
 		{".punt-labs/ethos/unknown/file", 0, false},
+		{".githooks/pre-commit", 0, false}, // known only through HookEntries
 		{"README.md", 0, false},
 	}
 	for _, tt := range tests {
@@ -88,11 +147,44 @@ func TestClassifyNormalizesPath(t *testing.T) {
 	}
 }
 
+func TestHookEntries(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name     string
+		hooksDir string
+		want     []string // paths that must classify as source; nil means no entries
+		not      []string
+	}{
+		{"in tree", root + "/.githooks", []string{".githooks/pre-commit", ".githooks/commit-msg"}, []string{"pre-commit", "x/pre-commit"}},
+		{"nested", root + "/tools/git hooks", []string{"tools/git hooks/pre-commit"}, nil},
+		{"metacharacters", root + "/h[1]*", []string{"h[1]*/pre-commit"}, []string{"h1/pre-commit"}},
+		{"outside", t.TempDir(), nil, []string{"pre-commit"}},
+		{"git dir", root + "/.git/hooks", nil, []string{".git/hooks/pre-commit"}},
+		{"root itself", root, []string{"pre-commit"}, nil},
+	}
+	for _, tt := range tests {
+		table := layout.TableFor(root, tt.hooksDir)
+		for _, p := range tt.want {
+			if c, _, ok := layout.ClassifyIn(table, p); !ok || c != layout.Source {
+				t.Errorf("%s: ClassifyIn(%q) = %v, %v; want source", tt.name, p, c, ok)
+			}
+		}
+		for _, p := range tt.not {
+			if _, _, ok := layout.ClassifyIn(table, p); ok {
+				t.Errorf("%s: ClassifyIn(%q) matched; want no entry", tt.name, p)
+			}
+		}
+	}
+}
+
 func TestTablePatternsWellFormed(t *testing.T) {
 	for _, e := range layout.Table {
 		for _, seg := range strings.Split(e.Pattern, "/") {
 			if _, err := path.Match(seg, ""); err != nil {
 				t.Errorf("pattern %q: bad segment %q: %v", e.Pattern, seg, err)
+			}
+			if strings.ContainsAny(seg, "[\\") {
+				t.Errorf("pattern %q: segment %q uses a character class or escape, which Overlap does not model", e.Pattern, seg)
 			}
 		}
 		if e.Class < layout.Source || e.Class > layout.Never {
@@ -113,38 +205,18 @@ func TestClassFourComesFirst(t *testing.T) {
 	}
 }
 
-// witness returns a concrete path matching pattern, so every entry can be
-// checked for overlap without a hand-written list of paths.
-func witness(pattern string) string {
-	segs := strings.Split(pattern, "/")
-	for i, s := range segs {
-		if s == "**" {
-			segs[i] = "x/y"
-			continue
-		}
-		segs[i] = strings.ReplaceAll(s, "*", "x")
-	}
-	return strings.Join(segs, "/")
-}
-
-// conflicts returns, for each path, a description of two entries of different
-// classes that both match it when neither is class 4.
-func conflicts(table []layout.Entry, paths []string) []string {
+// conflicts returns every pair of entries of table that can match one path,
+// have different classes, and are not class 4. Class 4 is exempt because the
+// table resolves it by order.
+func conflicts(table []layout.Entry) []string {
 	var out []string
-	for _, p := range paths {
-		var first *layout.Entry
-		ms := layout.Matches(table, p)
-		for i := range ms {
-			e := ms[i]
-			if e.Class == layout.Never {
+	for i, a := range table {
+		for _, b := range table[i+1:] {
+			if a.Class == b.Class || a.Class == layout.Never || b.Class == layout.Never {
 				continue
 			}
-			if first == nil {
-				first = &e
-				continue
-			}
-			if e.Class != first.Class {
-				out = append(out, p+": "+first.Pattern+" ("+first.Class.String()+") and "+e.Pattern+" ("+e.Class.String()+")")
+			if layout.Overlap(a.Pattern, b.Pattern) {
+				out = append(out, a.Pattern+" ("+a.Class.String()+") overlaps "+b.Pattern+" ("+b.Class.String()+")")
 			}
 		}
 	}
@@ -162,42 +234,39 @@ func unclassified(table []layout.Entry, paths []string) []string {
 	return out
 }
 
-func witnesses(table []layout.Entry) []string {
-	out := make([]string, 0, len(table))
-	for _, e := range table {
-		out = append(out, witness(e.Pattern))
-	}
-	return out
-}
-
 func TestEntriesAreExclusive(t *testing.T) {
-	paths := append(witnesses(layout.Table), writerPaths(t)...)
-	for _, c := range conflicts(layout.Table, paths) {
-		t.Errorf("overlapping classes: %s", c)
+	c := writerCorpus(t)
+	for _, s := range conflicts(c.table) {
+		t.Errorf("overlapping classes: %s", s)
 	}
 }
 
-// TestExclusivityDetectsOverlap is the mutant: a class-3 entry that overlaps
-// the class-2 contract.yaml entry must be reported, and a class-4 overlap
-// must not.
+// TestExclusivityDetectsOverlap is the mutant: entries the round-1 witnesses
+// missed, a class-2/class-3 overlap, and the same shapes as class 4.
 func TestExclusivityDetectsOverlap(t *testing.T) {
-	mutant := append(append([]layout.Entry{}, layout.Table...),
-		layout.Entry{Pattern: ".punt-labs/ethos/missions/*/*.yaml", Class: layout.Trace})
-	got := conflicts(mutant, witnesses(mutant))
-	if len(got) == 0 {
-		t.Fatal("class-2/class-3 overlap not detected")
+	with := func(extra ...layout.Entry) []layout.Entry {
+		return append(append([]layout.Entry{}, layout.Table...), extra...)
 	}
-
-	ok := append(append([]layout.Entry{}, layout.Table...),
-		layout.Entry{Pattern: ".punt-labs/ethos/missions/*/contract.yaml", Class: layout.Never})
-	if got := conflicts(ok, witnesses(ok)); len(got) != 0 {
-		t.Errorf("class-4 overlap reported: %v", got)
+	for _, e := range []layout.Entry{
+		{Pattern: ".punt-labs/ethos/missions/*/*.yaml", Class: layout.Trace},
+		{Pattern: "**/pre-commit", Class: layout.Source},
+	} {
+		if got := conflicts(with(e)); len(got) == 0 {
+			t.Errorf("overlap of %q with the table not detected", e.Pattern)
+		}
+	}
+	for _, e := range []layout.Entry{
+		{Pattern: ".punt-labs/ethos/missions/*/contract.yaml", Class: layout.Never},
+	} {
+		if got := conflicts(with(e)); len(got) != 0 {
+			t.Errorf("class-4 overlap reported: %v", got)
+		}
 	}
 }
 
 func TestEveryWriterPathIsClassified(t *testing.T) {
-	paths := writerPaths(t)
-	for _, p := range unclassified(layout.Table, paths) {
+	c := writerCorpus(t)
+	for _, p := range unclassified(c.table, c.paths) {
 		t.Errorf("writer created %s, which no entry of layout.Table matches", p)
 	}
 }
@@ -205,19 +274,20 @@ func TestEveryWriterPathIsClassified(t *testing.T) {
 // TestCoverageDetectsUnmatchedWriter is the mutant: a writer path with no
 // entry, and a table that lost an entry a writer needs, must both be reported.
 func TestCoverageDetectsUnmatchedWriter(t *testing.T) {
-	paths := append(writerPaths(t), ".punt-labs/ethos/newthing/file.bin")
-	got := unclassified(layout.Table, paths)
+	c := writerCorpus(t)
+	paths := append(append([]string{}, c.paths...), ".punt-labs/ethos/newthing/file.bin")
+	got := unclassified(c.table, paths)
 	if len(got) != 1 || got[0] != ".punt-labs/ethos/newthing/file.bin" {
 		t.Errorf("unclassified = %v, want the new writer path only", got)
 	}
 
 	var trimmed []layout.Entry
-	for _, e := range layout.Table {
+	for _, e := range c.table {
 		if e.Pattern != ".punt-labs/ethos/missions/*/contract.yaml" {
 			trimmed = append(trimmed, e)
 		}
 	}
-	if got := unclassified(trimmed, writerPaths(t)); len(got) == 0 {
+	if got := unclassified(trimmed, c.paths); len(got) == 0 {
 		t.Error("removing the contract.yaml entry left every writer path classified")
 	}
 }

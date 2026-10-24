@@ -182,7 +182,6 @@ var Table = []Entry{
 	{".gitignore", Source},
 	{"CLAUDE.md", Source},
 	// The hook files `ethos enable` writes when core.hooksPath puts the hooks
-	// directory inside the work tree; the directory is the user's choice.
-	{"**/pre-commit", Source},
-	{"**/commit-msg", Source},
+	// directory inside the work tree are class 1 too; the directory is the
+	// user's choice, so HookEntries derives them from the resolved path.
 }

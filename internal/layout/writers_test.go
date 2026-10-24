@@ -15,8 +15,10 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/seed"
@@ -30,7 +32,7 @@ import (
 // here, so a writer added later either appears in the result or is not
 // exercised; the former fails TestEveryWriterPathIsClassified when no entry
 // matches.
-func writerPaths(t *testing.T) []string {
+func writerCorpus(t *testing.T) corpus {
 	t.Helper()
 
 	root := t.TempDir()
@@ -84,7 +86,18 @@ func writerPaths(t *testing.T) []string {
 	})
 	require.NoError(t, err)
 	sort.Strings(paths)
-	return paths
+
+	// Hook files are classified from the directory git resolves for the repo,
+	// as the doctor check does.
+	hooksDir, _ := githook.HooksDir(root)
+	return corpus{paths: paths, table: layout.TableFor(root, hooksDir)}
+}
+
+// corpus is the set of files the writers left in the repository, with the table
+// that classifies them: layout.Table plus the entries for in-tree hook files.
+type corpus struct {
+	paths []string
+	table []layout.Entry
 }
 
 func gitIn(t *testing.T, dir string, args ...string) {
