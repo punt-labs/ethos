@@ -218,10 +218,14 @@ supplied). Design + resolution rules:
 
 ### Native OpenCode MCP identity
 
-OpenCode MCP calls can resolve identity from request-local session metadata,
-without setting a shared server identity. Explicitly seat the OpenCode session
+With `ethos serve --opencode-session-metadata`, OpenCode MCP calls can resolve
+identity from request-local session metadata, without setting a shared server
+identity. Default MCP behavior remains unchanged, including when metadata is
+malformed. Metadata is routing context, not authentication.
+Explicitly seat the OpenCode session
 ID as an Ethos participant first; `whoami`, implicit roster lookup, and `iam`
 then use that exact caller and fail if its binding is missing or invalid.
+Repair a missing participant by joining the existing roster, not recreating it.
 See the [identity pilot guide](docs/opencode-mcp-identity.md) for setup and
 limitations. This does not implement automatic lifecycle, mission, or fork
 integration.
