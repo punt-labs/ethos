@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // maxAuditLineBytes is the per-line ceiling for collectContractIDs.
@@ -472,7 +473,7 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 		return "", fmt.Errorf("creating %s: %w", repoDir, err)
 	}
 
-	staging, err := os.MkdirTemp(repoDir, "."+id+".migrate-")
+	staging, err := os.MkdirTemp(repoDir, layout.MigrateStagingPrefix(id))
 	if err != nil {
 		return "", fmt.Errorf("creating staging dir: %w", err)
 	}

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
@@ -507,7 +508,7 @@ func writeExec(dest string, data []byte) error {
 	if fi, err := os.Stat(dest); err == nil {
 		mode = fi.Mode().Perm() | 0o100 // ensure owner-exec without widening
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".*")
+	tmp, err := os.CreateTemp(dir, layout.DotTempPattern(filepath.Base(dest)))
 	if err != nil {
 		return fmt.Errorf("cannot create a temp file next to %s — hook not installed: %w", dest, err)
 	}

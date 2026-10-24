@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1628,7 +1629,7 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 				// retry succeeds cleanly.
 				if len(oldData) > 0 {
 					dir := filepath.Dir(recordPath)
-					if rbErr := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, oldData); rbErr != nil {
+					if rbErr := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, oldData); rbErr != nil {
 						return fmt.Errorf(
 							"disclaim: event append failed: %w; rollback failed: %v", evErr, rbErr,
 						)
@@ -2377,7 +2378,7 @@ func (s *Store) writeContract(c *Contract) error {
 // restoreContract so the two on-disk writers of a mission contract
 // cannot drift apart on durability.
 func writeContractFile(dest string, data []byte) error {
-	tmp := dest + ".tmp"
+	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
 	// at the temp path. os.WriteFile would follow a symlink at tmp,
 	// writing through to the link target (write-set bypass); a symlink
@@ -2854,7 +2855,7 @@ func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error 
 	if err != nil {
 		return err
 	}
-	tmp := dest + ".tmp"
+	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and
 	// tmp before WriteFile would follow them.
 	if err := rejectSymlink(dest); err != nil {
@@ -3497,7 +3498,7 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 	if err != nil {
 		return err
 	}
-	tmp := dest + ".tmp"
+	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and
 	// tmp before WriteFile would follow them.
 	if err := rejectSymlink(dest); err != nil {

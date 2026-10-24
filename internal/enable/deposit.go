@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // The vendored zone is exactly these three repo-relative paths. enable writes
@@ -132,7 +134,7 @@ func writeVendored(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	tmp, err := os.CreateTemp(dir, layout.DotTempPattern(filepath.Base(path)))
 	if err != nil {
 		return fmt.Errorf("creating temp file in %s: %w", dir, err)
 	}

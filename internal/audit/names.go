@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // A sealed chunk is an immutable tracked file holding a contiguous run of a
@@ -124,11 +126,11 @@ func (c ChunkName) TempFile() string {
 // writes before its atomic rename. The name embeds the range so a widened
 // tail after a crash yields a different temp name.
 func SessionTempFile(first, last int64) string {
-	return "." + SessionChunkFile(first, last) + ".tmp"
+	return layout.DotTmp(SessionChunkFile(first, last))
 }
 
 func MissionTempFile(session string, first, last int64) string {
-	return "." + MissionChunkFile(session, first, last) + ".tmp"
+	return layout.DotTmp(MissionChunkFile(session, first, last))
 }
 
 // Classify classifies a filename within a namespace directory. The prefix

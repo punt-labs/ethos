@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -366,7 +367,7 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	// disk — readers branch on record.yaml's presence, so its absence
 	// signals "skeleton not yet committed" and avoids a torn read.
 	if len(payload.Prompt) > 0 {
-		if err := writeAtomicFile(dir, "prompt-*.md.tmp",
+		if err := writeAtomicFile(dir, layout.TmpPattern("prompt", ".md"),
 			filepath.Join(dir, "prompt.md"), redact.Body(payload.Prompt)); err != nil {
 			return "", fmt.Errorf("writing delegation prompt: %w", err)
 		}
@@ -396,7 +397,7 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 		return "", fmt.Errorf("marshaling delegation: %w", err)
 	}
 	recordPath := filepath.Join(dir, "record.yaml")
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return "", fmt.Errorf("writing delegation record: %w", err)
 	}
 	return recordPath, nil
@@ -615,7 +616,7 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	if err != nil {
 		return fmt.Errorf("close delegation: marshaling record: %w", err)
 	}
-	if err := writeAtomicFile(filepath.Dir(recordPath), "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(filepath.Dir(recordPath), layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return fmt.Errorf("close delegation: %w", err)
 	}
 	return nil
@@ -685,7 +686,7 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	if err != nil {
 		return fmt.Errorf("close delegation skeleton: marshaling record: %w", err)
 	}
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
 	return nil
@@ -783,7 +784,7 @@ func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact P
 	if err != nil {
 		return nil, fmt.Errorf("disclaim: marshaling record: %w", err)
 	}
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return nil, fmt.Errorf("disclaim: %w", err)
 	}
 	return d, nil

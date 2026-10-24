@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
@@ -205,7 +206,7 @@ func withLock(real string, fn func() error) error {
 // sees a torn file.
 func writeAtomic(real string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(real)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+".tmp*")
+	tmp, err := os.CreateTemp(dir, layout.DotTempPattern(filepath.Base(real)))
 	if err != nil {
 		return fmt.Errorf("creating temp file in %s: %w", dir, err)
 	}

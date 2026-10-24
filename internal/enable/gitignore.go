@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // gitignoreMarker heads the block enable appends so the patterns are
@@ -369,7 +371,7 @@ func writeGitignore(path string, data []byte) error {
 	}
 
 	dir := filepath.Dir(target)
-	tmp, err := os.CreateTemp(dir, ".gitignore.*")
+	tmp, err := os.CreateTemp(dir, layout.SiblingTempPattern(".gitignore"))
 	if err != nil {
 		return fmt.Errorf("creating temp .gitignore in %s: %w", dir, err)
 	}

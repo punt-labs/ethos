@@ -324,3 +324,59 @@ func TestFallbackComesLast(t *testing.T) {
 		}
 	}
 }
+
+// fill substitutes what os.CreateTemp and os.MkdirTemp would for the last "*".
+func fill(pattern string) string {
+	i := strings.LastIndex(pattern, "*")
+	if i < 0 {
+		return pattern + "123456"
+	}
+	return pattern[:i] + "123456" + pattern[i+1:]
+}
+
+// TestTempEntriesAreFedByHelpers: every Temp entry must match a name some
+// helper in temp.go builds, and each such name is class 4 and so never
+// tracked. The writers call these helpers, so the pattern and the name they
+// create cannot drift apart.
+func TestTempEntriesAreFedByHelpers(t *testing.T) {
+	names := []string{
+		layout.TmpPath(".punt-labs/ethos/identities/bwk.yaml"),
+		layout.TmpPath(".punt-labs/ethos/missions/m-1/contract.yaml"),
+		layout.TmpPath(".punt-labs/ethos.yaml"),
+		".punt-labs/ethos/missions/m-1/delegations/d-1/" + fill(layout.TmpPattern("record", ".yaml")),
+		".punt-labs/ethos/missions/m-1/delegations/d-1/" + fill(layout.TmpPattern("prompt", ".md")),
+		".punt-labs/ethos/sessions/2026-10-24-s/" + layout.DotTmp("audit-1-2.jsonl"),
+		".punt-labs/ethos/missions/m-1/" + layout.DotTmp("log-s-1-2.jsonl"),
+		".claude/agents/" + fill(layout.SeedTmpPattern("bwk.md")),
+		".punt-labs/ethos/" + fill(layout.DotTempPattern("CLAUDE.md")),
+		".punt-labs/ethos/" + fill(layout.DotTempPattern("ETHOS-SETUP.md")),
+		".punt-labs/ethos/" + fill(layout.DotTempPattern(".vendored-manifest")),
+		fill(layout.SiblingTempPattern(".gitignore")),
+		fill(layout.DotTempPattern("CLAUDE.md")),
+		".githooks/" + fill(layout.DotTempPattern("pre-commit")),
+		".githooks/" + fill(layout.DotTempPattern("commit-msg")),
+		".punt-labs/ethos/missions/" + fill(layout.MigrateStagingPrefix("m-1")+"*") + "/contract.yaml",
+	}
+	for _, n := range names {
+		if c, e, ok := layout.Classify(n); !ok || c != layout.Never {
+			t.Errorf("helper name %q classified %v, %q, %v; want class 4", n, c, e.Pattern, ok)
+		}
+	}
+	for _, e := range layout.Table {
+		if !e.Temp {
+			continue
+		}
+		fed := false
+		for _, n := range names {
+			if layout.Match(e.Pattern, n) {
+				fed = true
+			}
+		}
+		if !fed {
+			t.Errorf("temp entry %q matches no name built by a helper in temp.go", e.Pattern)
+		}
+		if e.Class != layout.Never {
+			t.Errorf("temp entry %q is class %v, want class 4", e.Pattern, e.Class)
+		}
+	}
+}

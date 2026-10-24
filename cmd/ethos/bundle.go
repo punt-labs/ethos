@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"gopkg.in/yaml.v3"
 )
@@ -148,7 +149,7 @@ func writeConfigFile(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
-	tmp := path + ".tmp"
+	tmp := layout.TmpPath(path)
 	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}

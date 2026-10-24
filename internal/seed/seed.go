@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // scope names the destination root a seeded path resolves against. It is
@@ -661,7 +663,7 @@ func escapes(rel string) bool {
 // it to dest. os.Link fails with os.ErrExist if dest already exists, giving
 // an atomic no-clobber create. The temp file is always removed.
 func linkInstall(dest string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".seed.*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(dest), layout.SeedTmpPattern(filepath.Base(dest)))
 	if err != nil {
 		return err
 	}
@@ -692,7 +694,7 @@ func atomicWrite(dest string, data []byte) error {
 // for the one caller (repairAdditive) that must not silently overwrite
 // dest's existing permissions with the 0644 default — see its call site.
 func atomicWriteMode(dest string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".seed.*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(dest), layout.SeedTmpPattern(filepath.Base(dest)))
 	if err != nil {
 		return err
 	}

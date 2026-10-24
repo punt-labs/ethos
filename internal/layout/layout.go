@@ -47,6 +47,8 @@ type Entry struct {
 	// must come after every non-fallback entry, and the exclusivity check does
 	// not compare it with them: it cannot take a path from them.
 	Fallback bool
+	// Temp marks a class-4 entry for a name built by a helper in temp.go.
+	Temp bool
 }
 
 // Classify returns the class of relPath, a path relative to the repository
@@ -124,15 +126,18 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/identities/*.yaml.lock", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
 	// Temporary names writers create for an atomic rename.
-	{Pattern: ".punt-labs/**/*.tmp", Class: Never},
-	{Pattern: ".claude/agents/*.tmp", Class: Never},
-	{Pattern: ".punt-labs/ethos/.CLAUDE.md.*", Class: Never},
-	{Pattern: ".punt-labs/ethos/.ETHOS-SETUP.md.*", Class: Never},
-	{Pattern: ".punt-labs/ethos/.vendored-manifest.*", Class: Never},
-	{Pattern: ".gitignore.*", Class: Never},
-	{Pattern: ".CLAUDE.md.*", Class: Never},
-	{Pattern: "**/.pre-commit.*", Class: Never},
-	{Pattern: "**/.commit-msg.*", Class: Never},
+	temp(".punt-labs/**/*" + TmpSuffix),
+	temp(".claude/agents/*" + TmpSuffix),
+	temp(".punt-labs/ethos/" + DotTempPattern("CLAUDE.md")),
+	temp(".punt-labs/ethos/" + DotTempPattern("ETHOS-SETUP.md")),
+	temp(".punt-labs/ethos/" + DotTempPattern(".vendored-manifest")),
+	temp(SiblingTempPattern(".gitignore")),
+	temp(DotTempPattern("CLAUDE.md")),
+	temp("**/" + DotTempPattern("pre-commit")),
+	temp("**/" + DotTempPattern("commit-msg")),
+	// The staging directory of `ethos mission migrate`, and what is in it if a
+	// crash leaves it behind.
+	temp(".punt-labs/ethos/missions/" + MigrateStagingPrefix("*") + "*/**"),
 
 	// Class 3: trace tier. The live files and the record: blame archive sit
 	// in the machine-local zone; the rest are written at tracked paths today.
@@ -193,4 +198,9 @@ var Table = []Entry{
 	// above claims the path.
 	{Pattern: ".punt-labs/ethos/**/m-*.contract.yaml", Class: Blame, Fallback: true},
 	{Pattern: ".punt-labs/ethos/**/m-*.result.yaml", Class: Blame, Fallback: true},
+}
+
+// temp is a class-4 entry for a name a helper in temp.go builds.
+func temp(pattern string) Entry {
+	return Entry{Pattern: pattern, Class: Never, Temp: true}
 }

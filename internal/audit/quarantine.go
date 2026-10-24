@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // Quarantine retires a corrupt sealed chunk and recovers what it can, the
@@ -303,7 +305,7 @@ func writeMarkerAtomic(dir, name string, m Marker) error {
 	if err != nil {
 		return err
 	}
-	tempPath := filepath.Join(dir, "."+name+".tmp")
+	tempPath := filepath.Join(dir, layout.DotTmp(name))
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("creating temp marker %s: %w", tempPath, err)
