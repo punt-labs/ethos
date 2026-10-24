@@ -104,12 +104,22 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/identities/bwk.ext/quarry.yaml", layout.Source, true},
 		{".punt-labs/ethos.yaml", layout.Source, true},
 		{".claude/agents/bwk.md", layout.Source, true},
-		{".punt-labs/ethos/missions/m-1/contract.yaml", layout.Blame, true},
+		{".punt-labs/ethos/missions/m-1.contract.yaml", layout.Blame, true},
+		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.result.yaml", layout.Blame, true},
+		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.contract.yaml", layout.Blame, true},
+		// A fallback never takes a path another entry claims.
+		{".punt-labs/ethos/missions/m-1/artifacts/m-1.contract.yaml", layout.Trace, true},
+		{".punt-labs/ethos/identities/m-1.contract.yaml", layout.Source, true},
 		{".punt-labs/ethos/missions/m-1/delegations/d-1/record.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions/m-1/corrections.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions.jsonl", layout.Blame, true},
 		{".punt-labs/ethos/adrs/DES-079.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions/m-1.contract.yaml", layout.Blame, true},
+		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.result.yaml", layout.Blame, true},
+		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.contract.yaml", layout.Blame, true},
+		// A fallback never takes a path another entry claims.
+		{".punt-labs/ethos/missions/m-1/artifacts/m-1.contract.yaml", layout.Trace, true},
+		{".punt-labs/ethos/identities/m-1.contract.yaml", layout.Source, true},
 		{".punt-labs/ethos/missions/m-1/delegations/d-1/prompt.md", layout.Trace, true},
 		{".punt-labs/ethos/missions/m-1/reflections.yaml", layout.Trace, true},
 		{".punt-labs/ethos/missions/m-1/artifacts/notes.md", layout.Trace, true},
@@ -124,6 +134,8 @@ func TestClassify(t *testing.T) {
 		// No entry.
 		{".punt-labs/ethos/ethos.yaml", 0, false},
 		{".punt-labs/ethos/unknown/file", 0, false},
+		{".punt-labs/ethos/README.md", 0, false},
+		{".punt-labs/ethos/missions-closed/notes.yaml", 0, false},
 		{".githooks/pre-commit", 0, false}, // known only through HookEntries
 		{"README.md", 0, false},
 	}
@@ -212,7 +224,7 @@ func conflicts(table []layout.Entry) []string {
 	var out []string
 	for i, a := range table {
 		for _, b := range table[i+1:] {
-			if a.Class == b.Class || a.Class == layout.Never || b.Class == layout.Never {
+			if a.Class == b.Class || a.Class == layout.Never || b.Class == layout.Never || a.Fallback || b.Fallback {
 				continue
 			}
 			if layout.Overlap(a.Pattern, b.Pattern) {
@@ -289,5 +301,26 @@ func TestCoverageDetectsUnmatchedWriter(t *testing.T) {
 	}
 	if got := unclassified(trimmed, c.paths); len(got) == 0 {
 		t.Error("removing the contract.yaml entry left every writer path classified")
+	}
+}
+
+// TestFallbackComesLast: a fallback entry only claims paths nothing else does,
+// so no non-fallback entry may follow one, with or without hook entries.
+func TestFallbackComesLast(t *testing.T) {
+	for name, table := range map[string][]layout.Entry{
+		"Table":    layout.Table,
+		"TableFor": layout.TableFor("/repo", "/repo/.githooks"),
+	} {
+		seen := false
+		for _, e := range table {
+			if e.Fallback {
+				seen = true
+			} else if seen {
+				t.Errorf("%s: non-fallback entry %q follows a fallback entry", name, e.Pattern)
+			}
+		}
+		if !seen {
+			t.Errorf("%s has no fallback entry", name)
+		}
 	}
 }

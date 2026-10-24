@@ -125,3 +125,20 @@ func TestCheckUnclassifiedFiles_InTreeHookFilesAreClassified(t *testing.T) {
 	assert.Contains(t, r.Detail, ".punt-labs/ethos/hooks/post-merge")
 	assert.NotContains(t, r.Detail, "pre-commit")
 }
+
+// TestCheckUnclassifiedFiles_ExportedMissionsPass: `ethos mission export --dir
+// .punt-labs/ethos/missions-closed` output must not warn; other files beside it
+// still do.
+func TestCheckUnclassifiedFiles_ExportedMissionsPass(t *testing.T) {
+	root := t.TempDir()
+	touch(t, root, ".punt-labs/ethos/missions-closed/m-2026-10-24-001.contract.yaml")
+	touch(t, root, ".punt-labs/ethos/missions-closed/m-2026-10-24-001.result.yaml")
+	assert.Equal(t, "PASS", CheckUnclassifiedFiles(root, root).Status)
+
+	touch(t, root, ".punt-labs/ethos/README.md")
+	touch(t, root, ".punt-labs/ethos/missions-closed/notes.yaml")
+	r := CheckUnclassifiedFiles(root, root)
+	assert.Equal(t, "WARN", r.Status)
+	assert.Contains(t, r.Detail, ".punt-labs/ethos/README.md")
+	assert.Contains(t, r.Detail, "missions-closed/notes.yaml")
+}

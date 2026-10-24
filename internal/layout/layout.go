@@ -43,6 +43,10 @@ func (c Class) String() string {
 type Entry struct {
 	Pattern string
 	Class   Class
+	// Fallback marks an entry that claims only paths no other entry matches. It
+	// must come after every non-fallback entry, and the exclusivity check does
+	// not compare it with them: it cannot take a path from them.
+	Fallback bool
 }
 
 // Classify returns the class of relPath, a path relative to the repository
@@ -114,74 +118,79 @@ func normalize(p string) string {
 // Every other pair of entries must be disjoint, which the package tests check.
 var Table = []Entry{
 	// Class 4: never tracked.
-	{".punt-labs/**/*.local.*", Never},
-	{".punt-labs/ethos/missions/**/*.lock", Never},
-	{".punt-labs/ethos/missions.jsonl.lock", Never},
-	{".punt-labs/ethos/identities/*.yaml.lock", Never},
-	{".punt-labs/local/ethos/**/*.lock", Never},
+	{Pattern: ".punt-labs/**/*.local.*", Class: Never},
+	{Pattern: ".punt-labs/ethos/missions/**/*.lock", Class: Never},
+	{Pattern: ".punt-labs/ethos/missions.jsonl.lock", Class: Never},
+	{Pattern: ".punt-labs/ethos/identities/*.yaml.lock", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
 	// Temporary names writers create for an atomic rename.
-	{".punt-labs/**/*.tmp", Never},
-	{".claude/agents/*.tmp", Never},
-	{".punt-labs/ethos/.CLAUDE.md.*", Never},
-	{".punt-labs/ethos/.ETHOS-SETUP.md.*", Never},
-	{".punt-labs/ethos/.vendored-manifest.*", Never},
-	{".gitignore.*", Never},
-	{".CLAUDE.md.*", Never},
-	{"**/.pre-commit.*", Never},
-	{"**/.commit-msg.*", Never},
+	{Pattern: ".punt-labs/**/*.tmp", Class: Never},
+	{Pattern: ".claude/agents/*.tmp", Class: Never},
+	{Pattern: ".punt-labs/ethos/.CLAUDE.md.*", Class: Never},
+	{Pattern: ".punt-labs/ethos/.ETHOS-SETUP.md.*", Class: Never},
+	{Pattern: ".punt-labs/ethos/.vendored-manifest.*", Class: Never},
+	{Pattern: ".gitignore.*", Class: Never},
+	{Pattern: ".CLAUDE.md.*", Class: Never},
+	{Pattern: "**/.pre-commit.*", Class: Never},
+	{Pattern: "**/.commit-msg.*", Class: Never},
 
 	// Class 3: trace tier. The live files and the record: blame archive sit
 	// in the machine-local zone; the rest are written at tracked paths today.
-	{".punt-labs/local/ethos/sessions/*.audit.jsonl", Trace},
-	{".punt-labs/local/ethos/missions/*/*.log.jsonl", Trace},
-	{".punt-labs/local/ethos/missions/*.jsonl", Trace},
-	{".punt-labs/local/ethos/trace/**", Trace},
-	{".punt-labs/ethos/missions/*/delegations/*/prompt.md", Trace},
-	{".punt-labs/ethos/missions/*/reflections.yaml", Trace},
-	{".punt-labs/ethos/missions/*/log.jsonl", Trace},
-	{".punt-labs/ethos/missions/*/log-*.jsonl", Trace},
-	{".punt-labs/ethos/missions/*/log-*.quarantine", Trace},
-	{".punt-labs/ethos/missions/*/log-*.jsonl.corrupt*", Trace},
+	{Pattern: ".punt-labs/local/ethos/sessions/*.audit.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/local/ethos/missions/*/*.log.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/local/ethos/missions/*.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/local/ethos/trace/**", Class: Trace},
+	{Pattern: ".punt-labs/ethos/missions/*/delegations/*/prompt.md", Class: Trace},
+	{Pattern: ".punt-labs/ethos/missions/*/reflections.yaml", Class: Trace},
+	{Pattern: ".punt-labs/ethos/missions/*/log.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/ethos/missions/*/log-*.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/ethos/missions/*/log-*.quarantine", Class: Trace},
+	{Pattern: ".punt-labs/ethos/missions/*/log-*.jsonl.corrupt*", Class: Trace},
 	// Agent-written; no ethos code writes, moves or exports them.
-	{".punt-labs/ethos/missions/*/artifacts/**", Trace},
-	{".punt-labs/ethos/sessions/*/audit.jsonl", Trace},
-	{".punt-labs/ethos/sessions/*/audit-*.jsonl", Trace},
-	{".punt-labs/ethos/sessions/*/audit-*.quarantine", Trace},
-	{".punt-labs/ethos/sessions/*/audit-*.jsonl.corrupt*", Trace},
+	{Pattern: ".punt-labs/ethos/missions/*/artifacts/**", Class: Trace},
+	{Pattern: ".punt-labs/ethos/sessions/*/audit.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/ethos/sessions/*/audit-*.jsonl", Class: Trace},
+	{Pattern: ".punt-labs/ethos/sessions/*/audit-*.quarantine", Class: Trace},
+	{Pattern: ".punt-labs/ethos/sessions/*/audit-*.jsonl.corrupt*", Class: Trace},
 
 	// Class 2: blame tier.
-	{".punt-labs/ethos/missions.jsonl", Blame},
-	{".punt-labs/ethos/missions/*/contract.yaml", Blame},
-	{".punt-labs/ethos/missions/*/results.yaml", Blame},
-	{".punt-labs/ethos/missions/*/corrections.yaml", Blame},
-	{".punt-labs/ethos/missions/*/delegations/*/record.yaml", Blame},
-	{".punt-labs/ethos/missions/*.contract.yaml", Blame},
-	{".punt-labs/ethos/missions/*.result.yaml", Blame},
-	{".punt-labs/ethos/adrs/*.yaml", Blame},
+	{Pattern: ".punt-labs/ethos/missions.jsonl", Class: Blame},
+	{Pattern: ".punt-labs/ethos/missions/*/contract.yaml", Class: Blame},
+	{Pattern: ".punt-labs/ethos/missions/*/results.yaml", Class: Blame},
+	{Pattern: ".punt-labs/ethos/missions/*/corrections.yaml", Class: Blame},
+	{Pattern: ".punt-labs/ethos/missions/*/delegations/*/record.yaml", Class: Blame},
+	{Pattern: ".punt-labs/ethos/adrs/*.yaml", Class: Blame},
 
 	// Class 1: source and configuration.
-	{".punt-labs/ethos.yaml", Source},
-	{".punt-labs/ethos/config.yaml", Source}, // legacy; read, never written
-	{".punt-labs/ethos/.vendor.yaml", Source},
-	{".punt-labs/ethos/.vendored-manifest", Source},
-	{".punt-labs/ethos/CLAUDE.md", Source},
-	{".punt-labs/ethos/ETHOS-SETUP.md", Source},
-	{".punt-labs/ethos/enabled", Source},
-	{".punt-labs/ethos/identities/*.yaml", Source},
-	{".punt-labs/ethos/identities/*.ext/*.yaml", Source},
-	{".punt-labs/ethos/personalities/*.md", Source},
-	{".punt-labs/ethos/writing-styles/*.md", Source},
-	{".punt-labs/ethos/talents/*.md", Source},
-	{".punt-labs/ethos/roles/*.yaml", Source},
-	{".punt-labs/ethos/teams/*.yaml", Source},
-	{".punt-labs/ethos/agents/*.md", Source},
-	{".punt-labs/ethos/archetypes/*.yaml", Source},
-	{".punt-labs/ethos/pipelines/*.yaml", Source},
-	{".punt-labs/ethos-bundles/**", Source},
-	{".claude/agents/*.md", Source},
-	{".gitignore", Source},
-	{"CLAUDE.md", Source},
+	{Pattern: ".punt-labs/ethos.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos/config.yaml", Class: Source}, // legacy; read, never written
+	{Pattern: ".punt-labs/ethos/.vendor.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos/.vendored-manifest", Class: Source},
+	{Pattern: ".punt-labs/ethos/CLAUDE.md", Class: Source},
+	{Pattern: ".punt-labs/ethos/ETHOS-SETUP.md", Class: Source},
+	{Pattern: ".punt-labs/ethos/enabled", Class: Source},
+	{Pattern: ".punt-labs/ethos/identities/*.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos/identities/*.ext/*.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos/personalities/*.md", Class: Source},
+	{Pattern: ".punt-labs/ethos/writing-styles/*.md", Class: Source},
+	{Pattern: ".punt-labs/ethos/talents/*.md", Class: Source},
+	{Pattern: ".punt-labs/ethos/roles/*.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos/teams/*.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos/agents/*.md", Class: Source},
+	{Pattern: ".punt-labs/ethos/archetypes/*.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos/pipelines/*.yaml", Class: Source},
+	{Pattern: ".punt-labs/ethos-bundles/**", Class: Source},
+	{Pattern: ".claude/agents/*.md", Class: Source},
+	{Pattern: ".gitignore", Class: Source},
+	{Pattern: "CLAUDE.md", Class: Source},
 	// The hook files `ethos enable` writes when core.hooksPath puts the hooks
 	// directory inside the work tree are class 1 too; the directory is the
 	// user's choice, so HookEntries derives them from the resolved path.
+
+	// The shape `ethos mission export` writes. With --dir the directory is the
+	// caller's choice (missions-closed/ in several repositories), so the shape
+	// is claimed anywhere under .punt-labs/ethos, but only where no entry
+	// above claims the path.
+	{Pattern: ".punt-labs/ethos/**/m-*.contract.yaml", Class: Blame, Fallback: true},
+	{Pattern: ".punt-labs/ethos/**/m-*.result.yaml", Class: Blame, Fallback: true},
 }

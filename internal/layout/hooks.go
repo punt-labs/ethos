@@ -31,10 +31,19 @@ func HookEntries(repoRoot, hooksDir string) []Entry {
 	return out
 }
 
-// TableFor returns Table followed by the hook entries for the resolved hooks
-// directory.
+// TableFor returns Table with the hook entries for the resolved hooks
+// directory placed before the fallback entries, which must stay last.
 func TableFor(repoRoot, hooksDir string) []Entry {
-	return append(append([]Entry{}, Table...), HookEntries(repoRoot, hooksDir)...)
+	var out, fallback []Entry
+	for _, e := range Table {
+		if e.Fallback {
+			fallback = append(fallback, e)
+		} else {
+			out = append(out, e)
+		}
+	}
+	out = append(out, HookEntries(repoRoot, hooksDir)...)
+	return append(out, fallback...)
 }
 
 func evalPath(p string) string {
