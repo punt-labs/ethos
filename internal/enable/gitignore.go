@@ -348,6 +348,14 @@ func LocalIgnored(repoRoot string) (bool, error) {
 	return covers(repoRoot, machineLocalRule, presentLines(data)), nil
 }
 
+// createGitignoreTemp creates the staging file for an atomic write to target,
+// beside target. Its name comes from logical, the path the caller asked to
+// write, not from target: a .gitignore linked to another name is still
+// classified as .gitignore's staging file (DES-079).
+func createGitignoreTemp(target, logical string) (*os.File, error) {
+	return os.CreateTemp(filepath.Dir(target), layout.SiblingTempPattern(filepath.Base(logical)))
+}
+
 // writeGitignore replaces the .gitignore at path atomically and durably: it
 // writes to a temp file in the target's directory, fsyncs it, and renames over
 // the target, so a crash or power loss leaves the operator's file as either the
@@ -371,7 +379,7 @@ func writeGitignore(path string, data []byte) error {
 	}
 
 	dir := filepath.Dir(target)
-	tmp, err := os.CreateTemp(dir, layout.SiblingTempPattern(".gitignore"))
+	tmp, err := createGitignoreTemp(target, path)
 	if err != nil {
 		return fmt.Errorf("creating temp .gitignore in %s: %w", dir, err)
 	}

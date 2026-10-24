@@ -114,6 +114,23 @@ func (c ChunkName) MarkerFile() string {
 	return c.Stem() + ".quarantine"
 }
 
+// CorruptName returns the name a retired chunk with the given stem is renamed
+// to: <stem>.jsonl.corrupt.
+func CorruptName(stem string) string {
+	return stem + ".jsonl.corrupt"
+}
+
+// CorruptHashName returns the name a chunk is retired under when
+// <stem>.jsonl.corrupt already holds earlier evidence: <stem>.jsonl.corrupt-<hash>,
+// with a -n suffix for the nth candidate (n >= 2) when that name is taken too.
+func CorruptHashName(stem, hash string, n int) string {
+	name := CorruptName(stem) + "-" + hash
+	if n >= 2 {
+		name += "-" + strconv.Itoa(n)
+	}
+	return name
+}
+
 // TempFile returns the dotted temp name for a parsed chunk's namespace.
 func (c ChunkName) TempFile() string {
 	if c.Namespace == MissionNS {

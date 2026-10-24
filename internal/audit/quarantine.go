@@ -40,7 +40,7 @@ import (
 func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string) (Marker, error) {
 	stem := cn.Stem()
 	chunkPath := filepath.Join(sealedDir, cn.ChunkFile())
-	corruptPath := filepath.Join(sealedDir, stem+".jsonl.corrupt")
+	corruptPath := filepath.Join(sealedDir, CorruptName(stem))
 	markerPath := filepath.Join(sealedDir, cn.MarkerFile())
 
 	// State: a parseable marker means the quarantine already completed — an
@@ -173,9 +173,8 @@ func renameRetire(repoRoot, src, dst string) error {
 func corruptHashName(dir, stem string, content []byte) (string, error) {
 	sum := sha256.Sum256(content)
 	hash := hex.EncodeToString(sum[:])[:12]
-	base := stem + ".jsonl.corrupt-" + hash
-	candidate := base
-	for n := 2; ; n++ {
+	for n := 1; ; n++ {
+		candidate := CorruptHashName(stem, hash, n)
 		_, err := os.Stat(filepath.Join(dir, candidate))
 		if errors.Is(err, fs.ErrNotExist) {
 			return candidate, nil
@@ -183,7 +182,6 @@ func corruptHashName(dir, stem string, content []byte) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("stat %s: %w", filepath.Join(dir, candidate), err)
 		}
-		candidate = fmt.Sprintf("%s-%d", base, n)
 	}
 }
 

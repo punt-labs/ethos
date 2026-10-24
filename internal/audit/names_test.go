@@ -121,3 +121,27 @@ func TestSplitLines(t *testing.T) {
 		t.Fatalf("non-terminated: got %d lines, want 2", len(got))
 	}
 }
+
+// TestCorruptNamesClassify: the constructors the quarantine writes with are the
+// names Classify recognises as retired chunks of the same stem.
+func TestCorruptNamesClassify(t *testing.T) {
+	for _, ns := range []Namespace{SessionNS, MissionNS} {
+		cn := ChunkName{Namespace: ns, First: 1, Last: 2}
+		if ns == MissionNS {
+			cn.Session = "s"
+		}
+		for _, name := range []string{
+			CorruptName(cn.Stem()),
+			CorruptHashName(cn.Stem(), "deadbeef0123", 1),
+			CorruptHashName(cn.Stem(), "deadbeef0123", 2),
+		} {
+			got, kind := Classify(name, ns)
+			if kind != KindCorrupt || got != cn {
+				t.Errorf("Classify(%q) = %+v, %v; want %+v, KindCorrupt", name, got, kind, cn)
+			}
+		}
+	}
+	if got, want := CorruptHashName("x", "h", 2), "x.jsonl.corrupt-h-2"; got != want {
+		t.Errorf("CorruptHashName(x, h, 2) = %q, want %q", got, want)
+	}
+}

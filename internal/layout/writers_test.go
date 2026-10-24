@@ -214,17 +214,35 @@ func writeAuditFiles(t *testing.T, root string) {
 		filepath.Join(sessionDir, sess.ChunkFile()),
 		filepath.Join(sessionDir, sess.TempFile()),
 		filepath.Join(sessionDir, sess.MarkerFile()),
-		filepath.Join(sessionDir, sess.Stem()+".jsonl.corrupt"),
-		filepath.Join(sessionDir, sess.Stem()+".jsonl.corrupt-abc123"),
 		filepath.Join(missionDir, msn.ChunkFile()),
 		filepath.Join(missionDir, msn.TempFile()),
 		filepath.Join(missionDir, msn.MarkerFile()),
-		filepath.Join(missionDir, msn.Stem()+".jsonl.corrupt"),
-		filepath.Join(missionDir, msn.Stem()+".jsonl.corrupt-abc123"),
 	} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, nil, 0o644))
 	}
+
+	quarantineTwice(t, root, sessionDir, sess)
+	quarantineTwice(t, root, missionDir, msn)
+}
+
+// quarantineTwice corrupts the chunk named cn in dir and runs the real
+// quarantine on it, then corrupts it again and runs it a second time, so the
+// directory holds the <stem>.jsonl.corrupt a first event leaves, the marker, and
+// the <stem>.jsonl.corrupt-<hash> a second event retires fresh damage to.
+func quarantineTwice(t *testing.T, root, dir string, cn audit.ChunkName) {
+	t.Helper()
+
+	live := filepath.Join(t.TempDir(), "live.jsonl") // absent: nothing to re-seal
+	for _, garbage := range []string{"not json\n", "still not json\n"} {
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(garbage), 0o644))
+		_, err := audit.Quarantine(root, dir, cn, live, "test corruption")
+		require.NoError(t, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, audit.CorruptName(cn.Stem())+"-*"))
+	require.NoError(t, err)
+	require.NotEmpty(t, matches, "the second quarantine must retire to a .corrupt-<hash> name")
 }
 
 // writeAgents runs the three writers of .claude/agents/<name>.md: the
@@ -293,4 +311,53 @@ func writeMigrations(t *testing.T, root, global string) {
 	require.NoError(t, os.WriteFile(filepath.Join(sessions, "sess-1.audit.jsonl"),
 		[]byte(`{"ts":"2026-10-23T00:00:00Z","tool_name":"Read","tool_use_id":"t1"}`+"\n"), 0o644))
 	require.NoError(t, hook.MigrateAudit(sessions, root, false, io.Discard))
+}
+
+// TestSymlinkedTargetsAreClassified: `ethos enable` writes through a CLAUDE.md
+// linked to AGENTS.md and a .gitignore linked to another name. The links are
+// classified by their logical names, and the writers leave nothing behind that
+// is not. The link targets are the user's files, not ethos writes.
+func TestSymlinkedTargetsAreClassified(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	gitIn(t, root, "init", "-q")
+	for target, link := range map[string]string{"AGENTS.md": "CLAUDE.md", "shared.ignore": ".gitignore"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, target), []byte("# user file\n"), 0o644))
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	_, err := enable.Enable(root)
+	require.NoError(t, err)
+
+	var leftovers []string
+	require.NoError(t, filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		if rel == ".git" && d.IsDir() {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || rel == "AGENTS.md" || rel == "shared.ignore" {
+			return nil
+		}
+		if _, _, ok := layout.Classify(filepath.ToSlash(rel)); !ok {
+			leftovers = append(leftovers, rel)
+		}
+		return nil
+	}))
+	if len(leftovers) > 0 {
+		t.Errorf("enable through symlinks left unclassified files: %v", leftovers)
+	}
+	for _, link := range []string{"CLAUDE.md", ".gitignore"} {
+		fi, err := os.Lstat(filepath.Join(root, link))
+		require.NoError(t, err)
+		if fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s is no longer a symlink", link)
+		}
+	}
 }
