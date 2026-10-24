@@ -12767,8 +12767,9 @@ ethos writes to its class (bead `ethos-g3g3`). The first matching entry
 gives a path's class, and class-4 entries (locks, temporary files,
 `*.local.*`) come first, so a lock inside a mission directory or an
 `ext/<ns>.local.yaml` file is class 4. A test fails when a writer creates
-a path no entry matches, and when two entries of different classes match
-one path at the same position in the order. An `ethos doctor` check
+a path no entry matches, and when entries of two different classes both
+match one path and neither is class 4; class-4 precedence is the only
+overlap the table resolves by order. An `ethos doctor` check
 reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
 that no entry matches; other tools' files under `.punt-labs/` are not
 ethos's to classify. A prose list cannot stay complete as writers are
@@ -12859,24 +12860,26 @@ needs:
   audit quarantine artifacts.
 
 **Agent-written files in the mission tree.** Agents write
-`missions/<id>/artifacts/*.md` with their own file tools; ethos does not
-create them, and its live writers do not redact them. They are class 3.
-The one ethos writer that touches them is `export --full`, which rewrites
-them in place through the redactor. In both `record` modes,
-`ethos enable` writes an ignore rule for
-`.punt-labs/ethos/missions/*/artifacts/`, so an artifact reaches git only
-after `export --full` has redacted it. `record: full` does not commit
-artifacts as the agent wrote them.
+`missions/<id>/artifacts/*.md` with their own file tools. No ethos code
+writes, moves, exports or redacts them. The class table has an entry for
+the path, class 3, so `ethos doctor` does not report them, and in both
+`record` modes `ethos enable` writes an ignore rule for
+`.punt-labs/ethos/missions/*/artifacts/`. Neither `export --full` nor
+`record: full` changes this. An artifact a person wants in git is moved
+to a path of their choosing and committed by them; ethos makes no
+redaction claim about it. An artifact already tracked stays tracked
+despite the rule, and `ethos doctor` lists it with the `git rm --cached`
+command below.
 
 The live event log and live audit file stay in the machine-local zone
 `.punt-labs/local/ethos/` in every mode (`internal/audit/paths.go:26`).
-Where every other class-3 file is written is set by `record` in
-`.punt-labs/ethos.yaml`:
+Where every other class-3 file that ethos writes is written is set by
+`record` in `.punt-labs/ethos.yaml`:
 
 - `record: blame` (the default): under the machine-local archive
   `.punt-labs/local/ethos/trace/`, keeping each file's path relative to
   `.punt-labs/ethos/`. The pre-commit seal keeps its DES-058 role (live
-  file to immutable chunk) but seals into the archive. The class-4 rule
+  file to immutable chunk) but seals into the archive. The ignore rule
   `.punt-labs/**/local/**` is what keeps the archive untracked; the
   archive's files are still class 3.
 - `record: full`: at their paths under `.punt-labs/ethos/`, tracked, as
@@ -12892,7 +12895,9 @@ trailer hook is unchanged.
 one machine: `.punt-labs/**/*.local.*`, every lock file ethos creates
 (`.punt-labs/ethos/missions/**/*.lock`, which also matches
 `missions/.create.lock`; `.punt-labs/ethos/missions.jsonl.lock`;
-`.punt-labs/ethos/identities/*.yaml.lock`), and the temporary files
+`.punt-labs/ethos/identities/*.yaml.lock`; and `*.lock` anywhere under
+`.punt-labs/local/ethos/`, such as the live-file locks at
+`internal/audit/paths.go:43,63`), and the temporary files
 writers create for an atomic rename. The ignore rule
 `.punt-labs/**/local/**` also covers the `record: blame` trace archive.
 `ethos enable`'s rules (`internal/enable/gitignore.go:68-93`) cover only
@@ -12903,12 +12908,13 @@ every class-4 pattern, each with a probe.
 
 **Opting in to the trace tier.** `ethos mission export <id> --full` writes
 one mission's per-mission class-3 files (delegation prompts,
-`reflections.yaml`, artifacts and event-log chunks) from the archive to
-their tracked paths, through the redactor (DES-080). Audit chunks are per
+`reflections.yaml` and event-log chunks) from the archive to their
+tracked paths, through the redactor (DES-080). Audit chunks are per
 session, not per mission, and `--full` does not export them. `record:
-full` writes every class-3 file to its tracked path as it is written,
-audit chunks included, so audit chunks reach git only under
-`record: full`. The ignore rules follow the mode:
+full` writes the class-3 files ethos writes to their tracked paths as
+they are written, audit chunks included, so audit chunks reach git only
+under `record: full`. Neither covers the live files or agent-written
+artifacts (above). The ignore rules follow the mode:
 
 - Under `record: blame`, `ethos enable` writes ignore rules for the
   tracked class-3 paths, so a file written there by an older binary is
@@ -13024,7 +13030,7 @@ command, prompt or contract was committed verbatim.
    unredacted lines, because the event-log writer redacted nothing but
    three event types (Context above). Neither is rewritten (decision 6).
    Agent-written `artifacts/` files are not written by ethos and are out
-   of scope (DES-079); `export --full` redacts them when it copies them.
+   of scope (DES-079); no ethos command copies or exports them.
    The identity graph, generated and seeded
    `.claude/agents/` files, `.punt-labs/ethos.yaml` and the vendor
    manifests are out of scope: they carry identity data on purpose, and an
