@@ -13050,7 +13050,11 @@ command, prompt or contract was committed verbatim.
    that ethos enforces (a contract's tool grants, write set, extraction
    targets, precondition paths and repository) get the path pass only,
    because a name-based credential match would change what they mean
-   (`Bash(gh auth token:*)` is a tool grant, not a secret). Identifiers,
+   (`Bash(gh auth token:*)` is a tool grant, not a secret). For these
+   fields the path pass rewrites only an absolute path that begins with
+   the home directory or repository root; a relative path is left
+   unchanged, so `testdata/home/alice/config.yaml` is never turned into
+   `testdata~/config.yaml`. Identifiers,
    hashes, enums and timestamps get no pass. The contract writer
    validates the redacted form and refuses the write if redaction made
    it invalid. Matching by name over-redacts some ordinary text
