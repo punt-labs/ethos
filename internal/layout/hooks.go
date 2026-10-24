@@ -12,7 +12,8 @@ var hookNames = []string{"pre-commit", "commit-msg"}
 // HookEntries returns class-1 entries for the hook files `ethos enable` writes
 // into hooksDir, when core.hooksPath places that directory inside the working
 // tree at repoRoot. It returns nil when hooksDir is outside the tree (the
-// default .git/hooks included), because those files are not the repository's.
+// default .git/hooks included) or inside .punt-labs/, because those files are
+// not the repository's or belong to ethos's own classes.
 // The directory is the user's choice, so the entries come from the resolved
 // directory rather than from the static Table.
 func HookEntries(repoRoot, hooksDir string) []Entry {
@@ -21,8 +22,12 @@ func HookEntries(repoRoot, hooksDir string) []Entry {
 		return nil
 	}
 	rel = filepath.ToSlash(rel)
-	if rel == ".git" || strings.HasPrefix(rel, ".git/") {
-		return nil
+	// .git is not tracked; .punt-labs is ethos's own zones, whose classes a
+	// source hook entry would overlap.
+	for _, z := range []string{".git", ".punt-labs"} {
+		if rel == z || strings.HasPrefix(rel, z+"/") {
+			return nil
+		}
 	}
 	out := make([]Entry, 0, len(hookNames))
 	for _, n := range hookNames {
@@ -46,11 +51,22 @@ func TableFor(repoRoot, hooksDir string) []Entry {
 	return append(out, fallback...)
 }
 
+// evalPath resolves symlinks in the longest existing prefix of p and appends
+// the rest, so a directory not yet created resolves the way the repo root does.
 func evalPath(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
+	p = filepath.Clean(p)
+	rest := ""
+	for cur := p; ; {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
 	}
-	return filepath.Clean(p)
 }
 
 // escape quotes the glob metacharacters in a literal path.

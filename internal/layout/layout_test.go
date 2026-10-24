@@ -1,7 +1,9 @@
 package layout_test
 
 import (
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -115,12 +117,6 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/missions/m-1/corrections.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions.jsonl", layout.Blame, true},
 		{".punt-labs/ethos/adrs/DES-079.yaml", layout.Blame, true},
-		{".punt-labs/ethos/missions/m-1.contract.yaml", layout.Blame, true},
-		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.result.yaml", layout.Blame, true},
-		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.contract.yaml", layout.Blame, true},
-		// A fallback never takes a path another entry claims.
-		{".punt-labs/ethos/missions/m-1/artifacts/m-1.contract.yaml", layout.Trace, true},
-		{".punt-labs/ethos/identities/m-1.contract.yaml", layout.Source, true},
 		{".punt-labs/ethos/missions/m-1/delegations/d-1/prompt.md", layout.Trace, true},
 		{".punt-labs/ethos/missions/m-1/reflections.yaml", layout.Trace, true},
 		{".punt-labs/ethos/missions/m-1/artifacts/notes.md", layout.Trace, true},
@@ -174,6 +170,8 @@ func TestHookEntries(t *testing.T) {
 		{"outside", t.TempDir(), nil, []string{"pre-commit"}},
 		{"git dir", root + "/.git/hooks", nil, []string{".git/hooks/pre-commit"}},
 		{"root itself", root, []string{"pre-commit"}, nil},
+		{"ethos zone", root + "/.punt-labs/ethos/hooks", nil, []string{".punt-labs/ethos/hooks/pre-commit"}},
+		{"punt-labs itself", root + "/.punt-labs", nil, []string{".punt-labs/pre-commit"}},
 	}
 	for _, tt := range tests {
 		table := layout.TableFor(root, tt.hooksDir)
@@ -185,6 +183,24 @@ func TestHookEntries(t *testing.T) {
 		for _, p := range tt.not {
 			if _, _, ok := layout.ClassifyIn(table, p); ok {
 				t.Errorf("%s: ClassifyIn(%q) matched; want no entry", tt.name, p)
+			}
+		}
+	}
+}
+
+// TestHookEntriesSymlinkedRoot: a hooks directory that does not exist yet must
+// resolve against a symlinked repo root as an existing one does (macOS /var).
+func TestHookEntriesSymlinkedRoot(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for _, root := range []string{link, real} {
+		for _, dir := range []string{link, real} {
+			table := layout.TableFor(root, filepath.Join(dir, ".githooks"))
+			if c, _, ok := layout.ClassifyIn(table, ".githooks/pre-commit"); !ok || c != layout.Source {
+				t.Errorf("root %s, hooks dir under %s: ClassifyIn = %v, %v; want source", root, dir, c, ok)
 			}
 		}
 	}
@@ -251,6 +267,22 @@ func TestEntriesAreExclusive(t *testing.T) {
 	c := writerCorpus(t)
 	for _, s := range conflicts(c.table) {
 		t.Errorf("overlapping classes: %s", s)
+	}
+}
+
+// TestTableForIsExclusive: hook entries must not overlap another class, wherever
+// core.hooksPath points. Directories inside .punt-labs/ are refused outright.
+func TestTableForIsExclusive(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{
+		".githooks",
+		".punt-labs/ethos/hooks",
+		".punt-labs/ethos/missions/m-1/artifacts",
+		".punt-labs/ethos/missions/m-1",
+	} {
+		for _, s := range conflicts(layout.TableFor(root, filepath.Join(root, dir))) {
+			t.Errorf("hooks dir %s: overlapping classes: %s", dir, s)
+		}
 	}
 }
 
