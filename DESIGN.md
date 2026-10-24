@@ -12758,8 +12758,13 @@ forensics, not blame.
 
 ### Decision
 
-Every file ethos writes inside a repository's working tree belongs to
-exactly one of the four classes below. A class says what a file is; where a
+Every file ethos writes inside a repository's working tree at a path it
+chooses belongs to exactly one of the four classes below. Output the user
+directs to a path of their choosing (`ethos mission export --dir`,
+`ethos export --to`) is outside the classification. A writer that follows
+a symlink (a `CLAUDE.md` linked to `AGENTS.md`, a linked `.gitignore`) is
+classified by the name it was asked to write, and names its temporary
+file after that name. A class says what a file is; where a
 class-3 file is written depends on the `record` setting (below). The lists
 in this ADR name the paths known on 2026-10-24 and are not the authority.
 The authority is one ordered table in code that maps every path pattern
@@ -12777,11 +12782,13 @@ case is a fallback entry: the exported-record shape
 `missions-closed/` directory) is class 2, sits last, and claims only a path
 no other entry matches, so an agent artifact named `m-1.contract.yaml`
 stays class 3. Temporary-file entries are built from the same helpers the
-writers use to name their temporary files, and a test fails when an entry
-matches no helper-built name. An `ethos doctor` check
-reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
-that no entry matches; other tools' files under `.punt-labs/` are not
-ethos's to classify. A prose list cannot stay complete as writers are
+writers use to name their temporary files; a test fails when an entry
+matches no helper-built name, and a source scan fails when an in-tree
+writer names a temporary file without a helper. An `ethos doctor` check
+reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/` of
+the working tree it runs in that no entry matches, and reports a symlink
+in those zones as not scanned; other tools' files under `.punt-labs/` are
+not ethos's to classify. A prose list cannot stay complete as writers are
 added; a failing test can.
 
 Files ethos writes outside the working tree are out of scope: git hooks
@@ -12793,8 +12800,8 @@ in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
 entries are derived from the resolved hooks directory, not from the file
 names, so a file named `pre-commit` elsewhere in the tree is not
 classified as a hook. A hooks directory at or under `.punt-labs/` gets no
-entries: it would overlap ethos's own zones, and `ethos doctor` reports
-its files as unclassified. Adding a team bundle as a submodule writes
+entries: it could overlap ethos's own zones. `ethos doctor` names such a
+hooks directory and lists the ethos hook files in it as unclassified. Adding a team bundle as a submodule writes
 `.gitmodules` through `git submodule add`
 (`cmd/ethos/team_bundle.go`); it is class 1.
 
@@ -13068,10 +13075,12 @@ command, prompt or contract was committed verbatim.
    because a name-based credential match would change what they mean
    (`Bash(gh auth token:*)` is a tool grant, not a secret). For these
    fields the path pass rewrites an absolute path only where one starts:
-   at the start of the value or after a boundary (`(`, `//`, whitespace,
-   `=`, `:`, `,`, a quote), and only when the home directory or repository
-   root is followed by `/`, `)`, `:`, whitespace, a quote or the end. A
-   relative path is left unchanged, so `testdata/home/alice/config.yaml`
+   at the start of the value or after a boundary (`(`, a run of `/`,
+   `scheme://`, whitespace, `=`, `:`, `,`, a quote), and only when the
+   home directory or repository root is followed by `/`, `)`, `:`, `,`,
+   `;`, `]`, whitespace, a quote or the end. A slash directly after a
+   placeholder never starts a path, so the pass is idempotent. A
+   relative path is never rewritten, so `testdata/home/alice/config.yaml`
    is never turned into `testdata~/config.yaml`. The placeholders are
    reversible on the machine that reads them: the current repository root
    becomes `<repo>`, the current home `~`, and the dash-encoded current
@@ -13081,9 +13090,20 @@ command, prompt or contract was committed verbatim.
    the same function, so a recorded read and a contract entry compare
    equal. Another user's home becomes a token that never expands
    (`~[redacted-user]`), so a precondition naming it fails with that
-   reason instead of matching the reader's own home. If a path-tagged
-   value still contains a home path or user name after the pass, the
-   writer refuses it. Identifiers,
+   reason instead of matching the reader's own home. Audit lines carry a
+   path-format marker; a `~` in a read recorded on a line without it is
+   not trusted, because older lines wrote another user's home as `~`.
+   Leak-freedom is one check, run by every in-scope writer (the record
+   writers, `migrate`, `scrub` and the audit writer) on every output
+   value after the passes: a value that contains the home directory,
+   `/home/<name>`, `/Users/<name>`, a dash-encoded home, or the user name
+   as a path segment, anywhere and not directly after a placeholder,
+   leaks. A mission writer refuses it, naming the field and not the
+   value; the audit writer replaces the value with `[redacted-path]`.
+   The check over-matches by design: a relative entry such as
+   `testdata/home/alice/x` is refused. Go fuzz tests drive every writer
+   and assert that each output passes the check or is refused, and that
+   the path pass is idempotent. Identifiers,
    hashes, enums and timestamps get no pass. The contract writer
    validates the redacted form and refuses the write if redaction made
    it invalid. Matching by name over-redacts some ordinary text

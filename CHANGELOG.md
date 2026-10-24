@@ -95,6 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up to 10 unrecognized files; files in other tools' directories under
   `.punt-labs/` are not checked. Exported mission records placed under
   `.punt-labs/ethos/` with `ethos mission export --dir` are recognized.
+  The check scans the working tree it runs in (a git worktree's own
+  files), reports a symlink in either directory as not scanned, and names
+  a `core.hooksPath` directory under `.punt-labs/` whose ethos hook files
+  have no class. The temporary file `ethos enable` uses when updating
+  `CLAUDE.md` is now named `.CLAUDE.md.<random>` (was
+  `.CLAUDE.md.tmp<random>`), also when `CLAUDE.md` is a symlink.
 
 - **Design for native OpenCode integration (DES-078,
   `docs/design-opencode-plugin.md`).** Design only, no implementation.
