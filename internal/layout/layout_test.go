@@ -426,10 +426,11 @@ func fill(pattern string) string {
 	return pattern[:i] + "123456" + pattern[i+1:]
 }
 
-// TestTempEntriesAreFedByHelpers: every Temp entry must match a name some
-// helper in temp.go builds, and each such name is class 4 and so never
-// tracked. The writers call these helpers, so the pattern and the name they
-// create cannot drift apart.
+// TestTempEntriesAreFedByHelpers proves two things about the table and the
+// helpers in temp.go: each name a helper builds, in the shape a writer uses it,
+// classifies as class 4; and each Temp entry matches at least one such name, so
+// no Temp entry is dead. It does not prove that writers call the helpers;
+// TestTempNamesComeFromLayoutHelpers scans the source for that.
 func TestTempEntriesAreFedByHelpers(t *testing.T) {
 	names := []string{
 		layout.TmpPath(".punt-labs/ethos/identities/bwk.yaml"),
