@@ -13029,7 +13029,13 @@ command, prompt or contract was committed verbatim.
    DES-054's passes only; mission event-log chunks sealed before then hold
    unredacted lines, because the event-log writer redacted nothing but
    three event types (Context above). Neither is rewritten (decision 6).
-   Agent-written `artifacts/` files are not written by ethos and are out
+   Upgrade exception: lines already in a live audit file or live event log
+   when a repository upgrades were written before redaction, and the first
+   seal after the upgrade copies them into a chunk unchanged
+   (`SelectLiveTail`, `internal/audit/seal.go:228-264`). Until
+   `ethos mission scrub` also redacts live tails and recomputes their
+   `tool_input_hash` (bead `ethos-kic6`), that first post-upgrade chunk
+   can hold pre-DES-080 content. Agent-written `artifacts/` files are not written by ethos and are out
    of scope (DES-079); no ethos command copies or exports them.
    The identity graph, generated and seeded
    `.claude/agents/` files, `.punt-labs/ethos.yaml` and the vendor
