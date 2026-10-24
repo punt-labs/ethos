@@ -63,6 +63,11 @@ func TestOverlap(t *testing.T) {
 		{"a/*/c", "**/c", true},
 		{`\*`, "*", true},
 		{`\*`, "x", false},
+		// ? is one rune, as in path.Match, not one byte.
+		{"a?c", "aéc", true},
+		{"a?c", "aééc", false},
+		{"a??c", "aéc", false},
+		{"é*", "éb", true},
 	}
 	for _, tt := range tests {
 		if got := layout.Overlap(tt.a, tt.b); got != tt.want {
@@ -281,9 +286,10 @@ func TestClassFourComesFirst(t *testing.T) {
 	}
 }
 
-// conflicts returns every pair of entries of table that can match one path,
-// have different classes, and are not class 4. Class 4 is exempt because the
-// table resolves it by order.
+// conflicts returns every pair of entries of table that can match one path and
+// have different classes. Two kinds of entry are exempt: class 4, which the
+// table resolves by order, and Fallback entries, which claim only paths no
+// other entry matches.
 func conflicts(table []layout.Entry) []string {
 	var out []string
 	for i, a := range table {
@@ -317,16 +323,22 @@ func TestEntriesAreExclusive(t *testing.T) {
 	}
 }
 
-// TestTableForIsExclusive: hook entries must not overlap another class, wherever
-// core.hooksPath points. Directories inside .punt-labs/ are refused outright.
+// TestTableForIsExclusive: with core.hooksPath at a directory where a class-2 or
+// class-3 entry's files live (or at that file's own path), TableFor must add no
+// source entry that overlaps it. HookEntries meets this by refusing directories
+// inside .punt-labs/; the test fails if that refusal is narrowed, or if an
+// entry is added whose witness directory lies elsewhere.
 func TestTableForIsExclusive(t *testing.T) {
 	root := t.TempDir()
-	for _, dir := range []string{
-		".githooks",
-		".punt-labs/ethos/hooks",
-		".punt-labs/ethos/missions/m-1/artifacts",
-		".punt-labs/ethos/missions/m-1",
-	} {
+	dirs := []string{".githooks"}
+	for _, e := range layout.Table {
+		if e.Class == layout.Source || e.Class == layout.Never {
+			continue
+		}
+		w := witness(e.Pattern)
+		dirs = append(dirs, w, path.Dir(w))
+	}
+	for _, dir := range dirs {
 		for _, s := range conflicts(mustTableFor(t, root, filepath.Join(root, dir))) {
 			t.Errorf("hooks dir %s: overlapping classes: %s", dir, s)
 		}

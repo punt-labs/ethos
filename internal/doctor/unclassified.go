@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,7 +51,7 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("scanning %s: %v", filepath.Join(repoRoot, zone), err)}
 		}
 	}
-	if err := collectHookFiles(table, repoRoot, hooksDir, seen); err != nil {
+	if err := collectHookFiles(repoRoot, hooksDir, seen); err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
 
@@ -124,14 +125,18 @@ func collectUnclassified(table []layout.Entry, root, zone string, seen map[strin
 	})
 }
 
-// collectHookFiles adds to seen the hook files ethos wrote into a hooks
-// directory under .punt-labs/ that no table entry matches. The zone walk
-// misses them when the directory lies outside both zones.
-func collectHookFiles(table []layout.Entry, root, hooksDir string, seen map[string]bool) error {
+// collectHookFiles adds to seen one entry naming the hooks directory, when
+// core.hooksPath puts it at or under .punt-labs/ and ethos hook files exist
+// there. layout refuses entries for such a directory, and a zone entry may
+// claim the files by accident (a mission's artifacts/ is class 3), so the
+// check names the directory rather than rely on the zone walk. The walk's own
+// entries for these files are dropped as duplicates.
+func collectHookFiles(root, hooksDir string, seen map[string]bool) error {
 	paths, err := layout.PuntLabsHookPaths(root, hooksDir)
 	if err != nil {
 		return fmt.Errorf("resolving hooks directory %s: %w", hooksDir, err)
 	}
+	var names []string
 	for _, rel := range paths {
 		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -139,9 +144,14 @@ func collectHookFiles(table []layout.Entry, root, hooksDir string, seen map[stri
 			}
 			return fmt.Errorf("checking hook file %s: %w", rel, err)
 		}
-		if _, _, ok := layout.ClassifyIn(table, rel); !ok {
-			seen[rel] = true
-		}
+		names = append(names, path.Base(rel))
+		delete(seen, rel)
 	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	seen[fmt.Sprintf("core.hooksPath %s is inside .punt-labs; ethos hook files there are unclassified: %s",
+		path.Dir(paths[0]), strings.Join(names, ", "))] = true
 	return nil
 }

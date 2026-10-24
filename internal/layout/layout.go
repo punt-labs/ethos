@@ -116,8 +116,10 @@ func normalize(p string) string {
 
 // Table is the ordered path-class table. Class-4 entries come first so that a
 // lock inside a mission directory, or an ext/<ns>.local.yaml file, is never
-// tracked; that precedence is the only overlap the table resolves by order.
-// Every other pair of entries must be disjoint, which the package tests check.
+// tracked; that precedence is the only overlap the table resolves by order
+// between non-fallback entries. A Fallback entry is the other exemption: it
+// claims only what no other entry does, so it may overlap any of them. Every
+// other pair of entries must be disjoint, which the package tests check.
 var Table = []Entry{
 	// Class 4: never tracked.
 	{Pattern: ".punt-labs/**/*.local.*", Class: Never},
@@ -162,6 +164,8 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions.jsonl", Class: Blame},
 	{Pattern: ".punt-labs/ethos/missions/*/contract.yaml", Class: Blame},
 	{Pattern: ".punt-labs/ethos/missions/*/results.yaml", Class: Blame},
+	// No writer yet: the corrections slice of ethos-g3g3 will create it. The
+	// entry is kept so the file has a class on the day it appears.
 	{Pattern: ".punt-labs/ethos/missions/*/corrections.yaml", Class: Blame},
 	{Pattern: ".punt-labs/ethos/missions/*/delegations/*/record.yaml", Class: Blame},
 	{Pattern: ".punt-labs/ethos/adrs/*.yaml", Class: Blame},

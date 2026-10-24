@@ -92,26 +92,6 @@ func countOccurrences(s, sub string) int {
 	return n
 }
 
-// TestCheckUnclassifiedFiles_HooksInsideZoneAreUnclassified: layout refuses
-// hook entries for a hooks directory inside .punt-labs/, so with core.hooksPath
-// pointing into a scanned zone its files warn like any other unknown file.
-func TestCheckUnclassifiedFiles_HooksInsideZoneAreUnclassified(t *testing.T) {
-	root := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"config", "core.hooksPath", ".punt-labs/ethos/hooks"},
-	} {
-		out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
-		require.NoError(t, err, string(out))
-	}
-	touch(t, root, ".punt-labs/ethos/hooks/pre-commit")
-	touch(t, root, ".punt-labs/ethos/hooks/commit-msg")
-	r := CheckUnclassifiedFiles(root)
-	assert.Equal(t, "WARN", r.Status)
-	assert.Contains(t, r.Detail, ".punt-labs/ethos/hooks/pre-commit")
-	assert.Contains(t, r.Detail, ".punt-labs/ethos/hooks/commit-msg")
-}
-
 // TestCheckUnclassifiedFiles_ExportedMissionsPass: `ethos mission export --dir
 // .punt-labs/ethos/missions-closed` output must not warn; other files beside it
 // still do.
@@ -197,20 +177,30 @@ func TestCheckUnclassifiedFiles_SymlinkInsideZoneIsReported(t *testing.T) {
 	assert.NotContains(t, r.Detail, "bwk.yaml")
 }
 
-func TestCheckUnclassifiedFiles_HooksDirUnderPuntLabsOutsideZones(t *testing.T) {
-	root := t.TempDir()
-	gitIn(t, root, "init", "-q")
-	gitIn(t, root, "config", "core.hooksPath", ".punt-labs/githooks")
-	assert.Equal(t, "PASS", CheckUnclassifiedFiles(root).Status, "no hook files yet")
+// TestCheckUnclassifiedFiles_HooksDirUnderPuntLabs: layout refuses hook entries
+// for a hooks directory at or under .punt-labs/, so the check names the
+// directory itself. Inside a zone the directory must not be classified by the
+// zone's own entries, such as a mission's artifacts/ (class 3).
+func TestCheckUnclassifiedFiles_HooksDirUnderPuntLabs(t *testing.T) {
+	for _, dir := range []string{
+		".punt-labs/githooks",
+		".punt-labs/hooks",
+		".punt-labs/ethos/hooks",
+		".punt-labs/ethos/missions/m-1/artifacts",
+	} {
+		t.Run(dir, func(t *testing.T) {
+			root := t.TempDir()
+			gitIn(t, root, "init", "-q")
+			gitIn(t, root, "config", "core.hooksPath", dir)
+			assert.Equal(t, "PASS", CheckUnclassifiedFiles(root).Status, "no hook files yet")
 
-	touch(t, root, ".punt-labs/githooks/pre-commit")
-	touch(t, root, ".punt-labs/githooks/commit-msg")
-	touch(t, root, ".punt-labs/githooks/other") // not an ethos-written hook
-	r := CheckUnclassifiedFiles(root)
-	assert.Equal(t, "WARN", r.Status)
-	assert.Contains(t, r.Detail, ".punt-labs/githooks/pre-commit")
-	assert.Contains(t, r.Detail, ".punt-labs/githooks/commit-msg")
-	assert.NotContains(t, r.Detail, "githooks/other")
+			touch(t, root, dir+"/pre-commit")
+			touch(t, root, dir+"/commit-msg")
+			r := CheckUnclassifiedFiles(root)
+			assert.Equal(t, "WARN", r.Status)
+			assert.Contains(t, r.Detail, "core.hooksPath "+dir+" is inside .punt-labs; ethos hook files there are unclassified: commit-msg, pre-commit")
+		})
+	}
 }
 
 // TestCheckUnclassifiedFiles_SurfacesHooksDirWarnings: githook.HooksDir warns

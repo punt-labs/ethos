@@ -26,29 +26,30 @@ func overlapSegments(a, b []string) bool {
 }
 
 // token is one element of a single-segment glob: a run of any characters, any
-// one character, or one literal character.
+// one rune (as path.Match counts), or one literal rune.
 type token struct {
 	kind byte // '*', '?' or 'c'
-	c    byte
+	c    rune
 }
 
 // tokens parses a path.Match segment. Character classes are not used by any
 // table entry and are rejected by the package tests.
 func tokens(seg string) []token {
 	var out []token
-	for i := 0; i < len(seg); i++ {
-		switch seg[i] {
+	rs := []rune(seg)
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
 		case '*':
 			out = append(out, token{kind: '*'})
 		case '?':
 			out = append(out, token{kind: '?'})
 		case '\\':
-			if i+1 < len(seg) {
+			if i+1 < len(rs) {
 				i++
 			}
-			out = append(out, token{kind: 'c', c: seg[i]})
+			out = append(out, token{kind: 'c', c: rs[i]})
 		default:
-			out = append(out, token{kind: 'c', c: seg[i]})
+			out = append(out, token{kind: 'c', c: rs[i]})
 		}
 	}
 	return out
