@@ -793,6 +793,16 @@ Example:
 
 var missionExportDir string
 
+// missionExportDefaultDir is where `ethos mission export` writes when --dir is
+// not given, relative to the current directory.
+const missionExportDefaultDir = ".punt-labs/ethos/missions"
+
+// missionExportPaths returns the files `ethos mission export` writes for
+// mission id under dir.
+func missionExportPaths(dir, id string) (contract, result string) {
+	return filepath.Join(dir, id+".contract.yaml"), filepath.Join(dir, id+".result.yaml")
+}
+
 var missionExportCmd = &cobra.Command{
 	Use:   "export <id-or-prefix>",
 	Short: "Export mission contract and result to a repo directory for git tracking",
@@ -961,7 +971,7 @@ func init() {
 	missionLogCmd.Flags().StringVar(&missionLogSinceFilter, "since", "",
 		"Filter by RFC3339 timestamp (events on or after)")
 
-	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".punt-labs/ethos/missions",
+	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", missionExportDefaultDir,
 		"Directory to export artifacts into")
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
@@ -1982,7 +1992,7 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("marshaling contract: %w", err)
 	}
-	contractPath := filepath.Join(dir, id+".contract.yaml")
+	contractPath, resultPath := missionExportPaths(dir, id)
 	if err := os.WriteFile(contractPath, contractData, 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", contractPath, err)
 	}
@@ -2002,7 +2012,6 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("marshaling result: %w", err)
 	}
-	resultPath := filepath.Join(dir, id+".result.yaml")
 	if err := os.WriteFile(resultPath, resultData, 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", resultPath, err)
 	}
