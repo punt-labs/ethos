@@ -13040,7 +13040,15 @@ command, prompt or contract was committed verbatim.
    rather than copied), and credentials (token shapes such as `ghp_`,
    `github_pat_`, `sk-`, AWS key IDs, `Bearer`, PEM private-key blocks, and
    `name=value` pairs whose name denotes a secret), replaced by
-   `[redacted-secret]`.
+   `[redacted-secret]`. Free-text fields get all three passes. Fields
+   that ethos enforces (a contract's tool grants, write set, extraction
+   targets, precondition paths and repository) get the path pass only,
+   because a name-based credential match would change what they mean
+   (`Bash(gh auth token:*)` is a tool grant, not a secret). Identifiers,
+   hashes, enums and timestamps get no pass. The contract writer
+   validates the redacted form and refuses the write if redaction made
+   it invalid. Matching by name over-redacts some ordinary text
+   (`max_tokens=4096`); that cost is accepted and pinned in tests.
 3. **Failure behaviour.** Every in-scope writer refuses the write when the
    redactor cannot be built, as the delegation writer does — except the
    audit writer, which by design never blocks a tool call
@@ -13073,8 +13081,13 @@ command, prompt or contract was committed verbatim.
      tracked path, so no existing chunk is modified.
 6. **History is scrubbed forward only.** The mutable tracked records
    (`contract.yaml`, `results.yaml`, `reflections.yaml`,
-   `delegations/*/record.yaml` and `prompt.md`, `missions.jsonl`) are
-   rewritten once through the new redactor in a normal commit. Sealed
+   `delegations/*/record.yaml` and `prompt.md`, `missions.jsonl`, and
+   plain-export output at its default directory) are rewritten through
+   the new redactor in a normal commit. `ethos mission scrub` does this in
+   any repository: it lists the files that would change, rewrites them
+   with `--apply`, continues past a file it cannot process, and exits
+   non-zero if any file failed. A repository upgrading from an earlier
+   ethos runs it once. Sealed
    chunks are not rewritten: DES-058 makes them immutable, and about 760
    are tracked in this repository alone. The legacy pre-DES-058
    `audit.jsonl` and `log.jsonl` files are not rewritten either: their
