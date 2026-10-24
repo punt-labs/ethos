@@ -216,6 +216,16 @@ and exports `ETHOS_SESSION` (plus `ETHOS_AGENT_ID` when `--persona` is
 supplied). Design + resolution rules:
 [Harness-neutral sessions](docs/harness-sessions.md).
 
+### Native OpenCode MCP identity
+
+OpenCode MCP calls can resolve identity from request-local session metadata,
+without setting a shared server identity. Explicitly seat the OpenCode session
+ID as an Ethos participant first; `whoami`, implicit roster lookup, and `iam`
+then use that exact caller and fail if its binding is missing or invalid.
+See the [identity pilot guide](docs/opencode-mcp-identity.md) for setup and
+limitations. This does not implement automatic lifecycle, mission, or fork
+integration.
+
 ### Self-Standing Repos: `vendor` and `resolution: repo-only`
 
 Default resolution is repo → active bundle → global, and the global
