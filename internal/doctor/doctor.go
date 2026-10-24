@@ -107,7 +107,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	results = append(results, CheckDelegatedWorkerArchetypes(storeRoot))
 
 	// DES-079: every file ethos owns has a class in the path-class table.
-	results = append(results, CheckUnclassifiedFiles(repoRoot, storeRoot))
+	results = append(results, CheckUnclassifiedFiles(repoRoot))
 	return results
 }
 

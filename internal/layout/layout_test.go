@@ -174,7 +174,7 @@ func TestHookEntries(t *testing.T) {
 		{"punt-labs itself", root + "/.punt-labs", nil, []string{".punt-labs/pre-commit"}},
 	}
 	for _, tt := range tests {
-		table := layout.TableFor(root, tt.hooksDir)
+		table := mustTableFor(t, root, tt.hooksDir)
 		for _, p := range tt.want {
 			if c, _, ok := layout.ClassifyIn(table, p); !ok || c != layout.Source {
 				t.Errorf("%s: ClassifyIn(%q) = %v, %v; want source", tt.name, p, c, ok)
@@ -198,10 +198,57 @@ func TestHookEntriesSymlinkedRoot(t *testing.T) {
 	}
 	for _, root := range []string{link, real} {
 		for _, dir := range []string{link, real} {
-			table := layout.TableFor(root, filepath.Join(dir, ".githooks"))
+			table := mustTableFor(t, root, filepath.Join(dir, ".githooks"))
 			if c, _, ok := layout.ClassifyIn(table, ".githooks/pre-commit"); !ok || c != layout.Source {
 				t.Errorf("root %s, hooks dir under %s: ClassifyIn = %v, %v; want source", root, dir, c, ok)
 			}
+		}
+	}
+}
+
+func mustTableFor(t *testing.T, root, hooksDir string) []layout.Entry {
+	t.Helper()
+	table, err := layout.TableFor(root, hooksDir)
+	if err != nil {
+		t.Fatalf("TableFor(%q, %q): %v", root, hooksDir, err)
+	}
+	return table
+}
+
+// TestHookEntriesUnresolvablePath: a symlink loop is neither "does not exist"
+// nor a path to guess about; the error reaches the caller.
+func TestHookEntriesUnresolvablePath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink("loop", filepath.Join(root, "loop")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := layout.HookEntries(root, filepath.Join(root, "loop", "hooks")); err == nil {
+		t.Error("HookEntries through a symlink loop returned no error")
+	}
+	if _, err := layout.TableFor(root, filepath.Join(root, "loop", "hooks")); err == nil {
+		t.Error("TableFor through a symlink loop returned no error")
+	}
+}
+
+func TestPuntLabsHookPaths(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name, hooksDir string
+		want           []string
+	}{
+		{"githooks", root + "/.punt-labs/githooks", []string{".punt-labs/githooks/pre-commit", ".punt-labs/githooks/commit-msg"}},
+		{"in zone", root + "/.punt-labs/ethos/hooks", []string{".punt-labs/ethos/hooks/pre-commit", ".punt-labs/ethos/hooks/commit-msg"}},
+		{"in tree", root + "/.githooks", nil},
+		{"git dir", root + "/.git/hooks", nil},
+		{"outside", t.TempDir(), nil},
+	}
+	for _, tt := range tests {
+		got, err := layout.PuntLabsHookPaths(root, tt.hooksDir)
+		if err != nil {
+			t.Errorf("%s: %v", tt.name, err)
+		}
+		if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
 		}
 	}
 }
@@ -280,7 +327,7 @@ func TestTableForIsExclusive(t *testing.T) {
 		".punt-labs/ethos/missions/m-1/artifacts",
 		".punt-labs/ethos/missions/m-1",
 	} {
-		for _, s := range conflicts(layout.TableFor(root, filepath.Join(root, dir))) {
+		for _, s := range conflicts(mustTableFor(t, root, filepath.Join(root, dir))) {
 			t.Errorf("hooks dir %s: overlapping classes: %s", dir, s)
 		}
 	}
@@ -342,7 +389,7 @@ func TestCoverageDetectsUnmatchedWriter(t *testing.T) {
 func TestFallbackComesLast(t *testing.T) {
 	for name, table := range map[string][]layout.Entry{
 		"Table":    layout.Table,
-		"TableFor": layout.TableFor("/repo", "/repo/.githooks"),
+		"TableFor": mustTableFor(t, "/repo", "/repo/.githooks"),
 	} {
 		seen := false
 		for _, e := range table {
