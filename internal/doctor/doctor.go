@@ -54,7 +54,7 @@ func (r Result) Passed() bool {
 // needs it (Bugbot #370 class: resolving the active team from the worktree
 // while activation wrote it to the store produced false orphan reports).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot string, teams *team.LayeredStore) []Result {
-	results := make([]Result, 0, 14) // matches today's check count; a stale hint just costs one reallocation, not correctness
+	results := make([]Result, 0, 15) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
 	dir, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
 	results = append(results, passFail("Identity directory", dir, ok))
@@ -105,6 +105,9 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	// "test" archetypes is data-driven from the deployed YAML, so a binary
 	// upgrade with no `ethos seed` re-run silently loses enforcement.
 	results = append(results, CheckDelegatedWorkerArchetypes(storeRoot))
+
+	// DES-079: every file ethos owns has a class in the path-class table.
+	results = append(results, CheckUnclassifiedFiles(repoRoot, storeRoot))
 	return results
 }
 

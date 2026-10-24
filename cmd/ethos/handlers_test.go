@@ -189,7 +189,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	// ethos-bfml/ethos-hy40 added "Audit trailer hook" and ethos-e05k
 	// added "Code archetype delegated-worker guard", bumping the count
 	// from 12 to 14.
-	require.Len(t, results, 14)
+	require.Len(t, results, 15)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
