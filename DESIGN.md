@@ -4213,7 +4213,7 @@ emits `ticket` only. Reject both keys simultaneously to prevent ambiguity.
 - New contracts and event logs use `ticket`.
 - A future major release removes the `bead` alias.
 
-## DES-050: Automatic mission traceability via repo-local JSONL (SETTLED; AMENDED 2026-10-24 by DES-079, DES-080)
+## DES-050: Automatic mission traceability via repo-local JSONL (SETTLED; AMENDED 2026-10-24 by DES-080)
 
 **Context**: `ethos mission close` writes contract and result data to the
 global missions directory (`~/.punt-labs/ethos/missions/`). This data
@@ -12682,7 +12682,7 @@ Full writeups, including two historical exploit traces, are in
 
 ---
 
-## DES-079: What ethos puts in git — a blame tier by default, a trace tier by opt-in (amends DES-026, DES-050, DES-054, DES-058, DES-070, DES-072, DES-075) (SETTLED)
+## DES-079: What ethos puts in git — a blame tier by default, a trace tier by opt-in (amends DES-026, DES-054, DES-058, DES-070, DES-072, DES-075) (SETTLED)
 
 **Status**: Settled 2026-10-23 by operator ruling; ADRs added to the blame
 tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
@@ -12691,13 +12691,10 @@ Implementation in progress: the DES-080 redaction is under way; beads `ethos-g3g
 
 ### What this amends
 
-- **DES-026** adds three requirements to the generator: its output is
-  committed, it must be deterministic, and `ethos doctor` fails on drift.
-  DES-026's content comparison before writing stays.
-- **DES-050** rejected automatic export of full mission records because it
-  "produces multi-file diffs per close". DES-079 keeps that rejection for
-  the trace tier and makes export the opt-in for it (`export --full`,
-  `record: full`).
+- **DES-026** generates `.claude/agents/<handle>.md` at SessionStart and
+  compares content before writing. DES-079 adds three requirements: the
+  output is committed, it is deterministic, and `ethos doctor` fails on
+  drift. The content comparison stays.
 - **DES-054** made the whole mission tree git-tracked. Under DES-079 only
   the class-2 files are tracked by default; delegation prompts,
   reflections and event-log chunks move to the class-3 archive, and
@@ -12718,8 +12715,9 @@ Implementation in progress: the DES-080 redaction is under way; beads `ethos-g3g
 
 Ethos began as a local-only tool: identity in YAML, runtime state on the
 developer's machine (DES-023). DES-050 added one light, git-tracked
-artifact, the `missions.jsonl` trace, and rejected automatic export of full
-mission records because it "produces multi-file diffs per close". DES-054
+artifact, the `missions.jsonl` trace, and rejected automatically exporting
+the contract and result YAML because it "produces multi-file diffs per
+close". DES-054
 and DES-058 then moved the mission record and a sealed per-tool-call audit
 trail into the repository, to give agent-written code a git-blame-style
 provenance. The result is the layout DES-075 describes, plus a pre-commit
@@ -12764,18 +12762,24 @@ Every file ethos writes inside a repository's working tree belongs to
 exactly one of the four classes below. A class says what a file is; where a
 class-3 file is written depends on the `record` setting (below). The lists
 in this ADR name the paths known on 2026-10-24 and are not the authority.
-The authority is one table in code that maps every path pattern ethos
-writes to its class (bead `ethos-g3g3`), with a test that fails when a
-writer creates a path the table does not classify, and an `ethos doctor`
-check that reports unclassified files under `.punt-labs/`. A prose list
-cannot stay complete as writers are added; a failing test can.
+The authority is one ordered table in code that maps every path pattern
+ethos writes to its class (bead `ethos-g3g3`). The first matching entry
+gives a path's class, and class-4 entries (locks, temporary files,
+`*.local.*`) come first, so a lock inside a mission directory or an
+`ext/<ns>.local.yaml` file is class 4. A test fails when a writer creates
+a path no entry matches, and when two entries of different classes match
+one path at the same position in the order. An `ethos doctor` check
+reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
+that no entry matches; other tools' files under `.punt-labs/` are not
+ethos's to classify. A prose list cannot stay complete as writers are
+added; a failing test can.
 
 Files ethos writes outside the working tree are out of scope: git hooks
 in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
 `core.hooksPath` places the hooks directory inside the working tree,
 `ethos enable` writes `pre-commit` and `commit-msg` there
-(`internal/enable/enable.go:233-248`, detected at
-`internal/githook/resolver.go:73`); those hook files are class 1.
+(`internal/enable/enable.go:232-253`, detected at
+`internal/githook/resolver.go:71`); those hook files are class 1.
 
 **1. Source and configuration — tracked.**
 
@@ -12803,11 +12807,14 @@ in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
   what its writer would produce now: generated files against the
   generator's output, installed files against their source
   `.punt-labs/ethos/agents/<name>.md` (`InstallAgentDefinitions` copies
-  from there, `internal/hook/agent_installer.go:57-73`), and seeded files
-  against the content embedded in the binary. The seed manifest (DES-065) lives in the home
-  directory and is absent on a fresh clone, so it is not the comparison
-  source. A diff in `.claude/agents/` then always means the source or the
-  binary changed.
+  from there, `internal/hook/agent_installer.go:57-73`). For those two, a
+  diff in `.claude/agents/` always means the source or the binary
+  changed. Seeded files are different: `ethos seed` keeps a file the user
+  has edited (DES-065, `internal/seed/seed.go:484-491`), so a seeded file
+  that differs from the content embedded in the binary is either a local
+  edit or an older binary. `ethos doctor` reports that difference as a
+  warning, not a failure. The seed manifest lives in the home directory
+  and is absent on a fresh clone, so it cannot tell the two cases apart.
 
 **2. Blame tier — tracked by default.** The record `git blame` provenance
 needs:
@@ -12826,7 +12833,12 @@ needs:
   directory: `missions/<id>.contract.yaml` and `missions/<id>.result.yaml`
   (`cmd/ethos/mission.go:964`). The same content as the mission's
   `contract.yaml` and final result, redacted. With `--dir`, the output
-  location is the caller's choice and outside this classification.
+  location is the caller's choice and outside this classification. Today
+  the default directory is a relative path resolved against the current
+  directory (`cmd/ethos/mission.go:1976-1977`), so an export run from a
+  subdirectory writes `<subdir>/.punt-labs/ethos/missions/`, which no
+  class covers; bead `ethos-g3g3` resolves it against the repository
+  root.
 - ADRs, as `.punt-labs/ethos/adrs/<id>.yaml` (operator ruling 2026-10-24).
   A design decision is part of the provenance of the code it shaped. Today
   `ethos adr` stores ADRs in `~/.punt-labs/ethos/adrs` (`cmd/ethos/adr.go`,
@@ -12890,9 +12902,13 @@ consumer repository can commit both. `ethos enable` must write a rule for
 every class-4 pattern, each with a probe.
 
 **Opting in to the trace tier.** `ethos mission export <id> --full` writes
-one mission's class-3 files from the archive to their tracked paths,
-through the redactor (DES-080). `record: full` does the same for every
-mission as it is written. The ignore rules follow the mode:
+one mission's per-mission class-3 files (delegation prompts,
+`reflections.yaml`, artifacts and event-log chunks) from the archive to
+their tracked paths, through the redactor (DES-080). Audit chunks are per
+session, not per mission, and `--full` does not export them. `record:
+full` writes every class-3 file to its tracked path as it is written,
+audit chunks included, so audit chunks reach git only under
+`record: full`. The ignore rules follow the mode:
 
 - Under `record: blame`, `ethos enable` writes ignore rules for the
   tracked class-3 paths, so a file written there by an older binary is
@@ -12938,10 +12954,11 @@ is a backstop). `prfaq.tex` is corrected to match.
   store (DES-081), not git.
 - Existing committed chunks stay in history (operator ruling 2026-10-23: no
   history rewrite); new ones stop arriving.
-- In the UI, the Corrections section reads `corrections.yaml`; the audit,
+- In the UI, the Corrections section reads `corrections.yaml`. The
   timeline and delegation-prompt views read the local archive and show data
   only on the machine that did the work, unless the mission was exported
-  with `--full`.
+  with `--full` or the repository uses `record: full`. The audit view shows
+  data from other machines only under `record: full`.
 
 ### Rejected alternatives
 
@@ -13036,7 +13053,18 @@ command, prompt or contract was committed verbatim.
    form") stays computed over the redacted, stored form: the new passes run
    before the hash, so a line that contains a credential hashes differently
    from before. Evaluator pinning (DES-033) hashes identity content, which
-   is out of scope, and is unchanged.
+   is out of scope, and is unchanged. Two writers re-redact lines that
+   already carry a hash:
+   - The legacy-audit migration redacts each legacy line, recomputes
+     `tool_input_hash` over the redacted form, and computes its re-run
+     dedupe key (`ts|tool|tool_input_hash`, or the sha256 of the line for a
+     hashless line) from the redacted line on both sides, so a re-run
+     after a partial append matches what it already wrote.
+   - `export --full` copies archive files through the redactor. A line
+     redacted when it was written comes out unchanged, because the passes
+     are idempotent. A line from before DES-080 may change; its hash is
+     recomputed over the new stored form. The copy is a new file at a
+     tracked path, so no existing chunk is modified.
 6. **History is scrubbed forward only.** The mutable tracked records
    (`contract.yaml`, `results.yaml`, `reflections.yaml`,
    `delegations/*/record.yaml` and `prompt.md`, `missions.jsonl`) are
@@ -13049,8 +13077,9 @@ command, prompt or contract was committed verbatim.
    they append (decision 1). Past commits are not rewritten (operator
    ruling 2026-10-23).
 7. **What this amends in DES-054.** DES-054's implementation note
-   (ethos-ersr, #411) applied write-path redaction to two writers: the
-   Tier B skeleton writer (paths) and the audit lines (paths, addresses,
+   (ethos-ersr, #411) applied write-path redaction at three sites: the
+   Tier B skeleton writer (paths), `CloseDelegation`'s free-text reason
+   (home directory), and the audit lines (paths, addresses,
    sensitive-tool keep-lists). This ADR extends redaction to every
    in-scope writer in decision 1 and adds the credential pass. DES-054's
    hash rule is unchanged (decision 5).
