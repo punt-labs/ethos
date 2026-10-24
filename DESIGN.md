@@ -12769,7 +12769,16 @@ gives a path's class, and class-4 entries (locks, temporary files,
 `ext/<ns>.local.yaml` file is class 4. A test fails when a writer creates
 a path no entry matches, and when entries of two different classes both
 match one path and neither is class 4; class-4 precedence is the only
-overlap the table resolves by order. An `ethos doctor` check
+overlap the table resolves by order. Overlap is decided pairwise on the
+patterns' segment sequences, not by sampling paths. The one other ordered
+case is a fallback entry: the exported-record shape
+`.punt-labs/ethos/**/m-*.contract.yaml` and `m-*.result.yaml` (output of
+`ethos mission export --dir` under `.punt-labs/ethos/`, such as a
+`missions-closed/` directory) is class 2, sits last, and claims only a path
+no other entry matches, so an agent artifact named `m-1.contract.yaml`
+stays class 3. Temporary-file entries are built from the same helpers the
+writers use to name their temporary files, and a test fails when an entry
+matches no helper-built name. An `ethos doctor` check
 reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
 that no entry matches; other tools' files under `.punt-labs/` are not
 ethos's to classify. A prose list cannot stay complete as writers are
@@ -12780,7 +12789,14 @@ in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
 `core.hooksPath` places the hooks directory inside the working tree,
 `ethos enable` writes `pre-commit` and `commit-msg` there
 (`internal/enable/enable.go:232-253`, detected at
-`internal/githook/resolver.go:71`); those hook files are class 1.
+`internal/githook/resolver.go:71`); those hook files are class 1. Their
+entries are derived from the resolved hooks directory, not from the file
+names, so a file named `pre-commit` elsewhere in the tree is not
+classified as a hook. A hooks directory at or under `.punt-labs/` gets no
+entries: it would overlap ethos's own zones, and `ethos doctor` reports
+its files as unclassified. Adding a team bundle as a submodule writes
+`.gitmodules` through `git submodule add`
+(`cmd/ethos/team_bundle.go`); it is class 1.
 
 **1. Source and configuration — tracked.**
 
@@ -12792,8 +12808,8 @@ in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
   `.punt-labs/ethos/config.yaml` is read as a fallback and never written,
   `internal/resolve/resolve.go:497`), `.punt-labs/ethos/.vendor.yaml`,
   `.punt-labs/ethos/.vendored-manifest`. This repository also carries a
-  stray `.punt-labs/ethos/ethos.yaml` that no code reads or writes; bead
-  `ethos-g3g3` removes it.
+  stray `.punt-labs/ethos/ethos.yaml` that no code reads or writes; slice 1
+  of bead `ethos-g3g3` removed it.
 - Files `ethos enable` writes: `.punt-labs/ethos/CLAUDE.md`,
   `.punt-labs/ethos/ETHOS-SETUP.md`, `.punt-labs/ethos/enabled`, the
   `@`-import line in the repository's root `CLAUDE.md`, and its rules in
@@ -13051,10 +13067,23 @@ command, prompt or contract was committed verbatim.
    targets, precondition paths and repository) get the path pass only,
    because a name-based credential match would change what they mean
    (`Bash(gh auth token:*)` is a tool grant, not a secret). For these
-   fields the path pass rewrites only an absolute path that begins with
-   the home directory or repository root; a relative path is left
-   unchanged, so `testdata/home/alice/config.yaml` is never turned into
-   `testdata~/config.yaml`. Identifiers,
+   fields the path pass rewrites an absolute path only where one starts:
+   at the start of the value or after a boundary (`(`, `//`, whitespace,
+   `=`, `:`, `,`, a quote), and only when the home directory or repository
+   root is followed by `/`, `)`, `:`, whitespace, a quote or the end. A
+   relative path is left unchanged, so `testdata/home/alice/config.yaml`
+   is never turned into `testdata~/config.yaml`. The placeholders are
+   reversible on the machine that reads them: the current repository root
+   becomes `<repo>`, the current home `~`, and the dash-encoded current
+   home (`-home-<user>-` in `~/.claude/projects/` names) `-~-`, and every
+   check that compares these fields (preconditions, write-set admission)
+   expands them back first. The audit writer redacts a read's path with
+   the same function, so a recorded read and a contract entry compare
+   equal. Another user's home becomes a token that never expands
+   (`~[redacted-user]`), so a precondition naming it fails with that
+   reason instead of matching the reader's own home. If a path-tagged
+   value still contains a home path or user name after the pass, the
+   writer refuses it. Identifiers,
    hashes, enums and timestamps get no pass. The contract writer
    validates the redacted form and refuses the write if redaction made
    it invalid. Matching by name over-redacts some ordinary text

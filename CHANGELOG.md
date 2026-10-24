@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The stray `.punt-labs/ethos/ethos.yaml` in this repository. No code read
+  or wrote it.
+
 ### Fixed
 
 - **`.claude/settings.json` conforms to `punt-kit/standards/permissions.md`.**
@@ -79,6 +84,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and verified live through a real subagent spawn.
 
 ### Added
+
+- **`ethos doctor` reports files ethos does not recognize under
+  `.punt-labs/ethos/` and `.punt-labs/local/ethos/`** (DES-079 slice 1,
+  bead `ethos-g3g3`). A new package, `internal/layout`, holds one ordered
+  table mapping every path ethos writes inside a repository to its class
+  (source and configuration, blame tier, trace tier, never tracked). Tests
+  fail when a writer creates a path no entry matches, and when two entries
+  of different classes can match one path. The new check warns and lists
+  up to 10 unrecognized files; files in other tools' directories under
+  `.punt-labs/` are not checked. Exported mission records placed under
+  `.punt-labs/ethos/` with `ethos mission export --dir` are recognized.
 
 - **Design for native OpenCode integration (DES-078,
   `docs/design-opencode-plugin.md`).** Design only, no implementation.
