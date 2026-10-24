@@ -158,11 +158,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line) on local machines without it. CI installs fuzz from
   punt-labs/z-spec v0.20.5 (ethos-cy70).
 
+### Docs
+
+- **`DESIGN.md` gains DES-079, DES-080 and DES-081; `prfaq.tex` is revised
+  to v3.4.** DES-079 (decided) defines what ethos puts in git: a blame
+  tier tracked by default and a trace tier kept machine-local unless a
+  repository opts in. DES-080 (decided) extends redaction to every
+  mission-record and audit writer. DES-081 (proposed) records the ethos 2.0
+  storage direction. The PR/FAQ now states what is committed today and
+  marks the rest as in progress. This entry changes documents only; the
+  implementing pull requests (`ethos-3e3f`, `ethos-g3g3`, `ethos-yjh0`)
+  add their own entries when they merge.
+
 ### Changed
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
-  Notifications fire only for push-triggered failures, which keeps
-  `BIFF_RELAY_TOKEN` away from runs triggered by pull requests. The
+  Notifications fire only for failures of push, schedule and
+  workflow_dispatch runs, never for runs triggered by pull requests, which
+  keeps `BIFF_RELAY_TOKEN` away from pull-request code. The
   checkout reads the default branch, so a failing branch cannot redirect
   the relay. Action pins and the `punt-biff` version are updated.
 - **`docs/spec-mission-lifecycle.tex` is re-baselined to current code.**
