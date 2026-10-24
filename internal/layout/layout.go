@@ -187,6 +187,7 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos-bundles/**", Class: Source},
 	{Pattern: ".claude/agents/*.md", Class: Source},
 	{Pattern: ".gitignore", Class: Source},
+	{Pattern: ".gitmodules", Class: Source}, // written by git submodule add (team add-bundle)
 	{Pattern: "CLAUDE.md", Class: Source},
 	// The hook files `ethos enable` writes when core.hooksPath puts the hooks
 	// directory inside the work tree are class 1 too; the directory is the

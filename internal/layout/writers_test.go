@@ -1,6 +1,7 @@
 package layout_test
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -55,14 +56,15 @@ func writerCorpus(t *testing.T) corpus {
 	writeAgents(t, root, ethosDir, global)
 
 	// The ADR store takes its directory from the caller; DES-079 puts it at
-	// <repo>/.punt-labs/ethos/adrs. The vendor manifest is written by the vendor
-	// command; its constructor is the source here.
+	// <repo>/.punt-labs/ethos/adrs; the CLI's own default store is global and is
+	// covered in cmd/ethos.
 	require.NoError(t, adr.NewStore(filepath.Join(ethosDir, "adrs")).Create(&adr.ADR{
 		ID: "DES-901", Title: "t", Status: adr.StatusProposed, Author: "bwk",
 		CreatedAt: "2026-10-24T00:00:00Z", UpdatedAt: "2026-10-24T00:00:00Z",
 		Context: "c", Decision: "d",
 	}))
-	require.NoError(t, os.WriteFile(vendor.ManifestPath(ethosDir), []byte("{}\n"), 0o644))
+	writeVendored(t, ethosDir)
+	writeMigrations(t, root, global)
 
 	var paths []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -193,7 +195,7 @@ func writeAuditFiles(t *testing.T, root string) {
 	const sid = "sess-1"
 	live := audit.LiveAuditPath(root, sid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o755))
-	require.NoError(t, os.WriteFile(live, []byte(`{"ts":"2026-10-24T00:00:00.000000001Z","tool":"Read"}`+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(live, []byte(`{"ts":"2026-10-24T00:00:00.000000001Z","tool":"Read","contract_id":"m-2026-10-24-903"}`+"\n"), 0o644))
 	_, err := hook.SealRepo(root, time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC), hook.SealOptions{})
 	require.NoError(t, err)
 
@@ -209,7 +211,6 @@ func writeAuditFiles(t *testing.T, root string) {
 		audit.LiveMissionLogPath(root, mid, sid),
 		audit.MissionResiduePath(root, mid),
 		audit.MissionLegacyLogPath(root, mid),
-		filepath.Join(sessionDir, "audit.jsonl"),
 		filepath.Join(sessionDir, sess.ChunkFile()),
 		filepath.Join(sessionDir, sess.TempFile()),
 		filepath.Join(sessionDir, sess.MarkerFile()),
@@ -248,4 +249,48 @@ func writeAgents(t *testing.T, root, ethosDir, global string) {
 	_, err = seed.SeedVersionWithBundleDir(filepath.Join(global, "seed"), filepath.Join(global, "skills"),
 		filepath.Join(root, ".claude", "agents"), "", "", "test", false)
 	require.NoError(t, err)
+}
+
+// writeVendored runs `ethos vendor --team engineering --apply` from a separate
+// source store into the repository: the copy writer and the .vendor.yaml
+// manifest.
+func writeVendored(t *testing.T, ethosDir string) {
+	t.Helper()
+
+	src, empty := t.TempDir(), t.TempDir()
+	writeIdentityGraph(t, src)
+	v, err := vendor.New(vendor.Sources{
+		Roots:      []string{src},
+		Identities: identity.NewLayeredStore(identity.NewStore(src), identity.NewStore(empty)),
+		Roles:      role.NewLayeredStore(src, empty),
+		Teams:      team.NewLayeredStore(src, empty),
+	}, vendor.Options{Team: "engineering", Dest: ethosDir, Apply: true})
+	require.NoError(t, err)
+	_, err = v.Run()
+	require.NoError(t, err)
+}
+
+// writeMigrations runs `ethos mission migrate` and the legacy audit migration
+// against legacy global files, and leaves the staging directory a crashed
+// mission migration would leave behind.
+func writeMigrations(t *testing.T, root, global string) {
+	t.Helper()
+
+	const id = "m-2026-10-24-903" // referenced as contract_id in the live audit file
+	legacy := filepath.Join(global, "missions")
+	require.NoError(t, os.MkdirAll(legacy, 0o755))
+	for _, suffix := range []string{".yaml", ".jsonl", ".results.yaml", ".reflections.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(legacy, id+suffix), []byte("x: 1\n"), 0o644))
+	}
+	require.NoError(t, mission.MigrateMission(global, root, root, id, false, io.Discard))
+
+	missions := filepath.Join(root, ".punt-labs", "ethos", "missions")
+	staging, err := os.MkdirTemp(missions, layout.MigrateStagingPrefix("m-2026-10-24-904"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(staging, "contract.yaml"), []byte("x: 1\n"), 0o600))
+
+	sessions := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(sessions, "sess-1.audit.jsonl"),
+		[]byte(`{"ts":"2026-10-23T00:00:00Z","tool_name":"Read","tool_use_id":"t1"}`+"\n"), 0o644))
+	require.NoError(t, hook.MigrateAudit(sessions, root, false, io.Discard))
 }

@@ -103,6 +103,7 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/identities/bwk.yaml", layout.Source, true},
 		{".punt-labs/ethos/identities/bwk.ext/quarry.yaml", layout.Source, true},
 		{".punt-labs/ethos.yaml", layout.Source, true},
+		{".gitmodules", layout.Source, true},
 		{".claude/agents/bwk.md", layout.Source, true},
 		{".punt-labs/ethos/missions/m-1.contract.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions-closed/m-2026-10-24-001.result.yaml", layout.Blame, true},
@@ -378,5 +379,26 @@ func TestTempEntriesAreFedByHelpers(t *testing.T) {
 		if e.Class != layout.Never {
 			t.Errorf("temp entry %q is class %v, want class 4", e.Pattern, e.Class)
 		}
+	}
+}
+
+// TestMigrateStagingIsClassFour: files in the staging directory of an
+// interrupted `ethos mission migrate` look like mission files
+// (missions/*/contract.yaml), so only the explicit class-4 entry, which comes
+// first, keeps them out of git.
+func TestMigrateStagingIsClassFour(t *testing.T) {
+	c := writerCorpus(t)
+	n := 0
+	for _, p := range c.paths {
+		if !strings.Contains(p, "."+"m-2026-10-24-904.migrate-") {
+			continue
+		}
+		n++
+		if class, e, ok := layout.ClassifyIn(c.table, p); !ok || class != layout.Never || !e.Temp {
+			t.Errorf("%s classified %v by %q, want a class-4 temp entry", p, class, e.Pattern)
+		}
+	}
+	if n == 0 {
+		t.Fatal("corpus holds no migrate staging file")
 	}
 }
