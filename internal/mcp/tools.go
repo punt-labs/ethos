@@ -29,20 +29,27 @@ import (
 
 // Handler groups MCP tool handlers with shared stores.
 type Handler struct {
-	store         identity.IdentityStore
-	sessionStore  *session.Store
-	talents       *attribute.Store
-	personalities *attribute.Store
-	writingStyles *attribute.Store
-	roles         *role.LayeredStore
-	teams         *team.LayeredStore
-	missionStore  *mission.Store
-	adrStore      *adr.Store
-	vendor        VendorRunner
+	store                   identity.IdentityStore
+	sessionStore            *session.Store
+	talents                 *attribute.Store
+	personalities           *attribute.Store
+	writingStyles           *attribute.Store
+	roles                   *role.LayeredStore
+	teams                   *team.LayeredStore
+	missionStore            *mission.Store
+	adrStore                *adr.Store
+	vendor                  VendorRunner
+	opencodeSessionMetadata bool
 }
 
 // Option configures optional Handler fields.
 type Option func(*Handler)
+
+// WithOpenCodeSessionMetadata opts into request-local OpenCode caller routing.
+// It is disabled by default for compatibility with existing MCP consumers.
+func WithOpenCodeSessionMetadata(enabled bool) Option {
+	return func(h *Handler) { h.opencodeSessionMetadata = enabled }
+}
 
 // WithSessionStore sets the session store on the handler.
 func WithSessionStore(ss *session.Store) Option {
@@ -201,6 +208,35 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 	if persona == "" {
 		return mcplib.NewToolResultError("persona is required for iam"), nil
 	}
+	if sid, present, err := h.metadataSessionID(req); present {
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if sessionID != sid {
+			return mcplib.NewToolResultError("session_id must match the metadata caller for iam"), nil
+		}
+		agentID, err := stringArgStrict(req, "agent_id")
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if agentID != "" && agentID != sid {
+			return mcplib.NewToolResultError("agent_id must match the metadata caller for iam"), nil
+		}
+		caller, err := h.callerParticipant(sid)
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if _, err := h.loadCallerIdentity(caller.Persona); err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if _, err := h.loadCallerIdentity(persona); err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if err := h.sessionStore.SetExistingPersona(sid, sid, persona); err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, sid, sid)), nil
+	}
 
 	// Key the participant on ETHOS_AGENT_ID then the Claude PID — parity
 	// with the CLI so the same declaration records the same agent key on
@@ -232,6 +268,20 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 }
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	if sid, present, err := h.metadataSessionID(req); present {
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		caller, err := h.callerParticipant(sid)
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		id, err := h.loadCallerIdentity(caller.Persona, identity.Reference(boolArg(req, "reference", false)))
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		return jsonResult(id)
+	}
 	handle, err := resolve.Resolve(h.store, h.sessionStore)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
@@ -480,6 +530,28 @@ func (h *Handler) sessionTool() mcplib.Tool {
 // cause for the former while keeping the plain, actionable message for
 // the latter, mirroring cmd/ethos/iam.go's split.
 func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
+	sid, present, metaErr := h.metadataSessionID(req)
+	if present {
+		if metaErr != nil {
+			return "", metaErr
+		}
+		explicit, err := stringArgStrict(req, "session_id")
+		if err != nil {
+			return "", err
+		}
+		if stringArg(req, "method", "") == "iam" && explicit != "" && explicit != sid {
+			return "", fmt.Errorf("session_id must match the metadata caller for iam")
+		}
+		// Explicit roster/join/leave are administrative operations, not
+		// declarations about the caller. They may target another session.
+		if explicit != "" {
+			return explicit, nil
+		}
+		if _, err := h.callerParticipant(sid); err != nil {
+			return "", err
+		}
+		return sid, nil
+	}
 	sessionID := stringArg(req, "session_id", "")
 	if sessionID != "" {
 		return sessionID, nil

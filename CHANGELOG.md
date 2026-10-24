@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- With the opt-in `ethos serve --opencode-session-metadata`, native OpenCode
+  MCP `whoami`, implicit roster lookup, and `iam` use
+  request-local `ai.opencode/sessionID` metadata and the exact registered
+  participant instead of the server's process identity. Missing or invalid
+  caller bindings fail visibly; `iam` cannot recreate a removed participant
+  or target a different caller. Default MCP behavior ignores that metadata,
+  preserving existing consumers. Missing-participant recovery recommends
+  joining the existing roster rather than overwriting it with creation.
+  Explicit roster setup is required; mission and fork
+  traceability are not changed.
+
 - **`.claude/settings.json` conforms to `punt-kit/standards/permissions.md`.**
   `Bash(bash:*)` and `Bash(sed:*)` were allowed; the standard forbids both
   by name (§3). `Bash(bash:*)` nullified every network deny rule, because
