@@ -240,9 +240,9 @@ type Trigger struct {
 // and "bead" (deprecated alias). Setting both is an error. Marshal
 // emits "ticket" only.
 type Inputs struct {
-	Ticket     string   `yaml:"ticket,omitempty" json:"ticket,omitempty"`
+	Ticket     string   `yaml:"ticket,omitempty" json:"ticket,omitempty" redact:"path"`
 	Files      []string `yaml:"files,omitempty" json:"files,omitempty" redact:"path"`
-	References []string `yaml:"references,omitempty" json:"references,omitempty"`
+	References []string `yaml:"references,omitempty" json:"references,omitempty" redact:"path"`
 	Trigger    *Trigger `yaml:"trigger,omitempty" json:"trigger,omitempty"`
 }
 

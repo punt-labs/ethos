@@ -3,6 +3,7 @@ package mission
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -303,7 +304,7 @@ func TestWriterAndScrubAgree(t *testing.T) {
 	require.NoError(t, err)
 	raw, err := yaml.Marshal(c)
 	require.NoError(t, err)
-	scrubbed, _, err := redactYAMLDocPaths(r.Content, r.Path, raw)
+	scrubbed, _, err := redactYAMLDoc(r.Content, r.Path, reflect.TypeOf(Contract{}), raw)
 	require.NoError(t, err)
 	var viaScrub Contract
 	require.NoError(t, yaml.Unmarshal(scrubbed, &viaScrub))
@@ -356,4 +357,74 @@ func TestCheckPathFields(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Delegations[0].Role")
 	assert.Contains(t, err.Error(), "Delegations[0].SpawnPattern")
+}
+
+// TestStore_AppendResult_FilePathsKeepTheirValue: a files_changed path is
+// validated against the write set, so it is persisted as validated. An
+// address-shaped filename must not be rewritten into a different path.
+func TestStore_AppendResult_FilePathsKeepTheirValue(t *testing.T) {
+	newLeakFixture(t)
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"src/"}
+	require.NoError(t, s.Create(c))
+	r := &Result{
+		Mission: c.MissionID, Round: 1, Author: c.Worker,
+		Verdict: VerdictPass, Confidence: 0.8,
+		FilesChanged: []FileChange{{Path: "src/user@example.com", Added: 1}},
+		Evidence:     []EvidenceCheck{{Name: "make check", Status: EvidenceStatusPass}},
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+
+	got, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].FilesChanged, 1)
+	assert.Equal(t, "src/user@example.com", got[0].FilesChanged[0].Path)
+}
+
+// TestAppendTraceSummary_PathFieldsKeepTheirValue: the trace carries the
+// same enforcement values as the contract and result it summarizes.
+func TestAppendTraceSummary_PathFieldsKeepTheirValue(t *testing.T) {
+	newLeakFixture(t)
+	dir := t.TempDir()
+	s := &Store{repoRoot: dir}
+	c := &Contract{
+		MissionID: "m-2026-01-01-001", CreatedAt: "2026-01-01T00:00:00Z",
+		ClosedAt: "2026-01-02T00:00:00Z", Status: StatusClosed,
+		Leader: "alice", Worker: "bob", Evaluator: Evaluator{Handle: "carol"},
+		WriteSet: []string{"src/user@example.com"},
+		Inputs:   Inputs{Ticket: "docs/a@b.example.com.md"},
+		Budget:   Budget{Rounds: 1}, CurrentRound: 1,
+	}
+	r := &Result{Verdict: VerdictPass, FilesChanged: []FileChange{{Path: "src/user@example.com"}}}
+	require.NoError(t, s.appendTraceSummary(c, r))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".punt-labs", "ethos", "missions.jsonl"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"write_set":["src/user@example.com"]`)
+	assert.Contains(t, string(data), `"files_changed":["src/user@example.com"]`)
+	assert.Contains(t, string(data), `"ticket":"docs/a@b.example.com.md"`)
+}
+
+// TestStore_Create_InputsFeedingRequireReadKeepTheirValue: ${inputs.ticket}
+// and ${inputs.references.N} are substituted into require_read, so an
+// address-shaped reference must round-trip unchanged.
+func TestStore_Create_InputsFeedingRequireReadKeepTheirValue(t *testing.T) {
+	newLeakFixture(t)
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.Inputs.Ticket = "docs/t@b.example.com.md"
+	c.Inputs.References = []string{"docs/a@b.example.com.md"}
+	c.Preconditions = []Precondition{{
+		Form:        PreconditionFormExplicit,
+		RequireRead: []string{"${inputs.references.0}"},
+		Message:     "read the reference first",
+	}}
+	require.NoError(t, s.Create(c))
+
+	got, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, c.Inputs.Ticket, got.Inputs.Ticket)
+	assert.Equal(t, c.Inputs.References, got.Inputs.References)
 }

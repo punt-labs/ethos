@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -89,12 +90,22 @@ type ScrubResult struct {
 // unchanged keeps its bytes, and so does every unaffected line of a JSONL
 // file. Like every record writer it fails closed when no redactor can be
 // built.
-func ScrubFiles(repoRoot string, rels []string, dryRun bool) (ScrubResult, error) {
+//
+// Each file is read, redacted and renamed under the lock its writers hold
+// (the trace lock, the per-mission lock, the delegation lock), so a
+// concurrent close or update is not lost to the rewrite. globalRoot is the
+// shared store root those locks live under. A symlinked artifact or
+// containing directory is refused, as every loader here refuses it.
+func ScrubFiles(repoRoot, globalRoot string, rels []string, dryRun bool) (ScrubResult, error) {
 	var res ScrubResult
 	r, err := NewPathRedactor(repoRoot)
 	if err != nil {
 		return res, fmt.Errorf("scrubbing %s: %w", repoRoot, err)
 	}
+	if strings.TrimSpace(globalRoot) == "" {
+		return res, fmt.Errorf("scrubbing %s: the global store root is required for the record locks", repoRoot)
+	}
+	s := NewStoreWithRoots(repoRoot, globalRoot)
 	sorted := append([]string(nil), rels...)
 	sort.Strings(sorted)
 	var failed []error
@@ -102,7 +113,7 @@ func ScrubFiles(repoRoot string, rels []string, dryRun bool) (ScrubResult, error
 		if !scrubbable(rel) {
 			continue
 		}
-		did, err := scrubFile(r, repoRoot, rel, dryRun)
+		did, err := s.scrubFileLocked(r, rel, dryRun)
 		switch {
 		case errors.Is(err, errScrubMissing):
 			res.Skipped = append(res.Skipped, rel)
@@ -131,6 +142,75 @@ var errScrubMissing = errors.New("file does not exist")
 // write-time failures that a real filesystem cannot produce on demand.
 var scrubWrite = writeAtomicFile
 
+// scrubFileLocked is scrubFile under the locks the file's writers take,
+// after refusing a symlinked path.
+func (s *Store) scrubFileLocked(r PathRedactor, rel string, dryRun bool) (bool, error) {
+	if err := rejectSymlinkedPath(s.repoRoot, rel); err != nil {
+		return false, err
+	}
+	var did bool
+	err := s.withRecordLocks(rel, func() error {
+		var err error
+		did, err = scrubFile(r, s.repoRoot, rel, dryRun)
+		return err
+	})
+	return did, err
+}
+
+// withRecordLocks runs fn holding the lock that serializes rel's writers:
+// the trace lock for missions.jsonl, the per-mission lock for a mission's
+// contract, results and reflections, the delegation lock for a delegation
+// record. Plain export files have no writer lock.
+func (s *Store) withRecordLocks(rel string, fn func() error) error {
+	rel = path.Clean(rel)
+	parts := strings.Split(rel, "/")
+	switch {
+	case rel == ".punt-labs/ethos/missions.jsonl":
+		return withTraceLock(RepoStatePath(s.repoRoot), fn)
+	case len(parts) == 5:
+		return s.withLock(parts[3], fn)
+	case len(parts) == 7:
+		release, err := AcquireDelegationLock(s.root, parts[5])
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
+	return fn()
+}
+
+// rejectSymlinkedPath refuses rel when it, or any directory above it below
+// repoRoot, is a symlink: a link there would send the rewrite outside the
+// tracked tree.
+func rejectSymlinkedPath(repoRoot, rel string) error {
+	cur := repoRoot
+	for _, seg := range strings.Split(path.Clean(rel), "/") {
+		cur = filepath.Join(cur, seg)
+		if err := rejectSymlink(cur); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// artifactType is the record type a tracked YAML file decodes into, which
+// supplies the redact tags the YAML redactor reads. Nil for an unknown file.
+func artifactType(name string) reflect.Type {
+	switch {
+	case name == "contract.yaml", strings.HasSuffix(name, ".contract.yaml"):
+		return reflect.TypeOf(Contract{})
+	case name == "results.yaml":
+		return reflect.TypeOf(resultsFile{})
+	case name == "reflections.yaml":
+		return reflect.TypeOf(reflectionsFile{})
+	case name == "record.yaml":
+		return reflect.TypeOf(Delegation{})
+	case strings.HasSuffix(name, ".result.yaml"):
+		return reflect.TypeOf(Result{})
+	}
+	return nil
+}
+
 // scrubFile redacts one file in place and reports whether it changed.
 func scrubFile(r PathRedactor, repoRoot, rel string, dryRun bool) (bool, error) {
 	dest := filepath.Join(repoRoot, filepath.FromSlash(rel))
@@ -148,12 +228,11 @@ func scrubFile(r PathRedactor, repoRoot, rel string, dryRun bool) (bool, error) 
 	case ".jsonl":
 		out, changed, err = redactJSONLines(f, data)
 	case ".yaml":
-		// A contract's enforcement fields get the path pass only, as in
-		// the writer; see the redact:"path" tags on Contract.
-		if strings.HasSuffix(rel, "contract.yaml") {
-			out, changed, err = redactYAMLDocPaths(f, r.Path, data)
-		} else {
-			out, changed, err = redactYAMLDoc(f, data)
+		// The record's type supplies the modes, as in the writer: path
+		// fields get the path pass only and IDs and enums are kept.
+		out, changed, err = redactYAMLDoc(f, r.Path, artifactType(path.Base(rel)), data)
+		if err == nil && changed && strings.HasSuffix(rel, "contract.yaml") {
+			err = checkScrubbedContract(data, out)
 		}
 	default:
 		s := f(string(data))

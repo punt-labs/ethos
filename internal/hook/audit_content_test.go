@@ -823,3 +823,43 @@ func TestBuildAuditEntry_Credentials(t *testing.T) {
 		assert.False(t, entry.Redacted)
 	})
 }
+
+// TestRedactSensitiveContent_CredentialsBeforeAddresses: the credential
+// pass runs first, so a URL password holding '@' or '#' is taken whole
+// instead of being cut by the address sweep.
+func TestRedactSensitiveContent_CredentialsBeforeAddresses(t *testing.T) {
+	in := map[string]any{"command": "git clone https://alice:p!ss#word@example.com/repo"}
+	out, changed := redactSensitiveContent("Bash", in)
+	assert.True(t, changed)
+	got, _ := out["command"].(string)
+	assert.Equal(t, "git clone https://alice:[redacted-secret]@example.com/repo", got)
+	for _, leak := range []string{"p!ss", "word"} {
+		assert.NotContains(t, got, leak)
+	}
+
+	// The same holds on an enrolled tool's kept field.
+	in = map[string]any{"subject": "https://alice:p!ss#word@example.com/repo"}
+	out, _ = redactSensitiveContent("send_email", in)
+	got, _ = out["subject"].(string)
+	assert.NotContains(t, got, "p!ss")
+	assert.NotContains(t, got, "word")
+}
+
+// TestRedactSensitiveContent_ReadTargetsKeepTheirValue: a file path is
+// compared byte-for-byte by the precondition evaluator, so the credential
+// pass must not rewrite it; the rest of the line is still swept.
+func TestRedactSensitiveContent_ReadTargetsKeepTheirValue(t *testing.T) {
+	in := map[string]any{
+		"file_path":     "cfg/token=abc",
+		"path":          "cfg/token=abc",
+		"notebook_path": "cfg/password: x.ipynb",
+		"command":       "GITHUB_TOKEN=abc12345",
+	}
+	out, changed := redactSensitiveContent("Read", in)
+	assert.True(t, changed)
+	assert.Equal(t, "cfg/token=abc", out["file_path"])
+	assert.Equal(t, "cfg/token=abc", out["path"])
+	assert.Equal(t, "cfg/password: x.ipynb", out["notebook_path"])
+	assert.Equal(t, "GITHUB_TOKEN=[redacted-secret]", out["command"])
+	assert.Equal(t, "GITHUB_TOKEN=abc12345", in["command"], "the input is not mutated")
+}

@@ -20,16 +20,16 @@ type TraceSummary struct {
 	Leader          string   `json:"leader" redact:"keep"`
 	Worker          string   `json:"worker" redact:"keep"`
 	Evaluator       string   `json:"evaluator" redact:"keep"`
-	Ticket          string   `json:"ticket,omitempty"`
-	WriteSet        []string `json:"write_set"`
+	Ticket          string   `json:"ticket,omitempty" redact:"path"`
+	WriteSet        []string `json:"write_set" redact:"path"`
 	SuccessCriteria []string `json:"success_criteria"`
 	RoundsUsed      int      `json:"rounds_used"`
 	RoundsBudgeted  int      `json:"rounds_budgeted"`
 	Verdict         string   `json:"verdict" redact:"keep"`
-	FilesChanged    []string `json:"files_changed"`
+	FilesChanged    []string `json:"files_changed" redact:"path"`
 	Pipeline        string   `json:"pipeline,omitempty" redact:"keep"`
 	Session         string   `json:"session,omitempty" redact:"keep"`
-	Repo            string   `json:"repo,omitempty"`
+	Repo            string   `json:"repo,omitempty" redact:"path"`
 }
 
 // buildTraceSummary maps a closed contract and its satisfying result
@@ -93,6 +93,26 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 	}
 	data = append(data, '\n')
 
+	return withTraceLock(dir, func() error {
+		f, err := os.OpenFile(
+			filepath.Join(dir, "missions.jsonl"),
+			os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+			0o644,
+		)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		_, writeErr := f.Write(data)
+		return writeErr
+	})
+}
+
+// withTraceLock runs fn holding the exclusive lock that serializes every
+// writer of the missions.jsonl in dir: the Close-time append and the
+// scrub's rewrite.
+func withTraceLock(dir string, fn func() error) error {
 	// Lock a dedicated sibling lock file, not missions.jsonl itself
 	// (Bugbot finding on the Windows locking work): the append-only
 	// handle needed to write missions.jsonl (O_APPEND|O_WRONLY) is opened
@@ -117,16 +137,5 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 	}
 	defer func() { _ = funlock(lf) }()
 
-	f, err := os.OpenFile(
-		filepath.Join(dir, "missions.jsonl"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
-		0o644,
-	)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, writeErr := f.Write(data)
-	return writeErr
+	return fn()
 }

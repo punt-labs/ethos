@@ -909,7 +909,11 @@ func runMissionScrub(out, errOut io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("mission scrub: %w", err)
 	}
-	res, err := mission.ScrubFiles(repoRoot, rels, !missionScrubApply)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("mission scrub: resolving the global store root: %w", err)
+	}
+	res, err := mission.ScrubFiles(repoRoot, filepath.Join(home, ".punt-labs", "ethos"), rels, !missionScrubApply)
 	for _, rel := range res.Skipped {
 		fmt.Fprintf(errOut, "ethos: mission scrub: skipping %s: tracked but missing from the worktree\n", rel)
 	}

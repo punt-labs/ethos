@@ -29,9 +29,9 @@ import (
 //     structured fields (a file_path, a glob) are left alone so a
 //     non-sensitive tool's line stays byte-identical.
 //
-// A third pass, redact.SecretsValue, runs over every string in the
-// result whatever its key: a credential has no reliable key to hang a
-// keep-list on, and a matched value is replaced with
+// A third pass, redact.SecretsValue, runs first over every string whatever
+// its key (except the file paths in pathKeys): a credential has no reliable
+// key to hang a keep-list on, and a matched value is replaced with
 // redact.SecretToken. The email pattern and the credential patterns live
 // in internal/redact so the mission writers share one definition.
 //
@@ -191,20 +191,59 @@ func redactSensitiveContent(toolName string, input map[string]any) (map[string]a
 	if input == nil {
 		return nil, false
 	}
+	// The credential pass runs first, as in redact.Prose: the address
+	// sweep would otherwise cut a URL password that holds '@' or '#' and
+	// leave a fragment. It covers every string whatever its key, because a
+	// token has no reliable key to hang a keep-list on.
+	in, changed := sweepSecrets(input)
 	var m map[string]any
-	var changed bool
 	if keep, ok := sensitiveTools[bareToolName(toolName)]; ok {
-		m, changed = reduceToKeepList(input, keep)
+		var c bool
+		m, c = reduceToKeepList(in, keep)
+		changed = changed || c
 	} else {
-		out, c := sweepPII(input, sweepOff)
+		out, c := sweepPII(in, sweepOff)
 		m, _ = out.(map[string]any)
-		changed = c
+		changed = changed || c
 	}
-	// The credential pass covers every string whatever its key: a token
-	// has no reliable key to hang a keep-list on.
-	out, c := redact.SecretsValue(m)
-	m, _ = out.(map[string]any)
-	return m, changed || c
+	return m, changed
+}
+
+// pathKeys name tool_input keys that hold the file a tool acts on. The
+// precondition evaluator compares a recorded Read's file_path byte-for-byte
+// with the contract's require_read, so these values get the path pass
+// alone, as enforcement fields do in a contract: a credential-shaped name
+// such as cfg/token=abc must be recorded as it was read.
+var pathKeys = map[string]bool{
+	"file_path":     true,
+	"path":          true,
+	"notebook_path": true,
+}
+
+// sweepSecrets applies the credential pass to input except for the string
+// values under pathKeys. It reports whether anything changed and never
+// mutates input.
+func sweepSecrets(input map[string]any) (map[string]any, bool) {
+	held := map[string]string{}
+	rest := input
+	for k := range pathKeys {
+		if v, ok := input[k].(string); ok {
+			if len(held) == 0 {
+				rest = maps.Clone(input)
+			}
+			held[k] = v
+			delete(rest, k)
+		}
+	}
+	out, changed := redact.SecretsValue(rest)
+	if !changed {
+		return input, false
+	}
+	m, _ := out.(map[string]any)
+	for k, v := range held {
+		m[k] = v
+	}
+	return m, true
 }
 
 // bareToolName returns the trailing segment of an MCP tool name.

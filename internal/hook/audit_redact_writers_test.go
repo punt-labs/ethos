@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // leakyReason is an error string as an I/O failure produces it: an
@@ -236,4 +237,26 @@ func TestRedactReason_PlaceholderIsAnnounced(t *testing.T) {
 	assert.Equal(t, redactedValueToken, got)
 	assert.Contains(t, string(msg), "reason replaced: ")
 	assert.NotContains(t, string(msg), "boom")
+}
+
+// TestRedactLegacyLine_AuditErrorIsSweptBesideAChangedInput: audit_error is
+// free text next to tool_input, so a change to tool_input must not spare it.
+func TestRedactLegacyLine_AuditErrorIsSweptBesideAChangedInput(t *testing.T) {
+	r := mission.PathRedactor{Home: "/h/user"}
+	line := `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"mail jane@example.com"},` +
+		`"audit_error":"failed for bob@example.com with GITHUB_TOKEN=abc12345"}`
+	out, changed, err := redactLegacyLine([]byte(line), "", r)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	for _, leak := range []string{"jane@example.com", "bob@example.com", "abc12345"} {
+		assert.NotContains(t, string(out), leak)
+	}
+	assert.Contains(t, string(out), `"redacted":true`)
+
+	// Only audit_error leaks: still swept.
+	only := `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"ls"},"audit_error":"bob@example.com"}`
+	out, changed, err = redactLegacyLine([]byte(only), "", r)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.NotContains(t, string(out), "bob@example.com")
 }

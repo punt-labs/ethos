@@ -28,6 +28,7 @@ import (
 const (
 	EmailToken  = "[redacted-email]"
 	SecretToken = "[redacted-secret]"
+	SlugToken   = "[redacted-slug]"
 )
 
 // EmailPattern matches an address with a lettered top-level domain.
@@ -153,8 +154,10 @@ var (
 
 	// homeSlug matches the dash-encoded form Claude Code uses for project
 	// directories: /home/alice/work becomes -home-alice-work. A leading
-	// '-' before the boundary excludes flags like --home-dir.
-	homeSlug = regexp.MustCompile(`(^|[^A-Za-z0-9_.\-])-(?:home|Users)-[A-Za-z0-9_.]+`)
+	// '-' before the boundary excludes flags like --home-dir. The username
+	// may itself contain dashes, so the match takes the whole component, up
+	// to a slash, whitespace or a quote.
+	homeSlug = regexp.MustCompile("(^|[^A-Za-z0-9_.\\-])-(?:home|Users)-[^\\s/\"'`]+")
 )
 
 // SecretsString replaces credentials in s with SecretToken: the token
@@ -217,13 +220,15 @@ func replaceValue(re *regexp.Regexp, s string) string {
 func IsSecretKey(name string) bool { return secretKey.MatchString(name) }
 
 // HomePaths rewrites /home/<name> and /Users/<name> to ~ for any name,
-// and the dash-encoded -home-<name> / -Users-<name> of a Claude project
-// slug to -~.
+// and a foreign dash-encoded -home-<name>... / -Users-<name>... Claude
+// project slug to -~-[redacted-slug]. A slug does not say where the
+// username ends, so the whole component goes; the current user's own slug
+// is handled exactly by PathRedactor, which knows the prefix.
 // It is the one pass that is safe over sealed history, where addresses
 // are left alone.
 func HomePaths(s string) string {
 	s = homePath.ReplaceAllString(s, "${1}~")
-	return homeSlug.ReplaceAllString(s, "${1}-~")
+	return homeSlug.ReplaceAllString(s, "${1}-~-"+SlugToken)
 }
 
 // HomePathsValue applies HomePaths to every string reachable from v (a

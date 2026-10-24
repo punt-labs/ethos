@@ -164,17 +164,23 @@ func TestRecord_NonStringValuesUnderSecretKeys(t *testing.T) {
 }
 
 func TestHomePaths_DashEncodedSlugs(t *testing.T) {
+	// The username length is unknown in a slug, so the whole component
+	// after -home-/-Users- is replaced, up to a slash, space or quote.
 	tests := []struct{ in, want string }{
-		{"~/.claude/projects/-home-jfreeman-Coding-punt-labs-ethos/memory/MEMORY.md", "~/.claude/projects/-~-Coding-punt-labs-ethos/memory/MEMORY.md"},
-		{"/x/projects/-Users-alice-work", "/x/projects/-~-work"},
-		{"-home-bob", "-~"},
-		{"slug -home-bob-", "slug -~-"},
+		{"~/.claude/projects/-home-jfreeman-Coding-punt-labs-ethos/memory/MEMORY.md", "~/.claude/projects/-~-[redacted-slug]/memory/MEMORY.md"},
+		{"/x/projects/-Users-alice-work", "/x/projects/-~-[redacted-slug]"},
+		{"-home-bob", "-~-[redacted-slug]"},
+		{"slug -home-bob-", "slug -~-[redacted-slug]"},
+		{"/p/-home-alice-smith-work/x", "/p/-~-[redacted-slug]/x"},
+		{"/p/-home-alice.smith-work", "/p/-~-[redacted-slug]"},
+		{"in 'p/-Users-a-b-c' ok", "in 'p/-~-[redacted-slug]' ok"},
 		// Not slugs: no leading boundary, or a flag.
 		{"my-home-page-title", "my-home-page-title"},
 		{"--home-dir-x", "--home-dir-x"},
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, HomePaths(tt.in), tt.in)
+		assert.Equal(t, tt.want, HomePaths(HomePaths(tt.in)), "idempotent: "+tt.in)
 	}
-	assert.Equal(t, "see -~ here", HomePaths("see -home-jfreeman here"))
+	assert.Equal(t, "see -~-[redacted-slug] here", HomePaths("see -home-jfreeman here"))
 }

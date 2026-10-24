@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -549,16 +550,20 @@ func copyIfExists(r PathRedactor, src, dst string) error {
 		return fmt.Errorf("reading %s: %w", src, err)
 	}
 	hint := "fix the file and re-run `ethos mission migrate`"
+	var red []byte
 	switch {
 	case strings.HasSuffix(src, ".jsonl"):
 		hint = "fix or remove the line and re-run `ethos mission migrate`"
-		data, _, err = redactJSONLines(r.Content, data)
-	case filepath.Base(dst) == "contract.yaml":
-		// Enforcement fields get the path pass only, as in the writer.
-		data, _, err = redactYAMLDocPaths(r.Content, r.Path, data)
+		red, _, err = redactJSONLines(r.Content, data)
 	default:
-		data, _, err = redactYAMLDoc(r.Content, data)
+		// The record's type gives the modes, as in the writer: enforcement
+		// fields get the path pass only and IDs and enums are kept.
+		red, _, err = redactYAMLDoc(r.Content, r.Path, artifactType(filepath.Base(dst)), data)
+		if err == nil && filepath.Base(dst) == "contract.yaml" {
+			err = checkScrubbedContract(data, red)
+		}
 	}
+	data = red
 	if err != nil {
 		return fmt.Errorf("redacting %s: %w; %s", src, err, hint)
 	}
@@ -589,28 +594,31 @@ func writeSyncedFile(path string, data []byte) error {
 	return nil
 }
 
+// redactMode says how the redactor treats a YAML value, taken from the
+// redact tag of the struct field it decodes into.
+type redactMode int
+
+const (
+	modeContent redactMode = iota // the content pass (f)
+	modePath                      // the path pass (p) alone
+	modeKeep                      // left byte-for-byte
+)
+
 // redactYAMLDoc re-encodes a YAML document with f applied to every
-// string scalar. Keys, numbers, booleans and structure are untouched. It
-// reports whether any scalar changed; a caller that rewrites in place
-// skips an unchanged file so its formatting is left alone. An empty
-// document stays empty. A file holding more than one document is
-// refused: re-encoding the first would drop the others.
-func redactYAMLDoc(f func(string) string, data []byte) ([]byte, bool, error) {
-	return redactYAMLDocPaths(f, f, data)
-}
-
-// pathYAMLKeys are the contract keys whose values the system acts on
-// (see the redact:"path" tags in mission.go and delegation.go).
-var pathYAMLKeys = map[string]bool{
-	"repo": true, "write_set": true, "extract_into": true, "tools": true,
-	"require_read": true, "files": true, "role": true, "spawn_pattern": true,
-}
-
-// redactYAMLDocPaths is redactYAMLDoc with p applied instead of f to the
-// values under pathYAMLKeys. It is for a contract, whose enforcement
-// fields must not meet the credential or email passes. With p == f the
-// keys are not treated specially.
-func redactYAMLDocPaths(f, p func(string) string, data []byte) ([]byte, bool, error) {
+// string scalar and comment, and p to those under a `redact:"path"`
+// field. Keys, numbers, booleans and structure are untouched. It reports
+// whether anything changed; a caller that rewrites in place skips an
+// unchanged file so its formatting is left alone. An empty document stays
+// empty. A file holding more than one document is refused: re-encoding
+// the first would drop the others.
+//
+// typ is the Go type the document decodes into, or nil when it has none.
+// The modes come from its redact tags, the same ones the record writers
+// read, so a value the system relies on (an ID, an enum, a path) is
+// treated exactly as the writer treats it. Keys typ does not know take
+// the mode of their parent. With p == f and typ == nil every string gets
+// the one pass.
+func redactYAMLDoc(f, p func(string) string, typ reflect.Type, data []byte) ([]byte, bool, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return data, false, nil
 	}
@@ -626,40 +634,9 @@ func redactYAMLDocPaths(f, p func(string) string, data []byte) ([]byte, bool, er
 		}
 		return nil, false, fmt.Errorf("parsing yaml: multiple documents (only one is supported)")
 	}
-	changed := false
-	var walk func(n *yaml.Node, isKey bool, f func(string) string)
-	walk = func(n *yaml.Node, isKey bool, f func(string) string) {
-		switch n.Kind {
-		case yaml.ScalarNode:
-			if isKey || n.Tag != "!!str" {
-				return
-			}
-			if v := f(n.Value); v != n.Value {
-				n.Value, changed = v, true
-			}
-		case yaml.MappingNode:
-			for i := 0; i+1 < len(n.Content); i += 2 {
-				k, val := n.Content[i], n.Content[i+1]
-				if k.Kind == yaml.ScalarNode && redact.IsSecretKey(k.Value) && secretYAMLValue(val) {
-					*val = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: redact.SecretToken}
-					changed = true
-					continue
-				}
-				g := f
-				if k.Kind == yaml.ScalarNode && pathYAMLKeys[k.Value] {
-					g = p
-				}
-				walk(k, true, f)
-				walk(val, false, g)
-			}
-		default:
-			for _, c := range n.Content {
-				walk(c, false, f)
-			}
-		}
-	}
-	walk(&doc, false, f)
-	if !changed {
+	w := yamlRedactor{f: f, p: p}
+	w.walk(&doc, typ, modeContent)
+	if !w.changed {
 		return data, false, nil
 	}
 	out, err := yaml.Marshal(&doc)
@@ -667,6 +644,127 @@ func redactYAMLDocPaths(f, p func(string) string, data []byte) ([]byte, bool, er
 		return nil, false, fmt.Errorf("encoding yaml: %w", err)
 	}
 	return out, true, nil
+}
+
+type yamlRedactor struct {
+	f, p    func(string) string
+	changed bool
+}
+
+func (w *yamlRedactor) pass(mode redactMode) func(string) string {
+	if mode == modePath {
+		return w.p
+	}
+	return w.f
+}
+
+// comments applies the content pass to n's head, line and foot comments.
+// A comment is prose, never a value the system acts on, even beside a path
+// or kept field; and yaml.v3 attaches a trailing comment to the preceding
+// key, so the field's own pass would let it leak.
+func (w *yamlRedactor) comments(n *yaml.Node) {
+	for _, c := range []*string{&n.HeadComment, &n.LineComment, &n.FootComment} {
+		if v := w.f(*c); v != *c {
+			*c, w.changed = v, true
+		}
+	}
+}
+
+func (w *yamlRedactor) walk(n *yaml.Node, t reflect.Type, mode redactMode) {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	w.comments(n)
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if mode == modeKeep || n.Tag != "!!str" {
+			return
+		}
+		if v := w.pass(mode)(n.Value); v != n.Value {
+			n.Value, w.changed = v, true
+		}
+	case yaml.MappingNode:
+		w.walkMapping(n, t, mode)
+	case yaml.SequenceNode:
+		var et reflect.Type
+		if t != nil && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+			et = t.Elem()
+		}
+		for _, c := range n.Content {
+			w.walk(c, et, mode)
+		}
+	default:
+		for _, c := range n.Content {
+			w.walk(c, t, mode)
+		}
+	}
+}
+
+func (w *yamlRedactor) walkMapping(n *yaml.Node, t reflect.Type, mode redactMode) {
+	fields := yamlFields(t)
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, val := n.Content[i], n.Content[i+1]
+		km, vt := mode, reflect.Type(nil)
+		if t != nil && t.Kind() == reflect.Map {
+			vt = t.Elem()
+		}
+		if sf, ok := fields[k.Value]; ok && k.Kind == yaml.ScalarNode {
+			vt = sf.Type
+			switch tag := sf.Tag.Get("redact"); {
+			case mode == modeKeep:
+			case tag == "keep":
+				km = modeKeep
+			case tag == "path":
+				km = modePath
+			}
+		}
+		if km != modeKeep && k.Kind == yaml.ScalarNode && redact.IsSecretKey(k.Value) && secretYAMLValue(val) {
+			*val = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: redact.SecretToken}
+			w.changed = true
+			continue
+		}
+		w.comments(k)
+		w.walk(val, vt, km)
+	}
+}
+
+// yamlFields maps each YAML key of struct type t to its field. Other
+// types, and nil, have none.
+func yamlFields(t reflect.Type) map[string]reflect.StructField {
+	if t == nil || t.Kind() != reflect.Struct {
+		return nil
+	}
+	out := make(map[string]reflect.StructField, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		sf := t.Field(i)
+		if !sf.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(sf.Tag.Get("yaml"), ",")
+		switch name {
+		case "-":
+			continue
+		case "":
+			name = strings.ToLower(sf.Name)
+		}
+		out[name] = sf
+	}
+	return out
+}
+
+// checkScrubbedContract refuses a redacted contract file that no longer
+// validates, as the contract writer does. It judges only a contract that
+// was valid to begin with: an archetype may relax rules Validate applies
+// without one, and a file that was already invalid cannot be made worse.
+func checkScrubbedContract(orig, red []byte) error {
+	var before, after Contract
+	if yaml.Unmarshal(orig, &before) != nil || before.Validate() != nil {
+		return nil
+	}
+	if err := yaml.Unmarshal(red, &after); err != nil {
+		return fmt.Errorf("redacted contract does not parse: %w", err)
+	}
+	return checkRedactedContract(after)
 }
 
 // secretYAMLValue reports whether the value under a credential-named key

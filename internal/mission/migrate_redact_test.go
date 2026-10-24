@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -85,19 +86,19 @@ func TestMigrateMission_RefusesMalformedLegacyRecord(t *testing.T) {
 // reads the first document only, so re-encoding would drop the rest.
 func TestRedactYAMLDoc_RefusesMultipleDocuments(t *testing.T) {
 	id := func(s string) string { return s }
-	_, _, err := redactYAMLDoc(id, []byte("a: 1\n---\nb: /home/alice/x\n"))
+	_, _, err := redactYAMLDoc(id, id, nil, []byte("a: 1\n---\nb: /home/alice/x\n"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple")
 
-	out, changed, err := redactYAMLDoc(id, []byte("a: 1\n"))
+	out, changed, err := redactYAMLDoc(id, id, nil, []byte("a: 1\n"))
 	require.NoError(t, err)
 	assert.False(t, changed)
 	assert.Equal(t, "a: 1\n", string(out))
 }
 
-func TestRedactYAMLDocPaths_EnforcementKeysGetOnlyPaths(t *testing.T) {
+func TestRedactYAMLDoc_EnforcementKeysGetOnlyPaths(t *testing.T) {
 	in := "tools:\n    - Bash(gh auth token:*)\n    - Read(/home/alice/x)\ncontext: \"GITHUB_TOKEN=abc12345 a@b.org\"\n"
-	out, changed, err := redactYAMLDocPaths(redact.Prose, func(s string) string { return redact.HomePaths(s) }, []byte(in))
+	out, changed, err := redactYAMLDoc(redact.Prose, func(s string) string { return redact.HomePaths(s) }, reflect.TypeOf(Contract{}), []byte(in))
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Contains(t, string(out), "Bash(gh auth token:*)")
@@ -140,4 +141,32 @@ func TestMigrateMission_ContractEnforcementFieldsKeepTheirValue(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "contract.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "Bash(gh auth token:*)")
+}
+
+// TestCopyIfExists_SchemaDrivenYAML: the migration redacts a legacy record
+// by its type, as the writer does. A pipeline ID that looks like a key is
+// kept, a result's file path is kept, and a comment-only leak is scrubbed.
+func TestCopyIfExists_SchemaDrivenYAML(t *testing.T) {
+	dir := t.TempDir()
+	r := PathRedactor{}
+	c := validContract()
+	c.Pipeline = "sk-project-implementation-workflow"
+	raw, err := yaml.Marshal(&c)
+	require.NoError(t, err)
+	src := filepath.Join(dir, "m.yaml")
+	require.NoError(t, os.WriteFile(src, append(raw, []byte("# GITHUB_TOKEN=abc12345\n")...), 0o600))
+	dst := filepath.Join(dir, "contract.yaml")
+	require.NoError(t, copyIfExists(r, src, dst))
+	got, err := os.ReadFile(dst)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "pipeline: sk-project-implementation-workflow")
+	assert.NotContains(t, string(got), "abc12345")
+
+	src = filepath.Join(dir, "m.results.yaml")
+	require.NoError(t, os.WriteFile(src, []byte("results:\n    - files_changed:\n        - path: src/user@example.com\n"), 0o600))
+	dst = filepath.Join(dir, "results.yaml")
+	require.NoError(t, copyIfExists(r, src, dst))
+	got, err = os.ReadFile(dst)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "path: src/user@example.com")
 }

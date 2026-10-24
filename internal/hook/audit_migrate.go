@@ -280,17 +280,24 @@ func redactLegacyLine(raw []byte, repoRoot string, r mission.PathRedactor) ([]by
 			changed = true
 		}
 	}
+	// A preview is recomputed when tool_input changed, so it is swept only
+	// when tool_input did not. audit_error is free text beside tool_input,
+	// not derived from it, and is swept either way.
+	textKeys := []string{"audit_error"}
 	if !changed {
-		for _, k := range []string{"tool_input_preview", "audit_error"} {
-			if s, ok := m[k].(string); ok {
-				if red := r.Content(s); red != s {
-					m[k], changed = red, true
-				}
+		textKeys = append(textKeys, "tool_input_preview")
+	}
+	textChanged := false
+	for _, k := range textKeys {
+		if s, ok := m[k].(string); ok {
+			if red := r.Content(s); red != s {
+				m[k], textChanged = red, true
 			}
 		}
-		if changed {
-			m["redacted"] = true
-		}
+	}
+	if textChanged {
+		m["redacted"] = true
+		changed = true
 	}
 	if !changed {
 		return raw, false, nil

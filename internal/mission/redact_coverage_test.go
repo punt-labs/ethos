@@ -139,6 +139,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/mission.AcquireDispatchPendingLock": exempt(reasonLock),
 	"internal/mission.Store.withCreateLock":       exempt(reasonLock),
 	"internal/mission.Store.withLock":             exempt(reasonLock),
+	"internal/mission.withTraceLock":              exempt(reasonLock),
 	"internal/mission.acquireMissionLock":         exempt(reasonLock),
 	"internal/mission.newReleaseFunc":             exempt(reasonLock),
 	"internal/mission.allocateCounter":            exempt(reasonCounter),
@@ -154,7 +155,8 @@ var writerRegistry = map[string]writerEntry{
 
 	"internal/hook.buildAuditEntry":        checkpoint("redactToolInput"),
 	"internal/hook.redactToolInput":        checkpoint("NewPathRedactor", "redactSensitiveContent"),
-	"internal/hook.redactSensitiveContent": checkpoint("SecretsValue"),
+	"internal/hook.redactSensitiveContent": checkpoint("sweepSecrets"),
+	"internal/hook.sweepSecrets":           checkpoint("SecretsValue"),
 	"internal/hook.HandleAuditLog":         checkpoint("buildAuditEntry"),
 	"internal/hook.appendLiveAudit":        downstream("HandleAuditLog", "appends the entry buildAuditEntry redacted; HandleAuditLog is its only caller"),
 	"internal/hook.writeAuditEntry": downstream("HandleAuditLog",

@@ -102,7 +102,7 @@ type Result struct {
 // WriteSet at Append time; Added/Removed are counts with no upper
 // bound but must be non-negative.
 type FileChange struct {
-	Path    string `yaml:"path" json:"path"`
+	Path    string `yaml:"path" json:"path" redact:"path"`
 	Added   int    `yaml:"added" json:"added"`
 	Removed int    `yaml:"removed" json:"removed"`
 }

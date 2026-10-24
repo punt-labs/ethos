@@ -222,5 +222,5 @@ func TestPathRedactor_DashEncodedHome(t *testing.T) {
 		assert.Equal(t, tt.want, r.Text(tt.in), tt.in)
 	}
 	// The generic slug form needs no configured home.
-	assert.Equal(t, "/p/-~-Coding", r.Content("/p/-home-jfreeman-Coding"))
+	assert.Equal(t, "/p/-~-[redacted-slug]", r.Content("/p/-home-jfreeman-Coding"))
 }
