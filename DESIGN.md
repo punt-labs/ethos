@@ -12920,7 +12920,7 @@ artifacts (above). The ignore rules follow the mode:
   tracked class-3 paths, so a file written there by an older binary is
   not committed by accident. `export --full` still writes to those paths,
   so its output is ignored; the command prints the `git add -f <paths>`
-  line that stages it. Ethos runs no git commands. Once added, git tracks
+  line that stages it. Export does not stage its output; only the pre-commit seal runs `git add` (`internal/audit/seal.go:411`). Once added, git tracks
   the files despite the rules.
 - Under `record: full`, `ethos enable` omits those rules (except the
   artifacts rule above). Changing `record` takes effect for the ignore
