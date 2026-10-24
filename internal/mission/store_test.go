@@ -294,8 +294,10 @@ func TestStore_RoundTrip_Trigger(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loaded.Inputs.Trigger)
 	assert.Equal(t, "email", loaded.Inputs.Trigger.Type)
-	assert.Equal(t, "<abc@example.com>", loaded.Inputs.Trigger.MessageID)
-	assert.Equal(t, "mal@serenity.ship", loaded.Inputs.Trigger.From)
+	// The contract is a tracked file, so the sender and message ID are
+	// swept; the trigger is provenance for a human, nothing matches on it.
+	assert.Equal(t, "<[redacted-email]>", loaded.Inputs.Trigger.MessageID)
+	assert.Equal(t, "[redacted-email]", loaded.Inputs.Trigger.From)
 	assert.Equal(t, "cargo run", loaded.Inputs.Trigger.Subject)
 	assert.Equal(t, c.Inputs.Ticket, loaded.Inputs.Ticket)
 }
@@ -5604,13 +5606,15 @@ func TestStore_ForceReleaseWriteSet_RedactsReasonInEventLog(t *testing.T) {
 // failure must leave the contract exactly as it was — write_set and
 // extract_into intact, no event appended.
 func TestStore_ForceReleaseWriteSet_RedactorFailureLeavesMissionUnchanged(t *testing.T) {
-	t.Setenv("HOME", "relative/path")
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
 
 	s := forceReleaseTestStore(t, repoRoot, globalRoot)
 	c := forceReleasableContract("m-2026-08-06-052")
 	require.NoError(t, s.Create(c))
+	// Set after Create: the contract writer itself fails closed on an
+	// unusable $HOME.
+	t.Setenv("HOME", "relative/path")
 	originalWriteSet := append([]string(nil), c.WriteSet...)
 
 	_, err := s.ForceReleaseWriteSet("m-2026-08-06-052", "should never land on disk")

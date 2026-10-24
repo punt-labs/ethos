@@ -4,18 +4,28 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 // PathRedactor rewrites machine-specific absolute path prefixes into
 // portable tokens. $HOME/X becomes ~/X and <repoRoot>/X becomes
 // <repo>/X.
 //
-// Every artifact ethos writes into a git-tracked tree passes through
-// one of these: the PostToolUse audit lines (internal/hook), the Tier B
-// delegation prompt.md, and the delegation record. Absolute paths in
-// shared history leak the original operator's username and machine
-// layout forever, and those trees are pushed to public repos.
+// Every record ethos writes into a tracked tree is built from a
+// PathRedactor: contracts, results, reflections, event logs, the
+// missions.jsonl trace, `ethos mission export`, and the delegation
+// prompt and record go through RedactRecord and Content; the PostToolUse
+// audit lines (internal/hook) go through NewPathRedactor and the shared
+// internal/redact passes. TestTrackedWritersAreRedacted enumerates the
+// writers and fails when one is added without a redactor, so this comment
+// is checked, not trusted. Absolute paths, addresses, and credentials in
+// shared history leak forever, and those trees are pushed to public
+// repos.
 //
 // A zero Repo or Home disables that substitution rather than erroring.
 // No method on this type returns an error: once a redactor exists, a
@@ -36,7 +46,22 @@ type PathRedactor struct {
 // rewritten.
 func (r PathRedactor) Text(s string) string {
 	s = replacePrefix(s, r.Repo, "<repo>")
-	return replacePrefix(s, r.Home, "~")
+	s = replacePrefix(s, r.Home, "~")
+	return replaceDashHome(s, r.Home)
+}
+
+// replaceDashHome rewrites the dash-encoded home directory Claude Code
+// uses in project slugs (/var/home/zed becomes -var-home-zed) to -~. The
+// slug carries the username exactly as the path does. /home/<name> and
+// /Users/<name> are also caught without knowing the home, by
+// redact.HomePaths; this covers any other home layout.
+func replaceDashHome(s, home string) string {
+	dash := strings.ReplaceAll(home, string(filepath.Separator), "-")
+	if home == "" || dash == "" || dash == "-" || !strings.Contains(s, dash) {
+		return s
+	}
+	re := regexp.MustCompile(`(^|[^A-Za-z0-9_.\-])` + regexp.QuoteMeta(dash) + `(-|[^A-Za-z0-9_.]|$)`)
+	return re.ReplaceAllString(s, "${1}-~${2}")
 }
 
 // replacePrefix rewrites every occurrence of prefix in s to token,
@@ -97,13 +122,28 @@ func continuesComponent(rest string) bool {
 	}
 }
 
+// Content redacts free text bound for a tracked file: paths first, then
+// the shared credential, email and foreign-home passes in
+// internal/redact. Text alone is for values known to be paths.
+func (r PathRedactor) Content(s string) string {
+	return redact.Prose(r.Text(s))
+}
+
+// Path redacts a value the system acts on, such as a tool grant or a
+// write-set entry: home and repo prefixes, and any user's home, but no
+// credential or address pass. Those passes would rewrite the value and
+// change what it enforces.
+func (r PathRedactor) Path(s string) string {
+	return redact.HomePaths(r.Text(s))
+}
+
 // Body redacts a file body. Returns nil for nil so an absent optional
 // artifact stays absent.
 func (r PathRedactor) Body(b []byte) []byte {
 	if b == nil {
 		return nil
 	}
-	return []byte(r.Text(string(b)))
+	return []byte(r.Content(string(b)))
 }
 
 // Value redacts v recursively. Strings are rewritten via Text; maps
@@ -192,4 +232,60 @@ func NewPathRedactor(repoRoot string) (PathRedactor, error) {
 // matches every "." in every string.
 func usablePrefix(p string) bool {
 	return p != "" && filepath.IsAbs(p) && filepath.Clean(p) != string(filepath.Separator)
+}
+
+// RedactRecord returns a copy of v with every string field passed
+// through Content, except fields tagged `redact:"keep"` (IDs, hashes,
+// enums, timestamps). It is the one entry point the record writers use.
+//
+// It fails closed: when no usable redactor can be built the error is
+// returned and the caller must refuse the write.
+func RedactRecord[T any](repoRoot string, v T) (T, error) {
+	r, err := NewPathRedactor(repoRoot)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("redacting record: %w", err)
+	}
+	return redact.RecordPaths(v, r.Content, r.Path), nil
+}
+
+// RedactedYAML is RedactRecord followed by yaml.Marshal: the one way a
+// record becomes the YAML bytes of a tracked file. Contracts, results,
+// reflections, delegation records and `ethos mission export` all call it,
+// so there is no marshal step between a record and the disk that skipped
+// the redactor. An error means the caller must not write.
+//
+// Each check runs on the redacted record before it is marshaled, so a
+// caller can refuse a record whose redacted form is no longer valid.
+func RedactedYAML[T any](repoRoot string, v T, checks ...func(redacted T) error) ([]byte, error) {
+	r, err := RedactRecord(repoRoot, v)
+	if err != nil {
+		return nil, err
+	}
+	for _, check := range checks {
+		if err := check(r); err != nil {
+			return nil, err
+		}
+	}
+	data, err := yaml.Marshal(&r)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling record: %w", err)
+	}
+	return data, nil
+}
+
+// checkPathFields refuses a redacted contract in which any path-tagged
+// field differs from the path pass applied alone to the original. Those
+// fields are acted on, so the credential and email passes must never have
+// touched them; this holds whether or not the contract validates.
+func checkPathFields(repoRoot string, orig, red Contract) error {
+	r, err := NewPathRedactor(repoRoot)
+	if err != nil {
+		return fmt.Errorf("building path redactor: %w", err)
+	}
+	want := redact.RecordPaths(orig, func(s string) string { return s }, r.Path)
+	if diffs := redact.PathDiffs(want, red); len(diffs) > 0 {
+		return fmt.Errorf("redaction altered enforcement fields: %s", strings.Join(diffs, ", "))
+	}
+	return nil
 }

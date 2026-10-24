@@ -34,8 +34,12 @@ import (
 //
 // livePath is the session audit live file (session namespace) or the
 // per-(mission, session) mission live log (mission namespace) the re-seal
-// draws from. Returns the marker it wrote (or found).
-func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string) (Marker, error) {
+// draws from. redactReason is applied to reason: the marker is committed
+// beside the sealed chunks and the reason is free text, often an error
+// string carrying a path. The caller supplies it because only the caller
+// knows the home and repo prefixes. Returns the marker it wrote (or found).
+func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string, redactReason func(string) string) (Marker, error) {
+	reason = redactReason(reason)
 	stem := cn.Stem()
 	chunkPath := filepath.Join(sealedDir, cn.ChunkFile())
 	corruptPath := filepath.Join(sealedDir, stem+".jsonl.corrupt")

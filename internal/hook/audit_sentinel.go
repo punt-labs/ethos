@@ -7,7 +7,27 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
+
+// redactReason redacts the free-text reason of a loss marker. The reason
+// is an error string, which carries absolute paths, and the marker lands
+// in a git-tracked file.
+//
+// The audit writer never blocks a tool call, and a loss marker that
+// cannot be written is worse than one with a placeholder, so when no
+// redactor can be built the reason is replaced whole rather than the
+// write refused (the same exception redactToolInput makes). The
+// replacement is announced on stderr; the cause is not part of the
+// reason, so the announcement cannot leak what the placeholder hides.
+func redactReason(reason string) string {
+	r, err := mission.NewPathRedactor("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: audit: reason replaced: %v\n", err)
+		return redactedValueToken
+	}
+	return r.Content(reason)
+}
 
 // auditSentinel is the minimal JSONL line emitted when the audit
 // pipeline cannot persist a full entry. The shape is deliberately
@@ -49,6 +69,7 @@ type auditSentinel struct {
 // sealed and always shown. AppendMonotonic appends in one write and fsyncs, the
 // same atomicity the sentinel needs.
 func emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID string, now time.Time, reason string) error {
+	reason = redactReason(reason)
 	// MonotonicFloor seeds from sealed chunks + legacy; a corrupt sealed dir
 	// makes it unavailable, in which case a zero floor still lets AppendMonotonic
 	// mint above the live file's own max — a landed marker beats no marker.
@@ -79,6 +100,7 @@ func emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID string, now ti
 // with no seal there is nothing to sort below. Defensive shape: one canonical
 // JSONL line, O_APPEND, single write, fsync.
 func emitLegacySentinel(path, sessionID, ts, reason string) error {
+	reason = redactReason(reason)
 	data, err := json.Marshal(auditSentinel{
 		Ts:         ts,
 		Session:    sessionID,

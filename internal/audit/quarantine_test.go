@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 func initGitRepo(t *testing.T, dir string) {
@@ -62,7 +64,7 @@ func TestQuarantineFullRecovery(t *testing.T) {
 	writeLive(t, live, 100, 200, 300)
 
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	m, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch")
+	m, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose)
 	if err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
@@ -97,7 +99,7 @@ func TestQuarantinePartialRecoveryLeavesGap(t *testing.T) {
 	writeLive(t, live, 100, 200)
 
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	m, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch")
+	m, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose)
 	if err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
@@ -135,7 +137,7 @@ func TestQuarantineTotalLossRecordsFullRangeGap(t *testing.T) {
 	writeLive(t, live, 50, 60)
 
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	m, err := Quarantine(repo, sealedDir, cn, live, "unparseable")
+	m, err := Quarantine(repo, sealedDir, cn, live, "unparseable", redact.Prose)
 	if err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}
@@ -158,11 +160,11 @@ func TestQuarantineIdempotent(t *testing.T) {
 	writeLive(t, live, 100, 200, 300)
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
 
-	m1, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch")
+	m1, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose)
 	if err != nil {
 		t.Fatalf("first quarantine: %v", err)
 	}
-	m2, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch")
+	m2, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose)
 	if err != nil {
 		t.Fatalf("second quarantine (idempotent): %v", err)
 	}
@@ -183,7 +185,7 @@ func TestQuarantineResumeFromCorrupt(t *testing.T) {
 	writeLive(t, live, 100, 200, 300)
 
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	m, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch")
+	m, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose)
 	if err != nil {
 		t.Fatalf("resume quarantine: %v", err)
 	}
@@ -214,7 +216,7 @@ func TestQuarantineNeverOverwritesExistingCorrupt(t *testing.T) {
 	writeLive(t, live, 100, 200, 300)
 
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err != nil {
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose); err != nil {
 		t.Fatalf("quarantine over existing .corrupt: %v", err)
 	}
 	// The prior .corrupt evidence survives untouched.
@@ -242,7 +244,7 @@ func TestQuarantineNoOpRetiresFreshCorruptionAtCoveredName(t *testing.T) {
 	writeChunk(t, sealedDir, SessionChunkFile(100, 300), 100, 200)
 	gitCommitAll(t, repo, "seal")
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err != nil {
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose); err != nil {
 		t.Fatal(err)
 	}
 	// The re-seal produced a content-named chunk at [100,200] (a covered name).
@@ -253,7 +255,7 @@ func TestQuarantineNoOpRetiresFreshCorruptionAtCoveredName(t *testing.T) {
 	}
 	// A second quarantine (idempotent no-op) must NOT be blind to it: it
 	// retires the fresh corruption under a .corrupt-<hash> and succeeds.
-	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err != nil {
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose); err != nil {
 		t.Fatalf("no-op reconcile: %v", err)
 	}
 	// The scan is clean again — no valid chunk at [100,200] trips the check.
@@ -275,12 +277,41 @@ func TestSealReadsQuarantinedChunkWithoutError(t *testing.T) {
 	live := filepath.Join(repo, "live.jsonl")
 	writeLive(t, live, 100, 200, 300)
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err != nil {
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch", redact.Prose); err != nil {
 		t.Fatal(err)
 	}
 	// After quarantine, a scan no longer errors on the retired chunk (the
 	// .corrupt is covered by the marker).
 	if _, err := ScanSealedDir(sealedDir, SessionNS, ""); err != nil {
 		t.Errorf("scan after quarantine errored: %v", err)
+	}
+}
+
+// TestQuarantineMarkerReasonRedacted: the marker lands in the tracked
+// sealed directory, and its reason is operator- or error-supplied text.
+func TestQuarantineMarkerReasonRedacted(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealedDir := filepath.Join(repo, "sealed")
+	writeChunk(t, sealedDir, SessionChunkFile(100, 300), 100, 200)
+	gitCommitAll(t, repo, "seal")
+	live := filepath.Join(repo, "live.jsonl")
+	writeLive(t, live, 100, 200, 300)
+
+	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
+	m, err := Quarantine(repo, sealedDir, cn, live, "bad chunk in /home/alice/work GITHUB_TOKEN=abc mail a@b.org", redact.Prose)
+	if err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	const want = "bad chunk in ~/work GITHUB_TOKEN=[redacted-secret] mail [redacted-email]"
+	if m.Reason != want {
+		t.Errorf("reason = %q, want %q", m.Reason, want)
+	}
+	onDisk, err := ReadMarker(filepath.Join(sealedDir, cn.MarkerFile()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.Reason != want {
+		t.Errorf("on-disk reason = %q, want %q", onDisk.Reason, want)
 	}
 }

@@ -108,13 +108,15 @@ func TestStore_Abandon_RedactorFailureLeavesMissionOpen(t *testing.T) {
 	// (NewPathRedactor requires an absolute path below the root), so
 	// this reproduces "redactor construction fails" without needing
 	// to fake a broken os.UserHomeDir.
-	t.Setenv("HOME", "relative/path")
+	// The contract is created under a valid $HOME first: the contract
+	// writer itself fails closed on an unusable one.
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
 
 	s := NewStoreWithRoots(repoRoot, globalRoot)
 	c := newContract("m-2026-08-06-097")
 	require.NoError(t, s.Create(c))
+	t.Setenv("HOME", "relative/path")
 
 	_, err := s.Abandon("m-2026-08-06-097", "should never land on disk")
 	require.Error(t, err, "Abandon must refuse when the redactor cannot be built")

@@ -180,3 +180,18 @@ func TestRedactAbsolutePaths_HashPortability(t *testing.T) {
 			"same logical call — otherwise the collision detector "+
 			"becomes machine-specific")
 }
+
+// TestRedactToolInput_ForeignHomePaths: a path pasted from another
+// machine names a person as surely as this one does.
+func TestRedactToolInput_ForeignHomePaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	in := map[string]any{"tool_input": map[string]any{
+		"command": "cat /home/alice/notes.txt",
+		"paths":   []any{"/Users/bob/x", "ok"},
+	}}
+	got, _ := redactToolInput(in, "Bash", t.TempDir())
+	assert.Equal(t, map[string]any{
+		"command": "cat ~/notes.txt",
+		"paths":   []any{"~/x", "ok"},
+	}, got)
+}

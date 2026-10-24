@@ -11,7 +11,7 @@ Keep schemas flat. Bound the integers, prefix the free types, and avoid B keywor
 Git rules:
 - Run `make check` before each commit; it runs fuzz on docs/*.tex.
 - Commit by explicit path only: `git commit -m "<msg>" -- docs/spec-opencode-integration.tex`.
-- End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- End each commit message with `Co-Authored-By: Claude Opus 5.5 <[redacted-email]>`.
 - Never stage, unstage, or restore any other file.
 - Commit on your branch; do not push, do not touch PRs or merge — the leader does that.
 

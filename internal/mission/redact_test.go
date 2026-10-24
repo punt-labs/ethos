@@ -209,3 +209,18 @@ func TestNewPathRedactor(t *testing.T) {
 			"a trailing slash on repoRoot must not silently defeat the token")
 	})
 }
+
+func TestPathRedactor_DashEncodedHome(t *testing.T) {
+	r := PathRedactor{Home: "/var/home/zed", Repo: "/var/home/zed/work/ethos"}
+	tests := []struct{ in, want string }{
+		{"~/.claude/projects/-var-home-zed-work-ethos/memory/MEMORY.md", "~/.claude/projects/-~-work-ethos/memory/MEMORY.md"},
+		{"/p/-var-home-zed", "/p/-~"},
+		{"/p/-var-home-zedd-x", "/p/-var-home-zedd-x"},
+		{"/var/home/zed/x", "~/x"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, r.Text(tt.in), tt.in)
+	}
+	// The generic slug form needs no configured home.
+	assert.Equal(t, "/p/-~-Coding", r.Content("/p/-home-jfreeman-Coding"))
+}

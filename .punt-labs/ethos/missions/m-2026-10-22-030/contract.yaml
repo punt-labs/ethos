@@ -30,4 +30,4 @@ budget:
     rounds: 2
     reflection_after_each: true
 current_round: 1
-context: 'Round 7, re-scoped successor to m-2026-10-22-026 (closed failed at round cap with one blocking finding B1 and six wording findings from evaluator rsc). DES-078 design, ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge -- the leader does that. Each criterion is a leader decision; if source verification shows one impossible as stated, stop and report.'
+context: 'Round 7, re-scoped successor to m-2026-10-22-026 (closed failed at round cap with one blocking finding B1 and six wording findings from evaluator rsc). DES-078 design, ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in ~/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge -- the leader does that. Each criterion is a leader decision; if source verification shows one impossible as stated, stop and report.'

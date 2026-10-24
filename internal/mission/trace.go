@@ -2,6 +2,7 @@ package mission
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -11,23 +12,23 @@ import (
 // closing result so every closed mission is visible in the repo's git
 // history without reading the global missions directory.
 type TraceSummary struct {
-	ID              string   `json:"id"`
-	CreatedAt       string   `json:"created_at"`
-	ClosedAt        string   `json:"closed_at"`
-	Status          string   `json:"status"`
-	Type            string   `json:"type,omitempty"`
-	Leader          string   `json:"leader"`
-	Worker          string   `json:"worker"`
-	Evaluator       string   `json:"evaluator"`
+	ID              string   `json:"id" redact:"keep"`
+	CreatedAt       string   `json:"created_at" redact:"keep"`
+	ClosedAt        string   `json:"closed_at" redact:"keep"`
+	Status          string   `json:"status" redact:"keep"`
+	Type            string   `json:"type,omitempty" redact:"keep"`
+	Leader          string   `json:"leader" redact:"keep"`
+	Worker          string   `json:"worker" redact:"keep"`
+	Evaluator       string   `json:"evaluator" redact:"keep"`
 	Ticket          string   `json:"ticket,omitempty"`
 	WriteSet        []string `json:"write_set"`
 	SuccessCriteria []string `json:"success_criteria"`
 	RoundsUsed      int      `json:"rounds_used"`
 	RoundsBudgeted  int      `json:"rounds_budgeted"`
-	Verdict         string   `json:"verdict"`
+	Verdict         string   `json:"verdict" redact:"keep"`
 	FilesChanged    []string `json:"files_changed"`
-	Pipeline        string   `json:"pipeline,omitempty"`
-	Session         string   `json:"session,omitempty"`
+	Pipeline        string   `json:"pipeline,omitempty" redact:"keep"`
+	Session         string   `json:"session,omitempty" redact:"keep"`
 	Repo            string   `json:"repo,omitempty"`
 }
 
@@ -82,7 +83,10 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	summary := buildTraceSummary(c, result)
+	summary, err := RedactRecord(s.repoRoot, buildTraceSummary(c, result))
+	if err != nil {
+		return fmt.Errorf("writing trace summary for %s: %w", c.MissionID, err)
+	}
 	data, err := json.Marshal(summary)
 	if err != nil {
 		return err

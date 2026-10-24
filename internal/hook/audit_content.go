@@ -2,9 +2,10 @@ package hook
 
 import (
 	"maps"
-	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 // audit_content.go is the per-tool content redaction policy for the
@@ -16,7 +17,7 @@ import (
 // body plus its recipient, and a recipient address inside a CronCreate
 // prompt, both landed in a public repo.
 //
-// Two passes run here, both name-based and both fail-closed in the
+// Two policy passes run here, both name-based and both fail-closed in the
 // sense that matching more than necessary is the safe direction:
 //
 //  1. Sensitive tools reduce to a keep-list. Everything the list does
@@ -28,18 +29,26 @@ import (
 //     structured fields (a file_path, a glob) are left alone so a
 //     non-sensitive tool's line stays byte-identical.
 //
-// Both passes run BEFORE tool_input_hash is computed, so the hash is
-// over the stored form. That is the DES-052 cross-machine
+// A third pass, redact.SecretsValue, runs over every string in the
+// result whatever its key: a credential has no reliable key to hang a
+// keep-list on, and a matched value is replaced with
+// redact.SecretToken. The email pattern and the credential patterns live
+// in internal/redact so the mission writers share one definition.
+//
+// All passes run BEFORE tool_input_hash is computed, so the hash is
+// over the stored form (DES-054). That is the cross-machine
 // collision-detection invariant: two machines making the same logical
 // call must produce the same hash, and a hash over a form that never
-// reaches disk cannot be checked against anything.
+// reaches disk cannot be checked against anything. A line that carries a
+// credential therefore hashes differently than it did before the
+// credential pass existed; the hash follows the stored form, by design.
 //
 // The tokens match the hand-redacted lines from the public-website
 // PR #259 cleanup so one grep finds both the hand-redacted history and
 // everything written since.
 const (
 	redactedValueToken = "[redacted]"
-	redactedEmailToken = "[redacted-email]"
+	redactedEmailToken = redact.EmailToken
 )
 
 // sensitiveTools maps a tool's bare name to the tool_input keys that
@@ -120,7 +129,7 @@ var recipientKeys = map[string]bool{
 // clone line and the `.linux` in a Go toolchain module path are both
 // address-shaped, and both are now rewritten. That is a legibility
 // cost in the log, paid to stop committing operator addresses; the
-// pattern is not narrowed to dodge it, because emailPattern is shared
+// pattern is not narrowed to dodge it, because redact.EmailPattern is shared
 // with the send_email sweep and a carve-out here opens a hole there.
 //
 // A key earns its place by a tool actually writing prose under it, not
@@ -171,28 +180,6 @@ var promptBearingKeys = map[string]bool{
 	"title":          true,
 }
 
-// emailPattern matches an address with a lettered top-level domain.
-// Requiring the TLD keeps some common false positives out: a short Go
-// module version (gopkg.in/yaml.v3@v3.0.1), a digest (image@sha256:...),
-// and a bare user@host all fail the final \.[A-Za-z]{2,} anchor.
-//
-// It does not keep all of them out, and the two that get through are
-// pinned in TestEmailPattern_AddressShapedNonAddresses rather than left
-// for a reader to rediscover: `git@github.com` is a legal address by
-// shape, and a Go toolchain module path
-// (golang.org/toolchain@v0.0.1-go1.26.5.linux-amd64) satisfies the
-// anchor at `.linux`, where the shorter yaml.v3@v3.0.1 does not. Both
-// now get rewritten wherever a swept key holds them, which since
-// command joined promptBearingKeys means ordinary shell lines.
-//
-// Deliberately not RFC 5322, and deliberately not narrowed to exempt
-// those two. An address-shaped run of characters is what leaks; a parser
-// that accepts every legal address and nothing else would be larger,
-// slower, and no better at this job. A carve-out is worse than larger:
-// one pattern serves every key, so an exemption that keeps a clone line
-// legible also lets the same run through a mail subject.
-var emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
-
 // redactSensitiveContent applies the policy to one tool call's
 // already-path-redacted tool_input. It reports whether anything
 // changed so the caller can stamp the redacted marker on the entry.
@@ -204,12 +191,20 @@ func redactSensitiveContent(toolName string, input map[string]any) (map[string]a
 	if input == nil {
 		return nil, false
 	}
+	var m map[string]any
+	var changed bool
 	if keep, ok := sensitiveTools[bareToolName(toolName)]; ok {
-		return reduceToKeepList(input, keep)
+		m, changed = reduceToKeepList(input, keep)
+	} else {
+		out, c := sweepPII(input, sweepOff)
+		m, _ = out.(map[string]any)
+		changed = c
 	}
-	out, changed := sweepPII(input, sweepOff)
-	m, _ := out.(map[string]any)
-	return m, changed
+	// The credential pass covers every string whatever its key: a token
+	// has no reliable key to hang a keep-list on.
+	out, c := redact.SecretsValue(m)
+	m, _ = out.(map[string]any)
+	return m, changed || c
 }
 
 // bareToolName returns the trailing segment of an MCP tool name.
@@ -338,10 +333,10 @@ func sweepPII(v any, mode sweepMode) (any, bool) {
 func sweepString(s string, mode sweepMode) (string, bool) {
 	switch mode {
 	case sweepPrompt:
-		r := emailPattern.ReplaceAllString(s, redactedEmailToken)
+		r := redact.EmailPattern.ReplaceAllString(s, redactedEmailToken)
 		return r, r != s
 	case sweepAddress:
-		if emailPattern.MatchString(s) {
+		if redact.EmailPattern.MatchString(s) {
 			return redactedValueToken, true
 		}
 		return s, false

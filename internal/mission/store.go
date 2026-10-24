@@ -977,6 +977,15 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	if !validStatuses[status] || status == StatusOpen || status == StatusAbandoned {
 		return nil, fmt.Errorf("invalid close status %q: must be closed, failed, or escalated", status)
 	}
+	// Every record Close writes (the contract, the close event, the
+	// missions.jsonl line) goes through the redactor. Build it before the
+	// lock and before any mutation, as Abandon does: the trace write runs
+	// after the close commits and is non-fatal (DES-050), so a redactor
+	// failure found there would drop the index line silently instead of
+	// refusing the close.
+	if _, err := NewPathRedactor(s.repoRoot); err != nil {
+		return nil, fmt.Errorf("close: building path redactor: %w", err)
+	}
 	var satisfying *Result
 	var closed *Contract
 	err := s.withLock(missionID, func() error {
@@ -2356,9 +2365,23 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 // serializes every writer for this missionID, so there is no concurrent
 // second writer to trample the shared name.
 func (s *Store) writeContract(c *Contract) error {
-	data, err := yaml.Marshal(c)
+	// A contract that validates but whose redacted form does not would
+	// land on disk unloadable. Judge only a contract that was valid to
+	// begin with: an archetype may relax rules Validate applies without one.
+	valid := c.Validate() == nil
+	data, err := RedactedYAML(s.repoRoot, *c, func(red Contract) error {
+		// Enforcement fields are checked for every contract: Validate
+		// cannot see a corrupted spawn_pattern or require_read.
+		if err := checkPathFields(s.repoRoot, *c, red); err != nil {
+			return err
+		}
+		if !valid {
+			return nil
+		}
+		return checkRedactedContract(red)
+	})
 	if err != nil {
-		return fmt.Errorf("marshaling contract: %w", err)
+		return fmt.Errorf("writing contract %s: %w", c.MissionID, err)
 	}
 	if err := s.ensureMissionDir(c.MissionID); err != nil {
 		return err
@@ -2368,6 +2391,15 @@ func (s *Store) writeContract(c *Contract) error {
 		return err
 	}
 	return writeContractFile(dest, data)
+}
+
+// checkRedactedContract refuses a redacted contract that fails
+// validation. The validator names the field.
+func checkRedactedContract(red Contract) error {
+	if err := red.Validate(); err != nil {
+		return fmt.Errorf("redacted contract is invalid: %w", err)
+	}
+	return nil
 }
 
 // writeContractFile writes data to dest atomically via a fixed-name
@@ -2842,8 +2874,7 @@ func (s *Store) loadReflectionsLocked(missionID string) ([]Reflection, error) {
 // schema_version key) can be added without breaking decode of older
 // files.
 func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error {
-	wrapper := reflectionsFile{Reflections: rs}
-	data, err := yaml.Marshal(&wrapper)
+	data, err := RedactedYAML(s.repoRoot, reflectionsFile{Reflections: rs})
 	if err != nil {
 		return fmt.Errorf("marshaling reflections: %w", err)
 	}
@@ -3485,8 +3516,7 @@ func (s *Store) loadResultsLocked(missionID string) ([]Result, error) {
 // schema_version key) can be added without breaking decode of older
 // files.
 func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
-	wrapper := resultsFile{Results: rs}
-	data, err := yaml.Marshal(&wrapper)
+	data, err := RedactedYAML(s.repoRoot, resultsFile{Results: rs})
 	if err != nil {
 		return fmt.Errorf("marshaling results: %w", err)
 	}
