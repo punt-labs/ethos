@@ -158,25 +158,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line) on local machines without it. CI installs fuzz from
   punt-labs/z-spec v0.20.5 (ethos-cy70).
 
+### Docs
+
+- **`DESIGN.md` gains DES-079, DES-080 and DES-081; `prfaq.tex` is revised
+  to v3.4.** DES-079 (decided) defines what ethos puts in git: a blame
+  tier tracked by default and a trace tier kept machine-local unless a
+  repository opts in. DES-080 (decided) extends redaction to every
+  mission-record and audit writer. DES-081 (proposed) records the ethos 2.0
+  storage direction. The PR/FAQ now states what is committed today and
+  marks the rest as in progress. This entry changes documents only; the
+  implementing pull requests (`ethos-3e3f`, `ethos-g3g3`, `ethos-yjh0`)
+  add their own entries when they merge.
+
 ### Changed
 
-- **What ethos puts in git is decided (DES-079, DES-080), and an ethos 2.0
-  storage direction is proposed (DES-081).** Besides the identity graph,
-  configuration and `.claude/agents/`, ethos will by default commit only
-  the record `git blame`-style provenance needs: per mission the contract,
-  results, delegation records and corrections, plus `missions.jsonl` and
-  ADRs (which move from `~/.punt-labs/ethos/adrs` into the repository).
-  Prompts, reflections, agent-written artifacts, event logs and
-  per-tool-call audit stay
-  on the developer's machine unless exported with
-  `ethos mission export --full` or `record: full`. Every mission-record and
-  audit file ethos writes will be redacted for paths, email addresses and
-  credentials; identity files keep their email bindings. Already-sealed
-  chunks are not rewritten.
-  Ethos 2.0 is proposed to move runtime state behind a storage interface,
-  with an embedded local backend and an `ethosd` service on Postgres for
-  teams. Implementation is tracked in `ethos-3e3f`, `ethos-g3g3`,
-  `ethos-yjh0` and `ethos-uag1`.
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
   workflow_dispatch runs, never for runs triggered by pull requests, which

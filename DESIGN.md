@@ -12687,7 +12687,7 @@ Full writeups, including two historical exploit traces, are in
 **Status**: Settled 2026-10-23 by operator ruling; ADRs added to the blame
 tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
 store in the repository) and `ethos-3e3f` (redaction, DES-080).
-Implementation pending.
+Implementation in progress: the DES-080 redaction is under way; beads `ethos-g3g3` and `ethos-yjh0` are not started.
 
 ### What this amends
 
@@ -12846,13 +12846,15 @@ needs:
   `audit.jsonl` (appended to only by the legacy-audit migration), and
   audit quarantine artifacts.
 
-**Agent-written files in the mission tree.** `missions/<id>/artifacts/*.md`
-is written by agents with their own file tools; no ethos code writes it.
-It is therefore outside the four classes and outside the DES-080
-redactor. Under `record: blame`, `ethos enable` writes an ignore rule for
-`.punt-labs/ethos/missions/*/artifacts/`, so these files stay local unless
-a person forces them in. `export --full` copies them through the
-redactor.
+**Agent-written files in the mission tree.** Agents write
+`missions/<id>/artifacts/*.md` with their own file tools; ethos does not
+create them, and its live writers do not redact them. They are class 3.
+The one ethos writer that touches them is `export --full`, which rewrites
+them in place through the redactor. In both `record` modes,
+`ethos enable` writes an ignore rule for
+`.punt-labs/ethos/missions/*/artifacts/`, so an artifact reaches git only
+after `export --full` has redacted it. `record: full` does not commit
+artifacts as the agent wrote them.
 
 The live event log and live audit file stay in the machine-local zone
 `.punt-labs/local/ethos/` in every mode (`internal/audit/paths.go:26`).
@@ -12890,9 +12892,21 @@ every class-4 pattern, each with a probe.
 **Opting in to the trace tier.** `ethos mission export <id> --full` writes
 one mission's class-3 files from the archive to their tracked paths,
 through the redactor (DES-080). `record: full` does the same for every
-mission as it is written. Under `record: blame`, `ethos enable` also writes
-ignore rules for the tracked class-3 paths, so a file written there by an
-older binary is not committed by accident. Plain `ethos mission export <id> [--dir]` keeps its current output
+mission as it is written. The ignore rules follow the mode:
+
+- Under `record: blame`, `ethos enable` writes ignore rules for the
+  tracked class-3 paths, so a file written there by an older binary is
+  not committed by accident. `export --full` still writes to those paths,
+  so its output is ignored; the command prints the `git add -f <paths>`
+  line that stages it. Ethos runs no git commands. Once added, git tracks
+  the files despite the rules.
+- Under `record: full`, `ethos enable` omits those rules (except the
+  artifacts rule above). Changing `record` takes effect for the ignore
+  rules when `ethos enable` is re-run, which rewrites its block in
+  `.gitignore`; `ethos doctor` fails while the block does not match the
+  mode.
+
+Plain `ethos mission export <id> [--dir]` keeps its current output
 (the contract and the final result) for publishing a mission elsewhere, and
 now goes through the redactor; existing callers, such as a workspace that
 exports closed missions with `--dir`, are unaffected. For a repository that
