@@ -519,11 +519,6 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 	return fmt.Sprintf("migrate %s -> %s", id, relRepoPath(repoMissionDir)), nil
 }
 
-// copyIfExists copies src to dst when src exists. A missing src is
-// not an error — sibling artifacts (log.jsonl, results.yaml,
-// reflections.yaml) are optional. The copy is whole-file: open both
-// fds, io.Copy, fsync, close. The destination is created with mode
-// 0o600 to match the contract file mode used by writeContract.
 // removeStaging deletes a migrate staging directory and says on w when it
 // cannot: a leftover staging directory is one the user must remove by hand.
 // The path is reported repo-relative, so a home directory does not leak.
@@ -540,6 +535,11 @@ func removeStaging(w io.Writer, staging string) {
 	fmt.Fprintf(w, "ethos: mission migrate: could not remove staging directory %s: %v\n", relRepoPath(staging), err)
 }
 
+// copyIfExists copies src to dst when src exists. A missing src is
+// not an error — sibling artifacts (log.jsonl, results.yaml,
+// reflections.yaml) are optional. The copy is whole-file: open both
+// fds, io.Copy, fsync, close. The destination is created with mode
+// 0o600 to match the contract file mode used by writeContract.
 func copyIfExists(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
