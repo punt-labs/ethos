@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -182,11 +183,18 @@ func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResul
 		return SealGitError(repoRoot, "locating the index (git rev-parse --git-path index)", err, true)
 	}
 
+	// The directories this run will create: a rollback removes them again, and
+	// says so when it cannot.
+	var newDirs []string
+	for _, u := range units {
+		newDirs = appendMissingDirs(newDirs, repoRoot, u.sealedDir)
+	}
+
 	var wrote []string
 	for _, u := range units {
 		out, err := u.write()
 		if err != nil {
-			return rollbackSeal(wrote, nil, fmt.Errorf("sealing %s: %w", u.label, err), "writing chunks")
+			return rollbackSeal(wrote, nil, newDirs, fmt.Errorf("sealing %s: %w", u.label, err), "writing chunks")
 		}
 		if out.wroteChunk {
 			res.SessionsSealed++
@@ -210,13 +218,21 @@ func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResul
 	}
 	snap, err := snapshotIndex(indexPath)
 	if err != nil {
-		return rollbackSeal(wrote, nil, fmt.Errorf("snapshotting the index: %w", err), "snapshotting the index")
+		return rollbackSeal(wrote, nil, newDirs, fmt.Errorf("snapshotting the index: %w", err), "snapshotting the index")
 	}
 	addStart := time.Now()
 	addErr := audit.GitAdd(repoRoot, toAdd...)
-	snap.addFinished(addStart)
+	snap.addFinished(addStart, errors.Is(addErr, gitenv.ErrTimeout))
 	if err := addErr; err != nil {
-		return rollbackSeal(wrote, snap, SealGitError(repoRoot, "staging chunks (git add)", err, false), "staging chunks (git add)")
+		cause := SealGitError(repoRoot, "staging chunks (git add)", err, false)
+		if indexLockExists(err) {
+			// git took nothing and changed nothing: the lock is someone's, the
+			// index is as it was, and there is nothing to restore.
+			snap = snap.abandon()
+			cause = fmt.Errorf("git add could not take %s.lock, which already exists: another git process may be running, or one left it; "+
+				"the lock was left alone and the index was not touched: %w", indexPath, cause)
+		}
+		return rollbackSeal(wrote, snap, newDirs, cause, "staging chunks (git add)")
 	}
 	snap.discard()
 	res.ChunksStaged += len(toAdd)
@@ -242,21 +258,58 @@ func gitIndexPath(repoRoot string) (string, error) {
 	return p, nil
 }
 
+// indexLockExists reports whether git add failed because <index>.lock already
+// existed ("Unable to create '.../index.lock': File exists").
+func indexLockExists(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "index.lock") && strings.Contains(msg, "File exists")
+}
+
+// appendMissingDirs appends to dirs the directories from the first one that
+// does not exist, below root, down to dir (shallowest first): the ones creating
+// dir will make. Entries already in dirs are not repeated.
+func appendMissingDirs(dirs []string, root, dir string) []string {
+	var missing []string
+	for d := dir; d != root && d != filepath.Dir(d); d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		}
+		missing = append([]string{d}, missing...)
+	}
+	for _, d := range missing {
+		if !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
 // rollbackSeal undoes a failed seal: it restores the index from snap (nil
-// before the add), then removes the chunks this run wrote (the live files hold
-// every line). It returns the failure naming the phase, saying the tree is
-// unchanged only when every step succeeded and listing what is left when one
-// did not.
-func rollbackSeal(wrote []string, snap *indexSnapshot, cause error, phase string) error {
+// before the add), removes the chunks this run wrote (the live files hold
+// every line) and the directories it created, deepest first, and always
+// removes the index snapshot. It returns the failure naming the phase, saying
+// the tree is unchanged only when every step succeeded and listing what is
+// left, empty directories included, when one did not. A lock it removed is
+// reported.
+func rollbackSeal(wrote []string, snap *indexSnapshot, newDirs []string, cause error, phase string) error {
 	var left []string
 	if snap != nil {
 		if err := snap.restore(); err != nil {
 			left = append(left, fmt.Sprintf("restoring the index from %s: %v", snap.snap, err))
 		}
+		if len(snap.notes) > 0 {
+			cause = fmt.Errorf("%w (%s)", cause, strings.Join(snap.notes, "; "))
+		}
+		snap.cleanup()
 	}
 	for _, p := range wrote {
 		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			left = append(left, fmt.Sprintf("removing chunk %s: %v", p, err))
+		}
+	}
+	for i := len(newDirs) - 1; i >= 0; i-- {
+		if err := os.Remove(newDirs[i]); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			left = append(left, fmt.Sprintf("removing the directory %s this seal created: %v", newDirs[i], err))
 		}
 	}
 	return sealStageFailure(phase, cause, left)

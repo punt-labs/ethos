@@ -25,9 +25,11 @@ type indexSnapshot struct {
 	mode       fs.FileMode
 	data       []byte
 
-	addStart time.Time
-	after    [sha256.Size]byte // the index our add left, as sha256 ...
-	afterOK  bool              // ... and whether there was one
+	addStart    time.Time
+	addTimedOut bool              // our git add was killed at its deadline
+	notes       []string          // what restore did that the caller must report (a lock it removed)
+	after       [sha256.Size]byte // the index our add left, as sha256 ...
+	afterOK     bool              // ... and whether there was one
 }
 
 // snapshotIndex copies the index at path to path+".ethos-tmp", with the
@@ -62,12 +64,14 @@ func writeFileMode(path string, data []byte, mode fs.FileMode) error {
 	return os.Chmod(path, mode)
 }
 
-// addFinished records the index our `git add` left, once git has exited, and
-// when the add started: the restore puts the snapshot back only while the
-// index is still that, and removes a leftover index.lock only if it is newer
-// than the add.
-func (s *indexSnapshot) addFinished(start time.Time) {
-	s.addStart = start
+// addFinished records the index our `git add` left, once git has exited, when
+// the add started, and whether it was killed at its deadline: the restore puts
+// the snapshot back only while the index is still that, and removes a leftover
+// index.lock only after a timeout of our own add, when the lock is newer than
+// the add and no process holds it. After any other failure a lock belongs to
+// someone else.
+func (s *indexSnapshot) addFinished(start time.Time, timedOut bool) {
+	s.addStart, s.addTimedOut = start, timedOut
 	s.after, s.afterOK = fingerprint(s.path)
 }
 
@@ -128,13 +132,13 @@ func (s *indexSnapshot) restore() error {
 		release()
 		return err
 	}
-	_ = os.Remove(s.snap) // restored: the sibling copy is no longer needed
 	return nil
 }
 
 // takeLock creates lock exclusively. A lock that exists is ours to remove only
-// if it is newer than our add (our git, killed, left it) and no process holds
-// it; any other is somebody's, and the error names it.
+// if our own git add timed out, the lock is newer than the add, and no process
+// holds it (by inode); every other is somebody's, and the error names it. A
+// lock it removes is recorded in s.notes: never removed unreported.
 func (s *indexSnapshot) takeLock(lock string) (*os.File, error) {
 	open := func() (*os.File, error) { return os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) }
 	f, err := open()
@@ -144,6 +148,10 @@ func (s *indexSnapshot) takeLock(lock string) (*os.File, error) {
 	info, serr := os.Stat(lock)
 	if serr != nil {
 		return nil, fmt.Errorf("index lock %s exists and cannot be examined: %w", lock, serr)
+	}
+	if !s.addTimedOut {
+		return nil, fmt.Errorf("index lock %s exists and our git add did not time out, so it is not ours to remove: "+
+			"another git may hold it; remove it if none is running", lock)
 	}
 	if info.ModTime().Before(s.addStart.Add(-lockSlack)) {
 		return nil, fmt.Errorf("index lock %s exists and is older than our git add: another git may hold it; "+
@@ -159,6 +167,7 @@ func (s *indexSnapshot) takeLock(lock string) (*os.File, error) {
 	if err := os.Remove(lock); err != nil {
 		return nil, fmt.Errorf("removing the stale index lock %s: %w", lock, err)
 	}
+	s.notes = append(s.notes, fmt.Sprintf("removed the stale index lock %s left by our git add, which timed out", lock))
 	f, err = open()
 	if err != nil {
 		return nil, fmt.Errorf("taking index lock %s: %w", lock, err)
@@ -166,9 +175,21 @@ func (s *indexSnapshot) takeLock(lock string) (*os.File, error) {
 	return f, nil
 }
 
-// discard removes the snapshot after a successful add.
-func (s *indexSnapshot) discard() {
+// abandon is the snapshot of a failed add that changed nothing: it is removed
+// and there is nothing to restore.
+func (s *indexSnapshot) abandon() *indexSnapshot {
+	s.cleanup()
+	return nil
+}
+
+// cleanup removes the sibling copy of the index, whatever happened to the
+// restore: it is only for recovery after a crash, and a seal that ran to its
+// end leaves none.
+func (s *indexSnapshot) cleanup() {
 	if s.existed {
 		_ = os.Remove(s.snap)
 	}
 }
+
+// discard removes the snapshot after a successful add.
+func (s *indexSnapshot) discard() { s.cleanup() }

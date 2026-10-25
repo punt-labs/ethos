@@ -14,6 +14,11 @@ import (
 // indexFixture writes an index holding before and snapshots it, then writes
 // afterAdd as the index our `git add` left and marks the add finished.
 func indexFixture(t *testing.T, mode os.FileMode, before, afterAdd string) (*indexSnapshot, string, time.Time) {
+	return indexFixtureTimedOut(t, mode, before, afterAdd, false)
+}
+
+// indexFixtureTimedOut is indexFixture for an add that did, or did not, time out.
+func indexFixtureTimedOut(t *testing.T, mode os.FileMode, before, afterAdd string, timedOut bool) (*indexSnapshot, string, time.Time) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "index")
 	require.NoError(t, os.WriteFile(path, []byte(before), mode))
@@ -22,7 +27,7 @@ func indexFixture(t *testing.T, mode os.FileMode, before, afterAdd string) (*ind
 	require.NoError(t, err)
 	start := time.Now()
 	require.NoError(t, os.WriteFile(path, []byte(afterAdd), mode))
-	snap.addFinished(start)
+	snap.addFinished(start, timedOut)
 	return snap, path, start
 }
 
@@ -65,7 +70,7 @@ func TestIndexRestoreRemovesOurStaleLock(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("checking that no process holds the lock needs /proc")
 	}
-	snap, path, _ := indexFixture(t, 0o644, "before", "after")
+	snap, path, _ := indexFixtureTimedOut(t, 0o644, "before", "after", true)
 	require.NoError(t, os.WriteFile(path+".lock", []byte("partial"), 0o644))
 
 	require.NoError(t, snap.restore())
@@ -73,6 +78,40 @@ func TestIndexRestoreRemovesOurStaleLock(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "before", string(data))
 	assert.NoFileExists(t, path+".lock")
+	require.Len(t, snap.notes, 1, "a lock that was removed is reported")
+	assert.Contains(t, snap.notes[0], path+".lock")
+}
+
+// After any failure other than our own add timing out, a lock belongs to
+// someone else, however new and however unheld.
+func TestIndexRestoreLeavesALockAfterANonTimeoutFailure(t *testing.T) {
+	snap, path, _ := indexFixtureTimedOut(t, 0o644, "before", "after", false)
+	require.NoError(t, os.WriteFile(path+".lock", []byte("theirs"), 0o644))
+	err := snap.restore()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path+".lock")
+	assert.FileExists(t, path+".lock")
+	assert.Empty(t, snap.notes)
+}
+
+// The holder check compares inodes: a lock reached through a symlinked
+// directory is still found open.
+func TestLockHeldComparesByInode(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs /proc")
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(real, link))
+	f, err := os.Create(filepath.Join(real, "index.lock"))
+	require.NoError(t, err)
+	held, known := lockHeld(filepath.Join(link, "index.lock"))
+	assert.True(t, known)
+	assert.True(t, held, "held through another spelling of the path")
+	require.NoError(t, f.Close())
+	held, known = lockHeld(filepath.Join(link, "index.lock"))
+	assert.True(t, known)
+	assert.False(t, held)
 }
 
 // A lock a live process holds is never removed, however new.
@@ -80,7 +119,7 @@ func TestIndexRestoreKeepsAHeldLock(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("checking that no process holds the lock needs /proc")
 	}
-	snap, path, _ := indexFixture(t, 0o644, "before", "after")
+	snap, path, _ := indexFixtureTimedOut(t, 0o644, "before", "after", true)
 	f, err := os.Create(path + ".lock")
 	require.NoError(t, err)
 	defer f.Close()
@@ -116,7 +155,7 @@ func TestIndexRestoreRemovesTheIndexGitMade(t *testing.T) {
 	require.NoError(t, err)
 	start := time.Now()
 	require.NoError(t, os.WriteFile(path, []byte("made by add"), 0o644))
-	snap.addFinished(start)
+	snap.addFinished(start, false)
 	require.NoError(t, snap.restore())
 	assert.NoFileExists(t, path)
 	assert.NoFileExists(t, path+".lock")
