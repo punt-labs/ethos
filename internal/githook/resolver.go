@@ -15,8 +15,8 @@ import (
 // inside the work tree or outside the repo, and the notice of a degraded
 // lookup. Degraded says the directory was not fully verified against git;
 // Reason says why. The directory is not exported: a caller that acts on it
-// goes through Target or Verified, which refuse a lookup it cannot trust, and
-// one that only shows it uses Display.
+// goes through Verified, which refuses a lookup it cannot trust, and one that
+// only shows it uses Display.
 type Lookup struct {
 	dir      string
 	root     string // the work tree the lookup was made for
@@ -39,25 +39,6 @@ func (l Lookup) Verified() (string, error) {
 	return l.dir, nil
 }
 
-// Target returns the directory to install hooks into. It is Verified's answer,
-// except that a degraded lookup is accepted when the repository's own git
-// directory exists as a directory with a HEAD: enable then works without git,
-// but never on a stale linked worktree or a moved submodule whose gitdir is
-// gone, where git would not run what is written.
-func (l Lookup) Target() (string, error) {
-	if !l.Degraded {
-		return l.dir, nil
-	}
-	gd := manualGitDir(l.root)
-	if info, err := os.Stat(gd); err != nil || !info.IsDir() {
-		return "", fmt.Errorf("hooks directory not verified: %s; git directory %s does not exist", l.Reason, gd)
-	}
-	if _, err := os.Stat(filepath.Join(gd, "HEAD")); err != nil {
-		return "", fmt.Errorf("hooks directory not verified: %s; %s has no HEAD, so it is not a git directory", l.Reason, gd)
-	}
-	return l.dir, nil
-}
-
 // HooksDir returns the hooks directory git runs for the repo at repoRoot.
 //
 // It asks git directly first — `git rev-parse --git-path hooks` honors
@@ -65,9 +46,9 @@ func (l Lookup) Target() (string, error) {
 // (missing, failing, or reporting a work tree that is not repoRoot) it falls
 // back to reading .git and commondir by hand and marks the Lookup degraded.
 // That fallback cannot see core.hooksPath. This is the one resolver install,
-// enable, and doctor share, so they cannot drift; the manual fallback is kept
-// (not install.sh's git-required form) so enable resolves in a git-less
-// environment where doctor already succeeds.
+// enable, disable, and doctor share, so they cannot drift. The manual fallback
+// exists so doctor and disable can report where hooks would be without git;
+// enable requires a verified lookup and refuses a degraded one.
 //
 // repoRoot is made absolute first; ETHOS_REPO_ROOT may be relative.
 func HooksDir(repoRoot string) Lookup {

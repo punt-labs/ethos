@@ -1029,13 +1029,11 @@ func TestGitOutIncludesStderr(t *testing.T) {
 // TestLookupAccessors: the hooks directory is reachable only through methods
 // that state what they verified.
 func TestLookupAccessors(t *testing.T) {
-	t.Run("healthy lookup yields its dir from both", func(t *testing.T) {
+	t.Run("healthy lookup yields its dir", func(t *testing.T) {
 		l := Lookup{dir: "/x/hooks"}
-		for name, f := range map[string]func() (string, error){"Target": l.Target, "Verified": l.Verified} {
-			got, err := f()
-			if err != nil || got != "/x/hooks" {
-				t.Errorf("%s = %q, %v; want /x/hooks, nil", name, got, err)
-			}
+		got, err := l.Verified()
+		if err != nil || got != "/x/hooks" {
+			t.Errorf("Verified = %q, %v; want /x/hooks, nil", got, err)
 		}
 	})
 
@@ -1048,40 +1046,6 @@ func TestLookupAccessors(t *testing.T) {
 			t.Errorf("Verified error = %v, want one carrying the reason", err)
 		}
 	})
-
-	t.Run("degraded lookup with a real gitdir has a Target", func(t *testing.T) {
-		root := t.TempDir()
-		mkGitDir(t, filepath.Join(root, ".git"))
-		l := Lookup{dir: filepath.Join(root, ".git", "hooks"), root: root, Degraded: true, Reason: "git is absent"}
-		got, err := l.Target()
-		if err != nil || got != l.dir {
-			t.Errorf("Target = %q, %v; want %q, nil", got, err, l.dir)
-		}
-	})
-
-	t.Run("degraded lookup with a gitdir lacking HEAD has no Target", func(t *testing.T) {
-		root := t.TempDir()
-		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		l := Lookup{dir: filepath.Join(root, ".git", "hooks"), root: root, Degraded: true, Reason: "git is absent"}
-		if _, err := l.Target(); err == nil {
-			t.Error("Target = nil error for a .git with no HEAD")
-		}
-	})
-
-	t.Run("degraded lookup with a stale gitdir file has no Target", func(t *testing.T) {
-		root := t.TempDir()
-		gone := filepath.Join(t.TempDir(), "worktrees", "wt")
-		if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+gone+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		l := hooksDirNoGit(t, root)
-		_, err := l.Target()
-		if err == nil || !strings.Contains(err.Error(), gone) {
-			t.Errorf("Target error = %v, want one naming %s", err, gone)
-		}
-	})
 }
 
 func mkGitDir(t *testing.T, gd string) {
@@ -1092,11 +1056,4 @@ func mkGitDir(t *testing.T, gd string) {
 	if err := os.WriteFile(filepath.Join(gd, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// hooksDirNoGit resolves root with git off PATH, so the lookup is degraded.
-func hooksDirNoGit(t *testing.T, root string) Lookup {
-	t.Helper()
-	t.Setenv("PATH", t.TempDir())
-	return HooksDir(root)
 }

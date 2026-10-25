@@ -12,7 +12,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -162,6 +161,14 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 func Disable(repoRoot string, force bool) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
 
+	// Resolve the hooks directory before the sibling probe and before changing
+	// anything, so a refusal leaves the repo enabled rather than half disabled,
+	// and a degraded lookup is reported as such, not as a failed git probe.
+	lk, hooksDir, err := unchainTarget(repoRoot, force)
+	if err != nil {
+		return rep, err
+	}
+
 	if !force {
 		// Fail closed: a probe that cannot confirm the siblings are disabled
 		// must refuse, not silently degrade the operator-ruled refuse-by-
@@ -176,13 +183,6 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 				"disable would unchain the shared git hooks, but these worktrees are still enabled: %s — re-run with --force to unchain anyway",
 				strings.Join(siblings, ", "))
 		}
-	}
-
-	// Resolve the hooks directory before changing anything, so a refusal leaves
-	// the repo enabled rather than half disabled.
-	lk, hooksDir, err := unchainTarget(repoRoot)
-	if err != nil {
-		return rep, err
 	}
 
 	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport)
@@ -242,14 +242,15 @@ func removeMarker(repoRoot string) (bool, error) {
 	return true, nil
 }
 
-// hooksTarget resolves the hooks directory for enable. Target refuses a
-// degraded lookup whose git directory is missing: creating hooks there would
-// make a fake gitdir that git never runs. The error carries the reason.
+// hooksTarget resolves the hooks directory for enable. Only a directory git
+// itself named is acted on: a degraded lookup ignores core.hooksPath, so the
+// hooks written there might never run, and enable would report success for a
+// repo whose seal does not fire.
 func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 	l := githook.HooksDir(repoRoot)
-	dir, err := l.Target()
+	dir, err := l.Verified()
 	if err != nil {
-		return l, "", fmt.Errorf("refusing to create a hooks directory for %s: %w", repoRoot, err)
+		return l, "", fmt.Errorf("git is required to install hooks: %s", l.Reason)
 	}
 	return l, dir, nil
 }
@@ -293,29 +294,28 @@ var hookSpecs = map[string]struct {
 
 // unchainTarget resolves the hooks directory disable strips. A degraded lookup
 // cannot see core.hooksPath, so the directory it guesses may not be the one git
-// runs; disable refuses rather than strip a directory while the real one keeps
-// its sections. A guessed directory that does not exist has nothing to strip.
-func unchainTarget(repoRoot string) (githook.Lookup, string, error) {
+// runs, whether or not the guess exists. Without force disable refuses; with
+// force it returns an empty dir and unchainHooks records that the hooks were
+// skipped.
+func unchainTarget(repoRoot string, force bool) (githook.Lookup, string, error) {
 	l := githook.HooksDir(repoRoot)
 	dir, err := l.Verified()
-	if err == nil {
-		return l, dir, nil
-	}
-	_, statErr := os.Stat(l.Display())
 	switch {
-	case errors.Is(statErr, fs.ErrNotExist):
+	case err == nil:
+		return l, dir, nil
+	case force:
 		return l, "", nil
-	case statErr != nil:
-		return l, "", fmt.Errorf("checking %s: %w; %w", l.Display(), statErr, err)
 	}
-	return l, "", fmt.Errorf("refusing to strip hooks from %s: %w", l.Display(), err)
+	return l, "", fmt.Errorf("%w; install git or fix safe.directory, or re-run with --force to remove the import and marker and leave hook sections in place", err)
 }
 
 // unchainHooks strips the seal and trailer sections from the hooks in dir. An
-// empty dir means unchainTarget found none.
+// empty dir means unchainTarget found none it could verify.
 func unchainHooks(l githook.Lookup, dir string, rep *Report) error {
 	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	if dir == "" {
+		rep.step("hook:*", "skipped", fmt.Sprintf(
+			"hooks directory not verified (%s); ethos sections may remain under core.hooksPath", l.Reason))
 		return nil
 	}
 	for _, name := range layout.HookNames() {
