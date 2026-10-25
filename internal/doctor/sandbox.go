@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
@@ -129,7 +130,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		return false, errSandboxGitUnavailable
 	}
 
-	dir, err := os.MkdirTemp("", "ethos-doctor-hook-*")
+	dir, err := os.MkdirTemp("", layout.ScratchDirPattern("ethos-doctor-hook"))
 	if err != nil {
 		return false, fmt.Errorf("creating sandbox: %w", err)
 	}

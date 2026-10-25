@@ -466,6 +466,8 @@ var tempHelperCases = []struct {
 	{"DotTempPattern", func(b string) string { return fill(layout.DotTempPattern(b)) }},
 	{"SiblingTempPattern", func(b string) string { return fill(layout.SiblingTempPattern(b)) }},
 	{"TmpPattern", func(b string) string { return fill(layout.TmpPattern(b, ".yaml")) }},
+	{"ScratchDirPattern", func(b string) string { return fill(layout.ScratchDirPattern(b)) }},
+	{"ScratchDirPattern", func(b string) string { return fill(layout.ScratchDirPattern(b)) + "/hooks/pre-commit" }},
 	{"MigrateStagingPrefix", func(b string) string { return fill(layout.MigrateStagingPrefix(b)+"*") + "/contract.yaml" }},
 	{"MigrateStagingPrefix", func(b string) string { return fill(layout.MigrateStagingPrefix(b) + "*") }},
 }

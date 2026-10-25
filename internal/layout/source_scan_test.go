@@ -27,13 +27,12 @@ type allowance struct {
 // writes outside the repository's working tree: under $HOME, or under
 // os.TempDir(), the user's temp directory.
 var tempAllowed = map[string]allowance{
-	"internal/session/store.go:WriteCurrentSession":     {1, "writes under $HOME/.punt-labs/ethos/sessions, outside any working tree"},
-	"internal/session/store.go:writeRoster":             {1, "writes under $HOME/.punt-labs/ethos/sessions, outside any working tree"},
-	"internal/mission/active.go:writeSidecarFile":       {1, "writes under the global root, outside any working tree"},
-	"internal/mission/id.go:writeCounterAtomic":         {1, "writes the per-user mission counter under $HOME, outside any working tree"},
-	"internal/doctor/sandbox.go:hookInvocationObserved": {1, "os.MkdirTemp(\"\", ...) puts the sandbox under os.TempDir(), not in the repo; it is removed before the function returns"},
-	"internal/hook/generate_agents.go:buildAgentFile":   {1, "a shell command in generated agent frontmatter that skips .tmp/ scratch paths; no file is created"},
-	"internal/mission/delegation.go:writeAtomicFile":    {1, "takes the pattern as a parameter; every caller must pass a layout helper (checked as helperArgs)"},
+	"internal/session/store.go:WriteCurrentSession":   {1, "writes under $HOME/.punt-labs/ethos/sessions, outside any working tree"},
+	"internal/session/store.go:writeRoster":           {1, "writes under $HOME/.punt-labs/ethos/sessions, outside any working tree"},
+	"internal/mission/active.go:writeSidecarFile":     {1, "writes under the global root, outside any working tree"},
+	"internal/mission/id.go:writeCounterAtomic":       {1, "writes the per-user mission counter under $HOME, outside any working tree"},
+	"internal/hook/generate_agents.go:buildAgentFile": {1, "a shell command in generated agent frontmatter that skips .tmp/ scratch paths; no file is created"},
+	"internal/mission/delegation.go:writeAtomicFile":  {1, "takes the pattern as a parameter; every caller must pass a layout helper (checked as helperArgs)"},
 }
 
 // helperArgs maps a function that forwards a temp pattern to os.CreateTemp to

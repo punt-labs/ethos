@@ -38,6 +38,11 @@ func DotTempPattern(base string) string { return "." + base + ".*" + TmpMarker }
 // called base: "base.*.ethos-tmp".
 func SiblingTempPattern(base string) string { return base + ".*" + TmpMarker }
 
+// ScratchDirPattern is the os.MkdirTemp pattern for a scratch directory named
+// prefix: "prefix-*.ethos-tmp". It carries the marker because TMPDIR may point
+// inside a working tree, where an unmarked name would be unclassified.
+func ScratchDirPattern(prefix string) string { return prefix + "-*" + TmpMarker }
+
 // MigrateStagingPrefix is the os.MkdirTemp prefix of the directory
 // `ethos mission migrate` stages mission id in before renaming it into place.
 func MigrateStagingPrefix(id string) string { return "." + id + ".migrate" + TmpMarker + "-" }
