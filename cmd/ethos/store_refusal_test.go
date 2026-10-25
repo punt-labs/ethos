@@ -105,7 +105,8 @@ func TestCLI_UnreadableGitRefusesWrites(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "nested.yaml"))
 }
 
-// A command that reports on the degraded state stays runnable.
+// A command that reports on the degraded state stays runnable, and exits
+// non-zero with a FAIL row: every non-exempt command would refuse here.
 func TestCLI_DoctorRunsOnUnreadableGit(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -114,8 +115,13 @@ func TestCLI_DoctorRunsOnUnreadableGit(t *testing.T) {
 	cmd := exec.Command(ethosBinary, "doctor")
 	cmd.Dir = inner
 	cmd.Env = withForcedNotUnderClaudeCode(se.env)
-	out, _ := cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
 	assert.Contains(t, string(out), "Identity directory", "doctor still prints its table")
+	assert.Contains(t, string(out), "Repository store")
+	assert.Contains(t, string(out), "not located: ")
+	var ee *exec.ExitError
+	require.ErrorAs(t, err, &ee, string(out))
+	assert.NotEqual(t, 0, ee.ExitCode())
 }
 
 // Every command that reads or writes the store, plus seed, refuses on an

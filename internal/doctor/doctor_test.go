@@ -1993,9 +1993,11 @@ func TestRunAllRefusedRootOverride(t *testing.T) {
 	assert.Equal(t, "not scanned: not in a repository", find(results, "Unclassified files").Detail)
 }
 
-// TestRunAllRefusedStore: a store root that was refused or could not be
-// resolved is a WARN on every check that reads the store, where being outside a
-// repository stays PASS "not in a repo".
+// TestRunAllRefusedStore: when the store could not be located for a reason
+// other than "not in a repository", doctor emits one FAIL row naming the
+// reason, and every check that read the store keeps its own status with a
+// note that it saw the global layer only. Being outside a repository stays
+// PASS "not in a repo", with no row and no note.
 func TestRunAllRefusedStore(t *testing.T) {
 	s, ss, root := newFixture(t)
 	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
@@ -2004,6 +2006,7 @@ func TestRunAllRefusedStore(t *testing.T) {
 
 	storeChecks := []string{
 		"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard",
+		"Identity directory", "Human identity", "Duplicate fields", "Extension key names",
 	}
 	find := func(results []Result, name string) Result {
 		for _, r := range results {
@@ -2015,29 +2018,57 @@ func TestRunAllRefusedStore(t *testing.T) {
 		return Result{}
 	}
 
-	refused := fmt.Errorf("ETHOS_REPO_ROOT=%q has no .punt-labs/ethos store; refusing to use it", "/nope")
-	results := RunAll(s, ss, "", nil, "", refused, nil)
-	for _, name := range storeChecks {
-		r := find(results, name)
-		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
-		assert.Equal(t, "not checked: "+refused.Error(), r.Detail, name)
-	}
-
-	// The checks that read the identity store, layered over the repository
-	// store, are gated too: they must not report on the global fallback.
-	for _, name := range []string{"Identity directory", "Human identity", "Duplicate fields", "Extension key names"} {
-		r := find(results, name)
-		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
-		assert.Equal(t, "not checked: "+refused.Error(), r.Detail, name)
-	}
-
 	outside := fmt.Errorf("/ is %w", resolve.ErrNotInRepo)
-	results = RunAll(s, ss, "", nil, "", outside, nil)
-	for _, name := range storeChecks {
-		r := find(results, name)
+	base := RunAll(s, ss, "", nil, "", outside, nil)
+	for _, r := range base {
+		assert.NotEqual(t, "Repository store", r.Name, "no row outside a repository")
+		assert.NotContains(t, r.Detail, "global layer only", r.Name)
+	}
+	for _, name := range []string{"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard"} {
+		r := find(base, name)
 		assert.Equal(t, "PASS", r.Status, name)
 		assert.Equal(t, "not in a repo", r.Detail, name)
 	}
+
+	refused := fmt.Errorf("ETHOS_REPO_ROOT=%q has no .punt-labs/ethos store; refusing to use it", "/nope")
+	results := RunAll(s, ss, "", nil, "", refused, nil)
+	row := find(results, "Repository store")
+	assert.Equal(t, "FAIL", row.Status)
+	assert.Equal(t, "not located: "+refused.Error(), row.Detail)
+	assert.True(t, AnyFailed(results), "doctor exits non-zero when every command would refuse")
+	for _, name := range storeChecks {
+		r, b := find(results, name), find(base, name)
+		assert.Equal(t, b.Status, r.Status, "%s keeps its status: %s", name, r.Detail)
+		assert.Equal(t, b.Detail+" (global layer only; repo store not located: "+refused.Error()+")", r.Detail, name)
+	}
+}
+
+// A FAIL from a check is never lowered by a gate: the store gate notes the
+// global layer, the checkout gate notes the unlocated checkout.
+func TestRunAllGateKeepsFail(t *testing.T) {
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\nemail: x@example.com\n")
+	writeIdentity(t, root, "zoe", "name: Zoe\nhandle: zoe\nkind: human\nemail: x@example.com\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	refused := errors.New("git cannot resolve the repository")
+	for _, r := range RunAll(s, ss, "", refused, "", refused, nil) {
+		if r.Name == "Duplicate fields" {
+			assert.Equal(t, "FAIL", r.Status, r.Detail)
+			assert.Contains(t, r.Detail, "global layer only")
+		}
+	}
+
+	failed := Result{Name: "x", Status: "FAIL", Detail: "broken"}
+	got := gateCheckout(failed, "", refused)
+	assert.Equal(t, "FAIL", got.Status)
+	assert.Equal(t, "broken (checkout not located: git cannot resolve the repository)", got.Detail)
+	got = gateCheckout(Result{Name: "x", Status: "PASS", Detail: "fine"}, "", refused)
+	assert.Equal(t, "WARN", got.Status)
+	assert.Equal(t, "not checked: git cannot resolve the repository", got.Detail)
+	got = gateStore(failed, "", refused)
+	assert.Equal(t, "FAIL", got.Status)
 }
 
 // TestRunAllGatesEveryLocatedCheck: every check RunAll hands a located input
@@ -2064,9 +2095,9 @@ func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 	located := map[string]int{
 		"repoRoot": kindCheckout, "storeRoot": kindStore, "s": kindStore, "teams": kindStore,
 	}
-	// hasRepoLocalTeam only chooses a message and reports false for ""; gate
-	// builds the gates themselves.
-	pure := map[string]int{"hasRepoLocalTeam": kindStore, "gate": 0}
+	// hasRepoLocalTeam only chooses a message and reports false for "";
+	// gateCheckout, gateStore and unlocated are the gates themselves.
+	pure := map[string]int{"hasRepoLocalTeam": kindStore, "gateCheckout": 0, "gateStore": 0, "unlocated": 0}
 
 	// kindOf is the located kinds an expression carries: a located name, or a
 	// call to a pure derivation, directly. A nested check call is judged on its

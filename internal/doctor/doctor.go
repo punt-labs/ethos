@@ -57,26 +57,22 @@ func (r Result) Passed() bool {
 //
 // rootErr is LocateRepoRoot's error. When repoRoot is empty because an
 // ETHOS_REPO_ROOT was refused, or the checkout could not be examined, the
-// checks that read the checkout report WARN with that reason instead of
-// passing as "not in a repo"; being outside any repository is not a problem.
+// checks that read the checkout are gated (gateCheckout); being outside any
+// repository is not a problem.
 //
-// storeErr is LocateStoreRoot's error, with the same contract for the checks
-// that read the store: a refused store root is a WARN, not "not in a repo".
+// storeErr is LocateStoreRoot's error. When the store could not be located
+// for any other reason, doctor emits a FAIL "Repository store" row — every
+// non-exempt command refuses in that state — and the checks that read the
+// store are gated (gateStore).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr error, teams *team.LayeredStore) []Result {
-	results := make([]Result, 0, 15) // matches today's check count; a stale hint just costs one reallocation, not correctness
+	results := make([]Result, 0, 16) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
-	// gate turns a check's result into a WARN when its tree could not be
-	// located for a reason other than "not in a repository".
-	gate := func(root string, err error) func(Result) Result {
-		return func(r Result) Result {
-			if root == "" && err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-				r.Status, r.Detail = "WARN", "not checked: "+err.Error()
-			}
-			return r
-		}
+	checkout := func(r Result) Result { return gateCheckout(r, repoRoot, rootErr) }
+	store := func(r Result) Result { return gateStore(r, storeRoot, storeErr) }
+
+	if unlocated(storeRoot, storeErr) {
+		results = append(results, Result{Name: "Repository store", Status: "FAIL", Detail: "not located: " + storeErr.Error()})
 	}
-	checkout := gate(repoRoot, rootErr)
-	store := gate(storeRoot, storeErr)
 
 	// The identity store, like the team store, is layered over the repository
 	// store, so these checks read it and are gated with it.
@@ -132,6 +128,37 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// DES-079: every file ethos owns has a class in the path-class table.
 	results = append(results, checkout(CheckUnclassifiedFiles(repoRoot)))
 	return results
+}
+
+// unlocated reports whether a tree was not located for a reason other than
+// being outside a repository.
+func unlocated(root string, err error) bool {
+	return root == "" && err != nil && !errors.Is(err, resolve.ErrNotInRepo)
+}
+
+// gateStore notes on a check that read the identity, team or repository
+// store that it saw the global layer only, when the repository store was not
+// located. The status is kept: the check did run, and a FAIL must stay a FAIL.
+func gateStore(r Result, root string, err error) Result {
+	if unlocated(root, err) {
+		r.Detail += " (global layer only; repo store not located: " + err.Error() + ")"
+	}
+	return r
+}
+
+// gateCheckout marks a check that reads the checkout when the checkout was not
+// located: a FAIL keeps its status with a note; anything else, which examined
+// no tree, becomes WARN "not checked".
+func gateCheckout(r Result, root string, err error) Result {
+	if !unlocated(root, err) {
+		return r
+	}
+	if r.Status == "FAIL" {
+		r.Detail += " (checkout not located: " + err.Error() + ")"
+		return r
+	}
+	r.Status, r.Detail = "WARN", "not checked: "+err.Error()
+	return r
 }
 
 // passFail builds a Result from a boolean check outcome: true is PASS, false
