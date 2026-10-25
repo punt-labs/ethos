@@ -1,6 +1,9 @@
 package layout_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path"
 	"path/filepath"
@@ -287,14 +290,15 @@ func TestClassFourComesFirst(t *testing.T) {
 }
 
 // conflicts returns every pair of entries of table that can match one path and
-// have different classes. Two kinds of entry are exempt: class 4, which the
-// table resolves by order, and Fallback entries, which claim only paths no
-// other entry matches.
+// have different classes. Two kinds of pair are exempt: any pair with a class 4
+// entry, which the table resolves by order, and a Fallback entry paired with a
+// non-fallback one, because a fallback claims only paths no other entry
+// matches. Two fallbacks are not exempt: nothing orders them.
 func conflicts(table []layout.Entry) []string {
 	var out []string
 	for i, a := range table {
 		for _, b := range table[i+1:] {
-			if a.Class == b.Class || a.Class == layout.Never || b.Class == layout.Never || a.Fallback || b.Fallback {
+			if a.Class == b.Class || a.Class == layout.Never || b.Class == layout.Never || a.Fallback != b.Fallback {
 				continue
 			}
 			if layout.Overlap(a.Pattern, b.Pattern) {
@@ -433,28 +437,69 @@ func fill(pattern string) string {
 func TestTempHelpersMakeClassFourNames(t *testing.T) {
 	bases := []string{"post-merge", "AGENTS.md", "shared.ignore", "pre-commit", ".vendored-manifest", "x"}
 	dirs := []string{"", "docs", ".githooks", ".punt-labs/ethos", ".punt-labs/ethos/missions/m-1/delegations/d-1", "a/b/c"}
-	helpers := map[string]func(base string) string{
-		"TmpPath":             layout.TmpPath,
-		"DotTmp":              layout.DotTmp,
-		"SeedTmpPattern":      func(b string) string { return fill(layout.SeedTmpPattern(b)) },
-		"DotTempPattern":      func(b string) string { return fill(layout.DotTempPattern(b)) },
-		"SiblingTempPattern":  func(b string) string { return fill(layout.SiblingTempPattern(b)) },
-		"TmpPattern":          func(b string) string { return fill(layout.TmpPattern(b, ".yaml")) },
-		"MigrateStagingFile":  func(b string) string { return fill(layout.MigrateStagingPrefix(b)+"*") + "/contract.yaml" },
-		"MigrateStagingEntry": func(b string) string { return fill(layout.MigrateStagingPrefix(b) + "*") },
-	}
-	for name, h := range helpers {
+	for _, h := range tempHelperCases {
 		for _, b := range bases {
-			n := h(b)
+			n := h.name(b)
 			if !strings.Contains(n, layout.TmpMarker) {
-				t.Errorf("%s(%q) = %q does not contain %q", name, b, n, layout.TmpMarker)
+				t.Errorf("%s(%q) = %q does not contain %q", h.fn, b, n, layout.TmpMarker)
 			}
 			for _, d := range dirs {
 				p := path.Join(d, n)
 				if c, e, ok := layout.Classify(p); !ok || c != layout.Never {
-					t.Errorf("%s(%q) in %q: %q classified %v, %q, %v; want class 4", name, b, d, p, c, e.Pattern, ok)
+					t.Errorf("%s(%q) in %q: %q classified %v, %q, %v; want class 4", h.fn, b, d, p, c, e.Pattern, ok)
 				}
 			}
+		}
+	}
+}
+
+// tempHelperCases exercises each name-building function of temp.go. fn is the
+// exported function the case covers; a function may have several cases, one per
+// shape of name it yields.
+var tempHelperCases = []struct {
+	fn   string
+	name func(base string) string
+}{
+	{"TmpPath", layout.TmpPath},
+	{"DotTmp", layout.DotTmp},
+	{"SeedTmpPattern", func(b string) string { return fill(layout.SeedTmpPattern(b)) }},
+	{"DotTempPattern", func(b string) string { return fill(layout.DotTempPattern(b)) }},
+	{"SiblingTempPattern", func(b string) string { return fill(layout.SiblingTempPattern(b)) }},
+	{"TmpPattern", func(b string) string { return fill(layout.TmpPattern(b, ".yaml")) }},
+	{"MigrateStagingPrefix", func(b string) string { return fill(layout.MigrateStagingPrefix(b)+"*") + "/contract.yaml" }},
+	{"MigrateStagingPrefix", func(b string) string { return fill(layout.MigrateStagingPrefix(b) + "*") }},
+}
+
+// TestEveryTempHelperIsExercised: an exported function of temp.go that returns
+// a string is a name builder, and must have a case in tempHelperCases, or a new
+// helper could omit TmpMarker without failing TestTempHelpersMakeClassFourNames.
+func TestEveryTempHelperIsExercised(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "temp.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := map[string]bool{}
+	for _, h := range tempHelperCases {
+		covered[h.fn] = true
+	}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv != nil || !fd.Name.IsExported() || fd.Type.Results == nil || len(fd.Type.Results.List) != 1 {
+			continue
+		}
+		if id, ok := fd.Type.Results.List[0].Type.(*ast.Ident); ok && id.Name == "string" && !covered[fd.Name.Name] {
+			t.Errorf("temp.go: %s returns a string but has no case in tempHelperCases", fd.Name.Name)
+		}
+	}
+	for fn := range covered {
+		found := false
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == fn {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("tempHelperCases names %s, which temp.go does not declare", fn)
 		}
 	}
 }
@@ -514,5 +559,26 @@ func TestLegacyMigrateStagingIsClassFour(t *testing.T) {
 		if e.Temp {
 			t.Errorf("%s matched a Temp entry %q; the marker set must stay marker-only", p, e.Pattern)
 		}
+	}
+}
+
+func TestConflicts(t *testing.T) {
+	tests := []struct {
+		name  string
+		table []layout.Entry
+		want  int
+	}{
+		{"same class", []layout.Entry{{Pattern: "a/**", Class: 1}, {Pattern: "a/b", Class: 1}}, 0},
+		{"different classes overlap", []layout.Entry{{Pattern: "a/**", Class: 1}, {Pattern: "a/b", Class: 2}}, 1},
+		{"class 4 is exempt", []layout.Entry{{Pattern: "a/**", Class: 1}, {Pattern: "a/b", Class: layout.Never}}, 0},
+		{"fallback against non-fallback is exempt", []layout.Entry{{Pattern: "a/**", Class: 1, Fallback: true}, {Pattern: "a/b", Class: 2}}, 0},
+		{"fallback against fallback is not", []layout.Entry{{Pattern: "a/**", Class: 1, Fallback: true}, {Pattern: "a/b", Class: 2, Fallback: true}}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := conflicts(tt.table); len(got) != tt.want {
+				t.Errorf("conflicts = %v, want %d", got, tt.want)
+			}
+		})
 	}
 }

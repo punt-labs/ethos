@@ -85,6 +85,22 @@ func isTempLiteral(e ast.Expr) bool {
 	return err == nil && (strings.Contains(s, ".tmp") || strings.Contains(s, "tmp-"))
 }
 
+// layoutTempFuncs returns the names of the functions declared in
+// internal/layout/temp.go, the file of staging-name helpers.
+func layoutTempFuncs() (map[string]bool, error) {
+	f, err := parser.ParseFile(token.NewFileSet(), "temp.go", nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool)
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil {
+			out[fd.Name.Name] = true
+		}
+	}
+	return out, nil
+}
+
 // declName names the declaration a finding is reported under: a function, or
 // the first name of a package-level var or const block.
 func declName(d ast.Decl) string {
@@ -123,6 +139,12 @@ func scanTempNames(name, src string) ([]tempFinding, error) {
 	ioutilNames := importNames(f, ioutilPath)
 	layoutNames := importNames(f, layoutPath)
 
+	// Only a function declared in temp.go builds a staging name; any other
+	// layout.X(...) call may not carry TmpMarker.
+	tempFuncs, err := layoutTempFuncs()
+	if err != nil {
+		return nil, err
+	}
 	isLayoutCall := func(e ast.Expr) bool {
 		call, ok := e.(*ast.CallExpr)
 		if !ok {
@@ -133,7 +155,7 @@ func scanTempNames(name, src string) ([]tempFinding, error) {
 			return false
 		}
 		id, ok := sel.X.(*ast.Ident)
-		return ok && layoutNames[id.Name]
+		return ok && layoutNames[id.Name] && tempFuncs[sel.Sel.Name]
 	}
 
 	var out []tempFinding
@@ -239,6 +261,7 @@ func j(dir string)         { osx.CreateTemp(dir, "x-*") }
 func k(dir string)         { ioutil.TempFile(dir, "x-*") }
 func l(dir string)         { ioutil.TempDir(dir, "x-") }
 func m(dir string)         { os.CreateTemp(dir, lay.TmpPattern("r", ".yaml")+".x") }
+func n(dir string)         { os.CreateTemp(dir, layout.NotAHelper("r")) }
 
 func ok(dir, dest string) {
 	os.CreateTemp(dir, layout.TmpPattern("r", ".yaml"))
@@ -257,7 +280,7 @@ func ok(dir, dest string) {
 	for _, f := range got {
 		funcs = append(funcs, f.Func)
 	}
-	want := "tmpSuffix viaVar a b c d e f g h i j k l m"
+	want := "tmpSuffix viaVar a b c d e f g h i j k l m n"
 	if strings.Join(funcs, " ") != want {
 		t.Errorf("flagged = %v, want %q: %+v", funcs, want, got)
 	}
