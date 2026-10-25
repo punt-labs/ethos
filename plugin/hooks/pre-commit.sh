@@ -35,10 +35,19 @@ _host_status=$?
 # A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
 # dormant": the hook prints git's own error and exits 1, so the commit is
 # blocked and the operator sees why, rather than skipping with the host status.
-if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>&1); then
-  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$REPO_ROOT" >&2
+# git's stderr goes to a file and is shown only on failure: a warning or
+# GIT_TRACE output on a rev-parse that succeeded must not become part of the
+# repository root, nor make the hook skip the seal.
+_revparse_err=$(mktemp 2>/dev/null) || {
+  printf 'ethos: pre-commit: mktemp failed; cannot run git rev-parse\n' >&2
+  exit 1
+}
+if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>"$_revparse_err"); then
+  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$(cat "$_revparse_err")" >&2
+  rm -f "$_revparse_err"
   exit 1
 fi
+rm -f "$_revparse_err"
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
 
 # Resolve the ethos binary: PATH first, then the default install dir.

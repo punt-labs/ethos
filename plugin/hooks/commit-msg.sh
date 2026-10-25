@@ -33,10 +33,19 @@ _host_status=$?
 # A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
 # dormant": the hook prints git's own error and exits 1, so the commit is
 # blocked and the operator sees why, rather than skipping with the host status.
-if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>&1); then
-  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed: %s\n' "$REPO_ROOT" >&2
+# git's stderr goes to a file and is shown only on failure: a warning or
+# GIT_TRACE output on a rev-parse that succeeded must not become part of the
+# repository root, nor make the hook skip the seal.
+_revparse_err=$(mktemp 2>/dev/null) || {
+  printf 'ethos: commit-msg: mktemp failed; cannot run git rev-parse\n' >&2
+  exit 1
+}
+if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>"$_revparse_err"); then
+  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed: %s\n' "$(cat "$_revparse_err")" >&2
+  rm -f "$_revparse_err"
   exit 1
 fi
+rm -f "$_revparse_err"
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
 
 [ -z "$1" ] && exit "$_host_status"
@@ -122,20 +131,24 @@ add_trailer() {
       printf 'ethos: commit-msg: mktemp failed; using plain append\n' >&2
     # git interpret-trailers is not bounded here: it runs inside git's own
     # commit, on the message file only, never on the repository.
-    elif git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp"; then
+    elif git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp" 2>"$tmp.err"; then
       # mv can fail on permissions, cross-filesystem, or
       # disk-full. If it does, the temp file is stale and the
       # commit message is untouched — fall through to the plain
       # append path so the trailer still lands (Copilot on PR
       # #328: previously returned 0 after a silent mv failure).
+      rm -f "$tmp.err"
       if mv "$tmp" "$msg_file"; then
         return 0
       fi
       rm -f "$tmp"
       printf 'ethos: commit-msg: mv onto %s failed; using plain append\n' "$msg_file" >&2
     else
-      rm -f "$tmp"
-      printf 'ethos: commit-msg: git interpret-trailers failed; using plain append\n' >&2
+      # A failing git is not "git is unavailable": print its error and block
+      # the commit, never fall back to a plain append behind its back.
+      printf 'ethos: commit-msg: git interpret-trailers failed: %s\n' "$(cat "$tmp.err")" >&2
+      rm -f "$tmp" "$tmp.err"
+      exit 1
     fi
   fi
   # Plain-append fallback. Ensure the file ends with a blank line
