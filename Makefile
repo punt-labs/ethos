@@ -40,9 +40,10 @@ GOLANGCI_LINT := $(GOBIN)/golangci-lint
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-lint: ## Lint (golangci-lint + shellcheck + ruff + mypy)
+lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
+	GOOS=windows go vet ./... # the windows build, tests included: a unix-only helper or test file must carry its build tag
 	shellcheck plugin/hooks/*.sh install.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
