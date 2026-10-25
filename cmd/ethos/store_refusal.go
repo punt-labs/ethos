@@ -47,6 +47,16 @@ const (
 // ~/.punt-labs/ethos/adrs; adr create resolves its default author through the
 // identity store, so it refuses. The MCP session and adr tools stay
 // unguarded: adr create there takes its author from the caller.
+//
+// The attribute creates (talent, personality, writing-style), role create and
+// team create are store-refusing although they write the global layer: Save and
+// Delete always target it (internal/attribute/layered.go,
+// internal/role/layered.go, internal/team/layered.go; the repo layer only under
+// resolution: repo-only), but they read every layer to validate and to refuse a
+// duplicate, so a repository store that cannot be read would let them run on a
+// partial view. identity create writes the repository store when there is one
+// (internal/identity/layered.go Save). TestCreatesWriteWhereTheLayersSay pins
+// where each writes.
 var storeUses = map[string]storeUse{
 	// Command groups print help.
 	"ethos": storeGlobalOnly, "ethos adr": storeGlobalOnly, "ethos audit": storeGlobalOnly,

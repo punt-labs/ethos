@@ -44,7 +44,13 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 	createCmd := &cobra.Command{
 		Use:   "create <slug>",
 		Short: fmt.Sprintf("Create a new %s", kind.DisplayName),
-		Args:  cobra.ExactArgs(1),
+		Long: fmt.Sprintf(`Create a new %s.
+
+It is written to the global layer (~/.punt-labs/ethos/%s), whatever repository
+you are in; under "resolution: repo-only" it is written to the repository store
+instead. Every layer is read to refuse a duplicate, so a repository store ethos
+cannot read refuses the command.`, kind.DisplayName, kind.DirName),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAttributeCreate(cmd, kind, args[0], createFile)
 		},
