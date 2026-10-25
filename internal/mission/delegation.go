@@ -408,9 +408,9 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 // a failed fsync surfaces — djb evaluator gate: a half-written file
 // is unacceptable. The temp file is removed on every error path.
 //
-// pattern is the os.CreateTemp pattern (e.g. "record-*.yaml.tmp"); the
-// random component avoids the predictable ".tmp" suffix that a second
-// writer could trample.
+// pattern is the os.CreateTemp pattern (e.g. layout.TmpPattern("record",
+// ".yaml"), "record-*.yaml.ethos-tmp"); the random component avoids a
+// predictable name that a second writer could trample.
 func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 	tmp, err := os.CreateTemp(dir, pattern)
 	if err != nil {
@@ -578,7 +578,7 @@ func LoadDelegation(recordPath string) (*Delegation, error) {
 // only fire on records that were just written and never advanced).
 //
 // Atomic via os.CreateTemp + Chmod(0o600) + Sync + Close + Rename in
-// the record's own directory. A predictable ".tmp" suffix is avoided
+// the record's own directory. A predictable temp name is avoided
 // so a second writer cannot trample the first. djb evaluator gate:
 // a half-written close is unacceptable — the on-disk record either
 // keeps its prior contents or carries the new verdict in full.

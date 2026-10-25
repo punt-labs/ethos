@@ -853,8 +853,9 @@ func (s *Store) DeleteCurrentSession(claudePID string) error {
 // sessions directory. Sync errors propagate so a failed fsync
 // surfaces — djb evaluator gate: a half-written roster is
 // unacceptable. The temp file is removed on every error path. A
-// random suffix (via os.CreateTemp) avoids the predictable ".tmp"
-// suffix that two concurrent writers could trample.
+// random infix (via os.CreateTemp) keeps two concurrent writers from
+// trampling one temp file; the roster lives under the user's home, outside
+// any repository, so it needs no layout.TmpMarker.
 func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	data, err := yaml.Marshal(roster)
 	if err != nil {
