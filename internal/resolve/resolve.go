@@ -1262,6 +1262,11 @@ func configBare(git, common string) (bool, error) {
 	case err == nil:
 		return strings.TrimSpace(string(out)) == "true", nil
 	case errors.As(err, &ee) && ee.ExitCode() == 1 && gitenv.WithoutTrace(string(ee.Stderr)) == "":
+		// No gitenv.UnreadableUserConfig check here, on purpose: `--file` reads
+		// exactly one file, the repository's own config, and git does not skip
+		// it silently. A file it cannot open is a fatal exit 128 (the default
+		// case below), so exit 1 with a clean stderr can only be "key unset".
+		// The user's global and system config are not consulted by --file.
 		// Unset, or no config file. Trace lines (a trace2 target in the user's
 		// config) are not part of the answer; any other stderr is — an
 		// unreadable config exits 1 with "warning: unable to access".

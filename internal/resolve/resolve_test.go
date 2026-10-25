@@ -1995,7 +1995,9 @@ func TestTrace2FromConfigDoesNotMakeUnsetAnError(t *testing.T) {
 	for name, cfg := range map[string]string{
 		"normal": "[trace2]\n\tnormalTarget = true\n\tnormalBrief = true\n",
 		"perf":   "[trace2]\n\tperfTarget = true\n\tperfBrief = true\n",
-		"event":  "[trace2]\n\teventTarget = true\n",
+		// The event target alone is JSON the old reader recognised; with a brief
+		// normal target beside it (lines with no timestamp) it was not.
+		"event and brief normal": "[trace2]\n\teventTarget = true\n\tnormalTarget = true\n\tnormalBrief = true\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "gitconfig")
@@ -2035,4 +2037,22 @@ func TestNeutralReadIsNotRefusedByADanglingGitAboveTmpdir(t *testing.T) {
 	v, err := GitConfig("", "user.name")
 	require.NoError(t, err)
 	assert.Equal(t, "fine", v)
+}
+
+// `git config --file` does not skip an unreadable file silently: configBare
+// reports it (exit 128), so it needs no user-config readability check.
+func TestConfigBareUnreadableRepoConfigIsAnError(t *testing.T) {
+	skipIfRoot(t)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	common := t.TempDir()
+	cfg := filepath.Join(common, "config")
+	require.NoError(t, os.WriteFile(cfg, []byte("[core]\n\tbare = true\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	_, err = configBare(git, common)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), cfg)
 }
