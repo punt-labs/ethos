@@ -263,7 +263,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start tells the session why and records the repository as unresolved;
   the pre-commit audit seal blocks the commit and leaves the tree
   unchanged. The `pre-commit` and `commit-msg` hook scripts exit 1 with
-  git's error when `git rev-parse` fails, instead of skipping the seal.
+  git's error when `git rev-parse` or `git interpret-trailers` fails,
+  instead of skipping the seal or the trailers; a warning git prints on
+  success no longer stops the seal.
+- **A command that needs the repository store exits 2 (was 1) when the
+  store cannot be located**, and also when `.punt-labs/ethos` exists but
+  cannot be read (a dangling symlink, a file, no permission), instead of
+  writing to the global store. The repository is located once per
+  command.
+- **Session rosters whose repository could not be resolved** show
+  `unresolved` in `ethos session list` (`repo_unresolved` in its JSON),
+  and `ethos session show` prints the reason. `ethos session purge`
+  skips them and names the fix; `ethos session purge --force` removes
+  them.
+- **`ethos mission dispatch`, `scaffold` and `correct` refuse a malformed
+  `.punt-labs/ethos.yaml`** instead of recording `claude` as the leader.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and

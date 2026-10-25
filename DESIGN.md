@@ -12858,26 +12858,43 @@ filesystem boundary. Every git command ethos runs has a time limit:
 10 seconds (`gitenv.Timeout`) for lookups, reads and the audit-seal
 commands, 5 minutes for a team-bundle clone, and the existing 2- and
 10-second limits for the working-context and doctor-sandbox commands.
-In Go code, a test accounts for every program ethos starts outside
-`internal/gitenv`, by file, and fails on any start of git it does not
-list; the shell hooks `pre-commit.sh` and `commit-msg.sh` run
-`git rev-parse` unbounded and exit 1 with git's error when it fails. On
-a timeout git receives SIGTERM, so it can remove its index lock, and
-SIGKILL one second later. Every git read declares what an absent answer
-is (a configuration key that is not set, no such remote, not a
-repository); any other failure, a timeout included, is an error that
+In Go code, a type-checked test accounts for every way a non-test
+package can start a program (any reference to `exec.Command`, an
+`exec.Cmd` start, `os.StartProcess`, the `syscall` and `x/sys/unix`
+exec calls), counted by file, and fails on any start of git outside
+`internal/gitenv`; no non-test package may import the unbounded test
+helpers. The shell hooks `pre-commit.sh` and `commit-msg.sh` run
+`git rev-parse` and `git interpret-trailers` unbounded and exit 1 with
+git's error when either fails. On a timeout git receives SIGTERM, so it
+can remove its index lock, and SIGKILL one second later. Git's tracing
+variables are cleared, so trace output cannot turn an answer into a
+failure. Every git read declares what an absent answer is (a
+configuration key that is not set, no such remote, or git's "not a git
+repository (or any" discovery failure; a broken `.git` link is not
+absent); any other failure, a timeout included, is an error that
 carries git's message and names the command and the directory. A git
 failure is therefore never read as "no repository", "no remote", "not a
-gitlink" or an empty identity, and the lookups that returned an empty
-root on failure are removed. Identity resolution fails on a git error
+gitlink" or an empty identity. The lookups that returned an empty root
+on failure are removed, and a type-checked test fails on any function
+that turns a location error other than "not in a repository" or "does
+not exist" into an empty root. Each command locates the store, its
+`.punt-labs/ethos` directory and the checkout once, before it runs; a
+command that needs the store exits 2 when any of them cannot be read,
+and only commands classified as global-only use the global stores.
+Session start reads the origin from the located checkout, so an
+`ETHOS_REPO_ROOT` override records that repository's origin. Identity resolution fails on a git error
 instead of falling back to `$USER`. When session start cannot resolve
 the identity, the repository or the checkout, the session is told why,
 and the roster records `repo_unresolved` with the reason instead of an
 empty repository; purge and the vacuum cross-check skip such rosters
-and say so. The pre-commit seal runs its read-only git queries before
-writing any chunk, then writes every chunk and stages them in one
-`git add`. If that fails it removes the chunks it wrote, blocks the
-commit and leaves the tree as it was. Tests compare 28 `.git` shapes with
+and say so, and `ethos session purge --force` removes them. The
+pre-commit seal runs its read-only git queries before writing any
+chunk, then writes every chunk, snapshots the index and stages the
+chunks in one `git add`. If anything fails after the writes it restores
+the index from the snapshot, removes the chunks it wrote and blocks the
+commit; the error names the failed step and states whether the tree is
+as it was or what is left. Removing leftover temporary files and
+creating empty directories during the seal are not undone. Tests compare 28 `.git` shapes with
 `git rev-parse` and run the same shapes with git hidden. On a refusal,
 or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one
 failing row; checks that read the store keep their own status and note
