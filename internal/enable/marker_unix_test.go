@@ -59,3 +59,22 @@ func mustNil(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// A sibling worktree whose marker cannot be examined is counted as enabled with
+// the cause named, and an inherited GIT_DIR (a hook's) does not redirect the
+// worktree listing.
+func TestEnabledSiblingWorktreesUsesTheMarkerRuleAndAParsedEnvironment(t *testing.T) {
+	dir := gitRepo(t)
+	gitRun(t, dir, "-c", "user.email=t@x", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "i")
+	sib := filepath.Join(t.TempDir(), "sib")
+	gitRun(t, dir, "worktree", "add", "-q", sib)
+	mustNil(t, os.MkdirAll(filepath.Join(sib, markerRel), 0o755)) // a directory where the marker file goes
+
+	other := gitRepo(t)
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	got, err := enabledSiblingWorktrees(dir)
+	mustNil(t, err)
+	if len(got) != 1 || !strings.Contains(got[0], "cannot tell") || !strings.Contains(got[0], "not a regular file") {
+		t.Fatalf("siblings = %v, want the one with a directory for a marker, with the cause", got)
+	}
+}

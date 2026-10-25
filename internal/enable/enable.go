@@ -389,13 +389,15 @@ func configStatus(storeRoot string) (hint, warning string) {
 }
 
 // enabledSiblingWorktrees returns the other worktrees of this repo that still
-// carry the enabled marker. The git hooks dir is shared across all worktrees,
+// carry the enabled marker (resolve.EnabledMarker). git runs in the parsed
+// environment, so an inherited GIT_DIR (a hook's) cannot redirect it. The git
+// hooks dir is shared across all worktrees,
 // so unchaining here disables the seal for every one of them. It fails closed:
 // a worktree-list probe failure returns an error (disable refuses), and a
-// sibling marker whose stat fails for a non-IsNotExist reason is counted as
-// enabled with the errno named, never silently treated as disabled.
+// sibling whose marker cannot be examined is counted as enabled with the cause
+// named, never silently treated as disabled.
 func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
-	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "worktree", "list", "--porcelain")
+	out, err := gitenv.OutputEnv(repoRoot, "git", gitenv.Parsed(), "worktree", "list", "--porcelain")
 	if err != nil {
 		// Surface git's own diagnostic (dubious ownership, not a repo, …)
 		// rather than a bare "exit status 128".
@@ -415,12 +417,15 @@ func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
 		if path == "" || textscan.SamePath(path, repoRoot) {
 			continue
 		}
-		_, statErr := os.Stat(filepath.Join(path, markerRel))
+		// The same rule as doctor and the hooks: a store path that cannot be read,
+		// or a marker that is not a regular file, is counted as enabled with the
+		// cause named, never silently as disabled.
+		present, markErr := resolve.EnabledMarker(path)
 		switch {
-		case statErr == nil:
+		case markErr != nil:
+			enabled = append(enabled, fmt.Sprintf("%s (cannot tell: %v)", path, markErr))
+		case present:
 			enabled = append(enabled, path)
-		case !os.IsNotExist(statErr):
-			enabled = append(enabled, fmt.Sprintf("%s (marker stat error: %v)", path, statErr))
 		}
 	}
 	return enabled, nil
