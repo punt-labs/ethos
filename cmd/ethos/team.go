@@ -229,7 +229,11 @@ func printTeam(w io.Writer, t *team.Team) {
 
 func runTeamForRepo(cmd *cobra.Command, repo string) error {
 	if repo == "" {
-		repo = resolve.RepoName()
+		name, err := resolve.RepoName()
+		if err != nil {
+			return fmt.Errorf("could not determine repo name: %w", err)
+		}
+		repo = name
 	}
 	if repo == "" {
 		return fmt.Errorf("could not determine repo name (no argument and no git remote)")

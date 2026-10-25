@@ -1463,13 +1463,19 @@ var captureStderr = testhelpers.CaptureStderr
 func TestGitConfig_ReadsValue(t *testing.T) {
 	setGitConfig(t, "test-user", "test@example.com")
 
-	assert.Equal(t, "test-user", GitConfig("user.name"))
-	assert.Equal(t, "test@example.com", GitConfig("user.email"))
+	name, err := GitConfig("user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "test-user", name)
+	email, err := GitConfig("user.email")
+	require.NoError(t, err)
+	assert.Equal(t, "test@example.com", email)
 }
 
 func TestGitConfig_MissingKey(t *testing.T) {
 	setGitConfig(t, "", "")
-	assert.Equal(t, "", GitConfig("user.name"))
+	v, err := GitConfig("user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "", v)
 }
 
 // --- parseRepoName tests ---
@@ -1519,7 +1525,9 @@ func TestRepoName(t *testing.T) {
 			runGit(t, dir, "init")
 			runGit(t, dir, "remote", "add", "origin", tt.url)
 
-			assert.Equal(t, tt.want, RepoName())
+			got, err := RepoName()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -1534,7 +1542,9 @@ func TestRepoName_NoRemote(t *testing.T) {
 	setGitConfig(t, "", "")
 	runGit(t, dir, "init")
 
-	assert.Equal(t, "", RepoName())
+	got, err := RepoName()
+	require.NoError(t, err)
+	assert.Equal(t, "", got)
 }
 
 // --- ResolveMaxDelegationDepth tests (DES-054 v5) ---

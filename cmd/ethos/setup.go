@@ -136,7 +136,11 @@ func runSetup(cmd *cobra.Command) error {
 	// (then the hard-fail), not persist blank.
 	cfg.Email = strings.TrimSpace(cfg.Email)
 	if cfg.Email == "" {
-		cfg.Email = resolve.GitConfig("user.email")
+		email, err := resolve.GitConfig("user.email")
+		if err != nil {
+			return fmt.Errorf("setup: no email in --file, and reading git user.email failed: %w", err)
+		}
+		cfg.Email = email
 	}
 	if cfg.Email == "" {
 		return fmt.Errorf("setup: no email — set git user.email or pass email: in --file")
@@ -575,7 +579,10 @@ func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 	// Prompt 3: Email (default: git user.email). The created identity must
 	// carry an email so it resolves by git email; runSetup hard-fails if this
 	// stays empty and git user.email is unset.
-	defaultEmail := resolve.GitConfig("user.email")
+	defaultEmail, err := resolve.GitConfig("user.email")
+	if err != nil {
+		fmt.Fprintf(errw, "ethos: setup: no email default: %v\n", err)
+	}
 	if defaultEmail != "" {
 		fmt.Fprintf(errw, "Email [%s]: ", defaultEmail)
 	} else {
