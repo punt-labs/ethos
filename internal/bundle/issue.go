@@ -37,7 +37,7 @@ func issue(err error) error {
 		Err:    err,
 		What:   "the repository's bundle or policy configuration is unusable",
 		Effect: "so no persona or identity was answered: the global layer would have been consulted instead.",
-		Answer: "this answer ignores it: the repository layer is used without it",
+		Answer: "no answer is given while it cannot be honoured",
 		Policy: true,
 	}
 }

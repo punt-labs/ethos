@@ -406,11 +406,17 @@ func TestBundleErrorIsToldEverywhere(t *testing.T) {
 		require.NoError(t, err)
 		return r
 	}
+	// Every guarded read and write refuses with the issue's description, as the
+	// CLI does; nothing is answered from a layer the repository did not choose.
 	read := call("talent", "list")
-	require.Len(t, read.Content, 2)
-	note := read.Content[1].(mcp.TextContent).Text
-	assert.Contains(t, note, what)
-	assert.Contains(t, note, "repository layer is used without it")
+	require.True(t, read.IsError)
+	refusal := read.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, refusal, what)
+	assert.Contains(t, refusal, "no-such-bundle")
+	assert.NotContains(t, refusal, "repository layer is used")
+	doc := call("doctor", "")
+	assert.False(t, doc.IsError, "doctor still runs and reports")
+	assert.Contains(t, doc.Content[0].(mcp.TextContent).Text, "Repository configuration")
 	assert.True(t, call("talent", "create").IsError, "a write refuses")
 	who := call("identity", "whoami")
 	assert.True(t, who.IsError)

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -152,6 +153,16 @@ func (h *Handler) guardStore(tool string, fn mcpserver.ToolHandlerFunc) mcpserve
 		// answer, not a partial one: every identity method refuses, as the CLI's
 		// identity commands do.
 		what, _, answer := resolve.Describe(h.storeErr)
+		var ce *resolve.ConfigError
+		if errors.As(h.storeErr, &ce) && ce.Policy {
+			// A bundle or policy that cannot be honoured: as the CLI refuses every
+			// store command, every guarded method refuses, reads included. The
+			// layers left are not the ones the repository chose, and the global
+			// one is never answered. Doctor is unguarded and reports it.
+			return mcplib.NewToolResultError(fmt.Sprintf(
+				"%s %s: %s (%v); refusing: nothing is answered while it cannot be honoured",
+				tool, method, what, h.storeErr)), nil
+		}
 		if strictTools[tool] {
 			return mcplib.NewToolResultError(fmt.Sprintf(
 				"%s %s: %s (%v); refusing identity: it is only answered from a repository store that can be used",
