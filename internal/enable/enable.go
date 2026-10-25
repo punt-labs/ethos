@@ -105,6 +105,13 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
 	}
 
+	// A marker that exists but is not a regular file (a directory, a FIFO, a
+	// link to nothing) is refused before anything is written: writing through
+	// the link or opening the FIFO would be the wrong answer to it.
+	if _, err := resolve.EnabledMarker(repoRoot); err != nil {
+		return rep, fmt.Errorf("enable: %w; remove it and re-run", err)
+	}
+
 	depositWarns, err := deposit(repoRoot, Guide, Setup)
 	if err != nil {
 		return rep, err
@@ -229,7 +236,19 @@ func writeMarker(repoRoot string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating marker dir: %w", err)
 	}
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	present, err := resolve.EnabledMarker(repoRoot)
+	if err != nil {
+		return fmt.Errorf("writing marker %s: %w", markerRel, err)
+	}
+	if present {
+		return nil // a regular file already: nothing to write
+	}
+	// O_EXCL: never through a link or onto anything that appeared since.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("writing marker %s: %w", markerRel, err)
+	}
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("writing marker %s: %w", markerRel, err)
 	}
 	return nil
