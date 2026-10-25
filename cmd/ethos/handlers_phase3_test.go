@@ -5,12 +5,12 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +24,7 @@ const phase3RepoID = "punt-labs/ethos"
 // derives id from the checkout.
 func addOriginRemote(t *testing.T, repo, id string) {
 	t.Helper()
-	cmd := exec.Command("git", "-C", repo, "remote", "add", "origin", "git@github.com:"+id+".git")
+	cmd := testhelpers.GitCommand("-C", repo, "remote", "add", "origin", "git@github.com:"+id+".git")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git remote add origin: %v: %s", err, out)
 	}

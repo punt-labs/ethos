@@ -14,6 +14,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -72,7 +73,7 @@ func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	gitInit := exec.Command("git", "init", repo)
+	gitInit := testhelpers.GitCommand("init", repo)
 	gitInit.Env = gitEnv
 	initOut, initErr := gitInit.CombinedOutput()
 	require.NoError(t, initErr, "git init failed: %s", initOut)
@@ -686,6 +687,7 @@ func TestSubprocess_AuditLog(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
 	// presence the signal for "a session was expected, fail loud if

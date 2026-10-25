@@ -3,11 +3,11 @@ package hook
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,7 @@ func initGitRepo(t *testing.T, dir string) {
 
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = dir
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
@@ -97,7 +97,7 @@ func TestBuildWorkingContext_DetachedHEAD(t *testing.T) {
 	initGitRepo(t, dir)
 
 	env := gitEnv(dir)
-	cmd := exec.Command("git", "checkout", "--detach")
+	cmd := testhelpers.GitCommand("checkout", "--detach")
 	cmd.Dir = dir
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()

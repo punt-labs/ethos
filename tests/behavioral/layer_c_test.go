@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -245,7 +246,7 @@ func gitUntrackedOutsideWriteSet(t *testing.T, f *Fixture, writeSet []string) []
 
 func gitExec(t *testing.T, f *Fixture, args ...string) *exec.Cmd {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testhelpers.GitCommand(args...)
 	cmd.Dir = f.Repo
 	cmd.Env = f.Env
 	return cmd

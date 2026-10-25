@@ -6,12 +6,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,12 +28,12 @@ func gitInitDir(t *testing.T, dir, home string) {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	cmd := exec.Command("git", "init", dir)
+	cmd := testhelpers.GitCommand("init", dir)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git init %s: %s", dir, out)
 
-	cfg := exec.Command("git", "-C", dir, "config", "user.email", "test-user@example.com")
+	cfg := testhelpers.GitCommand("-C", dir, "config", "user.email", "test-user@example.com")
 	cfg.Env = env
 	out, err = cfg.CombinedOutput()
 	require.NoError(t, err, "git config user.email in %s: %s", dir, out)

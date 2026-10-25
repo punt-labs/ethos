@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
 
@@ -15,6 +16,7 @@ import (
 // (~/.punt-labs/ethos/locks) lands in a temp dir, not the developer's real
 // home, when a test enables/disables a repo.
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	home, err := os.MkdirTemp("", "enable-home-*")
 	if err != nil {
 		panic(err)
@@ -40,11 +42,11 @@ func gitRepo(t *testing.T) string {
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 	// Neutralize the session's env-injected git config (GIT_CONFIG_COUNT with
 	// commit.gpgsign=true and a signing key) — it has the highest precedence
 	// and would force gpg signing, which fails under the isolated test HOME.
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cmd.Env,
 		"GIT_CONFIG_COUNT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null")
@@ -250,7 +252,7 @@ func TestEnableGitlinkGuard(t *testing.T) {
 	dir := gitRepo(t)
 	// Record .punt-labs/ethos as a gitlink (mode 160000) in the index.
 	sha := "0000000000000000000000000000000000000001"
-	cmd := exec.Command("git", "-C", dir, "update-index", "--add", "--cacheinfo", "160000,"+sha+",.punt-labs/ethos")
+	cmd := testhelpers.GitCommand("-C", dir, "update-index", "--add", "--cacheinfo", "160000,"+sha+",.punt-labs/ethos")
 	if err := cmd.Run(); err != nil {
 		t.Skipf("cannot stage a gitlink in this git: %v", err)
 	}

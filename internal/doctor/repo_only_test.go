@@ -3,11 +3,11 @@ package doctor
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -153,8 +153,8 @@ func gitRepo(t *testing.T) string {
 		{"-C", root, "config", "user.email", "t@example.com"},
 		{"-C", root, "config", "user.name", "Test"},
 	} {
-		cmd := exec.Command("git", args...)
-		cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "GIT_CONFIG_GLOBAL=/dev/null")
+		cmd := testhelpers.GitCommand(args...)
+		cmd.Env = append(cmd.Env, "HOME="+t.TempDir(), "GIT_CONFIG_GLOBAL=/dev/null")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git %v: %s", args, out)
 	}
@@ -200,7 +200,7 @@ func TestCheckLocalExtNotTracked(t *testing.T) {
 			[]byte(GitignoreRule+"\n"), 0o644))
 		rel := writeLocalExt(t, root)
 
-		add := exec.Command("git", "-C", root, "add", "-f", rel)
+		add := testhelpers.GitCommand("-C", root, "add", "-f", rel)
 		out, err := add.CombinedOutput()
 		require.NoError(t, err, string(out))
 
@@ -243,7 +243,7 @@ func TestCheckLocalExtNotTracked(t *testing.T) {
 				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 				require.NoError(t, os.WriteFile(p, []byte("token: s3cret\n"), 0o644))
 
-				add := exec.Command("git", "-C", root, "add", "-f", rel)
+				add := testhelpers.GitCommand("-C", root, "add", "-f", rel)
 				out, err := add.CombinedOutput()
 				require.NoError(t, err, string(out))
 

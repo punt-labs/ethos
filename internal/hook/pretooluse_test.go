@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1132,7 +1133,7 @@ func stageContract(t *testing.T, home, missionID string) {
 func stageRepoRoot(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
-	cmd := exec.Command("git", "init", repo)
+	cmd := testhelpers.GitCommand("init", repo)
 	cmd.Env = []string{
 		"HOME=" + t.TempDir(),
 		"GIT_CONFIG_GLOBAL=/dev/null",
@@ -1230,7 +1231,7 @@ func TestTierBDispatch_FromWorktreeResolvesMainStore(t *testing.T) {
 
 	gitAt := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = dir
 		cmd.Env = []string{
 			"HOME=" + home,
@@ -1329,7 +1330,7 @@ func TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree(t *testing.T) {
 
 	gitAt := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = dir
 		cmd.Env = []string{
 			"HOME=" + home,

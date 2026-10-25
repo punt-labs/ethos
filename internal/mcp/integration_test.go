@@ -17,6 +17,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,7 @@ var ethosBinary string
 const mcpRPCTimeout = 30 * time.Second
 
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
 	// presence the signal for "a session was expected, fail loud if
@@ -127,7 +129,7 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	gitInit := exec.Command("git", "init", repo)
+	gitInit := testhelpers.GitCommand("init", repo)
 	gitInit.Env = gitEnv
 	out, gitErr := gitInit.CombinedOutput()
 	require.NoError(t, gitErr, "git init failed: %s", out)

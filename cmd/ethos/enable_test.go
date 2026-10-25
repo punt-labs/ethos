@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
@@ -39,7 +40,7 @@ func enableGitRepo(t *testing.T) string {
 	// Isolate HOME so claudemd's per-user lock dir lands in a temp dir.
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
-	cmd := exec.Command("git", "-C", dir, "init", "-q")
+	cmd := testhelpers.GitCommand("-C", dir, "init", "-q")
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git init: %v", err)
 	}

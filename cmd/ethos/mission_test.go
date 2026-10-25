@@ -35,6 +35,7 @@ var ethosBinary string
 // runtime os.Exit error paths in `runMissionCreate` (the in-process
 // captureStdout pattern would crash on os.Exit).
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
 	// presence the signal for "a session was expected, fail loud if
@@ -2703,8 +2704,8 @@ func TestMissionCreate_RoleOverlapThroughLiveStoresSubprocess(t *testing.T) {
 	// overlap assertion. Give the child a CWD with its own bare .git
 	// so FindRepoRoot stops outside the ethos repo.
 	repo := t.TempDir()
-	gitInit := exec.Command("git", "init", repo)
-	gitInit.Env = append(os.Environ(),
+	gitInit := testhelpers.GitCommand("init", repo)
+	gitInit.Env = append(gitInit.Env,
 		"HOME="+home,
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
@@ -3355,7 +3356,7 @@ func missionResultVerifyEnv(t *testing.T) (home, repo, missionID string) {
 	env := testGitEnv(home)
 
 	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = repo
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
@@ -3575,7 +3576,7 @@ func TestMissionResult_VerifyOn_RejectsUnknownPath(t *testing.T) {
 	repo := t.TempDir()
 	env := testGitEnv(home)
 	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = repo
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
@@ -4000,7 +4001,7 @@ func TestMissionResult_VerifyOn_HandlesRenames(t *testing.T) {
 	repo := t.TempDir()
 	env := testGitEnv(home)
 	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = repo
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()

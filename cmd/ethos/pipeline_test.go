@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -77,7 +76,7 @@ func pipelineInProcessEnv(t *testing.T) string {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repo, ".punt-labs", "ethos.yaml"),
 		[]byte("agent: claude\n"), 0o644))
-	cmd := exec.Command("git", "init", repo)
+	cmd := testhelpers.GitCommand("init", repo)
 	cmd.Env = []string{
 		"HOME=" + home,
 		"GIT_CONFIG_GLOBAL=/dev/null",

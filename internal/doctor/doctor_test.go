@@ -22,6 +22,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,7 @@ import (
 // instead exercise the loud path. A test that wants the under-Claude-Code
 // path sets one back with t.Setenv.
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	os.Unsetenv("CLAUDE_PID")
 	os.Unsetenv("CLAUDECODE")
 	// Stripping the env vars is not enough: a real claude process is
@@ -923,8 +925,8 @@ func TestCheckSealHook(t *testing.T) {
 		}
 		real := filepath.Join(t.TempDir(), "gitdir")
 		wt := t.TempDir()
-		cmd := exec.Command("git", "init", "-q", "--separate-git-dir", real, wt)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd := testhelpers.GitCommand("init", "-q", "--separate-git-dir", real, wt)
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", out)
 		hooks := filepath.Join(real, "hooks")
@@ -975,9 +977,9 @@ func TestCheckSealHook(t *testing.T) {
 		mainDir := t.TempDir()
 		gitRun := func(dir string, args ...string) {
 			t.Helper()
-			cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+			cmd := testhelpers.GitCommand(append([]string{"-c", "commit.gpgsign=false"}, args...)...)
 			cmd.Dir = dir
-			cmd.Env = append(os.Environ(),
+			cmd.Env = append(cmd.Env,
 				"HOME="+t.TempDir(),
 				"GIT_CONFIG_GLOBAL=/dev/null",
 				"GIT_CONFIG_SYSTEM=/dev/null",
@@ -1008,12 +1010,12 @@ func TestCheckSealHook(t *testing.T) {
 			t.Skip("git not available")
 		}
 		repo := t.TempDir()
-		cmd := exec.Command("git", "-C", repo, "init", "-q")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd := testhelpers.GitCommand("-C", repo, "init", "-q")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git init: %s", out)
-		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd = testhelpers.GitCommand("-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err = cmd.CombinedOutput()
 		require.NoError(t, err, "git config: %s", out)
 
@@ -1044,12 +1046,12 @@ func TestCheckSealHook(t *testing.T) {
 			t.Skip("git not available")
 		}
 		repo := t.TempDir()
-		cmd := exec.Command("git", "-C", repo, "init", "-q")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd := testhelpers.GitCommand("-C", repo, "init", "-q")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git init: %s", out)
-		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd = testhelpers.GitCommand("-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err = cmd.CombinedOutput()
 		require.NoError(t, err, "git config: %s", out)
 
@@ -1387,12 +1389,12 @@ func TestCheckHookCurrencyHooksPathWarning(t *testing.T) {
 		t.Skip("git not available")
 	}
 	repo := t.TempDir()
-	cmd := exec.Command("git", "-C", repo, "init", "-q")
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	cmd := testhelpers.GitCommand("-C", repo, "init", "-q")
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git init: %s", out)
-	cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	cmd = testhelpers.GitCommand("-C", repo, "config", "core.hooksPath", ".husky")
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "git config: %s", out)
 

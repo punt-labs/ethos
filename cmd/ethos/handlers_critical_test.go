@@ -13,6 +13,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -555,7 +556,7 @@ func gitCmd(t *testing.T, dir string, args ...string) {
 
 // execGit creates a git command with sanitized environment.
 func execGit(dir, home string, args ...string) *exec.Cmd {
-	cmd := exec.Command("git", args...)
+	cmd := testhelpers.GitCommand(args...)
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"HOME=" + home,
@@ -611,7 +612,7 @@ func TestSealHookPassthroughWithoutEthos(t *testing.T) {
 		"GIT_COMMITTER_EMAIL=test@test",
 	}
 	run := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+		cmd := testhelpers.GitCommand(append([]string{"-c", "commit.gpgsign=false"}, args...)...)
 		cmd.Dir = repo
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()

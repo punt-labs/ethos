@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,7 +108,7 @@ func TestSetup_InsideGitShapesWritesOnlyWhereGitResolves(t *testing.T) {
 			mk(t, outer, inner)
 			t.Chdir(inner)
 
-			top, gitErr := exec.Command("git", "-C", inner, "rev-parse", "--show-toplevel").Output()
+			top, gitErr := testhelpers.GitCommand("-C", inner, "rev-parse", "--show-toplevel").Output()
 			cfgPath := filepath.Join(t.TempDir(), "setup.yaml")
 			writeSetupFile(t, cfgPath, "name: Shape User\nhandle: shape-user\nemail: shape@example.com\n")
 			_, stderr, err := execHandler(t, "setup", "--file", cfgPath)

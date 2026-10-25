@@ -3,7 +3,6 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,7 +113,7 @@ func TestCheckUnclassifiedFiles_ExportedMissionsPass(t *testing.T) {
 }
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir,
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir,
 		"-c", "user.email=t@example.com", "-c", "user.name=t"}, args...)...)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(out))

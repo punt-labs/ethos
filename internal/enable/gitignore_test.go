@@ -2,10 +2,11 @@ package enable
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // The two runtime patterns enable must ensure a consumer repo ignores: the
@@ -372,8 +373,8 @@ func assertLocalIgnored(t *testing.T, dir string, want bool) {
 // gitOutput runs git in dir and returns its stdout.
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(cmd.Env,
 		"GIT_CONFIG_COUNT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null")

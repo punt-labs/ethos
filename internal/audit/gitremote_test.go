@@ -1,9 +1,9 @@
 package audit
 
 import (
-	"os/exec"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,7 +101,7 @@ func TestParseGitRemote(t *testing.T) {
 
 func gitInit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 	require.NoError(t, cmd.Run(), "git %v", args)
 }
 

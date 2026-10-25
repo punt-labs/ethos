@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -287,7 +288,7 @@ email: test-user@example.com
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	cfg := exec.Command("git", "-C", repo, "config", "user.email", "nobody@example.invalid")
+	cfg := testhelpers.GitCommand("-C", repo, "config", "user.email", "nobody@example.invalid")
 	cfg.Env = gitEnv
 	require.NoError(t, cfg.Run(), "repointing git email")
 	t.Setenv("USER", "claude")
@@ -948,7 +949,7 @@ func TestSetup_HardFailNoEmail(t *testing.T) {
 	home, repo := setupTestEnv(t)
 
 	// Remove the repo-local email so neither the file nor git supplies one.
-	unset := exec.Command("git", "-C", repo, "config", "--unset", "user.email")
+	unset := testhelpers.GitCommand("-C", repo, "config", "--unset", "user.email")
 	unset.Env = []string{
 		"HOME=" + home,
 		"GIT_CONFIG_GLOBAL=/dev/null",
@@ -1200,7 +1201,7 @@ func TestSetup_FromWorktreeWritesConfigToStoreAgentsToCheckout(t *testing.T) {
 
 	git := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 		cmd.Env = []string{
 			"HOME=" + home,
 			"GIT_CONFIG_GLOBAL=/dev/null",

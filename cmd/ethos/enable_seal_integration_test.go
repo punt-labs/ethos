@@ -4,10 +4,11 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // TestCLI_SealLifecycleAcrossEnableDisable is the end-to-end cross-feature
@@ -122,7 +123,7 @@ func commit(t *testing.T, repo string, env []string, fileName, content, msg stri
 		t.Fatal(err)
 	}
 	gitRunEnv(t, repo, env, "add", fileName)
-	cmd := exec.Command("git", "-C", repo, "commit", "-q", "-m", msg)
+	cmd := testhelpers.GitCommand("-C", repo, "commit", "-q", "-m", msg)
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git commit %q: %v\n%s", msg, err, out)
