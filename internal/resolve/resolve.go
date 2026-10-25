@@ -680,8 +680,8 @@ func checkRepoRootOverride(requireStore bool) (root string, set bool, err error)
 	if requireStore {
 		store := filepath.Join(v, ".punt-labs", "ethos")
 		if info, err := os.Stat(store); err != nil || !info.IsDir() {
-			return "", true, fmt.Errorf("ETHOS_REPO_ROOT=%q has no %s store; refusing to use it",
-				v, filepath.Join(".punt-labs", "ethos"))
+			return "", true, fmt.Errorf("ETHOS_REPO_ROOT=%q has no %s store; refusing to use it: %w",
+				v, filepath.Join(".punt-labs", "ethos"), ErrOverrideNoStore)
 		}
 	}
 	return v, true, nil
@@ -737,6 +737,11 @@ func LocateRepoRoot() (string, error) {
 	}
 	return walkRepoRoot(nil)
 }
+
+// ErrOverrideNoStore is wrapped by the error LocateStoreRoot returns when
+// ETHOS_REPO_ROOT names an existing directory that holds no store yet: a fresh
+// repository, which `ethos enable` is about to give one.
+var ErrOverrideNoStore = errors.New("no ethos store at the overridden root")
 
 // ErrNotInRepo is wrapped by the error LocateRepoRoot returns when the working
 // directory is outside any repository, the one failure that is not a problem.

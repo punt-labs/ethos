@@ -3,11 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
@@ -157,6 +161,39 @@ func TestEnableDisableReportUnexaminableGit(t *testing.T) {
 			}
 			if !strings.Contains(errOut, dot) || strings.Contains(errOut, "not in a git repository") {
 				t.Errorf("stderr = %q, want the cause naming %s", errOut, dot)
+			}
+		})
+	}
+}
+
+// enable creates the store, so only an override naming a repository without one
+// may use the checkout as the store; any other failure to locate it stops enable.
+func TestEnableStoreRoot(t *testing.T) {
+	noStore := fmt.Errorf("override: %w", resolve.ErrOverrideNoStore)
+	other := errors.New("examining /x/.git: permission denied")
+	cases := []struct {
+		name    string
+		root    string
+		err     error
+		want    string
+		wantErr bool
+	}{
+		{"located", "/store", nil, "/store", false},
+		{"override without a store", "", noStore, "/repo", false},
+		{"unreadable .git", "", other, "", true},
+		{"outside a repository", "", fmt.Errorf("/ is %w", resolve.ErrNotInRepo), "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := enableStoreRoot("/repo", func() (string, error) { return c.root, c.err })
+			if c.wantErr {
+				if err == nil || !strings.Contains(err.Error(), c.err.Error()) {
+					t.Fatalf("error = %v, want one naming %v", err, c.err)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("got (%q, %v), want %q", got, err, c.want)
 			}
 		})
 	}

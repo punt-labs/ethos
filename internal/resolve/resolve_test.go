@@ -1890,6 +1890,7 @@ func TestLocateStoreRoot(t *testing.T) {
 		require.Error(t, err)
 		assert.NotErrorIs(t, err, ErrNotInRepo)
 		assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+		assert.ErrorIs(t, err, ErrOverrideNoStore)
 	})
 
 	t.Run("outside a repository wraps ErrNotInRepo", func(t *testing.T) {

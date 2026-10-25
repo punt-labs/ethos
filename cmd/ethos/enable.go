@@ -41,9 +41,9 @@ func runEnable(cmd *cobra.Command) error {
 	// "has setup been run?" config read resolves the shared store (#370).
 	// A fresh repo named by ETHOS_REPO_ROOT has no store yet, which the store
 	// lookup refuses; enable is what creates it, so the checkout is the store.
-	storeRoot, err := resolve.LocateStoreRoot()
+	storeRoot, err := enableStoreRoot(repoRoot, resolve.LocateStoreRoot)
 	if err != nil {
-		storeRoot = repoRoot
+		return err
 	}
 	rep, err := enable.EnableTo(repoRoot, storeRoot)
 	if err != nil {
@@ -55,6 +55,22 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	printEnableReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), rep, "enabled")
 	return nil
+}
+
+// enableStoreRoot is the store enable reads, found by locate. Only an
+// ETHOS_REPO_ROOT naming a repository with no store yet falls back to the
+// checkout: enable creates the store there. Any other failure (an unreadable
+// .git, a refused override) must not send the deposit to a tree locate never
+// chose.
+func enableStoreRoot(repoRoot string, locate func() (string, error)) (string, error) {
+	root, err := locate()
+	switch {
+	case err == nil:
+		return root, nil
+	case errors.Is(err, resolve.ErrOverrideNoStore):
+		return repoRoot, nil
+	}
+	return "", fmt.Errorf("enable: locating the store: %w", err)
 }
 
 // locateForCommand returns the work tree root for verb, or "" after printing
