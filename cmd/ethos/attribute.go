@@ -9,6 +9,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -298,10 +299,13 @@ func editContent(kind attribute.Kind, slug string) (string, error) {
 		editor = "vi"
 	}
 
-	tmpDir := filepath.Join(os.TempDir(), "ethos")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	// A private directory of our own, marked as temporary: TMPDIR may point
+	// inside a working tree, and a shared fixed name would let two edits collide.
+	tmpDir, err := os.MkdirTemp("", layout.ScratchDirPattern("ethos-edit"))
+	if err != nil {
 		return "", fmt.Errorf("creating temp directory: %w", err)
 	}
+	defer os.RemoveAll(tmpDir)
 
 	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("%s-%s.md", kind.CmdName, slug))
 	// Write a starter template.
@@ -309,7 +313,6 @@ func editContent(kind attribute.Kind, slug string) (string, error) {
 	if err := os.WriteFile(tmpFile, []byte(starter), 0o600); err != nil {
 		return "", fmt.Errorf("writing temp file: %w", err)
 	}
-	defer os.Remove(tmpFile)
 
 	cmd := exec.Command(editor, tmpFile)
 	cmd.Stdin = os.Stdin
