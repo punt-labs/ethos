@@ -672,3 +672,41 @@ func TestEvaluatePreconditions_HandleAuditLogIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, deny, "audit log written via HandleAuditLog must satisfy precondition: %s", reason)
 }
+
+// Outside a repository the audit-log hook writes the global legacy log, and
+// the precondition evaluator reads that same log: a Read recorded there
+// satisfies a later Write, and nothing relative to the working directory is
+// consulted.
+func TestEvaluatePreconditions_OutsideRepoRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	const sid = "sess-outside"
+	recorded := "/abs/recorded.go"
+	decoy := "/abs/decoy.go"
+	// A decoy log under the working directory must not count.
+	writeSessionReadAudit(t, cwd, sid, decoy)
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sid,
+		"tool_name":  "Read",
+		"tool_input": map[string]any{"file_path": recorded},
+	})
+	require.NoError(t, err)
+	sessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, HandleAuditLog(bytes.NewReader(payload), "", sessions))
+
+	c := makeContractWithPreconditions(
+		[]mission.Precondition{{Form: mission.PreconditionFormImplicit, Message: "read before write"}},
+		mission.Inputs{}, nil,
+	)
+	_, deny, err := EvaluatePreconditions(c, "Write", map[string]any{"file_path": recorded}, sid, "")
+	require.NoError(t, err)
+	assert.False(t, deny, "the Read the hook recorded outside a repository satisfies the precondition")
+
+	reason, deny, err := EvaluatePreconditions(c, "Write", map[string]any{"file_path": decoy}, sid, "")
+	require.NoError(t, err)
+	assert.True(t, deny, "a log relative to the working directory is not consulted")
+	assert.Equal(t, "read before write", reason)
+}

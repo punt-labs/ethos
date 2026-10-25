@@ -12,8 +12,10 @@ import (
 )
 
 // EvaluatePreconditions runs the admission gates on a contract's
-// Preconditions list against the session's audit log. It returns the
-// block reason and a deny flag plus a non-nil error when the
+// Preconditions list against the session's audit log: the repository's
+// session audit under repoRoot, or, when repoRoot is "" (outside any
+// repository), the global legacy log the audit-log hook writes there. It
+// returns the block reason and a deny flag plus a non-nil error when the
 // predicate could not be evaluated (malformed substitution, missing
 // input, unreadable audit log).
 //
@@ -290,8 +292,16 @@ func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
 	// DES-058: the precondition evaluator reads the union of sealed
 	// chunks and the live tail, not a single tracked file — a Read
 	// recorded this session lives in the live zone until a seal moves it
-	// into a chunk.
-	entries, err := readSessionAudit(repoRoot, sessionID, time.Now())
+	// into a chunk. Outside a repository the audit-log hook writes the
+	// legacy global log (resolveAuditWritePath), so that is the log read
+	// here — never a path relative to the working directory.
+	var entries []auditEntry
+	var err error
+	if repoRoot == "" {
+		entries, err = readGlobalSessionAudit(sessionID)
+	} else {
+		entries, err = readSessionAudit(repoRoot, sessionID, time.Now())
+	}
 	if err != nil {
 		return map[string]struct{}{}, fmt.Errorf("reading session audit: %w", err)
 	}
@@ -307,6 +317,16 @@ func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
 		reads[filepath.Clean(fp)] = struct{}{}
 	}
 	return reads, nil
+}
+
+// readGlobalSessionAudit reads the legacy global audit log the audit-log
+// hook writes for sessionID outside a repository.
+func readGlobalSessionAudit(sessionID string) ([]auditEntry, error) {
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		return nil, err
+	}
+	return readAuditEntries(legacyAuditPath(filepath.Join(globalRoot, "sessions"), sessionID))
 }
 
 // readsContain reports whether the audit-log set carries a Read for

@@ -41,7 +41,7 @@ func resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID string, now ti
 		if err := os.MkdirAll(globalSessionsDir, 0o700); err != nil {
 			return "", fmt.Errorf("creating %s: %w", globalSessionsDir, err)
 		}
-		return filepath.Join(globalSessionsDir, filepath.Base(sessionID)+".audit.jsonl"), nil
+		return legacyAuditPath(globalSessionsDir, sessionID), nil
 	}
 	dir, err := resolveRepoSessionDir(repoRoot, sessionID, now)
 	if err != nil {
@@ -51,6 +51,12 @@ func resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID string, now ti
 		return "", fmt.Errorf("creating %s: %w", dir, err)
 	}
 	return filepath.Join(dir, "audit.jsonl"), nil
+}
+
+// legacyAuditPath is the global audit log of sessionID outside a
+// repository: <globalSessionsDir>/<session-id>.audit.jsonl.
+func legacyAuditPath(globalSessionsDir, sessionID string) string {
+	return filepath.Join(globalSessionsDir, filepath.Base(sessionID)+".audit.jsonl")
 }
 
 // resolveRepoSessionDir returns the per-session directory under the
