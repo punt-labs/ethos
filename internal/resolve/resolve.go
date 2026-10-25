@@ -831,7 +831,7 @@ func checkoutRootIfAny() (string, error) {
 var warned sync.Map
 
 // warnOnce prints a message to stderr at most once per locateTTL: the
-// resolvers run on every command and hook, and the same skipped .git would
+// resolvers run on every command and hook, and the same warning would
 // otherwise repeat; a long-running server shows it again once the TTL passes,
 // when it is still true.
 func warnOnce(format string, args ...any) {
@@ -914,12 +914,10 @@ type location struct {
 	storeErr error  // why the store cannot be named, when root can
 }
 
-// located is one cached resolution: the location, the .git entries walked
-// past on the way, and the error.
+// located is one cached resolution: the location and the error.
 type located struct {
-	loc     location
-	skipped []string // "path: reason", for the skip notice
-	err     error
+	loc location
+	err error
 }
 
 // locations caches answers, keyed on the git binary (or its absence) and the
@@ -941,17 +939,13 @@ type cachedLocation struct {
 	at time.Time
 }
 
-// locateCwd resolves the working directory and notes on stderr every .git it
-// walked past.
+// locateCwd resolves the working directory.
 func locateCwd() (location, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return location{}, fmt.Errorf("getting the working directory: %w", err)
 	}
 	r := locate(cwd)
-	for _, s := range r.skipped {
-		warnOnce("ethos: warning: skipping %s", s)
-	}
 	return r.loc, r.err
 }
 
@@ -1059,6 +1053,15 @@ func gitLocate(git, start string) located {
 		if dot := danglingOnWalk(gitWalk(start)); dot != nil {
 			return located{err: dot}
 		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && gitenv.IsNotARepo(string(ee.Stderr)) {
+			// "Not a git repository" is the truth only when no .git is there: one
+			// that exists and that git does not accept (a damaged HEAD, a missing
+			// objects/, a FIFO) must not be answered for from the global store.
+			if derr := unacceptedDotGit(gitWalk(start)); derr != nil {
+				return located{err: derr}
+			}
+		}
 		return located{err: gitLocateError(start, err)}
 	}
 	top, gitDir, common, ok := parseRevParse(start, string(out))
@@ -1068,21 +1071,35 @@ func gitLocate(git, start string) located {
 		return handLocate(start)
 	}
 	root, under := ancestorAt(start, top)
-	var skipped []string
 	if under {
-		// Every .git between start and the root git chose was walked past.
+		// Every .git between start and the root git chose was walked past by git:
+		// a damaged one inside the repository is refused, not answered for the
+		// repository around it.
 		for dir := start; dir != root; dir = filepath.Dir(dir) {
 			if derr := gitenv.DanglingDotGit(dir); derr != nil {
 				return located{err: derr}
 			}
-			dot := filepath.Join(dir, ".git")
-			if _, err := os.Lstat(dot); !errors.Is(err, fs.ErrNotExist) {
-				skipped = append(skipped, dot+": git does not accept it as a repository")
+			if derr := unacceptedDotGit([]string{dir}); derr != nil {
+				return located{err: derr}
 			}
 		}
 	}
 	store, serr := storeRoot(root, gitDir, common, git)
-	return located{loc: location{root: root, store: store, storeErr: serr}, skipped: skipped}
+	return located{loc: location{root: root, store: store, storeErr: serr}}
+}
+
+// unacceptedDotGit is the refusal for a .git that exists in one of dirs and that
+// git did not accept as a repository (it answered "not a git repository", or
+// walked past it): ethos answers for neither an enclosing repository nor the
+// global store in its place. nil when no .git is there.
+func unacceptedDotGit(dirs []string) error {
+	for _, d := range dirs {
+		dot := filepath.Join(d, ".git")
+		if _, err := os.Lstat(dot); err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s exists but git does not accept it as a repository: ethos does not answer for an enclosing repository or the global store instead; repair or remove it", dot)
+		}
+	}
+	return nil
 }
 
 // danglingOnWalk is the first dangling .git symlink among dirs, or nil.
@@ -1355,29 +1372,30 @@ func sameDir(a, b string) bool {
 //     unset, where git dies; a parent whose device cannot be read ends the
 //     walk, where git dies.
 func handLocate(start string) located {
-	var skipped []string
 	for _, dir := range gitWalk(start) {
 		dot := filepath.Join(dir, ".git")
 		g, skip, err := examineGit(dot)
 		if err != nil {
-			return located{skipped: skipped, err: err}
+			return located{err: err}
 		}
 		if g.dir != "" {
 			root, _ := ancestorAt(start, dir)
 			store, serr := storeRoot(root, g.dir, g.common, "")
-			return located{loc: location{root: root, store: store, storeErr: serr}, skipped: skipped}
+			return located{loc: location{root: root, store: store, storeErr: serr}}
 		}
 		if skip != "" {
-			skipped = append(skipped, dot+": "+skip)
+			// A .git that is there and is not accepted: refused, as with git
+			// (unacceptedDotGit), never walked past to an enclosing repository.
+			return located{err: fmt.Errorf("%s exists but is not accepted as a repository (%s): ethos does not answer for an enclosing repository or the global store instead; repair or remove it", dot, skip)}
 		}
 		if _, reason, err := checkGitDir(dir); err == nil && reason == "" {
 			// git finds dir itself to be a git directory: a bare repository
 			// or the inside of a .git, neither a work tree.
-			return located{skipped: skipped, err: fmt.Errorf(
+			return located{err: fmt.Errorf(
 				"%s is inside the git directory %s, not a work tree; ethos must be run in a work tree", start, dir)}
 		}
 	}
-	return located{skipped: skipped, err: fmt.Errorf("%s is %w", start, ErrNotInRepo)}
+	return located{err: fmt.Errorf("%s is %w", start, ErrNotInRepo)}
 }
 
 // gitDirs is a git directory and its common directory.

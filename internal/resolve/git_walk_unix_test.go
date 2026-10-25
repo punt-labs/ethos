@@ -22,7 +22,7 @@ func init() {
 	gitShapes["fifo"] = gitShape{func(t *testing.T, inner string) {
 		t.Helper()
 		require.NoError(t, syscall.Mkfifo(filepath.Join(inner, ".git"), 0o644))
-	}, handOuter}
+	}, handError}
 
 	// An unreadable .git directory: git skips it and resolves the enclosing
 	// repository; the hand rules are deliberately stricter than git and refuse.

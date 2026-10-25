@@ -48,30 +48,8 @@ func createIdentityFrom(t *testing.T, se *cliSubprocessEnv, dir string) (string,
 	return string(out), code
 }
 
-// A .git that git skips (an empty directory) must not divert a write to the
-// global store: git treats inner as part of outer, and so does ethos. A .git
-// symlink that points nowhere or loops is refused instead
-// (TestCLI_InvalidInnerGitRefuses): the outer repository is not the one meant.
-func TestCLI_SkippedInnerGitUsesOuterStore(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-	cases := map[string]func(dot string) error{
-		"empty": func(dot string) error { return os.Mkdir(dot, 0o755) },
-	}
-	for name, mk := range cases {
-		t.Run(name, func(t *testing.T) {
-			se, inner := nestedGitEnv(t, mk)
-			out, code := createIdentityFrom(t, se, inner)
-			require.Equal(t, 0, code, out)
-			assert.FileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "nested.yaml"))
-			assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nested.yaml"))
-		})
-	}
-}
-
-// A .git git refuses (an empty or garbage gitfile, a gitdir to nowhere) is a
-// refusal: git stops there, so ethos must not write to the outer or global store.
+// A .git git does not accept (an empty or garbage gitfile, a gitdir to nowhere,
+// an empty directory) is a refusal: ethos must not write to the outer or global store.
 func TestCLI_InvalidInnerGitRefuses(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -84,6 +62,9 @@ func TestCLI_InvalidInnerGitRefuses(t *testing.T) {
 			return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot)
 		},
 		"symlink loop": func(dot string) error { return os.Symlink(dot, dot) },
+		// git walks past an empty directory to the outer repository; ethos
+		// refuses rather than answer for the outer one.
+		"empty directory": func(dot string) error { return os.Mkdir(dot, 0o755) },
 	}
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {

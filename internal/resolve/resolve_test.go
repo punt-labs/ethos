@@ -1764,23 +1764,6 @@ func TestStoreRootIfAnyStopsAtUnexaminableGit(t *testing.T) {
 }
 
 func TestLocateStoreRoot(t *testing.T) {
-	t.Run("a skipped inner .git resolves the outer store", func(t *testing.T) {
-		for name, s := range gitShapes {
-			if s.hand != handOuter {
-				continue
-			}
-			t.Run(name, func(t *testing.T) {
-				_, outer := shapeIn(t, s)
-				hideGit(t)
-				var got string
-				var err error
-				captureStderr(t, func() { got, err = locateStoreRoot() })
-				require.NoError(t, err)
-				assert.Equal(t, outer, got)
-			})
-		}
-	})
-
 	t.Run("unreadable .git is an error", func(t *testing.T) {
 		inner := unexaminableGit(t, emptyGitFile)
 		got, err := locateStoreRoot()

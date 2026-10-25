@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Hand-rule answers for a .git shape when git is not on PATH.
 const (
-	handOuter = "outer" // skipped: the enclosing repository resolves
 	handInner = "inner" // accepted: the shape's own directory is the root
 	handError = "error" // refused: resolution fails
 )
@@ -26,16 +26,10 @@ type gitShape struct {
 	hand string                           // the hand rules' answer
 }
 
-// strictShapes are the shapes git walks past to the enclosing repository and
-// ethos refuses, because the enclosing repository is not the one the user is
-// in: a .git symlink that points nowhere, or loops, or a .git directory that
-// exists and cannot be read.
-var strictShapes = map[string]bool{"dangling symlink": true, "symlink loop": true, "mode-000 .git directory": true}
-
 // gitShapes are the .git shapes the resolver must classify. With git on PATH
 // git decides each one; without it the hand rules give hand.
 var gitShapes = map[string]gitShape{
-	"empty directory":   {mkDir(), handOuter},
+	"empty directory":   {mkDir(), handError},
 	"dangling symlink":  {symlinkTo("absent"), handError},
 	"symlink loop":      {symlinkTo(".git"), handError},
 	"empty file":        {gitfile(""), handError},
@@ -43,12 +37,12 @@ var gitShapes = map[string]gitShape{
 	"no gitdir prefix":  {gitfile("/somewhere/else\n"), handError},
 	"gitdir to nowhere": {gitfile("gitdir: /nonexistent\n"), handError},
 
-	"commondir only":                {mkDir("commondir=../../.git"), handOuter},
-	"commondir only to nonexistent": {mkDir("commondir=/nonexistent"), handOuter},
-	"commondir only empty":          {mkDir("commondir="), handOuter},
-	"garbage HEAD":                  {mkDir("HEAD=garbage\n", "objects/", "refs/"), handOuter},
-	"HEAD as a directory":           {mkDir("HEAD/", "objects/", "refs/"), handOuter},
-	"objects as a file":             {mkDir("HEAD=ref: refs/heads/main\n", "objects=", "refs/"), handOuter},
+	"commondir only":                {mkDir("commondir=../../.git"), handError},
+	"commondir only to nonexistent": {mkDir("commondir=/nonexistent"), handError},
+	"commondir only empty":          {mkDir("commondir="), handError},
+	"garbage HEAD":                  {mkDir("HEAD=garbage\n", "objects/", "refs/"), handError},
+	"HEAD as a directory":           {mkDir("HEAD/", "objects/", "refs/"), handError},
+	"objects as a file":             {mkDir("HEAD=ref: refs/heads/main\n", "objects=", "refs/"), handError},
 	"hex HEAD":                      {mkDir("HEAD=0123456789abcdef0123456789abcdef01234567\n", "objects/", "refs/"), handInner},
 	"dangling commondir":            {mkDir("HEAD=ref: refs/heads/main\n", "commondir=/nonexistent", "objects/", "refs/"), handError},
 
@@ -182,7 +176,7 @@ func TestShapesFollowGit(t *testing.T) {
 			var got string
 			var err error
 			captureStderr(t, func() { got, err = locateRepoRoot() })
-			if gitErr != nil || strictShapes[name] {
+			if gitErr != nil || s.hand == handError {
 				require.Error(t, err, "git refuses this .git, or ethos does: %v", gitErr)
 				assert.NotErrorIs(t, err, ErrNotInRepo)
 				assert.Empty(t, got)
@@ -198,7 +192,7 @@ func TestShapesFollowGit(t *testing.T) {
 func TestShapesHandRules(t *testing.T) {
 	for name, s := range gitShapes {
 		t.Run(name, func(t *testing.T) {
-			inner, outer := shapeIn(t, s)
+			inner, _ := shapeIn(t, s)
 			hideGit(t)
 			var got string
 			var err error
@@ -213,9 +207,6 @@ func TestShapesHandRules(t *testing.T) {
 			case handInner:
 				require.NoError(t, err)
 				assert.Equal(t, inner, got)
-			case handOuter:
-				require.NoError(t, err)
-				assert.Equal(t, outer, got)
 			default:
 				t.Fatalf("shape %q has no hand answer", name)
 			}
@@ -223,12 +214,14 @@ func TestShapesHandRules(t *testing.T) {
 	}
 }
 
-// A shape the resolver skips is reported once on stderr, by every resolver
-// that walks past it, with git or without.
-func TestShapesSkipNotice(t *testing.T) {
+// A .git that is there and that git does not accept is refused, with the .git
+// named, whether git walks past it to an enclosing repository or says "not a git
+// repository", with git and without: the global store and the repository around
+// it are never answered in its place.
+func TestShapesNameTheRefusedDotGit(t *testing.T) {
 	for _, withGit := range []bool{true, false} {
 		for name, s := range gitShapes {
-			if s.hand != handOuter {
+			if s.hand != handError {
 				continue
 			}
 			t.Run(name, func(t *testing.T) {
@@ -241,18 +234,10 @@ func TestShapesSkipNotice(t *testing.T) {
 				if !withGit {
 					hideGit(t)
 				}
-				out := captureStderr(t, func() {
-					_, err := locateStoreRoot()
-					require.NoError(t, err)
-					_, err = locateRepoRoot()
-					require.NoError(t, err)
-					_, err = checkoutRootIfAny()
-					require.NoError(t, err)
-					_, err = storeRootIfAny()
-					require.NoError(t, err)
-				})
-				assert.Equal(t, 1, strings.Count(out, filepath.Join(inner, ".git")), out)
-				assert.Contains(t, out, "skipping")
+				_, err := locateRepoRoot()
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, ErrNotInRepo)
+				assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
 			})
 		}
 	}
@@ -286,8 +271,8 @@ func TestShapesStoreRoot(t *testing.T) {
 	}
 }
 
-// git is the authority: when it reports "not a git repository", the answer is
-// ErrNotInRepo, even with a .git entry above that git walked past.
+// A .git entry git does not accept is refused even when git reports "not a git
+// repository": the global store must not answer in its place.
 func TestGitNotARepoIsNotInRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -301,7 +286,9 @@ func TestGitNotARepoIsNotInRepo(t *testing.T) {
 	_, gitErr := gitTopLevel(t, dir)
 	require.Error(t, gitErr)
 	_, err := locateRepoRoot()
-	assert.ErrorIs(t, err, ErrNotInRepo)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrNotInRepo)
+	assert.Contains(t, err.Error(), filepath.Join(dir, ".git"))
 }
 
 // A refusal is never cached: once the .git is repaired, the next call
@@ -329,21 +316,24 @@ func TestRefusalIsNotCached(t *testing.T) {
 	}
 }
 
-// A success or ErrNotInRepo answer is reused for at most locateTTL, then
-// asked again.
+// A success answer is reused for at most locateTTL, then asked again.
 func TestAnswerCachedForTTL(t *testing.T) {
 	clock := time.Now()
 	orig := locateNow
 	locateNow = func() time.Time { return clock }
 	t.Cleanup(func() { locateNow = orig })
 
-	inner, outer := shapeIn(t, gitShapes["empty directory"])
+	outer := t.TempDir()
+	testhelpers.MakeGitDir(t, outer)
+	inner := filepath.Join(outer, "inner")
+	require.NoError(t, os.Mkdir(inner, 0o755))
+	t.Chdir(inner)
 	hideGit(t)
 	got, err := captureLocate(t)
 	require.NoError(t, err)
 	assert.Equal(t, outer, got)
 
-	makeGitDirAt(t, filepath.Join(inner, ".git")) // the skipped .git becomes a repository
+	makeGitDirAt(t, filepath.Join(inner, ".git")) // a nearer repository appears
 
 	clock = clock.Add(locateTTL - time.Second)
 	got, err = captureLocate(t)
