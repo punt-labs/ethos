@@ -3038,7 +3038,9 @@ func TestMatchDispatchPending_AmbiguitySignal(t *testing.T) {
 
 	var matched string
 	stderrText := captureStderr(t, func() {
-		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+		var err error
+		matched, err = matchDispatchPending(globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 	})
 
 	assert.Equal(t, missionA, matched, "FIFO still resolves to the oldest entry")
@@ -3069,7 +3071,9 @@ func TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers(t *testing.T)
 
 	var matched string
 	stderrText := captureStderr(t, func() {
-		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+		var err error
+		matched, err = matchDispatchPending(globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 	})
 
 	assert.Equal(t, missionA, matched)
@@ -3161,7 +3165,8 @@ func TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch(t *testing.T) {
 		release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
 		require.NoError(t, err)
 		defer release()
-		m := matchDispatchPending(globalRoot, sessionID, "bwk")
+		m, err := matchDispatchPending(globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 		if m != "" {
 			require.NoError(t, mission.ConsumeDispatchPending(globalRoot, sessionID, m))
 		}
@@ -3332,7 +3337,9 @@ func TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry(t *testing
 
 	var matched string
 	stderrText := captureStderr(t, func() {
-		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+		var err error
+		matched, err = matchDispatchPending(globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 	})
 
 	assert.Equal(t, resolvable, matched,

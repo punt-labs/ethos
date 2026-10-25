@@ -259,7 +259,10 @@ func dispatchTierBOrTierA(w io.Writer, sessionID string, toolInput map[string]an
 		return dispatchTierA(w, sessionID)
 	}
 	childAgentType := spawnAgentType(toolInput)
-	repoRoot := tierBStoreRoot()
+	repoRoot, err := tierBStoreRoot()
+	if err != nil {
+		return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: %v", err))
+	}
 	if missionID, ok := pretooluseInheritReader(repoRoot, parentDelegation, childAgentType); ok {
 		// Inherited from a parent delegation's SpawnPattern match, not
 		// from the active-mission sidecar — DES-076's consume callback

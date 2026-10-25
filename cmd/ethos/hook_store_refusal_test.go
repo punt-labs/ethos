@@ -105,3 +105,45 @@ func TestCLI_HookSubagentStartRefusesGateWhenStoreUnlocatable(t *testing.T) {
 	assert.Contains(t, res.SystemMessage, "cannot determine verifier gate: repository store not located")
 	assert.Contains(t, res.SystemMessage, filepath.Join(inner, ".git"))
 }
+
+// pre-tool-use under a declared mission, in a checkout whose store cannot be
+// located, denies with the refusal reason: never a contract read from the
+// global mission store. The same holds for an Agent spawn, whose
+// attribution (pending dispatch, claim, inheritance) reads the store.
+func TestCLI_HookPreToolUseDeniesWhenStoreUnlocatable(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se, inner := nestedGitEnv(t, emptyGitFile)
+	cases := map[string]struct {
+		payload string
+		env     []string
+	}{
+		"Write under MISSION_ID": {
+			payload: `{"session_id":"pre-s1","tool_name":"Write","tool_input":{"file_path":"x","content":"y"}}`,
+			env:     []string{"MISSION_ID=m-2026-01-01-001"},
+		},
+		"Agent under MISSION_ID": {
+			payload: `{"session_id":"pre-s1","tool_name":"Agent","tool_input":{"subagent_type":"bwk","prompt":"p"}}`,
+			env:     []string{"MISSION_ID=m-2026-01-01-001"},
+		},
+		"Agent without a mission": {
+			payload: `{"session_id":"pre-s1","tool_name":"Agent","tool_input":{"subagent_type":"bwk","prompt":"p"}}`,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			stdout, stderr, code := runHookIn(t, se, inner, "pre-tool-use", c.payload, c.env...)
+			assert.Equal(t, 0, code, stderr)
+			var res struct {
+				HookSpecificOutput struct {
+					PermissionDecision       string `json:"permissionDecision"`
+					PermissionDecisionReason string `json:"permissionDecisionReason"`
+				} `json:"hookSpecificOutput"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
+			assert.Equal(t, "deny", res.HookSpecificOutput.PermissionDecision, stdout)
+			assert.Contains(t, res.HookSpecificOutput.PermissionDecisionReason, filepath.Join(inner, ".git"))
+		})
+	}
+}

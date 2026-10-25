@@ -122,7 +122,11 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) erro
 	}
 	agentType := spawnAgentType(toolInput)
 
-	if missionID, boundVia := readActiveMissionForDispatch(sessionID, agentType); missionID != "" {
+	missionID, boundVia, err := readActiveMissionForDispatch(sessionID, agentType)
+	if err != nil {
+		return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: %v", err))
+	}
+	if missionID != "" {
 		var onDispatched func()
 		if boundVia == mission.BoundViaSidecarDispatch {
 			onDispatched = func() { consumeDispatchBinding(sessionID, missionID) }
@@ -165,16 +169,20 @@ func spawnAgentType(toolInput map[string]any) string {
 // (mission.BoundViaSidecarClaim or mission.BoundViaSidecarDispatch),
 // for the caller to both decide consumption and to stamp the
 // provenance field on the delegation record it writes.
-func readActiveMissionForDispatch(sessionID, agentType string) (missionID, boundVia string) {
+//
+// err is non-nil only when the mission store cannot be located: the
+// caller denies the spawn with it rather than attribute it from the
+// global store.
+func readActiveMissionForDispatch(sessionID, agentType string) (missionID, boundVia string, err error) {
 	if sessionID == "" {
-		return "", ""
+		return "", "", nil
 	}
-	globalRoot, err := tierBGlobalRoot()
-	if err != nil {
+	globalRoot, gerr := tierBGlobalRoot()
+	if gerr != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: resolving global root: %v; falling through\n",
-			err)
-		return "", ""
+			gerr)
+		return "", "", nil
 	}
 
 	// 1. Pending dispatches, oldest matching entry first. No contract
@@ -190,8 +198,12 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 	// certain without a Load, a subsequently-unloadable contract is a
 	// genuine, actionable problem for THIS specific spawn, not ambient
 	// noise behind every spawn in the session.
-	if pendingMissionID := matchDispatchPending(globalRoot, sessionID, agentType); pendingMissionID != "" {
-		return pendingMissionID, mission.BoundViaSidecarDispatch
+	pendingMissionID, err := matchDispatchPending(globalRoot, sessionID, agentType)
+	if err != nil {
+		return "", "", err
+	}
+	if pendingMissionID != "" {
+		return pendingMissionID, mission.BoundViaSidecarDispatch, nil
 	}
 
 	// 2. Claim: sticky, unconditional, unaffected by Worker matching.
@@ -214,10 +226,10 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: reading sidecar for %q: %v; falling through\n",
 			sessionID, err)
-		return "", ""
+		return "", "", nil
 	}
 	if binding.MissionID == "" {
-		return "", ""
+		return "", "", nil
 	}
 	if binding.Origin != mission.BindOriginClaim {
 		fmt.Fprintf(os.Stderr,
@@ -225,16 +237,16 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 				"(origin %q, not a clean claim) — spawning without a mission; run `ethos mission "+
 				"claim <id>` (or `ethos mission release`) to resolve it\n",
 			sessionID, binding.MissionID, binding.Origin)
-		return "", ""
+		return "", "", nil
 	}
 	if reason := staleBindingReason(binding.MissionID); reason != "" {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s but %s; "+
 				"run `ethos mission claim <id>` (or `ethos mission release`) — spawning without a mission\n",
 			sessionID, binding.MissionID, reason)
-		return "", ""
+		return "", "", nil
 	}
-	return binding.MissionID, mission.BoundViaSidecarClaim
+	return binding.MissionID, mission.BoundViaSidecarClaim, nil
 }
 
 // matchDispatchPending scans sessionID's pending dispatches
@@ -309,25 +321,24 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 // because OTHER pending entries exist for a different Worker (a
 // session dispatching both `bwk` and `rmh` work is not ambiguous for a
 // `bwk` spawn).
-func matchDispatchPending(globalRoot, sessionID, agentType string) string {
+func matchDispatchPending(globalRoot, sessionID, agentType string) (string, error) {
 	// J1 (full-branch review, m-2026-09-08-004 round 3): classification
 	// now runs through mission.ClassifyPendingDispatches, the SAME
 	// function the CLI/MCP dispatch-time queue-position advisory calls
-	// (via hook.DispatchBoundMessage below) — a store construction
-	// failure here is reported the same way a read failure always was
-	// in this function, non-blocking.
+	// (via hook.DispatchBoundMessage below). A read failure is
+	// non-blocking; a store that cannot be located is returned, and the
+	// spawn is denied with it: classifying against the global store in
+	// its place could bind the spawn to the wrong mission.
 	store, err := tierBMissionStore()
 	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"ethos: pre-tool-use: dispatch-pending: resolving mission store: %v; falling through\n", err)
-		return ""
+		return "", fmt.Errorf("dispatch-pending: resolving mission store: %w", err)
 	}
 	classified, warnings, err := mission.ClassifyPendingDispatches(store, globalRoot, sessionID, agentType)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: dispatch-pending: reading for %q: %v; falling through\n",
 			sessionID, err)
-		return ""
+		return "", nil
 	}
 	for _, warning := range warnings {
 		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: dispatch-pending: %s\n", warning)
@@ -359,12 +370,12 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) string {
 		}
 	}
 	if len(candidates) == 0 {
-		return ""
+		return "", nil
 	}
 	if len(candidates) > 1 {
 		warnDispatchPendingAmbiguity(agentType, candidates)
 	}
-	return candidates[0]
+	return candidates[0], nil
 }
 
 // warnDispatchPendingAmbiguity names a genuine multi-match ambiguity in
@@ -786,7 +797,10 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	success := false
 	defer func() { releaseID(success) }()
 
-	repoRoot := tierBStoreRoot()
+	repoRoot, err := tierBStoreRoot()
+	if err != nil {
+		return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: %v", err))
+	}
 	dispatchTierBConfirmedOpen()
 	releaseMission, err := mission.AcquireMissionLock(repoRoot, missionID)
 	if err != nil {
@@ -1023,19 +1037,22 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 // the CLI and the dispatch hook disagree and delegation is refused with
 // "resolving MISSION_ID not found" — the core ethos-yofr symptom (CR#1).
 //
-// It returns exactly what StoreRepoRoot returns, INCLUDING "" — it must NOT
-// fall back to the working directory. StoreRepoRoot returns ""
-// in two cases: no git repo at all, and (crucially) a set-but-invalid
-// ETHOS_REPO_ROOT, where F1's repoRootOverride deliberately returns "" so
-// the caller does not resolve some other tree. Substituting the raw cwd here
-// would, inside a worktree under a bad override, point the store at the
-// worktree's own tree — reintroducing ethos-yofr behind a bad override
-// (code-review round 2). On "", NewStoreWithRoots falls back to the global
-// tree (a warned, known state) for reads, and the write path
-// (AcquireMissionLock, WriteDelegationSkeleton) fails loud on the empty
-// repoRoot — never a silent worktree-local write.
-func tierBStoreRoot() string {
-	return resolve.StoreRepoRoot()
+// It resolves through resolve.LocateStoreRoot. Outside a repository it
+// returns ("", nil): the global tree is the store (a warned, known state),
+// and the write path (AcquireMissionLock, WriteDelegationSkeleton) fails
+// loud on the empty repoRoot. Any other failure — a refused
+// ETHOS_REPO_ROOT, a .git git refuses, a linked worktree whose store
+// cannot be named — is returned as the error, and every caller denies the
+// tool call with it: a contract read from the global store in its place
+// would bind the spawn to a mission the repository never held, and the
+// working directory is never substituted (ethos-yofr behind a bad
+// override, code-review round 2).
+func tierBStoreRoot() (string, error) {
+	root, err := resolve.LocateStoreRoot()
+	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		return "", fmt.Errorf("locating the mission store: %w", err)
+	}
+	return root, nil
 }
 
 // tierBRepoRoot resolves the current work tree root for the per-checkout
@@ -1103,13 +1120,16 @@ func tierBMissionStore() (*mission.Store, error) {
 	// means a future audit access here cannot silently route to the store tree
 	// (PR #370 sweep).
 	//
-	// The checkout root FOLLOWS the store root to "" when the store refuses:
-	// tierBStoreRoot is StoreRepoRoot (fail-closed on a bad ETHOS_REPO_ROOT,
-	// which must hold a store), but tierBRepoRoot accepts an override
-	// directory with no store, so it would re-accept the refused path. Pairing them unconditionally would let the audit zone
+	// The checkout root FOLLOWS the store root to "" outside a repository:
+	// tierBStoreRoot refuses a bad ETHOS_REPO_ROOT (which must hold a
+	// store), but tierBRepoRoot accepts an override directory with no
+	// store, so it would re-accept the refused path. Pairing them unconditionally would let the audit zone
 	// resurrect a path the store already refused (PR #370 override-resurrection
 	// class, same guard as missionCheckoutRoot + runUI).
-	storeRoot := tierBStoreRoot()
+	storeRoot, err := tierBStoreRoot()
+	if err != nil {
+		return nil, err
+	}
 	checkoutRoot := ""
 	if storeRoot != "" {
 		root, err := tierBRepoRoot()
