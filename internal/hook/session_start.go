@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
-	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
@@ -198,7 +197,7 @@ func purgeStale(ss *session.Store) {
 // with no origin still records Repo "".
 func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identity.Identity, humanErr error, agentPersona string) string {
 	if sessionID == "" {
-		return ""
+		return "the SessionStart payload carried no session_id, so no session roster was written"
 	}
 	var problems []string
 
@@ -221,8 +220,12 @@ func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identi
 	root := session.Participant{AgentID: userID, Persona: userPersona}
 	primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
 
-	repo, repoErr := ResolveRepo()
 	checkout, coErr := ResolveCheckout()
+	var repo string
+	var repoErr error
+	if coErr == nil {
+		repo, repoErr = ResolveRepo(checkout)
+	}
 	host := ResolveHost()
 
 	var create func() error
@@ -244,8 +247,10 @@ func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identi
 	}
 	if err := create(); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", err)
+		problems = append(problems, fmt.Sprintf("the session roster could not be written (%v)", err))
 	} else if err := ss.WriteCurrentSession(claudePID, sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to write current session: %v\n", err)
+		problems = append(problems, fmt.Sprintf("the session pointer could not be written (%v)", err))
 	}
 	return strings.Join(problems, "; ")
 }
@@ -353,24 +358,16 @@ func emitAgentContext(agentID *identity.Identity, agentPersona string, store ide
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
-// ResolveRepo extracts org/name from the git remote of the working
-// directory — the same value the SessionStart hook records for a roster.
+// ResolveRepo is the org/name identity of the checkout's origin remote — the
+// same value the SessionStart hook records for a roster, read with
+// `git -C <checkout>` as audit.RepoIdentity does, so a session started from a
+// directory outside the repository still records its repository's origin.
 // Exported so `ethos session start` resolves repo identically. It returns
-// ("", nil) for a checkout with no origin (or no repository): the roster
-// records Repo "" for that. Any other failure — a timeout, dubious ownership,
-// git not installed — is the error; the caller records repo_unresolved, never
-// "".
-func ResolveRepo() (string, error) {
-	out, absent, err := gitenv.Read(gitenv.Spec{
-		Git: "git", Args: []string{"remote", "get-url", "origin"}, Env: gitenv.Parsed(),
-	}, gitenv.AbsentNoRemote|gitenv.AbsentNotRepo)
-	if err != nil {
-		return "", fmt.Errorf("resolving the repository from the git remote: %w", err)
-	}
-	if absent {
-		return "", nil
-	}
-	return audit.ParseGitRemote(string(out)), nil
+// ("", nil) for a checkout with no origin, or no checkout; any other failure —
+// a timeout, dubious ownership, git not installed — is the error, and the
+// caller records repo_unresolved, never "".
+func ResolveRepo(checkout string) (string, error) {
+	return audit.RepoIdentity(checkout)
 }
 
 // ResolveCheckout returns the work-tree root whose machine-local live audit

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestResolveRepoClassifiesFailures(t *testing.T) {
 	t.Run("timeout is an error", func(t *testing.T) {
 		testhelpers.HangingGit(t)
 		t.Chdir(t.TempDir())
-		got, err := ResolveRepo()
+		got, err := ResolveRepo(".")
 		require.ErrorIs(t, err, gitenv.ErrTimeout)
 		assert.Empty(t, got)
 	})
@@ -30,7 +31,7 @@ func TestResolveRepoClassifiesFailures(t *testing.T) {
 		cmd := testhelpers.GitCommand("-C", dir, "init", "-q")
 		require.NoError(t, cmd.Run())
 		t.Chdir(dir)
-		got, err := ResolveRepo()
+		got, err := ResolveRepo(".")
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
@@ -131,9 +132,49 @@ func TestResolveRepoBrokenGitDirIsAnError(t *testing.T) {
 	for name, dir := range testhelpers.BrokenGitDirs(t) {
 		t.Run(name, func(t *testing.T) {
 			t.Chdir(dir)
-			got, err := ResolveRepo()
+			got, err := ResolveRepo(".")
 			require.Error(t, err)
 			assert.Empty(t, got)
 		})
 	}
+}
+
+// The repository identity is read with `git -C <checkout>` once the checkout
+// is known, as audit.RepoIdentity does: a session started from a directory
+// outside any repository, with ETHOS_REPO_ROOT naming one, records that
+// repository's origin.
+func TestCreateSessionRosterReadsTheOriginOfTheCheckout(t *testing.T) {
+	repo := t.TempDir()
+	require.NoError(t, testhelpers.GitCommand("-C", repo, "init", "-q").Run())
+	require.NoError(t, testhelpers.GitCommand("-C", repo, "remote", "add", "origin", "git@github.com:punt-labs/probe.git").Run())
+	t.Setenv("ETHOS_REPO_ROOT", repo)
+	t.Chdir(t.TempDir()) // outside any repository (the temp root is the git ceiling)
+
+	ss := session.NewStore(t.TempDir())
+	notice := createSessionRoster(ss, "s-origin", &identity.Identity{Handle: "mal"}, nil, "claude")
+	r, err := ss.Load("s-origin")
+	require.NoError(t, err)
+	assert.Equal(t, "punt-labs/probe", r.Repo)
+	assert.Empty(t, r.RepoUnresolved)
+	assert.Empty(t, notice)
+}
+
+// A payload with no session_id writes no roster, and the session is told so;
+// a roster that cannot be written is told too.
+func TestCreateSessionRosterReportsWhatItCouldNotDo(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
+	t.Run("no session_id", func(t *testing.T) {
+		notice := createSessionRoster(session.NewStore(t.TempDir()), "", nil, nil, "claude")
+		assert.Contains(t, notice, "session_id")
+	})
+	t.Run("roster write fails", func(t *testing.T) {
+		dir := t.TempDir()
+		// A file where the sessions directory goes: MkdirAll fails.
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "sessions"), []byte("x"), 0o644))
+		var notice string
+		testhelpers.CaptureStderr(t, func() {
+			notice = createSessionRoster(session.NewStore(dir), "s-nowrite", nil, nil, "claude")
+		})
+		assert.Contains(t, notice, "roster could not be written")
+	})
 }

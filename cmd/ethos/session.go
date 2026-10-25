@@ -524,8 +524,12 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    exactly as the hook resolves them — R6 convergence).
 	root := session.Participant{AgentID: human, Persona: human}
 	primary := session.Participant{AgentID: primaryID, Persona: primaryPersona, Parent: human}
-	repo, repoErr := hook.ResolveRepo()
 	checkout, coErr := hook.ResolveCheckout()
+	var repo string
+	var repoErr error
+	if coErr == nil {
+		repo, repoErr = hook.ResolveRepo(checkout)
+	}
 	if repoErr != nil || coErr != nil {
 		// The command fails loud and writes no roster: a repo identity that
 		// could not be resolved is never recorded as a Repo "" it did not
