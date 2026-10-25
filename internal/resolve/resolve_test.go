@@ -1989,14 +1989,16 @@ func TestUnreadableGitConfigIsAnErrorNotUnset(t *testing.T) {
 
 // A trace2 target in the user's config (normal and perf, brief or not) writes
 // to every git's stderr. The environment switches it off for every git ethos
-// runs, so an unset user.name is unset: GitConfig answers "" and Resolve falls
+// runs (these cases pin that; they pass at every commit since 77cebf7), so an unset user.name is unset: GitConfig answers "" and Resolve falls
 // through to the next step instead of reporting an error.
 func TestTrace2FromConfigDoesNotMakeUnsetAnError(t *testing.T) {
 	for name, cfg := range map[string]string{
 		"normal": "[trace2]\n\tnormalTarget = true\n\tnormalBrief = true\n",
 		"perf":   "[trace2]\n\tperfTarget = true\n\tperfBrief = true\n",
-		// The event target alone is JSON the old reader recognised; with a brief
-		// normal target beside it (lines with no timestamp) it was not.
+		// The event target beside a brief normal target (lines with no
+		// timestamp). It fails only on a reader that recognises trace formats
+		// instead of switching trace2 off by the environment (before 77cebf7);
+		// at later commits it pins behaviour that already holds.
 		"event and brief normal": "[trace2]\n\teventTarget = true\n\tnormalTarget = true\n\tnormalBrief = true\n",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2039,8 +2041,10 @@ func TestNeutralReadIsNotRefusedByADanglingGitAboveTmpdir(t *testing.T) {
 	assert.Equal(t, "fine", v)
 }
 
-// `git config --file` does not skip an unreadable file silently: configBare
-// reports it (exit 128), so it needs no user-config readability check.
+// `git config --file` does not skip an unreadable file silently: it exits 1 with
+// "warning: unable to access" on stderr, and configBare rejects that because the
+// stderr is not clean, so it needs no user-config readability check. This pins
+// behaviour that already held; it was written to document it, not to drive it.
 func TestConfigBareUnreadableRepoConfigIsAnError(t *testing.T) {
 	skipIfRoot(t)
 	git, err := exec.LookPath("git")
