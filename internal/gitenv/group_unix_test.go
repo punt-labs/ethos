@@ -46,16 +46,58 @@ func TestTimeoutGivesTheGroupItsGrace(t *testing.T) {
 		2*time.Second, 50*time.Millisecond, "the filter finished its cleanup before it was killed")
 }
 
-// A Network git has no credential prompt to wait on.
+// A Network git cannot prompt, and keeps the user's ssh choice.
 func TestNetworkGitCannotPrompt(t *testing.T) {
-	git := fakeGitScript(t, "echo \"$GIT_TERMINAL_PROMPT|$GIT_SSH_COMMAND\"\n")
-	t.Setenv("GIT_SSH_COMMAND", "ssh -i /some/key")
-	out, err := Run(Spec{Git: git, Network: true})
+	git := fakeGitScript(t, `case "$1" in config) [ -n "$FAKE_SSHCMD" ] && { echo "$FAKE_SSHCMD"; exit 0; }; exit 1;; esac
+echo "$@|$GIT_TERMINAL_PROMPT|$GIT_ASKPASS|$SSH_ASKPASS|$SSH_ASKPASS_REQUIRE|$GIT_SSH_COMMAND"
+`)
+	t.Setenv("GIT_ASKPASS", "/some/askpass")
+	t.Setenv("SSH_ASKPASS", "/some/ssh-askpass")
+	run := func() string {
+		out, err := Run(Spec{Git: git, Network: true, Args: []string{"clone", "u"}})
+		require.NoError(t, err)
+		return strings.TrimSpace(string(out))
+	}
+	const prefix = "-c core.askPass= -c credential.interactive=never clone u|0|||never|"
+
+	assert.Equal(t, prefix+"ssh -o BatchMode=yes", run(), "no ssh chosen: BatchMode, and no askpass program runs")
+
+	t.Setenv("GIT_SSH_COMMAND", "ssh -i /my/key")
+	assert.Equal(t, prefix+"ssh -i /my/key", run(), "the user's GIT_SSH_COMMAND is kept")
+
+	t.Setenv("GIT_SSH_COMMAND", "")
+	require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
+	t.Setenv("GIT_SSH", "/my/ssh")
+	assert.Equal(t, prefix, run(), "GIT_SSH is the user's choice: no GIT_SSH_COMMAND is added")
+
+	require.NoError(t, os.Unsetenv("GIT_SSH"))
+	t.Setenv("FAKE_SSHCMD", "ssh -F /my/config")
+	assert.Equal(t, prefix, run(), "core.sshCommand is the user's choice: no GIT_SSH_COMMAND is added")
+
+	out, err := Run(Spec{Git: git, Args: []string{"clone", "u"}})
 	require.NoError(t, err)
-	assert.Equal(t, "0|ssh -o BatchMode=yes\n", string(out))
-	out, err = Run(Spec{Git: git})
-	require.NoError(t, err)
-	assert.Equal(t, "|ssh -i /some/key\n", string(out), "an ordinary git keeps its own environment")
+	assert.Equal(t, "clone u||/some/askpass|/some/ssh-askpass||", strings.TrimSpace(string(out)), "an ordinary git is untouched")
+}
+
+// At the deadline a Network git's descendants (the ssh it started) are dead
+// too, whether or not they ignore SIGTERM.
+func TestNetworkGitTimeoutKillsItsDescendants(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "ssh.pid")
+	git := fakeGitScript(t, `case "$1" in config) exit 1;; esac
+trap '' TERM
+sh -c "trap '' TERM; echo \$\$ > '`+pidFile+`'; exec sleep 60" &
+while [ ! -s '`+pidFile+`' ]; do sleep 0.05; done
+wait
+`)
+	_, err := Run(Spec{Git: git, Network: true, Args: []string{"clone", "u"}, Limit: 500 * time.Millisecond})
+	require.ErrorIs(t, err, ErrTimeout)
+	data, rerr := os.ReadFile(pidFile)
+	require.NoError(t, rerr)
+	pid, aerr := strconv.Atoi(strings.TrimSpace(string(data)))
+	require.NoError(t, aerr)
+	require.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 3*time.Second, 50*time.Millisecond,
+		"the ssh (pid %d) outlived the deadline", pid)
 }
 
 // TestHelperRunGit is the child of the Ctrl-C tests, not a test: it runs one
@@ -75,7 +117,7 @@ func runHelperAndInterrupt(t *testing.T, network bool) int {
 	t.Helper()
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "git.pid")
-	git := fakeGitScript(t, "echo $$ > '"+pidFile+"'\nexec sleep 60\n")
+	git := fakeGitScript(t, "case \"$1\" in config) exit 1;; esac\necho $$ > '"+pidFile+"'\nexec sleep 60\n")
 	c := exec.Command(os.Args[0], "-test.run=^TestHelperRunGit$")
 	c.Env = append(os.Environ(), "ETHOS_HELPER_GIT="+git)
 	if network {
@@ -103,9 +145,9 @@ func runHelperAndInterrupt(t *testing.T, network bool) int {
 	return pid
 }
 
-// Ctrl-C reaches a Network git, so no clone is left running; an ordinary git
-// is in its own group and is not interrupted by it (it is bounded by its
-// timeout instead).
+// Ctrl-C does not leave a Network git running: ethos forwards the signal to its
+// group. An ordinary git has no forwarder, and is in its own group, so it is
+// not reached (it is bounded by its timeout instead).
 func TestCtrlCDoesNotLeaveANetworkGitRunning(t *testing.T) {
 	pid := runHelperAndInterrupt(t, true)
 	require.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 3*time.Second, 50*time.Millisecond,

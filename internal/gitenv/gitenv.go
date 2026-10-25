@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -39,6 +40,10 @@ func SetTimeout(d time.Duration) time.Duration {
 // ErrTimeout is wrapped by the error Output, OutputEnv and Run return when
 // git did not answer within its bound.
 var ErrTimeout = errors.New("git did not answer")
+
+// ErrInterrupted is wrapped by the error Run returns for a Network git stopped
+// because ethos got SIGINT or SIGTERM.
+var ErrInterrupted = errors.New("git interrupted")
 
 // Output runs git with args — as `git -C dir args...` when dir is not "" —
 // in the Parsed environment, and returns its stdout. A git that exits non-zero
@@ -80,19 +85,56 @@ type Spec struct {
 	Limit  time.Duration // 0: the shared deadline (Timeout, or SetTimeout's)
 
 	// Network marks git that talks to a remote or may ask the user something
-	// (clone, submodule add). It runs in ethos's own process group, so a
-	// Ctrl-C at the terminal reaches it and no clone is left running, and with
-	// GIT_TERMINAL_PROMPT=0 and ssh in BatchMode, so a credential prompt fails
-	// at once instead of waiting on a terminal nobody is watching.
+	// (clone, submodule add). It cannot prompt: GIT_TERMINAL_PROMPT=0, no
+	// askpass program, credential.interactive=never, and ssh in BatchMode unless
+	// the user chose an ssh (GIT_SSH_COMMAND, GIT_SSH or core.sshCommand), whose
+	// choice is kept. A credential prompt fails at once instead of waiting on a
+	// terminal nobody is watching. It runs in its own process group like every
+	// git, so a timeout reaches its descendants (ssh, helpers), and ethos
+	// forwards SIGINT and SIGTERM to that group while it runs, so a Ctrl-C does
+	// not leave a clone running.
 	Network bool
+}
+
+// networkArgs are prepended to a Network git's arguments.
+var networkArgs = []string{"-c", "core.askPass=", "-c", "credential.interactive=never"}
+
+// networkEnv returns what Network adds to git's environment for the git run by
+// s, given the environment it will have: no prompting of any kind, and an ssh in
+// BatchMode only when the user has not chosen one.
+func networkEnv(s Spec, env []string) []string {
+	add := []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "SSH_ASKPASS_REQUIRE=never"}
+	if !sshChosen(s, env) {
+		add = append(add, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+	}
+	return add
+}
+
+// sshChosen reports whether GIT_SSH_COMMAND, GIT_SSH or core.sshCommand is set
+// for the git run by s. A config that cannot be read counts as chosen: the
+// user's ssh is never overridden on a guess.
+func sshChosen(s Spec, env []string) bool {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_SSH_COMMAND=") || strings.HasPrefix(kv, "GIT_SSH=") {
+			return true
+		}
+	}
+	probe := Spec{Git: s.Git, Dir: s.Dir, Env: env, Args: []string{"config", "core.sshCommand"}}
+	if s.Dir == "" {
+		dir, nenv, cleanup, err := Neutral()
+		if err != nil {
+			return true
+		}
+		defer cleanup()
+		probe.Dir, probe.Env = dir, nenv
+	}
+	_, absent, err := Read(probe, AbsentUnset)
+	return err != nil || !absent
 }
 
 // groupGrace is how long the rest of a TERMed process group has to finish
 // before it is killed.
 const groupGrace = time.Second
-
-// networkEnv is what Network adds to git's environment.
-var networkEnv = []string{"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes"}
 
 // Run executes s under its bound. It returns stdout when s.Stdout is nil. A
 // git that exits non-zero returns its *exec.ExitError; one still running at
@@ -110,24 +152,46 @@ func Run(s Spec) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
+	// A Network git is stopped, with its group, when ethos is interrupted:
+	// ethos catches SIGINT and SIGTERM while it runs, cancels the command, and
+	// returns ErrInterrupted. It runs in its own process group, which the
+	// terminal's Ctrl-C does not reach, so nothing else would.
+	var interrupted atomic.Bool
+	if s.Network {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		done := make(chan struct{})
+		defer func() { signal.Stop(sig); close(done) }()
+		go func() {
+			select {
+			case <-sig:
+				interrupted.Store(true)
+				cancel()
+			case <-done:
+			}
+		}()
+	}
 	cmd := exec.CommandContext(ctx, s.Git, s.Args...)
 	cmd.Dir = s.Dir
 	cmd.Env = stripTrace(s.Env)
+	args := s.Args
 	if s.Network {
-		cmd.Env = append(cmd.Env, networkEnv...)
+		base := cmd.Env
+		if base == nil {
+			base = os.Environ()
+		}
+		cmd.Env = append(append([]string(nil), base...), networkEnv(s, base)...)
+		args = append(append([]string(nil), networkArgs...), s.Args...)
 	}
+	cmd.Args = append([]string{s.Git}, args...)
 	cmd.Stdin = s.Stdin
 	// On the deadline git and its process group get SIGTERM, so git can remove
 	// its index.lock; after the WaitDelay grace Go kills git, and killGroup
 	// what is left of the group (a filter that ignored SIGTERM). A child
-	// holding stdout does not stall the kill either. A Network git stays in
-	// ethos's group (see Spec.Network) and only git itself is signalled. On
-	// Windows there are no groups and no SIGTERM: the kill is immediate, and
-	// only git dies.
-	group := !s.Network
-	if group {
-		inOwnGroup(cmd)
-	}
+	// holding stdout does not stall the kill either. On Windows there are no
+	// groups and no SIGTERM: the kill is immediate, and only git dies.
+	group := true
+	inOwnGroup(cmd)
 	cmd.Cancel = func() error { return terminate(cmd, group) }
 	cmd.WaitDelay = time.Second
 	var out []byte
@@ -144,6 +208,10 @@ func Run(s Spec) ([]byte, error) {
 			endGroup(cmd, groupGrace)
 		}
 		return nil, timeoutError(s.Git, s.Args, s.Dir, limit)
+	}
+	if interrupted.Load() {
+		endGroup(cmd, groupGrace)
+		return nil, fmt.Errorf("%w: %s %s", ErrInterrupted, s.Git, strings.Join(s.Args, " "))
 	}
 	return out, err
 }
