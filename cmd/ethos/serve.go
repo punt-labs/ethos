@@ -32,7 +32,7 @@ func runServeImpl() error {
 	}
 	loc := locateServeStore()
 	if loc.Err != nil {
-		fmt.Fprintf(os.Stderr, "ethos serve: %v; write tools will refuse until it is repaired\n", loc.Err)
+		fmt.Fprintf(os.Stderr, "ethos serve: %v; guarded tools refuse writes (and, for identity and a bundle or policy failure, reads) until it is repaired\n", loc.Err)
 	}
 	h := buildServeHandler(home, loc)
 	// The store is located again on every tool call, and the stores rebuilt
@@ -70,8 +70,10 @@ func locateServeStore() mcp.StoreLocation {
 
 // buildServeHandler builds the MCP handler with every store built from loc,
 // the one location it was triggered with: nothing here locates again. A
-// non-nil loc.Err makes the guarded tools refuse writes and note that reads
-// come from the global store only; ethos serve is a command that handles the
+// non-nil loc.Err makes the guarded tools refuse writes; their reads carry a
+// note that they come from the global store only, except identity (every method
+// refuses) and a bundle or policy failure (every guarded read and write
+// refuses). Doctor, session and adr are unguarded; ethos serve is a command that handles the
 // error itself, so its constructors take the global stores for it.
 func buildServeHandler(home string, loc mcp.StoreLocation) *mcp.Handler {
 	storeErr := loc.Err

@@ -137,7 +137,7 @@ func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 // "not repo-only": the caller gets false only after the cause was printed.
 func unusableRepoOnly(err error) bool {
 	currentRoots().configFatal(err)
-	fmt.Fprintf(os.Stderr, "ethos: %v; the repository layer is used without the policy\n", err)
+	fmt.Fprintf(os.Stderr, "ethos: %v; this command does not apply the policy\n", err)
 	return false
 }
 

@@ -36,7 +36,7 @@ func resolveBundleRoot() string {
 	root, _, err := resolveBundle()
 	if err != nil {
 		currentRoots().configFatal(fmt.Errorf("bundle resolution failed: %w", err))
-		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v; the repository layer is used without the bundle\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v; this command skips the bundle layer\n", err)
 		return ""
 	}
 	return root
