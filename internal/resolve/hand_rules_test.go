@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,14 +57,13 @@ func TestStartInsideGitDirRefused(t *testing.T) {
 // everything else, so the hand rules see a mount point at boundary.
 func fakeDevices(t *testing.T, boundary string) {
 	t.Helper()
-	orig := deviceOf
-	deviceOf = func(p string) (uint64, bool) {
+	orig := gitenv.SetDeviceOf(func(p string) (uint64, bool) {
 		if p == boundary || strings.HasPrefix(p, boundary+string(filepath.Separator)) {
 			return 2, true
 		}
 		return 1, true
-	}
-	t.Cleanup(func() { deviceOf = orig })
+	})
+	t.Cleanup(func() { gitenv.SetDeviceOf(orig) })
 }
 
 // Without git, the hand rules stop at a filesystem boundary as git does,

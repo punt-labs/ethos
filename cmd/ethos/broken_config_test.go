@@ -228,3 +228,29 @@ func TestWarnIfGlobalFallbackNamesTheLocatedError(t *testing.T) {
 	out = testhelpers.CaptureStderr(t, func() { warnIfGlobalFallback("") })
 	assert.Contains(t, out, "no git repository found")
 }
+
+// The MCP team for_repo call from r/sub, where r/.git is a symlink to nothing:
+// the error says so; the origin of some enclosing repository is not read.
+func TestServeTeamForRepoUnderADanglingAncestorGit(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	t.Setenv("HOME", se.home)
+	base := t.TempDir()
+	r := filepath.Join(base, "r")
+	sub := filepath.Join(r, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(r, "nowhere"), filepath.Join(r, ".git")))
+	t.Setenv("GIT_CEILING_DIRECTORIES", base)
+	t.Chdir(sub)
+
+	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
+	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	var req mcp.CallToolRequest
+	req.Params.Name = "team"
+	req.Params.Arguments = map[string]any{"method": "for_repo"}
+	res, err := srv.GetTool("team").Handler(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	text := res.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, text, filepath.Join(r, ".git"))
+	assert.Contains(t, text, "symlink to nothing")
+}

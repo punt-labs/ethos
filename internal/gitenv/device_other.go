@@ -1,6 +1,6 @@
 //go:build !unix
 
-package resolve
+package gitenv
 
 // statDevice reports no device where there is no st_dev: the hand rules then
 // never see a filesystem boundary.

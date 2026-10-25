@@ -1,6 +1,6 @@
 //go:build unix
 
-package resolve
+package gitenv
 
 import "syscall"
 

@@ -306,3 +306,25 @@ func TestRunNilEnvStripsTrace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "[][][]\n", string(out))
 }
+
+// A .git symlink to nothing in an ancestor is found from a subdirectory, up to
+// the repository git would use; below a real repository it does not matter.
+func TestDanglingDotGitInAnAncestor(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", base) // stay inside the temp tree
+	r := filepath.Join(base, "r")
+	sub := filepath.Join(r, "sub", "deeper")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	if err := os.Symlink(filepath.Join(r, "nowhere"), filepath.Join(r, ".git")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	err := DanglingDotGit(sub)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), filepath.Join(r, ".git"))
+
+	// A real repository between the subdirectory and the link ends the walk.
+	inner := filepath.Join(r, "sub")
+	require.NoError(t, os.MkdirAll(filepath.Join(inner, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(inner, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+	assert.NoError(t, DanglingDotGit(sub))
+}

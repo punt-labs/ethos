@@ -399,11 +399,15 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(s.Args, " "), err, stderr)
 }
 
-// DanglingDotGit reports a .git in dir that is a symlink to nothing (or a
-// loop). git walks past it to whatever repository encloses dir, or says "not a
-// git repository"; neither is the truth, so a read in dir is refused. An empty
-// dir is the working directory. It is nil when there is no .git or it can be
-// followed; anything else is git's to judge.
+// DanglingDotGit reports a .git that is a symlink to nothing (or a loop) in dir
+// or in any directory git would examine above it: Walk's directories, nearest
+// first, up to the GIT_CEILING_DIRECTORIES or filesystem boundary, as the hand
+// rules walk. git skips such a link and answers for whatever repository
+// encloses it, or says "not a git repository"; neither is the truth, so a read
+// there is refused. The walk ends at the first .git that is a gitfile or a
+// directory holding HEAD: that is the repository git uses. An empty dir is the
+// working directory. It is nil when there is none; anything else is git's to
+// judge.
 func DanglingDotGit(dir string) error {
 	if dir == "" {
 		wd, err := os.Getwd()
@@ -412,13 +416,27 @@ func DanglingDotGit(dir string) error {
 		}
 		dir = wd
 	}
-	dot := filepath.Join(dir, ".git")
-	li, err := os.Lstat(dot)
-	if err != nil || li.Mode()&os.ModeSymlink == 0 {
-		return nil
-	}
-	if _, err := os.Stat(dot); errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
-		return fmt.Errorf("%s is a symlink to nothing: git would skip it and answer for an enclosing repository, or none; remove or repair it", dot)
+	for _, d := range Walk(dir) {
+		dot := filepath.Join(d, ".git")
+		li, err := os.Lstat(dot)
+		if err != nil {
+			continue
+		}
+		if li.Mode()&os.ModeSymlink != 0 {
+			if _, err := os.Stat(dot); errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
+				return fmt.Errorf("%s is a symlink to nothing: git would skip it and answer for an enclosing repository, or none; remove or repair it", dot)
+			}
+		}
+		if info, err := os.Stat(dot); err == nil {
+			if info.Mode().IsRegular() {
+				return nil // a gitfile: the repository
+			}
+			if info.IsDir() {
+				if h, err := os.Stat(filepath.Join(dot, "HEAD")); err == nil && h.Mode().IsRegular() {
+					return nil
+				}
+			}
+		}
 	}
 	return nil
 }
