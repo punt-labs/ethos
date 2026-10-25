@@ -143,7 +143,7 @@ func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 // repo-only exists to forbid; the missing store then trips the
 // no-repo-layer error above.
 func resolutionConfigRoot() string {
-	if root := resolve.StoreRepoRoot(); root != "" {
+	if root, err := resolve.LocateStoreRoot(); err == nil {
 		return root
 	}
 	root, _ := resolve.RepoRootOverride()

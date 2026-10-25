@@ -95,7 +95,7 @@ func TestCLI_RefusedRepoRootOverrideCannotFallBackToGlobal(t *testing.T) {
 	stdout, stderr, exit := runCLI(t, se, "list")
 
 	assert.Equal(t, 1, exit, "must not succeed by falling back to global")
-	assert.Contains(t, stderr, "no identity store")
+	assert.Contains(t, stderr, "refusing to use")
 	assert.NotContains(t, stdout, "test-agent")
 }
 

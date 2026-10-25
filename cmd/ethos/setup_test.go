@@ -563,7 +563,7 @@ func TestSetup_UnexaminableGitFails(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(home) })
 	dot := filepath.Join(noRepo, ".git")
-	if err := os.Symlink(filepath.Join(noRepo, "absent"), dot); err != nil {
+	if err := os.Symlink(dot, dot); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
 
@@ -589,6 +589,28 @@ func TestSetup_UnexaminableGitFails(t *testing.T) {
 	_, _, runErr := execHandler(t, "setup", "--file", cfgPath)
 	require.Error(t, runErr)
 	assert.Contains(t, runErr.Error(), dot)
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "bad-dot.yaml"),
+		"a refusal must precede every write")
+}
+
+// An override naming a directory with no .punt-labs/ethos store is refused by
+// the store lookup; setup must say so before it saves any identity.
+func TestSetup_RefusedStoreWritesNoIdentity(t *testing.T) {
+	home, repo := setupTestEnv(t)
+	bare := t.TempDir()
+	t.Setenv("ETHOS_REPO_ROOT", bare)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `
+name: Refused Store
+handle: refused-store
+email: refused-store@example.com
+`)
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "refused-store.yaml"))
 }
 
 // setupTestEnvNoSeed is like setupTestEnv but does not run seed, so the

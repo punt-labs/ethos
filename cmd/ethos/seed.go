@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,8 +41,12 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// agents (DES-070) are Claude Code subagent definitions that belong to
 	// whichever repo `ethos seed` runs in. Outside a repo there is nowhere to
 	// put them, so the category is skipped rather than guessed.
+	repoRoot, rootErr := resolve.LocateRepoRoot()
+	if rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
+		return fmt.Errorf("ethos seed: locating the repository: %w", rootErr)
+	}
 	var agentsRoot, activeBundle, activeBundleDir string
-	if repoRoot := resolve.FindRepoRoot(); repoRoot != "" {
+	if repoRoot != "" {
 		agentsRoot = filepath.Join(repoRoot, ".claude", "agents")
 		// activeBundle/activeBundleDir drive DES-073's bundle-scoped skill
 		// deploy. bundle.ResolveActive is the SAME resolution the

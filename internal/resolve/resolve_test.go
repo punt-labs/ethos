@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1662,23 +1663,12 @@ func TestLocateRepoRoot(t *testing.T) {
 	})
 
 	t.Run("a .git that cannot be examined is an error, not no repo", func(t *testing.T) {
-		for name, mk := range map[string]func(dot string) error{
-			"dangling symlink": func(dot string) error { return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot) },
-			"symlink loop":     func(dot string) error { return os.Symlink(dot, dot) },
-		} {
-			t.Run(name, func(t *testing.T) {
-				root := t.TempDir()
-				if err := mk(filepath.Join(root, ".git")); err != nil {
-					t.Skipf("symlink: %v", err)
-				}
-				t.Chdir(root)
-				got, err := LocateRepoRoot()
-				assert.Empty(t, got)
-				require.Error(t, err)
-				assert.NotErrorIs(t, err, ErrNotInRepo)
-				assert.Contains(t, err.Error(), filepath.Join(root, ".git"))
-			})
-		}
+		inner := unexaminableGit(t, loopGit)
+		got, err := LocateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepo)
+		assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
 	})
 
 	t.Run("unreadable working directory", func(t *testing.T) {
@@ -1713,37 +1703,96 @@ func unexaminableGit(t *testing.T, mk func(dot string) error) string {
 	return inner
 }
 
-var unexaminableGitCases = map[string]func(dot string) error{
+func loopGit(dot string) error { return os.Symlink(dot, dot) }
+
+// invalidGitCases are .git entries git itself skips: it keeps walking up.
+var invalidGitCases = map[string]func(dot string) error{
 	"dangling symlink": func(dot string) error { return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot) },
-	"symlink loop":     func(dot string) error { return os.Symlink(dot, dot) },
+	"empty file":       func(dot string) error { return os.WriteFile(dot, nil, 0o644) },
+	"garbage file":     func(dot string) error { return os.WriteFile(dot, []byte("not a gitfile\n"), 0o644) },
+	"no gitdir prefix": func(dot string) error { return os.WriteFile(dot, []byte("/somewhere/else\n"), 0o644) },
 }
 
-// A .git that cannot be examined stops StoreRepoRoot: walking past it would
-// resolve the enclosing repository and write into the wrong store.
+// A .git that git itself cannot read stops StoreRepoRoot: walking past it
+// would resolve the enclosing repository and write into the wrong store.
 func TestStoreRepoRootStopsAtUnexaminableGit(t *testing.T) {
-	for name, mk := range unexaminableGitCases {
+	inner := unexaminableGit(t, loopGit)
+	var got string
+	out := captureStderr(t, func() { got = StoreRepoRoot() })
+	assert.Empty(t, got)
+	assert.Contains(t, out, filepath.Join(inner, ".git"))
+}
+
+// A .git that is not a git dir or a gitdir file is skipped, as git does: the
+// walk continues to the enclosing repository, with one warning.
+func TestWalkSkipsInvalidGit(t *testing.T) {
+	for name, mk := range invalidGitCases {
 		t.Run(name, func(t *testing.T) {
 			inner := unexaminableGit(t, mk)
+			outer := filepath.Dir(inner)
 			var got string
-			out := captureStderr(t, func() { got = StoreRepoRoot() })
-			assert.Empty(t, got)
+			out := captureStderr(t, func() { got = FindRepoRoot() })
+			assert.Equal(t, realpath(t, outer), realpath(t, got))
 			assert.Contains(t, out, filepath.Join(inner, ".git"))
+			assert.Equal(t, 1, strings.Count(out, "skipping"), "one warning")
+
+			got, err := LocateRepoRoot()
+			require.NoError(t, err)
+			assert.Equal(t, realpath(t, outer), realpath(t, got))
 		})
 	}
+}
+
+func TestLocateStoreRoot(t *testing.T) {
+	t.Run("invalid inner .git resolves the outer store", func(t *testing.T) {
+		for name, mk := range invalidGitCases {
+			t.Run(name, func(t *testing.T) {
+				inner := unexaminableGit(t, mk)
+				outer := filepath.Dir(inner)
+				require.NoError(t, os.MkdirAll(filepath.Join(outer, ".punt-labs", "ethos"), 0o755))
+				got, err := LocateStoreRoot()
+				require.NoError(t, err)
+				assert.Equal(t, realpath(t, outer), realpath(t, got))
+			})
+		}
+	})
+
+	t.Run("unreadable .git is an error", func(t *testing.T) {
+		inner := unexaminableGit(t, loopGit)
+		got, err := LocateStoreRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepo)
+		assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
+	})
+
+	t.Run("refused override is an error", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
+		got, err := LocateStoreRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepo)
+		assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	})
+
+	t.Run("outside a repository wraps ErrNotInRepo", func(t *testing.T) {
+		if _, err := os.Stat("/.git"); err == nil {
+			t.Skip("/ is inside a repository")
+		}
+		t.Chdir("/")
+		_, err := LocateStoreRoot()
+		assert.ErrorIs(t, err, ErrNotInRepo)
+	})
 }
 
 // FindRepoRoot reports why it found nothing when the cause is not simply
 // "outside a repository".
 func TestFindRepoRootReportsUnexaminableGit(t *testing.T) {
-	for name, mk := range unexaminableGitCases {
-		t.Run(name, func(t *testing.T) {
-			inner := unexaminableGit(t, mk)
-			var got string
-			out := captureStderr(t, func() { got = FindRepoRoot() })
-			assert.Empty(t, got)
-			assert.Contains(t, out, filepath.Join(inner, ".git"))
-		})
-	}
+	inner := unexaminableGit(t, loopGit)
+	var got string
+	out := captureStderr(t, func() { got = FindRepoRoot() })
+	assert.Empty(t, got)
+	assert.Contains(t, out, filepath.Join(inner, ".git"))
 }
 
 func TestFindRepoRootSilentOutsideARepo(t *testing.T) {

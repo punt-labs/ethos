@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -704,14 +705,26 @@ func FindRepoRoot() string {
 }
 
 // warnWalkRepoRoot is walkRepoRoot for callers that return only a path: any
-// failure other than "outside a repository" is printed to stderr, so a
-// dangling or unreadable .git is not reported as "not in a git repository".
+// failure other than "outside a repository" is printed to stderr, so an
+// unreadable .git is not reported as "not in a git repository".
 func warnWalkRepoRoot() string {
-	root, err := walkRepoRoot()
+	root, err := walkRepoRoot(warnOnce)
 	if err != nil && !errors.Is(err, ErrNotInRepo) {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		warnOnce("ethos: %v", err)
 	}
 	return root
+}
+
+// warned holds the messages warnOnce has printed.
+var warned sync.Map
+
+// warnOnce prints a message to stderr once per process: the resolvers run on
+// every command and hook, and the same skipped .git would otherwise repeat.
+func warnOnce(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if _, dup := warned.LoadOrStore(msg, true); !dup {
+		fmt.Fprintln(os.Stderr, msg)
+	}
 }
 
 // LocateRepoRoot is FindRepoRoot with the reason it found nothing: an invalid
@@ -721,33 +734,35 @@ func LocateRepoRoot() (string, error) {
 	if root, set, err := checkRepoRootOverride(false); set {
 		return root, err
 	}
-	return walkRepoRoot()
+	return walkRepoRoot(nil)
 }
 
 // ErrNotInRepo is wrapped by the error LocateRepoRoot returns when the working
 // directory is outside any repository, the one failure that is not a problem.
 var ErrNotInRepo = errors.New("not inside a git repository")
 
-// walkRepoRoot walks up from the working directory to the first .git marker. A
-// .git that cannot be examined (permission denied, a symlink loop or a dangling
-// symlink) is an error: skipping it would resolve an enclosing repository's
-// root, and write into the wrong tree.
-func walkRepoRoot() (string, error) {
+// walkRepoRoot walks up from the working directory to the first .git marker,
+// as git does. A .git that is not a directory or a gitdir file (a dangling
+// symlink, an empty or garbage file) is skipped, as git skips it, and warn (if
+// not nil) is told. A .git that git itself cannot read (permission denied, a
+// symlink loop) is an error: skipping it would resolve an enclosing
+// repository's root, and write into the wrong tree.
+func walkRepoRoot(warn func(format string, args ...any)) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getting the working directory: %w", err)
 	}
 	for dir := cwd; ; {
 		dot := filepath.Join(dir, ".git")
-		_, err := os.Stat(dot)
-		if err == nil {
+		found, skip, err := examineGit(dot)
+		if err != nil {
+			return "", err
+		}
+		if found {
 			return dir, nil
 		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("examining %s: %w", dot, err)
-		}
-		if _, lerr := os.Lstat(dot); lerr == nil {
-			return "", fmt.Errorf("examining %s: dangling symlink: %w", dot, err)
+		if skip != "" && warn != nil {
+			warn("ethos: warning: skipping %s: %s", dot, skip)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -755,6 +770,33 @@ func walkRepoRoot() (string, error) {
 		}
 		dir = parent
 	}
+}
+
+// examineGit classifies a .git path: found when it is a directory or a gitdir
+// file; otherwise a skip reason when git would skip it (empty when the path
+// simply does not exist); an error when it cannot be read.
+func examineGit(dot string) (found bool, skip string, err error) {
+	info, err := os.Stat(dot)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if _, lerr := os.Lstat(dot); lerr == nil {
+			return false, "dangling symlink", nil
+		}
+		return false, "", nil
+	case err != nil:
+		return false, "", fmt.Errorf("examining %s: %w", dot, err)
+	case info.IsDir():
+		return true, "", nil
+	}
+	data, err := os.ReadFile(dot)
+	if err != nil {
+		return false, "", fmt.Errorf("examining %s: %w", dot, err)
+	}
+	target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok || strings.TrimSpace(target) == "" {
+		return false, "not a git directory or gitdir file", nil
+	}
+	return true, "", nil
 }
 
 // StoreRepoRoot returns the root of the repository whose .punt-labs/ethos
@@ -778,20 +820,33 @@ func walkRepoRoot() (string, error) {
 //     submodule); resolve the owning repo through the common dir. A .git
 //     that cannot be examined stops the walk with "" (see walkRepoRoot).
 func StoreRepoRoot() string {
-	if root, set := repoRootOverride(true); set {
-		return root
+	root, err := LocateStoreRoot()
+	if err != nil && !errors.Is(err, ErrNotInRepo) {
+		warnOnce("ethos: %v", err)
 	}
-	dir := warnWalkRepoRoot()
-	if dir == "" {
-		return ""
+	return root
+}
+
+// LocateStoreRoot is StoreRepoRoot with the reason it found nothing: a refused
+// ETHOS_REPO_ROOT, an unreadable .git, or a working directory outside any
+// repository (wrapping ErrNotInRepo, the one failure that is not a problem). A
+// writer must refuse on any other error rather than fall back to the global
+// store. It prints nothing; the caller reports the error.
+func LocateStoreRoot() (string, error) {
+	if root, set, err := checkRepoRootOverride(true); set {
+		return root, err
+	}
+	dir, err := walkRepoRoot(warnOnce)
+	if err != nil {
+		return "", err
 	}
 	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
-		return dir // main work tree — the store lives here
+		return dir, nil // main work tree — the store lives here
 	}
 	if root := worktreeStoreRoot(dir); root != "" {
-		return root
+		return root, nil
 	}
-	return dir
+	return dir, nil
 }
 
 // worktreeStoreRoot resolves the repository root that owns the store for a

@@ -151,6 +151,13 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: %w", err)
 	}
 
+	// Locate the checkout and the shared store BEFORE any write, applying
+	// both refusals, so a refusal leaves no identity behind.
+	repoRoot, storeRoot, err := locateSetupRoots()
+	if err != nil {
+		return err
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("setup: %w", err)
@@ -213,23 +220,7 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// --- Repo config and bundle ---
-	repoRoot, rootErr := resolve.LocateRepoRoot()
 	if repoRoot == "" {
-		// Distinguish "genuinely not in a repo" from "a bad ETHOS_REPO_ROOT
-		// was refused." The latter must FAIL LOUD, not silently skip repo
-		// config and report success — a set-but-refused override while the cwd
-		// is a real repo/worktree would otherwise degrade setup to no-repo mode
-		// (#370 F-A). FindRepoRoot returns "" for a set override only when it
-		// was refused (a valid one resolves non-empty).
-		if override, set := resolve.RepoRootOverride(); set {
-			return fmt.Errorf("setup: ETHOS_REPO_ROOT=%q was refused (not an "+
-				"existing directory); unset it or point it at a repo", override)
-		}
-		// A .git that cannot be examined is not "no repo": say why and stop,
-		// rather than skip repo config as if the cwd were outside any repository.
-		if rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
-			return fmt.Errorf("setup: locating the repository: %w", rootErr)
-		}
 		fmt.Fprintln(errw, "ethos: setup: not in a git repository (identities created, skipping repo config and team)")
 		if result.Skipped == nil {
 			result.Skipped = []string{}
@@ -245,18 +236,12 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// The repo config, bundle, team, and default-agent selection all resolve
-	// from the SHARED store (StoreRepoRoot) — the tree every reader uses (team
+	// from the SHARED store (storeRoot) — the tree every reader uses (team
 	// activate, resolveBundleRoot, the SessionStart persona, doctor) — so
 	// setup's writes are visible to them. Only the "in a git repo" guard above
 	// and the .claude/agents destination below stay on the checkout (repoRoot).
 	// In a linked worktree these differ; on a plain checkout or first run they
 	// coincide, so this is a no-op there.
-	storeRoot := resolve.StoreRepoRoot()
-	if storeRoot == "" {
-		return fmt.Errorf("setup: cannot resolve the mission store root " +
-			"(ETHOS_REPO_ROOT was set but refused); unset it or point it at a repo " +
-			"with a .punt-labs/ethos store")
-	}
 
 	// Legacy submodule check (the shared .punt-labs/ethos submodule). No
 	// migration command exists — the resolver falls back to two-layer
@@ -873,4 +858,29 @@ func contains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// locateSetupRoots returns the checkout and the shared store setup writes to.
+// Both are empty outside a repository. Any other failure to locate either —
+// a refused ETHOS_REPO_ROOT, a .git that cannot be read — is an error: setup
+// must not degrade to no-repo mode.
+func locateSetupRoots() (repoRoot, storeRoot string, err error) {
+	repoRoot, rootErr := resolve.LocateRepoRoot()
+	if repoRoot == "" {
+		// A set-but-refused override must FAIL LOUD, not silently skip repo
+		// config and report success (#370 F-A).
+		if override, set := resolve.RepoRootOverride(); set {
+			return "", "", fmt.Errorf("setup: ETHOS_REPO_ROOT=%q was refused (not an "+
+				"existing directory); unset it or point it at a repo", override)
+		}
+		if rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
+			return "", "", fmt.Errorf("setup: locating the repository: %w", rootErr)
+		}
+		return "", "", nil
+	}
+	storeRoot, err = resolve.LocateStoreRoot()
+	if err != nil {
+		return "", "", fmt.Errorf("setup: locating the store: %w", err)
+	}
+	return repoRoot, storeRoot, nil
 }

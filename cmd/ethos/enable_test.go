@@ -147,7 +147,7 @@ func TestEnableDisableReportUnexaminableGit(t *testing.T) {
 		t.Run(verb, func(t *testing.T) {
 			dir := t.TempDir()
 			dot := filepath.Join(dir, ".git")
-			if err := os.Symlink(filepath.Join(dir, "absent"), dot); err != nil {
+			if err := os.Symlink(dot, dot); err != nil {
 				t.Skipf("symlink: %v", err)
 			}
 			t.Chdir(dir)
