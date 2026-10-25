@@ -1957,3 +1957,32 @@ func TestGitConfigWithNoCheckoutSeesTheWholeUserConfig(t *testing.T) {
 		assert.Equal(t, "global@example.com", v)
 	})
 }
+
+// An unreadable user git config is not an unset key: the value may be in it.
+// Identity resolution reports the error and never falls through to $USER.
+func TestUnreadableGitConfigIsAnErrorNotUnset(t *testing.T) {
+	skipIfRoot(t)
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[user]\n\tname = hidden\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", "") // registers the restore ...
+	require.NoError(t, os.Unsetenv("GIT_CONFIG_GLOBAL")) // ... then really unsets it
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	v, err := GitConfig("", "user.name")
+	require.Error(t, err)
+	assert.Empty(t, v)
+	assert.Contains(t, err.Error(), cfg)
+
+	// The whole chain: a user named for the OS user must not be returned.
+	s := identity.NewStore(t.TempDir())
+	require.NoError(t, s.Save(&identity.Identity{Name: "Os User", Handle: "osuser", Kind: "human"}))
+	t.Setenv("USER", "osuser")
+	handle, err := Resolve(s, nil, "")
+	require.Error(t, err, "got %q", handle)
+	assert.Contains(t, err.Error(), cfg)
+}

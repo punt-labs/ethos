@@ -270,3 +270,56 @@ func TestAuditSealRefusesABrokenStore(t *testing.T) {
 	assert.ErrorIs(t, err, failClosed{})
 	assert.Contains(t, errb.String(), "boom")
 }
+
+// An unreadable git config is an error on every identity path: the CLI, the
+// session-start hook and the MCP whoami report it, and none falls through to
+// $USER as if no git user were set.
+func TestUnreadableGitConfigIsReportedEverywhere(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	se := setupCLISubprocessEnv(t)
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[user]\n\tname = hidden\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	env := func() []string {
+		var out []string
+		for _, kv := range withForcedNotUnderClaudeCode(se.env) {
+			if !strings.HasPrefix(kv, "GIT_CONFIG_GLOBAL=") {
+				out = append(out, kv)
+			}
+		}
+		return append(out, "GIT_CONFIG_GLOBAL="+cfg)
+	}
+
+	if ethosBinary != "" {
+		c := exec.Command(ethosBinary, "whoami")
+		c.Dir = se.repo
+		c.Env = env()
+		out, err := c.CombinedOutput()
+		require.Error(t, err, string(out))
+		assert.Contains(t, string(out), cfg)
+
+		hse := *se
+		hse.env = env()
+		stdout, stderr, _ := runHookIn(t, &hse, se.repo, "session-start", `{"session_id":"gc-s1","hook_event_name":"SessionStart"}`)
+		assert.Contains(t, stdout+stderr, cfg)
+		roster, err := os.ReadFile(filepath.Join(se.home, ".punt-labs", "ethos", "sessions", "gc-s1.yaml"))
+		require.NoError(t, err)
+		assert.NotContains(t, string(roster), "persona: "+os.Getenv("USER"), "no persona from $USER")
+	}
+
+	t.Setenv("HOME", se.home)
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Chdir(se.repo)
+	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
+	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	var req mcp.CallToolRequest
+	req.Params.Name = "identity"
+	req.Params.Arguments = map[string]any{"method": "whoami"}
+	res, err := srv.GetTool("identity").Handler(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	assert.Contains(t, res.Content[0].(mcp.TextContent).Text, cfg)
+}

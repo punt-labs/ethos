@@ -206,7 +206,8 @@ func TestRead(t *testing.T) {
 	}{
 		"ok":                   {"echo v\n", AbsentUnset, "ok", ""},
 		"unset key":            {"exit 1\n", AbsentUnset, "absent", ""},
-		"exit 1 with stderr":   {"echo boom >&2; exit 1\n", AbsentUnset, "absent", ""},
+		"exit 1 with stderr":   {"echo boom >&2; exit 1\n", AbsentUnset, "error", "boom"},
+		"exit 1, trace only":   {"echo '12:00:01.000001 git.c:1  exit' >&2; echo '{\"event\":\"exit\"}' >&2; exit 1\n", AbsentUnset, "absent", ""},
 		"exit 1 not asked for": {"exit 1\n", AbsentNoRemote, "error", ""},
 		"no such remote":       {"echo 'error: No such remote' >&2; exit 2\n", AbsentNoRemote, "absent", ""},
 		"exit 2 not asked for": {"exit 2\n", AbsentUnset, "error", ""},

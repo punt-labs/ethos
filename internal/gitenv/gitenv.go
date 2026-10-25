@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -430,8 +431,9 @@ func stripTraceParameters(v string) string {
 type Absent int
 
 const (
-	// AbsentUnset: exit 1 — `git config` for an unset key. Whatever git wrote to
-	// stderr is not part of the rule: git config has no other exit 1.
+	// AbsentUnset: exit 1 with nothing on stderr but trace lines — `git config`
+	// for an unset key. An unreadable config file also exits 1, with "warning:
+	// unable to access ..." on stderr; that is an error, never an unset key.
 	AbsentUnset Absent = 1 << iota
 	// AbsentNoRemote: exit 2 — `git remote get-url` for a remote that does not exist.
 	AbsentNoRemote
@@ -458,7 +460,7 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	}
 	stderr := strings.TrimSpace(string(ee.Stderr))
 	switch {
-	case absent&AbsentUnset != 0 && ee.ExitCode() == 1:
+	case absent&AbsentUnset != 0 && ee.ExitCode() == 1 && WithoutTrace(stderr) == "":
 		return nil, true, nil
 	case absent&AbsentNoRemote != 0 && ee.ExitCode() == 2:
 		return nil, true, nil
@@ -543,4 +545,76 @@ func Neutral() (dir string, env []string, cleanup func(), err error) {
 	}
 	env = append(userConfigEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
 	return dir, env, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+// traceLine matches the lines git's trace and trace2 write: a time of day, then
+// the source location and the message (GIT_TRACE, trace2 normal and perf), or a
+// JSON event object (trace2 event).
+var traceLine = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2}\.\d+ |\{"event":)`)
+
+// WithoutTrace returns git's stderr with its trace lines removed, trimmed: what
+// git said apart from what a GIT_TRACE or trace2 target in the user's config
+// made it say.
+func WithoutTrace(stderr string) string {
+	var kept []string
+	for _, l := range strings.Split(stderr, "\n") {
+		if !traceLine.MatchString(l) {
+			kept = append(kept, l)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// UnreadableUserConfig returns an error naming the first of the user's git
+// config files (GIT_CONFIG_GLOBAL, or $XDG_CONFIG_HOME/git/config and
+// ~/.gitconfig; GIT_CONFIG_SYSTEM or /etc/gitconfig unless GIT_CONFIG_NOSYSTEM)
+// that exists and cannot be read. Some gits skip such a file without a word and
+// exit 1 as for an unset key, so a caller that read "unset" checks this before
+// believing it: a value that may have been in the file is not "unset".
+func UnreadableUserConfig() error {
+	var files []string
+	if g, ok := os.LookupEnv("GIT_CONFIG_GLOBAL"); ok {
+		if g != "" {
+			files = append(files, g)
+		}
+	} else {
+		home, _ := os.UserHomeDir()
+		xdg := os.Getenv("XDG_CONFIG_HOME")
+		if xdg == "" && home != "" {
+			xdg = filepath.Join(home, ".config")
+		}
+		if xdg != "" {
+			files = append(files, filepath.Join(xdg, "git", "config"))
+		}
+		if home != "" {
+			files = append(files, filepath.Join(home, ".gitconfig"))
+		}
+	}
+	if b, _ := ParseBool(os.Getenv("GIT_CONFIG_NOSYSTEM")); !b {
+		if s, ok := os.LookupEnv("GIT_CONFIG_SYSTEM"); ok {
+			if s != "" {
+				files = append(files, s)
+			}
+		} else {
+			files = append(files, "/etc/gitconfig")
+		}
+	}
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("the git config %s cannot be examined: %w", f, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		h, err := os.Open(f)
+		if err != nil {
+			return fmt.Errorf("the git config %s cannot be read: %w", f, err)
+		}
+		_ = h.Close()
+	}
+	return nil
 }

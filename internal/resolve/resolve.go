@@ -1226,10 +1226,10 @@ func configBare(git, common string) (bool, error) {
 	switch {
 	case err == nil:
 		return strings.TrimSpace(string(out)) == "true", nil
-	case errors.As(err, &ee) && ee.ExitCode() == 1:
-		// Unset, or no config file: git config has no other exit 1, and what it
-		// wrote to stderr (a trace2 target in the user's config) is not part of
-		// the answer.
+	case errors.As(err, &ee) && ee.ExitCode() == 1 && gitenv.WithoutTrace(string(ee.Stderr)) == "":
+		// Unset, or no config file. Trace lines (a trace2 target in the user's
+		// config) are not part of the answer; any other stderr is — an
+		// unreadable config exits 1 with "warning: unable to access".
 		return false, nil
 	case errors.As(err, &ee) && len(ee.Stderr) > 0:
 		return false, fmt.Errorf("git config --file %s core.bare: %s", cfg, strings.TrimSpace(string(ee.Stderr)))
@@ -1688,6 +1688,11 @@ func GitConfig(checkout, key string) (string, error) {
 	case err != nil:
 		return "", fmt.Errorf("reading git config %s in %s: %w", key, where, err)
 	case absent:
+		// "Unset" is only believed when every config file could be read: a git
+		// that skips an unreadable file exits 1 as for an unset key.
+		if err := gitenv.UnreadableUserConfig(); err != nil {
+			return "", fmt.Errorf("reading git config %s in %s: %w", key, where, err)
+		}
 		return "", nil
 	}
 	v := strings.TrimSpace(string(out))
