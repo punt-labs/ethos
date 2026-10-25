@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -52,13 +53,62 @@ var storeWrites = map[string][]string{
 	"vendor":        {""},
 }
 
-// addTool registers every tool. A tool not declared unguarded is guarded.
-func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn mcpserver.ToolHandlerFunc) {
-	if unguardedTools[tool.Name] {
-		s.AddTool(tool, fn)
-		return
+// toolMethod is a tool handler as a method expression, so each call can run
+// on the handler whose stores match the store's current location.
+type toolMethod func(*Handler, context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error)
+
+// storeRelocation re-locates the repository store on every tool call and
+// rebuilds the handler when the answer changes, so a repaired (or newly
+// broken) .git takes effect in a running server.
+type storeRelocation struct {
+	locate func() error                  // nil when located or outside any repository
+	build  func(storeErr error) *Handler // a handler whose stores match that answer
+	mu     sync.Mutex
+	cur    *Handler
+}
+
+// RelocateStore makes the registered tools locate the store again on every
+// call (cheap: resolve caches answers) and run on a handler built by build
+// for the current answer. h serves until the answer differs from its own.
+func (h *Handler) RelocateStore(locate func() error, build func(storeErr error) *Handler) {
+	h.relocation = &storeRelocation{locate: locate, build: build, cur: h}
+}
+
+// current returns the handler a tool call runs on: h itself, or, with
+// RelocateStore, the handler for the store's location now.
+func (h *Handler) current() *Handler {
+	r := h.relocation
+	if r == nil {
+		return h
 	}
-	s.AddTool(tool, h.guardStore(tool.Name, fn))
+	err := r.locate()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if errText(err) != errText(r.cur.storeErr) {
+		r.cur = r.build(err)
+	}
+	return r.cur
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// addTool registers every tool. A tool not declared unguarded is guarded.
+func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn toolMethod) {
+	s.AddTool(tool, func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		cur := h.current()
+		call := func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+			return fn(cur, ctx, req)
+		}
+		if unguardedTools[tool.Name] {
+			return call(ctx, req)
+		}
+		return cur.guardStore(tool.Name, call)(ctx, req)
+	})
 }
 
 // guardStore wraps fn: when the store could not be located, a declared read

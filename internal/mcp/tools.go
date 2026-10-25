@@ -39,7 +39,8 @@ type Handler struct {
 	missionStore  *mission.Store
 	adrStore      *adr.Store
 	vendor        VendorRunner
-	storeErr      error // why the repository store could not be located, if so
+	storeErr      error            // why the repository store could not be located, if so
+	relocation    *storeRelocation // set by RelocateStore
 }
 
 // Option configures optional Handler fields.
@@ -129,34 +130,34 @@ func NewHandlerWithOptions(s identity.IdentityStore, talents, personalities, wri
 // RegisterTools adds all ethos MCP tools to the given server.
 func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// Identity tool (consolidated)
-	h.addTool(s, h.identityTool(), h.handleIdentity)
+	h.addTool(s, h.identityTool(), (*Handler).handleIdentity)
 	// Extension tool (consolidated)
-	h.addTool(s, h.extTool(), h.handleExt)
+	h.addTool(s, h.extTool(), (*Handler).handleExt)
 	// Session tool (consolidated)
-	h.addTool(s, h.sessionTool(), h.handleSession)
+	h.addTool(s, h.sessionTool(), (*Handler).handleSession)
 	// Doctor tool (standalone admin tool)
-	h.addTool(s, h.doctorTool(), h.handleDoctor)
+	h.addTool(s, h.doctorTool(), (*Handler).handleDoctor)
 	// Attribute tools (consolidated)
 	h.registerAttributeTools(s)
 	// Role tool (if store configured)
 	if h.roles != nil {
-		h.addTool(s, h.roleTool(), h.handleRole)
+		h.addTool(s, h.roleTool(), (*Handler).handleRole)
 	}
 	// Team tool (if store configured)
 	if h.teams != nil {
-		h.addTool(s, h.teamTool(), h.handleTeam)
+		h.addTool(s, h.teamTool(), (*Handler).handleTeam)
 	}
 	// Mission tool (if store configured)
 	if h.missionStore != nil {
-		h.addTool(s, h.missionTool(), h.handleMission)
+		h.addTool(s, h.missionTool(), (*Handler).handleMission)
 	}
 	// ADR tool (if store configured)
 	if h.adrStore != nil {
-		h.addTool(s, h.adrTool(), h.handleADR)
+		h.addTool(s, h.adrTool(), (*Handler).handleADR)
 	}
 	// Vendor tool (if a runner is configured)
 	if h.vendor != nil {
-		h.addTool(s, h.vendorTool(), h.handleVendor)
+		h.addTool(s, h.vendorTool(), (*Handler).handleVendor)
 	}
 }
 

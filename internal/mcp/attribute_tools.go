@@ -13,9 +13,9 @@ import (
 
 // registerAttributeTools adds consolidated attribute tools (one per resource).
 func (h *Handler) registerAttributeTools(s *mcpserver.MCPServer) {
-	h.addTool(s, h.talentTool(), h.handleTalent)
-	h.addTool(s, h.personalityTool(), h.handlePersonality)
-	h.addTool(s, h.writingStyleTool(), h.handleWritingStyle)
+	h.addTool(s, h.talentTool(), (*Handler).handleTalent)
+	h.addTool(s, h.personalityTool(), (*Handler).handlePersonality)
+	h.addTool(s, h.writingStyleTool(), (*Handler).handleWritingStyle)
 }
 
 // --- Tool Definitions ---
