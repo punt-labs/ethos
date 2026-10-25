@@ -1923,6 +1923,12 @@ func TestHookChecksOnADegradedLookup(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
 		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
+		assert.Contains(t, r.Detail, "install git", "currency: %s", name)
+
+		r = CheckUnclassifiedFiles(dir)
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
+		assert.Contains(t, r.Detail, "install git", "unclassified: %s", name)
 	}
 }
 
@@ -1939,6 +1945,14 @@ func TestHookChecksAdviceFollowsCause(t *testing.T) {
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
 	assert.Contains(t, r.Detail, "top level")
 	assert.NotContains(t, r.Detail, "install git")
+
+	for name, r := range map[string]Result{
+		"currency":     CheckHookCurrency(sub, currencyTestSpec),
+		"unclassified": CheckUnclassifiedFiles(sub),
+	} {
+		assert.Contains(t, r.Detail, "top level", name)
+		assert.NotContains(t, r.Detail, "install git", name)
+	}
 }
 
 // TestRunAllRefusedRootOverride: a refused ETHOS_REPO_ROOT is a WARN on every
@@ -2009,6 +2023,14 @@ func TestRunAllRefusedStore(t *testing.T) {
 		assert.Equal(t, "not checked: "+refused.Error(), r.Detail, name)
 	}
 
+	// The checks that read the identity store, layered over the repository
+	// store, are gated too: they must not report on the global fallback.
+	for _, name := range []string{"Identity directory", "Human identity", "Duplicate fields", "Extension key names"} {
+		r := find(results, name)
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Equal(t, "not checked: "+refused.Error(), r.Detail, name)
+	}
+
 	outside := fmt.Errorf("/ is %w", resolve.ErrNotInRepo)
 	results = RunAll(s, ss, "", nil, "", outside, nil)
 	for _, name := range storeChecks {
@@ -2018,11 +2040,13 @@ func TestRunAllRefusedStore(t *testing.T) {
 	}
 }
 
-// TestRunAllGatesEveryLocatedCheck: every check RunAll hands repoRoot goes
-// through checkout, and every check it hands storeRoot goes through store; each
-// turns a refused root into a WARN. The calls are found in the source, so a
-// check added later without the gate fails here instead of reading PASS "not
-// in a repo" for a tree it never examined.
+// TestRunAllGatesEveryLocatedCheck: every check RunAll hands a located input
+// goes through checkout (repoRoot) or store (storeRoot, the identity store s,
+// the team store teams), and each turns a refused root into a WARN. A located
+// input is one of those names, a value derived from one (an alias, or
+// hasRepoLocalTeam's result), however it reaches the call. The calls are found
+// in the source, so a check added later without the gate fails here instead of
+// reading PASS for a tree it never examined.
 func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "doctor.go", nil, 0)
@@ -2036,17 +2060,52 @@ func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 	}
 	require.NotNil(t, runAll)
 
-	uses := func(call *ast.CallExpr, name string) bool {
-		for _, a := range call.Args {
-			if id, ok := a.(*ast.Ident); ok && id.Name == name {
-				return true
-			}
-		}
-		return false
+	const kindCheckout, kindStore = 1, 2
+	located := map[string]int{
+		"repoRoot": kindCheckout, "storeRoot": kindStore, "s": kindStore, "teams": kindStore,
 	}
 	// hasRepoLocalTeam only chooses a message and reports false for ""; gate
 	// builds the gates themselves.
-	pure := map[string]bool{"hasRepoLocalTeam": true, "gate": true}
+	pure := map[string]int{"hasRepoLocalTeam": kindStore, "gate": 0}
+
+	// kindOf is the located kinds an expression carries: a located name, or a
+	// call to a pure derivation, directly. A nested check call is judged on its
+	// own when the walk reaches it.
+	kindOf := func(e ast.Expr) int {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return located[x.Name]
+		case *ast.CallExpr:
+			return pure[types.ExprString(x.Fun)]
+		}
+		return 0
+	}
+	// An assignment from a located value makes its targets located: aliases.
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(runAll.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			kind := 0
+			for _, r := range as.Rhs {
+				kind |= kindOf(r)
+				if call, ok := r.(*ast.CallExpr); ok && pure[types.ExprString(call.Fun)] != 0 {
+					for _, a := range call.Args {
+						kind |= kindOf(a)
+					}
+				}
+			}
+			for _, l := range as.Lhs {
+				if id, ok := l.(*ast.Ident); ok && kind != 0 && located[id.Name]|kind != located[id.Name] {
+					located[id.Name] |= kind
+					changed = true
+				}
+			}
+			return true
+		})
+	}
 
 	var gated, ungated []string
 	var walk func(n ast.Node, inCheckout, inStore bool)
@@ -2063,28 +2122,26 @@ func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 				return false
 			}
 			name := types.ExprString(call.Fun)
-			if pure[name] {
+			if _, isPure := pure[name]; isPure {
 				return true
 			}
-			ok = true
-			if uses(call, "repoRoot") && !inCheckout {
-				ok = false
+			kind := 0
+			for _, a := range call.Args {
+				kind |= kindOf(a)
 			}
-			if uses(call, "storeRoot") && !inStore {
-				ok = false
+			if kind == 0 {
+				return true
 			}
-			if uses(call, "repoRoot") || uses(call, "storeRoot") {
-				if ok {
-					gated = append(gated, name)
-				} else {
-					ungated = append(ungated, name)
-				}
+			if (kind&kindCheckout != 0 && !inCheckout) || (kind&kindStore != 0 && !inStore) {
+				ungated = append(ungated, name)
+			} else {
+				gated = append(gated, name)
 			}
 			return true
 		})
 	}
 	walk(runAll.Body, false, false)
 
-	assert.Empty(t, ungated, "checks given repoRoot or storeRoot outside checkout(...) or store(...)")
-	assert.GreaterOrEqual(t, len(gated), 10, "the scan found too few gated checks: %v", gated)
+	assert.Empty(t, ungated, "checks given a located input outside checkout(...) or store(...)")
+	assert.GreaterOrEqual(t, len(gated), 13, "the scan found too few gated checks: %v", gated)
 }

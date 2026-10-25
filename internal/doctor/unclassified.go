@@ -69,7 +69,7 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 	note := ""
 	switch {
 	case lk.Degraded:
-		note = "; hooks directory not verified: " + lk.Reason
+		note = "; hooks directory not verified: " + lk.Explain()
 	case len(lk.Warnings) > 0:
 		note = "; hooks directory: " + strings.Join(lk.Warnings, "; ")
 	}

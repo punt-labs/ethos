@@ -78,29 +78,30 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	checkout := gate(repoRoot, rootErr)
 	store := gate(storeRoot, storeErr)
 
-	dir, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
-	results = append(results, passFail("Identity directory", dir, ok))
+	// The identity store, like the team store, is layered over the repository
+	// store, so these checks read it and are gated with it.
+	results = append(results, store(identityDirResult(s, ss, storeRoot)))
 
 	// Human identity carries its own status: a fresh install (no identity
 	// yet) is a WARN pointing at `ethos setup`, not a FAIL.
-	results = append(results, CheckHumanIdentity(s, ss))
+	results = append(results, store(CheckHumanIdentity(s, ss)))
 
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
 	// guard stays on the checkout (repoRoot) (#370).
 	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot))))
 
-	dup, ok := CheckDuplicateFields(s, ss)
-	results = append(results, passFail("Duplicate fields", dup, ok))
+	results = append(results, store(duplicateFieldsResult(s, ss)))
 
 	results = append(results, checkout(store(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))))
-	results = append(results, checkout(CheckSealHook(repoRoot)))
 
-	// ethos-bfml/ethos-hy40: the trailer hook gets the same presence check
-	// the seal hook already had — gated on the enabled marker, active
-	// determined by execution (checkHookPresence), not by whether a section
-	// merely exists. See the DES-hook-presence ADR in DESIGN.md.
-	results = append(results, checkout(CheckTrailerHook(repoRoot)))
+	// ethos-bfml/ethos-hy40: every hook gets the presence check the seal hook
+	// had first — gated on the enabled marker, active determined by execution
+	// (checkHookPresence), not by whether a section merely exists. See the
+	// DES-hook-presence ADR in DESIGN.md.
+	for _, spec := range hookSpecs {
+		results = append(results, checkout(checkHookPresence(repoRoot, spec)))
+	}
 
 	// DES-hook-drift-detection: content-currency checks, independent of the
 	// enabled marker and of the presence checks' active states — see
@@ -115,7 +116,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// belong to the tree being committed.
 	results = append(results, store(CheckRepoSetComplete(s, storeRoot)))
 	results = append(results, checkout(CheckLocalExtNotTracked(repoRoot)))
-	results = append(results, CheckExtCredentialNames(s))
+	results = append(results, store(CheckExtCredentialNames(s)))
 
 	// DES-072: hand-edited mission files read as machine-written and
 	// are invisible to every mission-reading surface — the exact
@@ -141,6 +142,18 @@ func passFail(name, detail string, ok bool) Result {
 		status = "FAIL"
 	}
 	return Result{Name: name, Status: status, Detail: detail}
+}
+
+// identityDirResult is CheckIdentityDir as a Result.
+func identityDirResult(s identity.IdentityStore, ss *session.Store, storeRoot string) Result {
+	detail, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
+	return passFail("Identity directory", detail, ok)
+}
+
+// duplicateFieldsResult is CheckDuplicateFields as a Result.
+func duplicateFieldsResult(s identity.IdentityStore, ss *session.Store) Result {
+	detail, ok := CheckDuplicateFields(s, ss)
+	return passFail("Duplicate fields", detail, ok)
 }
 
 // defaultAgentResult is CheckDefaultAgent as a Result.
@@ -762,7 +775,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	lk := githook.HooksDir(repoRoot)
 	dir, lkErr := lk.Verified()
 	if lkErr != nil {
-		return Result{Name: name, Status: "WARN", Detail: lkErr.Error()}
+		return Result{Name: name, Status: "WARN", Detail: "hooks directory not verified: " + lk.Explain()}
 	}
 	hooksDirWarnings := lk.Warnings
 	if len(hooksDirWarnings) > 0 {
