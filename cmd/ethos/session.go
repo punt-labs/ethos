@@ -897,19 +897,32 @@ func runSessionPurge(cmd *cobra.Command) error {
 	// run outside any repo leaves every repo-bound session for its owning
 	// checkout.
 	loc := currentRoots()
+	repoRoot, repoID := loc.Checkout, ""
+	var lookupErr error
 	if loc.CheckoutErr != nil {
-		return fmt.Errorf("session purge: locating the checkout: %w", loc.CheckoutErr)
+		lookupErr = fmt.Errorf("session purge: locating the checkout: %w", loc.CheckoutErr)
+	} else if id, err := audit.RepoIdentity(repoRoot); err != nil {
+		lookupErr = err
+	} else {
+		repoID = id
 	}
-	repoRoot := loc.Checkout
-	var err error
-	repoID, err := audit.RepoIdentity(repoRoot)
+	if lookupErr != nil {
+		// A purge that cannot name its checkout can still remove what needs no
+		// checkout (a roster whose repository was never resolved), but it
+		// cannot verify any other session's unsealed state: without --force it
+		// stops; with it, it runs as a purge outside any repository, which
+		// leaves every repository-bound session for its owner.
+		if !sessionPurgeForce {
+			return lookupErr
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: purge: %v; --force: purging as if outside any repository\n", lookupErr)
+		repoRoot, repoID = "", ""
+	}
+	rep, err := ss.PurgeTombstonedReport(repoRoot, repoID, sessionPurgeForce)
 	if err != nil {
 		return err
 	}
-	purged, refused, err := ss.PurgeTombstoned(repoRoot, repoID, sessionPurgeForce)
-	if err != nil {
-		return err
-	}
+	purged, refused := rep.Purged, rep.Refused
 	if jsonOutput {
 		if purged == nil {
 			purged = []string{}
@@ -920,10 +933,15 @@ func runSessionPurge(cmd *cobra.Command) error {
 		if refused == nil {
 			refused = []string{}
 		}
-		if werr := writeJSON(out, map[string][]string{
+		skipped := rep.Skipped
+		if skipped == nil {
+			skipped = []session.SkippedSession{}
+		}
+		if werr := writeJSON(out, map[string]any{
 			"sessions":  purged,
 			"pid_files": pidPurged,
 			"refused":   refused,
+			"skipped":   skipped,
 		}); werr != nil {
 			return werr
 		}
@@ -931,6 +949,9 @@ func runSessionPurge(cmd *cobra.Command) error {
 			return pidErr
 		}
 		return nil
+	}
+	for _, sk := range rep.Skipped {
+		fmt.Fprintf(out, "Skipped %s: repository identity never resolved (%s); --force removes it\n", sk.Session, sk.Reason)
 	}
 	for _, id := range refused {
 		fmt.Fprintf(out, "Refused to purge %s (see stderr for cause; --force overrides)\n", id)
@@ -945,7 +966,7 @@ func runSessionPurge(cmd *cobra.Command) error {
 		return pidErr
 	}
 	switch {
-	case len(purged) == 0 && len(pidPurged) == 0 && len(refused) == 0:
+	case len(purged) == 0 && len(pidPurged) == 0 && len(refused) == 0 && len(rep.Skipped) == 0:
 		fmt.Fprintln(out, "No stale sessions found.")
 	case len(purged) == 0 && len(pidPurged) == 0:
 		fmt.Fprintf(out, "Nothing purged; %d session(s) refused (see above).\n", len(refused))

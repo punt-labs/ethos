@@ -236,6 +236,10 @@ func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identi
 	case resolvedID != nil:
 		userPersona = resolvedID.Handle
 	case humanErr != nil:
+		// The human could not be resolved: nothing about them is recorded, the
+		// OS user's name included (it is how the roster would otherwise name
+		// them, and a roster that failed to resolve must not claim an owner).
+		userID = "unknown"
 		problems = append(problems, fmt.Sprintf(
 			"could not resolve the human identity (%v); no persona is recorded for the human", humanErr))
 	default:

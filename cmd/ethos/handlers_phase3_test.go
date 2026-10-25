@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -469,10 +470,65 @@ func TestRunSessionPurge_JSONRefused(t *testing.T) {
 
 	// stdout must be valid JSON — no stray prose corrupting the payload.
 	assert.NotContains(t, stdout, "Refused to purge")
-	var got map[string][]string
+	var got struct {
+		Refused  []string `json:"refused"`
+		Sessions []string `json:"sessions"`
+		Skipped  []any    `json:"skipped"`
+	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --json stdout must parse: %q", stdout)
-	assert.Equal(t, []string{"sess-refused"}, got["refused"])
-	assert.Empty(t, got["sessions"])
+	assert.Equal(t, []string{"sess-refused"}, got.Refused)
+	assert.Empty(t, got.Sessions)
+	assert.Empty(t, got.Skipped)
+}
+
+// createUnresolvedSession writes a roster whose repository identity was never
+// resolved, with a live primary (this process): not stale.
+func createUnresolvedSession(t *testing.T, se *cliSubprocessEnv, id string) {
+	t.Helper()
+	st := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos"))
+	root := session.Participant{AgentID: "unknown"}
+	primary := session.Participant{AgentID: strconv.Itoa(os.Getpid()), Parent: "unknown"}
+	require.NoError(t, st.CreateUnresolved(id, root, primary, "git did not answer", "", "h"))
+}
+
+// purge --json lists an unresolved roster as skipped, with the reason; --force
+// removes it though its session is alive, and still runs when the checkout
+// cannot be located.
+func TestRunSessionPurge_UnresolvedSkippedThenForced(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	createUnresolvedSession(t, se, "sess-unresolved")
+
+	stdout, _, err := execHandler(t, "session", "purge", "--json")
+	require.NoError(t, err)
+	var got struct {
+		Sessions []string `json:"sessions"`
+		Skipped  []struct {
+			Session string `json:"session"`
+			Reason  string `json:"reason"`
+		} `json:"skipped"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
+	assert.Empty(t, got.Sessions)
+	require.Len(t, got.Skipped, 1)
+	assert.Equal(t, "sess-unresolved", got.Skipped[0].Session)
+	assert.Equal(t, "git did not answer", got.Skipped[0].Reason)
+
+	// The checkout cannot be located; without --force the purge stops.
+	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "absent"))
+	_, _, err = execHandler(t, "session", "purge")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "locating the checkout")
+
+	// With --force it removes the roster anyway, and says what it did.
+	sessionPurgeForce = true
+	stdout, stderr, err := execHandler(t, "session", "purge", "--force", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "purging as if outside any repository")
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
+	assert.Equal(t, []string{"sess-unresolved"}, got.Sessions)
 }
 
 // TestRunSessionPurge_TextRefused is Bugbot R6-2: when the unsealed-lines

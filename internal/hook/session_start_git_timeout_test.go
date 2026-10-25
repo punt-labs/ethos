@@ -71,8 +71,8 @@ func TestCreateSessionRosterRepoLookupFailure(t *testing.T) {
 	})
 }
 
-// A failed human-identity resolution records no persona for the human (not
-// the OS user's) and says why; "no identity matched" keeps the OS-user
+// A failed human-identity resolution records no persona for the human and no
+// owner (neither is the OS user's) and says why; "no identity matched" keeps the OS-user
 // fallback.
 func TestCreateSessionRosterHumanFailure(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
@@ -83,7 +83,7 @@ func TestCreateSessionRosterHumanFailure(t *testing.T) {
 	r, err := ss.Load("s-h-fail")
 	require.NoError(t, err)
 	require.NotEmpty(t, r.Participants)
-	assert.Equal(t, "someone", r.Participants[0].AgentID)
+	assert.Equal(t, "unknown", r.Participants[0].AgentID, "a failure names no owner from $USER")
 	assert.Empty(t, r.Participants[0].Persona, "a failure is not recorded as the OS user's persona")
 	assert.Contains(t, notice, "git did not answer")
 

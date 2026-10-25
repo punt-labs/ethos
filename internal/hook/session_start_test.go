@@ -814,3 +814,51 @@ func TestResolveCheckoutMatchesLiveWritePath(t *testing.T) {
 	assert.Equal(t, liveAuditPath(checkout, "s"), liveAuditPath(got, "s"),
 		"the recorded checkout must resolve the same live path the writer uses")
 }
+
+// A malformed repo config and an agent persona that will not load both reach
+// the session's additionalContext, not stderr alone; and the roster written
+// for the failed store names no owner from $USER.
+func TestHandleSessionStart_FailuresReachAdditionalContext(t *testing.T) {
+	t.Run("malformed config", func(t *testing.T) {
+		dir := t.TempDir()
+		s := identity.NewStore(dir)
+		ss := session.NewStore(dir)
+		repoRoot := t.TempDir()
+		testhelpers.MakeGitDir(t, repoRoot)
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".punt-labs", "ethos.yaml"), []byte("agent: [unclosed\n"), 0o644))
+		t.Chdir(repoRoot)
+		t.Setenv("USER", "jfreeman")
+		isolateGitConfig(t, "test-human")
+
+		out, err := captureStdout(t, func() error {
+			return HandleSessionStart(bytes.NewReader([]byte(`{"session_id":"s-badcfg"}`)), SessionStartDeps{Store: s, Sessions: ss})
+		})
+		require.Error(t, err, "the exit status still reports it")
+		assert.Contains(t, out, "additionalContext")
+		assert.Contains(t, out, "parsing repo config")
+
+		r, lerr := ss.Load("s-badcfg")
+		require.NoError(t, lerr)
+		assert.NotEmpty(t, r.RepoUnresolved)
+		for _, p := range r.Participants {
+			assert.NotEqual(t, "jfreeman", p.AgentID, "no owner is taken from $USER for an unresolved roster")
+			assert.NotEqual(t, "jfreeman", p.Persona)
+		}
+	})
+	t.Run("agent persona does not load", func(t *testing.T) {
+		dir := t.TempDir()
+		s := identity.NewStore(dir)
+		ss := session.NewStore(dir)
+		repoRoot := t.TempDir()
+		testhelpers.MakeGitDir(t, repoRoot)
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".punt-labs", "ethos.yaml"), []byte("agent: ghost\n"), 0o644))
+		t.Chdir(repoRoot)
+		isolateGitConfig(t, "test-human")
+
+		out := captureSessionStartOutput(t, `{"session_id":"s-ghost"}`, SessionStartDeps{Store: s, Sessions: ss})
+		assert.Contains(t, out, "additionalContext")
+		assert.Contains(t, out, `agent identity \"ghost\" could not be loaded`)
+	})
+}
