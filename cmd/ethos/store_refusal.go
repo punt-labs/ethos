@@ -11,12 +11,17 @@ import (
 
 // storeRefusalExempt lists the commands that run when the repository store
 // cannot be located: they report on, repair or do not use the store, or (setup,
-// seed) locate and refuse for themselves. Every other command refuses (see
-// refuseUnlocatableStore).
+// seed) locate and refuse for themselves. session, adr, whoami and iam keep
+// global-only stores, and `session write-current` is doctor's own remedy for a
+// broken session pointer. To match, the session (iam included) and adr MCP
+// tools are unguarded, and identity whoami runs there as a read. Every other
+// command refuses (see refuseUnlocatableStore).
 var storeRefusalExempt = []string{
 	"ethos version", "ethos doctor", "ethos completion", "ethos help",
 	"ethos hook", "ethos serve", "ethos enable", "ethos disable",
 	"ethos uninstall", "ethos setup", "ethos seed", "ethos audit",
+	"ethos session", "ethos adr", "ethos whoami", "ethos iam",
+	"ethos identity whoami",
 	"ethos __complete", "ethos __completeNoDesc",
 }
 

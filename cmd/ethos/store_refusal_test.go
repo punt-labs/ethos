@@ -138,11 +138,7 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 		{"team", "activate", "x"},
 		{"role", "create", "x"},
 		{"mission", "list"},
-		{"whoami"},
-		{"identity", "whoami"},
-		{"iam", "x"},
-		{"session"},
-		{"adr", "list"},
+		{"identity", "list"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
@@ -156,15 +152,41 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 	}
 }
 
+// The commands whose stores are global-only — session (whose write-current is
+// doctor's own remedy), adr, whoami, iam — run on an unreadable .git: none of
+// them refuses on the repository store.
+func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se, inner := nestedGitEnv(t, emptyGitFile)
+	for _, args := range [][]string{
+		{"whoami"},
+		{"identity", "whoami"},
+		{"iam", "x"},
+		{"session"},
+		{"session", "write-current", "--pid", "1", "--session", "s"},
+		{"adr", "list"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			cmd := exec.Command(ethosBinary, args...)
+			cmd.Dir = inner
+			cmd.Env = withForcedNotUnderClaudeCode(se.env)
+			out, _ := cmd.CombinedOutput()
+			assert.NotContains(t, string(out), "refusing to use the global store", string(out))
+		})
+	}
+}
+
 // The commands that report on, repair or do not use the store stay runnable.
 func TestStoreRefusalExemptions(t *testing.T) {
 	root := rootCmd
 	exempt := [][]string{
 		{"version"}, {"doctor"}, {"setup"}, {"seed"}, {"enable"}, {"disable"},
 		{"hook"}, {"serve"}, {"uninstall"}, {"completion"}, {"audit"}, {"role", "schema"},
+		{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session"}, {"session", "write-current"}, {"adr"},
 	}
 	refused := [][]string{
-		{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session"}, {"adr"},
 		{"identity", "list"}, {"mission", "list"},
 	}
 	find := func(args []string) *cobra.Command {
