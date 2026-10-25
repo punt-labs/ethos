@@ -89,16 +89,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.punt-labs/ethos/` and `.punt-labs/local/ethos/`** (DES-079 slice 1,
   bead `ethos-g3g3`). A new package, `internal/layout`, holds one ordered
   table mapping every path ethos writes inside a repository to its class
-  (source and configuration, blame tier, trace tier, never tracked). Tests
-  fail when a writer creates a path no entry matches, and when two entries
-  of different classes can match one path. The new check warns and lists
+  (source and configuration, blame tier, trace tier, never tracked). A
+  test runs every in-tree writer it knows of and fails when one creates a
+  path no entry matches, and a test fails when two entries of different
+  classes can match one path. The new check warns and lists
   up to 10 unrecognized files; files in other tools' directories under
   `.punt-labs/` are not checked. Exported mission records placed under
   `.punt-labs/ethos/` with `ethos mission export --dir` are recognized.
   The check scans the working tree it runs in (a git worktree's own
   files), reports any symlink on the way to either directory as not
-  scanned, names a `core.hooksPath` directory under `.punt-labs/` whose
-  ethos hook files have no class, and says when it could not scan.
+  scanned, names a `core.hooksPath` directory under `.punt-labs/` and the
+  class (or none) of each hook file in it, and says when it could not
+  scan.
 
 - **Design for native OpenCode integration (DES-078,
   `docs/design-opencode-plugin.md`).** Design only, no implementation.
@@ -196,7 +198,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository now has `.ethos-tmp` in its name** (DES-079). A crash of an
   earlier version can have left a temporary file under its old name:
   `*.tmp`, `*.jsonl.tmp`, `.<id>.migrate-*/` under
-  `.punt-labs/ethos/missions/`, `.CLAUDE.md.tmp*` or `.CLAUDE.md.*`,
+  `.punt-labs/ethos/missions/`, `.CLAUDE.md.tmp*` or `.CLAUDE.md.*` (or
+  `.<target>.tmp*` beside the target when `CLAUDE.md` is a symlink),
   `.ETHOS-SETUP.md.*`, `..vendored-manifest.*`, `.gitignore.*`, or
   `.pre-commit.*` and `.commit-msg.*` in the hooks directory. Any of these
   can be deleted. `ethos doctor` lists the ones under `.punt-labs/ethos/`
@@ -223,14 +226,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--force` it removes the import and marker and reports that hook
   sections may remain under `core.hooksPath`.
 - **`ethos doctor` under an unverified hooks directory:** the
-  hook-presence check fails in an enabled repository ("cannot verify
-  hooks"), the hook-currency check warns. A refused `ETHOS_REPO_ROOT`
-  override, or a `.git` that cannot be examined, makes every check that
-  reads the checkout warn with the reason, visible to MCP clients,
-  instead of passing; the mission store is no longer resolved to an
-  enclosing repository in that case. `ethos enable`, `ethos disable` and
-  `ethos setup` report the real reason a `.git` cannot be examined
-  instead of "not in a git repository".
+  hook-presence check fails in an enabled repository and warns in a
+  dormant one ("cannot verify hooks"), the hook-currency check warns, and
+  the advice matches the cause (install git, fix `safe.directory`, or run
+  from the repository's top level).
+- **Finding the repository follows git.** A `.git` that is not a git
+  directory or `gitdir:` file (a dangling symlink, an empty file) is
+  skipped with one warning and the search continues upward. A `.git` that
+  cannot be read (permission denied, a symlink loop), or a refused
+  `ETHOS_REPO_ROOT`, makes every `ethos doctor` check that reads the
+  checkout or the store warn with the reason, visible to MCP clients,
+  and makes other commands refuse instead of silently using the global
+  store. `ethos setup` checks this before writing any identity.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and

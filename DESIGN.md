@@ -11274,7 +11274,8 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
   enabled repository, the safe direction, rather than silently reusing
   the old lexical scanner as a fallback (rejected below). Amended by
   DES-079 slice 1: the failure now comes earlier, from the hooks-directory
-  lookup itself ("cannot verify hooks: … install git"), because a
+  lookup itself ("cannot verify hooks: …", with advice that matches the
+cause), because a
   lookup made without git cannot see `core.hooksPath`; a dormant
   repository passes with that reason noted. The same slice makes
   `ethos enable` require git to install hooks and makes `ethos disable`
@@ -12809,8 +12810,10 @@ not built by a layout helper, or when a string literal looks like a
 staging name (`.tmp`, `tmp-`); a staging name built another way (for
 example `dest + ".new"`) is not caught by the scan and is reported by
 `ethos doctor` only if it is left under `.punt-labs/ethos/`. Writes
-under the system temporary directory are outside the repository and
-out of scope. An `ethos doctor`
+under the system temporary directory (`TMPDIR`) are out of scope even
+when `TMPDIR` lies inside the working tree, as it does in this
+organization; the one such write, doctor's hook sandbox, still carries
+the marker and is removed before doctor returns. An `ethos doctor`
 check reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
 of the working tree it runs in that no entry matches. It reports, without
 scanning past it, any symlink on the path from the repository root to
@@ -12820,15 +12823,25 @@ scanned, names a `core.hooksPath` directory under `.punt-labs/` that
 holds an ethos hook file (with the class each file actually gets, since a
 zone entry may still match it), and warns whenever the hooks directory
 could not be verified with git (git missing or failing, or the
-repository root not being git's top level). Under an unverified hooks
-directory the hook-currency check warns and the hook-presence check
-fails in an enabled repository. When there is no repository or neither
+repository root not being git's top level), with advice that matches
+the cause (install git, fix `safe.directory`, or run from the top
+level). Under an unverified hooks directory the hook-currency check
+warns, and the hook-presence check fails in an enabled repository and
+warns in a dormant one. When there is no repository or neither
 directory exists the check still passes, and its detail starts with
-"not scanned" and the reason. When an `ETHOS_REPO_ROOT` override is
-refused or the repository cannot be examined (an unreadable or dangling
-`.git`), every check that reads the checkout warns with the reason
-instead of passing, and the mission store is not resolved to an
-enclosing repository. `ethos enable` requires git to install hooks.
+"not scanned" and the reason.
+
+Finding the repository follows git: a `.git` that is not a git
+directory or a `gitdir:` file (a dangling symlink, an empty or garbage
+file) is skipped with one warning and the search continues upward, as
+git does; a `.git` that cannot be read (permission denied, a symlink
+loop) is an error. On that error, or a refused `ETHOS_REPO_ROOT`, every
+`ethos doctor` check that reads the checkout or the store warns with the
+reason instead of passing, a test parses `RunAll` to keep that true for
+new checks, and every other command refuses rather than fall back to
+the global store (`doctor`, `setup`, `enable`, `disable`, hooks, the
+MCP server and a few read-only utilities are exempt and handle the
+error themselves). `ethos enable` requires git to install hooks.
 `ethos disable` refuses an unverified hooks directory unless `--force`
 is given; with `--force` it removes the import and marker and reports
 that hook sections may remain. Output a user directs into
@@ -12848,7 +12861,9 @@ entries are derived from the resolved hooks directory, not from the file
 names, so a file named `pre-commit` elsewhere in the tree is not
 classified as a hook. A hooks directory at or under `.punt-labs/` gets no
 entries: it could overlap ethos's own zones. `ethos doctor` names such a
-hooks directory and lists the ethos hook files in it as unclassified. Adding a team bundle as a submodule writes
+hooks directory, lists each hook file in it with the class a zone entry
+gives it or as unclassified, and warns. Adding a team bundle as a
+submodule writes
 `.gitmodules` through `git submodule add`
 (`cmd/ethos/team_bundle.go`); it is class 1.
 
