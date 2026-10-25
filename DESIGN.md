@@ -11270,10 +11270,16 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
   `hookInvocationObserved` cannot honor that: the hook body itself calls
   `git rev-parse --show-toplevel`, so a git-less host could never run the
   real hook either — this is not a new dependency introduced by the
-  sandbox. When `git` is absent, `checkHookPresence` FAILs loudly
-  ("cannot verify … by execution: git not found on PATH"), the safe
-  direction, rather than silently reusing the old lexical scanner as a
-  fallback (rejected below).
+  sandbox. When `git` is absent, `checkHookPresence` FAILs loudly in an
+  enabled repository, the safe direction, rather than silently reusing
+  the old lexical scanner as a fallback (rejected below). Amended by
+  DES-079 slice 1: the failure now comes earlier, from the hooks-directory
+  lookup itself ("cannot verify hooks: … install git"), because a
+  lookup made without git cannot see `core.hooksPath`; a dormant
+  repository passes with that reason noted. The same slice makes
+  `ethos enable` require git to install hooks and makes `ethos disable`
+  refuse an unverified hooks directory unless `--force` is given, in
+  which case it leaves the hook sections in place and says so.
 - **A non-shell hook is never executed at all**, by design —
   `checkHookPresence` only attempts `hookInvocationObserved` when
   `textscan.IsShellHook` is true. For a non-shell body, a narrow,
@@ -12811,17 +12817,24 @@ scanning past it, any symlink on the path from the repository root to
 either directory, skips a nested git working tree inside them (such as
 `.punt-labs/ethos` checked out as a submodule) and reports it as not
 scanned, names a `core.hooksPath` directory under `.punt-labs/` that
-holds an ethos hook file, and warns whenever the hooks directory could
-not be verified with git (git missing or failing, or the repository
-root not being git's top level); the hook-presence and hook-currency
-checks warn the same way. When there is no repository or neither
+holds an ethos hook file (with the class each file actually gets, since a
+zone entry may still match it), and warns whenever the hooks directory
+could not be verified with git (git missing or failing, or the
+repository root not being git's top level). Under an unverified hooks
+directory the hook-currency check warns and the hook-presence check
+fails in an enabled repository. When there is no repository or neither
 directory exists the check still passes, and its detail starts with
-"not scanned" and the reason; an `ETHOS_REPO_ROOT` override that is
-refused is a warning, not a pass. `ethos enable` refuses to install
-hooks when the hooks directory could not be verified and the git
-directory it would write into does not exist (a stale linked worktree,
-a moved submodule), and `ethos disable` refuses to strip hooks from a
-directory it could not verify. Other tools' files under `.punt-labs/` are
+"not scanned" and the reason. When an `ETHOS_REPO_ROOT` override is
+refused or the repository cannot be examined (an unreadable or dangling
+`.git`), every check that reads the checkout warns with the reason
+instead of passing, and the mission store is not resolved to an
+enclosing repository. `ethos enable` requires git to install hooks.
+`ethos disable` refuses an unverified hooks directory unless `--force`
+is given; with `--force` it removes the import and marker and reports
+that hook sections may remain. Output a user directs into
+`.punt-labs/ethos/` or `.punt-labs/local/ethos/` that no entry claims
+(for example an `ethos export --to` directory there) is reported by
+`ethos doctor` on every run. Other tools' files under `.punt-labs/` are
 not ethos's to classify. A prose list cannot stay complete as writers are
 added; a failing test can.
 
@@ -12829,8 +12842,8 @@ Files ethos writes outside the working tree are out of scope: git hooks
 in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
 `core.hooksPath` places the hooks directory inside the working tree,
 `ethos enable` writes `pre-commit` and `commit-msg` there
-(`internal/enable/enable.go:232-253`, detected at
-`internal/githook/resolver.go:71`); those hook files are class 1. Their
+(`chainHooks` in `internal/enable`, the location found by
+`githook.HooksDir`); those hook files are class 1. Their
 entries are derived from the resolved hooks directory, not from the file
 names, so a file named `pre-commit` elsewhere in the tree is not
 classified as a hook. A hooks directory at or under `.punt-labs/` gets no
@@ -12889,7 +12902,7 @@ needs:
 - `missions.jsonl`.
 - The output of plain `ethos mission export <id>` at its default
   directory: `missions/<id>.contract.yaml` and `missions/<id>.result.yaml`
-  (`cmd/ethos/mission.go:964`). The same content as the mission's
+  (`missionExportDirectory` in `cmd/ethos`). The same content as the mission's
   `contract.yaml` and final result, redacted. The default directory is
   resolved against the repository root, whatever the working directory.
   With `--dir`, the output location is the caller's choice: class 2

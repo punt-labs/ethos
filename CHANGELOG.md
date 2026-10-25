@@ -197,13 +197,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier version can have left a temporary file under its old name:
   `*.tmp`, `*.jsonl.tmp`, `.<id>.migrate-*/` under
   `.punt-labs/ethos/missions/`, `.CLAUDE.md.tmp*` or `.CLAUDE.md.*`,
-  `.ETHOS-SETUP.md.*`, `.gitignore.*`, or `.pre-commit.*` and
-  `.commit-msg.*` in the hooks directory. Any of these can be deleted.
-  `ethos doctor` lists the old `*.tmp` files under `.punt-labs/ethos/` and
-  `.punt-labs/local/ethos/` as unrecognized; an old `.<id>.migrate-*/`
-  staging directory is classified never-tracked and not listed; doctor
-  does not see the others. The audit sweep still recognizes and removes
-  old `*.jsonl.tmp` chunks.
+  `.ETHOS-SETUP.md.*`, `..vendored-manifest.*`, `.gitignore.*`, or
+  `.pre-commit.*` and `.commit-msg.*` in the hooks directory. Any of these
+  can be deleted. `ethos doctor` lists the ones under `.punt-labs/ethos/`
+  and `.punt-labs/local/ethos/` as unrecognized (old `*.tmp` files and
+  the `.punt-labs/ethos/.CLAUDE.md.*`, `.ETHOS-SETUP.md.*` and
+  `..vendored-manifest.*` leftovers of the guide deposit), except an old
+  `.<id>.migrate-*/` staging directory, which is classified never-tracked
+  and not listed; it does not see the ones elsewhere in the repository.
+  The audit sweep still recognizes and removes old `*.jsonl.tmp` chunks.
 - **`ethos mission export` without `--dir` writes to
   `.punt-labs/ethos/missions/` under the repository root**, not under the
   current directory. Outside a repository it fails and says why.
@@ -213,14 +215,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   git's own error. It skips a nested git working tree under
   `.punt-labs/ethos/`, such as an old team-registry submodule, and reports
   it as not scanned.
-- **`ethos enable` refuses to install hooks into a git directory that
-  does not exist** (a repository root that is a subdirectory of another
-  repository, a stale linked worktree, a moved submodule), and
-  **`ethos disable` refuses to strip hooks from a hooks directory it
-  could not verify with git**. The `ethos doctor` hook-presence and
-  hook-currency checks warn in the same case, and a refused
-  `ETHOS_REPO_ROOT` override is now a warning with its reason, visible
-  to MCP clients, instead of a pass.
+- **`ethos enable` requires git to install hooks.** Without git, or when
+  git cannot verify the hooks directory (a repository root that is a
+  subdirectory of another repository, a stale linked worktree, a moved
+  submodule), it refuses before writing anything. **`ethos disable`
+  refuses an unverified hooks directory** and names the fix; with
+  `--force` it removes the import and marker and reports that hook
+  sections may remain under `core.hooksPath`.
+- **`ethos doctor` under an unverified hooks directory:** the
+  hook-presence check fails in an enabled repository ("cannot verify
+  hooks"), the hook-currency check warns. A refused `ETHOS_REPO_ROOT`
+  override, or a `.git` that cannot be examined, makes every check that
+  reads the checkout warn with the reason, visible to MCP clients,
+  instead of passing; the mission store is no longer resolved to an
+  enclosing repository in that case. `ethos enable`, `ethos disable` and
+  `ethos setup` report the real reason a `.git` cannot be examined
+  instead of "not in a git repository".
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
