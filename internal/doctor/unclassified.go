@@ -36,8 +36,7 @@ const maxListedUnclassified = 10
 func CheckUnclassifiedFiles(repoRoot string) Result {
 	name := "Unclassified files"
 	if repoRoot == "" {
-		return Result{Name: name, Status: "PASS", Detail: "not scanned: no repository root (not inside a git repository, " +
-			"ETHOS_REPO_ROOT does not name a directory, or the working directory is unreadable)"}
+		return Result{Name: name, Status: "PASS", Detail: "not scanned: not in a repository"}
 	}
 	// ETHOS_REPO_ROOT may be relative; every comparison below needs one spelling.
 	repoRoot, err := filepath.Abs(repoRoot)
@@ -46,7 +45,7 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 	}
 
 	lk := githook.HooksDir(repoRoot)
-	hooksDir := lk.Dir
+	hooksDir := lk.Display() // a degraded lookup is reported below, not acted on
 	table, err := layout.TableFor(repoRoot, hooksDir)
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("resolving hooks directory %s: %v", hooksDir, err)}
@@ -73,16 +72,19 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 	case len(lk.Warnings) > 0:
 		note = "; hooks directory: " + strings.Join(lk.Warnings, "; ")
 	}
-	if sc.clean() && lk.Degraded {
-		return Result{Name: name, Status: "WARN", Detail: strings.TrimPrefix(note, "; ")}
+	status, detail := "PASS", ""
+	switch {
+	case !sc.clean():
+		status, detail = "WARN", sc.detail()+" — see DES-079"
+	case sc.zones == 0:
+		detail = "not scanned: neither .punt-labs/ethos nor .punt-labs/local/ethos exists"
+	default:
+		detail = "every file under .punt-labs/ethos and .punt-labs/local/ethos has a class"
 	}
-	if sc.clean() {
-		if sc.zones == 0 {
-			return Result{Name: name, Status: "PASS", Detail: "not scanned: neither .punt-labs/ethos nor .punt-labs/local/ethos exists" + note}
-		}
-		return Result{Name: name, Status: "PASS", Detail: "every file under .punt-labs/ethos and .punt-labs/local/ethos has a class" + note}
+	if lk.Degraded {
+		status = "WARN"
 	}
-	return Result{Name: name, Status: "WARN", Detail: sc.detail() + " — see DES-079" + note}
+	return Result{Name: name, Status: status, Detail: detail + note}
 }
 
 // scan is what the check found: unclassified files, paths it could not scan,
@@ -209,7 +211,9 @@ func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
 // there. layout refuses entries for such a directory, and a zone entry may
 // claim the files by accident (a mission's artifacts/ is class 3), so the
 // check names the directory rather than rely on the zone walk. The walk's own
-// entries for these files are dropped as duplicates.
+// entries for these files are dropped as duplicates, matched by file identity:
+// on a case-insensitive file system the walk may spell a path differently from
+// core.hooksPath.
 func (s *scan) collectHookFiles(root, hooksDir string) error {
 	paths, err := layout.PuntLabsHookPaths(root, hooksDir)
 	if err != nil {
@@ -217,14 +221,17 @@ func (s *scan) collectHookFiles(root, hooksDir string) error {
 	}
 	var names []string
 	for _, rel := range paths {
-		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			return fmt.Errorf("checking hook file %s: %w", rel, err)
 		}
 		names = append(names, path.Base(rel))
-		delete(s.files, rel)
+		if err := dropSameFile(s.files, root, info); err != nil {
+			return err
+		}
 	}
 	if len(names) == 0 {
 		return nil
@@ -232,5 +239,23 @@ func (s *scan) collectHookFiles(root, hooksDir string) error {
 	sort.Strings(names)
 	s.notes[fmt.Sprintf("core.hooksPath %s is inside .punt-labs; ethos hook files there are unclassified: %s",
 		path.Dir(paths[0]), strings.Join(names, ", "))] = true
+	return nil
+}
+
+// dropSameFile deletes from files every path (relative to root) that names the
+// file info describes. A path that has vanished since the walk is not that file.
+func dropSameFile(files map[string]bool, root string, info os.FileInfo) error {
+	for rel := range files {
+		fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("checking %s: %w", rel, err)
+		}
+		if os.SameFile(fi, info) {
+			delete(files, rel)
+		}
+	}
 	return nil
 }

@@ -3,6 +3,7 @@ package doctor
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -457,7 +458,7 @@ func TestCheckSealHook(t *testing.T) {
 	// that documented state. No `exec.LookPath("git")` skip: the whole
 	// point is that a dormant repo must PASS even when the sandbox
 	// couldn't have run at all.
-	t.Run("dormant: no git on PATH still PASSes — execution never attempted (S2/P1)", func(t *testing.T) {
+	t.Run("dormant: no git on PATH is WARN unverified — execution never attempted (S2/P1)", func(t *testing.T) {
 		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
@@ -465,10 +466,11 @@ func TestCheckSealHook(t *testing.T) {
 
 		t.Setenv("PATH", t.TempDir()) // no git anywhere on PATH
 		r := CheckSealHook(dir)
-		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
-		// The degraded hooks-dir lookup is named, but never fails a dormant repo.
-		assert.True(t, strings.HasPrefix(r.Detail, "not enabled here"), r.Detail)
-		assert.Contains(t, r.Detail, "core.hooksPath is ignored")
+		// The degraded hooks-dir lookup is named and no verdict is given, but it
+		// never fails a dormant repo.
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.True(t, r.Passed(), "an unverified hooks directory must not gate doctor's exit status")
+		assert.True(t, strings.HasPrefix(r.Detail, "hooks directory not verified:"), r.Detail)
 	})
 
 	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
@@ -924,7 +926,7 @@ func TestCheckSealHook(t *testing.T) {
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
 
-	t.Run("worktree resolves hooks through commondir", func(t *testing.T) {
+	t.Run("hand-built worktree layout is not trusted without git", func(t *testing.T) {
 		// Real worktree layout: the .git file points at
 		// <main>/.git/worktrees/<name>, which has a commondir file (../..)
 		// back to the main .git — where the hooks actually live. The seal
@@ -949,9 +951,11 @@ func TestCheckSealHook(t *testing.T) {
 			[]byte("gitdir: "+wtAdmin+"\n"), 0o644))
 		mark(t, wt)
 
+		// git does not know this layout (the main .git is not a repository), so
+		// the commondir guess is reported, not judged.
 		r := CheckSealHook(wt)
-		assert.True(t, r.Passed(), "detail: %s", r.Detail)
-		assert.Contains(t, r.Detail, "standalone")
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "hooks directory not verified:")
 	})
 
 	t.Run("worktree via real git worktree add", func(t *testing.T) {
@@ -1180,7 +1184,7 @@ func TestCheckHookPresence_Bfml_Hy40Regression(t *testing.T) {
 	t.Setenv("USER", "mal")
 	t.Setenv("HOME", t.TempDir())
 
-	repo := t.TempDir()
+	repo := repoTemp(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755))
 	// The seal hook is installed and healthy — only the trailer side is
 	// missing, isolating the exact gap hy40 named.
@@ -1189,7 +1193,7 @@ func TestCheckHookPresence_Bfml_Hy40Regression(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 
-	results := RunAll(s, ss, repo, repo, nil)
+	results := RunAll(s, ss, repo, nil, repo, nil)
 
 	var trailerPresence *Result
 	for i := range results {
@@ -1219,7 +1223,7 @@ var currencyTestSpec = HookSpec{
 // currencyRepo creates a bare .git/hooks dir for CheckHookCurrency tests.
 func currencyRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := repoTemp(t) // a real repository: a hand-made .git is a degraded lookup
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 	return dir
 }
@@ -1471,7 +1475,7 @@ func TestRunAllHookCurrencyIndependentOfEnabledMarker(t *testing.T) {
 	t.Setenv("USER", "mal")
 	t.Setenv("HOME", t.TempDir())
 
-	repo := t.TempDir()
+	repo := repoTemp(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755))
 	_, err := githook.Chain(filepath.Join(repo, ".git", "hooks", "pre-commit"), hooks.PreCommit, hooks.SealTag, hooks.SealIdent)
 	require.NoError(t, err)
@@ -1479,7 +1483,7 @@ func TestRunAllHookCurrencyIndependentOfEnabledMarker(t *testing.T) {
 	require.NoError(t, err)
 	// No enabled marker written — the repo stays dormant.
 
-	results := RunAll(s, ss, repo, repo, nil)
+	results := RunAll(s, ss, repo, nil, repo, nil)
 	var sealCurrency, trailerCurrency *Result
 	for i := range results {
 		switch results[i].Name {
@@ -1513,7 +1517,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
-	results := RunAll(s, ss, "", "", nil)
+	results := RunAll(s, ss, "", nil, "", nil)
 	require.Len(t, results, 15)
 
 	names := make([]string, len(results))
@@ -1544,7 +1548,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-	results = RunAll(s, ss, "", "", nil)
+	results = RunAll(s, ss, "", nil, "", nil)
 	assert.False(t, AllPassed(results))
 	assert.Less(t, PassedCount(results), 14)
 
@@ -1877,4 +1881,56 @@ func TestChecklistAgentNames_Real(t *testing.T) {
 	assert.Contains(t, names, "invariant-completeness-reviewer")
 	assert.NotContains(t, names, "README",
 		"README.md must not be treated as an exempted agent handle")
+}
+
+// TestHookChecksWarnOnADegradedLookup: with git off PATH core.hooksPath cannot
+// be read, so no hook check may report a verdict on the directory it guessed.
+func TestHookChecksWarnOnADegradedLookup(t *testing.T) {
+	dir := repoTemp(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	for name, r := range map[string]Result{
+		"presence": CheckSealHook(dir),
+		"currency": CheckHookCurrency(dir, currencyTestSpec),
+	} {
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
+	}
+}
+
+// TestRunAllRefusedRootOverride: a refused ETHOS_REPO_ROOT is a WARN on every
+// check that reads the checkout, where being outside a repository stays PASS.
+func TestRunAllRefusedRootOverride(t *testing.T) {
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	checkout := []string{"Audit seal hook", "Audit trailer hook", "Seal hook currency", "Trailer hook currency", "Unclassified files"}
+	find := func(results []Result, name string) Result {
+		for _, r := range results {
+			if r.Name == name {
+				return r
+			}
+		}
+		t.Fatalf("no result named %q in %+v", name, results)
+		return Result{}
+	}
+
+	refused := fmt.Errorf("ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it", "/nope")
+	results := RunAll(s, ss, "", refused, "", nil)
+	for _, name := range checkout {
+		r := find(results, name)
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Contains(t, r.Detail, "ETHOS_REPO_ROOT", name)
+	}
+
+	outside := fmt.Errorf("/ is %w", resolve.ErrNotInRepo)
+	results = RunAll(s, ss, "", outside, "", nil)
+	for _, name := range checkout {
+		assert.Equal(t, "PASS", find(results, name).Status, name)
+	}
+	assert.Equal(t, "not scanned: not in a repository", find(results, "Unclassified files").Detail)
 }

@@ -13,14 +13,49 @@ import (
 //
 // Warnings holds every advisory line for the user: a core.hooksPath that lands
 // inside the work tree or outside the repo, and the notice of a degraded
-// lookup. Degraded says Dir was not fully verified against git; Reason says
-// why. A caller that acts on Dir (creates it, writes into it) must check
-// Degraded first.
+// lookup. Degraded says the directory was not fully verified against git;
+// Reason says why. The directory is not exported: a caller that acts on it
+// goes through Target or Verified, which refuse a lookup it cannot trust, and
+// one that only shows it uses Display.
 type Lookup struct {
-	Dir      string
+	dir      string
+	root     string // the work tree the lookup was made for
 	Warnings []string
 	Degraded bool
 	Reason   string
+}
+
+// Display returns the hooks directory for a message or a read-only scan. Do not
+// create or write into it: it may be a guess.
+func (l Lookup) Display() string { return l.dir }
+
+// Verified returns the hooks directory only when git itself named it. A
+// degraded lookup ignores core.hooksPath, so acting on its directory may touch
+// hooks git never runs, or miss the ones it does.
+func (l Lookup) Verified() (string, error) {
+	if l.Degraded {
+		return "", fmt.Errorf("hooks directory not verified: %s", l.Reason)
+	}
+	return l.dir, nil
+}
+
+// Target returns the directory to install hooks into. It is Verified's answer,
+// except that a degraded lookup is accepted when the repository's own git
+// directory exists as a directory with a HEAD: enable then works without git,
+// but never on a stale linked worktree or a moved submodule whose gitdir is
+// gone, where git would not run what is written.
+func (l Lookup) Target() (string, error) {
+	if !l.Degraded {
+		return l.dir, nil
+	}
+	gd := manualGitDir(l.root)
+	if info, err := os.Stat(gd); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("hooks directory not verified: %s; git directory %s does not exist", l.Reason, gd)
+	}
+	if _, err := os.Stat(filepath.Join(gd, "HEAD")); err != nil {
+		return "", fmt.Errorf("hooks directory not verified: %s; %s has no HEAD, so it is not a git directory", l.Reason, gd)
+	}
+	return l.dir, nil
 }
 
 // HooksDir returns the hooks directory git runs for the repo at repoRoot.
@@ -38,19 +73,20 @@ type Lookup struct {
 func HooksDir(repoRoot string) Lookup {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
-		return degradedLookup(manualHooksDir(repoRoot), fmt.Sprintf("making %s absolute: %v", repoRoot, err))
+		return degradedLookup(repoRoot, manualHooksDir(repoRoot), fmt.Sprintf("making %s absolute: %v", repoRoot, err))
 	}
 	l, err := gitHooksPath(root)
 	if err != nil {
-		return degradedLookup(manualHooksDir(root), err.Error())
+		return degradedLookup(root, manualHooksDir(root), err.Error())
 	}
 	return l
 }
 
 // degradedLookup builds the Lookup for a hooks dir found without git's help.
-func degradedLookup(dir, reason string) Lookup {
+func degradedLookup(root, dir, reason string) Lookup {
 	return Lookup{
-		Dir:      dir,
+		dir:      dir,
+		root:     root,
 		Degraded: true,
 		Reason:   reason,
 		Warnings: []string{fmt.Sprintf(
@@ -82,7 +118,7 @@ func gitHooksPath(repoRoot string) (Lookup, error) {
 		hd = filepath.Join(repoRoot, hd)
 	}
 	warns, err := classifyHooksPath(repoRoot, top, hdRaw)
-	l := Lookup{Dir: hd, Warnings: warns}
+	l := Lookup{dir: hd, root: repoRoot, Warnings: warns}
 	if err != nil {
 		l.Degraded = true
 		l.Reason = err.Error()
@@ -140,10 +176,9 @@ func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
 	}
 }
 
-// manualHooksDir resolves the hooks dir without git by reading the ".git"
-// gitdir file and its "commondir", so a worktree still lands on the common
-// ".git/hooks" git actually runs.
-func manualHooksDir(repoRoot string) string {
+// manualGitDir resolves repoRoot's git directory without git: ".git" itself, or
+// the target of its "gitdir:" line. The result is not checked to exist.
+func manualGitDir(repoRoot string) string {
 	dot := filepath.Join(repoRoot, ".git")
 	gd := dot
 	if info, err := os.Stat(dot); err != nil || !info.IsDir() {
@@ -157,6 +192,14 @@ func manualHooksDir(repoRoot string) string {
 			}
 		}
 	}
+	return gd
+}
+
+// manualHooksDir resolves the hooks dir without git by reading the git
+// directory and its "commondir", so a worktree still lands on the common
+// ".git/hooks" git actually runs.
+func manualHooksDir(repoRoot string) string {
+	gd := manualGitDir(repoRoot)
 	if data, err := os.ReadFile(filepath.Join(gd, "commondir")); err == nil {
 		if common := strings.TrimSpace(string(data)); common != "" {
 			if !filepath.IsAbs(common) {

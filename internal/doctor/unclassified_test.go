@@ -22,7 +22,7 @@ func touch(t *testing.T, root, rel string) {
 func TestCheckUnclassifiedFiles_NoRoot(t *testing.T) {
 	r := CheckUnclassifiedFiles("")
 	assert.Equal(t, "PASS", r.Status)
-	assert.True(t, strings.HasPrefix(r.Detail, "not scanned: no repository root"), r.Detail)
+	assert.True(t, strings.HasPrefix(r.Detail, "not scanned: not in a repository"), r.Detail)
 }
 
 func TestCheckUnclassifiedFiles_NoEthosTrees(t *testing.T) {
@@ -378,4 +378,41 @@ func repoTemp(t *testing.T) string {
 	dir := t.TempDir()
 	gitIn(t, dir, "init", "-q")
 	return dir
+}
+
+// TestCheckUnclassifiedFiles_DegradedKeepsTheScanResult: an unverified hooks
+// directory adds to the finding; it does not replace it.
+func TestCheckUnclassifiedFiles_DegradedKeepsTheScanResult(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	touch(t, root, ".punt-labs/ethos/stray.bin")
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, ".punt-labs/ethos/stray.bin")
+	assert.Contains(t, r.Detail, "hooks directory not verified:")
+
+	clean := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(clean, ".git"), 0o755))
+	touch(t, clean, ".punt-labs/ethos/identities/bwk.yaml")
+	r = CheckUnclassifiedFiles(clean)
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "every file under .punt-labs/ethos")
+	assert.Contains(t, r.Detail, "hooks directory not verified:")
+}
+
+// TestDropSameFile: paths are matched by file identity, not spelling; a hard
+// link stands in for the second spelling a case-insensitive file system gives.
+func TestDropSameFile(t *testing.T) {
+	root := t.TempDir()
+	touch(t, root, "a/hook")
+	touch(t, root, "a/other")
+	require.NoError(t, os.Link(filepath.Join(root, "a", "hook"), filepath.Join(root, "a", "Hook")))
+	info, err := os.Lstat(filepath.Join(root, "a", "hook"))
+	require.NoError(t, err)
+
+	files := map[string]bool{"a/Hook": true, "a/other": true, "a/vanished": true}
+	require.NoError(t, dropSameFile(files, root, info))
+	assert.Equal(t, map[string]bool{"a/other": true, "a/vanished": true}, files)
 }

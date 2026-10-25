@@ -550,3 +550,63 @@ func TestEnableRefusesSubdirectoryOfAnotherRepo(t *testing.T) {
 		t.Error("Enable wrote the marker before refusing")
 	}
 }
+
+// TestEnableRefusesStaleLinkedWorktree: a .git file whose gitdir target was
+// deleted must not pass for a repository; hooks written under a made-up gitdir
+// are never run by git.
+func TestEnableRefusesStaleLinkedWorktree(t *testing.T) {
+	dir := gitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "f")
+	gitRun(t, dir, "commit", "-q", "-m", "init")
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, dir, "worktree", "add", "-q", wt)
+	gitdir := filepath.Join(dir, ".git", "worktrees", "wt")
+	if err := os.RemoveAll(gitdir); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Enable(wt)
+	if err == nil {
+		t.Fatal("Enable in a stale linked worktree succeeded")
+	}
+	if !strings.Contains(err.Error(), gitdir) {
+		t.Errorf("error = %q, want it to name the missing gitdir %s", err, gitdir)
+	}
+	if exists(gitdir) {
+		t.Error("Enable recreated the deleted gitdir")
+	}
+	if exists(filepath.Join(wt, markerRel)) {
+		t.Error("Enable wrote the marker before refusing")
+	}
+}
+
+// TestDisableRefusesDegradedLookup: with git unavailable core.hooksPath cannot
+// be read, so disable must not strip .git/hooks while the real hooks directory
+// keeps its sections.
+func TestDisableRefusesDegradedLookup(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	gitRun(t, dir, "config", "core.hooksPath", ".githooks")
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	before := readFile(t, hook)
+	_, err := Disable(dir, true)
+	if err == nil {
+		t.Fatal("Disable with an unverified hooks directory succeeded")
+	}
+	if !strings.Contains(err.Error(), "not verified") {
+		t.Errorf("error = %q, want the degraded reason", err)
+	}
+	if got := readFile(t, hook); got != before {
+		t.Error("Disable stripped .git/hooks/pre-commit despite refusing")
+	}
+	if !exists(filepath.Join(dir, markerRel)) {
+		t.Error("Disable deleted the marker before refusing")
+	}
+}

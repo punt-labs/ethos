@@ -48,14 +48,31 @@ func (r Result) Passed() bool {
 
 // RunAll executes every standard health check and returns the results.
 //
-// repoRoot is the current work tree (FindRepoRoot) — the checkout whose
+// repoRoot is the current work tree (LocateRepoRoot) — the checkout whose
 // .claude/agents and seal hook the checks inspect. storeRoot is the shared
 // mission/config store (StoreRepoRoot); it differs from repoRoot only inside
 // a linked worktree, and only the team-config read in CheckOrphanedAgentFiles
 // needs it (Bugbot #370 class: resolving the active team from the worktree
 // while activation wrote it to the store produced false orphan reports).
-func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot string, teams *team.LayeredStore) []Result {
+//
+// rootErr is LocateRepoRoot's error. When repoRoot is empty because an
+// ETHOS_REPO_ROOT was refused, or the checkout could not be examined, the
+// checks that read the checkout report WARN with that reason instead of
+// passing as "not in a repo"; being outside any repository is not a problem.
+func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, teams *team.LayeredStore) []Result {
 	results := make([]Result, 0, 15) // matches today's check count; a stale hint just costs one reallocation, not correctness
+
+	// unlocated is why the checkout checks below cannot say anything, or nil.
+	var unlocated error
+	if repoRoot == "" && rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
+		unlocated = rootErr
+	}
+	checkout := func(r Result) Result {
+		if unlocated != nil {
+			r.Status, r.Detail = "WARN", "not checked: "+unlocated.Error()
+		}
+		return r
+	}
 
 	dir, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
 	results = append(results, passFail("Identity directory", dir, ok))
@@ -74,19 +91,19 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	results = append(results, passFail("Duplicate fields", dup, ok))
 
 	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))
-	results = append(results, CheckSealHook(repoRoot))
+	results = append(results, checkout(CheckSealHook(repoRoot)))
 
 	// ethos-bfml/ethos-hy40: the trailer hook gets the same presence check
 	// the seal hook already had — gated on the enabled marker, active
 	// determined by execution (checkHookPresence), not by whether a section
 	// merely exists. See the DES-hook-presence ADR in DESIGN.md.
-	results = append(results, CheckTrailerHook(repoRoot))
+	results = append(results, checkout(CheckTrailerHook(repoRoot)))
 
 	// DES-hook-drift-detection: content-currency checks, independent of the
 	// enabled marker and of the presence checks' active states — see
 	// docs/design-hook-drift-detection.md.
 	for _, spec := range hookSpecs {
-		results = append(results, CheckHookCurrency(repoRoot, spec))
+		results = append(results, checkout(CheckHookCurrency(repoRoot, spec)))
 	}
 
 	// DES-057. The completeness gate reads the shared store (storeRoot),
@@ -109,7 +126,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	results = append(results, CheckDelegatedWorkerArchetypes(storeRoot))
 
 	// DES-079: every file ethos owns has a class in the path-class table.
-	results = append(results, CheckUnclassifiedFiles(repoRoot))
+	results = append(results, checkout(CheckUnclassifiedFiles(repoRoot)))
 	return results
 }
 
@@ -390,7 +407,13 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
 	}
 	lk := githook.HooksDir(repoRoot)
-	dir, hooksDirWarnings := lk.Dir, lk.Warnings
+	// A degraded lookup did not read core.hooksPath: the directory it guessed
+	// may not be the one git runs, so a verdict on its files would be a guess.
+	dir, lkErr := lk.Verified()
+	if lkErr != nil {
+		return Result{Name: name, Status: "WARN", Detail: lkErr.Error()}
+	}
+	hooksDirWarnings := lk.Warnings
 	// A diverted core.hooksPath (inside the work tree, or outside the repo
 	// entirely) is exactly the kind of surprise an operator running `ethos
 	// doctor` needs named, not silently discarded — doctor is the one place
@@ -719,7 +742,11 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	}
 
 	lk := githook.HooksDir(repoRoot)
-	dir, hooksDirWarnings := lk.Dir, lk.Warnings
+	dir, lkErr := lk.Verified()
+	if lkErr != nil {
+		return Result{Name: name, Status: "WARN", Detail: lkErr.Error()}
+	}
+	hooksDirWarnings := lk.Warnings
 	if len(hooksDirWarnings) > 0 {
 		defer func() {
 			result.Detail += " (" + strings.Join(hooksDirWarnings, "; ") + ")"

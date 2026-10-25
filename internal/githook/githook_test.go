@@ -682,7 +682,7 @@ func TestHooksDir(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir)
 		l := HooksDir(dir)
-		hd, warns := l.Dir, l.Warnings
+		hd, warns := l.Display(), l.Warnings
 		if !strings.Contains(hd, filepath.Join(".git", "hooks")) {
 			t.Errorf("hooks dir = %q, want under .git/hooks", hd)
 		}
@@ -696,7 +696,7 @@ func TestHooksDir(t *testing.T) {
 		gitInit(t, dir)
 		gitConfig(t, dir, "core.hooksPath", ".husky")
 		l := HooksDir(dir)
-		hd, warns := l.Dir, l.Warnings
+		hd, warns := l.Display(), l.Warnings
 		if !strings.Contains(hd, ".husky") {
 			t.Errorf("hooks dir = %q, want .husky", hd)
 		}
@@ -888,7 +888,7 @@ func TestHooksDirDegradedLookupWarns(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // no git
 
 	l := HooksDir(dir)
-	hd, warns := l.Dir, l.Warnings
+	hd, warns := l.Display(), l.Warnings
 	if want := filepath.Join(dir, ".git", "hooks"); hd != want {
 		t.Errorf("hooks dir = %q, want %q", hd, want)
 	}
@@ -913,7 +913,7 @@ func TestHooksDirRelativeRoot(t *testing.T) {
 	t.Chdir(parent)
 
 	l := HooksDir("repo")
-	hd, warns := l.Dir, l.Warnings
+	hd, warns := l.Display(), l.Warnings
 	if !filepath.IsAbs(hd) || !strings.HasSuffix(hd, filepath.Join("repo", ".husky")) {
 		t.Errorf("hooks dir = %q, want absolute .../repo/.husky", hd)
 	}
@@ -952,8 +952,8 @@ func TestHooksDirDegradedFlag(t *testing.T) {
 		if !strings.Contains(l.Reason, "work tree") || !strings.Contains(l.Reason, sub) {
 			t.Errorf("Reason = %q, want it to name the work tree and %s", l.Reason, sub)
 		}
-		if want := filepath.Join(sub, ".git", "hooks"); l.Dir != want {
-			t.Errorf("Dir = %q, want %q", l.Dir, want)
+		if want := filepath.Join(sub, ".git", "hooks"); l.Display() != want {
+			t.Errorf("Display = %q, want %q", l.Display(), want)
 		}
 		if len(l.Warnings) == 0 {
 			t.Error("a degraded lookup carries no warning")
@@ -1024,4 +1024,79 @@ func TestGitOutIncludesStderr(t *testing.T) {
 	if !strings.Contains(err.Error(), "not a git repository") {
 		t.Errorf("error = %q, want git's stderr", err)
 	}
+}
+
+// TestLookupAccessors: the hooks directory is reachable only through methods
+// that state what they verified.
+func TestLookupAccessors(t *testing.T) {
+	t.Run("healthy lookup yields its dir from both", func(t *testing.T) {
+		l := Lookup{dir: "/x/hooks"}
+		for name, f := range map[string]func() (string, error){"Target": l.Target, "Verified": l.Verified} {
+			got, err := f()
+			if err != nil || got != "/x/hooks" {
+				t.Errorf("%s = %q, %v; want /x/hooks, nil", name, got, err)
+			}
+		}
+	})
+
+	t.Run("degraded lookup is never Verified", func(t *testing.T) {
+		root := t.TempDir()
+		mkGitDir(t, filepath.Join(root, ".git"))
+		l := Lookup{dir: filepath.Join(root, ".git", "hooks"), root: root, Degraded: true, Reason: "git is absent"}
+		_, err := l.Verified()
+		if err == nil || !strings.Contains(err.Error(), "git is absent") {
+			t.Errorf("Verified error = %v, want one carrying the reason", err)
+		}
+	})
+
+	t.Run("degraded lookup with a real gitdir has a Target", func(t *testing.T) {
+		root := t.TempDir()
+		mkGitDir(t, filepath.Join(root, ".git"))
+		l := Lookup{dir: filepath.Join(root, ".git", "hooks"), root: root, Degraded: true, Reason: "git is absent"}
+		got, err := l.Target()
+		if err != nil || got != l.dir {
+			t.Errorf("Target = %q, %v; want %q, nil", got, err, l.dir)
+		}
+	})
+
+	t.Run("degraded lookup with a gitdir lacking HEAD has no Target", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		l := Lookup{dir: filepath.Join(root, ".git", "hooks"), root: root, Degraded: true, Reason: "git is absent"}
+		if _, err := l.Target(); err == nil {
+			t.Error("Target = nil error for a .git with no HEAD")
+		}
+	})
+
+	t.Run("degraded lookup with a stale gitdir file has no Target", func(t *testing.T) {
+		root := t.TempDir()
+		gone := filepath.Join(t.TempDir(), "worktrees", "wt")
+		if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+gone+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		l := hooksDirNoGit(t, root)
+		_, err := l.Target()
+		if err == nil || !strings.Contains(err.Error(), gone) {
+			t.Errorf("Target error = %v, want one naming %s", err, gone)
+		}
+	})
+}
+
+func mkGitDir(t *testing.T, gd string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(gd, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gd, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// hooksDirNoGit resolves root with git off PATH, so the lookup is degraded.
+func hooksDirNoGit(t *testing.T, root string) Lookup {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	return HooksDir(root)
 }

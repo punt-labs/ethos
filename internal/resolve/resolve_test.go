@@ -1652,6 +1652,35 @@ func TestLocateRepoRoot(t *testing.T) {
 		assert.Contains(t, err.Error(), "not inside a git repository")
 	})
 
+	t.Run("not in a repository wraps ErrNotInRepo", func(t *testing.T) {
+		if _, err := os.Stat("/.git"); err == nil {
+			t.Skip("/ is inside a repository")
+		}
+		t.Chdir("/")
+		_, err := LocateRepoRoot()
+		assert.ErrorIs(t, err, ErrNotInRepo)
+	})
+
+	t.Run("a .git that cannot be examined is an error, not no repo", func(t *testing.T) {
+		for name, mk := range map[string]func(dot string) error{
+			"dangling symlink": func(dot string) error { return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot) },
+			"symlink loop":     func(dot string) error { return os.Symlink(dot, dot) },
+		} {
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				if err := mk(filepath.Join(root, ".git")); err != nil {
+					t.Skipf("symlink: %v", err)
+				}
+				t.Chdir(root)
+				got, err := LocateRepoRoot()
+				assert.Empty(t, got)
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, ErrNotInRepo)
+				assert.Contains(t, err.Error(), filepath.Join(root, ".git"))
+			})
+		}
+	})
+
 	t.Run("unreadable working directory", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "gone")
 		require.NoError(t, os.Mkdir(dir, 0o755))

@@ -6,6 +6,7 @@ package resolve
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -713,19 +714,34 @@ func LocateRepoRoot() (string, error) {
 	return walkRepoRoot()
 }
 
-// walkRepoRoot walks up from the working directory to the first .git marker.
+// ErrNotInRepo is wrapped by the error LocateRepoRoot returns when the working
+// directory is outside any repository, the one failure that is not a problem.
+var ErrNotInRepo = errors.New("not inside a git repository")
+
+// walkRepoRoot walks up from the working directory to the first .git marker. A
+// .git that cannot be examined (permission denied, a symlink loop or a dangling
+// symlink) is an error: skipping it would resolve an enclosing repository's
+// root, and write into the wrong tree.
 func walkRepoRoot() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getting the working directory: %w", err)
 	}
 	for dir := cwd; ; {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		dot := filepath.Join(dir, ".git")
+		_, err := os.Stat(dot)
+		if err == nil {
 			return dir, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("examining %s: %w", dot, err)
+		}
+		if _, lerr := os.Lstat(dot); lerr == nil {
+			return "", fmt.Errorf("examining %s: dangling symlink: %w", dot, err)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("%s is not inside a git repository", cwd)
+			return "", fmt.Errorf("%s is %w", cwd, ErrNotInRepo)
 		}
 		dir = parent
 	}

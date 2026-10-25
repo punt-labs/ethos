@@ -95,7 +95,7 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 
 	// Refuse before writing anything: a root with no .git of its own would
 	// get hook files git never runs.
-	if _, err := hooksTarget(repoRoot); err != nil {
+	if _, _, err := hooksTarget(repoRoot); err != nil {
 		return rep, err
 	}
 
@@ -178,6 +178,13 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 		}
 	}
 
+	// Resolve the hooks directory before changing anything, so a refusal leaves
+	// the repo enabled rather than half disabled.
+	lk, hooksDir, err := unchainTarget(repoRoot)
+	if err != nil {
+		return rep, err
+	}
+
 	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport)
 	if err != nil {
 		return rep, fmt.Errorf("removing import line: %w", err)
@@ -198,7 +205,7 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 		rep.step("marker", "already", "no marker present")
 	}
 
-	if err := unchainHooks(repoRoot, rep); err != nil {
+	if err := unchainHooks(lk, hooksDir, rep); err != nil {
 		return rep, err
 	}
 
@@ -235,34 +242,25 @@ func removeMarker(repoRoot string) (bool, error) {
 	return true, nil
 }
 
-// hooksTarget resolves the hooks directory for enable and refuses when the
-// lookup is degraded and repoRoot has no .git: creating hooks there would
-// make a fake .git that git never runs and that later makes the root look
-// like a repository. The error carries git's own account of why.
-func hooksTarget(repoRoot string) (githook.Lookup, error) {
+// hooksTarget resolves the hooks directory for enable. Target refuses a
+// degraded lookup whose git directory is missing: creating hooks there would
+// make a fake gitdir that git never runs. The error carries the reason.
+func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 	l := githook.HooksDir(repoRoot)
-	if !l.Degraded {
-		return l, nil
+	dir, err := l.Target()
+	if err != nil {
+		return l, "", fmt.Errorf("refusing to create a hooks directory for %s: %w", repoRoot, err)
 	}
-	_, err := os.Lstat(filepath.Join(repoRoot, ".git"))
-	switch {
-	case err == nil:
-		return l, nil
-	case errors.Is(err, fs.ErrNotExist):
-		return l, fmt.Errorf("refusing to create a hooks directory under %s: it has no .git of its own: %s", repoRoot, l.Reason)
-	default:
-		return l, fmt.Errorf("checking %s for .git: %w", repoRoot, err)
-	}
+	return l, dir, nil
 }
 
 // chainHooks resolves the shared hooks directory and chains the seal and
 // trailer sections into pre-commit and commit-msg.
 func chainHooks(repoRoot string, rep *Report) error {
-	l, err := hooksTarget(repoRoot)
+	l, dir, err := hooksTarget(repoRoot)
 	if err != nil {
 		return err
 	}
-	dir := l.Dir
 	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating hooks dir %s: %w", dir, err)
@@ -293,11 +291,33 @@ var hookSpecs = map[string]struct {
 	layout.HookCommitMsg: {hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
 }
 
-// unchainHooks strips the seal and trailer sections from the shared hooks.
-func unchainHooks(repoRoot string, rep *Report) error {
+// unchainTarget resolves the hooks directory disable strips. A degraded lookup
+// cannot see core.hooksPath, so the directory it guesses may not be the one git
+// runs; disable refuses rather than strip a directory while the real one keeps
+// its sections. A guessed directory that does not exist has nothing to strip.
+func unchainTarget(repoRoot string) (githook.Lookup, string, error) {
 	l := githook.HooksDir(repoRoot)
-	dir := l.Dir
+	dir, err := l.Verified()
+	if err == nil {
+		return l, dir, nil
+	}
+	_, statErr := os.Stat(l.Display())
+	switch {
+	case errors.Is(statErr, fs.ErrNotExist):
+		return l, "", nil
+	case statErr != nil:
+		return l, "", fmt.Errorf("checking %s: %w; %w", l.Display(), statErr, err)
+	}
+	return l, "", fmt.Errorf("refusing to strip hooks from %s: %w", l.Display(), err)
+}
+
+// unchainHooks strips the seal and trailer sections from the hooks in dir. An
+// empty dir means unchainTarget found none.
+func unchainHooks(l githook.Lookup, dir string, rep *Report) error {
 	rep.Warnings = append(rep.Warnings, l.Warnings...)
+	if dir == "" {
+		return nil
+	}
 	for _, name := range layout.HookNames() {
 		s, ok := hookSpecs[name]
 		if !ok {
