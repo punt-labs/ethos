@@ -154,8 +154,8 @@ func HangingGit(t testing.TB) {
 // ShimGit puts a git first on PATH that runs the real git, except that a
 // command whose first argument is in hang never answers; it shortens the git
 // deadline to 200ms. A test uses it to make exactly one git question time out
-// while every other works. The `-C dir` prefix is skipped when naming the
-// command.
+// while every other works. The `-C dir` and `-c key=value` prefixes are skipped when
+// naming the command.
 func ShimGit(t testing.TB, hang ...string) {
 	t.Helper()
 	real, err := exec.LookPath("git")
@@ -163,7 +163,8 @@ func ShimGit(t testing.TB, hang ...string) {
 	if err != nil || serr != nil || runtime.GOOS == "windows" {
 		t.Skip("needs git, sh and sleep")
 	}
-	script := "#!/bin/sh\ncmd=\"$1\"\n[ \"$1\" = -C ] && cmd=\"$3\"\ncase \"$cmd\" in\n"
+	// The command is the first argument that is not -C dir or -c key=value.
+	script := "#!/bin/sh\ncmd=; skip=0\nfor a in \"$@\"; do\n  if [ $skip = 1 ]; then skip=0; continue; fi\n  case \"$a\" in -C|-c) skip=1 ;; *) cmd=$a; break ;; esac\ndone\ncase \"$cmd\" in\n"
 	for _, h := range hang {
 		script += "  " + h + ") exec " + sleep + " 60 ;;\n"
 	}

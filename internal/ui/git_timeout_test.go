@@ -33,6 +33,7 @@ func TestLookupCommitCachesAFailureForTheRequestOnly(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	script := `#!/bin/sh
 PATH=/usr/bin:/bin
+while [ "$1" = -c ]; do shift 2; done
 case "$1" in
 blame)
   printf '` + sha + ` 1 1 2\nauthor A\n\tone\n` + sha + ` 2 2\nauthor A\n\ttwo\n' ;;
@@ -71,6 +72,7 @@ func TestBlamePageStopsAskingGitAfterATimeout(t *testing.T) {
 	require.NoError(t, err)
 	script := `#!/bin/sh
 PATH=/usr/bin:/bin
+while [ "$1" = -c ]; do shift 2; done
 case "$1" in
 blame)
   printf '` + sha1 + ` 1 1 1\nauthor A\n\tone\n` + sha2 + ` 2 2 1\nauthor B\n\ttwo\n' ;;

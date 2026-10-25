@@ -206,7 +206,7 @@ func TestRead(t *testing.T) {
 	}{
 		"ok":                   {"echo v\n", AbsentUnset, "ok", ""},
 		"unset key":            {"exit 1\n", AbsentUnset, "absent", ""},
-		"exit 1 with stderr":   {"echo boom >&2; exit 1\n", AbsentUnset, "error", "boom"},
+		"exit 1 with stderr":   {"echo boom >&2; exit 1\n", AbsentUnset, "absent", ""},
 		"exit 1 not asked for": {"exit 1\n", AbsentNoRemote, "error", ""},
 		"no such remote":       {"echo 'error: No such remote' >&2; exit 2\n", AbsentNoRemote, "absent", ""},
 		"exit 2 not asked for": {"exit 2\n", AbsentUnset, "error", ""},
@@ -248,4 +248,71 @@ func TestRead(t *testing.T) {
 		assert.ErrorIs(t, err, ErrTimeout)
 		assert.False(t, absent)
 	})
+}
+
+// A trace2 target in the user's git config (or environment) writes to git's
+// stderr; Read must still see `git config` for an unset key as exit 1, so it
+// switches the three trace2 targets off on the command line.
+func TestReadSwitchesTrace2Off(t *testing.T) {
+	git := fakeGitScript(t, "echo \"$@\"\n")
+	out, _, err := Read(Spec{Git: git, Args: []string{"config", "k"}}, AbsentUnset)
+	require.NoError(t, err)
+	assert.Equal(t, "-c trace2.normalTarget= -c trace2.eventTarget= -c trace2.perfTarget= config k\n", string(out))
+}
+
+// With real git: trace2 sent to stderr by the user's config and by
+// GIT_CONFIG_PARAMETERS does not make an unset key an error.
+func TestReadUnsetKeyUnderTrace2(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[trace2]\n\tnormalTarget = 2\n\teventTarget = 2\n\tperfTarget = 2\n"), 0o644))
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_TRACE2", "2")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'trace2.normalTarget=2'")
+	for name, env := range map[string][]string{"nil": nil, "inherited": Inherited(), "parsed": Parsed()} {
+		t.Run(name, func(t *testing.T) {
+			_, absent, err := Read(Spec{Git: "git", Args: []string{"config", "ethos.test.unset"}, Env: env}, AbsentUnset)
+			require.NoError(t, err)
+			assert.True(t, absent)
+		})
+	}
+}
+
+// Inherited keeps the caller's other config parameters and drops the trace2
+// ones, in both the GIT_CONFIG_PARAMETERS and the GIT_CONFIG_COUNT forms.
+func TestInheritedStripsTrace2Config(t *testing.T) {
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'core.x=1' 'trace2.eventTarget=2' 'user.name=a b'")
+	t.Setenv("GIT_CONFIG_COUNT", "3")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.y")
+	t.Setenv("GIT_CONFIG_VALUE_0", "1")
+	t.Setenv("GIT_CONFIG_KEY_1", "TRACE2.perfTarget")
+	t.Setenv("GIT_CONFIG_VALUE_1", "2")
+	t.Setenv("GIT_CONFIG_KEY_2", "core.z")
+	t.Setenv("GIT_CONFIG_VALUE_2", "3")
+	got := map[string]string{}
+	for _, kv := range Inherited() {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = v
+	}
+	assert.Equal(t, "'core.x=1' 'user.name=a b'", got["GIT_CONFIG_PARAMETERS"])
+	assert.Equal(t, "2", got["GIT_CONFIG_COUNT"])
+	assert.Equal(t, "core.y", got["GIT_CONFIG_KEY_0"])
+	assert.Equal(t, "core.z", got["GIT_CONFIG_KEY_1"])
+	assert.Equal(t, "3", got["GIT_CONFIG_VALUE_1"])
+	_, has := got["GIT_CONFIG_KEY_2"]
+	assert.False(t, has)
+}
+
+// A Spec with no Env inherits the process environment minus trace output.
+func TestRunNilEnvStripsTrace(t *testing.T) {
+	t.Setenv("GIT_TRACE", "1")
+	t.Setenv("GIT_TRACE2_EVENT", "/x")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'trace2.normalTarget=2'")
+	git := fakeGitScript(t, "echo \"[$GIT_TRACE][$GIT_TRACE2_EVENT][$GIT_CONFIG_PARAMETERS]\"\n")
+	out, err := Run(Spec{Git: git})
+	require.NoError(t, err)
+	assert.Equal(t, "[][][]\n", string(out))
 }

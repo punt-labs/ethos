@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -86,7 +87,7 @@ func Run(s Spec) ([]byte, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.Git, s.Args...)
 	cmd.Dir = s.Dir
-	cmd.Env = s.Env
+	cmd.Env = stripTrace(s.Env)
 	cmd.Stdin = s.Stdin
 	// On the deadline git gets SIGTERM, so it can remove its index.lock; after
 	// the WaitDelay grace Go kills it. A child holding stdout does not stall
@@ -201,11 +202,124 @@ func Inherited() []string {
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if name != "LC_ALL" && name != "LANGUAGE" && !isTrace(name) {
+		if name != "LC_ALL" && name != "LANGUAGE" {
 			env = append(env, kv)
 		}
 	}
-	return append(env, "LC_ALL=C", "LANGUAGE=")
+	return append(stripTrace(env), "LC_ALL=C", "LANGUAGE=")
+}
+
+// stripTrace returns env without anything that makes git write trace output to
+// stderr: the GIT_TRACE* variables and any trace2.* setting passed through
+// GIT_CONFIG_PARAMETERS or GIT_CONFIG_COUNT/KEY_n/VALUE_n. A nil env is the
+// process environment. Parsed and Inherited are already stripped; Run applies
+// it to every command, so a Spec with no Env gets the same treatment.
+func stripTrace(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	out := make([]string, 0, len(env))
+	var count = -1
+	keys := map[int]string{}
+	for _, kv := range env {
+		name, val, _ := strings.Cut(kv, "=")
+		switch {
+		case isTrace(name):
+			continue
+		case name == "GIT_CONFIG_PARAMETERS":
+			if v := stripTraceParameters(val); v != "" {
+				out = append(out, name+"="+v)
+			}
+			continue
+		case name == "GIT_CONFIG_COUNT":
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+				count = n
+				continue
+			}
+		case strings.HasPrefix(name, "GIT_CONFIG_KEY_"):
+			if i, err := strconv.Atoi(strings.TrimPrefix(name, "GIT_CONFIG_KEY_")); err == nil {
+				keys[i] = val
+				continue
+			}
+		case strings.HasPrefix(name, "GIT_CONFIG_VALUE_"):
+			if _, err := strconv.Atoi(strings.TrimPrefix(name, "GIT_CONFIG_VALUE_")); err == nil {
+				continue
+			}
+		}
+		out = append(out, kv)
+	}
+	if count < 0 {
+		return out
+	}
+	// Renumber the pairs that survive; the values are read again from env.
+	values := map[int]string{}
+	for _, kv := range env {
+		name, val, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "GIT_CONFIG_VALUE_") {
+			if i, err := strconv.Atoi(strings.TrimPrefix(name, "GIT_CONFIG_VALUE_")); err == nil {
+				values[i] = val
+			}
+		}
+	}
+	n := 0
+	for i := 0; i < count; i++ {
+		k, ok := keys[i]
+		if !ok || isTrace2Key(k) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", n, k), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", n, values[i]))
+		n++
+	}
+	if n > 0 {
+		out = append(out, "GIT_CONFIG_COUNT="+strconv.Itoa(n))
+	}
+	return out
+}
+
+func isTrace2Key(key string) bool {
+	return strings.HasPrefix(strings.ToLower(key), "trace2.")
+}
+
+// stripTraceParameters removes the trace2.* entries from a GIT_CONFIG_PARAMETERS
+// value: space-separated entries, each 'key=value' or 'key'='value' in git's
+// shell quoting ('\” is a literal quote).
+func stripTraceParameters(v string) string {
+	var kept []string
+	var raw, plain strings.Builder
+	inQuote := false
+	flush := func() {
+		if raw.Len() == 0 {
+			return
+		}
+		key, _, _ := strings.Cut(plain.String(), "=")
+		if !isTrace2Key(key) {
+			kept = append(kept, raw.String())
+		}
+		raw.Reset()
+		plain.Reset()
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case !inQuote && c == ' ':
+			flush()
+			continue
+		case !inQuote && c == '\\' && i+1 < len(v):
+			i++
+			raw.WriteByte(c)
+			raw.WriteByte(v[i])
+			plain.WriteByte(v[i])
+			continue
+		case c == '\'':
+			inQuote = !inQuote
+			raw.WriteByte(c)
+			continue
+		}
+		raw.WriteByte(c)
+		plain.WriteByte(c)
+	}
+	flush()
+	return strings.Join(kept, " ")
 }
 
 // Absent says which failed exits of a read mean "there is nothing there".
@@ -214,7 +328,8 @@ func Inherited() []string {
 type Absent int
 
 const (
-	// AbsentUnset: exit 1 with empty stderr — `git config` for an unset key.
+	// AbsentUnset: exit 1 — `git config` for an unset key. Whatever git wrote to
+	// stderr is not part of the rule: git config has no other exit 1.
 	AbsentUnset Absent = 1 << iota
 	// AbsentNoRemote: exit 2 — `git remote get-url` for a remote that does not exist.
 	AbsentNoRemote
@@ -228,22 +343,27 @@ const (
 // returns an error carrying git's stderr, wrapping the *exec.ExitError (or
 // ErrTimeout, or exec.ErrNotFound) for errors.Is and errors.As.
 func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
+	// -c with an empty value turns a trace2 target off whatever the user's
+	// config or environment says: trace output on stderr would turn "key unset"
+	// (exit 1, empty stderr) into a failure.
+	shown := s.Args
+	s.Args = append([]string{"-c", "trace2.normalTarget=", "-c", "trace2.eventTarget=", "-c", "trace2.perfTarget="}, s.Args...)
 	out, err = Run(s)
 	if err == nil {
 		return out, false, nil
 	}
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		return nil, false, fmt.Errorf("git %s: %w", strings.Join(s.Args, " "), err)
+		return nil, false, fmt.Errorf("git %s: %w", strings.Join(shown, " "), err)
 	}
 	stderr := strings.TrimSpace(string(ee.Stderr))
 	switch {
-	case absent&AbsentUnset != 0 && ee.ExitCode() == 1 && stderr == "":
+	case absent&AbsentUnset != 0 && ee.ExitCode() == 1:
 		return nil, true, nil
 	case absent&AbsentNoRemote != 0 && ee.ExitCode() == 2:
 		return nil, true, nil
 	case absent&AbsentNotRepo != 0 && IsNotARepo(stderr):
 		return nil, true, nil
 	}
-	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(s.Args, " "), err, stderr)
+	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(shown, " "), err, stderr)
 }

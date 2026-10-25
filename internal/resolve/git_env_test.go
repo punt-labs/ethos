@@ -25,7 +25,7 @@ func requireGit(t *testing.T) {
 func fakeGit(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\n"+body), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nwhile [ \"$1\" = -c ]; do shift 2; done\n"+body), 0o755))
 	t.Setenv("PATH", dir)
 	return dir
 }
