@@ -553,6 +553,44 @@ email: no-repo@example.com
 	assert.True(t, os.IsNotExist(statErr))
 }
 
+// A .git that cannot be examined fails setup with the cause; it is not "no
+// repo" and must not skip the repo config silently.
+func TestSetup_UnexaminableGitFails(t *testing.T) {
+	noRepo, err := os.MkdirTemp("/tmp", "ethos-setup-baddot-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(noRepo) })
+	home, err := os.MkdirTemp("/tmp", "ethos-setup-home-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(home) })
+	dot := filepath.Join(noRepo, ".git")
+	if err := os.Symlink(filepath.Join(noRepo, "absent"), dot); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+
+	setupBundle = "foundation"
+	setupSolo = false
+	setupFile = ""
+	t.Cleanup(func() {
+		setupBundle = "foundation"
+		setupSolo = false
+		setupFile = ""
+	})
+	t.Setenv("HOME", home)
+	t.Setenv("USER", "test-user")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Chdir(noRepo)
+	_, seedErr := seed.Seed(filepath.Join(home, ".punt-labs", "ethos"), filepath.Join(home, ".claude", "skills"), false)
+	require.NoError(t, seedErr)
+
+	cfgPath := filepath.Join(noRepo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "\nname: Bad Dot\nhandle: bad-dot\nemail: bad-dot@example.com\n")
+
+	_, _, runErr := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, runErr)
+	assert.Contains(t, runErr.Error(), dot)
+}
+
 // setupTestEnvNoSeed is like setupTestEnv but does not run seed, so the
 // conventional attributes are absent from the global layer.
 func setupTestEnvNoSeed(t *testing.T) (home, repo string) {

@@ -213,7 +213,7 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// --- Repo config and bundle ---
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot, rootErr := resolve.LocateRepoRoot()
 	if repoRoot == "" {
 		// Distinguish "genuinely not in a repo" from "a bad ETHOS_REPO_ROOT
 		// was refused." The latter must FAIL LOUD, not silently skip repo
@@ -224,6 +224,11 @@ func runSetup(cmd *cobra.Command) error {
 		if override, set := resolve.RepoRootOverride(); set {
 			return fmt.Errorf("setup: ETHOS_REPO_ROOT=%q was refused (not an "+
 				"existing directory); unset it or point it at a repo", override)
+		}
+		// A .git that cannot be examined is not "no repo": say why and stop,
+		// rather than skip repo config as if the cwd were outside any repository.
+		if rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
+			return fmt.Errorf("setup: locating the repository: %w", rootErr)
 		}
 		fmt.Fprintln(errw, "ethos: setup: not in a git repository (identities created, skipping repo config and team)")
 		if result.Skipped == nil {

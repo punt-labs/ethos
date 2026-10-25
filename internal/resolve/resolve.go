@@ -700,7 +700,17 @@ func FindRepoRoot() string {
 	if root, set := repoRootOverride(false); set {
 		return root
 	}
-	root, _ := walkRepoRoot()
+	return warnWalkRepoRoot()
+}
+
+// warnWalkRepoRoot is walkRepoRoot for callers that return only a path: any
+// failure other than "outside a repository" is printed to stderr, so a
+// dangling or unreadable .git is not reported as "not in a git repository".
+func warnWalkRepoRoot() string {
+	root, err := walkRepoRoot()
+	if err != nil && !errors.Is(err, ErrNotInRepo) {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+	}
 	return root
 }
 
@@ -765,33 +775,23 @@ func walkRepoRoot() (string, error) {
 //     a .punt-labs/ethos store, else refused loudly (see repoRootOverride).
 //  2. Walk upward for a .git marker. A .git directory is the main work
 //     tree — the store lives here. A .git file is a linked worktree (or a
-//     submodule); resolve the owning repo through the common dir.
+//     submodule); resolve the owning repo through the common dir. A .git
+//     that cannot be examined stops the walk with "" (see walkRepoRoot).
 func StoreRepoRoot() string {
 	if root, set := repoRootOverride(true); set {
 		return root
 	}
-	dir, err := os.Getwd()
-	if err != nil {
+	dir := warnWalkRepoRoot()
+	if dir == "" {
 		return ""
 	}
-	for {
-		marker := filepath.Join(dir, ".git")
-		info, err := os.Stat(marker)
-		if err == nil {
-			if info.IsDir() {
-				return dir // main work tree — the store lives here
-			}
-			if root := worktreeStoreRoot(dir); root != "" {
-				return root
-			}
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
+	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
+		return dir // main work tree — the store lives here
 	}
+	if root := worktreeStoreRoot(dir); root != "" {
+		return root
+	}
+	return dir
 }
 
 // worktreeStoreRoot resolves the repository root that owns the store for a

@@ -139,3 +139,25 @@ func TestEnableNotInRepoExits2(t *testing.T) {
 		t.Errorf("stderr = %q", errOut)
 	}
 }
+
+// A .git that cannot be examined is reported with its cause, not as "not in a
+// git repository".
+func TestEnableDisableReportUnexaminableGit(t *testing.T) {
+	for _, verb := range []string{"enable", "disable"} {
+		t.Run(verb, func(t *testing.T) {
+			dir := t.TempDir()
+			dot := filepath.Join(dir, ".git")
+			if err := os.Symlink(filepath.Join(dir, "absent"), dot); err != nil {
+				t.Skipf("symlink: %v", err)
+			}
+			t.Chdir(dir)
+			_, errOut, err := runEnableCmd(t, verb)
+			if _, ok := err.(failClosed); !ok {
+				t.Fatalf("error = %v (%T), want failClosed", err, err)
+			}
+			if !strings.Contains(errOut, dot) || strings.Contains(errOut, "not in a git repository") {
+				t.Errorf("stderr = %q, want the cause naming %s", errOut, dot)
+			}
+		})
+	}
+}

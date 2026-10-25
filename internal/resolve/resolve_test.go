@@ -1697,3 +1697,62 @@ func TestLocateRepoRoot(t *testing.T) {
 		assert.Contains(t, err.Error(), "working directory")
 	})
 }
+
+// unexaminableGit makes a nested directory under an enclosing repository whose
+// own .git cannot be examined, and makes it the working directory.
+func unexaminableGit(t *testing.T, mk func(dot string) error) string {
+	t.Helper()
+	outer := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(outer, ".git"), 0o755))
+	inner := filepath.Join(outer, "inner")
+	require.NoError(t, os.Mkdir(inner, 0o755))
+	if err := mk(filepath.Join(inner, ".git")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	t.Chdir(inner)
+	return inner
+}
+
+var unexaminableGitCases = map[string]func(dot string) error{
+	"dangling symlink": func(dot string) error { return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot) },
+	"symlink loop":     func(dot string) error { return os.Symlink(dot, dot) },
+}
+
+// A .git that cannot be examined stops StoreRepoRoot: walking past it would
+// resolve the enclosing repository and write into the wrong store.
+func TestStoreRepoRootStopsAtUnexaminableGit(t *testing.T) {
+	for name, mk := range unexaminableGitCases {
+		t.Run(name, func(t *testing.T) {
+			inner := unexaminableGit(t, mk)
+			var got string
+			out := captureStderr(t, func() { got = StoreRepoRoot() })
+			assert.Empty(t, got)
+			assert.Contains(t, out, filepath.Join(inner, ".git"))
+		})
+	}
+}
+
+// FindRepoRoot reports why it found nothing when the cause is not simply
+// "outside a repository".
+func TestFindRepoRootReportsUnexaminableGit(t *testing.T) {
+	for name, mk := range unexaminableGitCases {
+		t.Run(name, func(t *testing.T) {
+			inner := unexaminableGit(t, mk)
+			var got string
+			out := captureStderr(t, func() { got = FindRepoRoot() })
+			assert.Empty(t, got)
+			assert.Contains(t, out, filepath.Join(inner, ".git"))
+		})
+	}
+}
+
+func TestFindRepoRootSilentOutsideARepo(t *testing.T) {
+	if _, err := os.Stat("/.git"); err == nil {
+		t.Skip("/ is inside a repository")
+	}
+	t.Chdir("/")
+	var got string
+	out := captureStderr(t, func() { got = FindRepoRoot() })
+	assert.Empty(t, got)
+	assert.Empty(t, out)
+}

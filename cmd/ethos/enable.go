@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -32,9 +33,8 @@ func init() {
 }
 
 func runEnable(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := locateForCommand(cmd, "enable")
 	if repoRoot == "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), "ethos: enable: not in a git repository")
 		return failClosed{}
 	}
 	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
@@ -49,6 +49,22 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	printEnableReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), rep, "enabled")
 	return nil
+}
+
+// locateForCommand returns the work tree root for verb, or "" after printing
+// why there is none: a plain "not in a git repository", or the cause when a
+// .git exists but cannot be examined or ETHOS_REPO_ROOT was refused.
+func locateForCommand(cmd *cobra.Command, verb string) string {
+	root, err := resolve.LocateRepoRoot()
+	if root != "" {
+		return root
+	}
+	reason := "not in a git repository"
+	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		reason = err.Error()
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "ethos: %s: %s\n", verb, reason)
+	return ""
 }
 
 // emitPartialReport surfaces the completed steps and warnings to stderr on the
