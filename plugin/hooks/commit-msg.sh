@@ -73,11 +73,19 @@ if [ "$_revparse_status" -ne 0 ]; then
   exit 1
 fi
 [ -n "$_revparse_err" ] && rm -f "$_revparse_err"
-# The root must be one absolute line (a / path, or a Windows drive path) naming a
+# The root must be one absolute line (a / path, or a Windows drive path under
+# MINGW, MSYS or CYGWIN) naming a
 # directory; anything else (a trace line that got through, a relative path) is
 # not a root to trust.
 case "$REPO_ROOT" in
-/*|[A-Za-z]:/*) ;;
+/*) ;;
+[A-Za-z]:/*)
+  # A drive path is a root only where git for Windows runs this shell.
+  case "$(uname -s 2>/dev/null)" in
+  MINGW* | MSYS* | CYGWIN*) ;;
+  *) _revparse_bad=1 ;;
+  esac
+  ;;
 *) _revparse_bad=1 ;;
 esac
 case "$REPO_ROOT" in

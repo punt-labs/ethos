@@ -368,15 +368,23 @@ func TestHooksIgnoreATraceOnStdout(t *testing.T) {
 	}
 }
 
-// A Windows drive path is an absolute root, as a / path is: the hook gets past
-// the root check and goes on to the marker (here a directory literally named
-// "C:" in the working directory stands for the drive).
+// A Windows drive path is an absolute root where git for Windows runs the shell
+// (uname -s says MINGW, MSYS or CYGWIN): the hook gets past the root check and
+// goes on to the marker (a directory literally named "C:" in the working
+// directory stands for the drive). On Linux it is refused.
 func TestHooksAcceptAWindowsDrivePathAsARoot(t *testing.T) {
+	for _, uname := range []string{"MINGW64_NT-10.0", "MSYS_NT-10.0", "CYGWIN_NT-10.0", "Linux"} {
+		t.Run(uname, func(t *testing.T) { drivePathRoot(t, uname) })
+	}
+}
+
+func drivePathRoot(t *testing.T, uname string) {
 	work := t.TempDir()
 	root := filepath.Join(work, "C:", "repo")
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 	bin := fakeGitDir(t, "echo 'C:/repo'\n")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "uname"), []byte("#!/bin/sh\necho "+uname+"\n"), 0o755))
 	marker := filepath.Join(t.TempDir(), "sealed")
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755))
 	script, err := filepath.Abs("pre-commit.sh")
@@ -385,6 +393,12 @@ func TestHooksAcceptAWindowsDrivePathAsARoot(t *testing.T) {
 	cmd.Dir = work
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + bin + ":/usr/bin:/bin"}
 	out, err := cmd.CombinedOutput()
+	if uname == "Linux" {
+		require.Error(t, err, "a C:/ root is refused on Linux")
+		assert.Contains(t, string(out), "did not print one absolute directory")
+		assert.NoFileExists(t, marker)
+		return
+	}
 	require.NoError(t, err, string(out))
 	assert.FileExists(t, marker, "the root check accepted C:/repo and the seal ran")
 }
