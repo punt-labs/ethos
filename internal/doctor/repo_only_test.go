@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -339,4 +340,59 @@ func TestCheckExtCredentialNames(t *testing.T) {
 	t.Run("nil store passes", func(t *testing.T) {
 		assert.Equal(t, "PASS", CheckExtCredentialNames(nil).Status)
 	})
+
+	// A check that could not look is not a pass.
+	t.Run("list error warns", func(t *testing.T) {
+		r := CheckExtCredentialNames(failingStore{IdentityStore: newStore(t), listErr: errors.New("disk on fire")})
+		assert.Equal(t, "WARN", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "disk on fire")
+	})
+
+	t.Run("ext list error warns with the reason", func(t *testing.T) {
+		r := CheckExtCredentialNames(failingStore{IdentityStore: newStore(t), extErr: errors.New("ext dir unreadable")})
+		assert.Equal(t, "WARN", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "mal")
+		assert.Contains(t, r.Detail, "ext dir unreadable")
+	})
+
+	t.Run("unreadable extension file warns with the reason", func(t *testing.T) {
+		s := newStore(t)
+		require.NoError(t, s.ExtSet("mal", "quarry", "memory_collection", "mem"))
+		require.NoError(t, os.WriteFile(filepath.Join(s.ExtDir("mal"), "quarry.yaml"), []byte("key: [unclosed\n"), 0o600))
+		r := CheckExtCredentialNames(s)
+		assert.Equal(t, "WARN", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "quarry")
+	})
+
+	t.Run("a credential key and an unreadable file are both reported", func(t *testing.T) {
+		s := newStore(t)
+		require.NoError(t, s.Save(&identity.Identity{Name: "Zoe", Handle: "zoe", Kind: "human"}))
+		require.NoError(t, s.ExtSet("mal", "quarry", "api_token", "s3cret"))
+		require.NoError(t, s.ExtSet("zoe", "beadle", "gpg_key_id", "ABC"))
+		require.NoError(t, os.WriteFile(filepath.Join(s.ExtDir("zoe"), "beadle.yaml"), []byte("key: [unclosed\n"), 0o600))
+		r := CheckExtCredentialNames(s)
+		assert.Equal(t, "WARN", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "mal quarry/api_token")
+		assert.Contains(t, r.Detail, "zoe")
+	})
+}
+
+// failingStore fails List or ExtList with the given error.
+type failingStore struct {
+	identity.IdentityStore
+	listErr, extErr error
+}
+
+func (f failingStore) List() (*identity.ListResult, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.IdentityStore.List()
+}
+
+func (f failingStore) ExtList(handle string) ([]string, error) {
+	if f.extErr != nil {
+		return nil, f.extErr
+	}
+	return f.IdentityStore.ExtList(handle)
 }
