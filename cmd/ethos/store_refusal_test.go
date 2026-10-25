@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,4 +247,39 @@ func TestStoreRefusalExemptions(t *testing.T) {
 	rootCmd.AddCommand(unclassified)
 	t.Cleanup(func() { rootCmd.RemoveCommand(unclassified) })
 	assert.False(t, exemptFromStoreRefusal(unclassified), "an unclassified command refuses")
+}
+
+// End to end: a linked worktree of a repository whose config cannot be read
+// has a store ethos cannot decide the location of. A store command refuses,
+// naming the file, and never uses the global store.
+func TestCLI_UnreadableRepositoryConfigRefusesStoreCommands(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	se := setupCLISubprocessEnv(t)
+	for _, args := range [][]string{
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		cmd := testhelpers.GitCommand(append([]string{"-C", se.repo}, args...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	cmd := testhelpers.GitCommand("-C", se.repo, "worktree", "add", "-q", wt)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	cfg := filepath.Join(se.repo, ".git", "config")
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+
+	c := exec.Command(ethosBinary, "identity", "list")
+	c.Dir = wt
+	c.Env = withForcedNotUnderClaudeCode(se.env)
+	combined, err := c.CombinedOutput()
+	require.Error(t, err, string(combined))
+	assert.Contains(t, string(combined), cfg)
+	assert.Contains(t, string(combined), "refusing")
 }

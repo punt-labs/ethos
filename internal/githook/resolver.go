@@ -96,25 +96,33 @@ func (l Lookup) Verified() (string, error) {
 func HooksDir(repoRoot string) Lookup {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
-		return degradedLookup(repoRoot, manualHooksDir(repoRoot), fmt.Errorf("making %s absolute: %w", repoRoot, err))
+		dir, handErr := manualHooksDir(repoRoot)
+		return degradedLookup(repoRoot, dir, handErr, fmt.Errorf("making %s absolute: %w", repoRoot, err))
 	}
 	l, err := gitHooksPath(root)
 	if err != nil {
-		return degradedLookup(root, manualHooksDir(root), err)
+		dir, handErr := manualHooksDir(root)
+		return degradedLookup(root, dir, handErr, err)
 	}
 	return l
 }
 
 // degradedLookup builds the Lookup for a hooks dir found without git's help.
-func degradedLookup(root, dir string, cause error) Lookup {
+// handErr is why the hand rules found no git directory either (nil when they
+// did): it is part of the warning, so a reader sees why the default was used.
+func degradedLookup(root, dir string, handErr, cause error) Lookup {
+	warn := fmt.Sprintf(
+		"git did not resolve the hooks directory (%s); core.hooksPath is ignored and %s is assumed", cause, dir)
+	if handErr != nil {
+		warn += fmt.Sprintf(" (the hand rules found no git directory either: %v)", handErr)
+	}
 	return Lookup{
 		dir:      dir,
 		root:     root,
 		Degraded: true,
 		Reason:   cause.Error(),
 		cause:    cause,
-		Warnings: []string{fmt.Sprintf(
-			"git did not resolve the hooks directory (%s); core.hooksPath is ignored and %s is assumed", cause, dir)},
+		Warnings: []string{warn},
 	}
 }
 
@@ -205,13 +213,14 @@ func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
 // .git (resolve.HandGitDirs), so a worktree still lands on the common
 // ".git/hooks" git actually runs and nothing but a regular file or a
 // directory is ever opened. When those rules find no git directory it names
-// <repoRoot>/.git/hooks, the default: the lookup is degraded and only shown.
-func manualHooksDir(repoRoot string) string {
+// <repoRoot>/.git/hooks, the default, and returns why: the lookup is degraded
+// and only shown, with the reason in its warning.
+func manualHooksDir(repoRoot string) (string, error) {
 	_, common, err := resolve.HandGitDirs(repoRoot)
 	if err != nil {
-		return filepath.Join(repoRoot, ".git", "hooks")
+		return filepath.Join(repoRoot, ".git", "hooks"), err
 	}
-	return filepath.Join(common, "hooks")
+	return filepath.Join(common, "hooks"), nil
 }
 
 // gitOut runs git in repoRoot and returns its trimmed stdout. A failing git's

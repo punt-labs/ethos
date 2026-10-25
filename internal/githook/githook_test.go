@@ -747,7 +747,10 @@ func TestManualHooksDirWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+wtGitDir+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := manualHooksDir(wt)
+	got, herr := manualHooksDir(wt)
+	if herr != nil {
+		t.Fatal(herr)
+	}
 	want := filepath.Join(commonGit, "hooks")
 	if evalPath(got) != evalPath(want) {
 		t.Errorf("worktree hooks dir = %q, want %q", got, want)
@@ -1097,7 +1100,7 @@ func TestLookupRemedy(t *testing.T) {
 	t.Run("safe.directory refusal", func(t *testing.T) {
 		stderr := "fatal: detected dubious ownership in repository at '/x'\n" +
 			"To add an exception for this directory, call:\n\n\tgit config --global --add safe.directory /x"
-		l := degradedLookup("/x", "/x/.git/hooks", fmt.Errorf("git rev-parse --show-toplevel: exit status 128: %s", stderr))
+		l := degradedLookup("/x", "/x/.git/hooks", nil, fmt.Errorf("git rev-parse --show-toplevel: exit status 128: %s", stderr))
 		got := l.Remedy()
 		if !strings.Contains(got, "safe.directory") {
 			t.Errorf("Remedy = %q, want the safe.directory advice", got)
@@ -1108,7 +1111,7 @@ func TestLookupRemedy(t *testing.T) {
 	})
 
 	t.Run("unknown cause", func(t *testing.T) {
-		l := degradedLookup("/x", "/x/.git/hooks", errors.New("something else"))
+		l := degradedLookup("/x", "/x/.git/hooks", nil, errors.New("something else"))
 		if got := l.Remedy(); got != "" {
 			t.Errorf("Remedy = %q, want none", got)
 		}

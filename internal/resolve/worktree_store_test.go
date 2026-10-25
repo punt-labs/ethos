@@ -198,3 +198,73 @@ func TestWarnOnceRewarnsAfterTTL(t *testing.T) {
 	clock = clock.Add(locateTTL + time.Second)
 	assert.Equal(t, 1, count(), "again after the TTL")
 }
+
+// A linked worktree whose main checkout was deleted, or moved, has a gitfile
+// pointing at a git directory that is gone: that is a refusal naming the
+// layout, never "not in a repository", with git and without.
+func TestLinkedWorktreeOfMissingMainIsARefusal(t *testing.T) {
+	cases := map[string]func(t *testing.T, main string){
+		"main deleted": func(t *testing.T, main string) { require.NoError(t, os.RemoveAll(main)) },
+		"main moved": func(t *testing.T, main string) {
+			require.NoError(t, os.Rename(main, main+"-moved"))
+		},
+	}
+	for _, withGit := range []bool{true, false} {
+		for name, damage := range cases {
+			t.Run(map[bool]string{true: "git ", false: "no git "}[withGit]+name, func(t *testing.T) {
+				requireGit(t)
+				base := t.TempDir()
+				main := filepath.Join(base, "main")
+				initRepo(t, main)
+				wt := filepath.Join(base, "wt")
+				gitRun(t, "-C", main, "worktree", "add", "-q", wt)
+				damage(t, main)
+				t.Chdir(wt)
+				if !withGit {
+					hideGit(t)
+				}
+				var err error
+				captureStderr(t, func() {
+					_, err = LocateRepoRoot()
+					_, serr := LocateStoreRoot()
+					require.Error(t, serr)
+					assert.NotErrorIs(t, serr, ErrNotInRepo)
+				})
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, ErrNotInRepo)
+				assert.Contains(t, err.Error(), filepath.Join(wt, ".git"))
+			})
+		}
+	}
+}
+
+// core.bare that cannot be read is a refusal, with git and without, from
+// the library and from the CLI: a store the layout rule cannot decide is
+// never guessed.
+func TestUnreadableCoreBareIsARefusal(t *testing.T) {
+	skipIfRoot(t)
+	for _, withGit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "git", false: "no git"}[withGit], func(t *testing.T) {
+			requireGit(t)
+			base := t.TempDir()
+			main := filepath.Join(base, "main")
+			initRepo(t, main)
+			wt := filepath.Join(base, "wt")
+			gitRun(t, "-C", main, "worktree", "add", "-q", wt)
+			cfg := filepath.Join(main, ".git", "config")
+			chmodUnreadable(t, cfg, 0o644)
+			t.Chdir(wt)
+			if !withGit {
+				hideGit(t)
+			}
+			var store string
+			var err error
+			captureStderr(t, func() { store, err = LocateStoreRoot() })
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrNotInRepo)
+			assert.Empty(t, store)
+			// git refuses first and says why; the hand rules name core.bare.
+			assert.Contains(t, err.Error(), cfg)
+		})
+	}
+}

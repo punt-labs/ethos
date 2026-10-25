@@ -46,6 +46,11 @@ func TestHooksDirNeverOpensAFIFO(t *testing.T) {
 			if !l.Degraded {
 				t.Errorf("lookup for a FIFO .git is not degraded: %+v", l)
 			}
+			// The guessed directory is shown with why the hand rules found no
+			// git directory, so a reader is not told only the default.
+			if !strings.Contains(strings.Join(l.Warnings, "; "), "not a directory or a gitfile") {
+				t.Errorf("warnings = %v, want the hand rules' reason", l.Warnings)
+			}
 		})
 	}
 }
