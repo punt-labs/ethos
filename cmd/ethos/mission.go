@@ -794,7 +794,7 @@ Example:
 var missionExportDir string
 
 // missionExportDefaultDir is where `ethos mission export` writes when --dir is
-// not given, relative to the current directory.
+// not given, relative to the repository root.
 const missionExportDefaultDir = ".punt-labs/ethos/missions"
 
 // missionExportPaths returns the files `ethos mission export` writes for
@@ -810,8 +810,9 @@ var missionExportCmd = &cobra.Command{
 
 Copies the mission's contract and final result (the last result on file)
 to <dir>/<id>.contract.yaml and <dir>/<id>.result.yaml. The directory
-is created if it doesn't exist. Default --dir is .punt-labs/ethos/missions/ in
-the current working directory.
+is created if it doesn't exist. Default --dir is .punt-labs/ethos/missions/ under
+the repository root, wherever in the repository the command runs; an explicit
+--dir is relative to the current working directory.
 
 If the mission has no result yet (still open), only the contract is
 exported and a warning is printed to stderr. The exported files are
@@ -971,8 +972,8 @@ func init() {
 	missionLogCmd.Flags().StringVar(&missionLogSinceFilter, "since", "",
 		"Filter by RFC3339 timestamp (events on or after)")
 
-	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", missionExportDefaultDir,
-		"Directory to export artifacts into")
+	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", "",
+		"Directory to export artifacts into (default <repo root>/"+missionExportDefaultDir+")")
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchEvaluator, "evaluator", "", "Evaluator handle (required)")
@@ -1966,6 +1967,19 @@ func runMissionAdvance(idOrPrefix string) error {
 	return nil
 }
 
+// missionExportDirectory returns the directory to export into: flag when the
+// caller gave one, else the default under the repository root.
+func missionExportDirectory(flag string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	root := resolve.FindRepoRoot()
+	if root == "" {
+		return "", fmt.Errorf("choosing the export directory: not inside a git repository; pass --dir")
+	}
+	return filepath.Join(root, missionExportDefaultDir), nil
+}
+
 // runMissionExport handles `ethos mission export <id> [--dir <path>]`.
 //
 // Copies the mission contract and its final result to a repo-local
@@ -1983,7 +1997,10 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	dir := missionExportDir
+	dir, err := missionExportDirectory(missionExportDir)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating export directory %q: %w", dir, err)
 	}
