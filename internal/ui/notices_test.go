@@ -242,3 +242,29 @@ func TestBrowseFallbackReportsAScanError(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "reading long.txt stopped after line 1")
 }
+
+// A record that is there and cannot be read is a 500 that says so; one that is
+// not there is a 404.
+func TestUnreadableRecordIs500NotFoundIs404(t *testing.T) {
+	store := t.TempDir()
+	id := "m-2026-07-24-130"
+	srv := uiServer(t, store, store)
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+	assert.Equal(t, http.StatusNotFound, get("/missions/"+id).Code)
+	assert.Equal(t, http.StatusNotFound, get("/delegations/"+id+"/d-none").Code)
+
+	writeDelegation(t, store, id, "d-bad", "id: [unclosed\n")
+	rec := get("/delegations/" + id + "/d-bad")
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), "decoding delegation record")
+
+	contract := mission.RepoStatePath(store, "missions", id, "contract.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(contract), 0o755))
+	require.NoError(t, os.WriteFile(contract, []byte("mission_id: [unclosed\n"), 0o644))
+	rec = get("/missions/" + id)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+}

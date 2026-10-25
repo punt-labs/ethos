@@ -800,7 +800,7 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("mission %q not found", missionID)
+			return nil, notFoundError{fmt.Sprintf("mission %q not found", missionID)}
 		}
 		return nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
@@ -810,6 +810,14 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	}
 	return c, nil
 }
+
+// notFoundError is "no such mission": it reads as it always did and is
+// fs.ErrNotExist to errors.Is, so a caller can tell a mission that is not there
+// from one that is there and cannot be read.
+type notFoundError struct{ msg string }
+
+func (e notFoundError) Error() string        { return e.msg }
+func (e notFoundError) Is(target error) bool { return target == fs.ErrNotExist }
 
 // decodeAndValidate is the shared strict-decode + validate + filename-
 // match check used by Load and loadLocked. Factored out so the two

@@ -178,7 +178,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	store := s.missionStore()
 	c, err := store.Load(id)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("mission %q: %v", id, err), 404)
+		http.Error(w, fmt.Sprintf("mission %q: %v", id, err), loadStatus(err))
 		return
 	}
 
@@ -325,7 +325,7 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 	dir := mission.RepoStatePath(s.storeRoot, "missions", missionID, "delegations", delegationID)
 	d, err := mission.LoadDelegation(filepath.Join(dir, "record.yaml"))
 	if err != nil {
-		http.Error(w, fmt.Sprintf("delegation %q: %v", delegationID, err), 404)
+		http.Error(w, fmt.Sprintf("delegation %q: %v", delegationID, err), loadStatus(err))
 		return
 	}
 	d.Mission = missionID
@@ -358,4 +358,14 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 	if err := s.tmpl.ExecuteTemplate(w, "delegation.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
 	}
+}
+
+// loadStatus is the HTTP status for a failed load: 404 when the record is not
+// there, 500 when it is there and could not be read or parsed. The message is
+// the page: it says which.
+func loadStatus(err error) int {
+	if errors.Is(err, fs.ErrNotExist) {
+		return http.StatusNotFound
+	}
+	return http.StatusInternalServerError
 }
