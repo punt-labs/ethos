@@ -194,11 +194,33 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("bundle %q not found; available bundles:\n%s", name, listBundleNames(bundles))
 	}
 
+	out := cmd.OutOrStdout()
+
+	// A bundle or policy that cannot be honoured is exactly what activate may be
+	// run to repair. Write the two config keys and nothing else: no identity
+	// lookup, no CEO/COO resolution (both would consult stores the broken
+	// configuration governs). Say so, and say how to finish.
+	if issue := loc.configIssue(); issue != nil {
+		if err := setConfigKey(repoRoot, "team", name); err != nil {
+			return fmt.Errorf("writing team: %w", err)
+		}
+		if err := setConfigKey(repoRoot, "active_bundle", name); err != nil {
+			return fmt.Errorf("writing config: %w", err)
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team activate: the repository's configuration was unusable (%v); "+
+			"%q is written as the active bundle and the CEO/COO leadership roles were not assigned. "+
+			"Once the configuration is valid, run `ethos team activate %s` again to assign them.\n", issue, name, name)
+		if jsonOutput {
+			return writeJSON(out, map[string]string{"name": name, "status": "activated-leadership-skipped"})
+		}
+		fmt.Fprintf(out, "activated: %s (source: %s, path: %s); leadership not assigned\n", match.Name, match.Source, match.Path)
+		return nil
+	}
+
 	current, err := resolve.ResolveActiveBundle(repoRoot)
 	if err != nil {
 		return fmt.Errorf("reading active bundle: %w", err)
 	}
-	out := cmd.OutOrStdout()
 
 	// Resolve the human CEO to bind BEFORE any config write, so a caller who
 	// cannot supply one (an agent persona such as claude, or no resolvable

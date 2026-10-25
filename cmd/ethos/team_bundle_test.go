@@ -380,3 +380,21 @@ func TestLegacySubmoduleURL_MultipleSections(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "git@github.com:punt-labs/team.git", url)
 }
+
+// With the bundle configuration unusable (an active bundle that is not
+// installed), activate repairs it: it writes the active bundle, skips the
+// CEO/COO assignment with a stated reason, and exits 0.
+func TestTeamActivate_RepairsAnUnusableConfig(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	mkBundleDir(t, filepath.Join(env.globalRoot, "bundles"), "gstack", true)
+	writeRepoConfigFile(t, env.repo, "agent: claude\nactive_bundle: missingbundle\n")
+
+	stdout, stderr, err := execHandler(t, "team", "activate", "gstack")
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stdout, "activated: gstack")
+	assert.Contains(t, stderr, "leadership roles were not assigned")
+	assert.Contains(t, stderr, "run `ethos team activate gstack` again")
+	body := readRepoConfigFile(t, env.repo)
+	assert.Contains(t, body, "active_bundle: gstack")
+	assert.NotContains(t, body, "missingbundle")
+}
