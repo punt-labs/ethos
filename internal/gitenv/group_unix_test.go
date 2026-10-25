@@ -46,13 +46,15 @@ func TestTimeoutGivesTheGroupItsGrace(t *testing.T) {
 		2*time.Second, 50*time.Millisecond, "the filter finished its cleanup before it was killed")
 }
 
-// A Network git cannot prompt, and keeps the user's ssh choice.
+// A Network git cannot prompt, and ethos sets no ssh variable: the user's own
+// (GIT_SSH_COMMAND here) reaches git untouched, and none is invented.
 func TestNetworkGitCannotPrompt(t *testing.T) {
-	git := fakeGitScript(t, `case "$1" in config) [ -n "$FAKE_SSHCMD" ] && { echo "$FAKE_SSHCMD"; exit 0; }; exit 1;; esac
-echo "$@|$GIT_TERMINAL_PROMPT|$GIT_ASKPASS|$SSH_ASKPASS|$SSH_ASKPASS_REQUIRE|$GIT_SSH_COMMAND"
+	git := fakeGitScript(t, `echo "$@|$GIT_TERMINAL_PROMPT|$GIT_ASKPASS|$SSH_ASKPASS|$SSH_ASKPASS_REQUIRE|$GIT_SSH_COMMAND|$GIT_SSH"
 `)
 	t.Setenv("GIT_ASKPASS", "/some/askpass")
 	t.Setenv("SSH_ASKPASS", "/some/ssh-askpass")
+	require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
+	require.NoError(t, os.Unsetenv("GIT_SSH"))
 	run := func() string {
 		out, err := Run(Spec{Git: git, Network: true, Args: []string{"clone", "u"}})
 		require.NoError(t, err)
@@ -60,23 +62,34 @@ echo "$@|$GIT_TERMINAL_PROMPT|$GIT_ASKPASS|$SSH_ASKPASS|$SSH_ASKPASS_REQUIRE|$GI
 	}
 	const prefix = "-c core.askPass= -c credential.interactive=never clone u|0|||never|"
 
-	assert.Equal(t, prefix+"ssh -o BatchMode=yes", run(), "no ssh chosen: BatchMode, and no askpass program runs")
-
+	assert.Equal(t, prefix+"|", run(), "no askpass runs, and no ssh variable is set")
 	t.Setenv("GIT_SSH_COMMAND", "ssh -i /my/key")
-	assert.Equal(t, prefix+"ssh -i /my/key", run(), "the user's GIT_SSH_COMMAND is kept")
-
-	t.Setenv("GIT_SSH_COMMAND", "")
+	assert.Equal(t, prefix+"ssh -i /my/key|", run(), "the user's GIT_SSH_COMMAND is untouched")
 	require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
 	t.Setenv("GIT_SSH", "/my/ssh")
-	assert.Equal(t, prefix, run(), "GIT_SSH is the user's choice: no GIT_SSH_COMMAND is added")
+	assert.Equal(t, prefix+"|/my/ssh", run(), "the user's GIT_SSH is untouched")
 
 	require.NoError(t, os.Unsetenv("GIT_SSH"))
-	t.Setenv("FAKE_SSHCMD", "ssh -F /my/config")
-	assert.Equal(t, prefix, run(), "core.sshCommand is the user's choice: no GIT_SSH_COMMAND is added")
-
 	out, err := Run(Spec{Git: git, Args: []string{"clone", "u"}})
 	require.NoError(t, err)
-	assert.Equal(t, "clone u||/some/askpass|/some/ssh-askpass||", strings.TrimSpace(string(out)), "an ordinary git is untouched")
+	assert.Equal(t, "clone u||/some/askpass|/some/ssh-askpass|||", strings.TrimSpace(string(out)), "an ordinary git is untouched")
+}
+
+// A network git reads no user config of its own: an unreadable one does not
+// stop it (git resolves its ssh setup, ethos does not).
+func TestNetworkGitDoesNotReadTheUserConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[core]\n\tsshCommand = ssh -i key\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	git := fakeGitScript(t, "echo \"$1\"\n")
+	out, err := Run(Spec{Git: git, Network: true, Args: []string{"clone", "u"}})
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "-c")
 }
 
 // At the deadline a Network git's descendants (the ssh it started) are dead
@@ -156,30 +169,4 @@ func TestCtrlCDoesNotLeaveANetworkGitRunning(t *testing.T) {
 	pid = runHelperAndInterrupt(t, false)
 	assert.NoError(t, syscall.Kill(pid, 0), "an ordinary git runs in its own group and is not reached by a terminal's SIGINT")
 	_ = syscall.Kill(pid, syscall.SIGKILL)
-}
-
-// An unreadable config while reading core.sshCommand is an error: the user's
-// ssh choice may be in the file, so the network git does not run.
-func TestNetworkGitRefusesWhenCoreSshCommandCannotBeRead(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores permissions")
-	}
-	cfg := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(cfg, []byte("[core]\n\tsshCommand = ssh -i key\n"), 0o644))
-	require.NoError(t, os.Chmod(cfg, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
-	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
-	require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
-	require.NoError(t, os.Unsetenv("GIT_SSH"))
-	git := fakeGitScript(t, "case \"$1\" in config) exit 1;; ls-remote) echo \"$3\"; exit 0;; esac\necho ran\n")
-	_, err := Run(Spec{Git: git, Network: true, Remote: "git@example.invalid:o/r.git", Args: []string{"clone", "u"}})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), cfg, "an ssh remote refuses")
-
-	out, err := Run(Spec{Git: git, Network: true, Remote: "https://example.invalid/o/r.git", Args: []string{"clone", "u"}})
-	require.NoError(t, err, "an https remote reads no ssh setting")
-	assert.Equal(t, "ran\n", string(out))
-
-	_, err = Run(Spec{Git: git, Network: true, Remote: "../sibling", Args: []string{"clone", "u"}})
-	require.NoError(t, err, "a relative URL is unknown: nothing blocks, and nothing is overridden")
 }

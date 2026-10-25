@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -537,18 +538,18 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		return nil
 	}
 
+	// git's own stderr is shown as it comes and also kept: the advice below is
+	// decided from what git said, not from the URL (insteadOf, a superproject's
+	// config and a relative URL all make the URL a poor witness).
+	var gitErr bytes.Buffer
 	_, err := gitenv.Run(gitenv.Spec{
 		Git: gitArgs[0], Args: gitArgs[1:], Dir: gitDir, Env: gitenv.UserConfigEnv(),
-		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit, Network: true, Remote: url,
+		Stdout: out, Stderr: io.MultiWriter(cmd.ErrOrStderr(), &gitErr), Limit: cloneLimit, Network: true,
 	})
 	if err != nil {
 		wrapped := fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && !gitenv.IsRelativeURL(url) &&
-			gitenv.IsSSHTransport(gitenv.EffectiveURL(gitDir, gitenv.UserConfigEnv(), url)) {
-			// git ran and failed, and the effective URL (after insteadOf) is ssh:
-			// with no terminal, that is most often a
-			// host key or a passphrase it could not ask for.
+		if errors.As(err, &ee) && sshFailed(gitErr.String()) {
 			wrapped = fmt.Errorf("%w; add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key", wrapped)
 		}
 		return wrapped
@@ -562,6 +563,23 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	}
 	fmt.Fprintf(out, "added bundle %q at %s\n", name, targetDir)
 	return nil
+}
+
+// sshFailed reports whether git's stderr shows an ssh transport failure that a
+// terminal prompt would have answered: a key that was refused, a host key that
+// was not accepted, or ssh's own error lines.
+func sshFailed(stderr string) bool {
+	for _, marker := range []string{"Permission denied (publickey", "Host key verification failed", "Could not read from remote repository"} {
+		if strings.Contains(stderr, marker) {
+			return true
+		}
+	}
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ssh:") {
+			return true
+		}
+	}
+	return false
 }
 
 // --- legacy submodule detection ---

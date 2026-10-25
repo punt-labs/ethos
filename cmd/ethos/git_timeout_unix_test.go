@@ -247,33 +247,41 @@ func resolvedPath(t *testing.T, p string) string {
 	return r
 }
 
-// add-bundle's failure over ssh says ssh ran without a terminal and what to do;
-// over https it does not, and an unreadable ~/.gitconfig does not block https.
-func TestTeamAddBundleSSHFailureHint(t *testing.T) {
+// add-bundle's advice is decided from git's stderr, not the URL: git saying ssh
+// failed (a refused key, an unaccepted host key, an ssh: line) gets the ssh-add
+// advice; an https failure does not; and an unreadable ~/.gitconfig does not stop
+// an https clone (ethos reads no ssh setting).
+func TestTeamAddBundleAdviceFollowsGitsStderr(t *testing.T) {
 	prevApply, prevGlobal, prevName := addBundleApply, addBundleGlobal, addBundleName
 	addBundleApply, addBundleGlobal, addBundleName = true, true, ""
 	t.Cleanup(func() { addBundleApply, addBundleGlobal, addBundleName = prevApply, prevGlobal, prevName })
 	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
-	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"),
-		[]byte("#!/bin/sh\ncase \"$1\" in config) exit 1;; esac\necho 'fatal: Host key verification failed.' >&2\nexit 128\n"), 0o755))
-	t.Setenv("PATH", bin)
 	const hint = "add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key"
-	run := func(url string) error {
+	run := func(stderr, url string) error {
+		bin := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho '"+stderr+"' >&2\nexit 128\n"), 0o755))
+		t.Setenv("PATH", bin)
 		cmd := &cobra.Command{}
 		cmd.SetOut(&bytes.Buffer{})
 		cmd.SetErr(&bytes.Buffer{})
 		return runTeamAddBundle(cmd, url)
 	}
-	for _, url := range []string{"git@example.invalid:o/bundle.git", "ssh://git@example.invalid/o/bundle.git"} {
-		err := run(url)
-		require.Error(t, err, url)
-		assert.Contains(t, err.Error(), hint, url)
+	for _, stderr := range []string{
+		"git@h: Permission denied (publickey).",
+		"Host key verification failed.",
+		"fatal: Could not read from remote repository.",
+		"ssh: Could not resolve hostname h",
+	} {
+		err := run(stderr, "https://example.invalid/o/b.git") // the URL is not the witness
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), hint, stderr)
 	}
-	err := run("https://example.invalid/o/bundle.git")
+	err := run("fatal: unable to access 'https://h/o/b.git/': Could not resolve host: h", "https://example.invalid/o/b.git")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "ssh", "an https failure gets no ssh advice")
+	err = run("fatal: repository not found", "git@example.invalid:o/b.git")
+	assert.NotContains(t, err.Error(), hint, "an ssh URL alone is not a reason")
 
 	if os.Geteuid() != 0 {
 		cfg := filepath.Join(t.TempDir(), "gitconfig")
@@ -281,35 +289,43 @@ func TestTeamAddBundleSSHFailureHint(t *testing.T) {
 		require.NoError(t, os.Chmod(cfg, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
 		t.Setenv("GIT_CONFIG_GLOBAL", cfg)
-		err := run("https://example.invalid/o/bundle.git")
+		err := run("fatal: unable to access: Could not resolve host", "https://example.invalid/o/b.git")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "exit status 128", "git ran: the unreadable config did not block https")
-		err = run("git@example.invalid:o/bundle.git")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "a git configuration file cannot be read", "an ssh clone is blocked, in plain words")
-		assert.NotContains(t, err.Error(), hint, "git never ran: no ssh advice")
+		assert.Contains(t, err.Error(), "exit status 128", "git ran: the unreadable config did not stop the clone")
 	}
 }
 
-// An insteadOf rewrite from https to ssh makes the effective URL ssh: the user's
-// own ssh (core.sshCommand, GIT_SSH_COMMAND or GIT_SSH) is the one that runs, ethos
-// does not replace it, and the ssh advice is printed when the clone fails.
-func TestTeamAddBundleInsteadOfKeepsTheUsersSSH(t *testing.T) {
+// The user's own ssh setup runs, as git resolves it, whatever way it is given
+// (core.sshCommand, GIT_SSH_COMMAND, GIT_SSH), with and without an insteadOf
+// rewrite from https. (A submodule add with an insteadOf in the superproject's own
+// config is the next test.)
+func TestTeamAddBundleRunsTheUsersSSH(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
 	prevApply, prevGlobal, prevName := addBundleApply, addBundleGlobal, addBundleName
-	addBundleApply, addBundleGlobal, addBundleName = true, true, ""
 	t.Cleanup(func() { addBundleApply, addBundleGlobal, addBundleName = prevApply, prevGlobal, prevName })
+	const rewrite = "[url \"ssh://git@example.invalid/\"]\n\tinsteadOf = https://example.invalid/\n"
 
-	for _, how := range []string{"core.sshCommand", "GIT_SSH_COMMAND", "GIT_SSH"} {
-		t.Run(how, func(t *testing.T) {
+	type shape struct{ how, url, where string }
+	for _, sh := range []shape{
+		{"core.sshCommand", "ssh://git@example.invalid/o/b.git", "global-clone"},
+		{"GIT_SSH_COMMAND", "ssh://git@example.invalid/o/b.git", "global-clone"},
+		{"GIT_SSH", "ssh://git@example.invalid/o/b.git", "global-clone"},
+		{"core.sshCommand", "https://example.invalid/o/b.git", "global-clone-insteadOf"},
+		{"GIT_SSH_COMMAND", "https://example.invalid/o/b.git", "global-clone-insteadOf"},
+		{"GIT_SSH", "https://example.invalid/o/b.git", "global-clone-insteadOf"},
+	} {
+		t.Run(sh.how+" "+sh.where, func(t *testing.T) {
 			dir := t.TempDir()
 			log := filepath.Join(dir, "ssh.log")
 			ssh := filepath.Join(dir, "my-ssh")
 			require.NoError(t, os.WriteFile(ssh, []byte("#!/bin/sh\necho \"called $*\" >> '"+log+"'\nexit 1\n"), 0o755))
-			cfg := "[url \"ssh://git@example.invalid/\"]\n\tinsteadOf = https://example.invalid/\n"
-			if how == "core.sshCommand" {
+			cfg := ""
+			if sh.where == "global-clone-insteadOf" {
+				cfg += rewrite
+			}
+			if sh.how == "core.sshCommand" {
 				cfg += "[core]\n\tsshCommand = " + ssh + "\n"
 			}
 			path := filepath.Join(dir, "gitconfig")
@@ -318,21 +334,68 @@ func TestTeamAddBundleInsteadOfKeepsTheUsersSSH(t *testing.T) {
 			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 			require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
 			require.NoError(t, os.Unsetenv("GIT_SSH"))
-			if how != "core.sshCommand" {
-				t.Setenv(how, ssh)
+			if sh.how != "core.sshCommand" {
+				t.Setenv(sh.how, ssh)
 			}
 			t.Setenv("HOME", t.TempDir())
+			addBundleName = ""
+			addBundleApply = true
+			addBundleGlobal = true
 			t.Chdir(t.TempDir())
 
 			cmd := &cobra.Command{}
 			cmd.SetOut(&bytes.Buffer{})
 			cmd.SetErr(&bytes.Buffer{})
-			err := runTeamAddBundle(cmd, "https://example.invalid/o/bundle.git")
+			err := runTeamAddBundle(cmd, sh.url)
 			require.Error(t, err)
 			data, rerr := os.ReadFile(log)
 			require.NoError(t, rerr, "the user's ssh was not called: %v", err)
-			assert.Contains(t, string(data), "called", how)
-			assert.Contains(t, err.Error(), "add-bundle runs ssh without a terminal", "the effective URL is ssh: %v", err)
+			assert.Contains(t, string(data), "called")
 		})
 	}
+}
+
+// `git submodule add` does not apply the superproject's own insteadOf to the
+// clone it makes: with or without ethos the https remote stays https and the
+// user's ssh is not called. add-bundle does exactly what git does, in either
+// direction: it neither forces ssh nor hides it.
+func TestTeamAddBundleSubmoduleLocalInsteadOfIsGitsBusiness(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	prevApply, prevGlobal, prevName := addBundleApply, addBundleGlobal, addBundleName
+	t.Cleanup(func() { addBundleApply, addBundleGlobal, addBundleName = prevApply, prevGlobal, prevName })
+	dir := t.TempDir()
+	log := filepath.Join(dir, "ssh.log")
+	ssh := filepath.Join(dir, "my-ssh")
+	require.NoError(t, os.WriteFile(ssh, []byte("#!/bin/sh\necho called >> '"+log+"'\nexit 1\n"), 0o755))
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_SSH", ssh)
+	t.Setenv("HOME", t.TempDir())
+	const url = "https://example.invalid/o/b.git"
+	repoWithRewrite := func() string {
+		repo := t.TempDir()
+		gitInitDir(t, repo, t.TempDir())
+		gitCmd(t, repo, "config", "url.ssh://git@example.invalid/.insteadOf", "https://example.invalid/")
+		return repo
+	}
+
+	raw := exec.Command("git", "submodule", "add", url, ".punt-labs/ethos-bundles/b")
+	raw.Dir = repoWithRewrite()
+	raw.Env = testhelpers.GitEnv()
+	raw.Env = append(raw.Env, "GIT_SSH="+ssh, "GIT_CONFIG_GLOBAL=/dev/null", "HOME="+t.TempDir())
+	_ = raw.Run()
+	_, rawErr := os.Stat(log)
+	rawCalled := rawErr == nil
+	_ = os.Remove(log)
+
+	addBundleApply, addBundleGlobal, addBundleName = true, false, ""
+	t.Chdir(repoWithRewrite())
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	require.Error(t, runTeamAddBundle(cmd, url))
+	_, ethosErr := os.Stat(log)
+	assert.Equal(t, rawCalled, ethosErr == nil, "add-bundle behaves as git does about the user's ssh")
 }
