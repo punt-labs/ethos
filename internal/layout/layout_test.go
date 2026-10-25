@@ -498,3 +498,21 @@ func TestMigrateStagingIsClassFour(t *testing.T) {
 		t.Fatal("corpus holds no migrate staging file")
 	}
 }
+
+// TestLegacyMigrateStagingIsClassFour: before the temp marker, `ethos mission
+// migrate` staged in ".<id>.migrate-<random>"; an interrupted run of that
+// version leaves files that look like mission files.
+func TestLegacyMigrateStagingIsClassFour(t *testing.T) {
+	for _, p := range []string{
+		".punt-labs/ethos/missions/.m-1.migrate-123/contract.yaml",
+		".punt-labs/ethos/missions/.m-1.migrate-123/results.yaml",
+	} {
+		class, e, ok := layout.Classify(p)
+		if !ok || class != layout.Never {
+			t.Errorf("%s classified %v by %q (ok=%v), want class 4", p, class, e.Pattern, ok)
+		}
+		if e.Temp {
+			t.Errorf("%s matched a Temp entry %q; the marker set must stay marker-only", p, e.Pattern)
+		}
+	}
+}

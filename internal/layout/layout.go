@@ -132,6 +132,10 @@ var Table = []Entry{
 	// file, and a staging directory with whatever a crash leaves in it.
 	temp("**/*" + TmpMarker + "*"),
 	temp("**/*" + TmpMarker + "*/**"),
+	// The staging directory `ethos mission migrate` used before the marker,
+	// ".<id>.migrate-<random>". Not a Temp entry: new code never builds the
+	// name, and the marker set stays marker-only.
+	{Pattern: ".punt-labs/ethos/missions/.*.migrate-*/**", Class: Never},
 
 	// Class 3: trace tier. The live files and the record: blame archive sit
 	// in the machine-local zone; the rest are written at tracked paths today.
