@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -47,6 +48,10 @@ type SealResult struct {
 // In a gitlink-mounted repo the sealed tree is the wrong target, so the seal
 // is a no-op exit 0 with a one-line stderr deferral notice; the live lines
 // stay in .punt-labs/local/ and the clean-tree goal is already met.
+//
+// A seal that cannot finish — git did not answer, a chunk would not write —
+// returns an error that blocks the commit and leaves the tree as it found it:
+// see runSeal for the three phases and the rollback.
 func SealRepo(repoRoot string, now time.Time, opts SealOptions) (SealResult, error) {
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
@@ -58,41 +63,162 @@ func SealRepo(repoRoot string, now time.Time, opts SealOptions) (SealResult, err
 			repoRoot)
 		return SealResult{Deferred: true}, nil
 	}
-	var res SealResult
-	if err := sealSessionsInRepo(repoRoot, now, opts, &res); err != nil {
-		return res, err
+	units, err := repoSealUnits(repoRoot, now, opts)
+	if err != nil {
+		return SealResult{}, err
 	}
-	if err := sealMissionsInRepo(repoRoot, now, opts, &res); err != nil {
+	var res SealResult
+	if err := runSeal(repoRoot, units, opts, &res); err != nil {
 		return res, err
 	}
 	return res, nil
 }
 
-// sealSessionsInRepo seals each repo session's audit tail and stages chunks.
-func sealSessionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *SealResult) error {
+// repoSealUnits lists every unit a repo-wide seal covers: each session's audit
+// tail, then each (mission, session) log tail. It reads only the file system.
+func repoSealUnits(repoRoot string, now time.Time, opts SealOptions) ([]sealUnit, error) {
+	var units []sealUnit
 	sessions, err := listRepoSessions(repoRoot)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, sessionID := range sessions {
 		sealedDir, err := resolveSealDir(repoRoot, sessionID, now, opts)
 		if err != nil {
-			return fmt.Errorf("resolving session dir for %s: %w", sessionID, err)
+			return nil, fmt.Errorf("resolving session dir for %s: %w", sessionID, err)
 		}
-		var out sealOutcome
-		lockErr := WithLiveAuditLock(repoRoot, sessionID, func() error {
-			var e error
-			out, e = sealSessionLocked(repoRoot, sessionID, sealedDir, now, opts)
-			return e
-		})
-		if lockErr != nil {
-			return fmt.Errorf("sealing session %s: %w", sessionID, lockErr)
+		units = append(units, sessionSealUnit(repoRoot, sessionID, sealedDir, now, opts))
+	}
+	missions, err := listRepoMissions(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, missionID := range missions {
+		ids, err := listMissionSessions(repoRoot, missionID)
+		if err != nil {
+			return nil, err
 		}
-		if err := tallyAndStage(repoRoot, sealedDir, audit.SessionNS, "", out, opts, res); err != nil {
-			return fmt.Errorf("staging chunks for %s: %w", sessionID, err)
+		for _, sessionID := range ids {
+			units = append(units, missionSealUnit(repoRoot, missionID, sessionID, now, opts))
 		}
 	}
+	return units, nil
+}
+
+// sealUnit is one (session) or (mission, session) tail a seal covers.
+type sealUnit struct {
+	label     string
+	ns        audit.Namespace
+	session   string // mission namespace only; "" for session namespace
+	sealedDir string
+	// write runs the locked critical section: it writes the unit's new chunk,
+	// if any, and touches no git.
+	write func() (sealOutcome, error)
+}
+
+func sessionSealUnit(repoRoot, sessionID, sealedDir string, now time.Time, opts SealOptions) sealUnit {
+	return sealUnit{
+		label: "session " + sessionID, ns: audit.SessionNS, sealedDir: sealedDir,
+		write: func() (sealOutcome, error) {
+			var out sealOutcome
+			err := WithLiveAuditLock(repoRoot, sessionID, func() error {
+				var e error
+				out, e = sealSessionLocked(repoRoot, sessionID, sealedDir, now, opts)
+				return e
+			})
+			return out, err
+		},
+	}
+}
+
+// runSeal seals units in three phases, so a seal that cannot finish leaves the
+// tree as it found it:
+//
+//  1. every read-only git query — one `git status` over the chunks already on
+//     disk, to find orphans a crashed seal left unstaged;
+//  2. every chunk write, each under its unit's flock;
+//  3. one `git add` of the orphans and the new chunks.
+//
+// A failure in phase 1 happens before anything is written. A failure in phase
+// 2 or 3 removes the chunks this run wrote (the live files are untouched, so
+// the next seal rewrites them). A dry run only counts.
+func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResult) error {
+	if opts.DryRun {
+		for _, u := range units {
+			out, err := u.write()
+			if err != nil {
+				return fmt.Errorf("sealing %s: %w", u.label, err)
+			}
+			res.LinesSealed += out.lineCount
+		}
+		return nil
+	}
+
+	var existing []string
+	for _, u := range units {
+		paths, err := audit.ChunkArtifacts(u.sealedDir, u.ns, u.session)
+		if err != nil {
+			return fmt.Errorf("listing chunks for %s: %w", u.label, err)
+		}
+		existing = append(existing, paths...)
+	}
+	var pending []string
+	if len(existing) > 0 {
+		var err error
+		pending, err = audit.UntrackedOrModified(repoRoot, existing)
+		if err != nil {
+			return SealGitError(repoRoot, err)
+		}
+	}
+
+	var wrote []string
+	for _, u := range units {
+		out, err := u.write()
+		if err != nil {
+			return rollbackSeal(wrote, fmt.Errorf("sealing %s: %w", u.label, err))
+		}
+		if out.wroteChunk {
+			res.SessionsSealed++
+			res.LinesSealed += out.lineCount
+			wrote = append(wrote, out.chunkPath)
+		}
+	}
+
+	toAdd := append([]string(nil), pending...)
+	seen := make(map[string]bool, len(pending))
+	for _, p := range pending {
+		seen[p] = true
+	}
+	for _, p := range wrote {
+		if !seen[p] {
+			toAdd = append(toAdd, p)
+		}
+	}
+	if len(toAdd) == 0 {
+		return nil
+	}
+	if err := audit.GitAdd(repoRoot, toAdd...); err != nil {
+		return rollbackSeal(wrote, SealGitError(repoRoot, err))
+	}
+	res.ChunksStaged += len(toAdd)
 	return nil
+}
+
+// rollbackSeal removes the chunks a failed seal wrote, so the tree is as it
+// was; the live files still hold every line. It returns cause, with a note
+// when a chunk could not be removed (the next seal stages it as an orphan).
+func rollbackSeal(wrote []string, cause error) error {
+	var failed []string
+	for _, p := range wrote {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			failed = append(failed, fmt.Sprintf("%s: %v", p, err))
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%w; the chunks this run wrote could not all be removed (%s); the next seal stages them",
+			cause, strings.Join(failed, "; "))
+	}
+	return cause
 }
 
 // resolveSealDir resolves a session's sealed directory, dating a brand-new one
@@ -127,25 +253,7 @@ func resolveSealDir(repoRoot, sessionID string, now time.Time, opts SealOptions)
 type sealOutcome struct {
 	wroteChunk bool
 	lineCount  int
-}
-
-// tallyAndStage folds one unit's outcome into the run result and, outside the
-// flock, stages every untracked chunk in the sealed dir (orphan recovery).
-func tallyAndStage(repoRoot, sealedDir string, ns audit.Namespace, session string, out sealOutcome, opts SealOptions, res *SealResult) error {
-	if opts.DryRun {
-		res.LinesSealed += out.lineCount
-		return nil
-	}
-	if out.wroteChunk {
-		res.SessionsSealed++
-		res.LinesSealed += out.lineCount
-	}
-	staged, err := audit.StageUntrackedChunks(repoRoot, sealedDir, ns, session)
-	if err != nil {
-		return err
-	}
-	res.ChunksStaged += staged
-	return nil
+	chunkPath  string // the chunk written, when wroteChunk
 }
 
 // sealSessionLocked runs the audit seal's critical section under the caller's
@@ -221,7 +329,7 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 		return sealOutcome{}, err
 	}
 	reportf(opts, "sealed %d line(s) for %s into %s\n", len(tail), p.label, name)
-	return sealOutcome{wroteChunk: true, lineCount: len(tail)}, nil
+	return sealOutcome{wroteChunk: true, lineCount: len(tail), chunkPath: filepath.Join(p.sealedDir, name)}, nil
 }
 
 // reportf writes a verbose/dry-run line to the options' sink when present.

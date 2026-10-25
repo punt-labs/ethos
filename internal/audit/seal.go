@@ -374,12 +374,37 @@ func sweepable(e os.DirEntry, ns Namespace, ownSession, tempSession string, now 
 // session filters to one session's chunks. Returns the count actually staged
 // (already-clean-tracked chunks are not counted).
 func StageUntrackedChunks(repoRoot, dir string, ns Namespace, session string) (int, error) {
+	paths, err := ChunkArtifacts(dir, ns, session)
+	if err != nil {
+		return 0, err
+	}
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	pending, err := UntrackedOrModified(repoRoot, paths)
+	if err != nil {
+		return 0, err
+	}
+	if len(pending) == 0 {
+		return 0, nil
+	}
+	if err := GitAdd(repoRoot, pending...); err != nil {
+		return 0, err
+	}
+	return len(pending), nil
+}
+
+// ChunkArtifacts lists every chunk-namespace artifact in dir — a valid chunk,
+// a quarantine marker, or a .corrupt artifact — as absolute paths, in
+// directory order. In the mission namespace, session filters to one session's
+// artifacts. A missing dir lists nothing. It touches no git.
+func ChunkArtifacts(dir string, ns Namespace, session string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, fmt.Errorf("reading %s: %w", dir, err)
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
 	}
 	var paths []string
 	for _, e := range entries {
@@ -398,20 +423,7 @@ func StageUntrackedChunks(repoRoot, dir string, ns Namespace, session string) (i
 		case KindOther, KindNearMiss, KindTemp:
 		}
 	}
-	if len(paths) == 0 {
-		return 0, nil
-	}
-	pending, err := UntrackedOrModified(repoRoot, paths)
-	if err != nil {
-		return 0, err
-	}
-	if len(pending) == 0 {
-		return 0, nil
-	}
-	if err := GitAdd(repoRoot, pending...); err != nil {
-		return 0, err
-	}
-	return len(pending), nil
+	return paths, nil
 }
 
 // lastNewline returns the index of the last '\n' in b, or -1.
