@@ -6,14 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -432,6 +433,14 @@ func bundleNameFromURL(url string) string {
 	return s
 }
 
+// bundleCloneTimeout bounds `git clone` and `git submodule add` for a team
+// bundle: a network operation, so it gets its own limit, not the 10s every
+// local git read gets.
+const bundleCloneTimeout = 5 * time.Minute
+
+// cloneLimit is the bound runTeamAddBundle applies; a test may shorten it.
+var cloneLimit = bundleCloneTimeout
+
 func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	name := addBundleName
 	if name == "" {
@@ -481,13 +490,11 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		return nil
 	}
 
-	c := exec.Command(gitArgs[0], gitArgs[1:]...)
-	if gitDir != "" {
-		c.Dir = gitDir
-	}
-	c.Stdout = out
-	c.Stderr = cmd.ErrOrStderr()
-	if err := c.Run(); err != nil {
+	_, err := gitenv.Run(gitenv.Spec{
+		Git: gitArgs[0], Args: gitArgs[1:], Dir: gitDir,
+		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit,
+	})
+	if err != nil {
 		return fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
 	}
 	if jsonOutput {

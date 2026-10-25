@@ -3,12 +3,12 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
@@ -183,8 +183,8 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 // read the pattern with .gitignore's own semantics, where `/**/` spans zero
 // or more directories — so a file directly under .punt-labs/ is caught too.
 func trackedLocalExt(repoRoot string) ([]string, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files",
-		"--", ":(glob)"+GitignoreRule).Output()
+	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "ls-files",
+		"--", ":(glob)"+GitignoreRule)
 	if err != nil {
 		return nil, fmt.Errorf("could not ask git for tracked files: %v", err)
 	}

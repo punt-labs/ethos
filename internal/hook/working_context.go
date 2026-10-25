@@ -57,6 +57,7 @@ func runGit(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 
+	// Bound: gitTimeout (2s), by ctx; kept off gitenv's 10s so session start stays quick.
 	cmd := exec.CommandContext(ctx, "git", args...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -95,6 +96,7 @@ func uncommittedChanges() (int, []string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 
+	// Bound: gitTimeout (2s), by ctx; kept off gitenv's 10s so session start stays quick.
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	raw, err := cmd.Output()
 	if err != nil {

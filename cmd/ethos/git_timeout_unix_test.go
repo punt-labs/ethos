@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -89,4 +90,36 @@ func TestActiveRepoSessionsGitTimeout(t *testing.T) {
 	got := activeRepoSessions(t.TempDir(), &errb)
 	assert.Nil(t, got)
 	assert.Contains(t, errb.String(), "did not answer")
+}
+
+// mission --verify reports a git that did not answer as the error, naming
+// the timeout, for both of its git commands.
+func TestVerifyResultAgainstNumstatGitTimeout(t *testing.T) {
+	t.Chdir(t.TempDir())
+	testhelpers.HangingGit(t)
+	err := verifyResultAgainstNumstat(&mission.Result{}, "main")
+	require.ErrorIs(t, err, gitenv.ErrTimeout)
+	assert.Contains(t, err.Error(), "invalid base ref")
+}
+
+// team add-bundle --apply refuses a clone that does not finish within
+// bundleCloneTimeout, with the same message shape as every git timeout, and
+// the production bound is five minutes.
+func TestTeamAddBundleCloneTimeout(t *testing.T) {
+	assert.Equal(t, 5*time.Minute, bundleCloneTimeout)
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	testhelpers.HangingGit(t)
+	prevLimit, prevApply, prevGlobal, prevName := cloneLimit, addBundleApply, addBundleGlobal, addBundleName
+	cloneLimit, addBundleApply, addBundleGlobal, addBundleName = 200*time.Millisecond, true, true, ""
+	t.Cleanup(func() {
+		cloneLimit, addBundleApply, addBundleGlobal, addBundleName = prevLimit, prevApply, prevGlobal, prevName
+	})
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	err := runTeamAddBundle(cmd, "https://example.invalid/team-bundle.git")
+	require.ErrorIs(t, err, gitenv.ErrTimeout)
+	assert.Contains(t, err.Error(), "clone")
+	assert.Contains(t, err.Error(), "200ms")
 }

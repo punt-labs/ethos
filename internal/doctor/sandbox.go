@@ -173,6 +173,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// --template= defeats a caller's init.templateDir/GIT_TEMPLATE_DIR,
 	// which could otherwise seed the "sandbox" with attacker- or
 	// operator-controlled hooks of its own before ours ever runs.
+	// Bound: sandboxTimeout (10s), by ctx.
 	initCmd := exec.CommandContext(ctx, "git", "-C", dir, "init", "-q", "--template=")
 	initCmd.Env = sandboxEnv
 	if out, err := initCmd.CombinedOutput(); err != nil {
@@ -416,6 +417,7 @@ func (e *hookExitedEarlyError) Error() string {
 // runner, which is why it always attaches Output()'s stderr on failure
 // rather than exposing a broader interface.
 func gitInSandbox(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	// Bound: sandboxTimeout (10s), by the caller's ctx.
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = env
 	out, err := cmd.Output()

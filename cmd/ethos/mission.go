@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -1796,9 +1796,9 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	// --end-of-options sandboxes the base argument: git treats
 	// everything after it as a positional, so a base like
 	// "--output=/tmp/x" cannot smuggle a flag into rev-parse or diff.
-	check := exec.Command("git", "rev-parse", "--verify", "--end-of-options", base)
-	check.Stderr = os.Stderr
-	if err := check.Run(); err != nil {
+	if _, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Args: []string{"rev-parse", "--verify", "--end-of-options", base}, Stderr: os.Stderr,
+	}); err != nil {
 		return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
 	}
 
@@ -1817,9 +1817,11 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	//
 	// --end-of-options applies to `base+"..HEAD"` only; git treats
 	// `--no-renames` as a real flag before the sandbox.
-	diff := exec.Command("git", "diff", "--numstat", "--no-renames", "--end-of-options", base+"..HEAD")
-	diff.Stderr = os.Stderr
-	out, err := diff.Output()
+	out, err := gitenv.Run(gitenv.Spec{
+		Git:    "git",
+		Args:   []string{"diff", "--numstat", "--no-renames", "--end-of-options", base + "..HEAD"},
+		Stderr: os.Stderr,
+	})
 	if err != nil {
 		return fmt.Errorf("--verify: running git diff --numstat %s..HEAD: %w", base, err)
 	}

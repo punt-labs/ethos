@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
@@ -304,7 +304,7 @@ func emitAgentContext(agentID *identity.Identity, agentPersona string, store ide
 // Exported so `ethos session start` resolves repo identically. Empty when
 // unresolvable.
 func ResolveRepo() string {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	out, err := gitenv.OutputEnv("", "git", nil, "remote", "get-url", "origin")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: could not resolve repo from git remote: %v\n", err)
 		return ""

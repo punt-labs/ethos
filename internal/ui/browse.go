@@ -2,13 +2,15 @@ package ui
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 type browseData struct {
@@ -147,10 +149,20 @@ func (s *Server) renderFile(w http.ResponseWriter, relPath, absPath string) {
 	}
 }
 
+// git runs git in the repository root under the gitenv deadline. A command
+// that fails (an untracked file, an unknown commit) is just an error to the
+// caller; one that does not answer is also noted on stderr, so a page with no
+// attribution has its reason in the log.
+func (s *Server) git(args ...string) ([]byte, error) {
+	out, err := gitenv.OutputEnv(s.repoRoot, "git", nil, args...)
+	if errors.Is(err, gitenv.ErrTimeout) {
+		fmt.Fprintf(os.Stderr, "ethos ui: %v\n", err)
+	}
+	return out, err
+}
+
 func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
-	cmd := exec.Command("git", "blame", "--porcelain", relPath)
-	cmd.Dir = s.repoRoot
-	out, err := cmd.Output()
+	out, err := s.git("blame", "--porcelain", relPath)
 	if err != nil {
 		return nil
 	}
@@ -218,9 +230,7 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		c := &commitInfo{}
 
 		// Try trailers first.
-		cmd := exec.Command("git", "log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
-		cmd.Dir = s.repoRoot
-		out, err := cmd.Output()
+		out, err := s.git("log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
 		if err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) >= 1 {
@@ -234,9 +244,7 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		// Fallback: parse bead/ticket ID from commit subject, look
 		// up the mission in missions.jsonl.
 		if c.mission == "" {
-			cmd2 := exec.Command("git", "log", "--format=%s", "-1", sha)
-			cmd2.Dir = s.repoRoot
-			if subj, err := cmd2.Output(); err == nil {
+			if subj, err := s.git("log", "--format=%s", "-1", sha); err == nil {
 				subject := string(subj)
 				// Match ethos-XXXX or punt-labs-XXXX in parens at end of subject.
 				for _, candidate := range extractTicketIDs(subject) {
