@@ -2,7 +2,6 @@ package ui
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -149,13 +148,13 @@ func (s *Server) renderFile(w http.ResponseWriter, relPath, absPath string) {
 	}
 }
 
-// git runs git in the repository root under the gitenv deadline. A command
-// that fails (an untracked file, an unknown commit) is just an error to the
-// caller; one that does not answer is also noted on stderr, so a page with no
-// attribution has its reason in the log.
+// git runs git in the repository root under the gitenv deadline. Every
+// failure — an untracked file, an unknown commit, a timeout — is an error
+// carrying git's message to the caller and a notice on stderr, so a page with
+// no attribution has its reason in the log. None is read as an empty answer.
 func (s *Server) git(args ...string) ([]byte, error) {
-	out, err := gitenv.OutputEnv(s.repoRoot, "git", nil, args...)
-	if errors.Is(err, gitenv.ErrTimeout) {
+	out, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: s.repoRoot, Args: args, Env: gitenv.Inherited()}, 0)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos ui: %v\n", err)
 	}
 	return out, err
@@ -228,10 +227,15 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 			return c
 		}
 		c := &commitInfo{}
+		// A lookup in which git failed is returned but not cached: the next
+		// line of the same commit asks again.
+		failed := false
 
 		// Try trailers first.
 		out, err := s.git("log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
-		if err == nil {
+		if err != nil {
+			failed = true
+		} else {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) >= 1 {
 				c.mission = strings.TrimSpace(lines[0])
@@ -244,7 +248,9 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		// Fallback: parse bead/ticket ID from commit subject, look
 		// up the mission in missions.jsonl.
 		if c.mission == "" {
-			if subj, err := s.git("log", "--format=%s", "-1", sha); err == nil {
+			if subj, err := s.git("log", "--format=%s", "-1", sha); err != nil {
+				failed = true
+			} else {
 				subject := string(subj)
 				// Match ethos-XXXX or punt-labs-XXXX in parens at end of subject.
 				for _, candidate := range extractTicketIDs(subject) {
@@ -259,7 +265,9 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 			}
 		}
 
-		commitCache[sha] = c
+		if !failed {
+			commitCache[sha] = c
+		}
 		return c
 	}
 

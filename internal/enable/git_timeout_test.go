@@ -17,7 +17,8 @@ func TestEnableGitTimeouts(t *testing.T) {
 
 	t.Run("EnableTo", func(t *testing.T) {
 		_, err := EnableTo(repo, repo)
-		assert.ErrorIs(t, err, gitenv.ErrTimeout)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), gitenv.ErrTimeout.Error())
 	})
 	t.Run("gitExcludes", func(t *testing.T) {
 		_, err := gitExcludes(repo, []string{"a"})

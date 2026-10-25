@@ -172,6 +172,21 @@ func Parsed() []string {
 	return append(env, "LC_ALL=C", "LANGUAGE=")
 }
 
+// Inherited returns the current environment unchanged except that git's
+// messages are in the C locale. A caller that needs its own GIT_DIR or
+// GIT_INDEX_FILE (the seal, inside a pre-commit hook) and matches git's
+// English messages uses it.
+func Inherited() []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if name != "LC_ALL" && name != "LANGUAGE" {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "LC_ALL=C", "LANGUAGE=")
+}
+
 // Absent says which failed exits of a read mean "there is nothing there".
 // Every other failure is an error: a git failure must never read as an absent
 // value (an empty repo, a missing user, "not a gitlink").

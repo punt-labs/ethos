@@ -91,17 +91,20 @@ func GitMv(repoRoot, src, dst string) error {
 // IsGitlinkMount reports whether <repoRoot>/.punt-labs/ethos is a gitlink
 // (submodule) rather than regular tracked files. In that configuration the
 // sealed-chunk target tree is unreachable and the seal defers. A file with
-// git mode 160000 is a gitlink. A git that fails (not a repository) answers
-// false; a git that does not answer is an error, since seal or enable must
-// not proceed on a guess.
+// git mode 160000 is a gitlink. Outside a repository there is none (false).
+// Any other git failure — a timeout, dubious ownership, git not installed —
+// is an error: seal and enable must not proceed on a guess.
 func IsGitlinkMount(repoRoot string) (bool, error) {
 	rel := filepath.Join(".punt-labs", "ethos")
-	out, err := gitRun(repoRoot, "git ls-files", "ls-files", "--stage", "--", rel)
-	if errors.Is(err, gitenv.ErrTimeout) {
-		return false, err
-	}
+	out, absent, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Dir: repoRoot, Env: gitenv.Inherited(),
+		Args: []string{"ls-files", "--stage", "--", rel},
+	}, gitenv.AbsentNotRepo)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("git ls-files in %s: %w", repoRoot, err)
+	}
+	if absent {
+		return false, nil // not a repository: there is no gitlink
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "160000") {

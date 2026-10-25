@@ -86,8 +86,16 @@ func Enable(repoRoot string) (*Report, error) {
 func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
 
+	// Refuse before writing anything: a root with no .git of its own would
+	// get hook files git never runs.
+	lk, hooksDir, err := hooksTarget(repoRoot)
+	if err != nil {
+		return rep, err
+	}
+
 	// Guard the gitlink case: a submodule-mounted .punt-labs/ethos is a
-	// foreign git repo the vendored zone cannot be written into.
+	// foreign git repo the vendored zone cannot be written into. After the
+	// hooks check, so a missing git is reported as "install git".
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
 		return rep, fmt.Errorf("checking for a gitlink mount: %w", err)
@@ -95,13 +103,6 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	if gitlink {
 		return rep, fmt.Errorf(
 			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
-	}
-
-	// Refuse before writing anything: a root with no .git of its own would
-	// get hook files git never runs.
-	lk, hooksDir, err := hooksTarget(repoRoot)
-	if err != nil {
-		return rep, err
 	}
 
 	depositWarns, err := deposit(repoRoot, Guide, Setup)

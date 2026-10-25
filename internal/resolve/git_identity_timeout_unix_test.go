@@ -59,3 +59,55 @@ func TestResolveGitTimeoutIsAnError(t *testing.T) {
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
 	assert.Empty(t, handle)
 }
+
+// A git failure is never read as an absent value: an unset key and no remote
+// are absent; "dubious ownership" and a corrupt config are errors.
+func TestGitReadsClassifyFailures(t *testing.T) {
+	cases := map[string]struct {
+		body    string
+		cfgWant string
+		cfgErr  bool
+		repoErr bool
+	}{
+		"unset key / no remote": {body: "[ \"$1\" = remote ] && { echo 'error: No such remote' >&2; exit 2; }\nexit 1\n"},
+		"dubious ownership":     {body: "echo 'fatal: detected dubious ownership' >&2\nexit 128\n", cfgErr: true, repoErr: true},
+		"corrupt config":        {body: "echo 'fatal: bad config line 3' >&2\nexit 128\n", cfgErr: true, repoErr: true},
+		"not a repository":      {body: "[ \"$1\" = remote ] && { echo 'fatal: not a git repository (or any of the parent directories): .git' >&2; exit 128; }\nexit 1\n"},
+		"value":                 {body: "echo ' v '\n", cfgWant: "v"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			fakeGit(t, c.body)
+			t.Chdir(t.TempDir())
+			v, err := GitConfig("user.name")
+			if c.cfgErr {
+				require.Error(t, err)
+				assert.Empty(t, v)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, c.cfgWant, v)
+			}
+			r, err := RepoName()
+			if c.repoErr {
+				require.Error(t, err)
+				assert.Empty(t, r)
+			} else if name != "value" {
+				require.NoError(t, err)
+				assert.Empty(t, r)
+			}
+		})
+	}
+}
+
+// No git on PATH: identity resolution does not require git, so GitConfig is
+// unset; RepoName needs git and says so.
+func TestGitMissingFromPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Chdir(t.TempDir())
+	v, err := GitConfig("user.name")
+	require.NoError(t, err)
+	assert.Empty(t, v)
+	_, err = RepoName()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, exec.ErrNotFound)
+}

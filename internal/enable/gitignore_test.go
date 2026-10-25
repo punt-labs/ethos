@@ -353,10 +353,23 @@ func TestLocalIgnoredFallsBackWhenGitCannotAnswer(t *testing.T) {
 	}
 }
 
-// Not a work tree at all: git fails, there is no .gitignore to fall back on,
-// and the answer must be "not covered" rather than an error or a shrug.
+// Not a work tree at all: git says "not a git repository", which is an answer
+// (nothing there is covered), not an error and not the literal-line fallback.
 func TestLocalIgnoredOutsideAWorkTree(t *testing.T) {
-	assertLocalIgnored(t, filepath.Join(t.TempDir(), "no-such-repo"), false)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(LocalIgnoreRule+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertLocalIgnored(t, dir, false)
+}
+
+// A directory that does not exist is a failure git cannot answer: an error,
+// never "not covered".
+func TestLocalIgnoredMissingDirectoryIsAnError(t *testing.T) {
+	got, err := LocalIgnored(filepath.Join(t.TempDir(), "no-such-repo"))
+	if err == nil || got {
+		t.Fatalf("LocalIgnored = %v, %v; want false and an error", got, err)
+	}
 }
 
 func assertLocalIgnored(t *testing.T, dir string, want bool) {

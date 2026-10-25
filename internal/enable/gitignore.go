@@ -133,7 +133,11 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	var missing []ignoreRule
 	var patterns, defeated []string
 	for _, r := range gitignoreRules {
-		if covers(repoRoot, r, present) {
+		covered, err := covers(repoRoot, r, present)
+		if err != nil {
+			return "", "", err
+		}
+		if covered {
 			continue
 		}
 		// The pattern is uncovered but its literal line is already in the
@@ -236,22 +240,27 @@ func presentLines(data []byte) map[string]bool {
 // in gitExcludes: which rules travel with the repo, and whether one probe
 // standing in for a whole pattern is enough.
 //
-// It answers false on any doubt. A rule that covers part of the pattern, a
-// match that comes from an untraveling source, and a git that cannot answer at
-// all all mean "write the rule" — a redundant line costs nothing, a secret
-// staged by a repo that reported itself protected costs everything.
+// It answers false when git answers "not excluded": a rule that covers part
+// of the pattern, or a match that comes from an untraveling source, means
+// "write the rule" — a redundant line costs nothing, a secret staged by a
+// repo that reported itself protected costs everything.
 //
-// The literal pattern is consulted only when git cannot answer (no git in
-// PATH, not a work tree). It is a fallback, not a second opinion: when git
-// answers "not excluded" for a pattern whose line is right there in the file,
-// something overrides it, and taking the line's word for it is the fail-open
-// this predicate exists to prevent.
-func covers(repoRoot string, r ignoreRule, present map[string]bool) bool {
+// The literal pattern is consulted only when git is not installed. It is a
+// fallback, not a second opinion: when git answers "not excluded" for a
+// pattern whose line is right there in the file, something overrides it, and
+// taking the line's word for it is the fail-open this predicate exists to
+// prevent. Any other git failure (a timeout, dubious ownership, not a
+// repository) is an error: a git that could not answer must not read as "not
+// covered" or as "covered".
+func covers(repoRoot string, r ignoreRule, present map[string]bool) (bool, error) {
 	excluded, err := gitExcludes(repoRoot, r.probes)
-	if err != nil {
-		return present[r.pattern]
+	switch {
+	case err == nil:
+		return excluded, nil
+	case errors.Is(err, exec.ErrNotFound):
+		return present[r.pattern], nil
 	}
-	return excluded
+	return false, err
 }
 
 // gitExcludes reports whether the repo's own ignore rules exclude every path
@@ -285,6 +294,9 @@ func gitExcludes(repoRoot string, probes []string) (bool, error) {
 		Git: "git", Dir: repoRoot,
 		Args: []string{"-c", "core.excludesFile=" + os.DevNull,
 			"check-ignore", "-v", "-z", "--no-index", "--stdin"},
+		// The caller's environment, in the C locale: the "not a git
+		// repository" message below is matched in English.
+		Env:    gitenv.Inherited(),
 		Stdin:  strings.NewReader(strings.Join(probes, "\x00") + "\x00"),
 		Stdout: &stdout, Stderr: &stderr,
 	})
@@ -292,6 +304,9 @@ func gitExcludes(repoRoot string, probes []string) (bool, error) {
 		var ee *exec.ExitError
 		// Exit 1 is "no path matched" — an answer, and the answer is no.
 		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			if strings.Contains(stderr.String(), "not a git repository") {
+				return false, nil // nothing in a non-repository is covered
+			}
 			return false, fmt.Errorf("git check-ignore: %w: %s", err, strings.TrimSpace(stderr.String()))
 		}
 	}
@@ -348,7 +363,7 @@ func LocalIgnored(repoRoot string) (bool, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("reading .gitignore: %w", err)
 	}
-	return covers(repoRoot, machineLocalRule, presentLines(data)), nil
+	return covers(repoRoot, machineLocalRule, presentLines(data))
 }
 
 // createGitignoreTemp creates the staging file for an atomic write to target,

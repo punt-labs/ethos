@@ -1,9 +1,7 @@
 package audit
 
 import (
-	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
@@ -58,24 +56,25 @@ func ParseGitRemote(url string) string {
 // a roster's Repo field, computed by the same parser, so a roster's Repo and the
 // identity of the checkout that owns it always compare equal.
 //
-// It returns ("", nil) when repoRoot is empty, has no origin remote, or the
-// remote URL cannot be parsed. A checkout with no parseable origin also
+// It returns ("", nil) when repoRoot is empty, is not a repository, has no
+// origin remote, or the remote URL cannot be parsed. A checkout with no parseable origin also
 // records "" in its rosters, so "" == "" still matches those sessions; callers
 // treat a "" identity as "this checkout's own sessions" and leave
-// differently-identified sessions to the checkout that owns them. A git that
-// cannot be run or does not answer is an error, never "": an empty identity
-// would match the wrong sessions.
+// differently-identified sessions to the checkout that owns them. Any
+// other git failure (a timeout, git not installed, dubious ownership) is an
+// error, never "": an empty identity would match the wrong sessions.
 func RepoIdentity(repoRoot string) (string, error) {
 	if repoRoot == "" {
 		return "", nil
 	}
-	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "remote", "get-url", "origin")
-	var ee *exec.ExitError
-	switch {
-	case err == nil:
-		return ParseGitRemote(string(out)), nil
-	case errors.As(err, &ee), errors.Is(err, exec.ErrNotFound):
-		return "", nil // no origin, not a repository, or no git installed
+	out, absent, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Dir: repoRoot, Args: []string{"remote", "get-url", "origin"}, Env: gitenv.Parsed(),
+	}, gitenv.AbsentNoRemote|gitenv.AbsentNotRepo)
+	if err != nil {
+		return "", fmt.Errorf("reading the origin of %s: %w", repoRoot, err)
 	}
-	return "", fmt.Errorf("reading the origin of %s: %w", repoRoot, err)
+	if absent {
+		return "", nil // no origin, or not a repository
+	}
+	return ParseGitRemote(string(out)), nil
 }

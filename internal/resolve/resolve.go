@@ -1603,13 +1603,18 @@ func EnvRepoRoot() string {
 
 // RepoName returns the repository name (e.g. "punt-labs/ethos") for the
 // current working directory. Parses the "origin" remote URL.
-// Returns ("", nil) if not in a git repo, no origin remote is set, or git is
-// not installed. A git that cannot be run or does not answer within the
-// gitenv deadline is an error naming the directory.
+// Returns ("", nil) when there is no origin remote or the directory is not a
+// repository. Every other failure — a timeout, git not installed, dubious
+// ownership — is an error carrying git's message.
 func RepoName() (string, error) {
-	out, err := gitOutputHere("remote", "get-url", "origin")
+	out, absent, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Args: []string{"remote", "get-url", "origin"}, Env: gitenv.Parsed(),
+	}, gitenv.AbsentNoRemote|gitenv.AbsentNotRepo)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reading the origin remote in %s: %w", cwdName(), err)
+	}
+	if absent {
+		return "", nil
 	}
 	url := strings.TrimSpace(string(out))
 	if url == "" {
@@ -1622,25 +1627,12 @@ func RepoName() (string, error) {
 	return name, nil
 }
 
-// gitOutputHere runs git with args in the working directory under the
-// gitenv deadline. A git that ran and exited non-zero (an unset key, no
-// remote, not a repository) and a git that is not installed both answer
-// (nil, nil): nothing to read. Any other failure — a timeout among them — is
-// an error naming git and the directory.
-func gitOutputHere(args ...string) ([]byte, error) {
-	out, err := gitenv.Output("", "git", args...)
-	var ee *exec.ExitError
-	switch {
-	case err == nil:
-		return out, nil
-	case errors.As(err, &ee), errors.Is(err, exec.ErrNotFound):
-		return nil, nil
+// cwdName is the working directory for a message, or a stand-in.
+func cwdName() string {
+	if d, err := os.Getwd(); err == nil {
+		return d
 	}
-	dir, werr := os.Getwd()
-	if werr != nil {
-		dir = "the working directory"
-	}
-	return nil, fmt.Errorf("git %s in %s: %w", strings.Join(args, " "), dir, err)
+	return "the working directory"
 }
 
 // parseRepoName extracts "owner/repo" from a remote URL.
@@ -1670,13 +1662,22 @@ func parseRepoName(url string) string {
 	return name
 }
 
-// GitConfig reads a single git config value. Returns ("", nil) if git is
-// not installed or the key is not set; an error when git cannot be run or
-// does not answer within the gitenv deadline.
+// GitConfig reads a single git config value. Returns ("", nil) when the key
+// is unset, and when git is not installed: identity resolution does not
+// require git, so a missing git has no config to read. Every other failure — a
+// timeout, a corrupt config, dubious ownership — is an error carrying git's
+// message, never an unset key.
 func GitConfig(key string) (string, error) {
-	out, err := gitOutputHere("config", key)
-	if err != nil {
-		return "", err
+	out, absent, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Args: []string{"config", key}, Env: gitenv.Parsed(),
+	}, gitenv.AbsentUnset)
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("reading git config %s in %s: %w", key, cwdName(), err)
+	case absent:
+		return "", nil
 	}
 	v := strings.TrimSpace(string(out))
 	// Strip surrounding quotes — some git configs store values with
