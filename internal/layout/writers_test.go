@@ -91,7 +91,7 @@ func writerCorpus(t *testing.T) corpus {
 
 	// Hook files are classified from the directory git resolves for the repo,
 	// as the doctor check does.
-	hooksDir, _ := githook.HooksDir(root)
+	hooksDir := githook.HooksDir(root).Dir
 	return corpus{paths: paths, table: mustTableFor(t, root, hooksDir)}
 }
 

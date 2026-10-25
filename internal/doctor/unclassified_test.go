@@ -26,7 +26,7 @@ func TestCheckUnclassifiedFiles_NoRoot(t *testing.T) {
 }
 
 func TestCheckUnclassifiedFiles_NoEthosTrees(t *testing.T) {
-	root := t.TempDir()
+	root := repoTemp(t)
 	touch(t, root, "README.md") // outside the two zones, never examined
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "PASS", r.Status)
@@ -34,7 +34,7 @@ func TestCheckUnclassifiedFiles_NoEthosTrees(t *testing.T) {
 }
 
 func TestCheckUnclassifiedFiles_ClassifiedFilesPass(t *testing.T) {
-	root := t.TempDir()
+	root := repoTemp(t)
 	for _, rel := range []string{
 		".punt-labs/ethos/identities/bwk.yaml",
 		".punt-labs/ethos/missions/m-1/contract.yaml",
@@ -99,7 +99,7 @@ func countOccurrences(s, sub string) int {
 // .punt-labs/ethos/missions-closed` output must not warn; other files beside it
 // still do.
 func TestCheckUnclassifiedFiles_ExportedMissionsPass(t *testing.T) {
-	root := t.TempDir()
+	root := repoTemp(t)
 	touch(t, root, ".punt-labs/ethos/missions-closed/m-2026-10-24-001.contract.yaml")
 	touch(t, root, ".punt-labs/ethos/missions-closed/m-2026-10-24-001.result.yaml")
 	assert.Equal(t, "PASS", CheckUnclassifiedFiles(root).Status)
@@ -239,9 +239,59 @@ func TestCheckUnclassifiedFiles_NamesADegradedHooksLookup(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // no git
 
 	r := CheckUnclassifiedFiles(root)
-	assert.Equal(t, "PASS", r.Status, r.Detail)
-	assert.Contains(t, r.Detail, "git did not resolve the hooks directory")
-	assert.Contains(t, r.Detail, "core.hooksPath is ignored")
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "hooks directory not verified:")
+	assert.Contains(t, r.Detail, "git")
+}
+
+// TestCheckUnclassifiedFiles_SubdirectoryOfAnotherRepoIsNotVerified: git
+// reports the enclosing repository's work tree, so the hooks directory it would
+// name is not this root's; a clean scan still cannot say PASS.
+func TestCheckUnclassifiedFiles_SubdirectoryOfAnotherRepoIsNotVerified(t *testing.T) {
+	parent := t.TempDir()
+	gitIn(t, parent, "init", "-q")
+	root := filepath.Join(parent, "sub")
+	touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "hooks directory not verified:")
+	assert.Contains(t, r.Detail, "work tree")
+}
+
+// TestCheckUnclassifiedFiles_NestedWorkingTreeIsNotScanned: a directory with
+// its own .git inside a zone (a submodule) is another repository's files.
+func TestCheckUnclassifiedFiles_NestedWorkingTreeIsNotScanned(t *testing.T) {
+	root := t.TempDir()
+	gitIn(t, root, "init", "-q")
+	touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")
+	touch(t, root, ".punt-labs/ethos/vendored/stray.bin")
+	touch(t, root, ".punt-labs/ethos/vendored/.git") // gitlink file
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos/vendored is a separate git working tree")
+	assert.NotContains(t, r.Detail, "stray.bin")
+}
+
+// TestCheckUnclassifiedFiles_ZoneRootSubmoduleIsNotScanned: the zone root
+// itself being a submodule is skipped whole.
+func TestCheckUnclassifiedFiles_ZoneRootSubmoduleIsNotScanned(t *testing.T) {
+	root := t.TempDir()
+	gitIn(t, root, "init", "-q")
+	touch(t, root, ".punt-labs/ethos/stray.bin")
+	touch(t, root, ".punt-labs/ethos/.git")
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos is a separate git working tree")
+	assert.NotContains(t, r.Detail, "stray.bin")
+}
+
+// TestWalkZone_MissingRootIsNotScanned: a zone removed between the Lstat and
+// the walk was not scanned, and says so.
+func TestWalkZone_MissingRootIsNotScanned(t *testing.T) {
+	sc := newScan()
+	scanned, err := sc.walkZone(nil, t.TempDir(), filepath.Join(".punt-labs", "ethos"))
+	require.NoError(t, err)
+	assert.False(t, scanned)
 }
 
 // TestCheckUnclassifiedFiles_RelativeRoot: ETHOS_REPO_ROOT may be relative.
@@ -318,4 +368,14 @@ func TestCheckUnclassifiedFiles_OnlySkippedItemsAreNotFiles(t *testing.T) {
 	assert.Equal(t, "WARN", r.Status)
 	assert.NotContains(t, r.Detail, "match")
 	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos/linked is a symlink")
+}
+
+// repoTemp returns a fresh git repository. A plain temp directory under a
+// TMPDIR that is itself inside a repository is a subdirectory of that repo,
+// which the hooks lookup reports as degraded.
+func repoTemp(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	return dir
 }

@@ -390,7 +390,7 @@ func TestCheckSealHook(t *testing.T) {
 	// writeEnabledHook creates an enabled repo whose pre-commit holds body.
 	writeEnabledHook := func(t *testing.T, body string) string {
 		t.Helper()
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
@@ -407,7 +407,7 @@ func TestCheckSealHook(t *testing.T) {
 	// --- Four-state model (§2.7/§2.11) ---
 
 	t.Run("dormant: no marker, no hook → PASS not enabled here", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -415,7 +415,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("dormant: no marker, foreign hook without ethos → PASS not enabled here", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
@@ -434,7 +434,7 @@ func TestCheckSealHook(t *testing.T) {
 		if _, err := exec.LookPath("git"); err != nil {
 			t.Skip("git not available")
 		}
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		witness := filepath.Join(dir, "witness")
@@ -458,7 +458,7 @@ func TestCheckSealHook(t *testing.T) {
 	// point is that a dormant repo must PASS even when the sandbox
 	// couldn't have run at all.
 	t.Run("dormant: no git on PATH still PASSes — execution never attempted (S2/P1)", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\ntrue\n"), 0o755))
@@ -484,7 +484,7 @@ func TestCheckSealHook(t *testing.T) {
 	// — is a call assembled dynamically (eval, a variable) that no lexical
 	// scan, marker-based or pattern-based, can see without executing it.
 	t.Run("dormant: a textually-literal unmarked standalone call now WARNs (qodo #5, supersedes P5)", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		// No BEGIN/END markers — hasMarkerSection cannot see this call —
@@ -506,7 +506,7 @@ func TestCheckSealHook(t *testing.T) {
 	// execute. This is the same djb-reviewed trade-off P5 named, narrowed
 	// to the one shape lexical detection genuinely cannot close.
 	t.Run("dormant: an eval-obscured standalone call still PASSes — the narrower residual lexical scanning cannot close", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
@@ -521,7 +521,7 @@ func TestCheckSealHook(t *testing.T) {
 		// A foreign hook that only documents the marker text inside a heredoc,
 		// on a repo with no enabled marker, must not read as a chained section
 		// (no false WARN) — the marker scan consults the heredoc mask (E2).
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		body := "#!/bin/sh\ncat <<'EOF'\n# --- BEGIN ETHOS DES-058 SEAL ---\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
@@ -532,7 +532,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
@@ -544,7 +544,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("enabled but no pre-commit hook → FAIL", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		mark(t, dir)
 		r := CheckSealHook(dir)
@@ -560,7 +560,7 @@ func TestCheckSealHook(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses directory permissions")
 		}
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		zone := filepath.Join(dir, ".punt-labs", "ethos")
 		require.NoError(t, os.MkdirAll(zone, 0o755))
@@ -738,7 +738,7 @@ func TestCheckSealHook(t *testing.T) {
 	// what Chain would produce, so it correctly stays FAIL), this uses the
 	// real githook.Chain output.
 	t.Run("P4: a genuinely current section still WARNs, not FAILs, when the host section exits first", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooksDir := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 		hookPath := filepath.Join(hooksDir, "pre-commit")
@@ -783,7 +783,7 @@ func TestCheckSealHook(t *testing.T) {
 		sandboxGOOS = "linux"
 		t.Cleanup(func() { sandboxGOOS = orig })
 
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
@@ -808,7 +808,7 @@ func TestCheckSealHook(t *testing.T) {
 		sandboxGOOS = "linux"
 		t.Cleanup(func() { sandboxGOOS = orig })
 
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		witness := filepath.Join(t.TempDir(), "witness")
@@ -857,7 +857,7 @@ func TestCheckSealHook(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				simulateWindows(t)
 
-				dir := t.TempDir()
+				dir := repoTemp(t)
 				hooks := filepath.Join(dir, ".git", "hooks")
 				require.NoError(t, os.MkdirAll(hooks, 0o755))
 				body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
@@ -1068,7 +1068,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	}
 	writeEnabledHook := func(t *testing.T, body string) string {
 		t.Helper()
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooksDir := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte(body), 0o755))
@@ -1083,7 +1083,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	})
 
 	t.Run("dormant: no marker, no hook → PASS not enabled here", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		r := CheckTrailerHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -1091,7 +1091,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	})
 
 	t.Run("enabled but no commit-msg hook → FAIL", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		mark(t, dir)
 		r := CheckTrailerHook(dir)
@@ -1132,7 +1132,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	})
 
 	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooksDir := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
@@ -1148,7 +1148,7 @@ func TestCheckTrailerHook(t *testing.T) {
 		if _, err := exec.LookPath("git"); err != nil {
 			t.Skip("git not available")
 		}
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		_, err := githook.Chain(filepath.Join(dir, ".git", "hooks", "commit-msg"), hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent)
 		require.NoError(t, err)

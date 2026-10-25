@@ -45,7 +45,8 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("making repository root absolute: %v", err)}
 	}
 
-	hooksDir, warns := githook.HooksDir(repoRoot)
+	lk := githook.HooksDir(repoRoot)
+	hooksDir := lk.Dir
 	table, err := layout.TableFor(repoRoot, hooksDir)
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("resolving hooks directory %s: %v", hooksDir, err)}
@@ -66,8 +67,14 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 	}
 
 	note := ""
-	if len(warns) > 0 {
-		note = "; hooks directory: " + strings.Join(warns, "; ")
+	switch {
+	case lk.Degraded:
+		note = "; hooks directory not verified: " + lk.Reason
+	case len(lk.Warnings) > 0:
+		note = "; hooks directory: " + strings.Join(lk.Warnings, "; ")
+	}
+	if sc.clean() && lk.Degraded {
+		return Result{Name: name, Status: "WARN", Detail: strings.TrimPrefix(note, "; ")}
 	}
 	if sc.clean() {
 		if sc.zones == 0 {
@@ -147,7 +154,17 @@ func (s *scan) collectUnclassified(table []layout.Entry, root, zone string) (boo
 			return false, nil
 		}
 	}
-	err := filepath.WalkDir(filepath.Join(root, zone), func(p string, d fs.DirEntry, err error) error {
+	return s.walkZone(table, root, zone)
+}
+
+// walkZone walks root/zone, recording what collectUnclassified records. A
+// directory with a .git of its own is a separate working tree: it is recorded
+// and skipped, not scanned. It reports whether the zone root was walked; a root
+// removed after the caller's Lstat was not.
+func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
+	zoneRoot := filepath.Join(root, zone)
+	walked := false
+	err := filepath.WalkDir(zoneRoot, func(p string, d fs.DirEntry, err error) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil // removed while we walked, e.g. a migrate staging dir
 		}
@@ -155,6 +172,19 @@ func (s *scan) collectUnclassified(table []layout.Entry, root, zone string) (boo
 			return fmt.Errorf("%s: %w", p, err)
 		}
 		if d.IsDir() {
+			if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
+				rel, err := filepath.Rel(root, p)
+				if err != nil {
+					return err
+				}
+				s.skipped[filepath.ToSlash(rel)+" is a separate git working tree"] = true
+				return fs.SkipDir
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("checking %s for .git: %w", p, err)
+			}
+			if p == zoneRoot {
+				walked = true
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(root, p)
@@ -171,7 +201,7 @@ func (s *scan) collectUnclassified(table []layout.Entry, root, zone string) (boo
 		}
 		return nil
 	})
-	return err == nil, err
+	return walked && err == nil, err
 }
 
 // collectHookFiles records one note naming the hooks directory, when

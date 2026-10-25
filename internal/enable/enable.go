@@ -12,6 +12,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,6 +91,12 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	if audit.IsGitlinkMount(repoRoot) {
 		return rep, fmt.Errorf(
 			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
+	}
+
+	// Refuse before writing anything: a root with no .git of its own would
+	// get hook files git never runs.
+	if _, err := hooksTarget(repoRoot); err != nil {
+		return rep, err
 	}
 
 	depositWarns, err := deposit(repoRoot, Guide, Setup)
@@ -228,11 +235,35 @@ func removeMarker(repoRoot string) (bool, error) {
 	return true, nil
 }
 
+// hooksTarget resolves the hooks directory for enable and refuses when the
+// lookup is degraded and repoRoot has no .git: creating hooks there would
+// make a fake .git that git never runs and that later makes the root look
+// like a repository. The error carries git's own account of why.
+func hooksTarget(repoRoot string) (githook.Lookup, error) {
+	l := githook.HooksDir(repoRoot)
+	if !l.Degraded {
+		return l, nil
+	}
+	_, err := os.Lstat(filepath.Join(repoRoot, ".git"))
+	switch {
+	case err == nil:
+		return l, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return l, fmt.Errorf("refusing to create a hooks directory under %s: it has no .git of its own: %s", repoRoot, l.Reason)
+	default:
+		return l, fmt.Errorf("checking %s for .git: %w", repoRoot, err)
+	}
+}
+
 // chainHooks resolves the shared hooks directory and chains the seal and
 // trailer sections into pre-commit and commit-msg.
 func chainHooks(repoRoot string, rep *Report) error {
-	dir, warns := githook.HooksDir(repoRoot)
-	rep.Warnings = append(rep.Warnings, warns...)
+	l, err := hooksTarget(repoRoot)
+	if err != nil {
+		return err
+	}
+	dir := l.Dir
+	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating hooks dir %s: %w", dir, err)
 	}
@@ -258,14 +289,15 @@ var hookSpecs = map[string]struct {
 	tag   string
 	ident string
 }{
-	"pre-commit": {hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
-	"commit-msg": {hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
+	layout.HookPreCommit: {hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
+	layout.HookCommitMsg: {hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
 }
 
 // unchainHooks strips the seal and trailer sections from the shared hooks.
 func unchainHooks(repoRoot string, rep *Report) error {
-	dir, warns := githook.HooksDir(repoRoot)
-	rep.Warnings = append(rep.Warnings, warns...)
+	l := githook.HooksDir(repoRoot)
+	dir := l.Dir
+	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	for _, name := range layout.HookNames() {
 		s, ok := hookSpecs[name]
 		if !ok {

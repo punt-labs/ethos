@@ -527,3 +527,26 @@ func TestConfigStatus_ReadsStoreRoot(t *testing.T) {
 		t.Errorf("no config: want run-setup hint, got %q", hint)
 	}
 }
+
+// TestEnableRefusesSubdirectoryOfAnotherRepo: a root with no .git of its own
+// must not get a hooks directory git never runs.
+func TestEnableRefusesSubdirectoryOfAnotherRepo(t *testing.T) {
+	parent := gitRepo(t)
+	sub := filepath.Join(parent, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Enable(sub)
+	if err == nil {
+		t.Fatal("Enable on a subdirectory of another repo succeeded")
+	}
+	if !strings.Contains(err.Error(), sub) || !strings.Contains(err.Error(), "work tree") {
+		t.Errorf("error = %q, want it to name %s and git's work tree", err, sub)
+	}
+	if _, statErr := os.Stat(filepath.Join(sub, ".git")); statErr == nil {
+		t.Error("Enable created a fake .git in the subdirectory")
+	}
+	if _, statErr := os.Stat(filepath.Join(sub, markerRel)); statErr == nil {
+		t.Error("Enable wrote the marker before refusing")
+	}
+}

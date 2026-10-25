@@ -17,6 +17,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -84,8 +85,9 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	// DES-hook-drift-detection: content-currency checks, independent of the
 	// enabled marker and of the presence checks' active states — see
 	// docs/design-hook-drift-detection.md.
-	results = append(results, CheckHookCurrency(repoRoot, sealHookSpec))
-	results = append(results, CheckHookCurrency(repoRoot, trailerHookSpec))
+	for _, spec := range hookSpecs {
+		results = append(results, CheckHookCurrency(repoRoot, spec))
+	}
 
 	// DES-057. The completeness gate reads the shared store (storeRoot),
 	// matching every other resolution consumer; the git-boundary check
@@ -387,7 +389,8 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	} else if !os.IsNotExist(err) {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
 	}
-	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	lk := githook.HooksDir(repoRoot)
+	dir, hooksDirWarnings := lk.Dir, lk.Warnings
 	// A diverted core.hooksPath (inside the work tree, or outside the repo
 	// entirely) is exactly the kind of surprise an operator running `ethos
 	// doctor` needs named, not silently discarded — doctor is the one place
@@ -650,10 +653,13 @@ type HookSpec struct {
 	NeedsMsgArg bool
 }
 
+// hookSpecs is every hook doctor verifies, one per layout.HookNames entry.
+var hookSpecs = []HookSpec{sealHookSpec, trailerHookSpec}
+
 var sealHookSpec = HookSpec{
 	Name:       "Seal hook",
 	ShortName:  "seal",
-	File:       "pre-commit",
+	File:       layout.HookPreCommit,
 	Tag:        hooks.SealTag,
 	Ident:      hooks.SealIdent,
 	Canonical:  hooks.PreCommit,
@@ -663,7 +669,7 @@ var sealHookSpec = HookSpec{
 var trailerHookSpec = HookSpec{
 	Name:        "Trailer hook",
 	ShortName:   "trailer",
-	File:        "commit-msg",
+	File:        layout.HookCommitMsg,
 	Tag:         hooks.TrailerTag,
 	Ident:       hooks.TrailerIdent,
 	Canonical:   hooks.CommitMsg,
@@ -712,7 +718,8 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
-	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	lk := githook.HooksDir(repoRoot)
+	dir, hooksDirWarnings := lk.Dir, lk.Warnings
 	if len(hooksDirWarnings) > 0 {
 		defer func() {
 			result.Detail += " (" + strings.Join(hooksDirWarnings, "; ") + ")"
