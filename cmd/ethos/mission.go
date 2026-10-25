@@ -112,7 +112,8 @@ func warnIfGlobalFallback(repoRoot string) {
 	// directory is outside any repository.
 	why := "no git repository found for the current directory"
 	if err := currentRoots().Err(); err != nil {
-		why = fmt.Sprintf("the repository store could not be located (%v)", err)
+		what, _, _ := resolve.Describe(err)
+		why = fmt.Sprintf("%s (%v)", what, err)
 	}
 	fmt.Fprintf(os.Stderr,
 		"ethos: %s; operating on "+

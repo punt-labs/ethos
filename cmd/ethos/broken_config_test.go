@@ -416,3 +416,13 @@ func TestBundleErrorIsToldEverywhere(t *testing.T) {
 	assert.True(t, who.IsError)
 	assert.Contains(t, who.Content[0].(mcp.TextContent).Text, "no-such-bundle")
 }
+
+// The mission-store stderr line words a config failure as one.
+func TestWarnIfGlobalFallbackWordsAConfigFailure(t *testing.T) {
+	cmdRoots.Store(&repoRoots{Located: resolve.Located{ConfigErr: &resolve.ConfigError{
+		Err: errors.New("boom"), What: "the repository configuration could not be read"}}, Global: true})
+	t.Cleanup(func() { cmdRoots.Store(nil) })
+	out := testhelpers.CaptureStderr(t, func() { warnIfGlobalFallback("") })
+	assert.Contains(t, out, "the repository configuration could not be read (boom)")
+	assert.NotContains(t, out, "could not be located")
+}

@@ -240,10 +240,12 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 	if err := loc.Err(); err != nil {
 		// As the CLI: an identity answered from a store that cannot be used is
 		// the wrong answer, not a partial one.
-		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %v; refusing to answer from the global store instead", err)), nil
+		what, _, _ := resolve.Describe(err)
+		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %s (%v); identity is refused rather than answered from the global store", what, err)), nil
 	}
 	if issue := bundle.ConfigIssue(loc.Store, loc.Ethos, h.globalRoot()); issue != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %v", issue)), nil
+		what, _, _ := resolve.Describe(issue)
+		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %s (%v); identity is refused", what, issue)), nil
 	}
 	handle, err := resolve.Resolve(h.store, h.sessionStore, loc.Checkout)
 	if err != nil {

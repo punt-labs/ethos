@@ -151,16 +151,21 @@ func (h *Handler) guardStore(tool string, fn mcpserver.ToolHandlerFunc) mcpserve
 		// An identity answered from a store that cannot be used is the wrong
 		// answer, not a partial one: every identity method refuses, as the CLI's
 		// identity commands do.
-		if strictTools[tool] || !slices.Contains(storeReads[tool], method) {
+		what, _, answer := resolve.Describe(h.storeErr)
+		if strictTools[tool] {
 			return mcplib.NewToolResultError(fmt.Sprintf(
-				"%s %s: %v; refusing: only reads run when the repository store cannot be located, never against the global store instead",
-				tool, method, h.storeErr)), nil
+				"%s %s: %s (%v); refusing identity: it is only answered from a repository store that can be used",
+				tool, method, what, h.storeErr)), nil
+		}
+		if !slices.Contains(storeReads[tool], method) {
+			return mcplib.NewToolResultError(fmt.Sprintf(
+				"%s %s: %s (%v); refusing: only reads run while it cannot be used, and never against the global store instead",
+				tool, method, what, h.storeErr)), nil
 		}
 		result, err := fn(ctx, req)
 		if err != nil || result == nil {
 			return result, err
 		}
-		what, _, answer := resolve.Describe(h.storeErr)
 		result.Content = append(result.Content, mcplib.NewTextContent(fmt.Sprintf(
 			"note: %s (%v); %s", what, h.storeErr, answer)))
 		return result, nil

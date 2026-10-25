@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
@@ -241,4 +242,21 @@ func TestEveryToolRegisteredThroughAddTool(t *testing.T) {
 	}
 	sort.Strings(offenders)
 	assert.Empty(t, offenders, "register tools with h.addTool, never AddTool directly")
+}
+
+// The refusal for a config or bundle issue says what failed, and that identity
+// is refused, not that the store could not be located.
+func TestRefusalWordingFollowsTheKindOfFailure(t *testing.T) {
+	cfg := &resolve.ConfigError{Err: errors.New("parsing repo config /r/ethos.yaml: boom"), What: "the repository configuration could not be read", Effect: "x", Answer: "y"}
+	srv, _ := fullServer(t, WithStoreError(cfg))
+	result := callRegistered(t, srv, "identity", "whoami")
+	require.True(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, "the repository configuration could not be read")
+	assert.Contains(t, text, "boom")
+	assert.Contains(t, text, "refusing identity")
+	assert.NotContains(t, text, "could not be located")
+
+	write := callRegistered(t, srv, "talent", "create")
+	assert.Contains(t, resultText(t, write), "the repository configuration could not be read")
 }
