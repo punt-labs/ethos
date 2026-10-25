@@ -13,12 +13,17 @@ import (
 // HookNames returns the git hooks `ethos enable` writes. It is the one list
 // `ethos enable` and the path-class table both read, so a hook added to enable
 // is classified by the same edit.
-func HookNames() []string { return []string{HookPreCommit, HookCommitMsg} }
+func HookNames() []string {
+	return []string{HookPreCommit, HookCommitMsg, HookPreMergeCommit}
+}
 
 // The git hooks `ethos enable` writes, named once for enable and doctor.
 const (
 	HookPreCommit = "pre-commit"
 	HookCommitMsg = "commit-msg"
+	// HookPreMergeCommit runs the seal for `git merge --no-ff`, which runs it
+	// and commit-msg but not pre-commit.
+	HookPreMergeCommit = "pre-merge-commit"
 )
 
 // HookEntries returns class-1 entries for the hook files `ethos enable` writes

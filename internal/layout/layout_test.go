@@ -172,7 +172,7 @@ func TestHookEntries(t *testing.T) {
 		want     []string // paths that must classify as source; nil means no entries
 		not      []string
 	}{
-		{"in tree", root + "/.githooks", []string{".githooks/pre-commit", ".githooks/commit-msg"}, []string{"pre-commit", "x/pre-commit"}},
+		{"in tree", root + "/.githooks", []string{".githooks/pre-commit", ".githooks/commit-msg", ".githooks/pre-merge-commit"}, []string{"pre-commit", "x/pre-commit"}},
 		{"nested", root + "/tools/git hooks", []string{"tools/git hooks/pre-commit"}, nil},
 		{"metacharacters", root + "/h[1]*", []string{"h[1]*/pre-commit"}, []string{"h1/pre-commit"}},
 		{"outside", t.TempDir(), nil, []string{"pre-commit"}},
@@ -244,8 +244,8 @@ func TestPuntLabsHookPaths(t *testing.T) {
 		name, hooksDir string
 		want           []string
 	}{
-		{"githooks", root + "/.punt-labs/githooks", []string{".punt-labs/githooks/pre-commit", ".punt-labs/githooks/commit-msg"}},
-		{"in zone", root + "/.punt-labs/ethos/hooks", []string{".punt-labs/ethos/hooks/pre-commit", ".punt-labs/ethos/hooks/commit-msg"}},
+		{"githooks", root + "/.punt-labs/githooks", []string{".punt-labs/githooks/pre-commit", ".punt-labs/githooks/commit-msg", ".punt-labs/githooks/pre-merge-commit"}},
+		{"in zone", root + "/.punt-labs/ethos/hooks", []string{".punt-labs/ethos/hooks/pre-commit", ".punt-labs/ethos/hooks/commit-msg", ".punt-labs/ethos/hooks/pre-merge-commit"}},
 		{"in tree", root + "/.githooks", nil},
 		{"git dir", root + "/.git/hooks", nil},
 		{"outside", t.TempDir(), nil},
