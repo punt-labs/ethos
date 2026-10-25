@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -779,13 +781,17 @@ func LocateStoreRoot() (string, error) {
 		return root, err
 	}
 	loc, err := locateCwd()
+	if err == nil && loc.storeErr != nil {
+		return "", loc.storeErr
+	}
 	return loc.store, err
 }
 
 // location is where resolution found the repository for a directory.
 type location struct {
-	root  string // the work tree root
-	store string // the work tree whose .punt-labs/ethos is the store
+	root     string // the work tree root
+	store    string // the work tree whose .punt-labs/ethos is the store
+	storeErr error  // why the store cannot be named, when root can
 }
 
 // located is one cached resolution: the location, the .git entries walked
@@ -829,13 +835,11 @@ func locateCwd() (location, error) {
 	return r.loc, r.err
 }
 
-// locate resolves the repository containing start. When git is on PATH, git is
-// the authority (gitLocate); without it the hand rules decide (handLocate).
+// locate resolves the repository containing start. When a working git is on
+// PATH, git is the authority (gitLocate); without one the hand rules decide
+// (handLocate).
 func locate(start string) located {
-	git, err := exec.LookPath("git")
-	if err != nil {
-		git = "" // no usable git: the hand rules decide
-	}
+	git := usableGit()
 	key := git + "\x00" + start
 	if v, ok := locations.Load(key); ok {
 		if c := v.(cachedLocation); locateNow().Sub(c.at) < locateTTL {
@@ -848,7 +852,7 @@ func locate(start string) located {
 	} else {
 		r = handLocate(start)
 	}
-	if r.err == nil || errors.Is(r.err, ErrNotInRepo) {
+	if (r.err == nil && r.loc.storeErr == nil) || errors.Is(r.err, ErrNotInRepo) {
 		locations.Store(key, cachedLocation{r: r, at: locateNow()})
 	} else {
 		locations.Delete(key)
@@ -856,21 +860,74 @@ func locate(start string) located {
 	return r
 }
 
+// gitProbe is what `git --version` said about one git binary.
+type gitProbe struct {
+	version string // "git version 2.43.0"
+	err     error  // why it did not run
+}
+
+// probes holds one gitProbe per git path: the probe runs once per process.
+var probes sync.Map
+
+// usableGit returns the git on PATH when it runs, else "". A git that is on
+// PATH but does not run (the macOS xcrun shim without the command line tools)
+// is noted once; the hand rules decide in its place.
+func usableGit() string {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		return ""
+	}
+	if p := probeGit(git); p.err != nil {
+		warnOnce("ethos: warning: %s does not run (%v); finding the repository by the hand rules", git, p.err)
+		return ""
+	}
+	return git
+}
+
+// probeGit runs `git --version` for git once and remembers the answer.
+func probeGit(git string) gitProbe {
+	if v, ok := probes.Load(git); ok {
+		return v.(gitProbe)
+	}
+	cmd := exec.Command(git, "--version")
+	cmd.Env = gitenv.Parsed()
+	out, err := cmd.Output()
+	p := gitProbe{version: strings.TrimSpace(string(out))}
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		p.err = err
+	}
+	v, _ := probes.LoadOrStore(git, p)
+	return v.(gitProbe)
+}
+
 // gitLocate asks git for the work tree root, the git dir and the common dir of
 // start. git's "not a git repository" is ErrNotInRepo; any other git failure
 // (dubious ownership, an invalid gitfile, an unreadable commondir, "must be
 // run in a work tree") is a resolution error carrying git's own message.
+//
+// The options are the ones git has had since 2.13. git runs in the C locale,
+// so its messages are the English ones matched here, and without GIT_DIR,
+// GIT_WORK_TREE or GIT_COMMON_DIR, so it discovers the repository from start
+// rather than answering for the one an exported variable names (gitenv). An
+// answer that is not three paths, from a git older than those options, falls
+// back to the hand rules.
 func gitLocate(git, start string) located {
-	out, err := exec.Command(git, "-C", start, "rev-parse", "--path-format=absolute",
-		"--show-toplevel", "--git-dir", "--git-common-dir").Output()
+	cmd := exec.Command(git, "-C", start, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir")
+	cmd.Env = gitenv.Parsed()
+	out, err := cmd.Output()
 	if err != nil {
 		return located{err: gitLocateError(start, err)}
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	if len(lines) != 3 {
-		return located{err: fmt.Errorf("git rev-parse in %s: unexpected output %q", start, out)}
+	top, gitDir, common, ok := parseRevParse(start, string(out))
+	if !ok {
+		warnOnce("ethos: warning: %s (%s) answered `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir` with %q, not three paths; finding the repository by the hand rules",
+			git, probeGit(git).version, out)
+		return handLocate(start)
 	}
-	top, gitDir, common := lines[0], lines[1], lines[2]
 	root, under := ancestorAt(start, top)
 	var skipped []string
 	if under {
@@ -882,10 +939,32 @@ func gitLocate(git, start string) located {
 			}
 		}
 	}
-	return located{loc: location{root: root, store: storeRoot(root, gitDir, common)}, skipped: skipped}
+	store, serr := storeRoot(root, gitDir, common)
+	return located{loc: location{root: root, store: store, storeErr: serr}, skipped: skipped}
 }
 
-// gitLocateError turns a failed `git rev-parse` into a resolution error.
+// parseRevParse reads the three lines gitLocate asks for: the top level and
+// the git dir, both absolute, and the common dir, which git prints relative
+// to the directory it ran in (start) when it is not absolute.
+func parseRevParse(start, out string) (top, gitDir, common string, ok bool) {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 3 {
+		return "", "", "", false
+	}
+	top, gitDir, common = lines[0], lines[1], lines[2]
+	if !filepath.IsAbs(top) || !filepath.IsAbs(gitDir) || common == "" || strings.HasPrefix(common, "-") {
+		return "", "", "", false
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(start, common)
+	}
+	return top, gitDir, common, true
+}
+
+// gitLocateError turns a failed `git rev-parse` into a resolution error. It
+// names the nearest .git only when that helps: not when git's message already
+// names a path in that work tree, and not when the .git is at or above a
+// GIT_CEILING_DIRECTORIES entry, which git never examined.
 func gitLocateError(start string, err error) error {
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
@@ -897,21 +976,44 @@ func gitLocateError(start string, err error) error {
 		// ceiling boundary it stopped at, does not make this a refusal.
 		return fmt.Errorf("%s is %w", start, ErrNotInRepo)
 	}
-	if dot := firstDotGit(start); dot != "" {
+	if dot := firstDotGit(start, ceilings()); dot != "" && !strings.Contains(msg, filepath.Dir(dot)) {
 		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, msg)
 	}
 	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, msg)
 }
 
-// firstDotGit returns the nearest .git entry at or above start, or "".
-func firstDotGit(start string) string {
+// ceilings returns the GIT_CEILING_DIRECTORIES entries, symlinks resolved
+// where they can be.
+func ceilings() []string {
+	var cs []string
+	for _, c := range filepath.SplitList(os.Getenv("GIT_CEILING_DIRECTORIES")) {
+		if c == "" || !filepath.IsAbs(c) {
+			continue // git ignores a relative entry; an empty one only changes symlink handling
+		}
+		cs = append(cs, realDir(c))
+	}
+	return cs
+}
+
+// realDir returns p with symlinks resolved, or p cleaned when it cannot be.
+func realDir(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// firstDotGit returns the nearest .git entry git examines from start: at
+// start, or above it up to (not including) the first ceiling. "" when there
+// is none.
+func firstDotGit(start string, ceil []string) string {
 	for dir := start; ; {
 		dot := filepath.Join(dir, ".git")
 		if _, err := os.Lstat(dot); !errors.Is(err, fs.ErrNotExist) {
 			return dot
 		}
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || slices.Contains(ceil, realDir(parent)) {
 			return ""
 		}
 		dir = parent
@@ -938,16 +1040,40 @@ func ancestorAt(start, target string) (string, bool) {
 	}
 }
 
-// storeRoot returns the work tree that holds the store. A linked worktree (git
-// dir distinct from the common dir) keeps it in the main work tree, the parent
-// of the shared <main>/.git. A main tree, a submodule (common dir under
-// .git/modules) and a separate git dir keep it in their own work tree.
-func storeRoot(root, gitDir, common string) string {
-	gitDir, common = filepath.Clean(gitDir), filepath.Clean(common)
-	if gitDir == common || filepath.Base(common) != ".git" {
-		return root
+// storeRoot returns the work tree that holds the store. A main tree, a
+// submodule (common dir under .git/modules) and a separate git dir, whose git
+// dir is their common dir, keep it in their own work tree. A linked worktree
+// keeps it in the main work tree, the parent of the shared <main>/.git. A
+// linked worktree whose common dir is anything else (a separate git dir, a
+// submodule's .git/modules/<name>) names no work tree: the store is refused
+// rather than guessed.
+func storeRoot(root, gitDir, common string) (string, error) {
+	if sameDir(gitDir, common) {
+		return root, nil
 	}
-	return filepath.Dir(common)
+	common = filepath.Clean(common)
+	main := filepath.Dir(common)
+	if filepath.Base(common) != ".git" {
+		return "", fmt.Errorf("%s is a linked worktree of the repository at %s, which is not the .git of a work tree "+
+			"(a separate git dir or a submodule); ethos cannot tell where its store is: "+
+			"run from a work tree that holds the store, or set ETHOS_REPO_ROOT", root, common)
+	}
+	if info, err := os.Stat(main); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("%s is a linked worktree of %s, whose work tree %s does not exist; "+
+			"ethos cannot tell where its store is: set ETHOS_REPO_ROOT", root, common, main)
+	}
+	return main, nil
+}
+
+// sameDir reports whether a and b name the same directory: by file identity
+// when both exist (git prints symlinks resolved), else by cleaned path.
+func sameDir(a, b string) bool {
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	if aerr == nil && berr == nil {
+		return os.SameFile(ai, bi)
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // handLocate walks up from start to the first .git the hand rules accept (see
@@ -961,7 +1087,8 @@ func handLocate(start string) located {
 			return located{skipped: skipped, err: err}
 		}
 		if g.dir != "" {
-			return located{loc: location{root: dir, store: storeRoot(dir, g.dir, g.common)}, skipped: skipped}
+			store, serr := storeRoot(dir, g.dir, g.common)
+			return located{loc: location{root: dir, store: store, storeErr: serr}, skipped: skipped}
 		}
 		if skip != "" {
 			skipped = append(skipped, dot+": "+skip)
@@ -1123,7 +1250,8 @@ func validHead(s string) bool {
 }
 
 // IsWorkingTree reports whether dir is the root of a working tree: it holds a
-// .git that git (or, without git, the hand rules) accepts as a repository. A
+// .git that git (or, without a git that runs, the hand rules) accepts as a
+// repository. A
 // .git that is walked past or refused is not a working tree; an error is
 // returned only when the .git cannot be read.
 func IsWorkingTree(dir string) (bool, error) {
@@ -1133,7 +1261,7 @@ func IsWorkingTree(dir string) (bool, error) {
 	} else if err != nil {
 		return false, fmt.Errorf("examining %s: %w", dot, err)
 	}
-	if _, err := exec.LookPath("git"); err != nil {
+	if usableGit() == "" {
 		g, _, err := examineGit(dot)
 		if errors.Is(err, errInvalidGit) {
 			return false, nil

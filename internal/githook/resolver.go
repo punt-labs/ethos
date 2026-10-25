@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 // Lookup is the answer to "where does git run this repo's hooks".
@@ -233,9 +235,13 @@ func manualHooksDir(repoRoot string) string {
 
 // gitOut runs git in repoRoot and returns its trimmed stdout. A failing git's
 // stderr is part of the error: "not a git repository" and "dubious ownership"
-// are what the user needs to see, not "exit status 128".
+// are what the user needs to see, not "exit status 128". git runs in the C
+// locale, so Remedy can match those words, and without an exported GIT_DIR,
+// so it answers for repoRoot (gitenv).
 func gitOut(repoRoot string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", repoRoot}, args...)...).Output()
+	cmd := exec.Command("git", append([]string{"-C", repoRoot}, args...)...)
+	cmd.Env = gitenv.Parsed()
+	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
