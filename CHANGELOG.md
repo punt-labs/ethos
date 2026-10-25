@@ -248,6 +248,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart. `ethos setup` checks all of this, and that the bundle it will
   use exists ("no bundles installed; run `ethos seed` first"), before
   writing anything; `ethos seed` warns on a malformed repository config.
+  A linked worktree of a bare repository keeps its store at its own top
+  level. Without git, ethos refuses a start inside a git directory or a
+  bare repository and stops searching at a filesystem boundary.
+- **While the store cannot be located, `pre-tool-use` denies
+  mission-bound tool calls and every `Agent` spawn**, and the message says
+  how to fix it: repair or remove the `.git` named, or set
+  `ETHOS_REPO_ROOT`.
+- **Every git command ethos runs has a time limit**: 10 seconds, or 5
+  minutes for a team-bundle clone. A git that does not answer is
+  reported as an error naming the command and directory, never read as
+  "no repository" or "no remote". Identity resolution fails on a hung git
+  instead of falling back to `$USER`, and the pre-commit audit seal
+  blocks the commit and leaves the tree unchanged.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and

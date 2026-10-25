@@ -12836,10 +12836,12 @@ Finding the repository asks git when a working git is installed: one
 `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`
 call, run in the C locale with `GIT_DIR`, `GIT_WORK_TREE` and
 `GIT_COMMON_DIR` cleared, decides the working tree and the store. A
-linked worktree's store is the main checkout's; when the common git
-directory is not `<main>/.git` of an existing working tree (a separate
-git directory, a submodule's worktree) the store is refused rather
-than guessed. `GIT_CEILING_DIRECTORIES` applies, with or without git.
+linked worktree's store is the main checkout's: when the common git
+directory is `<parent>/.git` of a non-bare repository, the store is at
+`<parent>`. When the common git directory is a bare repository, the
+worktree's own top level holds the store. Any other common git directory
+(a separate git directory, a submodule's worktree) is refused rather than
+guessed. `GIT_CEILING_DIRECTORIES` applies, with or without git.
 Git's "not a git repository" means not in a repository; any other git
 failure (dubious ownership, an invalid gitfile, an unreadable
 `commondir`, a run inside `.git/` or a bare repository) is a refusal
@@ -12850,7 +12852,19 @@ run, strict hand rules apply: a `.git/` counts only with a valid `HEAD` and `obj
 `refs/` directories, a `.git` file only when it starts with exactly
 `gitdir:` followed by one space and names a git directory, a dangling symlink or non-file
 `.git` is skipped unread, and an unreadable `.git/` is refused, which is
-stricter than git. Tests compare 28 `.git` shapes with
+stricter than git. The hand rules also refuse a start inside a git
+directory or a bare repository, and stop the upward search at a
+filesystem boundary. Every git command ethos runs has a time limit:
+10 seconds (`gitenv.Timeout`) for lookups, reads and the audit-seal
+commands, 5 minutes for a team-bundle clone, and the existing 2- and
+10-second limits for the working-context and doctor-sandbox commands.
+A test fails on any other way of starting git. A git that does not
+answer within the limit is a refusal that names git, its arguments and
+the directory; it is never read as "no repository", "no remote" or an
+empty identity. Reading the git user name and email is bounded the same
+way, so identity resolution fails on a hung git instead of falling back
+to `$USER`, and the pre-commit seal fails closed, blocking the commit
+and leaving the tree unchanged. Tests compare 28 `.git` shapes with
 `git rev-parse` and run the same shapes with git hidden. On a refusal,
 or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one
 failing row; checks that read the store keep their own status and note
@@ -12860,8 +12874,13 @@ parses `RunAll` to keep the gate on every check). The MCP server
 locates the store on every call, runs only its read methods while the
 store is unlocated, and appends a note in a separate content block; the
 session hooks say why the persona is missing, the audit hook skips the
-entry and says so in the session, and `subagent-start` reports that it
-cannot evaluate the verifier gate. Every CLI command is classified in
+entry and says so in the session (as it does for an entry with no
+session id), and `subagent-start` reports that it cannot evaluate the
+verifier gate. While the store is unlocated, `pre-tool-use` denies
+mission-bound tool calls and every `Agent` spawn. The deny message names
+the failure and the fix: repair or remove the `.git` named, or set
+`ETHOS_REPO_ROOT` to the repository that holds the store. It never
+consults the global mission store instead. Every CLI command is classified in
 one table, which a test checks against the full command tree: commands
 that touch only global stores (session roster commands, `iam`,
 `adr list`/`show`/`settle`) and commands that handle the error
