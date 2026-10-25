@@ -51,7 +51,7 @@ func runUI() error {
 	// serve a repo-scoped dashboard off a relative or wrong tree.
 	storeRoot := resolve.StoreRepoRoot()
 	if storeRoot == "" {
-		return fmt.Errorf("ethos ui: cannot resolve the mission store root " +
+		return fmt.Errorf("ui: cannot resolve the mission store root " +
 			"(ETHOS_REPO_ROOT was set but refused); unset it or point it at a " +
 			"repo with a .punt-labs/ethos store")
 	}

@@ -43,7 +43,7 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// put them, so the category is skipped rather than guessed.
 	repoRoot, rootErr := resolve.LocateRepoRoot()
 	if rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
-		return fmt.Errorf("ethos seed: locating the repository: %w", rootErr)
+		return fmt.Errorf("seed: locating the repository: %w", rootErr)
 	}
 	var agentsRoot, activeBundle, activeBundleDir string
 	if repoRoot != "" {

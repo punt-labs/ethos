@@ -16,8 +16,7 @@ import (
 var storeRefusalExempt = []string{
 	"ethos version", "ethos doctor", "ethos completion", "ethos help",
 	"ethos hook", "ethos serve", "ethos enable", "ethos disable",
-	"ethos uninstall", "ethos setup", "ethos seed", "ethos whoami", "ethos iam",
-	"ethos identity whoami", "ethos session", "ethos audit", "ethos adr",
+	"ethos uninstall", "ethos setup", "ethos seed", "ethos audit",
 	"ethos __complete", "ethos __completeNoDesc",
 }
 
@@ -43,7 +42,8 @@ func refuseUnlocatableStore(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	if _, err := resolve.LocateStoreRoot(); err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		return fmt.Errorf("%s: %w; refusing to use the global store instead", cmd.CommandPath(), err)
+		name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
+		return fmt.Errorf("%s: %w; refusing to use the global store instead", name, err)
 	}
 	return nil
 }

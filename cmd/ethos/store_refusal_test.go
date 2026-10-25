@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -130,14 +132,44 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 		{"team", "activate", "x"},
 		{"role", "create", "x"},
 		{"mission", "list"},
+		{"whoami"},
+		{"identity", "whoami"},
+		{"iam", "x"},
+		{"session"},
+		{"adr", "list"},
 	} {
-		t.Run(args[0], func(t *testing.T) {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
 			cmd.Dir = inner
 			cmd.Env = withForcedNotUnderClaudeCode(se.env)
 			out, err := cmd.CombinedOutput()
 			require.Error(t, err, string(out))
 			assert.Contains(t, string(out), filepath.Join(inner, ".git"))
+			assert.NotContains(t, string(out), "ethos: ethos", "the command path is not prefixed twice")
 		})
+	}
+}
+
+// The commands that report on, repair or do not use the store stay runnable.
+func TestStoreRefusalExemptions(t *testing.T) {
+	root := rootCmd
+	exempt := [][]string{
+		{"version"}, {"doctor"}, {"setup"}, {"seed"}, {"enable"}, {"disable"},
+		{"hook"}, {"serve"}, {"uninstall"}, {"completion"}, {"audit"}, {"role", "schema"},
+	}
+	refused := [][]string{
+		{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session"}, {"adr"},
+		{"identity", "list"}, {"mission", "list"},
+	}
+	find := func(args []string) *cobra.Command {
+		c, _, err := root.Find(args)
+		require.NoError(t, err, args)
+		return c
+	}
+	for _, args := range exempt {
+		assert.True(t, exemptFromStoreRefusal(find(args)), "%v is exempt", args)
+	}
+	for _, args := range refused {
+		assert.False(t, exemptFromStoreRefusal(find(args)), "%v refuses", args)
 	}
 }
