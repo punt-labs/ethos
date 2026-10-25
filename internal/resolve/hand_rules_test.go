@@ -42,7 +42,7 @@ func TestStartInsideGitDirRefused(t *testing.T) {
 				}
 				var got string
 				var err error
-				captureStderr(t, func() { got, err = LocateRepoRoot() })
+				captureStderr(t, func() { got, err = locateRepoRoot() })
 				require.Error(t, err)
 				assert.NotErrorIs(t, err, ErrNotInRepo)
 				assert.Empty(t, got)
@@ -95,7 +95,7 @@ func TestHandRulesStopAtFilesystemBoundary(t *testing.T) {
 			hideGit(t)
 			var got string
 			var err error
-			captureStderr(t, func() { got, err = LocateRepoRoot() })
+			captureStderr(t, func() { got, err = locateRepoRoot() })
 			if !c.cross {
 				assert.ErrorIs(t, err, ErrNotInRepo, "the walk must stop at the mount point (got %q)", got)
 				return
@@ -117,7 +117,7 @@ func TestHandRulesBoundaryAboveRepository(t *testing.T) {
 	fakeDevices(t, realpath(t, filepath.Join(base, "mnt")))
 	t.Chdir(start)
 	hideGit(t)
-	got, err := LocateRepoRoot()
+	got, err := locateRepoRoot()
 	require.NoError(t, err)
 	assert.Equal(t, realpath(t, repo), realpath(t, got))
 }

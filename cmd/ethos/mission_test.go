@@ -225,7 +225,7 @@ func seedEvaluator(t *testing.T, root string) {
 }
 
 // chdirToFakeRepo creates a fake .git directory inside dir so
-// resolve.CheckoutRootIfAny() stops at dir rather than walking up to the
+// resolve.Roots() stops at dir rather than walking up to the
 // surrounding ethos checkout, then chdirs the test process there.
 // Subprocesses launched via exec.Command inherit the cwd and so
 // CheckoutRootIfAny resolves to dir. Used by CLI subprocess tests that
@@ -5402,11 +5402,10 @@ func TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect(t *testing.T) {
 
 	// The store root refuses the override (an error, never ""); the checkout
 	// root re-accepts the same path — the resurrection risk.
-	_, err := resolve.StoreRootIfAny()
-	require.Error(t, err, "the store root must refuse an override with no .punt-labs/ethos store")
-	checkout, err := resolve.CheckoutRootIfAny()
-	require.NoError(t, err)
-	require.Equal(t, dir, checkout,
+	loc := resolve.Roots()
+	require.Error(t, loc.StoreErr, "the store root must refuse an override with no .punt-labs/ethos store")
+	require.NoError(t, loc.CheckoutErr)
+	require.Equal(t, dir, loc.Checkout,
 		"the checkout root accepts the same path (requireStore=false) — the resurrection risk")
 
 	// With no store root the audit checkout root is empty, not the bad path.

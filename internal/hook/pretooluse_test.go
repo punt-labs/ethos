@@ -635,7 +635,7 @@ func TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal(t *testing.T) {
 // TestHandlePreToolUse_RepoRootValidation pins the MEDIUM finding from
 // the re-verification round: pathAllowed's repo-relative branch must
 // never resolve against an unmarked directory. allowlistRepoRoot uses
-// resolve.CheckoutRootIfAny (a .git-marker walk), never a bare working
+// resolve.Roots (a .git-marker walk), never a bare working
 // directory: resolving a target against a
 // directory that is merely SOME subdirectory of the real repo, not
 // the root itself, computes a repo-relative form one level too

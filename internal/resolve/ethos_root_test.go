@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// EthosRootOf is "" only when .punt-labs/ethos does not exist. Any other
+// ethosRootOf is "" only when .punt-labs/ethos does not exist. Any other
 // failure to stat it is an error: a dangling symlink, a regular file, a
 // permission error or a symlink loop is a store ethos cannot read, and must
 // not read as "no store yet".
@@ -22,13 +22,13 @@ func TestEthosRootOf(t *testing.T) {
 	t.Run("directory", func(t *testing.T) {
 		root, ethos := mk(t)
 		require.NoError(t, os.Mkdir(ethos, 0o755))
-		got, err := EthosRootOf(root)
+		got, err := ethosRootOf(root)
 		require.NoError(t, err)
 		assert.Equal(t, ethos, got)
 	})
 	t.Run("absent", func(t *testing.T) {
 		root, _ := mk(t)
-		got, err := EthosRootOf(root)
+		got, err := ethosRootOf(root)
 		require.NoError(t, err)
 		assert.Empty(t, got)
 	})
@@ -37,7 +37,7 @@ func TestEthosRootOf(t *testing.T) {
 		if err := os.Symlink(filepath.Join(root, "nowhere"), ethos); err != nil {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
-		got, err := EthosRootOf(root)
+		got, err := ethosRootOf(root)
 		require.Error(t, err)
 		assert.Empty(t, got)
 		assert.Contains(t, err.Error(), ethos)
@@ -47,13 +47,13 @@ func TestEthosRootOf(t *testing.T) {
 		if err := os.Symlink(ethos, ethos); err != nil {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
-		_, err := EthosRootOf(root)
+		_, err := ethosRootOf(root)
 		require.Error(t, err)
 	})
 	t.Run("regular file", func(t *testing.T) {
 		root, ethos := mk(t)
 		require.NoError(t, os.WriteFile(ethos, []byte("x"), 0o644))
-		_, err := EthosRootOf(root)
+		_, err := ethosRootOf(root)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not a directory")
 	})
@@ -61,19 +61,7 @@ func TestEthosRootOf(t *testing.T) {
 		skipIfRoot(t)
 		root, _ := mk(t)
 		chmodUnreadable(t, filepath.Join(root, ".punt-labs"), 0o755)
-		_, err := EthosRootOf(root)
+		_, err := ethosRootOf(root)
 		require.Error(t, err)
-	})
-	t.Run("EthosRootIfAny follows the same rule", func(t *testing.T) {
-		root, ethos := mk(t)
-		if err := os.Symlink(filepath.Join(root, "nowhere"), ethos); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
-		t.Setenv("ETHOS_REPO_ROOT", root)
-		// The override itself needs a store directory; with a dangling one the
-		// store root is refused, so the cause is an error either way.
-		got, err := EthosRootIfAny()
-		require.Error(t, err)
-		assert.Empty(t, got)
 	})
 }

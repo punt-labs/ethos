@@ -41,7 +41,13 @@ func runEnable(cmd *cobra.Command) error {
 	// "has setup been run?" config read resolves the shared store (#370).
 	// A fresh repo named by ETHOS_REPO_ROOT has no store yet, which the store
 	// lookup refuses; enable is what creates it, so the checkout is the store.
-	storeRoot, err := enableStoreRoot(repoRoot, resolve.LocateStoreRoot)
+	storeRoot, err := enableStoreRoot(repoRoot, func() (string, error) {
+		r := currentRoots()
+		if r.StoreErr != nil {
+			return "", r.StoreErr
+		}
+		return r.Store, firstError(r.EthosErr, r.ConfigErr)
+	})
 	if err != nil {
 		return err
 	}
@@ -77,13 +83,13 @@ func enableStoreRoot(repoRoot string, locate func() (string, error)) (string, er
 // why there is none: a plain "not in a git repository", or the cause when a
 // .git exists but cannot be examined or ETHOS_REPO_ROOT was refused.
 func locateForCommand(cmd *cobra.Command, verb string) string {
-	root, err := resolve.LocateRepoRoot()
-	if root != "" {
-		return root
+	r := currentRoots()
+	if r.Checkout != "" {
+		return r.Checkout
 	}
 	reason := "not in a git repository"
-	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		reason = err.Error()
+	if r.CheckoutErr != nil {
+		reason = r.CheckoutErr.Error()
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "ethos: %s: %s\n", verb, reason)
 	return ""

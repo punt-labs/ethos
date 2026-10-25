@@ -9,6 +9,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -56,7 +57,7 @@ func locateServeStore() mcp.StoreLocation {
 	r := locateRoots()
 	return mcp.StoreLocation{
 		Root: r.Store, EthosRoot: r.Ethos, Checkout: r.Checkout,
-		Err: firstError(r.StoreErr, r.EthosErr, r.CheckoutErr),
+		Err: r.Err(),
 	}
 }
 
@@ -67,7 +68,7 @@ func locateServeStore() mcp.StoreLocation {
 // error itself, so its constructors take the global stores for it.
 func buildServeHandler(home string, loc mcp.StoreLocation) *mcp.Handler {
 	storeErr := loc.Err
-	cmdRoots.Store(&repoRoots{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, StoreErr: loc.Err, Global: true})
+	cmdRoots.Store(&repoRoots{Located: resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, StoreErr: loc.Err}, Global: true})
 	is := identityStore()
 	talents := layeredAttributeStore(is, attribute.Talents)
 	personalities := layeredAttributeStore(is, attribute.Personalities)

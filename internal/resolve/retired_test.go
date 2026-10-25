@@ -15,12 +15,12 @@ import (
 
 // locators are the resolve functions whose error says why a repository, a
 // store or a checkout could not be located. "" with a nil error is their
-// answer for "not in a repository" (or, for EthosRootOf, "no store yet");
+// answer for "not in a repository" (or, for ethosRootOf, "no store yet");
 // every other failure is the error.
 var locators = map[string]bool{
-	"LocateRepoRoot": true, "LocateStoreRoot": true,
-	"StoreRootIfAny": true, "CheckoutRootIfAny": true,
-	"EthosRootIfAny": true, "EthosRootOf": true,
+	"locateRepoRoot": true, "locateStoreRoot": true,
+	"storeRootIfAny": true, "checkoutRootIfAny": true,
+	"ethosRootOf": true, "Roots": true,
 }
 
 // The lossy resolvers returned "" for "not in a repository" and for every

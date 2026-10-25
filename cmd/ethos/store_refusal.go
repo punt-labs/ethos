@@ -144,7 +144,7 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 	r := locateRoots()
 	r.Global = exemptFromStoreRefusal(cmd)
 	if !r.Global {
-		if err := firstError(r.StoreErr, r.EthosErr); err != nil {
+		if err := r.Err(); err != nil {
 			name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: %s: %v; refusing to use the global store instead\n", name, err)
 			return failClosed{}

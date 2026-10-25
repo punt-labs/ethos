@@ -86,7 +86,7 @@ func missionCheckoutRoot(storeRoot string) string {
 // reads/writes support. Reads stay on warn+global — a read hitting global is
 // not destructive.
 func refuseBadStoreOverride(op string) error {
-	if _, err := resolve.LocateStoreRoot(); err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+	if err := currentRoots().StoreFailure(); err != nil {
 		return fmt.Errorf("mission %s: %w; refusing to use the global store instead", op, err)
 	}
 	return nil
@@ -1535,9 +1535,9 @@ func runMissionClose(idOrPrefix, status string) error {
 	// and this must resolve the same tree the pre-commit seal (CheckoutRootIfAny)
 	// does — else it seals a tree the worktree never commits (Bugbot HIGH
 	// on PR #370).
-	if repoRoot, rErr := resolve.CheckoutRootIfAny(); rErr != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: locating the checkout: %v\n", rErr)
-	} else if repoRoot != "" {
+	if loc := currentRoots(); loc.CheckoutErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: locating the checkout: %v\n", loc.CheckoutErr)
+	} else if repoRoot := loc.Checkout; repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
 		}
@@ -1617,9 +1617,9 @@ func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 	// Parity with close: seal the checkout's mission-log tail so the
 	// abandon event is complete on disk even if no commit immediately
 	// follows. Non-fatal — the mission is already abandoned.
-	if repoRoot, rErr := resolve.CheckoutRootIfAny(); rErr != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: locating the checkout: %v\n", rErr)
-	} else if repoRoot != "" {
+	if loc := currentRoots(); loc.CheckoutErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: locating the checkout: %v\n", loc.CheckoutErr)
+	} else if repoRoot := loc.Checkout; repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: %v\n", sErr)
 		}
@@ -1987,11 +1987,14 @@ func missionExportDirectory(flag string) (string, error) {
 	if flag != "" {
 		return flag, nil
 	}
-	root, err := resolve.LocateRepoRoot()
-	if err != nil {
-		return "", fmt.Errorf("choosing the export directory: %w; pass --dir", err)
+	loc := currentRoots()
+	if loc.CheckoutErr != nil {
+		return "", fmt.Errorf("choosing the export directory: %w; pass --dir", loc.CheckoutErr)
 	}
-	return filepath.Join(root, missionExportDefaultDir), nil
+	if loc.Checkout == "" {
+		return "", fmt.Errorf("choosing the export directory: not inside a repository; pass --dir")
+	}
+	return filepath.Join(loc.Checkout, missionExportDefaultDir), nil
 }
 
 // runMissionExport handles `ethos mission export <id> [--dir <path>]`.

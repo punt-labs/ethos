@@ -505,7 +505,7 @@ func TestBuildTeamSection_ResolveError(t *testing.T) {
 	got := BuildTeamSection(ts, nil, nil, "")
 
 	assert.Contains(t, got, "## Team")
-	assert.Contains(t, got, "team resolution failed")
+	assert.Contains(t, got, "could not be located")
 }
 
 func TestBuildTeamSection_TeamLoadError(t *testing.T) {

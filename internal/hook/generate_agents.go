@@ -64,7 +64,7 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 		return nil // not configured — nothing to generate
 	}
 
-	cfg, err := resolve.LoadRepoConfig(configRoot)
+	cfg, err := resolve.ConfigOf(configRoot)
 	if err != nil {
 		return fmt.Errorf("generate agents: %w", err)
 	}
@@ -226,7 +226,7 @@ func GeneratedAgentHandles(configRoot string, identities identity.IdentityStore,
 	if teams == nil {
 		return nil, nil
 	}
-	cfg, err := resolve.LoadRepoConfig(configRoot)
+	cfg, err := resolve.ConfigOf(configRoot)
 	if err != nil {
 		return nil, fmt.Errorf("generated agent handles: %w", err)
 	}

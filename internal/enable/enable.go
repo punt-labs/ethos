@@ -356,7 +356,7 @@ func configStatus(storeRoot string) (hint, warning string) {
 	if storeRoot == "" {
 		return "", ""
 	}
-	cfg, err := resolve.LoadRepoConfig(storeRoot)
+	cfg, err := resolve.ConfigOf(storeRoot)
 	if err != nil {
 		return "", fmt.Sprintf(".punt-labs/ethos.yaml is unreadable: %v", err)
 	}

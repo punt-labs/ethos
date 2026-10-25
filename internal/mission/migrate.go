@@ -185,7 +185,7 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // genuine read error there still propagates, since each is a single,
 // currently-relevant file rather than an unbounded pool of historical
 // chunks.
-// checkoutRoot names the current work tree (resolve.CheckoutRootIfAny /
+// checkoutRoot names the current work tree (resolve.Roots /
 // CheckoutRootIfAny), distinct from repoRoot (the store root — the main
 // work tree) when the caller is running from a linked worktree. Both
 // the sealed scan and the live scan below cover repoRoot AND, when

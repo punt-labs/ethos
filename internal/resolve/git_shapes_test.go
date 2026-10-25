@@ -175,7 +175,7 @@ func TestShapesFollowGit(t *testing.T) {
 			want, gitErr := gitTopLevel(t, inner)
 			var got string
 			var err error
-			captureStderr(t, func() { got, err = LocateRepoRoot() })
+			captureStderr(t, func() { got, err = locateRepoRoot() })
 			if gitErr != nil {
 				require.Error(t, err, "git refuses this .git, so must we")
 				assert.NotErrorIs(t, err, ErrNotInRepo)
@@ -196,7 +196,7 @@ func TestShapesHandRules(t *testing.T) {
 			hideGit(t)
 			var got string
 			var err error
-			captureStderr(t, func() { got, err = LocateRepoRoot() })
+			captureStderr(t, func() { got, err = locateRepoRoot() })
 			switch s.hand {
 			case handError:
 				require.Error(t, err)
@@ -236,13 +236,13 @@ func TestShapesSkipNotice(t *testing.T) {
 					hideGit(t)
 				}
 				out := captureStderr(t, func() {
-					_, err := LocateStoreRoot()
+					_, err := locateStoreRoot()
 					require.NoError(t, err)
-					_, err = LocateRepoRoot()
+					_, err = locateRepoRoot()
 					require.NoError(t, err)
-					_, err = CheckoutRootIfAny()
+					_, err = checkoutRootIfAny()
 					require.NoError(t, err)
-					_, err = StoreRootIfAny()
+					_, err = storeRootIfAny()
 					require.NoError(t, err)
 				})
 				assert.Equal(t, 1, strings.Count(out, filepath.Join(inner, ".git")), out)
@@ -268,7 +268,7 @@ func TestShapesStoreRoot(t *testing.T) {
 				if !withGit {
 					hideGit(t)
 				}
-				got, err := LocateStoreRoot()
+				got, err := locateStoreRoot()
 				require.NoError(t, err)
 				want := inner
 				if linked {
@@ -294,7 +294,7 @@ func TestGitNotARepoIsNotInRepo(t *testing.T) {
 	t.Chdir(dir)
 	_, gitErr := gitTopLevel(t, dir)
 	require.Error(t, gitErr)
-	_, err := LocateRepoRoot()
+	_, err := locateRepoRoot()
 	assert.ErrorIs(t, err, ErrNotInRepo)
 }
 
@@ -312,11 +312,11 @@ func TestRefusalIsNotCached(t *testing.T) {
 			if !withGit {
 				hideGit(t)
 			}
-			_, err := LocateRepoRoot()
+			_, err := locateRepoRoot()
 			require.Error(t, err)
 			require.NoError(t, os.Remove(filepath.Join(inner, ".git")))
 			makeGitDirAt(t, filepath.Join(inner, ".git"))
-			got, err := LocateRepoRoot()
+			got, err := locateRepoRoot()
 			require.NoError(t, err)
 			assert.Equal(t, realpath(t, inner), realpath(t, got))
 		})
@@ -355,6 +355,6 @@ func captureLocate(t *testing.T) (string, error) {
 	t.Helper()
 	var got string
 	var err error
-	captureStderr(t, func() { got, err = LocateRepoRoot() })
+	captureStderr(t, func() { got, err = locateRepoRoot() })
 	return got, err
 }

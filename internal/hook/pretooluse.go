@@ -377,7 +377,7 @@ func pathAllowed(target string, entries []string, repoRoot string) bool {
 }
 
 // The repo root pathAllowed's repo-relative resolution branch may trust is
-// tierBRepoRoot's: the checkout resolve.LocateRepoRoot validated, or "" outside
+// tierBRepoRoot's: the checkout resolve.Roots validated, or "" outside
 // any repository. It must never be a bare working directory:
 // pathAllowed's repo-relative branch resolves a target against whatever root
 // it is given and then compares the RESULT against a relative write_set

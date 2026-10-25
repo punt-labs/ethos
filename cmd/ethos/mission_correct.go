@@ -8,7 +8,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -157,11 +156,11 @@ func runMissionCorrect(cmd *cobra.Command, idOrPrefix string) error {
 	// caller reading only stdout must not be blind to a durability
 	// warning that a human running interactively would see on stderr.
 	var warnings []string
-	if repoRoot, rErr := resolve.CheckoutRootIfAny(); rErr != nil {
-		msg := fmt.Sprintf("sealing mission log: locating the checkout: %v", rErr)
+	if loc := currentRoots(); loc.CheckoutErr != nil {
+		msg := fmt.Sprintf("sealing mission log: locating the checkout: %v", loc.CheckoutErr)
 		fmt.Fprintf(os.Stderr, "ethos: mission correct: %s\n", msg)
 		warnings = append(warnings, msg)
-	} else if repoRoot != "" {
+	} else if repoRoot := loc.Checkout; repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			msg := fmt.Sprintf("sealing mission log: %v", sErr)
 			fmt.Fprintf(os.Stderr, "ethos: mission correct: %s\n", msg)

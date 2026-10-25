@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,7 @@ func TestCreateSessionRosterRepoLookupFailure(t *testing.T) {
 		ss := session.NewStore(t.TempDir())
 		var notice string
 		testhelpers.CaptureStderr(t, func() {
-			notice = createSessionRoster(ss, "s-fail", &identity.Identity{Handle: "mal"}, nil, "claude")
+			notice = createSessionRoster(ss, "s-fail", &identity.Identity{Handle: "mal"}, nil, "claude", resolve.Roots())
 		})
 		r, err := ss.Load("s-fail")
 		require.NoError(t, err)
@@ -61,7 +62,7 @@ func TestCreateSessionRosterRepoLookupFailure(t *testing.T) {
 	})
 	t.Run("no origin", func(t *testing.T) {
 		ss := session.NewStore(t.TempDir())
-		notice := createSessionRoster(ss, "s-none", &identity.Identity{Handle: "mal"}, nil, "claude")
+		notice := createSessionRoster(ss, "s-none", &identity.Identity{Handle: "mal"}, nil, "claude", resolve.Roots())
 		r, err := ss.Load("s-none")
 		require.NoError(t, err)
 		assert.Empty(t, r.Repo)
@@ -78,7 +79,7 @@ func TestCreateSessionRosterHumanFailure(t *testing.T) {
 	t.Setenv("USER", "someone")
 	ss := session.NewStore(t.TempDir())
 
-	notice := createSessionRoster(ss, "s-h-fail", nil, assertErr("git did not answer"), "claude")
+	notice := createSessionRoster(ss, "s-h-fail", nil, assertErr("git did not answer"), "claude", resolve.Roots())
 	r, err := ss.Load("s-h-fail")
 	require.NoError(t, err)
 	require.NotEmpty(t, r.Participants)
@@ -86,7 +87,7 @@ func TestCreateSessionRosterHumanFailure(t *testing.T) {
 	assert.Empty(t, r.Participants[0].Persona, "a failure is not recorded as the OS user's persona")
 	assert.Contains(t, notice, "git did not answer")
 
-	createSessionRoster(ss, "s-h-none", nil, nil, "claude")
+	createSessionRoster(ss, "s-h-none", nil, nil, "claude", resolve.Roots())
 	r, err = ss.Load("s-h-none")
 	require.NoError(t, err)
 	assert.Equal(t, "someone", r.Participants[0].Persona, "no identity matched: the OS user is the fallback")
@@ -147,11 +148,12 @@ func TestCreateSessionRosterReadsTheOriginOfTheCheckout(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, testhelpers.GitCommand("-C", repo, "init", "-q").Run())
 	require.NoError(t, testhelpers.GitCommand("-C", repo, "remote", "add", "origin", "git@github.com:punt-labs/probe.git").Run())
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 	t.Setenv("ETHOS_REPO_ROOT", repo)
 	t.Chdir(t.TempDir()) // outside any repository (the temp root is the git ceiling)
 
 	ss := session.NewStore(t.TempDir())
-	notice := createSessionRoster(ss, "s-origin", &identity.Identity{Handle: "mal"}, nil, "claude")
+	notice := createSessionRoster(ss, "s-origin", &identity.Identity{Handle: "mal"}, nil, "claude", resolve.Roots())
 	r, err := ss.Load("s-origin")
 	require.NoError(t, err)
 	assert.Equal(t, "punt-labs/probe", r.Repo)
@@ -164,7 +166,7 @@ func TestCreateSessionRosterReadsTheOriginOfTheCheckout(t *testing.T) {
 func TestCreateSessionRosterReportsWhatItCouldNotDo(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
 	t.Run("no session_id", func(t *testing.T) {
-		notice := createSessionRoster(session.NewStore(t.TempDir()), "", nil, nil, "claude")
+		notice := createSessionRoster(session.NewStore(t.TempDir()), "", nil, nil, "claude", resolve.Roots())
 		assert.Contains(t, notice, "session_id")
 	})
 	t.Run("roster write fails", func(t *testing.T) {
@@ -173,7 +175,7 @@ func TestCreateSessionRosterReportsWhatItCouldNotDo(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "sessions"), []byte("x"), 0o644))
 		var notice string
 		testhelpers.CaptureStderr(t, func() {
-			notice = createSessionRoster(session.NewStore(dir), "s-nowrite", nil, nil, "claude")
+			notice = createSessionRoster(session.NewStore(dir), "s-nowrite", nil, nil, "claude", resolve.Roots())
 		})
 		assert.Contains(t, notice, "roster could not be written")
 	})

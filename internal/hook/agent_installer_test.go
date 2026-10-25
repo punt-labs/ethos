@@ -200,7 +200,7 @@ func TestInstallStubAgentDefs_FailsClosedOnLookupError(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	stderr := captureStderr(t, func() {
-		installStubAgentDefs(repoRoot, ids, teams)
+		installStubAgentDefs(repoRoot, ethosDir, ids, teams)
 	})
 
 	_, statErr := os.Stat(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))
@@ -225,7 +225,7 @@ func TestInstallStubAgentDefs_CopiesWhenNothingIsOwned(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	captureStderr(t, func() {
-		installStubAgentDefs(repoRoot, ids, teams)
+		installStubAgentDefs(repoRoot, ethosDir, ids, teams)
 	})
 
 	got, err := os.ReadFile(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))
@@ -258,7 +258,7 @@ func TestInstallStubAgentDefs_SkipsOwnedHandle(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	captureStderr(t, func() {
-		installStubAgentDefs(repoRoot, ids, teams)
+		installStubAgentDefs(repoRoot, ethosDir, ids, teams)
 	})
 
 	_, statErr := os.Stat(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))

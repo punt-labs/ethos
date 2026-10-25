@@ -904,22 +904,23 @@ func findBundle(storeRoot, globalRoot, name string) ([]bundle.Bundle, error) {
 // a refused ETHOS_REPO_ROOT, a .git that cannot be read — is an error: setup
 // must not degrade to no-repo mode.
 func locateSetupRoots() (repoRoot, storeRoot string, err error) {
-	repoRoot, rootErr := resolve.LocateRepoRoot()
-	if repoRoot == "" {
+	r := currentRoots()
+	if r.Checkout == "" {
 		// A set-but-refused override must FAIL LOUD, not silently skip repo
 		// config and report success (#370 F-A).
 		if override, set := resolve.RepoRootOverride(); set {
 			return "", "", fmt.Errorf("setup: ETHOS_REPO_ROOT=%q was refused (not an "+
 				"existing directory); unset it or point it at a repo", override)
 		}
-		if rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
-			return "", "", fmt.Errorf("setup: locating the repository: %w", rootErr)
+		if r.CheckoutErr != nil {
+			return "", "", fmt.Errorf("setup: locating the repository: %w", r.CheckoutErr)
 		}
 		return "", "", nil
 	}
-	storeRoot, err = resolve.LocateStoreRoot()
-	if err != nil {
+	// setup writes to the store, so it refuses a store ethos cannot read: a
+	// dangling .punt-labs or .punt-labs/ethos symlink, an unreadable config.
+	if err := r.StoreFailure(); err != nil {
 		return "", "", fmt.Errorf("setup: locating the store: %w", err)
 	}
-	return repoRoot, storeRoot, nil
+	return r.Checkout, r.Store, nil
 }

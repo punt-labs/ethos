@@ -76,14 +76,14 @@ func TestUnreadableGitDirectory(t *testing.T) {
 		require.NoError(t, err, "git skips an unreadable .git directory")
 		require.Equal(t, realpath(t, outer), realpath(t, want))
 		var got string
-		captureStderr(t, func() { got, err = LocateRepoRoot() })
+		captureStderr(t, func() { got, err = locateRepoRoot() })
 		require.NoError(t, err)
 		assert.Equal(t, outer, got)
 	})
 	t.Run("no git: stricter than git", func(t *testing.T) {
 		inner, _ := shapeIn(t, gitShapes["mode-000 .git directory"])
 		hideGit(t)
-		got, err := LocateRepoRoot()
+		got, err := locateRepoRoot()
 		assert.Empty(t, got)
 		require.Error(t, err)
 		assert.NotErrorIs(t, err, ErrNotInRepo)
@@ -167,7 +167,7 @@ func TestGitThatHangsIsARefusal(t *testing.T) {
 	var root string
 	var err, wtErr error
 	within(t, 10*time.Second, func() {
-		captureStderr(t, func() { root, err = LocateRepoRoot() })
+		captureStderr(t, func() { root, err = locateRepoRoot() })
 		_, wtErr = IsWorkingTree(inner)
 	})
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
@@ -189,7 +189,7 @@ func TestGitProbeThatHangsIsARefusal(t *testing.T) {
 	testhelpers.MakeGitDir(t, dir)
 	t.Chdir(dir)
 	within(t, 10*time.Second, func() {
-		captureStderr(t, func() { _, err = LocateRepoRoot() })
+		captureStderr(t, func() { _, err = locateRepoRoot() })
 	})
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
 	assert.Contains(t, err.Error(), "--version")

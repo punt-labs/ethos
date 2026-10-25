@@ -100,7 +100,7 @@ func TestLinkedWorktreeStoreByLayout(t *testing.T) {
 				}
 				var store string
 				var err error
-				captureStderr(t, func() { store, err = LocateStoreRoot() })
+				captureStderr(t, func() { store, err = locateStoreRoot() })
 				if want == "" {
 					require.Error(t, err)
 					assert.NotErrorIs(t, err, ErrNotInRepo)
@@ -111,7 +111,7 @@ func TestLinkedWorktreeStoreByLayout(t *testing.T) {
 					require.NoError(t, err)
 					assert.Equal(t, realpath(t, want), realpath(t, store))
 				}
-				root, err := LocateRepoRoot()
+				root, err := locateRepoRoot()
 				require.NoError(t, err)
 				assert.Equal(t, realpath(t, wt), realpath(t, root))
 			})
@@ -175,7 +175,7 @@ func TestStoreRefusalWrapsTimeout(t *testing.T) {
 	testhelpers.GitTimeout(t, 300*time.Millisecond)
 	t.Chdir(wt)
 	var store string
-	captureStderr(t, func() { store, err = LocateStoreRoot() })
+	captureStderr(t, func() { store, err = locateStoreRoot() })
 	require.Error(t, err)
 	assert.ErrorIs(t, err, gitenv.ErrTimeout)
 	assert.NotErrorIs(t, err, ErrNotInRepo)
@@ -225,8 +225,8 @@ func TestLinkedWorktreeOfMissingMainIsARefusal(t *testing.T) {
 				}
 				var err error
 				captureStderr(t, func() {
-					_, err = LocateRepoRoot()
-					_, serr := LocateStoreRoot()
+					_, err = locateRepoRoot()
+					_, serr := locateStoreRoot()
 					require.Error(t, serr)
 					assert.NotErrorIs(t, serr, ErrNotInRepo)
 				})
@@ -259,7 +259,7 @@ func TestUnreadableCoreBareIsARefusal(t *testing.T) {
 			}
 			var store string
 			var err error
-			captureStderr(t, func() { store, err = LocateStoreRoot() })
+			captureStderr(t, func() { store, err = locateStoreRoot() })
 			require.Error(t, err)
 			assert.NotErrorIs(t, err, ErrNotInRepo)
 			assert.Empty(t, store)

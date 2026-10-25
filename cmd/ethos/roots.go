@@ -26,15 +26,11 @@ import (
 // an explicit choice of its class (repoRoots.Global), never a fallback, and
 // it is the only way a failure leaves a constructor with "".
 
-// repoRoots is where the repository is, as located once for a command.
+// repoRoots is where the repository is, as located once for a command: the
+// resolve.Located (store, .punt-labs/ethos, checkout, config, and each one's
+// error) plus whether the command's class runs on the global stores.
 type repoRoots struct {
-	Store    string // the repository whose .punt-labs/ethos is the store; "" outside a repository
-	Ethos    string // <Store>/.punt-labs/ethos; "" when absent
-	Checkout string // the current work tree; "" outside a repository
-
-	StoreErr    error // why the store cannot be located
-	EthosErr    error // why .punt-labs/ethos cannot be read
-	CheckoutErr error // why the checkout cannot be located
+	resolve.Located
 
 	// Global: the command's class runs on the global stores when a lookup
 	// failed (see above). False means a failure here is a bug: the command
@@ -42,31 +38,15 @@ type repoRoots struct {
 	Global bool
 }
 
-// locateRoots looks the repository up, once: the store, its .punt-labs/ethos,
-// and the checkout. "Outside a repository" is "", nil; any other failure is
-// the error.
+// locateRoots looks the repository up, once, through resolve.Roots — the one
+// place ethos finds it, which validates the whole .punt-labs/ethos path and
+// the config. "Outside a repository" is "", nil; any other failure is the error.
 func locateRoots() *repoRoots {
-	r := &repoRoots{}
-	r.Store, r.StoreErr = resolve.StoreRootIfAny()
-	if r.StoreErr == nil && r.Store != "" {
-		r.Ethos, r.EthosErr = resolve.EthosRootOf(r.Store)
-	}
-	r.Checkout, r.CheckoutErr = resolve.CheckoutRootIfAny()
-	return r
+	return &repoRoots{Located: resolve.Roots()}
 }
 
-// err is the first failure to locate anything the stores need.
-func (r *repoRoots) err() error {
-	switch {
-	case r.StoreErr != nil:
-		return r.StoreErr
-	case r.EthosErr != nil:
-		return r.EthosErr
-	case r.CheckoutErr != nil:
-		return r.CheckoutErr
-	}
-	return nil
-}
+// err is the first failure to locate anything a command needs.
+func (r *repoRoots) err() error { return r.Located.Err() }
 
 // cmdRoots is the located repository for the running command, set by
 // establishRoots and by ethos serve for each handler it builds.
@@ -166,8 +146,8 @@ func requireCheckout(errOut io.Writer, name string) (string, error) {
 func requireStore(errOut io.Writer, name string) (string, error) {
 	r := currentRoots()
 	switch {
-	case r.StoreErr != nil:
-		fmt.Fprintf(errOut, "ethos: %s: %v\n", name, r.StoreErr)
+	case r.StoreFailure() != nil:
+		fmt.Fprintf(errOut, "ethos: %s: %v\n", name, r.StoreFailure())
 		return "", failClosed{}
 	case r.Store == "":
 		fmt.Fprintf(errOut, "ethos: %s must run inside a repo\n", name)

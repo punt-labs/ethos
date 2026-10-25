@@ -1108,8 +1108,9 @@ func TestSetup_RejectsMalformedAgentKey(t *testing.T) {
 
 	_, _, err := execHandler(t, "setup", "--file", cfgPath)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "non-string value")
-	assert.Contains(t, err.Error(), "agent")
+	// setup refuses at locate time: the config is part of the store, and a
+	// store ethos cannot read is not written to.
+	assert.Contains(t, err.Error(), "parsing repo config")
 
 	// The malformed key is not clobbered.
 	body := readRepoConfigFile(t, repo)

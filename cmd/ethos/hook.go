@@ -194,15 +194,11 @@ func runHookSubagentStart() error {
 // locateHookRoots returns the checkout and the store root. Both are empty
 // outside a repository; any other failure to locate either is the error.
 func locateHookRoots() (repoRoot, storeRoot string, err error) {
-	repoRoot, err = resolve.LocateRepoRoot()
-	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+	r := currentRoots()
+	if err := firstError(r.CheckoutErr, r.StoreFailure()); err != nil {
 		return "", "", err
 	}
-	storeRoot, err = resolve.LocateStoreRoot()
-	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		return "", "", err
-	}
-	return repoRoot, storeRoot, nil
+	return r.Checkout, r.Store, nil
 }
 
 func runHookSubagentStop() error {
@@ -320,8 +316,9 @@ func writeAuditLog(sessionsDir string) error {
 	// the migrate/show CLI commands. Outside a repository the legacy global
 	// path is right; any other failure would put the entry in the wrong
 	// tree, so the entry is not written.
-	repoRoot, err := resolve.LocateRepoRoot()
-	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+	loc := currentRoots()
+	repoRoot := loc.Checkout
+	if err := loc.CheckoutErr; err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v; audit entry not written rather than written to the global store\n", err)
 		return fmt.Errorf("%w: %v; not written rather than written to the global store", hook.ErrAuditDropped, err)
 	}

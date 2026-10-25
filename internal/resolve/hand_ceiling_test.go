@@ -61,7 +61,7 @@ func TestHandRulesHonourCeilingLikeGit(t *testing.T) {
 			hideGit(t)
 			var got string
 			var err error
-			captureStderr(t, func() { got, err = LocateRepoRoot() })
+			captureStderr(t, func() { got, err = locateRepoRoot() })
 			if gitErr != nil {
 				assert.ErrorIs(t, err, ErrNotInRepo, "git stops at the ceiling, so must the hand rules (got %q)", got)
 				return

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,7 +9,6 @@ import (
 	"os/signal"
 	"runtime"
 
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -37,12 +35,13 @@ func init() {
 }
 
 func runUI() error {
-	repoRoot, err := resolve.LocateRepoRoot()
-	if errors.Is(err, resolve.ErrNotInRepo) {
-		return fmt.Errorf("ethos ui must run inside a repo (no .git found)")
+	loc := currentRoots()
+	if loc.CheckoutErr != nil {
+		return fmt.Errorf("ethos ui: locating the checkout: %w", loc.CheckoutErr)
 	}
-	if err != nil {
-		return fmt.Errorf("ethos ui: locating the checkout: %w", err)
+	repoRoot := loc.Checkout
+	if repoRoot == "" {
+		return fmt.Errorf("ethos ui must run inside a repo (no .git found)")
 	}
 	// storeRoot resolves the mission store through the git common dir, so the
 	// dashboard shows the main work tree's missions when run from a linked
@@ -53,9 +52,12 @@ func runUI() error {
 	// same class as tierBStoreRoot's dropped Getwd fallback). When the store
 	// root cannot be resolved — a refused override — fail loud rather than
 	// serve a repo-scoped dashboard off a relative or wrong tree.
-	storeRoot, err := resolve.LocateStoreRoot()
-	if err != nil {
+	if err := loc.StoreFailure(); err != nil {
 		return fmt.Errorf("ui: cannot resolve the mission store root: %w", err)
+	}
+	storeRoot := loc.Store
+	if storeRoot == "" {
+		return fmt.Errorf("ui: cannot resolve the mission store root: not inside a repository")
 	}
 
 	srv, err := ui.NewServer(repoRoot, storeRoot)

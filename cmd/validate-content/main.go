@@ -120,11 +120,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	defaultEthosRoot, err := resolve.EthosRootIfAny()
-	if err != nil {
+	loc := resolve.Roots()
+	if err := loc.StoreFailure(); err != nil {
 		fmt.Fprintf(os.Stderr, "validate-content: locating the repository store: %v\n", err)
 		os.Exit(1)
 	}
+	defaultEthosRoot := loc.Ethos
 	defaultGlobalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	var ethosRoot, globalRoot string

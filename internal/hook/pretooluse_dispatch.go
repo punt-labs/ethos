@@ -746,7 +746,7 @@ var dispatchTierBConfirmedOpen = func() {}
 //
 // Releases run LIFO via defer.
 //
-// repoRoot resolution uses resolve.CheckoutRootIfAny — when there is no
+// repoRoot resolution uses resolve.Roots — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
 //
@@ -1034,52 +1034,27 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 	}
 }
 
-// tierBStoreRoot resolves the repo whose .punt-labs/ethos mission store the
-// Tier B dispatch reads and writes — the contract Load, the per-mission
-// lock, the delegation skeleton (record.yaml), the MISSION_ARTIFACTS_DIR
-// env, the depth-walk scan, and the aborted-close. It resolves through the
-// git common dir (resolve.StoreRootIfAny) so a leader dispatching from a
-// linked worktree writes and reads the SAME store the CLI's `mission create`
-// wrote to (the main work tree), not the worktree's empty tree. Without this
-// the CLI and the dispatch hook disagree and delegation is refused with
-// "resolving MISSION_ID not found" — the core ethos-yofr symptom (CR#1).
-//
-// It resolves through resolve.LocateStoreRoot. Outside a repository it
-// returns ("", nil): the global tree is the store (a warned, known state),
-// and the write path (AcquireMissionLock, WriteDelegationSkeleton) fails
-// loud on the empty repoRoot. Any other failure — a refused
-// ETHOS_REPO_ROOT, a .git git refuses, a linked worktree whose store
-// cannot be named — is returned as the error, and every caller denies the
-// tool call with it: a contract read from the global store in its place
-// would bind the spawn to a mission the repository never held, and the
-// working directory is never substituted (ethos-yofr behind a bad
-// override, code-review round 2).
-func tierBStoreRoot() (string, error) {
-	root, err := resolve.LocateStoreRoot()
-	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		return "", fmt.Errorf("locating the mission store: %w; mission-bound tool calls and Agent spawns are refused here "+
-			"until it is fixed: repair or remove the .git named above, or set ETHOS_REPO_ROOT to the "+
-			"repository that holds the .punt-labs/ethos store", err)
-	}
-	return root, nil
+// storeDenyError is the error for a hook that cannot locate its store: it
+// says what to fix.
+func storeDenyError(err error) error {
+	return fmt.Errorf("locating the mission store: %w; mission-bound tool calls and Agent spawns are refused here "+
+		"until it is fixed: repair or remove the path named above, or set ETHOS_REPO_ROOT to the "+
+		"repository that holds the .punt-labs/ethos store", err)
 }
 
-// tierBRepoRoot resolves the current work tree root for the per-checkout
-// portions of the hook — the audit/precondition read path, whose entries
-// live in the committing checkout, not the shared store. Store portions use
-// tierBStoreRoot instead.
-//
-// It resolves through resolve.LocateRepoRoot (ETHOS_REPO_ROOT, then git).
-// Outside a repository it returns ("", nil): there is no checkout. Any
-// other failure is returned as the error, never answered with the working
-// directory, which would read audit entries from whatever directory the
-// hook happened to start in.
+// tierBRepoRoot is the current work tree root for the per-checkout portions of
+// the hook — the audit/precondition read path, whose entries live in the
+// committing checkout, not the shared store. Store portions use the tier-B store root (locateTierBRoots).
+// Outside a repository it is ("", nil): there is no checkout. Any other
+// failure is returned as the error, never answered with the working directory,
+// which would read audit entries from whatever directory the hook happened to
+// start in.
 func tierBRepoRoot() (string, error) {
-	root, err := resolve.LocateRepoRoot()
-	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		return "", fmt.Errorf("locating the checkout: %w", err)
+	loc := resolve.Roots()
+	if loc.CheckoutErr != nil {
+		return "", fmt.Errorf("locating the checkout: %w", loc.CheckoutErr)
 	}
-	return root, nil
+	return loc.Checkout, nil
 }
 
 // tierBGlobalRoot resolves the global ethos root used for per-
@@ -1130,7 +1105,7 @@ func tierBMissionStore(roots tierBRoots) (*mission.Store, error) {
 	// (PR #370 sweep).
 	//
 	// The checkout root FOLLOWS the store root to "" outside a repository:
-	// tierBStoreRoot refuses a bad ETHOS_REPO_ROOT (which must hold a
+	// the tier-B store root (locateTierBRoots) refuses a bad ETHOS_REPO_ROOT (which must hold a
 	// store), but tierBRepoRoot accepts an override directory with no
 	// store, so it would re-accept the refused path. Pairing them unconditionally would let the audit zone
 	// resurrect a path the store already refused (PR #370 override-resurrection
@@ -1153,20 +1128,21 @@ func writeAgentBlock(w io.Writer, msg string) error {
 type tierBRoots struct{ store, checkout string }
 
 // locateTierBRoots locates the store and, when there is one, the checkout. The
-// checkout follows the store to "" outside a repository: tierBStoreRoot refuses
+// checkout follows the store to "" outside a repository: the tier-B store root (locateTierBRoots) refuses
 // a bad ETHOS_REPO_ROOT (which must hold a store), but tierBRepoRoot accepts an
 // override directory with no store, so pairing them unconditionally would let
 // the audit zone resurrect a path the store already refused.
 func locateTierBRoots() (tierBRoots, error) {
-	store, err := tierBStoreRoot()
-	if err != nil {
-		return tierBRoots{}, err
+	loc := resolve.Roots()
+	if err := loc.StoreFailure(); err != nil {
+		return tierBRoots{}, storeDenyError(err)
 	}
-	r := tierBRoots{store: store}
-	if store != "" {
-		if r.checkout, err = tierBRepoRoot(); err != nil {
-			return tierBRoots{}, err
+	r := tierBRoots{store: loc.Store}
+	if loc.Store != "" {
+		if loc.CheckoutErr != nil {
+			return tierBRoots{}, fmt.Errorf("locating the checkout: %w", loc.CheckoutErr)
 		}
+		r.checkout = loc.Checkout
 	}
 	return r, nil
 }

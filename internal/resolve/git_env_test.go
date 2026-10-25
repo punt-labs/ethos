@@ -59,7 +59,7 @@ exit 128
 		t.Setenv("LC_ALL", "de_DE.UTF-8")
 		t.Setenv("LANGUAGE", "de")
 		t.Chdir(t.TempDir())
-		_, err := LocateRepoRoot()
+		_, err := locateRepoRoot()
 		assert.ErrorIs(t, err, ErrNotInRepo)
 	})
 	t.Run("real git", func(t *testing.T) {
@@ -74,7 +74,7 @@ exit 128
 		t.Setenv("LC_ALL", "de_DE.UTF-8")
 		t.Setenv("LANGUAGE", "de")
 		t.Chdir(dir)
-		_, err := LocateRepoRoot()
+		_, err := locateRepoRoot()
 		assert.ErrorIs(t, err, ErrNotInRepo)
 	})
 }
@@ -88,9 +88,9 @@ func TestRelativeCommonDirFromSubdirectory(t *testing.T) {
 	sub := filepath.Join(main, "a", "b")
 	require.NoError(t, os.MkdirAll(sub, 0o755))
 	t.Chdir(sub)
-	root, err := LocateRepoRoot()
+	root, err := locateRepoRoot()
 	require.NoError(t, err)
-	store, err := LocateStoreRoot()
+	store, err := locateStoreRoot()
 	require.NoError(t, err)
 	assert.Equal(t, realpath(t, main), realpath(t, root))
 	assert.Equal(t, realpath(t, main), realpath(t, store))
@@ -126,7 +126,7 @@ echo "$PWD_TOP"; echo "--absolute-git-dir"; echo ".git"
 			t.Chdir(dir)
 			var got string
 			var err error
-			out := captureStderr(t, func() { got, err = LocateStoreRoot() })
+			out := captureStderr(t, func() { got, err = locateStoreRoot() })
 			require.NoError(t, err)
 			assert.Equal(t, dir, got)
 			if c.hand {
@@ -156,7 +156,7 @@ exit 1
 	out := captureStderr(t, func() {
 		for _, d := range dirs {
 			t.Chdir(d)
-			got, err := LocateRepoRoot()
+			got, err := locateRepoRoot()
 			require.NoError(t, err)
 			assert.Equal(t, d, got)
 		}
@@ -182,7 +182,7 @@ func TestExportedGitDirIgnored(t *testing.T) {
 		require.NoError(t, os.MkdirAll(sub, 0o755))
 		t.Setenv("GIT_DIR", filepath.Join(main, ".git"))
 		t.Chdir(sub)
-		got, err := LocateRepoRoot()
+		got, err := locateRepoRoot()
 		require.NoError(t, err)
 		assert.Equal(t, realpath(t, main), realpath(t, got))
 	})
@@ -194,9 +194,9 @@ func TestExportedGitDirIgnored(t *testing.T) {
 		t.Setenv("GIT_DIR", filepath.Join(main, ".git", "worktrees", "wt"))
 		t.Setenv("GIT_INDEX_FILE", filepath.Join(main, ".git", "worktrees", "wt", "index"))
 		t.Chdir(wt)
-		root, err := LocateRepoRoot()
+		root, err := locateRepoRoot()
 		require.NoError(t, err)
-		store, err := LocateStoreRoot()
+		store, err := locateStoreRoot()
 		require.NoError(t, err)
 		assert.Equal(t, realpath(t, wt), realpath(t, root))
 		assert.Equal(t, realpath(t, main), realpath(t, store))
@@ -210,7 +210,7 @@ func TestRefusalHint(t *testing.T) {
 	t.Run("git names the .git itself", func(t *testing.T) {
 		requireGit(t)
 		inner, _ := shapeIn(t, gitShapes["empty file"])
-		_, err := LocateRepoRoot()
+		_, err := locateRepoRoot()
 		require.Error(t, err)
 		assert.Equal(t, 1, strings.Count(err.Error(), filepath.Join(inner, ".git")), err.Error())
 	})
@@ -233,7 +233,7 @@ exit 128
 		fakeGit(t, boom)
 		t.Setenv("GIT_CEILING_DIRECTORIES", ceiling)
 		t.Chdir(start)
-		_, err := LocateRepoRoot()
+		_, err := locateRepoRoot()
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), filepath.Join(outer, ".git"))
 		assert.Contains(t, err.Error(), "something failed")
@@ -243,7 +243,7 @@ exit 128
 		fakeGit(t, boom)
 		t.Setenv("GIT_CEILING_DIRECTORIES", "")
 		t.Chdir(start)
-		_, err := LocateRepoRoot()
+		_, err := locateRepoRoot()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), filepath.Join(outer, ".git"))
 	})
@@ -285,13 +285,13 @@ func TestLinkedWorktreeWithoutMainWorkTree(t *testing.T) {
 				if !withGit {
 					hideGit(t)
 				}
-				store, err := LocateStoreRoot()
+				store, err := locateStoreRoot()
 				require.Error(t, err)
 				assert.NotErrorIs(t, err, ErrNotInRepo)
 				assert.Empty(t, store)
 				assert.Contains(t, err.Error(), "linked worktree")
 				assert.Contains(t, filepath.ToSlash(err.Error()), filepath.Base(c))
-				root, err := LocateRepoRoot()
+				root, err := locateRepoRoot()
 				require.NoError(t, err)
 				assert.Equal(t, realpath(t, wt), realpath(t, root))
 			})
@@ -315,7 +315,7 @@ func TestRelativeCommonDirFromSymlinkedSubdirectory(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	t.Chdir(link)
-	store, err := LocateStoreRoot()
+	store, err := locateStoreRoot()
 	require.NoError(t, err)
 	assert.Equal(t, realpath(t, main), realpath(t, store))
 }
@@ -402,7 +402,7 @@ exit 128
 `)
 	t.Setenv("GIT_CEILING_DIRECTORIES", "")
 	t.Chdir(start)
-	_, err := LocateRepoRoot()
+	_, err := locateRepoRoot()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), filepath.Join(outer, ".git"))
 }

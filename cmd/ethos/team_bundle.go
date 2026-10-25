@@ -100,10 +100,11 @@ type availableRow struct {
 }
 
 func runTeamAvailable(cmd *cobra.Command) error {
-	repoRoot, rootErr := resolve.StoreRootIfAny()
-	if rootErr != nil {
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
 		return fmt.Errorf("locating the repository store: %w", rootErr)
 	}
+	repoRoot := loc.Store
 	globalRoot := defaultGlobalRoot()
 
 	bundles, err := bundle.List(repoRoot, globalRoot)
@@ -164,10 +165,11 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	if !bundle.ValidName.MatchString(name) {
 		return fmt.Errorf("invalid bundle name %q (must match %s)", name, bundle.ValidName.String())
 	}
-	repoRoot, rootErr := resolve.StoreRootIfAny()
-	if rootErr != nil {
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
 		return fmt.Errorf("locating the repository store: %w", rootErr)
 	}
+	repoRoot := loc.Store
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
@@ -356,10 +358,11 @@ func listBundleNames(bundles []bundle.Bundle) string {
 // --- active ---
 
 func runTeamActive(cmd *cobra.Command) error {
-	repoRoot, rootErr := resolve.StoreRootIfAny()
-	if rootErr != nil {
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
 		return fmt.Errorf("locating the repository store: %w", rootErr)
 	}
+	repoRoot := loc.Store
 	globalRoot := defaultGlobalRoot()
 
 	b, err := bundle.ResolveActive(repoRoot, globalRoot)
@@ -396,10 +399,11 @@ func runTeamActive(cmd *cobra.Command) error {
 // --- deactivate ---
 
 func runTeamDeactivate(cmd *cobra.Command) error {
-	repoRoot, rootErr := resolve.StoreRootIfAny()
-	if rootErr != nil {
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
 		return fmt.Errorf("locating the repository store: %w", rootErr)
 	}
+	repoRoot := loc.Store
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
@@ -473,10 +477,11 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		targetDir = filepath.Join(globalRoot, "bundles", name)
 		gitArgs = []string{"git", "clone", url, targetDir}
 	} else {
-		repoRoot, rootErr := resolve.StoreRootIfAny()
-		if rootErr != nil {
+		loc := currentRoots()
+		if rootErr := loc.StoreFailure(); rootErr != nil {
 			return fmt.Errorf("locating the repository store: %w", rootErr)
 		}
+		repoRoot := loc.Store
 		if repoRoot == "" {
 			return fmt.Errorf("not in a git repository (use --global to install without a repo)")
 		}

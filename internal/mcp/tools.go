@@ -559,9 +559,8 @@ func (h *Handler) doctorTool() mcplib.Tool {
 }
 
 func (h *Handler) handleDoctor(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	repoRoot, rootErr := resolve.LocateRepoRoot()
-	storeRoot, storeErr := resolve.LocateStoreRoot()
-	results := doctor.RunAll(h.store, h.sessionStore, repoRoot, rootErr, storeRoot, storeErr, h.teams)
+	loc := resolve.Roots()
+	results := doctor.RunAll(h.store, h.sessionStore, loc.Checkout, loc.CheckoutErr, loc.Store, loc.StoreFailure(), h.teams)
 
 	// Format as table text per DES-020.
 	headers := []string{"NAME", "STATUS", "DETAIL"}

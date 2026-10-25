@@ -527,7 +527,8 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    exactly as the hook resolves them — R6 convergence).
 	root := session.Participant{AgentID: human, Persona: human}
 	primary := session.Participant{AgentID: primaryID, Persona: primaryPersona, Parent: human}
-	checkout, coErr := hook.ResolveCheckout()
+	loc := currentRoots()
+	checkout, coErr := loc.Checkout, firstError(loc.CheckoutErr, loc.StoreFailure())
 	var repo string
 	var repoErr error
 	if coErr == nil {
@@ -895,10 +896,12 @@ func runSessionPurge(cmd *cobra.Command) error {
 	// sessions whose recorded identity matches this checkout's (repoID); a purge
 	// run outside any repo leaves every repo-bound session for its owning
 	// checkout.
-	repoRoot, err := resolve.CheckoutRootIfAny()
-	if err != nil {
-		return fmt.Errorf("session purge: locating the checkout: %w", err)
+	loc := currentRoots()
+	if loc.CheckoutErr != nil {
+		return fmt.Errorf("session purge: locating the checkout: %w", loc.CheckoutErr)
 	}
+	repoRoot := loc.Checkout
+	var err error
 	repoID, err := audit.RepoIdentity(repoRoot)
 	if err != nil {
 		return err

@@ -492,65 +492,64 @@ func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 	return sessionPersona{handle: p.Persona, found: true}, nil
 }
 
-// EthosRootIfAny returns the path to .punt-labs/ethos/ for the repository the
-// store should read and write. It is "" with a nil error outside any
-// repository and when that directory does not exist yet. Any other failure — a
-// refused ETHOS_REPO_ROOT, a .git git refuses, a linked worktree whose store
-// cannot be named — is the error: a caller must refuse, never fall back to the
-// global store. In a linked worktree it finds the main work tree's store
-// rather than the worktree's own empty checkout (ethos-yofr).
-func EthosRootIfAny() (string, error) {
-	repoRoot, err := StoreRootIfAny()
-	if err != nil || repoRoot == "" {
-		return "", err
+// ethosRootOf is <storeRoot>/.punt-labs/ethos when it is a directory, "" with a
+// nil error only when it does not exist, and an error for every other failure.
+// The whole path is checked, one component at a time with Lstat: a dangling
+// symlink at any level (.punt-labs included), a non-directory, a symlink loop
+// or a permission error is a store ethos cannot read, never "no store yet". A
+// repository with no .punt-labs at all, or no .punt-labs/ethos in it, is the
+// ordinary "no store yet" (ENOENT of a component that is simply not there).
+func ethosRootOf(storeRoot string) (string, error) {
+	dir := storeRoot
+	for _, name := range []string{".punt-labs", "ethos"} {
+		dir = filepath.Join(dir, name)
+		li, err := os.Lstat(dir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return "", nil
+		case err != nil:
+			return "", fmt.Errorf("examining %s: %w", dir, err)
+		}
+		si, err := os.Stat(dir) // follows a symlink: a dangling one fails here
+		switch {
+		case err != nil:
+			kind := ""
+			if li.Mode()&fs.ModeSymlink != 0 {
+				kind = " (a dangling symlink)"
+			}
+			return "", fmt.Errorf("the ethos store path %s cannot be read%s: %w", dir, kind, err)
+		case !si.IsDir():
+			return "", fmt.Errorf("the ethos store path %s is not a directory", dir)
+		}
 	}
-	return EthosRootOf(repoRoot)
+	return dir, nil
 }
 
-// EthosRootOf is <storeRoot>/.punt-labs/ethos when it is a directory, "" with a
-// nil error only when it does not exist, and an error for every other failure:
-// a dangling symlink, a regular file, a permission error, a symlink loop. Each
-// of those is a store ethos cannot read, never "no store yet".
-func EthosRootOf(storeRoot string) (string, error) {
-	ethosRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
-	info, err := os.Stat(ethosRoot)
-	switch {
-	case errors.Is(err, fs.ErrNotExist) && !isDanglingLink(ethosRoot):
-		return "", nil
-	case err != nil:
-		return "", fmt.Errorf("examining the ethos store %s: %w", ethosRoot, err)
-	case !info.IsDir():
-		return "", fmt.Errorf("the ethos store %s is not a directory", ethosRoot)
-	}
-	return ethosRoot, nil
-}
+// ConfigOf reads the repo-local ethos configuration under a store root that
+// Roots (or a caller holding its result) established: .punt-labs/ethos.yaml
+// first, then the legacy .punt-labs/ethos/config.yaml. It returns nil, nil only
+// when neither exists; a config that is a dangling symlink, unreadable or
+// malformed is an error, never "no config".
+func ConfigOf(storeRoot string) (*RepoConfig, error) { return loadRepoConfig(storeRoot) }
 
-// isDanglingLink reports whether p is a symlink whose target does not exist:
-// os.Stat reports that as fs.ErrNotExist, but the store is not absent, it is
-// broken.
-func isDanglingLink(p string) bool {
-	info, err := os.Lstat(p)
-	return err == nil && info.Mode()&fs.ModeSymlink != 0
-}
-
-// LoadRepoConfig reads repo-local ethos configuration. Tries
+// loadRepoConfig reads repo-local ethos configuration. Tries
 // .punt-labs/ethos.yaml first, falls back to the legacy path
 // .punt-labs/ethos/config.yaml. Returns nil, nil when neither exists.
-func LoadRepoConfig(repoRoot string) (*RepoConfig, error) {
+func loadRepoConfig(repoRoot string) (*RepoConfig, error) {
 	newPath := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
-	data, err := os.ReadFile(newPath)
+	data, err := readConfigFile(newPath)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("reading %s: %w", newPath, err)
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
 		}
 		// New path not found — try legacy path.
 		oldPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "config.yaml")
-		data, err = os.ReadFile(oldPath)
+		data, err = readConfigFile(oldPath)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, fs.ErrNotExist) {
 				return nil, nil
 			}
-			return nil, fmt.Errorf("reading %s: %w", oldPath, err)
+			return nil, err
 		}
 	}
 	var cfg RepoConfig
@@ -559,6 +558,25 @@ func LoadRepoConfig(repoRoot string) (*RepoConfig, error) {
 	}
 	return &cfg, nil
 }
+
+// readConfigFile reads p. A path that is absent is fs.ErrNotExist; a path that is
+// a symlink to nothing is NOT absent, it is an error: ReadFile reports both as
+// ENOENT.
+func readConfigFile(p string) ([]byte, error) {
+	data, err := os.ReadFile(p)
+	if err == nil {
+		return data, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		if li, lerr := os.Lstat(p); lerr == nil && li.Mode()&fs.ModeSymlink != 0 {
+			return nil, fmt.Errorf("reading %s: it is a dangling symlink: %w", p, errDanglingConfig)
+		}
+		return nil, err
+	}
+	return nil, fmt.Errorf("reading %s: %w", p, err)
+}
+
+var errDanglingConfig = errors.New("dangling config symlink")
 
 // ResolveAgent returns the default agent identity handle for the repo.
 // Reads .punt-labs/ethos.yaml first, falls back to legacy
@@ -573,7 +591,7 @@ func ResolveAgent(repoRoot string) (string, error) {
 	if repoRoot == "" {
 		return "", nil
 	}
-	cfg, err := LoadRepoConfig(repoRoot)
+	cfg, err := loadRepoConfig(repoRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve agent: %w", err)
 	}
@@ -590,7 +608,7 @@ func ResolveTeam(repoRoot string) (string, error) {
 	if repoRoot == "" {
 		return "", nil
 	}
-	cfg, err := LoadRepoConfig(repoRoot)
+	cfg, err := loadRepoConfig(repoRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve team: %w", err)
 	}
@@ -615,7 +633,7 @@ func ResolveMaxDelegationDepth(repoRoot string, defaultValue int) (int, error) {
 	if repoRoot == "" {
 		return defaultValue, nil
 	}
-	cfg, err := LoadRepoConfig(repoRoot)
+	cfg, err := loadRepoConfig(repoRoot)
 	if err != nil {
 		return defaultValue, fmt.Errorf("resolve max_delegation_depth: %w", err)
 	}
@@ -642,7 +660,7 @@ func ResolveResolution(repoRoot string) (string, error) {
 	if repoRoot == "" {
 		return ResolutionLayered, nil
 	}
-	cfg, err := LoadRepoConfig(repoRoot)
+	cfg, err := loadRepoConfig(repoRoot)
 	if err != nil {
 		return ResolutionLayered, fmt.Errorf("resolve resolution: %w", err)
 	}
@@ -667,7 +685,7 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 	if repoRoot == "" {
 		return "", nil
 	}
-	cfg, err := LoadRepoConfig(repoRoot)
+	cfg, err := loadRepoConfig(repoRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve active bundle: %w", err)
 	}
@@ -681,7 +699,7 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 // and whether it is set, WITHOUT validating it or emitting any warning. It
 // lets a caller distinguish "no override, genuinely not in a repo" (set ==
 // false) from "an override was set but the resolver refused it" (set == true
-// while LocateRepoRoot/LocateStoreRoot refused it). setup uses it to fail loud on
+// while locateRepoRoot/locateStoreRoot refused it). setup uses it to fail loud on
 // a bad override instead of silently degrading to no-repo mode (#370 F-A).
 func RepoRootOverride() (value string, set bool) {
 	v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT"))
@@ -713,17 +731,17 @@ func checkRepoRootOverride(requireStore bool) (root string, set bool, err error)
 	return v, true, nil
 }
 
-// CheckoutRootIfAny is the current work tree root — the directory holding the
+// checkoutRootIfAny is the current work tree root — the directory holding the
 // .git marker for the cwd's checkout — or "" with a nil error outside any
 // repository. Any other failure (an invalid ETHOS_REPO_ROOT, a .git git
 // refuses, a git that does not answer) is the error. In a linked worktree it
 // is the WORKTREE root, not the main one: per-checkout operations
 // (enable/disable markers, generated .claude/agents, audit chunks that must
 // travel in this worktree's commit) belong to the checkout, not the shared
-// store; store readers and writers use StoreRootIfAny. ETHOS_REPO_ROOT
-// overrides resolution (see LocateRepoRoot).
-func CheckoutRootIfAny() (string, error) {
-	root, err := LocateRepoRoot()
+// store; store readers and writers use storeRootIfAny. ETHOS_REPO_ROOT
+// overrides resolution (see locateRepoRoot).
+func checkoutRootIfAny() (string, error) {
+	root, err := locateRepoRoot()
 	if errors.Is(err, ErrNotInRepo) {
 		return "", nil
 	}
@@ -750,11 +768,11 @@ func warnOnce(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, msg)
 }
 
-// LocateRepoRoot locates the current work tree root, with the reason it found nothing: an invalid
+// locateRepoRoot locates the current work tree root, with the reason it found nothing: an invalid
 // ETHOS_REPO_ROOT, an unreadable working directory, a .git git refuses, or a
 // working directory outside any repository. It returns the error rather than
 // printing it; a .git it walked past is still noted on stderr (warnOnce).
-func LocateRepoRoot() (string, error) {
+func locateRepoRoot() (string, error) {
 	if root, set, err := checkRepoRootOverride(false); set {
 		return root, err
 	}
@@ -762,22 +780,22 @@ func LocateRepoRoot() (string, error) {
 	return loc.root, err
 }
 
-// ErrOverrideNoStore is wrapped by the error LocateStoreRoot returns when
+// ErrOverrideNoStore is wrapped by the error locateStoreRoot returns when
 // ETHOS_REPO_ROOT names an existing directory that holds no store yet: a fresh
 // repository, which `ethos enable` is about to give one.
 var ErrOverrideNoStore = errors.New("no ethos store at the overridden root")
 
-// ErrNotInRepo is wrapped by the error LocateRepoRoot returns when the working
+// ErrNotInRepo is wrapped by the error locateRepoRoot returns when the working
 // directory is outside any repository, the one failure that is not a problem.
 var ErrNotInRepo = errors.New("not inside a git repository")
 
-// StoreRootIfAny is the root of the repository whose .punt-labs/ethos store
+// storeRootIfAny is the root of the repository whose .punt-labs/ethos store
 // the caller should read and write, or "" with a nil error outside any
 // repository. Any other failure — a refused ETHOS_REPO_ROOT, a .git git
 // refuses, a worktree whose store cannot be named — is the error, and a
 // writer must refuse rather than fall back to the global store.
 //
-// It differs from CheckoutRootIfAny only inside a linked worktree. Git keeps
+// It differs from checkoutRootIfAny only inside a linked worktree. Git keeps
 // one shared object store per repo; a linked worktree's .git is a file pointing
 // at the main work tree's .git, and — in the org-standard submodule layout —
 // the worktree's own .punt-labs/ethos is an empty, unpopulated checkout.
@@ -785,8 +803,8 @@ var ErrNotInRepo = errors.New("not inside a git repository")
 // <repo>/.claude/worktrees/x reads and writes the store at
 // <repo>/.punt-labs/ethos rather than a different, empty tree that silently
 // degrades to the global store (ethos-yofr).
-func StoreRootIfAny() (string, error) {
-	root, err := LocateStoreRoot()
+func storeRootIfAny() (string, error) {
+	root, err := locateStoreRoot()
 	if errors.Is(err, ErrNotInRepo) {
 		return "", nil
 	}
@@ -796,13 +814,13 @@ func StoreRootIfAny() (string, error) {
 	return root, nil
 }
 
-// LocateStoreRoot locates the store root, with the reason it found nothing: a refused
+// locateStoreRoot locates the store root, with the reason it found nothing: a refused
 // ETHOS_REPO_ROOT, a .git git refuses, or a working directory outside any
 // repository (wrapping ErrNotInRepo, the one failure that is not a problem). A
 // writer must refuse on any other error rather than fall back to the global
 // store. It returns the error rather than printing it; a .git it walked past
 // is still noted on stderr (warnOnce).
-func LocateStoreRoot() (string, error) {
+func locateStoreRoot() (string, error) {
 	if root, set, err := checkRepoRootOverride(true); set {
 		return root, err
 	}
