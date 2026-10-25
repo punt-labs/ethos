@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -146,7 +147,6 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 		{"iam", "x"},
 		{"session", "iam", "x"},
 		{"session", "start"},
-		{"session", "join", "--agent-id", "a"},
 		{"adr", "create", "--title", "t", "--decision", "d"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -161,9 +161,8 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 	}
 }
 
-// The commands that touch only global stores — roster reads, session
-// write-current (doctor's own remedy), session purge, adr list and show — run on
-// an unreadable .git: none of them refuses on the repository store.
+// The commands that touch only global stores run on an unreadable .git: none
+// of them refuses on the repository store.
 func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -176,8 +175,15 @@ func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
 		{"session", "roster"},
 		{"session", "write-current", "--pid", "1", "--session", "s"},
 		{"session", "purge"},
+		{"session", "end"},
+		{"session", "join", "--agent-id", "a", "--session", "s"},
+		{"session", "leave", "--agent-id", "a", "--session", "s"},
+		{"session", "create", "--session", "s", "--root-id", "r", "--primary-id", "p"},
+		{"session", "delete", "--session", "s"},
+		{"session", "delete-current", "--pid", "1"},
 		{"adr", "list"},
 		{"adr", "show", "x"},
+		{"adr", "settle", "x"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
@@ -189,29 +195,54 @@ func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
 	}
 }
 
-// The commands that report on, repair or do not use the store stay runnable.
+// Every command is classified for the store refusal, so a new command cannot
+// run unclassified: the table names exactly the commands cobra has.
+func TestEveryCommandClassifiedForStoreRefusal(t *testing.T) {
+	// cobra adds its help command when the root first executes; add it now
+	// so the walk is the same whichever tests ran before.
+	rootCmd.InitDefaultHelpCmd()
+	seen := map[string]bool{}
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		path := c.CommandPath()
+		seen[path] = true
+		_, ok := storeUses[path]
+		assert.True(t, ok || slices.Contains(cobraCommands, path), "%s is not classified in storeUses", path)
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(rootCmd)
+	for path := range storeUses {
+		assert.True(t, seen[path], "storeUses names %q, which is not a command", path)
+	}
+}
+
+// The classes the rulings fixed, and the default for anything unclassified.
 func TestStoreRefusalExemptions(t *testing.T) {
-	root := rootCmd
-	exempt := [][]string{
-		{"version"}, {"doctor"}, {"setup"}, {"seed"}, {"enable"}, {"disable"},
-		{"hook"}, {"serve"}, {"uninstall"}, {"completion"}, {"audit"}, {"role", "schema"},
-		{"session"}, {"session", "list"}, {"session", "show"}, {"session", "roster"},
-		{"session", "write-current"}, {"session", "purge"}, {"adr", "list"}, {"adr", "show"},
+	cases := map[storeUse][][]string{
+		storeHandlesError: {{"doctor"}, {"setup"}, {"seed"}, {"enable"}, {"disable"},
+			{"serve"}, {"hook"}, {"hook", "audit-log"}, {"audit", "seal"}},
+		storeGlobalOnly: {{"version"}, {"uninstall"}, {"completion"}, {"role", "schema"},
+			{"session"}, {"session", "list"}, {"session", "show"}, {"session", "roster"},
+			{"session", "write-current"}, {"session", "purge"}, {"session", "end"},
+			{"session", "join"}, {"session", "leave"}, {"session", "create"},
+			{"session", "delete"}, {"session", "delete-current"},
+			{"adr", "list"}, {"adr", "show"}, {"adr", "settle"}},
+		storeRefuses: {{"identity", "list"}, {"mission", "list"},
+			{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session", "iam"},
+			{"session", "start"}, {"adr", "create"}},
 	}
-	refused := [][]string{
-		{"identity", "list"}, {"mission", "list"},
-		{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session", "iam"},
-		{"session", "start"}, {"session", "join"}, {"adr", "create"},
+	for want, cmds := range cases {
+		for _, args := range cmds {
+			c, _, err := rootCmd.Find(args)
+			require.NoError(t, err, args)
+			assert.Equal(t, want, storeUses[c.CommandPath()], "%v", args)
+			assert.Equal(t, want != storeRefuses, exemptFromStoreRefusal(c), "%v", args)
+		}
 	}
-	find := func(args []string) *cobra.Command {
-		c, _, err := root.Find(args)
-		require.NoError(t, err, args)
-		return c
-	}
-	for _, args := range exempt {
-		assert.True(t, exemptFromStoreRefusal(find(args)), "%v is exempt", args)
-	}
-	for _, args := range refused {
-		assert.False(t, exemptFromStoreRefusal(find(args)), "%v refuses", args)
-	}
+	unclassified := &cobra.Command{Use: "brand-new"}
+	rootCmd.AddCommand(unclassified)
+	t.Cleanup(func() { rootCmd.RemoveCommand(unclassified) })
+	assert.False(t, exemptFromStoreRefusal(unclassified), "an unclassified command refuses")
 }
