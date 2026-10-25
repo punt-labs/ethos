@@ -356,3 +356,48 @@ exit 1
 	assert.NotEmpty(t, usableGit())
 	assert.Equal(t, 2, runs(), "a successful probe is kept")
 }
+
+// The hint is left out only when git's message names the work tree itself,
+// or the .git or a path inside it, compared by whole path components.
+func TestMessageNamesGit(t *testing.T) {
+	cases := map[string]struct {
+		msg, dot string
+		want     bool
+	}{
+		"names the .git":            {"fatal: invalid gitfile format: /r/a/.git", "/r/a/.git", true},
+		"names a path in the .git":  {"fatal: failed to read /r/a/.git/commondir", "/r/a/.git", true},
+		"names the work tree":       {"fatal: detected dubious ownership in repository at '/r/a'", "/r/a/.git", true},
+		"sentence end":              {"fatal: refusing /r/a.", "/r/a/.git", true},
+		"sibling prefix":            {"fatal: cannot read /r/ab/x", "/r/a/.git", false},
+		"sibling of the .git":       {"fatal: cannot read /r/a/.gitx", "/r/a/.git", false},
+		"suffix of a longer path":   {"fatal: cannot read /x/r/a", "/r/a/.git", false},
+		"a file in the work tree":   {"fatal: cannot read /r/a/b", "/r/a/.git", false},
+		"root .git, any other path": {"fatal: cannot read /home/x", "/.git", false},
+		"root .git, named":          {"fatal: invalid gitfile format: /.git", "/.git", true},
+		"root work tree, named":     {"fatal: dubious ownership in repository at '/'", "/.git", true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, c.want, messageNamesGit(c.msg, c.dot))
+		})
+	}
+}
+
+// A message naming a sibling whose name has the work tree's as a prefix
+// still gets the hint.
+func TestRefusalHintSiblingPrefix(t *testing.T) {
+	base := t.TempDir()
+	outer := filepath.Join(base, "ab")
+	testhelpers.MakeGitDir(t, outer)
+	start := filepath.Join(outer, "c")
+	require.NoError(t, os.MkdirAll(start, 0o755))
+	fakeGit(t, `[ "$1" = --version ] && { echo "git version 2.43.0"; exit 0; }
+echo "fatal: cannot read `+filepath.Join(base, "abc")+`" >&2
+exit 128
+`)
+	t.Setenv("GIT_CEILING_DIRECTORIES", "")
+	t.Chdir(start)
+	_, err := LocateRepoRoot()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), filepath.Join(outer, ".git"))
+}

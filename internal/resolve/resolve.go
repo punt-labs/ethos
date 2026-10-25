@@ -971,8 +971,9 @@ func parseRevParse(start, out string) (top, gitDir, common string, ok bool) {
 
 // gitLocateError turns a failed `git rev-parse` into a resolution error. It
 // names the nearest .git only when that helps: not when git's message already
-// names a path in that work tree, and not when the .git is at or above a
-// GIT_CEILING_DIRECTORIES entry, which git never examined.
+// names its work tree, the .git, or a path inside the .git (messageNamesGit),
+// and not when the .git is at or above a GIT_CEILING_DIRECTORIES entry, which
+// git never examined.
 func gitLocateError(start string, err error) error {
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
@@ -984,10 +985,44 @@ func gitLocateError(start string, err error) error {
 		// ceiling boundary it stopped at, does not make this a refusal.
 		return fmt.Errorf("%s is %w", start, ErrNotInRepo)
 	}
-	if dot := firstDotGit(start); dot != "" && !strings.Contains(msg, filepath.Dir(dot)) {
+	if dot := firstDotGit(start); dot != "" && !messageNamesGit(msg, dot) {
 		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, msg)
 	}
 	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, msg)
+}
+
+// messageNamesGit reports whether git's message msg names the work tree that
+// holds dot, or dot or a path inside it. Paths are matched as whole
+// components: the work tree /r/a is not named by /r/ab or /x/r/a, and every
+// absolute path is not "in" the root work tree.
+func messageNamesGit(msg, dot string) bool {
+	return namesPath(msg, filepath.Dir(dot), false) || namesPath(msg, dot, true)
+}
+
+// namesPath reports whether msg holds p as a whole path: preceded by the start
+// of msg or a delimiter, and followed by the end of msg, a delimiter, a
+// sentence-ending period, or (when under is set) a separator.
+func namesPath(msg, p string, under bool) bool {
+	for i := 0; ; {
+		j := strings.Index(msg[i:], p)
+		if j < 0 {
+			return false
+		}
+		start, end := i+j, i+j+len(p)
+		before := start == 0 || isPathDelim(msg[start-1])
+		after := end == len(msg) || isPathDelim(msg[end]) ||
+			msg[end] == '.' && (end+1 == len(msg) || isPathDelim(msg[end+1])) ||
+			under && msg[end] == filepath.Separator
+		if before && after {
+			return true
+		}
+		i = start + 1
+	}
+}
+
+// isPathDelim reports whether c ends a path in one of git's messages.
+func isPathDelim(c byte) bool {
+	return strings.IndexByte(" \t\r\n'\"`,;:()[]<>=", c) >= 0
 }
 
 // realDir returns p with symlinks resolved, or p cleaned when it cannot be.
