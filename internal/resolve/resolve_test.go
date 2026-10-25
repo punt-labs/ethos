@@ -1969,7 +1969,7 @@ func TestUnreadableGitConfigIsAnErrorNotUnset(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("GIT_CONFIG_GLOBAL", "") // registers the restore ...
+	t.Setenv("GIT_CONFIG_GLOBAL", "")                    // registers the restore ...
 	require.NoError(t, os.Unsetenv("GIT_CONFIG_GLOBAL")) // ... then really unsets it
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
