@@ -77,7 +77,21 @@ type Spec struct {
 	Stdout io.Writer     // nil: captured and returned
 	Stderr io.Writer     // nil: captured on the *exec.ExitError
 	Limit  time.Duration // 0: the shared deadline (Timeout, or SetTimeout's)
+
+	// Network marks git that talks to a remote or may ask the user something
+	// (clone, submodule add). It runs in ethos's own process group, so a
+	// Ctrl-C at the terminal reaches it and no clone is left running, and with
+	// GIT_TERMINAL_PROMPT=0 and ssh in BatchMode, so a credential prompt fails
+	// at once instead of waiting on a terminal nobody is watching.
+	Network bool
 }
+
+// groupGrace is how long the rest of a TERMed process group has to finish
+// before it is killed.
+const groupGrace = time.Second
+
+// networkEnv is what Network adds to git's environment.
+var networkEnv = []string{"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes"}
 
 // Run executes s under its bound. It returns stdout when s.Stdout is nil. A
 // git that exits non-zero returns its *exec.ExitError; one still running at
@@ -98,14 +112,22 @@ func Run(s Spec) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, s.Git, s.Args...)
 	cmd.Dir = s.Dir
 	cmd.Env = stripTrace(s.Env)
+	if s.Network {
+		cmd.Env = append(cmd.Env, networkEnv...)
+	}
 	cmd.Stdin = s.Stdin
 	// On the deadline git and its process group get SIGTERM, so git can remove
 	// its index.lock; after the WaitDelay grace Go kills git, and killGroup
 	// what is left of the group (a filter that ignored SIGTERM). A child
-	// holding stdout does not stall the kill either. On Windows there are no
-	// groups and no SIGTERM: the kill is immediate, and only git dies.
-	inOwnGroup(cmd)
-	cmd.Cancel = func() error { return terminate(cmd) }
+	// holding stdout does not stall the kill either. A Network git stays in
+	// ethos's group (see Spec.Network) and only git itself is signalled. On
+	// Windows there are no groups and no SIGTERM: the kill is immediate, and
+	// only git dies.
+	group := !s.Network
+	if group {
+		inOwnGroup(cmd)
+	}
+	cmd.Cancel = func() error { return terminate(cmd, group) }
 	cmd.WaitDelay = time.Second
 	var out []byte
 	var err error
@@ -117,7 +139,9 @@ func Run(s Spec) ([]byte, error) {
 		err = cmd.Run()
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		killGroup(cmd)
+		if group {
+			endGroup(cmd, groupGrace)
+		}
 		return nil, timeoutError(s.Git, s.Args, s.Dir, limit)
 	}
 	return out, err

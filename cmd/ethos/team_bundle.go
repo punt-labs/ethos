@@ -512,7 +512,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 
 	_, err := gitenv.Run(gitenv.Spec{
 		Git: gitArgs[0], Args: gitArgs[1:], Dir: gitDir,
-		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit,
+		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit, Network: true,
 	})
 	if err != nil {
 		return fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)

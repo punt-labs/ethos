@@ -2,12 +2,15 @@
 
 package gitenv
 
-import "os/exec"
+import (
+	"os/exec"
+	"time"
+)
 
 // There are no process groups here: inOwnGroup does nothing, and terminate
 // kills git at once, with no SIGTERM first and no grace.
 func inOwnGroup(*exec.Cmd) {}
 
-func terminate(cmd *exec.Cmd) error { return cmd.Process.Kill() }
+func terminate(cmd *exec.Cmd, _ bool) error { return cmd.Process.Kill() }
 
-func killGroup(*exec.Cmd) {}
+func endGroup(*exec.Cmd, time.Duration) {}
