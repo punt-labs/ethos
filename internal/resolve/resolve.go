@@ -796,10 +796,24 @@ type located struct {
 	err     error
 }
 
-// locations caches resolution for the life of the process, keyed on the git
-// binary (or its absence) and the starting directory: the resolvers run many
-// times per command, and each answer from git costs a process.
+// locations caches answers, keyed on the git binary (or its absence) and the
+// starting directory: the resolvers run many times per command, and each
+// answer from git costs a process. Only a location and ErrNotInRepo are
+// cached, and only for locateTTL, so a long-running server sees a repaired or
+// new repository; a refusal is never cached.
 var locations sync.Map
+
+// locateTTL bounds how long a cached answer is reused.
+const locateTTL = 30 * time.Second
+
+// locateNow is the clock the cache reads; a test may replace it.
+var locateNow = time.Now
+
+// cachedLocation is a located answer and when it was found.
+type cachedLocation struct {
+	r  located
+	at time.Time
+}
 
 // locateCwd resolves the working directory and notes on stderr every .git it
 // walked past.
@@ -824,7 +838,9 @@ func locate(start string) located {
 	}
 	key := git + "\x00" + start
 	if v, ok := locations.Load(key); ok {
-		return v.(located)
+		if c := v.(cachedLocation); locateNow().Sub(c.at) < locateTTL {
+			return c.r
+		}
 	}
 	var r located
 	if git != "" {
@@ -832,14 +848,18 @@ func locate(start string) located {
 	} else {
 		r = handLocate(start)
 	}
-	locations.Store(key, r)
+	if r.err == nil || errors.Is(r.err, ErrNotInRepo) {
+		locations.Store(key, cachedLocation{r: r, at: locateNow()})
+	} else {
+		locations.Delete(key)
+	}
 	return r
 }
 
 // gitLocate asks git for the work tree root, the git dir and the common dir of
-// start. A git failure is a resolution error carrying git's own message (a
-// dubious-ownership refusal, an invalid gitfile); only "not a git repository"
-// with no .git anywhere above start is ErrNotInRepo.
+// start. git's "not a git repository" is ErrNotInRepo; any other git failure
+// (dubious ownership, an invalid gitfile, an unreadable commondir, "must be
+// run in a work tree") is a resolution error carrying git's own message.
 func gitLocate(git, start string) located {
 	out, err := exec.Command(git, "-C", start, "rev-parse", "--path-format=absolute",
 		"--show-toplevel", "--git-dir", "--git-common-dir").Output()
@@ -873,9 +893,8 @@ func gitLocateError(start string, err error) error {
 	}
 	msg := strings.TrimSpace(string(ee.Stderr))
 	if strings.Contains(msg, "not a git repository (or any") {
-		if dot := firstDotGit(start); dot != "" {
-			return fmt.Errorf("git finds no repository from %s, yet %s exists (%s)", start, dot, msg)
-		}
+		// git is the authority: a .git it walked past, or a mount or
+		// ceiling boundary it stopped at, does not make this a refusal.
 		return fmt.Errorf("%s is %w", start, ErrNotInRepo)
 	}
 	if dot := firstDotGit(start); dot != "" {

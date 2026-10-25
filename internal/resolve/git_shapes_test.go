@@ -2,7 +2,6 @@ package resolve
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -278,9 +277,9 @@ func TestShapesStoreRoot(t *testing.T) {
 	}
 }
 
-// git's "not a git repository" is ErrNotInRepo only when no .git exists
-// anywhere above: a .git git walked past and found nothing beyond is refused.
-func TestGitNotARepoWithSkippedGitIsRefused(t *testing.T) {
+// git is the authority: when it reports "not a git repository", the answer is
+// ErrNotInRepo, even with a .git entry above that git walked past.
+func TestGitNotARepoIsNotInRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -293,7 +292,66 @@ func TestGitNotARepoWithSkippedGitIsRefused(t *testing.T) {
 	_, gitErr := gitTopLevel(t, dir)
 	require.Error(t, gitErr)
 	_, err := LocateRepoRoot()
-	require.Error(t, err)
-	assert.False(t, errors.Is(err, ErrNotInRepo))
-	assert.Contains(t, err.Error(), filepath.Join(dir, ".git"))
+	assert.ErrorIs(t, err, ErrNotInRepo)
+}
+
+// A refusal is never cached: once the .git is repaired, the next call
+// resolves it.
+func TestRefusalIsNotCached(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "git", false: "no git"}[withGit], func(t *testing.T) {
+			if withGit {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("git not installed")
+				}
+			}
+			inner, _ := shapeIn(t, gitShapes["empty file"])
+			if !withGit {
+				hideGit(t)
+			}
+			_, err := LocateRepoRoot()
+			require.Error(t, err)
+			require.NoError(t, os.Remove(filepath.Join(inner, ".git")))
+			makeGitDirAt(t, filepath.Join(inner, ".git"))
+			got, err := LocateRepoRoot()
+			require.NoError(t, err)
+			assert.Equal(t, realpath(t, inner), realpath(t, got))
+		})
+	}
+}
+
+// A success or ErrNotInRepo answer is reused for at most locateTTL, then
+// asked again.
+func TestAnswerCachedForTTL(t *testing.T) {
+	clock := time.Now()
+	orig := locateNow
+	locateNow = func() time.Time { return clock }
+	t.Cleanup(func() { locateNow = orig })
+
+	inner, outer := shapeIn(t, gitShapes["empty directory"])
+	hideGit(t)
+	got, err := captureLocate(t)
+	require.NoError(t, err)
+	assert.Equal(t, outer, got)
+
+	makeGitDirAt(t, filepath.Join(inner, ".git")) // the skipped .git becomes a repository
+
+	clock = clock.Add(locateTTL - time.Second)
+	got, err = captureLocate(t)
+	require.NoError(t, err)
+	assert.Equal(t, outer, got, "within the TTL the cached answer stands")
+
+	clock = clock.Add(2 * time.Second)
+	got, err = captureLocate(t)
+	require.NoError(t, err)
+	assert.Equal(t, inner, got, "past the TTL the answer is asked again")
+	assert.LessOrEqual(t, locateTTL, 30*time.Second)
+}
+
+func captureLocate(t *testing.T) (string, error) {
+	t.Helper()
+	var got string
+	var err error
+	captureStderr(t, func() { got, err = LocateRepoRoot() })
+	return got, err
 }
