@@ -44,3 +44,5 @@ var sandboxSupported = false
 func setNewProcessGroup(cmd *exec.Cmd) {}
 
 func reapProcessGroup(cmd *exec.Cmd) error { return nil }
+
+func termProcessGroup(cmd *exec.Cmd) error { return nil }

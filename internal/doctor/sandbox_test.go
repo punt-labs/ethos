@@ -336,3 +336,19 @@ func TestHookInvocationObserved_ProcessGroupCleanup(t *testing.T) {
 		})
 	}
 }
+
+// A hook that outlives the sandbox timeout is sent SIGTERM first, so it can
+// clean up, and killed only after a grace period.
+func TestHookInvocationObserved_TermBeforeKill(t *testing.T) {
+	if !sandboxSupported {
+		t.Skip("no sandbox on this platform")
+	}
+	orig := sandboxTimeout
+	sandboxTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { sandboxTimeout = orig })
+	marker := filepath.Join(t.TempDir(), "termed")
+	body := "#!/bin/sh\ntrap 'echo termed > '\"" + marker + "\"'; exit 0' TERM\nsleep 30 &\nwait\n"
+	_, err := hookInvocationObserved([]byte(body), []string{"audit", "seal"}, false)
+	require.Error(t, err, "the timeout is reported")
+	assert.FileExists(t, marker, "the hook received SIGTERM before it was killed")
+}

@@ -1,13 +1,14 @@
 package hook
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 // gitTimeout bounds all git subprocess calls in this file.
@@ -54,12 +55,7 @@ func BuildWorkingContext() string {
 // runGit runs a git command with a gitTimeout deadline. Returns trimmed
 // stdout on success, or the error on failure.
 func runGit(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	defer cancel()
-
-	// Bound: gitTimeout (2s), by ctx; kept off gitenv's 10s so session start stays quick.
-	cmd := exec.CommandContext(ctx, "git", args...)
-	out, err := cmd.Output()
+	out, err := gitenv.Run(gitenv.Spec{Git: "git", Args: args, Limit: gitTimeout})
 	if err != nil {
 		return "", err
 	}
@@ -93,12 +89,7 @@ func uncommittedChanges() (int, []string, bool) {
 	// Run git directly instead of runGit to preserve leading spaces.
 	// Porcelain lines start with two status chars (e.g. " M") and
 	// TrimSpace would strip the leading space, corrupting the parse.
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	defer cancel()
-
-	// Bound: gitTimeout (2s), by ctx; kept off gitenv's 10s so session start stays quick.
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
-	raw, err := cmd.Output()
+	raw, err := gitenv.Run(gitenv.Spec{Git: "git", Args: []string{"status", "--porcelain"}, Limit: gitTimeout})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: git status --porcelain: %v\n", err)
 		return 0, nil, false

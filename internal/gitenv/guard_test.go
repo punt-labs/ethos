@@ -46,12 +46,11 @@ var allowedProcessUses = map[string][]string{
 	"internal/resolve/resolve.go":  {"import"},
 
 	// Own context deadlines, stated at each command.
-	"internal/hook/working_context.go": {"import", `CommandContext("git")`, `CommandContext("git")`}, // gitTimeout (2s)
+	"internal/hook/working_context.go": {"import"}, // exec.LookPath only; its git runs through gitenv.Run with a 2s Limit
 	"internal/doctor/sandbox.go": {
 		"import",
-		`CommandContext("git")`, `CommandContext("git")`, // sandboxTimeout (10s)
-		`CommandContext("sh")`,   // sandbox: re-run a hook that returned ENOEXEC through sh
-		`CommandContext(<expr>)`, // sandbox: the hook itself, run in the sandbox repository
+		`CommandContext("sh")`,   // sandbox: re-run a hook that returned ENOEXEC through sh (TERM, then KILL)
+		`CommandContext(<expr>)`, // sandbox: the hook itself, run in the sandbox repository (TERM, then KILL)
 	},
 	"internal/doctor/procgroup_unix.go":    {"import"},
 	"internal/doctor/procgroup_windows.go": {"import"},

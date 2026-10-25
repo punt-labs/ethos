@@ -46,6 +46,21 @@ func setNewProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+// termProcessGroup sends SIGTERM to cmd's process group: the Cancel a
+// sandboxed command gets on its deadline, so the hook can clean up before
+// cmd.WaitDelay (a short grace) expires and Go kills the direct child.
+// reapProcessGroup, called unconditionally after Run, then SIGKILLs whatever
+// is left in the group.
+func termProcessGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
 // reapProcessGroup SIGKILLs cmd's process group (the negative-PID form of
 // kill(2)) rather than only cmd's direct PID — see setNewProcessGroup's
 // doc comment for exactly what that does and does not reach. Called both
