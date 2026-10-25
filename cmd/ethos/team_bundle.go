@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -515,11 +516,18 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	}
 
 	_, err := gitenv.Run(gitenv.Spec{
-		Git: gitArgs[0], Args: gitArgs[1:], Dir: gitDir,
-		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit, Network: true,
+		Git: gitArgs[0], Args: gitArgs[1:], Dir: gitDir, Env: gitenv.UserConfigEnv(),
+		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit, Network: true, Remote: url,
 	})
 	if err != nil {
-		return fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
+		wrapped := fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
+		var ee *exec.ExitError
+		if gitenv.IsSSHTransport(url) && errors.As(err, &ee) {
+			// git ran and failed: over ssh, with no terminal, that is most often a
+			// host key or a passphrase it could not ask for.
+			wrapped = fmt.Errorf("%w; add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key", wrapped)
+		}
+		return wrapped
 	}
 	if jsonOutput {
 		return writeJSON(out, map[string]any{

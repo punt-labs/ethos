@@ -246,3 +246,47 @@ func resolvedPath(t *testing.T, p string) string {
 	require.NoError(t, err)
 	return r
 }
+
+// add-bundle's failure over ssh says ssh ran without a terminal and what to do;
+// over https it does not, and an unreadable ~/.gitconfig does not block https.
+func TestTeamAddBundleSSHFailureHint(t *testing.T) {
+	prevApply, prevGlobal, prevName := addBundleApply, addBundleGlobal, addBundleName
+	addBundleApply, addBundleGlobal, addBundleName = true, true, ""
+	t.Cleanup(func() { addBundleApply, addBundleGlobal, addBundleName = prevApply, prevGlobal, prevName })
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"),
+		[]byte("#!/bin/sh\ncase \"$1\" in config) exit 1;; esac\necho 'fatal: Host key verification failed.' >&2\nexit 128\n"), 0o755))
+	t.Setenv("PATH", bin)
+	const hint = "add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key"
+	run := func(url string) error {
+		cmd := &cobra.Command{}
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		return runTeamAddBundle(cmd, url)
+	}
+	for _, url := range []string{"git@example.invalid:o/bundle.git", "ssh://git@example.invalid/o/bundle.git"} {
+		err := run(url)
+		require.Error(t, err, url)
+		assert.Contains(t, err.Error(), hint, url)
+	}
+	err := run("https://example.invalid/o/bundle.git")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "ssh", "an https failure gets no ssh advice")
+
+	if os.Geteuid() != 0 {
+		cfg := filepath.Join(t.TempDir(), "gitconfig")
+		require.NoError(t, os.WriteFile(cfg, []byte("[core]\n\tsshCommand = ssh -i k\n"), 0o644))
+		require.NoError(t, os.Chmod(cfg, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+		t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+		err := run("https://example.invalid/o/bundle.git")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exit status 128", "git ran: the unreadable config did not block https")
+		err = run("git@example.invalid:o/bundle.git")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "a git configuration file cannot be read", "an ssh clone is blocked, in plain words")
+		assert.NotContains(t, err.Error(), hint, "git never ran: no ssh advice")
+	}
+}

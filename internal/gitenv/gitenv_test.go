@@ -361,3 +361,22 @@ func TestDanglingDotGitReasons(t *testing.T) {
 		})
 	}
 }
+
+func TestIsSSHTransport(t *testing.T) {
+	for url, want := range map[string]bool{
+		"ssh://git@h/o/r.git":    true,
+		"git+ssh://h/o/r":        true,
+		"ssh+git://h/o/r":        true,
+		"git@github.com:o/r.git": true,
+		"h:o/r":                  true,
+		"https://h/o/r.git":      false,
+		"http://h/o/r":           false,
+		"file:///tmp/r":          false,
+		"git://h/o/r":            false,
+		"/tmp/r":                 false,
+		"./rel/r":                false,
+		"../x:y/r":               false,
+	} {
+		assert.Equal(t, want, IsSSHTransport(url), url)
+	}
+}

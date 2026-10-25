@@ -43,7 +43,9 @@ func SetTimeout(d time.Duration) time.Duration {
 var ErrTimeout = errors.New("git did not answer")
 
 // ErrInterrupted is wrapped by the error Run returns for a Network git stopped
-// because ethos got SIGINT or SIGTERM.
+// because ethos got SIGINT, SIGTERM, SIGHUP or SIGQUIT. Whichever it was, ethos
+// sent SIGTERM to git's group (then SIGKILL to what stayed); the original
+// signal itself is not delivered to git.
 var ErrInterrupted = errors.New("git interrupted")
 
 // Output runs git with args — as `git -C dir args...` when dir is not "" —
@@ -93,10 +95,33 @@ type Spec struct {
 	// terminal nobody is watching. It runs in a session of its own, with no
 	// controlling terminal, so ssh's own prompts (host key, passphrase) fail at
 	// once too, even with the user's ssh; the session is also its own process
-	// group, so a timeout reaches its descendants (ssh, helpers). ethos forwards
-	// SIGINT, SIGTERM, SIGHUP and SIGQUIT to that group while it runs, so a
-	// Ctrl-C or a hangup does not leave a clone running.
+	// group, so a timeout reaches its descendants (ssh, helpers). While it runs
+	// ethos catches SIGINT, SIGTERM, SIGHUP and SIGQUIT; each makes ethos send
+	// SIGTERM to that group (and SIGKILL to what stays), so a Ctrl-C or a hangup
+	// does not leave a clone running. The caught signal itself is not delivered.
 	Network bool
+
+	// Remote is the URL a Network git talks to, when the caller knows it. The
+	// user's ssh choice (core.sshCommand) is looked up only for an ssh transport
+	// (IsSSHTransport): an https or file remote is not blocked, nor changed, by
+	// an ssh setting. "" looks it up, as for any remote that might use ssh.
+	Remote string
+}
+
+// IsSSHTransport reports whether git would reach url over ssh: an ssh://,
+// ssh+git:// or git+ssh:// URL, or the scp-like form [user@]host:path (a colon
+// before any slash).
+func IsSSHTransport(url string) bool {
+	if scheme, _, ok := strings.Cut(url, "://"); ok {
+		switch strings.ToLower(scheme) {
+		case "ssh", "ssh+git", "git+ssh":
+			return true
+		}
+		return false
+	}
+	colon := strings.Index(url, ":")
+	slash := strings.Index(url, "/")
+	return colon > 0 && (slash < 0 || colon < slash)
 }
 
 // networkArgs are prepended to a Network git's arguments.
@@ -132,7 +157,7 @@ func sshChosen(s Spec, env []string) (bool, error) {
 	}
 	_, absent, err := Read(probe, AbsentUnset)
 	if err != nil {
-		return false, fmt.Errorf("reading core.sshCommand: %w", err)
+		return false, fmt.Errorf("a git configuration file cannot be read, so core.sshCommand is unknown: %w", err)
 	}
 	return !absent, nil
 }
@@ -191,9 +216,12 @@ func Run(s Spec) ([]byte, error) {
 		if base == nil {
 			base = os.Environ()
 		}
-		chosen, cerr := sshChosen(s, base)
-		if cerr != nil {
-			return nil, cerr
+		chosen := false
+		if s.Remote == "" || IsSSHTransport(s.Remote) {
+			var cerr error
+			if chosen, cerr = sshChosen(s, base); cerr != nil {
+				return nil, cerr
+			}
 		}
 		cmd.Env = append(append([]string(nil), base...), networkEnv(chosen)...)
 		args = append(append([]string(nil), networkArgs...), s.Args...)
@@ -547,10 +575,10 @@ func DanglingDotGitEnv(dir string, env []string) error {
 	return nil
 }
 
-// userConfigEnv is Parsed without dropping GIT_CONFIG_PARAMETERS and
+// UserConfigEnv is Parsed without dropping GIT_CONFIG_PARAMETERS and
 // GIT_CONFIG_COUNT: those are the user's own config (`git -c`, the environment),
 // not a repository's, and a read of the user's config must see them.
-func userConfigEnv() []string {
+func UserConfigEnv() []string {
 	keep := map[string]bool{"GIT_CONFIG_PARAMETERS": true, "GIT_CONFIG_COUNT": true}
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
@@ -578,7 +606,7 @@ func Neutral() (dir string, env []string, cleanup func(), err error) {
 	if r, rerr := filepath.EvalSymlinks(dir); rerr == nil {
 		dir = r
 	}
-	env = append(userConfigEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
+	env = append(UserConfigEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
 	return dir, env, func() { _ = os.RemoveAll(dir) }, nil
 }
 
