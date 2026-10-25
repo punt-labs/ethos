@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,7 +22,7 @@ func touch(t *testing.T, root, rel string) {
 func TestCheckUnclassifiedFiles_NoRoot(t *testing.T) {
 	r := CheckUnclassifiedFiles("")
 	assert.Equal(t, "PASS", r.Status)
-	assert.Equal(t, "not in a repo", r.Detail)
+	assert.True(t, strings.HasPrefix(r.Detail, "not scanned: no repository root"), r.Detail)
 }
 
 func TestCheckUnclassifiedFiles_NoEthosTrees(t *testing.T) {
@@ -29,6 +30,7 @@ func TestCheckUnclassifiedFiles_NoEthosTrees(t *testing.T) {
 	touch(t, root, "README.md") // outside the two zones, never examined
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "PASS", r.Status)
+	assert.True(t, strings.HasPrefix(r.Detail, "not scanned: neither .punt-labs/ethos nor .punt-labs/local/ethos exists"), r.Detail)
 }
 
 func TestCheckUnclassifiedFiles_ClassifiedFilesPass(t *testing.T) {
@@ -45,6 +47,7 @@ func TestCheckUnclassifiedFiles_ClassifiedFilesPass(t *testing.T) {
 	}
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "PASS", r.Status, r.Detail)
+	assert.False(t, strings.HasPrefix(r.Detail, "not scanned"), "zones were walked: %s", r.Detail)
 }
 
 func TestCheckUnclassifiedFiles_WarnsAndListsUnmatched(t *testing.T) {
@@ -159,7 +162,7 @@ func TestCheckUnclassifiedFiles_SymlinkZoneIsReported(t *testing.T) {
 		}
 		r := CheckUnclassifiedFiles(root)
 		assert.Equal(t, "WARN", r.Status, target)
-		assert.Contains(t, r.Detail, ".punt-labs/ethos is a symlink; not scanned")
+		assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos is a symlink")
 	}
 }
 
@@ -173,7 +176,7 @@ func TestCheckUnclassifiedFiles_SymlinkInsideZoneIsReported(t *testing.T) {
 	}
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "WARN", r.Status)
-	assert.Contains(t, r.Detail, ".punt-labs/ethos/linked (symlink, not scanned)")
+	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos/linked is a symlink")
 	assert.NotContains(t, r.Detail, "bwk.yaml")
 }
 
@@ -254,4 +257,65 @@ func TestCheckUnclassifiedFiles_RelativeRoot(t *testing.T) {
 	assert.Equal(t, "WARN", r.Status, r.Detail)
 	assert.Contains(t, r.Detail, ".punt-labs/ethos/stray.bin")
 	assert.NotContains(t, r.Detail, "git did not resolve", "git answered for the absolute root")
+}
+
+// TestCheckUnclassifiedFiles_SymlinkedParentIsReported: a symlinked .punt-labs
+// (or .punt-labs/local) is followed by neither zone; the first symlink on the
+// way down is the one reported.
+func TestCheckUnclassifiedFiles_SymlinkedParentIsReported(t *testing.T) {
+	for _, tt := range []struct{ link, want string }{
+		{".punt-labs", ".punt-labs is a symlink"},
+		{".punt-labs/local", ".punt-labs/local is a symlink"},
+	} {
+		root := t.TempDir()
+		outside := t.TempDir()
+		touch(t, outside, "ethos/stray.bin")
+		touch(t, outside, "local/ethos/stray.bin")
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		if tt.link == ".punt-labs" {
+			require.NoError(t, os.Remove(filepath.Join(root, ".punt-labs")))
+		}
+		if err := os.Symlink(outside, filepath.Join(root, filepath.FromSlash(tt.link))); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		r := CheckUnclassifiedFiles(root)
+		assert.Equal(t, "WARN", r.Status, tt.link)
+		assert.Contains(t, r.Detail, "not scanned: "+tt.want, tt.link)
+		assert.NotContains(t, r.Detail, "stray.bin", "a file behind the link was read: %s", tt.link)
+		assert.NotContains(t, r.Detail, "match", "no file was scanned, so none is counted: %s", tt.link)
+	}
+}
+
+// TestCheckUnclassifiedFiles_CountsOnlyFiles: files, what was not scanned, and
+// the hooks-directory line are reported separately; only files are counted.
+func TestCheckUnclassifiedFiles_CountsOnlyFiles(t *testing.T) {
+	root := t.TempDir()
+	gitIn(t, root, "init", "-q")
+	gitIn(t, root, "config", "core.hooksPath", ".punt-labs/githooks")
+	touch(t, root, ".punt-labs/githooks/pre-commit")
+	touch(t, root, ".punt-labs/ethos/stray.bin")
+	other := t.TempDir()
+	if err := os.Symlink(other, filepath.Join(root, ".punt-labs", "ethos", "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "WARN", r.Status)
+	assert.Contains(t, r.Detail, "1 file matches no entry of the path-class table: .punt-labs/ethos/stray.bin")
+	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos/linked is a symlink")
+	assert.Contains(t, r.Detail, "core.hooksPath .punt-labs/githooks is inside .punt-labs")
+}
+
+// TestCheckUnclassifiedFiles_OnlySkippedItemsAreNotFiles: nothing unclassified,
+// one thing not scanned: no "files match" count at all.
+func TestCheckUnclassifiedFiles_OnlySkippedItemsAreNotFiles(t *testing.T) {
+	root := t.TempDir()
+	touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, ".punt-labs", "ethos", "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "WARN", r.Status)
+	assert.NotContains(t, r.Detail, "match")
+	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos/linked is a symlink")
 }
