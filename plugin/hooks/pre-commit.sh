@@ -26,6 +26,22 @@
 # runs (a later assignment would reset $?).
 _host_status=$?
 
+# _git runs git with every trace variable cleared and trace2 switched off by the
+# environment (which overrides a target set in the user's config): a trace on
+# stdout, from `trace2.normalTarget=/dev/stdout` or GIT_TRACE=/dev/stdout, would
+# otherwise become part of what the hook reads or writes.
+_git() {
+  (
+    for _v in $(env | sed -n 's/^\(GIT_TRACE[A-Za-z0-9_]*\)=.*/\1/p'); do
+      unset "$_v"
+    done
+    unset GIT_CURL_VERBOSE
+    GIT_TRACE=0 GIT_TRACE2=0 GIT_TRACE2_PERF=0 GIT_TRACE2_EVENT=0
+    export GIT_TRACE GIT_TRACE2 GIT_TRACE2_PERF GIT_TRACE2_EVENT
+    exec git "$@"
+  )
+}
+
 # §2.7 marker gate: ethos does no commit-time work unless it is enabled in
 # this repo. REPO_ROOT is resolved inside the hook (worktree-safe: a worktree
 # resolves to its own work-tree root, where its .punt-labs/ethos/ lives), not
@@ -44,9 +60,9 @@ _host_status=$?
 # repository must not be blocked by a full or read-only temp directory.
 _revparse_err=$(mktemp 2>/dev/null) || _revparse_err=""
 if [ -n "$_revparse_err" ]; then
-  REPO_ROOT=$(git rev-parse --show-toplevel 2>"$_revparse_err")
+  REPO_ROOT=$(_git rev-parse --show-toplevel 2>"$_revparse_err")
 else
-  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  REPO_ROOT=$(_git rev-parse --show-toplevel 2>/dev/null)
 fi
 _revparse_status=$?
 if [ "$_revparse_status" -ne 0 ]; then
@@ -54,12 +70,26 @@ if [ "$_revparse_status" -ne 0 ]; then
     _revparse_msg=$(cat "$_revparse_err")
     rm -f "$_revparse_err"
   else
-    _revparse_msg=$(git rev-parse --show-toplevel 2>&1 >/dev/null)
+    _revparse_msg=$(_git rev-parse --show-toplevel 2>&1 >/dev/null)
   fi
   printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$_revparse_msg" >&2
   exit 1
 fi
 [ -n "$_revparse_err" ] && rm -f "$_revparse_err"
+# The root must be one absolute line naming a directory; anything else (a trace
+# line that got through, a relative path) is not a root to trust.
+case "$REPO_ROOT" in
+/*) ;;
+*) _revparse_bad=1 ;;
+esac
+case "$REPO_ROOT" in
+*"
+"*) _revparse_bad=1 ;;
+esac
+if [ -n "${_revparse_bad:-}" ] || [ ! -d "$REPO_ROOT" ]; then
+  printf 'ethos: pre-commit: git rev-parse --show-toplevel did not print one absolute directory: %s\n' "$REPO_ROOT" >&2
+  exit 1
+fi
 # "Marker absent" means only that every component of the path exists and the
 # marker file does not. A .punt-labs or .punt-labs/ethos that is a dangling
 # link, is not a directory, or cannot be searched is a store ethos cannot read:

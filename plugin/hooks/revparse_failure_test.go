@@ -198,11 +198,20 @@ echo "$f"
 // ready to make, and a PATH that holds git and no ethos.
 func realRepoWithHooks(t *testing.T) (repo string, run func(args ...string) (string, error)) {
 	t.Helper()
+	repo, _, run = newHookRepo(t)
+	return repo, run
+}
+
+// newHookRepo is realRepoWithHooks that also returns the HOME the hooks run
+// under and takes extra environment for git (and so for the hooks).
+func newHookRepo(t *testing.T, extraEnv ...string) (repo, home string, run func(args ...string) (string, error)) {
+	t.Helper()
 	repo = t.TempDir()
-	home := t.TempDir()
+	home = t.TempDir()
 	env := append(testhelpers.GitEnv(),
 		"HOME="+home, "PATH=/usr/bin:/bin", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x")
+	env = append(env, extraEnv...)
 	run = func(args ...string) (string, error) {
 		c := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-C", repo}, args...)...)
 		c.Env = env
@@ -217,7 +226,7 @@ func realRepoWithHooks(t *testing.T) (repo string, run func(args ...string) (str
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "hooks", h), body, 0o755))
 	}
-	return repo, run
+	return repo, home, run
 }
 
 // A .punt-labs or .punt-labs/ethos that git cannot follow is not "ethos is
@@ -319,4 +328,42 @@ func TestHooksBlockWhenEnabledAndEthosMissing(t *testing.T) {
 	out, err = run("merge", "--no-ff", "-m", "merge", "side")
 	require.Error(t, err, "the merge is blocked by commit-msg: %s", out)
 	assert.Contains(t, out, "commit-msg: ethos is enabled here but not installed; the commit is not sealed")
+}
+
+// A trace on stdout (trace2.normalTarget=/dev/stdout in the user's config, or
+// GIT_TRACE=/dev/stdout) is not part of the repository root or of the message
+// the hooks rewrite: the seal runs, and the trailer lands intact.
+func TestHooksIgnoreATraceOnStdout(t *testing.T) {
+	for name, setup := range map[string]struct {
+		env []string
+		cfg string
+	}{
+		"trace2 from config": {nil, "[trace2]\n\tnormalTarget = /dev/stdout\n\teventTarget = /dev/stdout\n"},
+		"GIT_TRACE":          {[]string{"GIT_TRACE=/dev/stdout", "GIT_TRACE2_PERF=/dev/stdout"}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo, home, run := newHookRepo(t, setup.env...)
+			if setup.cfg != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(setup.cfg), 0o644))
+			}
+			marker := filepath.Join(t.TempDir(), "sealed")
+			ethos := "#!/bin/sh\nif [ \"$1\" = audit ]; then echo sealed >> '" + marker + "'; fi\nif [ \"$1\" = hook ]; then echo MISSION_ID=m-2026-01-01-001; fi\nexit 0\n"
+			require.NoError(t, os.MkdirAll(filepath.Join(home, ".local", "bin"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".local", "bin", "ethos"), []byte(ethos), 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644))
+			_, err := run("add", "a.txt")
+			require.NoError(t, err)
+			out, err := run("commit", "-q", "-m", "subject")
+			require.NoError(t, err, out)
+			_, serr := os.Stat(marker)
+			assert.NoError(t, serr, "the seal ran")
+			msg, err := run("log", "-1", "--format=%B")
+			require.NoError(t, err)
+			// (The log command itself traces here; the message is the block it prints,
+			// and it must be the clean subject plus trailer, with no trace inside.)
+			assert.Contains(t, msg, "subject\n\nMission: m-2026-01-01-001\n")
+		})
+	}
 }
