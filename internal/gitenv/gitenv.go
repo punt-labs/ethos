@@ -90,10 +90,12 @@ type Spec struct {
 	// askpass program, credential.interactive=never, and ssh in BatchMode unless
 	// the user chose an ssh (GIT_SSH_COMMAND, GIT_SSH or core.sshCommand), whose
 	// choice is kept. A credential prompt fails at once instead of waiting on a
-	// terminal nobody is watching. It runs in its own process group like every
-	// git, so a timeout reaches its descendants (ssh, helpers), and ethos
-	// forwards SIGINT and SIGTERM to that group while it runs, so a Ctrl-C does
-	// not leave a clone running.
+	// terminal nobody is watching. It runs in a session of its own, with no
+	// controlling terminal, so ssh's own prompts (host key, passphrase) fail at
+	// once too, even with the user's ssh; the session is also its own process
+	// group, so a timeout reaches its descendants (ssh, helpers). ethos forwards
+	// SIGINT, SIGTERM, SIGHUP and SIGQUIT to that group while it runs, so a
+	// Ctrl-C or a hangup does not leave a clone running.
 	Network bool
 }
 
@@ -156,13 +158,15 @@ func Run(s Spec) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	// A Network git is stopped, with its group, when ethos is interrupted:
-	// ethos catches SIGINT and SIGTERM while it runs, cancels the command, and
+	// ethos catches SIGINT, SIGTERM, SIGHUP and SIGQUIT while it runs, cancels the command, and
 	// returns ErrInterrupted. It runs in its own process group, which the
-	// terminal's Ctrl-C does not reach, so nothing else would.
+	// terminal's Ctrl-C or hangup does not reach (it is also a session of its
+	// own, so a hangup of ethos's terminal does not reach it), so nothing else
+	// would.
 	var interrupted atomic.Bool
 	if s.Network {
 		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 		done := make(chan struct{})
 		defer func() { signal.Stop(sig); close(done) }()
 		go func() {
@@ -202,7 +206,7 @@ func Run(s Spec) ([]byte, error) {
 	// holding stdout does not stall the kill either. On Windows there are no
 	// groups and no SIGTERM: the kill is immediate, and only git dies.
 	group := true
-	inOwnGroup(cmd)
+	inOwnGroup(cmd, s.Network)
 	cmd.Cancel = func() error { return terminate(cmd, group) }
 	cmd.WaitDelay = time.Second
 	var out []byte

@@ -11,7 +11,15 @@ import (
 
 // inOwnGroup puts git in its own process group, so a timeout reaches what git
 // started (a clean or smudge filter, a credential helper) and not git alone.
-func inOwnGroup(cmd *exec.Cmd) {
+// With session set it gets its own session too (Setsid, which also makes it a
+// group leader): it then has no controlling terminal, and a prompt of ssh's own
+// (an unknown host key, a passphrase for a key the agent lacks) fails at once
+// instead of waiting on a terminal nobody is watching.
+func inOwnGroup(cmd *exec.Cmd, session bool) {
+	if session {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		return
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
