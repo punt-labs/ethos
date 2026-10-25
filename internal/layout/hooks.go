@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -23,21 +24,22 @@ func HookNames() []string { return []string{"pre-commit", "commit-msg"} }
 // directory rather than from the static Table. A path that cannot be resolved
 // for a reason other than not existing is an error.
 func HookEntries(repoRoot, hooksDir string) ([]Entry, error) {
-	rel, ok, err := relInTree(repoRoot, hooksDir)
+	h, ok, err := locate(repoRoot, hooksDir)
 	if err != nil || !ok {
 		return nil, err
 	}
 	// .git is not tracked; .punt-labs is ethos's own zones, whose classes a
 	// source hook entry would overlap.
 	for _, z := range []string{".git", ".punt-labs"} {
-		if underOrEqual(rel, z) {
-			return nil, nil
+		in, err := h.under(z)
+		if err != nil || in {
+			return nil, err
 		}
 	}
 	names := HookNames()
 	out := make([]Entry, 0, len(names))
 	for _, n := range names {
-		out = append(out, Entry{Pattern: escape(path.Join(rel, n)), Class: Source})
+		out = append(out, Entry{Pattern: escape(path.Join(h.rel, n)), Class: Source})
 	}
 	return out, nil
 }
@@ -46,14 +48,18 @@ func HookEntries(repoRoot, hooksDir string) ([]Entry, error) {
 // `ethos enable` writes into hooksDir, when hooksDir is .punt-labs/ or inside
 // it. No table entry claims those files, so a caller can report them.
 func PuntLabsHookPaths(repoRoot, hooksDir string) ([]string, error) {
-	rel, ok, err := relInTree(repoRoot, hooksDir)
-	if err != nil || !ok || !underOrEqual(rel, ".punt-labs") {
+	h, ok, err := locate(repoRoot, hooksDir)
+	if err != nil || !ok {
+		return nil, err
+	}
+	in, err := h.under(".punt-labs")
+	if err != nil || !in {
 		return nil, err
 	}
 	names := HookNames()
 	out := make([]string, 0, len(names))
 	for _, n := range names {
-		out = append(out, path.Join(rel, n))
+		out = append(out, path.Join(h.rel, n))
 	}
 	return out, nil
 }
@@ -77,22 +83,69 @@ func TableFor(repoRoot, hooksDir string) ([]Entry, error) {
 	return append(out, fallback...), nil
 }
 
-// relInTree returns hooksDir as a slash path relative to repoRoot, and whether
-// it lies inside the tree.
-func relInTree(repoRoot, hooksDir string) (string, bool, error) {
+// hooksLoc is a hooks directory that lies inside the working tree: root and
+// dir are symlink-resolved, rel is dir as a slash path relative to root.
+type hooksLoc struct{ root, dir, rel string }
+
+// locate returns where hooksDir lies relative to repoRoot, and whether it is
+// inside the tree. A path that cannot be related to the root is an error, not
+// a directory outside the tree.
+func locate(repoRoot, hooksDir string) (hooksLoc, bool, error) {
 	root, err := evalPath(repoRoot)
 	if err != nil {
-		return "", false, err
+		return hooksLoc{}, false, err
 	}
 	dir, err := evalPath(hooksDir)
 	if err != nil {
-		return "", false, err
+		return hooksLoc{}, false, err
 	}
 	rel, err := filepath.Rel(root, dir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false, nil
+	if err != nil {
+		return hooksLoc{}, false, fmt.Errorf("relating hooks directory %s to repository root %s: %w", dir, root, err)
 	}
-	return filepath.ToSlash(rel), true, nil
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return hooksLoc{}, false, nil
+	}
+	return hooksLoc{root: root, dir: dir, rel: filepath.ToSlash(rel)}, true, nil
+}
+
+// under reports whether the hooks directory is the top-level directory zone of
+// the working tree, or beneath it. It compares by name and by file identity: on
+// a case-insensitive filesystem .Punt-Labs is .punt-labs, and a spelling
+// comparison would miss it.
+func (h hooksLoc) under(zone string) (bool, error) {
+	if underOrEqual(h.rel, zone) {
+		return true, nil
+	}
+	return sameOrUnder(h.root, h.dir, zone)
+}
+
+// sameOrUnder reports whether dir, or an ancestor of dir below root, is the
+// same file as root/zone. A zone that does not exist has no identity to
+// match; the caller's name comparison is all there is.
+func sameOrUnder(root, dir, zone string) (bool, error) {
+	zi, err := os.Stat(filepath.Join(root, zone))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking %s: %w", filepath.Join(root, zone), err)
+	}
+	for cur := dir; cur != root; cur = filepath.Dir(cur) {
+		fi, err := os.Stat(cur)
+		switch {
+		case err == nil:
+			if os.SameFile(fi, zi) {
+				return true, nil
+			}
+		case !errors.Is(err, fs.ErrNotExist):
+			return false, fmt.Errorf("checking %s: %w", cur, err)
+		}
+		if filepath.Dir(cur) == cur {
+			break
+		}
+	}
+	return false, nil
 }
 
 // underOrEqual reports whether rel is dir or a path beneath it.
