@@ -54,6 +54,8 @@ func (l Lookup) Remedy() string {
 	switch {
 	case errors.Is(l.cause, exec.ErrNotFound):
 		return "install git"
+	case errors.Is(l.cause, gitenv.ErrTimeout):
+		return "find what blocks git there (a FIFO or a special file under .git, or a hung filesystem) and repair it"
 	case strings.Contains(msg, "dubious ownership") || strings.Contains(msg, "safe.directory"):
 		return "fix safe.directory"
 	case errors.As(l.cause, &mismatch):
@@ -216,11 +218,10 @@ func manualHooksDir(repoRoot string) string {
 // stderr is part of the error: "not a git repository" and "dubious ownership"
 // are what the user needs to see, not "exit status 128". git runs in the C
 // locale, so Remedy can match those words, and without an exported GIT_DIR,
-// so it answers for repoRoot (gitenv).
+// so it answers for repoRoot. A git that does not answer within
+// gitenv.Timeout is stopped and returned as gitenv.ErrTimeout (gitenv).
 func gitOut(repoRoot string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", repoRoot}, args...)...)
-	cmd.Env = gitenv.Parsed()
-	out, err := cmd.Output()
+	out, err := gitenv.Output(repoRoot, "git", args...)
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {

@@ -3,10 +3,15 @@
 package githook
 
 import (
+	"errors"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 // hooksDirWithin runs HooksDir(dir) and fails the test if it does not return
@@ -58,5 +63,40 @@ func TestManualHooksDirFIFOCommondir(t *testing.T) {
 	l := hooksDirWithin(t, dir)
 	if !l.Degraded {
 		t.Errorf("lookup without git is not degraded: %+v", l)
+	}
+}
+
+// With git on PATH, git itself blocks reading a FIFO commondir. The lookup
+// stops it after gitenv.Timeout and reports a degraded lookup whose reason
+// names git and the directory: Verified refuses it, nothing hangs.
+func TestHooksDirGitTimeoutIsARefusal(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	admin := filepath.Join(t.TempDir(), "admin")
+	makeGitDir(t, admin)
+	if err := syscall.Mkfifo(filepath.Join(admin, "commondir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, ".git"), "gitdir: "+admin+"\n")
+	done := make(chan Lookup, 1)
+	go func() { done <- HooksDir(dir) }()
+	var l Lookup
+	select {
+	case l = <-done:
+	case <-time.After(gitenv.Timeout + 10*time.Second):
+		t.Fatal("HooksDir did not return: git was not stopped")
+	}
+	if _, err := l.Verified(); err == nil {
+		t.Fatalf("a timed-out lookup was verified: %+v", l)
+	}
+	if !errors.Is(l.cause, gitenv.ErrTimeout) {
+		t.Errorf("cause = %v, want gitenv.ErrTimeout", l.cause)
+	}
+	for _, want := range []string{"git", dir, "did not answer"} {
+		if !strings.Contains(l.Explain(), want) {
+			t.Errorf("Explain() = %q, want it to name %q", l.Explain(), want)
+		}
 	}
 }

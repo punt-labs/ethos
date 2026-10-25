@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,4 +136,59 @@ func TestHandGitDirs(t *testing.T) {
 	_, _, err = HandGitDirs(empty)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a repository")
+}
+
+// within runs fn and fails the test if it has not returned by limit.
+func within(t *testing.T, limit time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); fn() }()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		t.Fatalf("still running after %v", limit)
+	}
+}
+
+// git itself blocks reading a FIFO commondir. Its command is stopped after
+// gitenv.Timeout and the answer is a refusal naming git and the directory:
+// never a hang, never the hand rules in its place. IsWorkingTree reports the
+// same refusal rather than "not a working tree".
+func TestGitThatHangsIsARefusal(t *testing.T) {
+	requireGit(t)
+	inner, _ := shapeIn(t, gitShape{func(t *testing.T, inner string) {
+		t.Helper()
+		admin := filepath.Join(t.TempDir(), "admin")
+		makeGitDirAt(t, admin)
+		require.NoError(t, syscall.Mkfifo(filepath.Join(admin, "commondir"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(inner, ".git"), []byte("gitdir: "+admin+"\n"), 0o644))
+	}, handError})
+	var root string
+	var err, wtErr error
+	within(t, 2*gitenv.Timeout+10*time.Second, func() {
+		captureStderr(t, func() { root, err = LocateRepoRoot() })
+		_, wtErr = IsWorkingTree(inner)
+	})
+	require.ErrorIs(t, err, gitenv.ErrTimeout)
+	assert.NotErrorIs(t, err, ErrNotInRepo)
+	assert.Empty(t, root)
+	assert.Contains(t, err.Error(), "git")
+	assert.Contains(t, err.Error(), inner)
+	assert.ErrorIs(t, wtErr, gitenv.ErrTimeout)
+}
+
+// A git whose --version does not answer is a refusal too, not a silent
+// switch to the hand rules.
+func TestGitProbeThatHangsIsARefusal(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	fakeGit(t, "exec "+sleep+" 60\n")
+	dir := t.TempDir()
+	testhelpers.MakeGitDir(t, dir)
+	t.Chdir(dir)
+	within(t, gitenv.Timeout+10*time.Second, func() {
+		captureStderr(t, func() { _, err = LocateRepoRoot() })
+	})
+	require.ErrorIs(t, err, gitenv.ErrTimeout)
+	assert.Contains(t, err.Error(), "--version")
 }

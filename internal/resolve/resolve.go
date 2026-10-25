@@ -839,7 +839,10 @@ func locateCwd() (location, error) {
 // PATH, git is the authority (gitLocate); without one the hand rules decide
 // (handLocate).
 func locate(start string) located {
-	git := usableGit()
+	git, err := usableGit()
+	if err != nil {
+		return located{err: err} // a refusal: never cached
+	}
 	key := git + "\x00" + start
 	if v, ok := locations.Load(key); ok {
 		if c := v.(cachedLocation); locateNow().Sub(c.at) < locateTTL {
@@ -874,30 +877,34 @@ var probes sync.Map
 
 // usableGit returns the git on PATH when it runs, else "". A git that is on
 // PATH but does not run (the macOS xcrun shim without the command line tools)
-// is noted once; the hand rules decide in its place.
-func usableGit() string {
+// is noted once; the hand rules decide in its place. A git that does not
+// answer within gitenv.Timeout is an error: a refusal, not a reason to guess
+// by the hand rules.
+func usableGit() (string, error) {
 	git, err := exec.LookPath("git")
 	if err != nil {
-		return ""
+		return "", nil
 	}
-	if p := probeGit(git); p.err != nil {
+	p := probeGit(git)
+	switch {
+	case errors.Is(p.err, gitenv.ErrTimeout):
+		return "", fmt.Errorf("finding the repository: %w", p.err)
+	case p.err != nil:
 		warnOnce("ethos: warning: %s does not run (%v); finding the repository by the hand rules", git, p.err)
-		return ""
+		return "", nil
 	}
-	return git
+	return git, nil
 }
 
 // probeGit runs `git --version` for git and remembers the answer: a success
-// for good, a failure for locateTTL.
+// for good, a failure for locateTTL, a timeout not at all.
 func probeGit(git string) gitProbe {
 	if v, ok := probes.Load(git); ok {
 		if p := v.(gitProbe); p.err == nil || locateNow().Sub(p.at) < locateTTL {
 			return p
 		}
 	}
-	cmd := exec.Command(git, "--version")
-	cmd.Env = gitenv.Parsed()
-	out, err := cmd.Output()
+	out, err := gitenv.Output("", git, "--version")
 	p := gitProbe{version: strings.TrimSpace(string(out)), at: locateNow()}
 	if err != nil {
 		var ee *exec.ExitError
@@ -906,7 +913,9 @@ func probeGit(git string) gitProbe {
 		}
 		p.err = err
 	}
-	probes.Store(git, p)
+	if !errors.Is(p.err, gitenv.ErrTimeout) {
+		probes.Store(git, p)
+	}
 	return p
 }
 
@@ -922,9 +931,10 @@ func probeGit(git string) gitProbe {
 // answer that is not three paths, from a git older than those options, falls
 // back to the hand rules.
 func gitLocate(git, start string) located {
-	cmd := exec.Command(git, "-C", start, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir")
-	cmd.Env = gitenv.Parsed()
-	out, err := cmd.Output()
+	out, err := gitenv.Output(start, git, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir")
+	if errors.Is(err, gitenv.ErrTimeout) {
+		return located{err: fmt.Errorf("finding the repository for %s: %w", start, err)}
+	}
 	if err != nil {
 		return located{err: gitLocateError(start, err)}
 	}
@@ -1217,9 +1227,7 @@ func configBare(git, common string) (bool, error) {
 		return handConfigBare(common)
 	}
 	cfg := filepath.Join(common, "config")
-	cmd := exec.Command(git, "config", "--file", cfg, "--bool", "core.bare")
-	cmd.Env = gitenv.Parsed()
-	out, err := cmd.Output()
+	out, err := gitenv.Output("", git, "config", "--file", cfg, "--bool", "core.bare")
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
@@ -1529,7 +1537,11 @@ func IsWorkingTree(dir string) (bool, error) {
 	} else if err != nil {
 		return false, fmt.Errorf("examining %s: %w", dot, err)
 	}
-	if usableGit() == "" {
+	git, err := usableGit()
+	if err != nil {
+		return false, err
+	}
+	if git == "" {
 		g, _, err := examineGit(dot)
 		if errors.Is(err, errInvalidGit) {
 			return false, nil
@@ -1537,6 +1549,9 @@ func IsWorkingTree(dir string) (bool, error) {
 		return g.dir != "", err
 	}
 	r := locate(dir)
+	if errors.Is(r.err, gitenv.ErrTimeout) {
+		return false, r.err
+	}
 	if r.err != nil {
 		return false, checkReadable(dot) // git refuses it: not a working tree
 	}

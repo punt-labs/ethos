@@ -341,19 +341,24 @@ exit 1
 		require.NoError(t, err)
 		return strings.Count(string(data), "x")
 	}
-	captureStderr(t, func() { assert.Empty(t, usableGit()) })
+	gitOnPath := func() string {
+		g, err := usableGit()
+		require.NoError(t, err)
+		return g
+	}
+	captureStderr(t, func() { assert.Empty(t, gitOnPath()) })
 	require.NoError(t, os.WriteFile(ok, nil, 0o644))
 
 	clock = clock.Add(locateTTL - time.Second)
-	captureStderr(t, func() { assert.Empty(t, usableGit(), "within the TTL the failure stands") })
+	captureStderr(t, func() { assert.Empty(t, gitOnPath(), "within the TTL the failure stands") })
 	assert.Equal(t, 1, runs())
 
 	clock = clock.Add(2 * time.Second)
-	assert.NotEmpty(t, usableGit(), "past the TTL the probe runs again")
+	assert.NotEmpty(t, gitOnPath(), "past the TTL the probe runs again")
 	assert.Equal(t, 2, runs())
 
 	clock = clock.Add(10 * locateTTL)
-	assert.NotEmpty(t, usableGit())
+	assert.NotEmpty(t, gitOnPath())
 	assert.Equal(t, 2, runs(), "a successful probe is kept")
 }
 
