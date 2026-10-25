@@ -36,16 +36,27 @@ _host_status=$?
 # git's stderr goes to a file and is shown only on failure: a warning or
 # GIT_TRACE output on a rev-parse that succeeded must not become part of the
 # repository root, nor make the hook skip the seal.
-_revparse_err=$(mktemp 2>/dev/null) || {
-  printf 'ethos: commit-msg: mktemp failed; cannot run git rev-parse\n' >&2
-  exit 1
-}
-if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>"$_revparse_err"); then
-  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed: %s\n' "$(cat "$_revparse_err")" >&2
-  rm -f "$_revparse_err"
+# A mktemp that fails does not block: rev-parse then runs without the capture
+# file, and is run again to show git's error only if it failed. A dormant
+# repository must not be blocked by a full or read-only temp directory.
+_revparse_err=$(mktemp 2>/dev/null) || _revparse_err=""
+if [ -n "$_revparse_err" ]; then
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>"$_revparse_err")
+else
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+fi
+_revparse_status=$?
+if [ "$_revparse_status" -ne 0 ]; then
+  if [ -n "$_revparse_err" ]; then
+    _revparse_msg=$(cat "$_revparse_err")
+    rm -f "$_revparse_err"
+  else
+    _revparse_msg=$(git rev-parse --show-toplevel 2>&1 >/dev/null)
+  fi
+  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed: %s\n' "$_revparse_msg" >&2
   exit 1
 fi
-rm -f "$_revparse_err"
+[ -n "$_revparse_err" ] && rm -f "$_revparse_err"
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
 
 [ -z "$1" ] && exit "$_host_status"
@@ -129,6 +140,12 @@ add_trailer() {
     tmp=$(mktemp "${msg_file}.XXXXXX" 2>/dev/null)
     if [ -z "$tmp" ]; then
       printf 'ethos: commit-msg: mktemp failed; using plain append\n' >&2
+    # The error file is made first, so a redirect that fails is reported as
+    # one and not as git interpret-trailers failing with no message. (`true`,
+    # not `:`: a failed redirect on a special builtin ends a POSIX shell.)
+    elif ! { true > "$tmp.err"; } 2>/dev/null; then
+      printf 'ethos: commit-msg: cannot create %s.err; using plain append\n' "$tmp" >&2
+      rm -f "$tmp"
     # git interpret-trailers is not bounded here: it runs inside git's own
     # commit, on the message file only, never on the repository.
     elif git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp" 2>"$tmp.err"; then

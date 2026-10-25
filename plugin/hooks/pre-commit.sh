@@ -8,14 +8,15 @@
 # as a blocking exit 2.
 #
 # Exit status on the non-failure paths (success, nothing-to-seal, gitlink
-# deferral, ethos not installed) is the captured host status $_host_status:
+# deferral) is the captured host status $_host_status:
 # 0 when this runs standalone (git starts the hook with $? = 0), or the host
 # hook's fall-through status when this is chained after a foreign hook. So a
 # clean seal is transparent — it never turns a host's failing fall-through
 # into a passing commit, and never blocks a commit the host would have passed.
 #
-# Passthrough when ethos is not installed — a missing binary must never
-# block a commit in an unrelated repo.
+# Passthrough when ethos is not enabled in the repo — a missing binary must
+# never block a commit in an unrelated repo. Where ethos IS enabled, a missing
+# binary blocks: the commit would carry unsealed audit lines.
 
 # Preserve a chained host hook's fall-through status. When install.sh appends
 # this script after a foreign hook's content, $? here is that hook's last
@@ -38,16 +39,27 @@ _host_status=$?
 # git's stderr goes to a file and is shown only on failure: a warning or
 # GIT_TRACE output on a rev-parse that succeeded must not become part of the
 # repository root, nor make the hook skip the seal.
-_revparse_err=$(mktemp 2>/dev/null) || {
-  printf 'ethos: pre-commit: mktemp failed; cannot run git rev-parse\n' >&2
-  exit 1
-}
-if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>"$_revparse_err"); then
-  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$(cat "$_revparse_err")" >&2
-  rm -f "$_revparse_err"
+# A mktemp that fails does not block: rev-parse then runs without the capture
+# file, and is run again to show git's error only if it failed. A dormant
+# repository must not be blocked by a full or read-only temp directory.
+_revparse_err=$(mktemp 2>/dev/null) || _revparse_err=""
+if [ -n "$_revparse_err" ]; then
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>"$_revparse_err")
+else
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+fi
+_revparse_status=$?
+if [ "$_revparse_status" -ne 0 ]; then
+  if [ -n "$_revparse_err" ]; then
+    _revparse_msg=$(cat "$_revparse_err")
+    rm -f "$_revparse_err"
+  else
+    _revparse_msg=$(git rev-parse --show-toplevel 2>&1 >/dev/null)
+  fi
+  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$_revparse_msg" >&2
   exit 1
 fi
-rm -f "$_revparse_err"
+[ -n "$_revparse_err" ] && rm -f "$_revparse_err"
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
 
 # Resolve the ethos binary: PATH first, then the default install dir.
@@ -57,7 +69,10 @@ if command -v ethos >/dev/null 2>&1; then
 elif [ -x "$HOME/.local/bin/ethos" ]; then
   ethos_bin="$HOME/.local/bin/ethos"
 else
-  exit "$_host_status"
+  # Enabled here, and no binary: the commit would carry audit lines that were
+  # never sealed. Say so and block, rather than pass quietly.
+  printf 'ethos: pre-commit: ethos is enabled here but not installed; the commit is not sealed\n' >&2
+  exit 1
 fi
 
 # `ethos audit seal` is fail-closed: exit 2 on an I/O error, a malformed or
