@@ -1283,3 +1283,26 @@ writing_style: concise-quantified
 	assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT",
 		"the error must name the refused override")
 }
+
+// setup with no email in --file and an unreadable git config names the read
+// error, not "no email": the address may be in the file it could not read.
+func TestSetup_UnreadableGitConfigNamesTheReadError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	_, repo := setupTestEnv(t)
+	gitCmd(t, repo, "config", "--unset", "user.email")
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[user]\n\temail = hidden@example.com\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+
+	setupPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, setupPath, "name: No Email\nhandle: no-email\nsolo: true\n")
+	_, _, err := execHandler(t, "setup", "--file", setupPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), cfg)
+	assert.Contains(t, err.Error(), "reading git user.email failed")
+	assert.NotContains(t, err.Error(), "no email — set git user.email")
+}
