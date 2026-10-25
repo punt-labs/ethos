@@ -84,13 +84,12 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
 	// guard stays on the checkout (repoRoot) (#370).
-	agent, ok := CheckDefaultAgent(repoRoot, storeRoot)
-	results = append(results, passFail("Default agent", agent, ok))
+	results = append(results, checkout(defaultAgentResult(repoRoot, storeRoot)))
 
 	dup, ok := CheckDuplicateFields(s, ss)
 	results = append(results, passFail("Duplicate fields", dup, ok))
 
-	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))
+	results = append(results, checkout(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s)))
 	results = append(results, checkout(CheckSealHook(repoRoot)))
 
 	// ethos-bfml/ethos-hy40: the trailer hook gets the same presence check
@@ -111,7 +110,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// reads the checkout (repoRoot), because the index and .gitignore
 	// belong to the tree being committed.
 	results = append(results, CheckRepoSetComplete(s, storeRoot))
-	results = append(results, CheckLocalExtNotTracked(repoRoot))
+	results = append(results, checkout(CheckLocalExtNotTracked(repoRoot)))
 	results = append(results, CheckExtCredentialNames(s))
 
 	// DES-072: hand-edited mission files read as machine-written and
@@ -138,6 +137,12 @@ func passFail(name, detail string, ok bool) Result {
 		status = "FAIL"
 	}
 	return Result{Name: name, Status: status, Detail: detail}
+}
+
+// defaultAgentResult is CheckDefaultAgent as a Result.
+func defaultAgentResult(repoRoot, storeRoot string) Result {
+	detail, ok := CheckDefaultAgent(repoRoot, storeRoot)
+	return passFail("Default agent", detail, ok)
 }
 
 // AllPassed returns true when every result passed.
@@ -372,7 +377,9 @@ func CheckSealHook(repoRoot string) Result { return checkHookPresence(repoRoot, 
 func CheckTrailerHook(repoRoot string) Result { return checkHookPresence(repoRoot, trailerHookSpec) }
 
 // checkHookPresence reports on spec's hook, keyed on the enabled marker
-// (§2.11). Four states:
+// (§2.11). Four states, each resolved against the hooks directory git itself
+// names; when git cannot name it (a degraded lookup) an enabled repo is a FAIL
+// ("cannot verify hooks") and a dormant one a PASS carrying the reason:
 //
 //   - Enabled (marker present): FAIL when the hook is missing or inactive;
 //     PASS when it carries an active call, proven by executing it
@@ -409,9 +416,14 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	lk := githook.HooksDir(repoRoot)
 	// A degraded lookup did not read core.hooksPath: the directory it guessed
 	// may not be the one git runs, so a verdict on its files would be a guess.
+	// An enabled repo must not read green on a guess (its commits may be
+	// unsealed); a dormant one has nothing to verify and carries the note.
 	dir, lkErr := lk.Verified()
 	if lkErr != nil {
-		return Result{Name: name, Status: "WARN", Detail: lkErr.Error()}
+		if markerPresent {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot verify hooks: %s; install git", lk.Reason)}
+		}
+		return Result{Name: name, Status: "PASS", Detail: "not enabled here (" + lkErr.Error() + ")"}
 	}
 	hooksDirWarnings := lk.Warnings
 	// A diverted core.hooksPath (inside the work tree, or outside the repo

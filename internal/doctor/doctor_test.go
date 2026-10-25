@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -458,7 +462,7 @@ func TestCheckSealHook(t *testing.T) {
 	// that documented state. No `exec.LookPath("git")` skip: the whole
 	// point is that a dormant repo must PASS even when the sandbox
 	// couldn't have run at all.
-	t.Run("dormant: no git on PATH is WARN unverified — execution never attempted (S2/P1)", func(t *testing.T) {
+	t.Run("dormant: no git on PATH is PASS with the unverified note — execution never attempted (S2/P1)", func(t *testing.T) {
 		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
@@ -466,11 +470,11 @@ func TestCheckSealHook(t *testing.T) {
 
 		t.Setenv("PATH", t.TempDir()) // no git anywhere on PATH
 		r := CheckSealHook(dir)
-		// The degraded hooks-dir lookup is named and no verdict is given, but it
-		// never fails a dormant repo.
-		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
-		assert.True(t, r.Passed(), "an unverified hooks directory must not gate doctor's exit status")
-		assert.True(t, strings.HasPrefix(r.Detail, "hooks directory not verified:"), r.Detail)
+		// The degraded hooks-dir lookup is named as a note, and it never fails a
+		// dormant repo.
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.True(t, strings.HasPrefix(r.Detail, "not enabled here"), r.Detail)
+		assert.Contains(t, r.Detail, "hooks directory not verified:")
 	})
 
 	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
@@ -911,16 +915,21 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("gitdir file redirects hooks path", func(t *testing.T) {
-		// A submodule .git file points directly at a dir with hooks/ and
-		// no commondir — the hooks dir is target/hooks.
-		real := t.TempDir()
+		// A .git file points directly at a dir with hooks/ and no commondir
+		// (git init --separate-git-dir) — the hooks dir is target/hooks.
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		real := filepath.Join(t.TempDir(), "gitdir")
+		wt := t.TempDir()
+		cmd := exec.Command("git", "init", "-q", "--separate-git-dir", real, wt)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
 		hooks := filepath.Join(real, "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
 			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
-		wt := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
-			[]byte("gitdir: "+real+"\n"), 0o644))
 		mark(t, wt)
 		r := CheckSealHook(wt)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -952,10 +961,10 @@ func TestCheckSealHook(t *testing.T) {
 		mark(t, wt)
 
 		// git does not know this layout (the main .git is not a repository), so
-		// the commondir guess is reported, not judged.
+		// the commondir guess is reported, not judged: an enabled repo FAILs.
 		r := CheckSealHook(wt)
-		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
-		assert.Contains(t, r.Detail, "hooks directory not verified:")
+		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "cannot verify hooks:")
 	})
 
 	t.Run("worktree via real git worktree add", func(t *testing.T) {
@@ -1883,18 +1892,33 @@ func TestChecklistAgentNames_Real(t *testing.T) {
 		"README.md must not be treated as an exempted agent handle")
 }
 
-// TestHookChecksWarnOnADegradedLookup: with git off PATH core.hooksPath cannot
-// be read, so no hook check may report a verdict on the directory it guessed.
-func TestHookChecksWarnOnADegradedLookup(t *testing.T) {
-	dir := repoTemp(t)
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+// TestHookChecksOnADegradedLookup: with git off PATH core.hooksPath cannot be
+// read, so no hook check may report a verdict on the directory it guessed. An
+// enabled repo whose hooks cannot be verified FAILs the presence check (a
+// green line would hide an unsealed repo); a dormant one PASSes with the note;
+// the currency check only WARNs.
+func TestHookChecksOnADegradedLookup(t *testing.T) {
+	enabled := repoTemp(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(enabled, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(enabled, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+	dormant := repoTemp(t)
 	t.Setenv("PATH", t.TempDir()) // no git
 
-	for name, r := range map[string]Result{
-		"presence": CheckSealHook(dir),
-		"currency": CheckHookCurrency(dir, currencyTestSpec),
-	} {
+	r := CheckSealHook(enabled)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "cannot verify hooks:")
+	assert.Contains(t, r.Detail, "install git")
+
+	r = CheckTrailerHook(enabled)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+
+	r = CheckSealHook(dormant)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+	assert.True(t, strings.HasPrefix(r.Detail, "not enabled here"), r.Detail)
+	assert.Contains(t, r.Detail, "hooks directory not verified:")
+
+	for name, dir := range map[string]string{"enabled": enabled, "dormant": dormant} {
+		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
 		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
 	}
@@ -1908,7 +1932,10 @@ func TestRunAllRefusedRootOverride(t *testing.T) {
 	t.Setenv("USER", "mal")
 	t.Setenv("HOME", t.TempDir())
 
-	checkout := []string{"Audit seal hook", "Audit trailer hook", "Seal hook currency", "Trailer hook currency", "Unclassified files"}
+	checkout := []string{
+		"Default agent", "Orphaned agent files", "Audit seal hook", "Audit trailer hook",
+		"Seal hook currency", "Trailer hook currency", "Local extension files", "Unclassified files",
+	}
 	find := func(results []Result, name string) Result {
 		for _, r := range results {
 			if r.Name == name {
@@ -1933,4 +1960,65 @@ func TestRunAllRefusedRootOverride(t *testing.T) {
 		assert.Equal(t, "PASS", find(results, name).Status, name)
 	}
 	assert.Equal(t, "not scanned: not in a repository", find(results, "Unclassified files").Detail)
+}
+
+// TestRunAllGatesEveryCheckoutCheck: every check RunAll hands repoRoot goes
+// through checkout, which turns a refused root into a WARN. The calls are
+// found in the source, so a check added later without the gate fails here
+// instead of reading PASS "not in a repo" for a checkout it never examined.
+func TestRunAllGatesEveryCheckoutCheck(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "doctor.go", nil, 0)
+	require.NoError(t, err)
+
+	var runAll *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "RunAll" {
+			runAll = fn
+		}
+	}
+	require.NotNil(t, runAll)
+
+	usesRepoRoot := func(call *ast.CallExpr) bool {
+		for _, a := range call.Args {
+			if id, ok := a.(*ast.Ident); ok && id.Name == "repoRoot" {
+				return true
+			}
+		}
+		return false
+	}
+	isCheckout := func(call *ast.CallExpr) bool {
+		id, ok := call.Fun.(*ast.Ident)
+		return ok && id.Name == "checkout"
+	}
+
+	var gated, ungated []string
+	var walk func(n ast.Node, inCheckout bool)
+	walk = func(n ast.Node, inCheckout bool) {
+		ast.Inspect(n, func(c ast.Node) bool {
+			call, ok := c.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if isCheckout(call) {
+				for _, a := range call.Args {
+					walk(a, true)
+				}
+				return false
+			}
+			if usesRepoRoot(call) {
+				name := types.ExprString(call.Fun)
+				if inCheckout {
+					gated = append(gated, name)
+				} else {
+					ungated = append(ungated, name)
+				}
+			}
+			return true
+		})
+	}
+	walk(runAll.Body, false)
+
+	assert.Empty(t, ungated, "checks given repoRoot outside checkout(...)")
+	assert.GreaterOrEqual(t, len(gated), 7, "the scan found too few gated checks: %v", gated)
 }
