@@ -39,7 +39,13 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
 	// "has setup been run?" config read resolves the shared store (#370).
-	rep, err := enable.EnableTo(repoRoot, resolve.StoreRepoRoot())
+	// A fresh repo named by ETHOS_REPO_ROOT has no store yet, which the store
+	// lookup refuses; enable is what creates it, so the checkout is the store.
+	storeRoot, err := resolve.LocateStoreRoot()
+	if err != nil {
+		storeRoot = repoRoot
+	}
+	rep, err := enable.EnableTo(repoRoot, storeRoot)
 	if err != nil {
 		emitPartialReport(cmd, rep)
 		return err

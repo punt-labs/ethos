@@ -161,3 +161,21 @@ func TestEnableDisableReportUnexaminableGit(t *testing.T) {
 		})
 	}
 }
+
+// ETHOS_REPO_ROOT naming a fresh repository (no store yet) is a valid target
+// for enable: it hints at `ethos setup` and prints no refusal.
+func TestEnableOverrideNamingFreshRepo(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Setenv("ETHOS_REPO_ROOT", dir)
+
+	out, errOut, err := runEnableCmd(t, "enable")
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if !strings.Contains(out, "ethos setup") {
+		t.Errorf("stdout = %q, want the run-ethos-setup hint", out)
+	}
+	if strings.Contains(errOut, "refusing") {
+		t.Errorf("stderr = %q, want no refusal for a valid override", errOut)
+	}
+}
