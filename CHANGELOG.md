@@ -280,8 +280,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ethos doctor` or `ethos serve`; they report it, as they do an
   unusable `active_bundle`, `repo-only` policy or unknown `resolution:`
   value. While the configuration or the store cannot be used, no hook
-  answers a persona and `ethos serve` refuses its guarded reads and
-  writes. An unusable bundle or policy also makes every store command
+  answers a persona and `ethos serve` refuses its guarded writes and
+  identity answers (and, for an unusable bundle or policy, its guarded
+  reads). An unusable bundle or policy also makes every store command
   except `team activate`, `team deactivate` and `team add-bundle` exit
   1; `team activate` refuses a global bundle under `repo-only`, and
   otherwise records the bundle without assigning the leadership roles.
@@ -291,9 +292,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regular file; `ethos enable` refuses such a marker. Git tracing set in
   the environment or in git configuration no longer makes ethos fail.
   An unreadable git configuration file is reported instead of treated as
-  "not set". On Unix, `ethos team add-bundle` no longer overrides your
-  ssh command, runs its clone with no terminal so an ssh or credential
-  prompt fails
+  "not set", and `ethos team add-bundle` names one before cloning. On
+  Unix, `ethos team add-bundle` no longer overrides your ssh command,
+  shows git's clone progress, runs its clone with no terminal so an ssh
+  or credential prompt fails
   at once instead of waiting, and Ctrl-C, a closed terminal or a timeout
   stops the clone with its ssh children. Identity and origin reads use
   the located repository, not the current directory; outside a

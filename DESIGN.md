@@ -12897,14 +12897,20 @@ SIGKILL to what remains), and a timeout does the same, so the clone
 stops with its ssh or helper children. They run with the C locale and
 no inherited repository variables (the user's command-scope
 configuration, `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`, is
-kept). Ethos sets and reads no ssh setting: whatever ssh command the
-user configured (`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`, an
-`insteadOf` rewrite) applies as git resolves it. They run no terminal
-prompt or askpass helper, and ssh's own prompts (an unknown host key, a
-passphrase) find no terminal, so a missing credential fails instead of
-waiting; when git's error output shows an ssh authentication or
-host-key failure, ethos adds that the user should load the key with
-`ssh-add` or accept the host key with `ssh` first. On Windows there are no process groups: a timeout kills git
+kept). Ethos sets no ssh command and reads no ssh setting: whatever ssh
+command the user configured (`GIT_SSH_COMMAND`, `GIT_SSH`,
+`core.sshCommand`, an `insteadOf` rewrite) applies as git resolves it;
+it switches off ssh's askpass (`SSH_ASKPASS` emptied,
+`SSH_ASKPASS_REQUIRE=never`). They run no terminal prompt or askpass
+helper, and ssh's own prompts (an unknown host key, a passphrase) find
+no terminal, so a missing credential fails instead of waiting. git's
+error output goes to the user's terminal unchanged, so clone progress
+shows. After a failed clone, ethos runs a bounded `git ls-remote` on
+the same URL; if its output shows an ssh authentication, host-key or
+passphrase failure, ethos adds that the user should load the key with
+`ssh-add` or accept the host key with `ssh` first. A user git
+configuration file that cannot be read is named before the clone,
+because git ignores it. On Windows there are no process groups: a timeout kills git
 at once and its children may outlive it. Git tracing is switched off
 through the environment (`GIT_TRACE2*=0` overrides configured targets)
 and any remaining trace lines are removed from stderr. A configuration
@@ -12923,9 +12929,12 @@ in the hooks-directory advice. Every git read declares what an absent
 answer is (a configuration key that is not set, no such remote, no
 upstream, a path `git check-ignore` does not match, or that discovery
 failure); a broken `.git` link, a `.git` symlink git cannot follow for
-any reason, or a `.git` that exists but cannot be read, in the
-directory or an ancestor below the ceiling, is never absent, even
-though git itself skips it and reports "not a git repository". Any other failure, a timeout included, is an error that
+any reason, a `.git` file that cannot be opened, or a `.git` directory
+whose `HEAD` cannot be read or whose `objects` or `refs` cannot be
+searched (git's own test), in the directory or an ancestor below the
+ceiling, is never absent, even though git itself skips such a directory
+and reports "not a git repository" (for such a file git reports an
+error). Any other failure, a timeout included, is an error that
 carries git's message and names the command and the directory. A git
 failure is therefore never read as "no repository", "no remote", "not a
 gitlink" or an empty identity. One function, `resolve.Roots()`, locates
@@ -12949,10 +12958,13 @@ and says to run it again once the configuration is valid. None of the
 three repairs an unknown `resolution:` value; activate says that value
 must be fixed in `.punt-labs/ethos.yaml`. When the configuration or the
 store cannot be used, no hook (session start, `subagent-start`,
-`pre-compact`) answers a persona, `ethos serve` refuses every guarded
-read and write (the MCP `adr create` included), and `ethos doctor`
-fails a "Repository configuration" or "Repository store" row and marks
-the identity rows "not checked". Identity reads (`git config user.*`) and the origin
+`pre-compact`) answers a persona; `ethos serve` refuses guarded writes
+(the MCP `adr create` included) and identity answers, refuses every
+guarded read too when the cause is an unusable bundle or policy, and
+otherwise answers other reads from the global store with a note; and
+`ethos doctor` fails a "Repository configuration" or "Repository store"
+row and marks a store or identity check that would have passed "not
+checked" (a failing one stays failed, with the cause noted). Identity reads (`git config user.*`) and the origin
 read run in the located checkout. With no checkout, the identity read
 runs as a plain `git config` from a neutral directory outside any
 repository, so included files and command-scope configuration apply
