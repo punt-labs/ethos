@@ -68,17 +68,70 @@ func TestNoFunctionTurnsALocateFailureIntoEmpty(t *testing.T) {
 		}
 	}
 	var violations []string
+	usedAllow := map[string]bool{}
 	for v := range found {
+		if key, ok := allowedLossy(v); ok {
+			usedAllow[key] = true
+			continue
+		}
 		violations = append(violations, v)
+	}
+	for key := range lossyAllowed {
+		if !usedAllow[key] {
+			violations = append(violations, "the allowlist entry "+key+" matches nothing: remove it")
+		}
 	}
 	sort.Strings(violations)
 	require.Empty(t, violations, "a located failure was turned into the empty string or dropped")
+}
+
+// lossyAllowed names the functions that answer "" for a located failure on
+// purpose, keyed "<file>:<function>". These two are the class table's explicit
+// choice: a command that handles a broken store itself (storeGlobalOnly and
+// storeHandlesError) gets the global stores for its constructors, after
+// mustBeUsable has refused every command that is not of that class.
+var lossyAllowed = map[string]string{
+	"cmd/ethos/roots.go:storeRoot": "a Global command's explicit choice of the global stores (mustBeUsable refuses the rest)",
+	"cmd/ethos/roots.go:ethosRoot": "a Global command's explicit choice of the global stores (mustBeUsable refuses the rest)",
+}
+
+// allowedLossy reports whether violation v ("<abs path>:line:col: function...")
+// is in lossyAllowed.
+func allowedLossy(v string) (string, bool) {
+	for key := range lossyAllowed {
+		file, fn, _ := strings.Cut(key, ":")
+		if strings.Contains(v, "/"+file+":") && strings.HasSuffix(v, ": "+fn) {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 // scanLocateFailures returns "file:line: function" for each violation in f.
 func scanLocateFailures(p *packages.Package, f *ast.File) []string {
 	var out []string
 	info := p.TypesInfo
+	located := locatedType(p)
+	// locatedErr reports whether e is an error of a resolve.Located: one of its
+	// ...Err fields, or the result of its Err() or StoreFailure(). A block run
+	// when it is non-nil is a failure block like one guarded by a locator's err.
+	locatedErr := func(e ast.Expr) bool {
+		if located == nil {
+			return false
+		}
+		switch v := e.(type) {
+		case *ast.SelectorExpr:
+			sel := info.Selections[v]
+			return sel != nil && sel.Kind() == types.FieldVal && strings.HasSuffix(v.Sel.Name, "Err") && isLocatedMember(located, sel.Obj())
+		case *ast.CallExpr:
+			if fn, ok := v.Fun.(*ast.SelectorExpr); ok && (fn.Sel.Name == "Err" || fn.Sel.Name == "StoreFailure") {
+				if sel := info.Selections[fn]; sel != nil {
+					return isLocatedMember(located, sel.Obj())
+				}
+			}
+		}
+		return false
+	}
 	errorType := types.Universe.Lookup("error").Type()
 	locatorCall := func(e ast.Expr) *ast.CallExpr {
 		call, ok := e.(*ast.CallExpr)
@@ -127,6 +180,14 @@ func scanLocateFailures(p *packages.Package, f *ast.File) []string {
 				if len(v.Rhs) != 1 {
 					return true
 				}
+				if locatedErr(v.Rhs[0]) && len(v.Lhs) == 1 {
+					if id, ok := v.Lhs[0].(*ast.Ident); ok {
+						if obj := info.ObjectOf(id); obj != nil && types.Identical(obj.Type(), errorType) {
+							tracked[obj] = true
+						}
+					}
+					return true
+				}
 				call := locatorCall(v.Rhs[0])
 				if call == nil {
 					return true
@@ -149,19 +210,16 @@ func scanLocateFailures(p *packages.Package, f *ast.File) []string {
 			}
 			return true
 		})
-		if len(tracked) == 0 {
-			return
-		}
 		report := func(n ast.Node) {
 			out = append(out, p.Fset.Position(n.Pos()).String()+": "+name)
 		}
 		ast.Inspect(body, func(n ast.Node) bool {
 			switch v := n.(type) {
 			case *ast.IfStmt:
-				if testsNonNil(info, v.Cond, tracked) && !separatesCases(info, v.Cond, tracked) && emptiesWithoutError(info, v.Body, errorType) {
+				if testsNonNil(info, v.Cond, tracked, locatedErr) && !separatesCases(info, v.Cond, tracked, locatedErr) && emptiesWithoutError(info, v.Body, errorType) {
 					report(v)
 				}
-				if testsNil(info, v.Cond, tracked) && v.Else != nil && emptiesWithoutError(info, v.Else, errorType) {
+				if testsNil(info, v.Cond, tracked, locatedErr) && v.Else != nil && emptiesWithoutError(info, v.Else, errorType) {
 					report(v)
 				}
 			case *ast.SwitchStmt:
@@ -175,11 +233,11 @@ func scanLocateFailures(p *packages.Package, f *ast.File) []string {
 					}
 					for _, e := range cc.List {
 						switch {
-						case v.Tag == nil && testsNonNil(info, e, tracked) && !separatesCases(info, e, tracked):
+						case v.Tag == nil && testsNonNil(info, e, tracked, locatedErr) && !separatesCases(info, e, tracked, locatedErr):
 							if emptiesWithoutError(info, &ast.BlockStmt{List: cc.Body}, errorType) {
 								report(cc)
 							}
-						case v.Tag == nil && testsNil(info, e, tracked):
+						case v.Tag == nil && testsNil(info, e, tracked, locatedErr):
 							sawNilCase = true
 						case v.Tag != nil && isTracked(info, v.Tag, tracked) && isNilIdent(e):
 							sawNilCase = true
@@ -224,23 +282,24 @@ func isTracked(info *types.Info, e ast.Expr, tracked map[types.Object]bool) bool
 }
 
 // testsNonNil reports whether cond contains `err != nil` for a tracked error.
-func testsNonNil(info *types.Info, cond ast.Expr, tracked map[types.Object]bool) bool {
-	return comparesToNil(info, cond, tracked, token.NEQ)
+func testsNonNil(info *types.Info, cond ast.Expr, tracked map[types.Object]bool, locatedErr func(ast.Expr) bool) bool {
+	return comparesToNil(info, cond, tracked, locatedErr, token.NEQ)
 }
 
 // testsNil reports whether cond contains `err == nil` for a tracked error.
-func testsNil(info *types.Info, cond ast.Expr, tracked map[types.Object]bool) bool {
-	return comparesToNil(info, cond, tracked, token.EQL)
+func testsNil(info *types.Info, cond ast.Expr, tracked map[types.Object]bool, locatedErr func(ast.Expr) bool) bool {
+	return comparesToNil(info, cond, tracked, locatedErr, token.EQL)
 }
 
-func comparesToNil(info *types.Info, cond ast.Expr, tracked map[types.Object]bool, op token.Token) bool {
+func comparesToNil(info *types.Info, cond ast.Expr, tracked map[types.Object]bool, locatedErr func(ast.Expr) bool, op token.Token) bool {
+	isErr := func(e ast.Expr) bool { return isTracked(info, e, tracked) || locatedErr(e) }
 	found := false
 	ast.Inspect(cond, func(n ast.Node) bool {
 		b, ok := n.(*ast.BinaryExpr)
 		if !ok || b.Op != op {
 			return true
 		}
-		if (isTracked(info, b.X, tracked) && isNilIdent(b.Y)) || (isNilIdent(b.X) && isTracked(info, b.Y, tracked)) {
+		if (isErr(b.X) && isNilIdent(b.Y)) || (isNilIdent(b.X) && isErr(b.Y)) {
 			found = true
 		}
 		return true
@@ -255,7 +314,8 @@ func comparesToNil(info *types.Info, cond ast.Expr, tracked map[types.Object]boo
 // errors in, and a negated test (`!errors.Is(...)`) runs the block for every
 // other error: neither separates. The sentinels are matched by package-level
 // object, so a local named ErrNotInRepo does not count.
-func separatesCases(info *types.Info, cond ast.Expr, tracked map[types.Object]bool) bool {
+func separatesCases(info *types.Info, cond ast.Expr, tracked map[types.Object]bool, locatedErr func(ast.Expr) bool) bool {
+	isErr := func(e ast.Expr) bool { return isTracked(info, e, tracked) || locatedErr(e) }
 	hasOr := false
 	positive := false
 	var walk func(e ast.Expr, negated bool)
@@ -275,12 +335,12 @@ func separatesCases(info *types.Info, cond ast.Expr, tracked map[types.Object]bo
 				walk(v.X, negated)
 				walk(v.Y, negated)
 			case token.EQL:
-				if !negated && ((isTracked(info, v.X, tracked) && isSentinel(info, v.Y)) || (isTracked(info, v.Y, tracked) && isSentinel(info, v.X))) {
+				if !negated && ((isErr(v.X) && isSentinel(info, v.Y)) || (isErr(v.Y) && isSentinel(info, v.X))) {
 					positive = true
 				}
 			}
 		case *ast.CallExpr:
-			if !negated && isErrorsIs(info, v) && len(v.Args) == 2 && isTracked(info, v.Args[0], tracked) && isSentinel(info, v.Args[1]) {
+			if !negated && isErrorsIs(info, v) && len(v.Args) == 2 && isErr(v.Args[0]) && isSentinel(info, v.Args[1]) {
 				positive = true
 			}
 		}
@@ -338,7 +398,7 @@ func emptiesWithoutError(info *types.Info, body ast.Node, errorType types.Type) 
 				bad = true // a bare return with named results hands back whatever they hold, a nil error included
 				return true
 			}
-			empty, hasErr := false, false
+			empty, hasErr, reportsError := false, false, false
 			for _, r := range v.Results {
 				if isEmptyString(r) {
 					empty = true
@@ -347,7 +407,14 @@ func emptiesWithoutError(info *types.Info, body ast.Node, errorType types.Type) 
 					if id, isNil := r.(*ast.Ident); !isNil || id.Name != "nil" {
 						hasErr = true
 					}
+				} else if ok && tv.Type != nil && types.Implements(tv.Type, errorType.Underlying().(*types.Interface)) {
+					hasErr = true // a concrete error type (failClosed{}, usageError{})
 				} else if call, ok := r.(*ast.CallExpr); ok {
+					// An MCP tool's error is a result, returned with a nil error.
+					if f, isSel := call.Fun.(*ast.SelectorExpr); isSel && f.Sel.Name == "NewToolResultError" {
+						hasErr = true
+						reportsError = true
+					}
 					// fmt.Errorf(...) and friends have type error.
 					if tv, ok := info.Types[call]; ok && types.Identical(tv.Type, errorType) {
 						hasErr = true
@@ -357,7 +424,7 @@ func emptiesWithoutError(info *types.Info, body ast.Node, errorType types.Type) 
 			// "" without an error, or any value with a literal nil error: the
 			// failure was turned into success.
 			last := v.Results[len(v.Results)-1]
-			if (empty && !hasErr) || (isNilIdent(last) && len(v.Results) > 1) {
+			if (empty && !hasErr) || (isNilIdent(last) && len(v.Results) > 1 && !reportsError) {
 				bad = true
 			}
 		case *ast.AssignStmt:
@@ -378,6 +445,7 @@ var matchingErrors = map[string][]string{
 	"Store":    {"StoreErr", "StoreFailure", "Err"},
 	"Ethos":    {"EthosErr", "StoreFailure", "Err"},
 	"Checkout": {"CheckoutErr", "Err"},
+	"Config":   {"ConfigErr", "StoreFailure", "Err"},
 }
 
 // scanLocatedUse flags a function that uses a located part (.Store, .Ethos,
@@ -387,7 +455,9 @@ var matchingErrors = map[string][]string{
 // call result (`currentRoots().Checkout`) has no variable to check the error
 // on, so it is flagged. It is a tripwire for the shapes ethos code uses, in
 // every package: it does not follow the value through a field, an argument or a
-// closure called elsewhere.
+// closure called elsewhere. A helper that blanks a field of a Located (`l.Store =
+// ""` and then passes l on) is out of scope: the scan reads uses of the parts,
+// not writes to them.
 func scanLocatedUse(p *packages.Package, f *ast.File) []string {
 	located := locatedType(p)
 	if located == nil {

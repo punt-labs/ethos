@@ -286,7 +286,11 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 // switch reported as a failure.
 func resolveActivateCEO(errw io.Writer) (handle string, ok bool) {
 	is := identityStore()
-	h, err := resolve.Resolve(is, sessionStore(), currentRoots().checkoutForGit())
+	checkout, err := currentRoots().checkoutForGit()
+	var h string
+	if err == nil {
+		h, err = resolve.Resolve(is, sessionStore(), checkout)
+	}
 	if err != nil {
 		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — no caller identity resolved (%v); run \"ethos setup\" first\n", err)
 		return "", false
