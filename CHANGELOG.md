@@ -199,15 +199,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.punt-labs/ethos/missions/`, `.CLAUDE.md.tmp*` or `.CLAUDE.md.*`,
   `.ETHOS-SETUP.md.*`, `.gitignore.*`, or `.pre-commit.*` and
   `.commit-msg.*` in the hooks directory. Any of these can be deleted.
-  `ethos doctor` lists the ones under `.punt-labs/ethos/` and
-  `.punt-labs/local/ethos/` as unrecognized; it does not see the others.
-  The audit sweep still recognizes and removes old `*.jsonl.tmp` chunks.
+  `ethos doctor` lists the old `*.tmp` files under `.punt-labs/ethos/` and
+  `.punt-labs/local/ethos/` as unrecognized; an old `.<id>.migrate-*/`
+  staging directory is classified never-tracked and not listed; doctor
+  does not see the others. The audit sweep still recognizes and removes
+  old `*.jsonl.tmp` chunks.
 - **`ethos mission export` without `--dir` writes to
   `.punt-labs/ethos/missions/` under the repository root**, not under the
-  current directory. It fails outside a repository.
-- **`ethos doctor` says when it found the git hooks directory without
-  git** (git missing or failing), because `core.hooksPath` is then
-  ignored.
+  current directory. Outside a repository it fails and says why.
+- **`ethos doctor` warns when it could not verify the git hooks directory
+  with git** (git missing or failing, or the repository root not being
+  git's top level), because `core.hooksPath` is then ignored, and shows
+  git's own error. It skips a nested git working tree under
+  `.punt-labs/ethos/`, such as an old team-registry submodule, and reports
+  it as not scanned.
+- **`ethos enable` refuses to create a hooks directory under a `.git`
+  that does not exist**, which happened when the repository root was a
+  subdirectory of another repository.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and

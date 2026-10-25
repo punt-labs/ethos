@@ -12760,10 +12760,13 @@ forensics, not blame.
 
 Every file ethos writes inside a repository's working tree at a path it
 chooses belongs to exactly one of the four classes below. Output the user
-directs to a path of their choosing (`ethos mission export --dir`,
-`ethos export --to`) is classified only where it lands under
-`.punt-labs/ethos/` (the fallback entry below); elsewhere it is outside
-the classification. Without `--dir`, `ethos mission export` writes to
+directs to a path of their choosing is outside the classification, with
+one exception: mission records written by `ethos mission export --dir`
+under `.punt-labs/ethos/` are class 2 (the fallback entry below).
+`ethos export --to` (an identity in another format: `SOUL.md`,
+`IDENTITY.md`, `STYLE.md`) writes to the directory its `--dir` names,
+the current directory by default, and is outside the classification
+wherever it lands. Without `--dir`, `ethos mission export` writes to
 `.punt-labs/ethos/missions/` under the repository root, whatever the
 working directory. A writer that follows a symlink (a `CLAUDE.md` linked
 to `AGENTS.md`, a linked `.gitignore`) is classified by the name it was
@@ -12774,8 +12777,9 @@ The authority is one ordered table in code that maps every path pattern
 ethos writes to its class (bead `ethos-g3g3`). The first matching entry
 gives a path's class, and class-4 entries (locks, temporary files,
 `*.local.*`) come first, so a lock inside a mission directory or an
-`ext/<ns>.local.yaml` file is class 4. A test fails when a writer creates
-a path no entry matches, and when entries of two different classes both
+`ext/<ns>.local.yaml` file is class 4. A test runs every in-tree writer
+it knows of and fails when one creates a path no entry matches (a new
+writer is covered once it is added to that test), and a test fails when entries of two different classes both
 match one path and neither is class 4; class-4 precedence is the only
 overlap the table resolves by order. Overlap is decided pairwise on the
 patterns' segment sequences, not by sampling paths. The one other ordered
@@ -12788,6 +12792,9 @@ stays class 3. Every temporary file or staging directory ethos creates in
 the tree carries one marker, `.ethos-tmp`, in its name, wherever it is
 created (a symlinked `CLAUDE.md`'s temporary file sits beside the link
 target), and two class-4 entries match that marker in any directory. A
+mission staging directory left by an earlier version
+(`.punt-labs/ethos/missions/.<id>.migrate-*/`) has its own class-4
+entry, so its copied `contract.yaml` is never taken for a record. A
 source scan fails when a temporary-file call (`os.CreateTemp`,
 `os.MkdirTemp`, `ioutil.TempFile`, `ioutil.TempDir`) takes a pattern
 not built by a layout helper, or when a string literal looks like a
@@ -12799,10 +12806,14 @@ out of scope. An `ethos doctor`
 check reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
 of the working tree it runs in that no entry matches. It reports, without
 scanning past it, any symlink on the path from the repository root to
-either directory, names a `core.hooksPath` directory under `.punt-labs/`,
-says when the hooks directory was found without git, and says "not
-scanned" rather than claiming a pass when there is no repository or
-neither directory exists. Other tools' files under `.punt-labs/` are
+either directory, skips a nested git working tree inside them (such as
+`.punt-labs/ethos` checked out as a submodule) and reports it as not
+scanned, names a `core.hooksPath` directory under `.punt-labs/`, warns
+whenever the hooks directory could not be verified with git (git
+missing or failing, or the repository root not being git's top level),
+and says "not scanned" rather than claiming a pass when there is no
+repository or neither directory exists. `ethos enable` refuses to
+create a hooks directory under a `.git` that does not exist. Other tools' files under `.punt-labs/` are
 not ethos's to classify. A prose list cannot stay complete as writers are
 added; a failing test can.
 
