@@ -521,9 +521,11 @@ func ethosRootOf(storeRoot string) (string, error) {
 		case !si.IsDir():
 			return "", fmt.Errorf("the ethos store path %s is not a directory", dir)
 		}
-	}
-	if err := checkDirAccess(dir); err != nil {
-		return "", fmt.Errorf("the ethos store %s cannot be read: %w", dir, err)
+		// Every component, .punt-labs included, must be listable and
+		// searchable: the hook scripts apply the same test to each.
+		if err := checkDirAccess(dir); err != nil {
+			return "", fmt.Errorf("the ethos store path %s cannot be read: %w", dir, err)
+		}
 	}
 	return dir, nil
 }

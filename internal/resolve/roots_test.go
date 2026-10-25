@@ -123,3 +123,23 @@ func TestRootsUnreadableStoreDirectoryIsAnError(t *testing.T) {
 		})
 	}
 }
+
+// An intermediate directory of the store path that cannot be listed (mode 0111)
+// is an error as the final one is, and doctor reads the marker through the same
+// rule as the hooks.
+func TestRootsUnreadableIntermediateDirectoryIsAnError(t *testing.T) {
+	skipIfRoot(t)
+	root := t.TempDir()
+	punt := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(filepath.Join(punt, "ethos"), 0o755))
+	require.NoError(t, os.Chmod(punt, 0o111))
+	t.Cleanup(func() { _ = os.Chmod(punt, 0o755) })
+	t.Setenv("ETHOS_REPO_ROOT", root)
+
+	loc := Roots()
+	require.Error(t, loc.StoreFailure())
+	assert.Contains(t, loc.StoreFailure().Error(), punt)
+	_, err := EnabledMarker(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), punt)
+}

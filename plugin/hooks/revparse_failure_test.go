@@ -236,6 +236,14 @@ func TestHooksBlockOnAnUnreadableStorePath(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos"), []byte("x"), 0o644))
 		},
 	}
+	if os.Geteuid() != 0 {
+		cases[".punt-labs cannot be listed (mode 0111)"] = func(t *testing.T, repo string) {
+			punt := filepath.Join(repo, ".punt-labs")
+			require.NoError(t, os.MkdirAll(filepath.Join(punt, "ethos"), 0o755))
+			require.NoError(t, os.Chmod(punt, 0o111))
+			t.Cleanup(func() { _ = os.Chmod(punt, 0o755) })
+		}
+	}
 	cases["marker is a directory"] = func(t *testing.T, repo string) {
 		require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), 0o755))
 	}
@@ -253,7 +261,7 @@ func TestHooksBlockOnAnUnreadableStorePath(t *testing.T) {
 			out, err := run("commit", "-m", "x")
 			require.Error(t, err, "the commit is blocked: %s", out)
 			assert.Contains(t, out, ".punt-labs")
-			assert.True(t, strings.Contains(out, "dangling link") || strings.Contains(out, "not a directory") || strings.Contains(out, "not a regular file"), out)
+			assert.True(t, strings.Contains(out, "dangling link") || strings.Contains(out, "not a directory") || strings.Contains(out, "not a regular file") || strings.Contains(out, "cannot be read"), out)
 		})
 	}
 	t.Run("really absent is dormant", func(t *testing.T) {
