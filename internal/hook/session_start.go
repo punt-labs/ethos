@@ -36,6 +36,9 @@ type SessionStartDeps struct {
 	Sessions *session.Store
 	Teams    *team.LayeredStore
 	Roles    *role.LayeredStore
+	// Issue is why the repository's bundle or policy could not be honoured, if
+	// so (bundle.ConfigIssue): the session is told in its systemMessage.
+	Issue error
 }
 
 // HandleSessionStart reads the SessionStart hook payload from stdin,
@@ -79,6 +82,12 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// the signal for direct CLI invocation and `ethos doctor`.
 	repoRoot := loc.Store
 	note := storeUnlocatedNote(storeFailure)
+	if issueNote := storeUnlocatedNote(deps.Issue); issueNote != "" {
+		if note != "" {
+			note += " "
+		}
+		note += issueNote
+	}
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
 	}

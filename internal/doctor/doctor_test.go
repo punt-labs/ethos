@@ -2040,8 +2040,9 @@ func TestRunAllRefusedStore(t *testing.T) {
 	assert.True(t, AnyFailed(results), "doctor exits non-zero when every command would refuse")
 	for _, name := range storeChecks {
 		r, b := find(results, name), find(base, name)
-		if b.Detail == "not in a repo" {
-			// It examined nothing: it did not find "not in a repo", it did not run.
+		if b.Status == "PASS" {
+			// It saw the global layer only, or examined nothing: it did not check
+			// the repository.
 			assert.Equal(t, "WARN", r.Status, name)
 			assert.Equal(t, "not checked: the repository store could not be located: "+refused.Error(), r.Detail, name)
 			continue

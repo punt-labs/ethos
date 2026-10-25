@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -135,6 +136,15 @@ func (r *repoRoots) configFatal(err error) {
 	}
 	fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 	os.Exit(1)
+}
+
+// configIssue is why the repository's bundle or policy cannot be honoured
+// (bundle.ConfigIssue), or nil. A broken store never gets this far.
+func (r *repoRoots) configIssue() error {
+	if r.StoreFailure() != nil {
+		return nil
+	}
+	return bundle.ConfigIssue(r.Store, r.Ethos, defaultGlobalRoot())
 }
 
 // checkoutForGit is the checkout the git identity is read in. When the checkout

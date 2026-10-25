@@ -20,6 +20,10 @@ func WithStoreError(err error) Option {
 	return func(h *Handler) { h.storeErr = err }
 }
 
+// strictTools refuse every method, reads included, when the store cannot be
+// used: their answers are only right from the repository store.
+var strictTools = map[string]bool{"identity": true}
+
 // unguardedTools never touch the repository store: session and adr keep
 // global-only stores, and doctor reports on the store's state. The matching CLI
 // commands are exempt from the store refusal too.
@@ -144,7 +148,10 @@ func (h *Handler) guardStore(tool string, fn mcpserver.ToolHandlerFunc) mcpserve
 	}
 	return func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		method := stringArg(req, "method", "")
-		if !slices.Contains(storeReads[tool], method) {
+		// An identity answered from a store that cannot be used is the wrong
+		// answer, not a partial one: every identity method refuses, as the CLI's
+		// identity commands do.
+		if strictTools[tool] || !slices.Contains(storeReads[tool], method) {
 			return mcplib.NewToolResultError(fmt.Sprintf(
 				"%s %s: %v; refusing: only reads run when the repository store cannot be located, never against the global store instead",
 				tool, method, h.storeErr)), nil

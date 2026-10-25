@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -55,9 +56,15 @@ func runServeImpl() error {
 // symlink included — is the error.
 func locateServeStore() mcp.StoreLocation {
 	r := locateRoots()
+	err := r.Err()
+	if err == nil {
+		// A bundle or policy that cannot be honoured is told the same way: reads
+		// carry its note, writes refuse (they would land in the wrong layer).
+		err = r.configIssue()
+	}
 	return mcp.StoreLocation{
 		Root: r.Store, EthosRoot: r.Ethos, Checkout: r.Checkout,
-		Err: r.Err(),
+		Err: err,
 	}
 }
 
@@ -68,7 +75,12 @@ func locateServeStore() mcp.StoreLocation {
 // error itself, so its constructors take the global stores for it.
 func buildServeHandler(home string, loc mcp.StoreLocation) *mcp.Handler {
 	storeErr := loc.Err
-	cmdRoots.Store(&repoRoots{Located: resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, StoreErr: loc.Err}, Global: true})
+	located := resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, StoreErr: loc.Err}
+	var ce *resolve.ConfigError
+	if errors.As(loc.Err, &ce) && ce.Policy {
+		located.StoreErr = nil // the store was read: its layer is used, without the policy
+	}
+	cmdRoots.Store(&repoRoots{Located: located, Global: true})
 	is := identityStore()
 	talents := layeredAttributeStore(is, attribute.Talents)
 	personalities := layeredAttributeStore(is, attribute.Personalities)

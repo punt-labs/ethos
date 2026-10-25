@@ -132,12 +132,12 @@ func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 
 // unusableRepoOnly handles a resolution policy that cannot be honoured. A store
 // command refuses (exit 2, never the global store in its place); a command
-// that handles the error itself says why and runs on the global stores, so a
+// that handles the error itself says why and runs without the policy, so a
 // hook or doctor can report it and a running server survives it. It is never
 // "not repo-only": the caller gets false only after the cause was printed.
 func unusableRepoOnly(err error) bool {
 	currentRoots().configFatal(err)
-	fmt.Fprintf(os.Stderr, "ethos: %v; using the global stores only\n", err)
+	fmt.Fprintf(os.Stderr, "ethos: %v; the repository layer is used without the policy\n", err)
 	return false
 }
 

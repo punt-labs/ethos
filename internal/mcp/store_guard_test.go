@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
-	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/role"
@@ -171,6 +169,9 @@ func TestReadsNoteWhenStoreUnlocatable(t *testing.T) {
 	srv := guardedServer(t)
 	for name, methods := range storeReads {
 		for _, method := range methods {
+			if strictTools[name] {
+				continue // refuses instead: TestIdentityMethodsRefuseWhenStoreUnlocatable
+			}
 			if method == "whoami" || method == "get" || method == "show" || method == "results" ||
 				method == "reflections" || method == "log" || method == "for_repo" {
 				continue // needs arguments; list covers the shape
@@ -193,41 +194,18 @@ func TestReadsNoteWhenStoreUnlocatable(t *testing.T) {
 	}
 }
 
-// identity list under an unlocatable store goes through the format-output
-// hook as a formatted table, with the note surfaced beside it.
-func TestIdentityListFormattedWithNote(t *testing.T) {
+// Every identity method refuses while the store cannot be used, reads
+// included: an identity answered from the global store alone is the wrong
+// answer, as the CLI's identity commands refuse it.
+func TestIdentityMethodsRefuseWhenStoreUnlocatable(t *testing.T) {
 	srv, s := fullServer(t, WithStoreError(errNoStore))
 	require.NoError(t, s.Save(&identity.Identity{Name: "Mal Reynolds", Handle: "mal", Kind: "human"}))
-	result := callRegistered(t, srv, "identity", "list")
-
-	blocks := make([]any, 0, len(result.Content))
-	for _, c := range result.Content {
-		tc, ok := c.(mcplib.TextContent)
-		require.True(t, ok)
-		blocks = append(blocks, map[string]any{"type": "text", "text": tc.Text})
+	for _, method := range []string{"list", "get", "whoami"} {
+		result := callRegistered(t, srv, "identity", method)
+		assert.True(t, result.IsError, method)
+		assert.Contains(t, resultText(t, result), errNoStore.Error(), method)
+		assert.NotContains(t, resultText(t, result), "mal", "no identity is returned")
 	}
-	payload, err := json.Marshal(map[string]any{
-		"tool_name":     "mcp__plugin_ethos_self__identity",
-		"tool_input":    map[string]any{"method": "list"},
-		"tool_response": blocks,
-	})
-	require.NoError(t, err)
-
-	var out bytes.Buffer
-	require.NoError(t, hook.HandleFormatOutput(bytes.NewReader(payload), &out))
-	var r struct {
-		HookSpecificOutput struct {
-			UpdatedMCPToolOutput string `json:"updatedMCPToolOutput"`
-			AdditionalContext    string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
-	}
-	require.NoError(t, json.Unmarshal(out.Bytes(), &r), out.String())
-	summary := r.HookSpecificOutput.UpdatedMCPToolOutput
-	assert.Contains(t, summary, "1 identit", "the list formatter ran: %s", summary)
-	assert.NotContains(t, summary, `"handle"`, "the summary is formatted, not raw JSON")
-	assert.Contains(t, summary, "repository store could not be located")
-	assert.Contains(t, r.HookSpecificOutput.AdditionalContext, "mal")
-	assert.Contains(t, r.HookSpecificOutput.AdditionalContext, "repository store could not be located")
 }
 
 // With a located store nothing changes.

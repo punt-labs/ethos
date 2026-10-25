@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -109,6 +110,12 @@ func TestCLI_BrokenConfigDoctorPrintsItsTable(t *testing.T) {
 			assert.Contains(t, row, "FAIL", string(out))
 			assert.Contains(t, row, filepath.Base(cfg), string(out))
 			assert.Contains(t, string(out), "Duplicate fields", "the rest of the table is printed")
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, "Human identity") || strings.Contains(line, "Default agent") {
+					assert.Contains(t, line, "WARN", "a store-only check that could not look is not a PASS: %s", line)
+					assert.Contains(t, line, "not checked")
+				}
+			}
 		})
 	}
 }
@@ -138,13 +145,13 @@ func TestServeSurvivesABrokenConfig(t *testing.T) {
 	}
 
 	// Healthy first: no note.
-	assert.Len(t, call(build(), "identity", "list").Content, 1)
+	assert.Len(t, call(build(), "talent", "list").Content, 1)
 
 	// Breaking mid-session: the next build (as the relocation makes it) survives.
 	for _, kind := range configBreaks {
 		breakConfig(t, se.repo, kind)
 		srv := build()
-		res := call(srv, "identity", "list")
+		res := call(srv, "talent", "list")
 		require.Len(t, res.Content, 2, "a read carries the note")
 		note, ok := res.Content[1].(mcp.TextContent)
 		require.True(t, ok)
@@ -352,4 +359,60 @@ func TestConfigOnlyFailureIsWordedAsAConfigFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A missing active bundle is told on every surface, in words that do not say
+// the global stores were all that was used: the repository layer was.
+func TestBundleErrorIsToldEverywhere(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	cfg := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
+	require.NoError(t, os.RemoveAll(cfg))
+	require.NoError(t, os.WriteFile(cfg, []byte("active_bundle: no-such-bundle\n"), 0o644))
+	const what = "the repository's bundle or policy configuration is unusable"
+
+	// session-start: in systemMessage, not only stderr.
+	stdout, _, _ := runHookIn(t, se, se.repo, "session-start", `{"session_id":"bd-s1","hook_event_name":"SessionStart"}`)
+	var res struct {
+		SystemMessage string `json:"systemMessage"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
+	assert.Contains(t, res.SystemMessage, what)
+	assert.Contains(t, res.SystemMessage, "no-such-bundle")
+	assert.NotContains(t, res.SystemMessage, "global stores only")
+
+	// doctor: a failing row.
+	c := exec.Command(ethosBinary, "doctor")
+	c.Dir = se.repo
+	c.Env = withForcedNotUnderClaudeCode(se.env)
+	out, err := c.CombinedOutput()
+	var ee *exec.ExitError
+	require.ErrorAs(t, err, &ee, string(out))
+	assert.Contains(t, string(out), "Repository configuration")
+	assert.Contains(t, string(out), "no-such-bundle")
+
+	// serve: a note on reads, writes refused; MCP whoami errors.
+	t.Setenv("HOME", se.home)
+	t.Chdir(se.repo)
+	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
+	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	call := func(tool, method string) *mcp.CallToolResult {
+		var req mcp.CallToolRequest
+		req.Params.Name = tool
+		req.Params.Arguments = map[string]any{"method": method}
+		r, err := srv.GetTool(tool).Handler(context.Background(), req)
+		require.NoError(t, err)
+		return r
+	}
+	read := call("talent", "list")
+	require.Len(t, read.Content, 2)
+	note := read.Content[1].(mcp.TextContent).Text
+	assert.Contains(t, note, what)
+	assert.Contains(t, note, "repository layer is used without it")
+	assert.True(t, call("talent", "create").IsError, "a write refuses")
+	who := call("identity", "whoami")
+	assert.True(t, who.IsError)
+	assert.Contains(t, who.Content[0].(mcp.TextContent).Text, "no-such-bundle")
 }

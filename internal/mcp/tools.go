@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/doctor"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -235,8 +237,13 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	loc := resolve.Roots()
-	if loc.CheckoutErr != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("whoami: locating the checkout: %v", loc.CheckoutErr)), nil
+	if err := loc.Err(); err != nil {
+		// As the CLI: an identity answered from a store that cannot be used is
+		// the wrong answer, not a partial one.
+		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %v; refusing to answer from the global store instead", err)), nil
+	}
+	if issue := bundle.ConfigIssue(loc.Store, loc.Ethos, h.globalRoot()); issue != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %v", issue)), nil
 	}
 	handle, err := resolve.Resolve(h.store, h.sessionStore, loc.Checkout)
 	if err != nil {
@@ -654,4 +661,13 @@ func jsonResult(v any) (*mcplib.CallToolResult, error) {
 		return mcplib.NewToolResultError(fmt.Sprintf("JSON marshal error: %v", err)), nil
 	}
 	return mcplib.NewToolResultText(string(data)), nil
+}
+
+// globalRoot is ~/.punt-labs/ethos, or "" when home cannot be determined.
+func (h *Handler) globalRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".punt-labs", "ethos")
 }

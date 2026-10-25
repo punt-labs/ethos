@@ -31,12 +31,12 @@ func resolveBundle() (root string, active *bundle.Bundle, err error) {
 // "bundle" is the legacy .punt-labs/ethos/ directory (which already
 // serves as the repo-local layer). A bundle error is the command's class's to
 // handle (configFatal): a store command refuses, a command that handles the
-// error runs on the global stores and says why on stderr.
+// error runs without the bundle and says why on stderr.
 func resolveBundleRoot() string {
 	root, _, err := resolveBundle()
 	if err != nil {
 		currentRoots().configFatal(fmt.Errorf("bundle resolution failed: %w", err))
-		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v; using the global stores only\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v; the repository layer is used without the bundle\n", err)
 		return ""
 	}
 	return root

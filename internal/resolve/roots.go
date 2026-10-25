@@ -83,6 +83,9 @@ type ConfigError struct {
 	What   string // "the repository configuration could not be read"
 	Effect string // what it cost a session: "so this repo's agent persona ..."
 	Answer string // what an MCP answer was built from
+	// Policy marks a bundle or resolution-policy failure: the repository's
+	// store was located and read, so its layer is used, without the policy.
+	Policy bool
 }
 
 func (e *ConfigError) Error() string { return e.Err.Error() }

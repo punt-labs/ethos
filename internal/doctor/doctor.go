@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -55,7 +56,20 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 	if storeErr != nil {
 		storeRoot = ""
 	}
-	return RunAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, teams)
+	results := RunAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, teams)
+	// A bundle or policy that cannot be honoured is its own failing row.
+	if storeErr == nil {
+		home, herr := os.UserHomeDir()
+		global := ""
+		if herr == nil {
+			global = filepath.Join(home, ".punt-labs", "ethos")
+		}
+		if issue := bundle.ConfigIssue(loc.Store, loc.Ethos, global); issue != nil {
+			what, _, _ := resolve.Describe(issue)
+			results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
+		}
+	}
+	return results
 }
 
 // RunAll executes every standard health check and returns the results.
@@ -152,17 +166,19 @@ func unlocated(root string, err error) bool {
 	return root == "" && err != nil && !errors.Is(err, resolve.ErrNotInRepo)
 }
 
-// gateStore notes on a check that read the identity, team or repository
-// store that it saw the global layer only, when the repository store was not
-// located. The status is kept: the check did run, and a FAIL must stay a FAIL.
+// gateStore marks a check that read the identity, team or repository store
+// when the repository store was not located: a PASS becomes WARN "not checked"
+// (it saw the global layer only), a FAIL keeps its status with a note.
 func gateStore(r Result, root string, err error) Result {
 	if !unlocated(root, err) {
 		return r
 	}
-	// A check that examined nothing because the store was not located did not
-	// find "not in a repo": it did not run.
-	if strings.HasPrefix(r.Detail, "not in a repo") {
-		r.Status, r.Detail = "WARN", "not checked: the repository store could not be located: "+err.Error()
+	// A check that PASSed on the global layer alone, or examined nothing because
+	// the store was not located, did not check the repository: it is a WARN
+	// that says so. A FAIL stays a FAIL, with a note.
+	if r.Status == "PASS" {
+		what, _, _ := resolve.Describe(err)
+		r.Status, r.Detail = "WARN", "not checked: "+what+": "+err.Error()
 		return r
 	}
 	r.Detail += " (global layer only; repo store not located: " + err.Error() + ")"
