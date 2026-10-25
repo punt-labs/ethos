@@ -12870,16 +12870,23 @@ function that discards a location error or turns one other than "not
 in a repository" or "does not exist" into an empty root. The shell
 hooks `pre-commit.sh` and `commit-msg.sh` run `git rev-parse` and
 `git interpret-trailers` unbounded and exit 1 with git's error when
-either fails; in an enabled repository a missing `ethos` binary also
-blocks the commit. On a timeout git's process group receives SIGTERM,
-so git can remove its index lock, and SIGKILL one second later (on
-Windows the kill is immediate). Git tracing is switched off for every
-read, from the environment and from configuration, so trace output
-cannot turn an answer into a failure. Every git read declares what an
-absent answer is (a configuration key that is not set, no such remote,
+either fails. In an enabled repository they also block the commit when
+the `ethos` binary is missing or when a component of the
+`.punt-labs/ethos` path is a dangling link, a non-directory or
+unreadable; only a marker that is simply absent means "not enabled".
+On a timeout git's process group receives SIGTERM, so git can remove
+its index lock, and SIGKILL after a one-second grace for the whole
+group (on Windows the kill is immediate). Git commands that reach the
+network (the team-bundle clone) stay in ethos's process group, so
+Ctrl-C stops them, and cannot prompt for credentials, so they fail
+instead of hanging. Git's tracing variables are removed from its
+environment. Tracing set in git configuration cannot be switched off
+from the command line, so answers never depend on stderr: an unset
+configuration key is recognised by git's exit status alone. Every git
+read declares what an absent answer is (a configuration key that is not set, no such remote,
 or git's "not a git repository (or any" discovery failure); a broken
-`.git` link, a dangling or looping `.git` symlink included, is never
-absent. Any other failure, a timeout included, is an error that
+`.git` link, a dangling or looping `.git` symlink in the directory or
+any ancestor up to the ceiling included, is never absent. Any other failure, a timeout included, is an error that
 carries git's message and names the command and the directory. A git
 failure is therefore never read as "no repository", "no remote", "not a
 gitlink" or an empty identity. One function, `resolve.Roots()`, locates
@@ -12888,14 +12895,20 @@ repository configuration, with an error for each; the lower-level
 lookups are unexported, so no other package can locate the repository
 another way. It checks every component of the `.punt-labs/ethos` path:
 a dangling symlink at any level, a non-directory or an unreadable entry
-is an error, and only an absent directory means "no store yet"; a
-dangling `ethos.yaml` is an error, not "no configuration". The CLI,
+(the final directory included) is an error, and only an absent
+directory means "no store yet"; a dangling or malformed `ethos.yaml` is
+an error, not "no configuration", and never stops a command that
+handles the error itself. Identity and repository reads (`git config
+user.*`, the origin remote) run in the located checkout, never in the
+working directory. The CLI,
 every hook, `ethos serve` (per call), setup, doctor, the UI and the
 mission, session, vendor and team commands use it. A command that
 needs the store exits 2 when any part cannot be read. Commands
 classified as global-only use the global stores; commands that handle
 the error themselves report a broken store where the user sees it
-(`ethos doctor` fails a "Repository store" row, session start tells the
+(`ethos doctor`, from the CLI or the MCP tool, fails a "Repository
+store" row and marks checks it could not run "not checked", never
+"not in a repo" or "not enabled"; session start tells the
 session, `pre-tool-use` denies, `subagent-start` reports the verifier
 gate as undecidable, `ethos serve` notes it on reads and denies writes,
 setup refuses). Session start reads the origin from the located
@@ -12906,17 +12919,22 @@ the identity, the repository or the checkout, the session is told why,
 and the roster records `repo_unresolved` with the reason instead of an
 empty repository; purge and the vacuum cross-check skip such rosters
 and say so (`--json` lists them as skipped), and
-`ethos session purge --force` removes them. The pre-commit seal runs
-its read-only git queries before writing any chunk, then writes every
-chunk, snapshots the index (keeping its mode) and stages the chunks in
-one `git add`. If anything fails after the writes it restores the index
-under `index.lock`, as git does, but only when the index still holds
-what its own `git add` left; if another process changed it, the seal
-leaves it and says so. It then removes the chunks it wrote and blocks
-the commit; the error names the failed step and states whether the
-tree is as it was or what is left, including a lock left by a killed
-git that it could not prove was its own. Removing leftover temporary files and
-creating empty directories during the seal are not undone. Tests compare 28 `.git` shapes with
+`ethos session purge --force` removes them, live or stale (`--json`
+lists them as `forced_unresolved` with a warning that their unsealed
+state was not verified). The pre-commit seal runs its read-only git
+queries before writing any chunk, then writes every chunk, snapshots
+the index (keeping its mode) and stages the chunks in one `git add`.
+If `git add` failed because another process held `index.lock`, nothing
+was staged: the seal leaves the lock and the index alone. After any
+other failure it restores the index under `index.lock`, as git does,
+but only when the index still holds what its own `git add` left; if
+another process changed it, the seal leaves it and says so. A leftover
+lock is removed only after the seal's own `git add` timed out, and only
+when no process holds the same file (compared by inode); any removal is
+reported. The seal then removes the chunks and the directories it
+created and blocks the commit; the error names the failed step and
+states whether the tree is as it was or what is left. Removing leftover
+temporary files from earlier runs is not undone. Tests compare 28 `.git` shapes with
 `git rev-parse` and run the same shapes with git hidden. On a refusal,
 or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one
 failing row; checks that read the store keep their own status and note
