@@ -20,11 +20,15 @@ import (
 // expires, and no failure is turned into "" on the way down.
 //
 // A lookup that failed is an error in the located value. A store command is
-// refused before it runs. A command whose class works without a store
-// (storeGlobalOnly: it touches only global stores; storeHandlesError: it
-// reports on or repairs the store itself) runs on the global stores: that is
-// an explicit choice of its class (repoRoots.Global), never a fallback, and
-// it is the only way a failure leaves a constructor with "".
+// refused before it runs. Two classes run without a store, for different
+// reasons. storeGlobalOnly commands touch only global stores, so a broken
+// repository store is irrelevant to them. storeHandlesError commands (doctor,
+// session-start, pre-tool-use, subagent-start, serve, setup, enable, disable,
+// seed, hooks, audit) report on or repair the store, and each one must show
+// the failure where the user sees it: a failing doctor row, session context, a
+// deny, a refused write, a refusal. Both run on the global stores for the
+// parts they use (repoRoots.Global); that is a choice of the class, never a
+// fallback, and it is the only way a failure leaves a constructor with "".
 
 // repoRoots is where the repository is, as located once for a command: the
 // resolve.Located (store, .punt-labs/ethos, checkout, config, and each one's

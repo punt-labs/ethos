@@ -86,3 +86,16 @@ func TestCLI_DanglingStoreDoctorFails(t *testing.T) {
 	}
 	assert.True(t, found, "a Repository store row: %s", out)
 }
+
+// subagent-start cannot decide the verifier gate against a broken store, and
+// says so in the session rather than on stderr alone.
+func TestCLI_DanglingStoreSubagentStartSaysSo(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se, store := danglingStoreEnv(t)
+	payload := `{"session_id":"dangling-s3","agent_id":"a-1","agent_type":"bwk","hook_event_name":"SubagentStart"}`
+	stdout, stderr, _ := runHookIn(t, se, se.repo, "subagent-start", payload)
+	assert.Contains(t, stdout, "cannot determine verifier gate", stderr)
+	assert.Contains(t, stdout, store, stderr)
+}
