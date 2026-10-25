@@ -70,7 +70,7 @@ var ErrNoIdentityMatch = errors.New("no identity matches")
 //  4. $USER — match identity handle field
 //
 // Returns an error when no step matches.
-func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
+func Resolve(store identity.IdentityStore, ss *session.Store, checkout string) (string, error) {
 	// Step 1: check for iam declaration via process tree.
 	if ss != nil {
 		sp, err := resolveFromSession(ss)
@@ -94,7 +94,7 @@ func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 	}
 
 	// Step 2: git config user.name → github field.
-	gitName, err := GitConfig("user.name")
+	gitName, err := GitConfig(checkout, "user.name")
 	if err != nil {
 		return "", fmt.Errorf("reading the git user: %w", err)
 	}
@@ -109,7 +109,7 @@ func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 	}
 
 	// Step 3: git config user.email → email field.
-	gitEmail, err := GitConfig("user.email")
+	gitEmail, err := GitConfig(checkout, "user.email")
 	if err != nil {
 		return "", fmt.Errorf("reading the git user: %w", err)
 	}
@@ -1558,7 +1558,9 @@ func readRegular(p string) ([]byte, error) {
 	return os.ReadFile(p)
 }
 
-// HandGitDirs returns the git directory and the common directory of the .git
+// HandGitDirs is not a locator: it reads the .git of a root the caller already
+// has (from Located), by the hand rules, for a caller without a git that runs.
+// It returns the git directory and the common directory of the .git
 // in root, by the hand rules (examineGit) and without running git: it never
 // opens anything but a regular file or a directory. An error says why there
 // is none: root/.git is absent, walked past, refused, or unreadable.
@@ -1595,11 +1597,29 @@ func validHead(s string) bool {
 	return true
 }
 
+// CheckoutOf is the work tree root git (or, without a git that runs, the hand
+// rules) finds for dir, through the same locator Roots uses: "" with a nil error
+// outside any repository, otherwise the error says why it cannot be found. It
+// answers for dir, not for the process: ETHOS_REPO_ROOT is not consulted. A
+// caller that has the process's checkout takes it from Located.Checkout; this is
+// for one that is given a directory to verify (githook's hooks lookup).
+func CheckoutOf(dir string) (string, error) {
+	r := locate(dir)
+	if errors.Is(r.err, ErrNotInRepo) {
+		return "", nil
+	}
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.loc.root, nil
+}
+
 // IsWorkingTree reports whether dir is the root of a working tree: it holds a
 // .git that git (or, without a git that runs, the hand rules) accepts as a
-// repository. A
-// .git that is walked past or refused is not a working tree; an error is
-// returned only when the .git cannot be read.
+// repository. A .git that is walked past or refused is not a working tree; an
+// error is returned only when the .git cannot be read. It is a classifier for
+// a directory it is handed (doctor's walk finds nested checkouts with it), not
+// a locator: the process's repository comes from Roots.
 func IsWorkingTree(dir string) (bool, error) {
 	dot := filepath.Join(dir, ".git")
 	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
@@ -1653,17 +1673,21 @@ func checkReadable(p string) error {
 	return nil
 }
 
-// RepoName returns the repository name (e.g. "punt-labs/ethos") for the
-// current working directory. Parses the "origin" remote URL.
-// Returns ("", nil) when there is no origin remote or the directory is not a
-// repository. Every other failure — a timeout, git not installed, dubious
-// ownership — is an error carrying git's message.
-func RepoName() (string, error) {
+// RepoName returns the repository name (e.g. "punt-labs/ethos") of checkout,
+// the work tree the resolver located, from its "origin" remote URL. It returns
+// ("", nil) when checkout is "" (outside a repository) or the repository has
+// no origin. Every other failure — a timeout, git not installed, dubious
+// ownership — is an error carrying git's message. git runs in checkout, never
+// in the working directory: the two differ under ETHOS_REPO_ROOT.
+func RepoName(checkout string) (string, error) {
+	if checkout == "" {
+		return "", nil
+	}
 	out, absent, err := gitenv.Read(gitenv.Spec{
-		Git: "git", Args: []string{"remote", "get-url", "origin"}, Env: gitenv.Parsed(),
+		Git: "git", Dir: checkout, Args: []string{"remote", "get-url", "origin"}, Env: gitenv.Parsed(),
 	}, gitenv.AbsentNoRemote|gitenv.AbsentNotRepo)
 	if err != nil {
-		return "", fmt.Errorf("reading the origin remote in %s: %w", cwdName(), err)
+		return "", fmt.Errorf("reading the origin remote in %s: %w", checkout, err)
 	}
 	if absent {
 		return "", nil
@@ -1677,14 +1701,6 @@ func RepoName() (string, error) {
 		fmt.Fprintf(os.Stderr, "ethos: could not parse repo name from remote URL %q\n", url)
 	}
 	return name, nil
-}
-
-// cwdName is the working directory for a message, or a stand-in.
-func cwdName() string {
-	if d, err := os.Getwd(); err == nil {
-		return d
-	}
-	return "the working directory"
 }
 
 // parseRepoName extracts "owner/repo" from a remote URL.
@@ -1714,28 +1730,42 @@ func parseRepoName(url string) string {
 	return name
 }
 
-// GitConfig reads a single git config value. Returns ("", nil) when the key
-// is unset, and when git is not installed: identity resolution does not
-// require git, so a missing git has no config to read. Every other failure — a
-// timeout, a corrupt config, dubious ownership — is an error carrying git's
-// message, never an unset key.
-func GitConfig(key string) (string, error) {
-	out, absent, err := gitenv.Read(gitenv.Spec{
-		Git: "git", Args: []string{"config", key}, Env: gitenv.Parsed(),
-	}, gitenv.AbsentUnset)
-	switch {
-	case errors.Is(err, exec.ErrNotFound):
-		return "", nil
-	case err != nil:
-		return "", fmt.Errorf("reading git config %s in %s: %w", key, cwdName(), err)
-	case absent:
-		return "", nil
+// GitConfig reads a single git config value as git would from checkout, the
+// work tree the resolver located (its own config, then global, then system).
+// With no checkout ("" — outside a repository, or one that could not be
+// located) only the global and system config are read, never the working
+// directory's repository: under ETHOS_REPO_ROOT that is some other repository.
+// Returns ("", nil) when the key is unset, and when git is not installed:
+// identity resolution does not require git, so a missing git has no config to
+// read. Every other failure — a timeout, a corrupt config, dubious ownership —
+// is an error carrying git's message, never an unset key.
+func GitConfig(checkout, key string) (string, error) {
+	scopes := [][]string{{}}
+	where := checkout
+	if checkout == "" {
+		scopes = [][]string{{"--global"}, {"--system"}}
+		where = "the global git config"
 	}
-	v := strings.TrimSpace(string(out))
-	// Strip surrounding quotes — some git configs store values with
-	// embedded quotes (e.g., user.name = "\"jmf-pobox\"").
-	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
-		v = v[1 : len(v)-1]
+	for _, scope := range scopes {
+		args := append(append([]string{"config"}, scope...), key)
+		out, absent, err := gitenv.Read(gitenv.Spec{
+			Git: "git", Dir: checkout, Args: args, Env: gitenv.Parsed(),
+		}, gitenv.AbsentUnset)
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return "", nil
+		case err != nil:
+			return "", fmt.Errorf("reading git config %s in %s: %w", key, where, err)
+		case absent:
+			continue
+		}
+		v := strings.TrimSpace(string(out))
+		// Strip surrounding quotes — some git configs store values with
+		// embedded quotes (e.g., user.name = "\"jmf-pobox\"").
+		if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+			v = v[1 : len(v)-1]
+		}
+		return v, nil
 	}
-	return v, nil
+	return "", nil
 }

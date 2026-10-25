@@ -902,7 +902,7 @@ func TestSetup_EmailDefaultsFromGit(t *testing.T) {
 
 	// The identity resolves by git email: no session, git user.name unset,
 	// so resolve falls to the email step (resolve.Resolve step 3).
-	handle, err := resolve.Resolve(store, session.NewStore(globalRoot))
+	handle, err := resolve.Resolve(store, session.NewStore(globalRoot), repo)
 	require.NoError(t, err)
 	assert.Equal(t, "git-default", handle, "created identity must resolve by git email")
 }

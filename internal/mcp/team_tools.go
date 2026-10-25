@@ -220,7 +220,11 @@ func (h *Handler) handleTeamAddCollab(req mcplib.CallToolRequest) (*mcplib.CallT
 func (h *Handler) handleTeamForRepo(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	repo := stringArg(req, "repo", "")
 	if repo == "" {
-		name, err := resolve.RepoName()
+		loc := resolve.Roots()
+		if loc.CheckoutErr != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("could not determine repo name: %v", loc.CheckoutErr)), nil
+		}
+		name, err := resolve.RepoName(loc.Checkout)
 		if err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("could not determine repo name: %v", err)), nil
 		}

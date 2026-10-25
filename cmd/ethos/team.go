@@ -229,7 +229,11 @@ func printTeam(w io.Writer, t *team.Team) {
 
 func runTeamForRepo(cmd *cobra.Command, repo string) error {
 	if repo == "" {
-		name, err := resolve.RepoName()
+		loc := currentRoots()
+		if loc.CheckoutErr != nil {
+			return fmt.Errorf("could not determine repo name: %w", loc.CheckoutErr)
+		}
+		name, err := resolve.RepoName(loc.Checkout)
 		if err != nil {
 			return fmt.Errorf("could not determine repo name: %w", err)
 		}

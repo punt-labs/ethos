@@ -114,7 +114,7 @@ func runADRCreate(cmd *cobra.Command) error {
 		// Try to resolve from session/git.
 		is := identityStore()
 		ss := sessionStore()
-		h, err := resolve.Resolve(is, ss)
+		h, err := resolve.Resolve(is, ss, currentRoots().Checkout)
 		if err == nil {
 			author = h
 		}

@@ -125,6 +125,13 @@ func runSetup(cmd *cobra.Command) error {
 		cfg.Handle = slugify(cfg.Name)
 	}
 
+	// Locate the checkout and the shared store BEFORE any write, applying
+	// both refusals, so a refusal leaves no identity behind.
+	repoRoot, storeRoot, err := locateSetupRoots()
+	if err != nil {
+		return err
+	}
+
 	// Default the human's email to git user.email when unspecified. This is
 	// what makes the created identity resolvable out of the box: resolve.Resolve
 	// matches git user.email against the identity's email field. Without it, a
@@ -136,7 +143,7 @@ func runSetup(cmd *cobra.Command) error {
 	// (then the hard-fail), not persist blank.
 	cfg.Email = strings.TrimSpace(cfg.Email)
 	if cfg.Email == "" {
-		email, err := resolve.GitConfig("user.email")
+		email, err := resolve.GitConfig(repoRoot, "user.email")
 		if err != nil {
 			return fmt.Errorf("setup: no email in --file, and reading git user.email failed: %w", err)
 		}
@@ -144,13 +151,6 @@ func runSetup(cmd *cobra.Command) error {
 	}
 	if cfg.Email == "" {
 		return fmt.Errorf("setup: no email — set git user.email or pass email: in --file")
-	}
-
-	// Locate the checkout and the shared store BEFORE any write, applying
-	// both refusals, so a refusal leaves no identity behind.
-	repoRoot, storeRoot, err := locateSetupRoots()
-	if err != nil {
-		return err
 	}
 
 	// Without --bundle, a re-run keeps the active bundle (see Bundle
@@ -584,7 +584,7 @@ func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 	// Prompt 3: Email (default: git user.email). The created identity must
 	// carry an email so it resolves by git email; runSetup hard-fails if this
 	// stays empty and git user.email is unset.
-	defaultEmail, err := resolve.GitConfig("user.email")
+	defaultEmail, err := resolve.GitConfig(currentRoots().Checkout, "user.email")
 	if err != nil {
 		fmt.Fprintf(errw, "ethos: setup: no email default: %v\n", err)
 	}

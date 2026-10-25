@@ -108,11 +108,17 @@ func warnIfGlobalFallback(repoRoot string) {
 	if home, err := os.UserHomeDir(); err == nil {
 		root = filepath.Join(home, ".punt-labs", "ethos")
 	}
+	// Say why there is no repo store: the located error, or that the
+	// directory is outside any repository.
+	why := "no git repository found for the current directory"
+	if err := currentRoots().Err(); err != nil {
+		why = fmt.Sprintf("the repository store could not be located (%v)", err)
+	}
 	fmt.Fprintf(os.Stderr,
-		"ethos: no git repository found for the current directory; operating on "+
+		"ethos: %s; operating on "+
 			"the global mission store at %s. Missions here are not visible from any "+
 			"repo checkout — set ETHOS_REPO_ROOT to force a repo store.\n",
-		root)
+		why, root)
 }
 
 // currentSessionIDBestEffort resolves the current session id from

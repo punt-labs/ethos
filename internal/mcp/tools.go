@@ -234,7 +234,7 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 }
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	handle, err := resolve.Resolve(h.store, h.sessionStore)
+	handle, err := resolve.Resolve(h.store, h.sessionStore, resolve.Roots().Checkout)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
 	}

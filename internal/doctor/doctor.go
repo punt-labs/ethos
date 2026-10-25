@@ -92,7 +92,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 
 	// Human identity carries its own status: a fresh install (no identity
 	// yet) is a WARN pointing at `ethos setup`, not a FAIL.
-	results = append(results, store(CheckHumanIdentity(s, ss)))
+	results = append(results, checkout(store(CheckHumanIdentity(s, ss, repoRoot))))
 
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
@@ -940,9 +940,9 @@ func hasRepoLocalTeam(storeRoot string) bool {
 // or "ambiguous identity: 2 matches for email ...". The old "no match — "
 // prefix contradicted the second one: an ambiguous store has too many matches,
 // not none.
-func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) Result {
+func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout string) Result {
 	name := "Human identity"
-	handle, err := resolve.Resolve(s, ss)
+	handle, err := resolve.Resolve(s, ss, checkout)
 	if err != nil {
 		if list, listErr := s.List(); listErr == nil &&
 			len(list.Identities) == 0 && len(list.Warnings) == 0 {

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -209,4 +212,19 @@ func TestCLI_DoctorLinkedWorktreeUnderTrace2(t *testing.T) {
 		}
 	}
 	assert.Contains(t, string(out), "Duplicate fields")
+}
+
+// The global-store warning names the located error, not "no git repository".
+func TestWarnIfGlobalFallbackNamesTheLocatedError(t *testing.T) {
+	loc := &repoRoots{Located: resolve.Located{ConfigErr: errors.New("parsing repo config /r/.punt-labs/ethos.yaml: boom")}, Global: true}
+	cmdRoots.Store(loc)
+	t.Cleanup(func() { cmdRoots.Store(nil) })
+	out := testhelpers.CaptureStderr(t, func() { warnIfGlobalFallback("") })
+	assert.Contains(t, out, "could not be located")
+	assert.Contains(t, out, "boom")
+	assert.NotContains(t, out, "no git repository found")
+
+	cmdRoots.Store(&repoRoots{Global: true})
+	out = testhelpers.CaptureStderr(t, func() { warnIfGlobalFallback("") })
+	assert.Contains(t, out, "no git repository found")
 }

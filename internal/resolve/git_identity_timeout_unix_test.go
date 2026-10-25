@@ -31,7 +31,7 @@ func TestGitConfigTimeout(t *testing.T) {
 	hangingGit(t)
 	var v string
 	var err error
-	within(t, 10*time.Second, func() { v, err = GitConfig("user.name") })
+	within(t, 10*time.Second, func() { v, err = GitConfig("", "user.name") })
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
 	assert.Empty(t, v)
 	assert.Contains(t, err.Error(), "user.name")
@@ -42,7 +42,7 @@ func TestRepoNameTimeout(t *testing.T) {
 	hangingGit(t)
 	var v string
 	var err error
-	within(t, 10*time.Second, func() { v, err = RepoName() })
+	within(t, 10*time.Second, func() { v, err = RepoName(".") })
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
 	assert.Empty(t, v)
 }
@@ -55,7 +55,7 @@ func TestResolveGitTimeoutIsAnError(t *testing.T) {
 	hangingGit(t)
 	var handle string
 	var err error
-	within(t, 10*time.Second, func() { handle, err = Resolve(s, nil) })
+	within(t, 10*time.Second, func() { handle, err = Resolve(s, nil, "") })
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
 	assert.Empty(t, handle)
 }
@@ -79,7 +79,7 @@ func TestGitReadsClassifyFailures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fakeGit(t, c.body)
 			t.Chdir(t.TempDir())
-			v, err := GitConfig("user.name")
+			v, err := GitConfig("", "user.name")
 			if c.cfgErr {
 				require.Error(t, err)
 				assert.Empty(t, v)
@@ -87,7 +87,7 @@ func TestGitReadsClassifyFailures(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, c.cfgWant, v)
 			}
-			r, err := RepoName()
+			r, err := RepoName(".")
 			if c.repoErr {
 				require.Error(t, err)
 				assert.Empty(t, r)
@@ -104,10 +104,10 @@ func TestGitReadsClassifyFailures(t *testing.T) {
 func TestGitMissingFromPath(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Chdir(t.TempDir())
-	v, err := GitConfig("user.name")
+	v, err := GitConfig("", "user.name")
 	require.NoError(t, err)
 	assert.Empty(t, v)
-	_, err = RepoName()
+	_, err = RepoName(".")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, exec.ErrNotFound)
 }
@@ -118,7 +118,7 @@ func TestRepoNameBrokenGitDirIsAnError(t *testing.T) {
 	for name, dir := range testhelpers.BrokenGitDirs(t) {
 		t.Run(name, func(t *testing.T) {
 			t.Chdir(dir)
-			got, err := RepoName()
+			got, err := RepoName(".")
 			require.Error(t, err)
 			assert.Empty(t, got)
 		})

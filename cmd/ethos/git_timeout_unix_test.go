@@ -48,7 +48,7 @@ func TestSetupFileGitTimeout(t *testing.T) {
 	cfgPath := filepath.Join(repo, "setup.yaml")
 	writeSetupFile(t, cfgPath, "name: Test User\nsolo: true\n")
 	setupFile = cfgPath
-	hangGit(t)
+	testhelpers.ShimGit(t, "config") // locating the repository works; reading the config hangs
 	cmd := &cobra.Command{}
 	cmd.SetErr(&bytes.Buffer{})
 	err := runSetup(cmd)

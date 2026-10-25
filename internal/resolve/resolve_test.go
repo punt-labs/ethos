@@ -73,7 +73,7 @@ func TestResolve_IamDeclaration(t *testing.T) {
 	))
 	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -123,7 +123,7 @@ func TestResolve_ToleratesLegacyKeyedParticipant(t *testing.T) {
 	))
 	require.NoError(t, ss.WriteCurrentSession(preferredPID, sessionID))
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle, "must tolerate a participant keyed on the legacy walk-derived PID")
 }
@@ -158,7 +158,7 @@ func TestResolve_ParticipantMissFallsThroughToGitOS(t *testing.T) {
 	))
 	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err, "a participant miss must not be a fatal error")
 	assert.Equal(t, "someone", handle, "must fall through to the git identity")
 }
@@ -225,7 +225,7 @@ func TestResolve_SessionFromEnv(t *testing.T) {
 	))
 	t.Setenv("ETHOS_SESSION", sessionID)
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle, "whoami must resolve the persona via ETHOS_SESSION, no PID pointer")
 }
@@ -251,7 +251,7 @@ func TestResolve_SessionAgentIDParity(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sessionID)
 	t.Setenv("ETHOS_AGENT_ID", "bwk-codex")
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "bwk", handle, "participant lookup must honor ETHOS_AGENT_ID")
 }
@@ -727,7 +727,7 @@ func TestResolve_GitNameMatchesGitHub(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human", GitHub: "mal-github",
 	})
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -739,7 +739,7 @@ func TestResolve_GitEmailMatchesEmail(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human", Email: "mal@serenity.ship",
 	})
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -762,7 +762,7 @@ func TestResolve_AmbiguousEmailFailsLoud(t *testing.T) {
 		Name: "Zoe Washburne", Handle: "zoe", Kind: "human", Email: "crew@serenity.ship",
 	}))
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.Error(t, err, "an ambiguous email must not resolve to an arbitrary identity")
 	assert.Empty(t, handle)
 	assert.Contains(t, err.Error(), "ambiguous identity: 2 matches")
@@ -776,7 +776,7 @@ func TestResolve_OSUserMatchesHandle(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
 	})
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -788,7 +788,7 @@ func TestResolve_NoMatch(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
 	})
 
-	_, err := Resolve(s, nil)
+	_, err := Resolve(s, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown-user")
 	assert.Contains(t, err.Error(), "nobody")
@@ -808,12 +808,12 @@ func TestResolve_NoMatchHintsRepoOnly(t *testing.T) {
 	}))
 
 	layered := identity.NewLayeredStoreWithBundle(repo, nil, global, false)
-	handle, err := Resolve(layered, nil)
+	handle, err := Resolve(layered, nil, "")
 	require.NoError(t, err, "layered still finds the global identity")
 	assert.Equal(t, "nobody", handle)
 
 	repoOnly := identity.NewLayeredStoreWithBundle(repo, nil, global, true)
-	_, err = Resolve(repoOnly, nil)
+	_, err = Resolve(repoOnly, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolution: repo-only")
 	assert.Contains(t, err.Error(), "ethos vendor")
@@ -831,7 +831,7 @@ func TestResolve_PriorityOrder(t *testing.T) {
 		Name: "Other Person", Handle: "other", Kind: "human", GitHub: "other-github",
 	}))
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -1476,17 +1476,17 @@ var captureStderr = testhelpers.CaptureStderr
 func TestGitConfig_ReadsValue(t *testing.T) {
 	setGitConfig(t, "test-user", "test@example.com")
 
-	name, err := GitConfig("user.name")
+	name, err := GitConfig("", "user.name")
 	require.NoError(t, err)
 	assert.Equal(t, "test-user", name)
-	email, err := GitConfig("user.email")
+	email, err := GitConfig("", "user.email")
 	require.NoError(t, err)
 	assert.Equal(t, "test@example.com", email)
 }
 
 func TestGitConfig_MissingKey(t *testing.T) {
 	setGitConfig(t, "", "")
-	v, err := GitConfig("user.name")
+	v, err := GitConfig("", "user.name")
 	require.NoError(t, err)
 	assert.Equal(t, "", v)
 }
@@ -1538,7 +1538,7 @@ func TestRepoName(t *testing.T) {
 			runGit(t, dir, "init")
 			runGit(t, dir, "remote", "add", "origin", tt.url)
 
-			got, err := RepoName()
+			got, err := RepoName(".")
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -1555,7 +1555,7 @@ func TestRepoName_NoRemote(t *testing.T) {
 	setGitConfig(t, "", "")
 	runGit(t, dir, "init")
 
-	got, err := RepoName()
+	got, err := RepoName(".")
 	require.NoError(t, err)
 	assert.Equal(t, "", got)
 }
@@ -1886,4 +1886,38 @@ func TestLinkedWorktreeStoreUnderTrace2(t *testing.T) {
 	loc := Roots()
 	require.NoError(t, loc.StoreFailure(), "core.bare unset is exit 1, whatever git wrote to stderr")
 	assert.Equal(t, realpath(t, main), realpath(t, loc.Store))
+}
+
+// The git identity and the origin come from the located checkout, not the
+// working directory: under ETHOS_REPO_ROOT the two are different repositories,
+// and outside any repository the working directory's repository is not read at
+// all.
+func TestGitReadsUseTheLocatedCheckout(t *testing.T) {
+	setGitConfig(t, "global-user", "global@example.com")
+	base := t.TempDir()
+	a := filepath.Join(base, "a")
+	b := filepath.Join(base, "b")
+	for _, d := range []string{a, b} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+		runGit(t, d, "init")
+	}
+	runGit(t, a, "config", "user.name", "alice")
+	runGit(t, a, "remote", "add", "origin", "git@github.com:punt-labs/a.git")
+	runGit(t, b, "config", "user.name", "bob")
+	runGit(t, b, "remote", "add", "origin", "git@github.com:punt-labs/b.git")
+	chdir(t, b) // the working directory is the other repository
+
+	name, err := GitConfig(a, "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "alice", name, "the checkout's own config")
+	repo, err := RepoName(a)
+	require.NoError(t, err)
+	assert.Equal(t, "punt-labs/a", repo, "the checkout's origin, not the cwd's")
+
+	name, err = GitConfig("", "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "global-user", name, "no checkout: the global config, never the cwd repository's")
+	repo, err = RepoName("")
+	require.NoError(t, err)
+	assert.Empty(t, repo, "no checkout: no repository name")
 }

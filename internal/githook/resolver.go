@@ -145,9 +145,15 @@ func degradedLookup(root, dir string, handErr, cause error) Lookup {
 // without it git would walk up from a non-repo repoRoot and resolve an
 // ancestor repo's hooks.
 func gitHooksPath(repoRoot string) (Lookup, error) {
-	top, err := gitOut(repoRoot, "rev-parse", "--show-toplevel")
+	if _, err := exec.LookPath("git"); err != nil {
+		return Lookup{}, fmt.Errorf("running git rev-parse: %w", err)
+	}
+	top, err := resolve.CheckoutOf(repoRoot)
 	if err != nil {
-		return Lookup{}, fmt.Errorf("git rev-parse --show-toplevel: %w", err)
+		return Lookup{}, fmt.Errorf("locating the work tree: %w", err)
+	}
+	if top == "" {
+		return Lookup{}, fmt.Errorf("not a git repository: %s is outside any repository", repoRoot)
 	}
 	if !sameFile(top, repoRoot) {
 		return Lookup{}, &workTreeError{top: top, root: repoRoot}
