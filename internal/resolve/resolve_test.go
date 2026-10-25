@@ -1362,11 +1362,73 @@ func TestStoreRepoRoot_StaleWorktreeWarns(t *testing.T) {
 		[]byte("gitdir: "+gone+"\n"), 0o644))
 
 	out := captureStderr(t, func() {
-		assert.Equal(t, realpath(t, dir), realpath(t, manualStoreRoot(dir)),
+		assert.Equal(t, realpath(t, dir), realpath(t, manualStoreRoot(dir, warnOnce)),
 			"a stale worktree falls back to its own store")
 	})
 	assert.Contains(t, out, "may have moved")
 	assert.Contains(t, out, gone)
+}
+
+// The resolvers run on every command and hook: the same refusal or stale
+// worktree is said once per process, not once per call.
+func TestResolverMessagesPrintOnce(t *testing.T) {
+	t.Run("refused override", func(t *testing.T) {
+		bogus := filepath.Join(t.TempDir(), "does-not-exist")
+		t.Setenv("ETHOS_REPO_ROOT", bogus)
+		out := captureStderr(t, func() {
+			StoreRepoRoot()
+			StoreRepoRoot()
+			FindRepoRoot()
+			FindRepoRoot()
+		})
+		assert.Equal(t, 1, strings.Count(out, bogus))
+	})
+
+	t.Run("stale worktree", func(t *testing.T) {
+		dir := t.TempDir()
+		gone := filepath.Join(t.TempDir(), "gone", ".git", "worktrees", "wt")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+gone+"\n"), 0o644))
+		out := captureStderr(t, func() {
+			manualStoreRoot(dir, warnOnce)
+			manualStoreRoot(dir, warnOnce)
+		})
+		assert.Equal(t, 1, strings.Count(out, "may have moved"))
+	})
+}
+
+// LocateStoreRoot reports through its error and prints nothing: not a skipped
+// .git, not a stale worktree. StoreRepoRoot, which has no error to return,
+// prints them.
+func TestLocateStoreRootIsSilent(t *testing.T) {
+	t.Run("skipped .git", func(t *testing.T) {
+		inner := unexaminableGit(t, skippedGitCases["dangling symlink"])
+		outer := filepath.Dir(inner)
+		require.NoError(t, os.MkdirAll(filepath.Join(outer, ".punt-labs", "ethos"), 0o755))
+		var got string
+		out := captureStderr(t, func() {
+			var err error
+			got, err = LocateStoreRoot()
+			require.NoError(t, err)
+		})
+		assert.Equal(t, realpath(t, outer), realpath(t, got))
+		assert.Empty(t, out)
+
+		out = captureStderr(t, func() { StoreRepoRoot() })
+		assert.Contains(t, out, "skipping", "StoreRepoRoot still says what it skipped")
+	})
+
+	t.Run("unreadable worktree pointer", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "admin", "commondir"), 0o755)) // unreadable as a file
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(dir, "admin")+"\n"), 0o644))
+		t.Chdir(dir)
+		t.Setenv("PATH", t.TempDir()) // no git: the manual resolver runs
+		out := captureStderr(t, func() {
+			_, err := LocateStoreRoot()
+			require.NoError(t, err)
+		})
+		assert.Empty(t, out)
+	})
 }
 
 // TestStoreRepoRoot_SubmoduleWorktreeStaysOut pins the SFH F4 fix: a common
@@ -1389,7 +1451,7 @@ func TestStoreRepoRoot_SubmoduleWorktreeStaysOut(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
 		[]byte("gitdir: "+admin+"\n"), 0o644))
 
-	got := manualStoreRoot(dir)
+	got := manualStoreRoot(dir, warnOnce)
 	assert.Equal(t, realpath(t, dir), realpath(t, got),
 		"a non-.git common dir must not resolve into .git/modules")
 	assert.NotContains(t, got, ".git",

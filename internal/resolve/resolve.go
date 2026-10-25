@@ -662,7 +662,7 @@ func RepoRootOverride() (value string, set bool) {
 func repoRootOverride(requireStore bool) (root string, set bool) {
 	root, set, err := checkRepoRootOverride(requireStore)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		warnOnce("ethos: %v", err)
 	}
 	return root, set
 }
@@ -746,7 +746,7 @@ var ErrNotInRepo = errors.New("not inside a git repository")
 // as git does. A .git that git skips (missing, a dangling symlink, an empty
 // directory, a FIFO or other special file) is passed over and warn (if not
 // nil) is told. A .git that git refuses (an empty or garbage gitfile, a gitdir
-// to nowhere) or cannot read (permission denied, a symlink loop) is an error:
+// to nowhere) or cannot read (permission denied) is an error:
 // skipping it would resolve an enclosing repository's root, and write into the
 // wrong tree.
 func walkRepoRoot(warn func(format string, args ...any)) (string, error) {
@@ -881,7 +881,7 @@ func isGitDir(dir string) (bool, error) {
 //     submodule); resolve the owning repo through the common dir. A .git
 //     that cannot be examined stops the walk with "" (see walkRepoRoot).
 func StoreRepoRoot() string {
-	root, err := LocateStoreRoot()
+	root, err := locateStoreRoot(warnOnce)
 	if err != nil && !errors.Is(err, ErrNotInRepo) {
 		warnOnce("ethos: %v", err)
 	}
@@ -894,17 +894,23 @@ func StoreRepoRoot() string {
 // writer must refuse on any other error rather than fall back to the global
 // store. It prints nothing; the caller reports the error.
 func LocateStoreRoot() (string, error) {
+	return locateStoreRoot(nil)
+}
+
+// locateStoreRoot is LocateStoreRoot telling warn (if not nil) what it skipped
+// or fell back from on the way.
+func locateStoreRoot(warn func(format string, args ...any)) (string, error) {
 	if root, set, err := checkRepoRootOverride(true); set {
 		return root, err
 	}
-	dir, err := walkRepoRoot(warnOnce)
+	dir, err := walkRepoRoot(warn)
 	if err != nil {
 		return "", err
 	}
 	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
 		return dir, nil // main work tree — the store lives here
 	}
-	if root := worktreeStoreRoot(dir); root != "" {
+	if root := worktreeStoreRoot(dir, warn); root != "" {
 		return root, nil
 	}
 	return dir, nil
@@ -918,11 +924,11 @@ func LocateStoreRoot() (string, error) {
 // gitdir and its commondir by hand when git is absent, so a worktree still
 // resolves in a git-less environment. This mirrors the common-dir idiom in
 // internal/doctor and internal/githook.
-func worktreeStoreRoot(worktree string) string {
+func worktreeStoreRoot(worktree string, warn func(format string, args ...any)) string {
 	if root := gitStoreRoot(worktree); root != "" {
 		return root
 	}
-	return manualStoreRoot(worktree)
+	return manualStoreRoot(worktree, warn)
 }
 
 // gitStoreRoot returns git's own resolution of the owning repo root, or
@@ -974,16 +980,19 @@ func gitRevParseAbs(dir, arg string) string {
 // deleted, a corrupt gitdir, or a permission failure. The clean case is
 // silent; a genuine error warns to stderr naming the worktree fallback,
 // rather than silently returning an empty store (SFH F2).
-func manualStoreRoot(worktree string) string {
+func manualStoreRoot(worktree string, warn func(format string, args ...any)) string {
+	if warn == nil {
+		warn = func(string, ...any) {}
+	}
 	dotgit := filepath.Join(worktree, ".git")
 	data, err := os.ReadFile(dotgit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", dotgit, err, worktree)
+		warn("ethos: warning: cannot read %s (%v); using the worktree store at %s", dotgit, err, worktree)
 		return worktree
 	}
 	gd := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
 	if gd == "" {
-		fmt.Fprintf(os.Stderr, "ethos: warning: %s has no gitdir pointer; using the worktree store at %s\n", dotgit, worktree)
+		warn("ethos: warning: %s has no gitdir pointer; using the worktree store at %s", dotgit, worktree)
 		return worktree
 	}
 	if !filepath.IsAbs(gd) {
@@ -993,7 +1002,7 @@ func manualStoreRoot(worktree string) string {
 		// The gitdir target is gone — a stale worktree (its main repo moved
 		// or was deleted), not a clean submodule. Do not silently treat it
 		// as one.
-		fmt.Fprintf(os.Stderr, "ethos: warning: worktree git dir %s is unreadable (%v); the main repo may have moved — using the worktree store at %s\n", gd, err, worktree)
+		warn("ethos: warning: worktree git dir %s is unreadable (%v); the main repo may have moved — using the worktree store at %s", gd, err, worktree)
 		return worktree
 	}
 	data, err = os.ReadFile(filepath.Join(gd, "commondir"))
@@ -1001,7 +1010,7 @@ func manualStoreRoot(worktree string) string {
 		if !os.IsNotExist(err) {
 			// A present-but-unreadable commondir is a real error, not the
 			// clean submodule signal (which is commondir simply absent).
-			fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", filepath.Join(gd, "commondir"), err, worktree)
+			warn("ethos: warning: cannot read %s (%v); using the worktree store at %s", filepath.Join(gd, "commondir"), err, worktree)
 		}
 		return worktree // absent commondir: a submodule keeps its own store
 	}
