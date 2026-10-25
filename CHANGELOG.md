@@ -276,13 +276,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors**, reported by every command and hook, instead of reading as
   "not a repository", "no store" or "no configuration". A malformed or
   dangling `ethos.yaml` no longer stops the hooks, `ethos doctor` or
-  `ethos serve`; they report it. In an enabled repository, `pre-commit`
-  and `commit-msg` block the commit when `ethos` is not installed or the
-  `.punt-labs/ethos` path is broken. Git tracing set in the environment
-  or in git configuration no longer makes ethos fail. `ethos team
-  add-bundle` fails instead of waiting for a credential prompt, and
-  Ctrl-C stops its clone. Identity and origin reads use the located
-  repository, not the current directory.
+  `ethos serve`; they report it, as they do an unusable `active_bundle`
+  or `repo-only` policy. In an enabled repository, `pre-commit` and
+  `commit-msg` block the commit when `ethos` is not installed, the
+  `.punt-labs/ethos` path is broken, or the `enabled` marker is not a
+  regular file. Git tracing set in the environment or in git
+  configuration no longer makes ethos fail. An unreadable git
+  configuration file is reported instead of treated as "not set".
+  `ethos team add-bundle` keeps your ssh command, fails instead of
+  waiting for a credential prompt, and Ctrl-C or a timeout stops its
+  clone with its ssh children. Identity and origin reads use the located
+  repository, not the current directory; outside a repository they
+  still honour included git configuration files.
+- **`ethos enable` installs a `pre-merge-commit` hook**, so a
+  `git merge --no-ff` commit is sealed like any other. Re-run
+  `ethos enable` in an already enabled repository; until then
+  `ethos doctor` fails the "Audit merge seal hook" row.
+- **The MCP `identity` tool refuses while the repository store or its
+  configuration cannot be read**, instead of answering from the global
+  store.
 - **Session rosters whose repository could not be resolved** show
   `unresolved` in `ethos session list` (`repo_unresolved` in its JSON),
   and `ethos session show` prints the reason. `ethos session purge`
