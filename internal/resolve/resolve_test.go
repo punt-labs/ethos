@@ -1,7 +1,6 @@
 package resolve
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1348,27 +1347,6 @@ func TestRepoRoot_EnvOverrideInvalid(t *testing.T) {
 	})
 }
 
-// TestStoreRepoRoot_StaleWorktreeWarns pins the SFH F2 fix: when a
-// worktree's git dir is gone (the main repo moved or was deleted), the
-// resolver warns and falls back to the worktree store rather than silently
-// treating the stale pointer as a clean submodule.
-func TestStoreRepoRoot_StaleWorktreeWarns(t *testing.T) {
-	dir := t.TempDir()
-	// A .git file pointing at a git dir that does not exist — the shape of a
-	// worktree whose main repo has moved. manualStoreRoot handles this
-	// directly; call it so the test does not depend on git's own behavior.
-	gone := filepath.Join(t.TempDir(), "gone", ".git", "worktrees", "wt")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
-		[]byte("gitdir: "+gone+"\n"), 0o644))
-
-	out := captureStderr(t, func() {
-		assert.Equal(t, realpath(t, dir), realpath(t, manualStoreRoot(dir, warnOnce)),
-			"a stale worktree falls back to its own store")
-	})
-	assert.Contains(t, out, "may have moved")
-	assert.Contains(t, out, gone)
-}
-
 // The resolvers run on every command and hook: the same refusal or stale
 // worktree is said once per process, not once per call.
 func TestResolverMessagesPrintOnce(t *testing.T) {
@@ -1384,78 +1362,62 @@ func TestResolverMessagesPrintOnce(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(out, bogus))
 	})
 
-	t.Run("stale worktree", func(t *testing.T) {
-		dir := t.TempDir()
-		gone := filepath.Join(t.TempDir(), "gone", ".git", "worktrees", "wt")
-		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+gone+"\n"), 0o644))
-		out := captureStderr(t, func() {
-			manualStoreRoot(dir, warnOnce)
-			manualStoreRoot(dir, warnOnce)
-		})
-		assert.Equal(t, 1, strings.Count(out, "may have moved"))
-	})
 }
 
-// LocateStoreRoot reports through its error and prints nothing: not a skipped
-// .git, not a stale worktree. StoreRepoRoot, which has no error to return,
-// prints them.
-func TestLocateStoreRootIsSilent(t *testing.T) {
-	t.Run("skipped .git", func(t *testing.T) {
-		inner := unexaminableGit(t, skippedGitCases["dangling symlink"])
-		outer := filepath.Dir(inner)
-		require.NoError(t, os.MkdirAll(filepath.Join(outer, ".punt-labs", "ethos"), 0o755))
-		var got string
-		out := captureStderr(t, func() {
+// LocateStoreRoot returns an unreadable worktree pointer as its error and
+// prints nothing of it, with git or without: falling back to the worktree's
+// own store would write into the wrong tree.
+func TestLocateStoreRootRefusesUnreadableCommondir(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "git", false: "no git"}[withGit], func(t *testing.T) {
+			if withGit {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("git not installed")
+				}
+			}
+			dir := t.TempDir()
+			admin := filepath.Join(dir, "admin")
+			makeGitDirAt(t, admin)
+			require.NoError(t, os.Mkdir(filepath.Join(admin, "commondir"), 0o755)) // unreadable as a file
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+admin+"\n"), 0o644))
+			t.Chdir(dir)
+			if !withGit {
+				hideGit(t)
+			}
+			var got string
 			var err error
-			got, err = LocateStoreRoot()
-			require.NoError(t, err)
+			out := captureStderr(t, func() { got, err = LocateStoreRoot() })
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrNotInRepo)
+			assert.Empty(t, got)
+			assert.Empty(t, out)
 		})
-		assert.Equal(t, realpath(t, outer), realpath(t, got))
-		assert.Empty(t, out)
-
-		out = captureStderr(t, func() { StoreRepoRoot() })
-		assert.Contains(t, out, "skipping", "StoreRepoRoot still says what it skipped")
-	})
-
-	t.Run("unreadable worktree pointer", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, "admin", "commondir"), 0o755)) // unreadable as a file
-		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(dir, "admin")+"\n"), 0o644))
-		t.Chdir(dir)
-		t.Setenv("PATH", t.TempDir()) // no git: the manual resolver runs
-		out := captureStderr(t, func() {
-			_, err := LocateStoreRoot()
-			require.NoError(t, err)
-		})
-		assert.Empty(t, out)
-	})
+	}
 }
 
-// TestStoreRepoRoot_SubmoduleWorktreeStaysOut pins the SFH F4 fix: a common
-// dir that is not a .git directory (e.g. a submodule's .git/modules/<name>)
-// must not resolve to a bogus root inside .git — gitStoreRoot keeps the
-// worktree.
-func TestStoreRepoRoot_SubmoduleWorktreeStaysOut(t *testing.T) {
-	// gitStoreRoot's decision hinges on filepath.Base(common). A common dir
-	// under .git/modules has a basename that is the module name, not ".git",
-	// so the resolver must decline to take its parent. manualStoreRoot
-	// applies the same guard; exercise it with a commondir that resolves to
-	// a modules dir.
-	dir := t.TempDir()
-	// The module admin dir lives under a super-repo's .git/modules, not under
-	// the worktree — the worktree's .git is a file pointing at it.
-	admin := filepath.Join(t.TempDir(), "super", ".git", "modules", "sub")
-	require.NoError(t, os.MkdirAll(admin, 0o755))
-	// commondir points at the module admin dir itself (basename "sub").
-	require.NoError(t, os.WriteFile(filepath.Join(admin, "commondir"), []byte(".\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
-		[]byte("gitdir: "+admin+"\n"), 0o644))
-
-	got := manualStoreRoot(dir, warnOnce)
-	assert.Equal(t, realpath(t, dir), realpath(t, got),
-		"a non-.git common dir must not resolve into .git/modules")
-	assert.NotContains(t, got, ".git",
-		"the resolved root must not sit inside a .git path")
+// A submodule's common dir is its own .git/modules/<name>, not a .git: the
+// store stays in the submodule's work tree, never inside .git.
+func TestStoreRepoRoot_SubmoduleStaysOut(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "git", false: "no git"}[withGit], func(t *testing.T) {
+			if withGit {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("git not installed")
+				}
+			}
+			dir := t.TempDir()
+			admin := filepath.Join(t.TempDir(), "super", ".git", "modules", "sub")
+			makeGitDirAt(t, admin)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+admin+"\n"), 0o644))
+			t.Chdir(dir)
+			if !withGit {
+				hideGit(t)
+			}
+			got, err := LocateStoreRoot()
+			require.NoError(t, err)
+			assert.Equal(t, realpath(t, dir), realpath(t, got))
+		})
+	}
 }
 
 // realpath resolves symlinks so a comparison holds on macOS, where
@@ -1768,21 +1730,6 @@ func unexaminableGit(t *testing.T, mk func(dot string) error) string {
 
 func emptyGitFile(dot string) error { return os.WriteFile(dot, nil, 0o644) }
 
-// skippedGitCases are .git entries git skips: it keeps walking up.
-var skippedGitCases = map[string]func(dot string) error{
-	"dangling symlink": func(dot string) error { return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot) },
-	"empty directory":  func(dot string) error { return os.Mkdir(dot, 0o755) },
-	"symlink loop":     func(dot string) error { return os.Symlink(dot, dot) },
-}
-
-// refusedGitCases are .git entries git stops at with a fatal error.
-var refusedGitCases = map[string]func(dot string) error{
-	"empty file":        emptyGitFile,
-	"garbage file":      func(dot string) error { return os.WriteFile(dot, []byte("not a gitfile\n"), 0o644) },
-	"no gitdir prefix":  func(dot string) error { return os.WriteFile(dot, []byte("/somewhere/else\n"), 0o644) },
-	"gitdir to nowhere": func(dot string) error { return os.WriteFile(dot, []byte("gitdir: /nonexistent\n"), 0o644) },
-}
-
 // A .git that git itself cannot read stops StoreRepoRoot: walking past it
 // would resolve the enclosing repository and write into the wrong store.
 func TestStoreRepoRootStopsAtUnexaminableGit(t *testing.T) {
@@ -1793,83 +1740,20 @@ func TestStoreRepoRootStopsAtUnexaminableGit(t *testing.T) {
 	assert.Contains(t, out, filepath.Join(inner, ".git"))
 }
 
-// A .git that git skips (dangling symlink, symlink loop, empty directory) is skipped: the
-// walk continues to the enclosing repository, with one warning.
-func TestWalkSkipsInvalidGit(t *testing.T) {
-	for name, mk := range skippedGitCases {
-		t.Run(name, func(t *testing.T) {
-			inner := unexaminableGit(t, mk)
-			outer := filepath.Dir(inner)
-			var got string
-			out := captureStderr(t, func() { got = FindRepoRoot() })
-			assert.Equal(t, realpath(t, outer), realpath(t, got))
-			assert.Contains(t, out, filepath.Join(inner, ".git"))
-			assert.Equal(t, 1, strings.Count(out, "skipping"), "one warning")
-
-			got, err := LocateRepoRoot()
-			require.NoError(t, err)
-			assert.Equal(t, realpath(t, outer), realpath(t, got))
-		})
-	}
-}
-
-// A .git that git refuses (an empty or garbage gitfile, a gitdir to nowhere) is an error naming the path, not a walk to the enclosing repository.
-func TestWalkRefusesBrokenGit(t *testing.T) {
-	for name, mk := range refusedGitCases {
-		t.Run(name, func(t *testing.T) {
-			inner := unexaminableGit(t, mk)
-			got, err := LocateRepoRoot()
-			assert.Empty(t, got)
-			require.Error(t, err)
-			assert.NotErrorIs(t, err, ErrNotInRepo)
-			assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
-		})
-	}
-}
-
-// The walk agrees with git for every case: skipped entries resolve the outer
-// repository, refused ones fail.
-func TestWalkAgreesWithGit(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
-	cases := map[string]bool{}
-	all := map[string]func(dot string) error{}
-	for name, mk := range skippedGitCases {
-		cases[name], all[name] = true, mk
-	}
-	for name, mk := range refusedGitCases {
-		cases[name], all[name] = false, mk
-	}
-	for name, mk := range all {
-		t.Run(name, func(t *testing.T) {
-			inner := unexaminableGit(t, mk)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			out, gitErr := exec.CommandContext(ctx, "git", "-C", inner, "rev-parse", "--show-toplevel").Output()
-			got, err := LocateRepoRoot()
-			if cases[name] {
-				require.NoError(t, gitErr, "git skips this .git")
-				require.NoError(t, err)
-				assert.Equal(t, realpath(t, strings.TrimSpace(string(out))), realpath(t, got))
-				return
-			}
-			require.Error(t, gitErr, "git refuses this .git")
-			require.Error(t, err)
-		})
-	}
-}
-
 func TestLocateStoreRoot(t *testing.T) {
-	t.Run("invalid inner .git resolves the outer store", func(t *testing.T) {
-		for name, mk := range skippedGitCases {
+	t.Run("a skipped inner .git resolves the outer store", func(t *testing.T) {
+		for name, s := range gitShapes {
+			if s.hand != handOuter {
+				continue
+			}
 			t.Run(name, func(t *testing.T) {
-				inner := unexaminableGit(t, mk)
-				outer := filepath.Dir(inner)
-				require.NoError(t, os.MkdirAll(filepath.Join(outer, ".punt-labs", "ethos"), 0o755))
-				got, err := LocateStoreRoot()
+				_, outer := shapeIn(t, s)
+				hideGit(t)
+				var got string
+				var err error
+				captureStderr(t, func() { got, err = LocateStoreRoot() })
 				require.NoError(t, err)
-				assert.Equal(t, realpath(t, outer), realpath(t, got))
+				assert.Equal(t, outer, got)
 			})
 		}
 	})

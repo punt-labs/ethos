@@ -695,25 +695,20 @@ func checkRepoRootOverride(requireStore bool) (root string, set bool, err error)
 // belong to the checkout, not the shared store. Store readers and writers
 // use StoreRepoRoot instead.
 //
-// ETHOS_REPO_ROOT (whitespace-trimmed) overrides the walk so an operator
+// ETHOS_REPO_ROOT (whitespace-trimmed) overrides resolution so an operator
 // can force the root when auto-resolution is wrong; it must name an existing
-// directory (see repoRootOverride).
+// directory (see repoRootOverride). Any failure other than "outside a
+// repository" is printed to stderr, so a .git git refuses is not reported as
+// "not in a git repository".
 func FindRepoRoot() string {
 	if root, set := repoRootOverride(false); set {
 		return root
 	}
-	return warnWalkRepoRoot()
-}
-
-// warnWalkRepoRoot is walkRepoRoot for callers that return only a path: any
-// failure other than "outside a repository" is printed to stderr, so an
-// unreadable .git is not reported as "not in a git repository".
-func warnWalkRepoRoot() string {
-	root, err := walkRepoRoot(warnOnce)
+	loc, err := locateCwd()
 	if err != nil && !errors.Is(err, ErrNotInRepo) {
 		warnOnce("ethos: %v", err)
 	}
-	return root
+	return loc.root
 }
 
 // warned holds the messages warnOnce has printed.
@@ -729,13 +724,15 @@ func warnOnce(format string, args ...any) {
 }
 
 // LocateRepoRoot is FindRepoRoot with the reason it found nothing: an invalid
-// ETHOS_REPO_ROOT, an unreadable working directory, or a working directory
-// outside any repository. It prints nothing; the caller reports the error.
+// ETHOS_REPO_ROOT, an unreadable working directory, a .git git refuses, or a
+// working directory outside any repository. It returns the error rather than
+// printing it; a .git it walked past is still noted on stderr (warnOnce).
 func LocateRepoRoot() (string, error) {
 	if root, set, err := checkRepoRootOverride(false); set {
 		return root, err
 	}
-	return walkRepoRoot(nil)
+	loc, err := locateCwd()
+	return loc.root, err
 }
 
 // ErrOverrideNoStore is wrapped by the error LocateStoreRoot returns when
@@ -746,124 +743,6 @@ var ErrOverrideNoStore = errors.New("no ethos store at the overridden root")
 // ErrNotInRepo is wrapped by the error LocateRepoRoot returns when the working
 // directory is outside any repository, the one failure that is not a problem.
 var ErrNotInRepo = errors.New("not inside a git repository")
-
-// walkRepoRoot walks up from the working directory to the first .git marker,
-// as git does. A .git that git skips (missing, a dangling symlink, an empty
-// directory, a FIFO or other special file) is passed over and warn (if not
-// nil) is told. A .git that git refuses (an empty or garbage gitfile, a gitdir
-// to nowhere) or cannot read (permission denied) is an error:
-// skipping it would resolve an enclosing repository's root, and write into the
-// wrong tree.
-func walkRepoRoot(warn func(format string, args ...any)) (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("getting the working directory: %w", err)
-	}
-	for dir := cwd; ; {
-		dot := filepath.Join(dir, ".git")
-		found, skip, err := examineGit(dot)
-		if err != nil {
-			return "", err
-		}
-		if found {
-			return dir, nil
-		}
-		if skip != "" && warn != nil {
-			warn("ethos: warning: skipping %s: %s", dot, skip)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("%s is %w", cwd, ErrNotInRepo)
-		}
-		dir = parent
-	}
-}
-
-// examineGit classifies a .git path by git's own rules: found when it is a git
-// directory or a gitfile naming one; otherwise a skip reason when git walks
-// past it (empty when the path simply does not exist); an error when git
-// refuses it or it cannot be read. It never reads anything but a regular file.
-func examineGit(dot string) (found bool, skip string, err error) {
-	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
-		return false, "", nil
-	} else if err != nil {
-		return false, "", fmt.Errorf("examining %s: %w", dot, err)
-	}
-	info, err := os.Stat(dot)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return false, "dangling symlink", nil
-	case errors.Is(err, syscall.ELOOP):
-		return false, "symlink loop", nil // git skips it too
-	case err != nil:
-		return false, "", fmt.Errorf("examining %s: %w", dot, err)
-	case info.IsDir():
-		ok, err := isGitDir(dot)
-		if err != nil {
-			return false, "", fmt.Errorf("examining %s: %w", dot, err)
-		}
-		if !ok {
-			return false, "not a git directory", nil
-		}
-		return true, "", nil
-	case !info.Mode().IsRegular():
-		return false, "not a directory or a gitfile", nil
-	}
-	data, err := os.ReadFile(dot)
-	if err != nil {
-		return false, "", fmt.Errorf("examining %s: %w", dot, err)
-	}
-	target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
-	target = strings.TrimSpace(target)
-	if !ok || target == "" {
-		return false, "", fmt.Errorf("%s is not a valid gitfile (want \"gitdir: <path>\"): %w", dot, errInvalidGit)
-	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(dot), target)
-	}
-	if info, err := os.Stat(target); err != nil || !info.IsDir() {
-		return false, "", fmt.Errorf("%s names %s, which is not a git directory: %w", dot, target, errInvalidGit)
-	}
-	return true, "", nil
-}
-
-// errInvalidGit marks a .git that git refuses: an examination error that is the
-// file's content, not a failure to read it.
-var errInvalidGit = errors.New("invalid git file")
-
-// IsWorkingTree reports whether dir holds a .git that git accepts as a
-// repository: a git directory or a gitfile naming one. A .git git skips or
-// refuses (missing, dangling, empty, garbage) is not a working tree; an error
-// is returned only when the .git cannot be read.
-func IsWorkingTree(dir string) (bool, error) {
-	found, _, err := examineGit(filepath.Join(dir, ".git"))
-	if errors.Is(err, errInvalidGit) {
-		return false, nil
-	}
-	return found, err
-}
-
-// isGitDir reports whether dir looks like a git directory as git judges it:
-// HEAD with objects/ and refs/, or a commondir file (a linked worktree's). An
-// entry that cannot be examined is an error, not a "no".
-func isGitDir(dir string) (bool, error) {
-	has := func(name string) (bool, error) {
-		_, err := os.Stat(filepath.Join(dir, name))
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-		return err == nil, err
-	}
-	if ok, err := has("commondir"); ok || err != nil {
-		return ok, err
-	}
-	for _, name := range []string{"HEAD", "objects", "refs"} {
-		if ok, err := has(name); !ok || err != nil {
-			return false, err
-		}
-	}
-	return true, nil
-}
 
 // StoreRepoRoot returns the root of the repository whose .punt-labs/ethos
 // store the caller should read and write, or empty string when the cwd is
@@ -878,15 +757,11 @@ func isGitDir(dir string) (bool, error) {
 // <repo>/.punt-labs/ethos rather than a different, empty tree that silently
 // degrades to the global store (ethos-yofr).
 //
-// Resolution order:
-//  1. ETHOS_REPO_ROOT env override (whitespace-trimmed) — validated to hold
-//     a .punt-labs/ethos store, else refused loudly (see repoRootOverride).
-//  2. Walk upward for a .git marker. A .git directory is the main work
-//     tree — the store lives here. A .git file is a linked worktree (or a
-//     submodule); resolve the owning repo through the common dir. A .git
-//     that cannot be examined stops the walk with "" (see walkRepoRoot).
+// ETHOS_REPO_ROOT (whitespace-trimmed) overrides resolution; it is validated
+// to hold a .punt-labs/ethos store, else refused loudly (see
+// repoRootOverride). Otherwise see locate.
 func StoreRepoRoot() string {
-	root, err := locateStoreRoot(warnOnce)
+	root, err := LocateStoreRoot()
 	if err != nil && !errors.Is(err, ErrNotInRepo) {
 		warnOnce("ethos: %v", err)
 	}
@@ -894,143 +769,388 @@ func StoreRepoRoot() string {
 }
 
 // LocateStoreRoot is StoreRepoRoot with the reason it found nothing: a refused
-// ETHOS_REPO_ROOT, an unreadable .git, or a working directory outside any
+// ETHOS_REPO_ROOT, a .git git refuses, or a working directory outside any
 // repository (wrapping ErrNotInRepo, the one failure that is not a problem). A
 // writer must refuse on any other error rather than fall back to the global
-// store. It prints nothing; the caller reports the error.
+// store. It returns the error rather than printing it; a .git it walked past
+// is still noted on stderr (warnOnce).
 func LocateStoreRoot() (string, error) {
-	return locateStoreRoot(nil)
-}
-
-// locateStoreRoot is LocateStoreRoot telling warn (if not nil) what it skipped
-// or fell back from on the way.
-func locateStoreRoot(warn func(format string, args ...any)) (string, error) {
 	if root, set, err := checkRepoRootOverride(true); set {
 		return root, err
 	}
-	dir, err := walkRepoRoot(warn)
+	loc, err := locateCwd()
+	return loc.store, err
+}
+
+// location is where resolution found the repository for a directory.
+type location struct {
+	root  string // the work tree root
+	store string // the work tree whose .punt-labs/ethos is the store
+}
+
+// located is one cached resolution: the location, the .git entries walked
+// past on the way, and the error.
+type located struct {
+	loc     location
+	skipped []string // "path: reason", for the skip notice
+	err     error
+}
+
+// locations caches resolution for the life of the process, keyed on the git
+// binary (or its absence) and the starting directory: the resolvers run many
+// times per command, and each answer from git costs a process.
+var locations sync.Map
+
+// locateCwd resolves the working directory and notes on stderr every .git it
+// walked past.
+func locateCwd() (location, error) {
+	cwd, err := os.Getwd()
 	if err != nil {
-		return "", err
+		return location{}, fmt.Errorf("getting the working directory: %w", err)
 	}
-	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
-		return dir, nil // main work tree — the store lives here
+	r := locate(cwd)
+	for _, s := range r.skipped {
+		warnOnce("ethos: warning: skipping %s", s)
 	}
-	if root := worktreeStoreRoot(dir, warn); root != "" {
-		return root, nil
-	}
-	return dir, nil
+	return r.loc, r.err
 }
 
-// worktreeStoreRoot resolves the repository root that owns the store for a
-// directory whose .git is a file. A linked worktree's store lives in the
-// MAIN work tree, reached through the shared (common) git dir; a submodule's
-// store lives in its own work tree. It asks git first — `git rev-parse`
-// honors the real repository layout — then falls back to reading the .git
-// gitdir and its commondir by hand when git is absent, so a worktree still
-// resolves in a git-less environment. This mirrors the common-dir idiom in
-// internal/doctor and internal/githook.
-func worktreeStoreRoot(worktree string, warn func(format string, args ...any)) string {
-	if root := gitStoreRoot(worktree); root != "" {
+// locate resolves the repository containing start. When git is on PATH, git is
+// the authority (gitLocate); without it the hand rules decide (handLocate).
+func locate(start string) located {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		git = "" // no usable git: the hand rules decide
+	}
+	key := git + "\x00" + start
+	if v, ok := locations.Load(key); ok {
+		return v.(located)
+	}
+	var r located
+	if git != "" {
+		r = gitLocate(git, start)
+	} else {
+		r = handLocate(start)
+	}
+	locations.Store(key, r)
+	return r
+}
+
+// gitLocate asks git for the work tree root, the git dir and the common dir of
+// start. A git failure is a resolution error carrying git's own message (a
+// dubious-ownership refusal, an invalid gitfile); only "not a git repository"
+// with no .git anywhere above start is ErrNotInRepo.
+func gitLocate(git, start string) located {
+	out, err := exec.Command(git, "-C", start, "rev-parse", "--path-format=absolute",
+		"--show-toplevel", "--git-dir", "--git-common-dir").Output()
+	if err != nil {
+		return located{err: gitLocateError(start, err)}
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 3 {
+		return located{err: fmt.Errorf("git rev-parse in %s: unexpected output %q", start, out)}
+	}
+	top, gitDir, common := lines[0], lines[1], lines[2]
+	root, under := ancestorAt(start, top)
+	var skipped []string
+	if under {
+		// Every .git between start and the root git chose was walked past.
+		for dir := start; dir != root; dir = filepath.Dir(dir) {
+			dot := filepath.Join(dir, ".git")
+			if _, err := os.Lstat(dot); !errors.Is(err, fs.ErrNotExist) {
+				skipped = append(skipped, dot+": git does not accept it as a repository")
+			}
+		}
+	}
+	return located{loc: location{root: root, store: storeRoot(root, gitDir, common)}, skipped: skipped}
+}
+
+// gitLocateError turns a failed `git rev-parse` into a resolution error.
+func gitLocateError(start string, err error) error {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return fmt.Errorf("running git rev-parse in %s: %w", start, err)
+	}
+	msg := strings.TrimSpace(string(ee.Stderr))
+	if strings.Contains(msg, "not a git repository (or any") {
+		if dot := firstDotGit(start); dot != "" {
+			return fmt.Errorf("git finds no repository from %s, yet %s exists (%s)", start, dot, msg)
+		}
+		return fmt.Errorf("%s is %w", start, ErrNotInRepo)
+	}
+	if dot := firstDotGit(start); dot != "" {
+		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, msg)
+	}
+	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, msg)
+}
+
+// firstDotGit returns the nearest .git entry at or above start, or "".
+func firstDotGit(start string) string {
+	for dir := start; ; {
+		dot := filepath.Join(dir, ".git")
+		if _, err := os.Lstat(dot); !errors.Is(err, fs.ErrNotExist) {
+			return dot
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// ancestorAt returns the ancestor of start (or start itself) that is the
+// directory target, keeping the caller's path form (git reports symlinks
+// resolved), and whether there is one. Otherwise it returns target.
+func ancestorAt(start, target string) (string, bool) {
+	ti, err := os.Stat(target)
+	if err != nil {
+		return target, false
+	}
+	for dir := start; ; {
+		if di, err := os.Stat(dir); err == nil && os.SameFile(di, ti) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return target, false
+		}
+		dir = parent
+	}
+}
+
+// storeRoot returns the work tree that holds the store. A linked worktree (git
+// dir distinct from the common dir) keeps it in the main work tree, the parent
+// of the shared <main>/.git. A main tree, a submodule (common dir under
+// .git/modules) and a separate git dir keep it in their own work tree.
+func storeRoot(root, gitDir, common string) string {
+	gitDir, common = filepath.Clean(gitDir), filepath.Clean(common)
+	if gitDir == common || filepath.Base(common) != ".git" {
 		return root
-	}
-	return manualStoreRoot(worktree, warn)
-}
-
-// gitStoreRoot returns git's own resolution of the owning repo root, or
-// empty when git cannot answer. A linked worktree has a per-worktree git
-// dir (<main>/.git/worktrees/<name>) distinct from the shared common dir
-// (<main>/.git); the main root is the common dir's parent. When the two
-// match (a submodule or a plain checkout), the store lives in this work
-// tree, so the worktree dir is returned as-is to preserve the caller's
-// symlink-form path.
-func gitStoreRoot(worktree string) string {
-	gitDir := gitRevParseAbs(worktree, "--git-dir")
-	common := gitRevParseAbs(worktree, "--git-common-dir")
-	if gitDir == "" || common == "" {
-		return ""
-	}
-	common = filepath.Clean(common)
-	if filepath.Clean(gitDir) == common {
-		return worktree // submodule or plain checkout
-	}
-	if filepath.Base(common) != ".git" {
-		// A non-standard common dir — e.g. a submodule's .git/modules/<name>,
-		// whose parent is inside .git, not a work tree (SFH F4). Keep the
-		// worktree rather than resolving a bogus root inside .git.
-		return worktree
 	}
 	return filepath.Dir(common)
 }
 
-// gitRevParseAbs runs `git -C dir rev-parse --path-format=absolute <arg>`
-// and returns the trimmed output, or empty on any error. The absolute
-// path format (git 2.31+) makes the result independent of cwd; an older
-// git that rejects the flag falls through to the manual resolver.
-func gitRevParseAbs(dir, arg string) string {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", arg).Output()
-	if err != nil {
-		return ""
+// handLocate walks up from start to the first .git the hand rules accept (see
+// examineGit). Used only when git is not on PATH.
+func handLocate(start string) located {
+	var skipped []string
+	for dir := start; ; {
+		dot := filepath.Join(dir, ".git")
+		g, skip, err := examineGit(dot)
+		if err != nil {
+			return located{skipped: skipped, err: err}
+		}
+		if g.dir != "" {
+			return located{loc: location{root: dir, store: storeRoot(dir, g.dir, g.common)}, skipped: skipped}
+		}
+		if skip != "" {
+			skipped = append(skipped, dot+": "+skip)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return located{skipped: skipped, err: fmt.Errorf("%s is %w", start, ErrNotInRepo)}
+		}
+		dir = parent
 	}
-	return strings.TrimSpace(string(out))
 }
 
-// manualStoreRoot resolves the owning repo root without git by reading the
-// .git gitdir pointer and its commondir file. For a linked worktree the
-// commondir resolves to <main>/.git, whose parent is the main work tree.
-// A submodule (commondir absent) keeps its store in this work tree, so the
-// worktree dir is returned.
+// gitDirs is a git directory and its common directory.
+type gitDirs struct{ dir, common string }
+
+// examineGit classifies a .git path by the hand rules: found (g.dir set) when
+// it is a git directory or a gitfile naming one; a skip reason when it is
+// walked past (empty when the path does not exist); an error when it is
+// refused or cannot be read. It never opens anything but a regular file or a
+// directory.
 //
-// It distinguishes a clean submodule signal (commondir simply absent) from a
-// genuine read error — a stale worktree whose main repo moved or was
-// deleted, a corrupt gitdir, or a permission failure. The clean case is
-// silent; a genuine error warns to stderr naming the worktree fallback,
-// rather than silently returning an empty store (SFH F2).
-func manualStoreRoot(worktree string, warn func(format string, args ...any)) string {
-	if warn == nil {
-		warn = func(string, ...any) {}
+// The rules follow git where it is strict: a gitfile is the exact bytes
+// "gitdir: " at offset 0 then a path (only trailing CR/LF stripped), and its
+// target must itself be a git directory (checkGitDir). They are stricter than
+// git in one place: a .git directory that cannot be read is an error, where
+// git skips it and resolves the enclosing repository — writing there would
+// put the store in a tree the user may not mean.
+func examineGit(dot string) (g gitDirs, skip string, err error) {
+	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
+		return gitDirs{}, "", nil
+	} else if err != nil {
+		return gitDirs{}, "", fmt.Errorf("examining %s: %w", dot, err)
 	}
-	dotgit := filepath.Join(worktree, ".git")
-	data, err := os.ReadFile(dotgit)
-	if err != nil {
-		warn("ethos: warning: cannot read %s (%v); using the worktree store at %s", dotgit, err, worktree)
-		return worktree
-	}
-	gd := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
-	if gd == "" {
-		warn("ethos: warning: %s has no gitdir pointer; using the worktree store at %s", dotgit, worktree)
-		return worktree
-	}
-	if !filepath.IsAbs(gd) {
-		gd = filepath.Join(worktree, gd)
-	}
-	if _, err := os.Stat(gd); err != nil {
-		// The gitdir target is gone — a stale worktree (its main repo moved
-		// or was deleted), not a clean submodule. Do not silently treat it
-		// as one.
-		warn("ethos: warning: worktree git dir %s is unreadable (%v); the main repo may have moved — using the worktree store at %s", gd, err, worktree)
-		return worktree
-	}
-	data, err = os.ReadFile(filepath.Join(gd, "commondir"))
-	if err != nil {
-		if !os.IsNotExist(err) {
-			// A present-but-unreadable commondir is a real error, not the
-			// clean submodule signal (which is commondir simply absent).
-			warn("ethos: warning: cannot read %s (%v); using the worktree store at %s", filepath.Join(gd, "commondir"), err, worktree)
+	info, err := os.Stat(dot)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return gitDirs{}, "dangling symlink", nil
+	case errors.Is(err, syscall.ELOOP):
+		return gitDirs{}, "symlink loop", nil
+	case err != nil:
+		return gitDirs{}, "", fmt.Errorf("examining %s: %w", dot, err)
+	case info.IsDir():
+		common, reason, err := checkGitDir(dot)
+		if err != nil {
+			return gitDirs{}, "", fmt.Errorf("examining %s: %w", dot, err)
 		}
-		return worktree // absent commondir: a submodule keeps its own store
+		if reason != "" {
+			return gitDirs{}, "not a git directory (" + reason + ")", nil
+		}
+		return gitDirs{dir: dot, common: common}, "", nil
+	case !info.Mode().IsRegular():
+		return gitDirs{}, "not a directory or a gitfile", nil
 	}
-	common := strings.TrimSpace(string(data))
-	if common == "" {
-		return worktree
+	data, err := os.ReadFile(dot)
+	if err != nil {
+		return gitDirs{}, "", fmt.Errorf("examining %s: %w", dot, err)
 	}
-	if !filepath.IsAbs(common) {
-		common = filepath.Join(gd, common)
+	target, ok := strings.CutPrefix(strings.TrimRight(string(data), "\r\n"), "gitdir: ")
+	if !ok || target == "" {
+		return gitDirs{}, "", fmt.Errorf("%s is not a valid gitfile (want \"gitdir: <path>\" at the start): %w", dot, errInvalidGit)
 	}
-	common = filepath.Clean(common)
-	if filepath.Base(common) == ".git" {
-		return filepath.Dir(common)
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(dot), target)
 	}
-	return worktree
+	common, reason, err := checkGitDir(target)
+	if err != nil {
+		return gitDirs{}, "", fmt.Errorf("%s names %s: %w", dot, target, err)
+	}
+	if reason != "" {
+		return gitDirs{}, "", fmt.Errorf("%s names %s, which is not a git directory (%s): %w", dot, target, reason, errInvalidGit)
+	}
+	return gitDirs{dir: target, common: common}, "", nil
+}
+
+// errInvalidGit marks a .git the hand rules refuse for its content, not for a
+// failure to read it.
+var errInvalidGit = errors.New("invalid git file")
+
+// checkGitDir applies git's test for a git directory to gd: HEAD a regular
+// file holding a ref or an object id, and objects/ and refs/ directories in
+// the common dir (gd, or the one its commondir file names). It returns the
+// common dir, or the reason gd is not a git directory. A commondir that cannot
+// be read or names nothing is an error, as is any entry that cannot be
+// examined.
+func checkGitDir(gd string) (common, reason string, err error) {
+	head := filepath.Join(gd, "HEAD")
+	info, err := os.Stat(head)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "", "no HEAD", nil
+	case err != nil:
+		return "", "", fmt.Errorf("examining %s: %w", head, err)
+	case !info.Mode().IsRegular():
+		return "", "HEAD is not a regular file", nil
+	}
+	data, err := os.ReadFile(head)
+	if err != nil {
+		return "", "", fmt.Errorf("reading %s: %w", head, err)
+	}
+	if !validHead(string(data)) {
+		return "", "HEAD holds neither a ref nor an object id", nil
+	}
+	common = gd
+	cd := filepath.Join(gd, "commondir")
+	data, err = os.ReadFile(cd)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// no commondir: gd is its own common dir
+	case err != nil:
+		return "", "", fmt.Errorf("reading %s: %w", cd, err)
+	default:
+		c := strings.TrimSpace(string(data))
+		if c == "" {
+			return "", "", fmt.Errorf("%s is empty: %w", cd, errInvalidGit)
+		}
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(gd, c)
+		}
+		info, err := os.Stat(c)
+		switch {
+		case errors.Is(err, fs.ErrNotExist) || err == nil && !info.IsDir():
+			return "", "", fmt.Errorf("%s names %s, which is not a directory: %w", cd, c, errInvalidGit)
+		case err != nil:
+			return "", "", fmt.Errorf("examining %s: %w", c, err)
+		}
+		common = c
+	}
+	for _, name := range []string{"objects", "refs"} {
+		p := filepath.Join(common, name)
+		info, err := os.Stat(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return "", "no " + name + " directory", nil
+		case err != nil:
+			return "", "", fmt.Errorf("examining %s: %w", p, err)
+		case !info.IsDir():
+			return "", name + " is not a directory", nil
+		}
+	}
+	return common, "", nil
+}
+
+// validHead reports whether HEAD's content is what git accepts: "ref:"
+// followed by a refs/ path, or a hex object id (SHA-1 or SHA-256).
+func validHead(s string) bool {
+	s = strings.TrimSpace(s)
+	if rest, ok := strings.CutPrefix(s, "ref:"); ok {
+		return strings.HasPrefix(strings.TrimLeft(rest, " \t"), "refs/")
+	}
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsWorkingTree reports whether dir is the root of a working tree: it holds a
+// .git that git (or, without git, the hand rules) accepts as a repository. A
+// .git that is walked past or refused is not a working tree; an error is
+// returned only when the .git cannot be read.
+func IsWorkingTree(dir string) (bool, error) {
+	dot := filepath.Join(dir, ".git")
+	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("examining %s: %w", dot, err)
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		g, _, err := examineGit(dot)
+		if errors.Is(err, errInvalidGit) {
+			return false, nil
+		}
+		return g.dir != "", err
+	}
+	r := locate(dir)
+	if r.err != nil {
+		return false, checkReadable(dot) // git refuses it: not a working tree
+	}
+	ri, err := os.Stat(r.loc.root)
+	if err != nil {
+		return false, fmt.Errorf("examining %s: %w", r.loc.root, err)
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		return false, fmt.Errorf("examining %s: %w", dir, err)
+	}
+	return os.SameFile(ri, di), nil
+}
+
+// checkReadable opens p when it is a regular file or a directory (never
+// anything that could block, such as a FIFO) and reports why it cannot be.
+func checkReadable(p string) error {
+	info, err := os.Stat(p)
+	if err != nil || !(info.IsDir() || info.Mode().IsRegular()) {
+		return nil // dangling, a loop, or special: walked past, not unreadable
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return fmt.Errorf("examining %s: %w", p, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", p, err)
+	}
+	return nil
 }
 
 // EnvRepoRoot is the canonical name several DES-054 hook and CLI call

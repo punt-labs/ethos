@@ -1,0 +1,299 @@
+package resolve
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// Hand-rule answers for a .git shape when git is not on PATH.
+const (
+	handOuter = "outer" // skipped: the enclosing repository resolves
+	handInner = "inner" // accepted: the shape's own directory is the root
+	handError = "error" // refused: resolution fails
+)
+
+// gitShape is a .git entry built inside a directory nested in a repository.
+type gitShape struct {
+	mk   func(t *testing.T, inner string) // builds inner/.git
+	hand string                           // the hand rules' answer
+}
+
+// gitShapes are the .git shapes the resolver must classify. With git on PATH
+// git decides each one; without it the hand rules give hand.
+var gitShapes = map[string]gitShape{
+	"empty directory":   {mkDir(), handOuter},
+	"dangling symlink":  {symlinkTo("absent"), handOuter},
+	"symlink loop":      {symlinkTo(".git"), handOuter},
+	"empty file":        {gitfile(""), handError},
+	"garbage file":      {gitfile("not a gitfile\n"), handError},
+	"no gitdir prefix":  {gitfile("/somewhere/else\n"), handError},
+	"gitdir to nowhere": {gitfile("gitdir: /nonexistent\n"), handError},
+
+	"commondir only":                {mkDir("commondir=../../.git"), handOuter},
+	"commondir only to nonexistent": {mkDir("commondir=/nonexistent"), handOuter},
+	"commondir only empty":          {mkDir("commondir="), handOuter},
+	"garbage HEAD":                  {mkDir("HEAD=garbage\n", "objects/", "refs/"), handOuter},
+	"HEAD as a directory":           {mkDir("HEAD/", "objects/", "refs/"), handOuter},
+	"objects as a file":             {mkDir("HEAD=ref: refs/heads/main\n", "objects=", "refs/"), handOuter},
+	"hex HEAD":                      {mkDir("HEAD=0123456789abcdef0123456789abcdef01234567\n", "objects/", "refs/"), handInner},
+	"dangling commondir":            {mkDir("HEAD=ref: refs/heads/main\n", "commondir=/nonexistent", "objects/", "refs/"), handError},
+
+	"gitdir to a plain directory": {gitfileTo(func(t *testing.T, d string) {
+		require.NoError(t, os.WriteFile(filepath.Join(d, "README"), []byte("x"), 0o644))
+	}, "gitdir: "), handError},
+	"gitdir to an empty directory": {gitfileTo(func(*testing.T, string) {}, "gitdir: "), handError},
+	"gitdir without the space":     {gitfileTo(makeGitDirAt, "gitdir:"), handError},
+	"gitdir with leading spaces":   {gitfileTo(makeGitDirAt, "  gitdir: "), handError},
+	"gitdir with a leading tab":    {gitfileTo(makeGitDirAt, "\tgitdir: "), handError},
+	"gitdir with trailing spaces":  {gitfileTo(makeGitDirAt, "gitdir: ", "  \n"), handError},
+	"gitdir with CRLF":             {gitfileTo(makeGitDirAt, "gitdir: ", "\r\n"), handInner},
+	"gitdir to a git directory":    {gitfileTo(makeGitDirAt, "gitdir: "), handInner},
+	"linked worktree":              {linkedWorktree(0o644), handInner},
+}
+
+// mkDir builds .git as a directory holding entries: "name/" is a directory,
+// "name=content" a file.
+func mkDir(entries ...string) func(t *testing.T, inner string) {
+	return func(t *testing.T, inner string) {
+		t.Helper()
+		dot := filepath.Join(inner, ".git")
+		require.NoError(t, os.Mkdir(dot, 0o755))
+		for _, e := range entries {
+			if name, ok := strings.CutSuffix(e, "/"); ok {
+				require.NoError(t, os.Mkdir(filepath.Join(dot, name), 0o755))
+				continue
+			}
+			name, content, _ := strings.Cut(e, "=")
+			require.NoError(t, os.WriteFile(filepath.Join(dot, name), []byte(content), 0o644))
+		}
+	}
+}
+
+func symlinkTo(target string) func(t *testing.T, inner string) {
+	return func(t *testing.T, inner string) {
+		t.Helper()
+		if err := os.Symlink(filepath.Join(inner, target), filepath.Join(inner, ".git")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+}
+
+func gitfile(content string) func(t *testing.T, inner string) {
+	return func(t *testing.T, inner string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(inner, ".git"), []byte(content), 0o644))
+	}
+}
+
+// makeGitDirAt makes d the minimal git directory git accepts.
+func makeGitDirAt(t *testing.T, d string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(d, "objects"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(d, "refs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(d, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+}
+
+// gitfileTo writes .git as prefix + a target directory built by mk + suffix
+// (a newline when no suffix is given).
+func gitfileTo(mk func(t *testing.T, d string), prefix string, suffix ...string) func(t *testing.T, inner string) {
+	end := "\n"
+	if len(suffix) > 0 {
+		end = suffix[0]
+	}
+	return func(t *testing.T, inner string) {
+		t.Helper()
+		target := filepath.Join(t.TempDir(), "target")
+		require.NoError(t, os.Mkdir(target, 0o755))
+		mk(t, target)
+		require.NoError(t, os.WriteFile(filepath.Join(inner, ".git"), []byte(prefix+target+end), 0o644))
+	}
+}
+
+// linkedWorktree makes inner a linked worktree of the enclosing repository by
+// hand, its commondir file at mode.
+func linkedWorktree(mode os.FileMode) func(t *testing.T, inner string) {
+	return func(t *testing.T, inner string) {
+		t.Helper()
+		admin := filepath.Join(filepath.Dir(inner), ".git", "worktrees", filepath.Base(inner))
+		require.NoError(t, os.MkdirAll(admin, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(admin, "HEAD"), []byte("ref: refs/heads/wt\n"), 0o644))
+		cd := filepath.Join(admin, "commondir")
+		require.NoError(t, os.WriteFile(cd, []byte("../..\n"), 0o644))
+		require.NoError(t, os.Chmod(cd, mode))
+		t.Cleanup(func() { _ = os.Chmod(cd, 0o644) })
+		require.NoError(t, os.WriteFile(filepath.Join(inner, ".git"), []byte("gitdir: "+admin+"\n"), 0o644))
+	}
+}
+
+// shapeIn builds shape s inside a directory nested in a fresh repository and
+// makes it the working directory. It returns the inner and outer directories.
+func shapeIn(t *testing.T, s gitShape) (inner, outer string) {
+	t.Helper()
+	outer = t.TempDir()
+	makeGitDirAt(t, filepath.Join(outer, ".git"))
+	inner = filepath.Join(outer, "inner")
+	require.NoError(t, os.Mkdir(inner, 0o755))
+	s.mk(t, inner)
+	t.Chdir(inner)
+	return inner, outer
+}
+
+// gitTopLevel asks git for the work tree root of dir.
+func gitTopLevel(t *testing.T, dir string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// hideGit removes git from PATH, so the hand rules decide.
+func hideGit(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	_, err := exec.LookPath("git")
+	require.Error(t, err, "git must not be on PATH")
+}
+
+// With git on PATH, git is the authority: every shape resolves to the root git
+// reports, or fails when git fails.
+func TestShapesFollowGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	for name, s := range gitShapes {
+		t.Run(name, func(t *testing.T) {
+			inner, _ := shapeIn(t, s)
+			want, gitErr := gitTopLevel(t, inner)
+			var got string
+			var err error
+			captureStderr(t, func() { got, err = LocateRepoRoot() })
+			if gitErr != nil {
+				require.Error(t, err, "git refuses this .git, so must we")
+				assert.NotErrorIs(t, err, ErrNotInRepo)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, realpath(t, want), realpath(t, got))
+		})
+	}
+}
+
+// Without git, the strict hand rules decide each shape.
+func TestShapesHandRules(t *testing.T) {
+	for name, s := range gitShapes {
+		t.Run(name, func(t *testing.T) {
+			inner, outer := shapeIn(t, s)
+			hideGit(t)
+			var got string
+			var err error
+			captureStderr(t, func() { got, err = LocateRepoRoot() })
+			switch s.hand {
+			case handError:
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, ErrNotInRepo)
+				assert.Empty(t, got)
+				assert.Contains(t, err.Error(), inner)
+			case handInner:
+				require.NoError(t, err)
+				assert.Equal(t, inner, got)
+			case handOuter:
+				require.NoError(t, err)
+				assert.Equal(t, outer, got)
+			default:
+				t.Fatalf("shape %q has no hand answer", name)
+			}
+		})
+	}
+}
+
+// A shape the resolver skips is reported once on stderr, by every resolver
+// that walks past it, with git or without.
+func TestShapesSkipNotice(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		for name, s := range gitShapes {
+			if s.hand != handOuter {
+				continue
+			}
+			t.Run(name, func(t *testing.T) {
+				if withGit {
+					if _, err := exec.LookPath("git"); err != nil {
+						t.Skip("git not installed")
+					}
+				}
+				inner, _ := shapeIn(t, s)
+				if !withGit {
+					hideGit(t)
+				}
+				out := captureStderr(t, func() {
+					_, err := LocateStoreRoot()
+					require.NoError(t, err)
+					_, err = LocateRepoRoot()
+					require.NoError(t, err)
+					FindRepoRoot()
+					StoreRepoRoot()
+				})
+				assert.Equal(t, 1, strings.Count(out, filepath.Join(inner, ".git")), out)
+				assert.Contains(t, out, "skipping")
+			})
+		}
+	}
+}
+
+// The store of a linked worktree is the main work tree's, with git and
+// without; a gitfile to a git directory of its own keeps the store here.
+func TestShapesStoreRoot(t *testing.T) {
+	cases := map[string]bool{"linked worktree": true, "gitdir to a git directory": false}
+	for _, withGit := range []bool{true, false} {
+		for name, linked := range cases {
+			t.Run(name, func(t *testing.T) {
+				if withGit {
+					if _, err := exec.LookPath("git"); err != nil {
+						t.Skip("git not installed")
+					}
+				}
+				inner, outer := shapeIn(t, gitShapes[name])
+				if !withGit {
+					hideGit(t)
+				}
+				got, err := LocateStoreRoot()
+				require.NoError(t, err)
+				want := inner
+				if linked {
+					want = outer
+				}
+				assert.Equal(t, realpath(t, want), realpath(t, got))
+			})
+		}
+	}
+}
+
+// git's "not a git repository" is ErrNotInRepo only when no .git exists
+// anywhere above: a .git git walked past and found nothing beyond is refused.
+func TestGitNotARepoWithSkippedGitIsRefused(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := filepath.Join(t.TempDir(), "d")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	// The ceiling stops git above dir, so git reports "not a git repository"
+	// whether or not the temp directory sits inside a repository.
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	t.Chdir(dir)
+	_, gitErr := gitTopLevel(t, dir)
+	require.Error(t, gitErr)
+	_, err := LocateRepoRoot()
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrNotInRepo))
+	assert.Contains(t, err.Error(), filepath.Join(dir, ".git"))
+}
