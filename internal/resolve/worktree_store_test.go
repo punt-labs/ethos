@@ -2,9 +2,13 @@ package resolve
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,4 +153,48 @@ func TestConfigBare(t *testing.T) {
 			assert.Equal(t, c.bare, bare)
 		})
 	}
+}
+
+// A git that does not answer when the store layout reads core.bare is a
+// refusal that still satisfies errors.Is(ErrTimeout), with git and without
+// the hand rules never consulted.
+func TestStoreRefusalWrapsTimeout(t *testing.T) {
+	requireGit(t)
+	main, wt := filepath.Join(t.TempDir(), "main"), ""
+	initRepo(t, main)
+	wt = filepath.Join(filepath.Dir(main), "wt")
+	gitRun(t, "-C", main, "worktree", "add", "-q", wt)
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	shim := filepath.Join(t.TempDir(), "git")
+	script := "#!/bin/sh\n[ \"$1\" = config ] && exec " + sleep + " 60\nexec " + realGit + " \"$@\"\n"
+	require.NoError(t, os.WriteFile(shim, []byte(script), 0o755))
+	t.Setenv("PATH", filepath.Dir(shim))
+	testhelpers.GitTimeout(t, 300*time.Millisecond)
+	t.Chdir(wt)
+	var store string
+	captureStderr(t, func() { store, err = LocateStoreRoot() })
+	require.Error(t, err)
+	assert.ErrorIs(t, err, gitenv.ErrTimeout)
+	assert.NotErrorIs(t, err, ErrNotInRepo)
+	assert.Empty(t, store)
+}
+
+// A message that is still true an hour later is shown again: a long-running
+// server must not warn once and go quiet.
+func TestWarnOnceRewarnsAfterTTL(t *testing.T) {
+	clock := time.Now()
+	orig := locateNow
+	locateNow = func() time.Time { return clock }
+	t.Cleanup(func() { locateNow = orig })
+	msg := "ethos: test warning " + t.Name()
+	count := func() int {
+		return strings.Count(captureStderr(t, func() { warnOnce("%s", msg) }), msg)
+	}
+	assert.Equal(t, 1, count())
+	assert.Equal(t, 0, count(), "once within the TTL")
+	clock = clock.Add(locateTTL + time.Second)
+	assert.Equal(t, 1, count(), "again after the TTL")
 }

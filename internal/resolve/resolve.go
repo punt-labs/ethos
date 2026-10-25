@@ -722,13 +722,18 @@ func FindRepoRoot() string {
 // warned holds the messages warnOnce has printed.
 var warned sync.Map
 
-// warnOnce prints a message to stderr once per process: the resolvers run on
-// every command and hook, and the same skipped .git would otherwise repeat.
+// warnOnce prints a message to stderr at most once per locateTTL: the
+// resolvers run on every command and hook, and the same skipped .git would
+// otherwise repeat; a long-running server shows it again once the TTL passes,
+// when it is still true.
 func warnOnce(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	if _, dup := warned.LoadOrStore(msg, true); !dup {
-		fmt.Fprintln(os.Stderr, msg)
+	now := locateNow()
+	if v, ok := warned.Load(msg); ok && now.Sub(v.(time.Time)) < locateTTL {
+		return
 	}
+	warned.Store(msg, now)
+	fmt.Fprintln(os.Stderr, msg)
 }
 
 // LocateRepoRoot is FindRepoRoot with the reason it found nothing: an invalid
@@ -1211,7 +1216,7 @@ func storeRoot(root, gitDir, common, git string) (string, error) {
 	common = filepath.Clean(common)
 	bare, err := configBare(git, common)
 	if err != nil {
-		return "", fmt.Errorf("%s is a linked worktree of the repository at %s, whose core.bare cannot be read (%v); "+
+		return "", fmt.Errorf("%s is a linked worktree of the repository at %s, whose core.bare cannot be read (%w); "+
 			"ethos cannot tell where its store is: set ETHOS_REPO_ROOT", root, common, err)
 	}
 	if bare {
