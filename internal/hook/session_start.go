@@ -64,6 +64,13 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// records repo_unresolved.
 	loc := resolve.Roots()
 	storeFailure := loc.StoreFailure()
+	// A bundle or policy that cannot be honoured refuses the persona as a broken
+	// store does, as the CLI and the MCP do: answering from the layers left
+	// would consult the global one the repository did not choose.
+	var policy *resolve.ConfigError
+	if storeFailure == nil && errors.As(deps.Issue, &policy) && policy.Policy {
+		storeFailure = deps.Issue
+	}
 	var resolvedID *identity.Identity
 	var humanErr error
 	if storeFailure != nil {
@@ -82,7 +89,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// the signal for direct CLI invocation and `ethos doctor`.
 	repoRoot := loc.Store
 	note := storeUnlocatedNote(storeFailure)
-	if issueNote := storeUnlocatedNote(deps.Issue); issueNote != "" {
+	if issueNote := storeUnlocatedNote(deps.Issue); issueNote != "" && !errors.Is(storeFailure, deps.Issue) {
 		if note != "" {
 			note += " "
 		}

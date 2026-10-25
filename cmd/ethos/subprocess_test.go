@@ -284,7 +284,7 @@ func TestCLI_MissingActiveBundle(t *testing.T) {
 
 	_, stderr, exitCode := runCLI(t, se, "list")
 	assert.NotEqual(t, 0, exitCode, "CLI must fail when active_bundle is missing")
-	assert.Contains(t, stderr, "bundle resolution failed")
+	assert.Contains(t, stderr, "bundle or policy configuration is unusable")
 	assert.Contains(t, stderr, "does-not-exist")
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"os"
 	"slices"
 	"strings"
@@ -159,11 +160,26 @@ func establishRoots(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: %s: %v; refusing to use the global store instead\n", name, err)
 			return failClosed{}
 		}
+		// A bundle or policy that cannot be honoured refuses a store command too
+		// (exit 1, as such a misconfiguration always has): it would otherwise
+		// answer from a layer the repository did not choose.
+		if issue := r.configIssue(); issue != nil && !repairsConfig[cmd.CommandPath()] {
+			name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
+			what, _, _ := resolve.Describe(issue)
+			return fmt.Errorf("%s: %s (%v); refusing to answer without it", name, what, issue)
+		}
 	} else if err := r.err(); err != nil {
 		noteRootFailure(err)
 	}
 	cmdRoots.Store(r)
 	return nil
+}
+
+// repairsConfig are the store commands whose job includes repairing a bundle or
+// policy that cannot be honoured: they run despite it. deactivate clears the
+// active bundle, activate names another, add-bundle installs the missing one.
+var repairsConfig = map[string]bool{
+	"ethos team deactivate": true, "ethos team activate": true, "ethos team add-bundle": true,
 }
 
 func firstError(errs ...error) error {

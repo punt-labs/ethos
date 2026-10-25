@@ -426,3 +426,57 @@ func TestWarnIfGlobalFallbackWordsAConfigFailure(t *testing.T) {
 	assert.Contains(t, out, "the repository configuration could not be read (boom)")
 	assert.NotContains(t, out, "could not be located")
 }
+
+// A bundle or policy issue refuses every store command with exit 1, naming the
+// cause; `mission list` does not print "No missions found." from a layer the
+// repository did not choose.
+func TestConfigIssueRefusesStoreCommands(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	for name, yaml := range map[string]string{
+		"missing bundle":     "active_bundle: nosuchbundle\n",
+		"unknown resolution": "resolution: repo_only\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			se := setupCLISubprocessEnv(t)
+			cfg := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
+			require.NoError(t, os.RemoveAll(cfg))
+			require.NoError(t, os.WriteFile(cfg, []byte(yaml), 0o644))
+			c := exec.Command(ethosBinary, "mission", "list")
+			c.Dir = se.repo
+			c.Env = withForcedNotUnderClaudeCode(se.env)
+			out, err := c.CombinedOutput()
+			var ee *exec.ExitError
+			require.ErrorAs(t, err, &ee, string(out))
+			assert.Equal(t, 1, ee.ExitCode(), string(out))
+			assert.Contains(t, string(out), "bundle or policy configuration is unusable")
+			assert.NotContains(t, string(out), "No missions found")
+		})
+	}
+}
+
+// An unknown `resolution:` value is a policy failure: session-start refuses the
+// persona (no human identity either) and says nothing was answered, as the CLI
+// and the MCP refuse; it does not answer from the layers left.
+func TestSessionStartRefusesAPersonaOnAPolicyIssue(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	cfg := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
+	require.NoError(t, os.RemoveAll(cfg))
+	require.NoError(t, os.WriteFile(cfg, []byte("agent: test-agent\nresolution: repo_only\n"), 0o644))
+	stdout, _, _ := runHookIn(t, se, se.repo, "session-start", `{"session_id":"po-s1","hook_event_name":"SessionStart"}`)
+	var res struct {
+		SystemMessage      string `json:"systemMessage"`
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
+	assert.Contains(t, res.SystemMessage, "unknown resolution")
+	assert.Contains(t, res.SystemMessage, "global layer would have been consulted")
+	assert.NotContains(t, res.HookSpecificOutput.AdditionalContext, "Active identity", "no identity was answered")
+	assert.NotContains(t, res.HookSpecificOutput.AdditionalContext, "Test Agent")
+}
