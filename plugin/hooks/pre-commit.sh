@@ -32,7 +32,13 @@ _host_status=$?
 # never a bare exit 0, so a chained host that signals failure by fall-through
 # still blocks the commit even when ethos is dormant. The gate sits before the
 # binary is ever resolved, so a dormant repo does no ethos work at commit time.
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit "$_host_status"
+# A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
+# dormant": the hook prints git's own error and exits 1, so the commit is
+# blocked and the operator sees why, rather than skipping with the host status.
+if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>&1); then
+  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$REPO_ROOT" >&2
+  exit 1
+fi
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
 
 # Resolve the ethos binary: PATH first, then the default install dir.

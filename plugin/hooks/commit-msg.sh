@@ -30,7 +30,13 @@ _host_status=$?
 # in at install time. Absent marker → exit with the captured host status,
 # never a bare exit 0, so a chained host that signals failure by fall-through
 # still blocks the commit even when ethos is dormant.
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit "$_host_status"
+# A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
+# dormant": the hook prints git's own error and exits 1, so the commit is
+# blocked and the operator sees why, rather than skipping with the host status.
+if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>&1); then
+  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed: %s\n' "$REPO_ROOT" >&2
+  exit 1
+fi
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
 
 [ -z "$1" ] && exit "$_host_status"
@@ -114,6 +120,8 @@ add_trailer() {
     tmp=$(mktemp "${msg_file}.XXXXXX" 2>/dev/null)
     if [ -z "$tmp" ]; then
       printf 'ethos: commit-msg: mktemp failed; using plain append\n' >&2
+    # git interpret-trailers is not bounded here: it runs inside git's own
+    # commit, on the message file only, never on the repository.
     elif git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp"; then
       # mv can fail on permissions, cross-filesystem, or
       # disk-full. If it does, the temp file is stale and the
