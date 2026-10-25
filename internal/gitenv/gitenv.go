@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -30,36 +31,86 @@ func SetTimeout(d time.Duration) time.Duration {
 	return time.Duration(deadline.Swap(int64(d)))
 }
 
-// ErrTimeout is wrapped by the error Output returns when git did not answer
-// within Timeout.
+// ErrTimeout is wrapped by the error Output, OutputEnv and Run return when
+// git did not answer within its bound.
 var ErrTimeout = errors.New("git did not answer")
 
 // Output runs git with args — as `git -C dir args...` when dir is not "" —
 // in the Parsed environment, and returns its stdout. A git that exits non-zero
 // returns its *exec.ExitError (stderr captured). A git still running after
-// Timeout (or the bound SetTimeout set) is killed and reported as ErrTimeout naming git, the arguments and
-// the directory.
+// Timeout (or the bound SetTimeout set) is killed and reported as ErrTimeout
+// naming git, the arguments and the directory.
 func Output(dir, git string, args ...string) ([]byte, error) {
 	full := args
 	if dir != "" {
 		full = append([]string{"-C", dir}, args...)
 	}
-	limit := time.Duration(deadline.Load())
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, git, full...)
-	cmd.Env = Parsed()
-	cmd.WaitDelay = time.Second // a child holding stdout does not stall the kill
-	out, err := cmd.Output()
-	if ctx.Err() == context.DeadlineExceeded {
-		where := ""
-		if dir != "" {
-			where = " in " + dir
-		}
-		return nil, fmt.Errorf("%w: %s %s%s did not answer within %v; refusing rather than guessing",
-			ErrTimeout, git, strings.Join(args, " "), where, limit)
+	out, err := Run(Spec{Git: git, Args: full, Env: Parsed()})
+	if errors.Is(err, ErrTimeout) {
+		return nil, timeoutError(git, args, dir, time.Duration(deadline.Load()))
 	}
 	return out, err
+}
+
+// OutputEnv is Output for a caller that needs its own environment: git runs
+// in dir (cmd.Dir; the working directory when "") with env, or the inherited
+// environment when env is nil. It is bounded and reports a timeout as Output
+// does.
+func OutputEnv(dir, git string, env []string, args ...string) ([]byte, error) {
+	return Run(Spec{Git: git, Dir: dir, Env: env, Args: args})
+}
+
+// Spec describes one bounded git command for Run.
+type Spec struct {
+	Git    string        // the git binary
+	Dir    string        // cmd.Dir; "" is the working directory
+	Env    []string      // nil inherits the process environment
+	Args   []string      // arguments after git
+	Stdin  io.Reader     // nil for none
+	Stdout io.Writer     // nil: captured and returned
+	Stderr io.Writer     // nil: captured on the *exec.ExitError
+	Limit  time.Duration // 0: the shared deadline (Timeout, or SetTimeout's)
+}
+
+// Run executes s under its bound. It returns stdout when s.Stdout is nil. A
+// git that exits non-zero returns its *exec.ExitError; one still running at
+// the bound is killed and reported as ErrTimeout naming git, the arguments,
+// the directory and the bound.
+func Run(s Spec) ([]byte, error) {
+	limit := s.Limit
+	if limit == 0 {
+		limit = time.Duration(deadline.Load())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, s.Git, s.Args...)
+	cmd.Dir = s.Dir
+	cmd.Env = s.Env
+	cmd.Stdin = s.Stdin
+	cmd.WaitDelay = time.Second // a child holding stdout does not stall the kill
+	var out []byte
+	var err error
+	if s.Stdout == nil {
+		cmd.Stderr = s.Stderr
+		out, err = cmd.Output()
+	} else {
+		cmd.Stdout, cmd.Stderr = s.Stdout, s.Stderr
+		err = cmd.Run()
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, timeoutError(s.Git, s.Args, s.Dir, limit)
+	}
+	return out, err
+}
+
+// timeoutError names the command and where it ran; an empty dir is reported
+// as the working directory.
+func timeoutError(git string, args []string, dir string, limit time.Duration) error {
+	if dir == "" {
+		dir, _ = os.Getwd()
+	}
+	return fmt.Errorf("%w: %s %s in %s did not answer within %v; refusing rather than guessing",
+		ErrTimeout, git, strings.Join(args, " "), dir, limit)
 }
 
 // dropped are the variables Parsed removes: the locale, which Parsed sets
