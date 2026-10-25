@@ -96,11 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.punt-labs/` are not checked. Exported mission records placed under
   `.punt-labs/ethos/` with `ethos mission export --dir` are recognized.
   The check scans the working tree it runs in (a git worktree's own
-  files), reports a symlink in either directory as not scanned, and names
-  a `core.hooksPath` directory under `.punt-labs/` whose ethos hook files
-  have no class. The temporary file `ethos enable` uses when updating
-  `CLAUDE.md` is now named `.CLAUDE.md.<random>` (was
-  `.CLAUDE.md.tmp<random>`), also when `CLAUDE.md` is a symlink.
+  files), reports any symlink on the way to either directory as not
+  scanned, names a `core.hooksPath` directory under `.punt-labs/` whose
+  ethos hook files have no class, and says when it could not scan.
 
 - **Design for native OpenCode integration (DES-078,
   `docs/design-opencode-plugin.md`).** Design only, no implementation.
@@ -193,6 +191,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   add their own entries when they merge.
 
 ### Changed
+
+- **Every temporary file and staging directory ethos creates inside a
+  repository now has `.ethos-tmp` in its name** (DES-079). Temporary
+  files left by a crash of an earlier version keep their old `.tmp`
+  names; `ethos doctor` lists them as unrecognized, and they can be
+  deleted.
+- **`ethos mission export` without `--dir` writes to
+  `.punt-labs/ethos/missions/` under the repository root**, not under the
+  current directory. It fails outside a repository.
+- **`ethos doctor` says when it found the git hooks directory without
+  git** (git missing or failing), because `core.hooksPath` is then
+  ignored.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and

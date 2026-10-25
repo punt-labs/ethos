@@ -12761,10 +12761,13 @@ forensics, not blame.
 Every file ethos writes inside a repository's working tree at a path it
 chooses belongs to exactly one of the four classes below. Output the user
 directs to a path of their choosing (`ethos mission export --dir`,
-`ethos export --to`) is outside the classification. A writer that follows
-a symlink (a `CLAUDE.md` linked to `AGENTS.md`, a linked `.gitignore`) is
-classified by the name it was asked to write, and names its temporary
-file after that name. A class says what a file is; where a
+`ethos export --to`) is classified only where it lands under
+`.punt-labs/ethos/` (the fallback entry below); elsewhere it is outside
+the classification. Without `--dir`, `ethos mission export` writes to
+`.punt-labs/ethos/missions/` under the repository root, whatever the
+working directory. A writer that follows a symlink (a `CLAUDE.md` linked
+to `AGENTS.md`, a linked `.gitignore`) is classified by the name it was
+asked to write. A class says what a file is; where a
 class-3 file is written depends on the `record` setting (below). The lists
 in this ADR name the paths known on 2026-10-24 and are not the authority.
 The authority is one ordered table in code that maps every path pattern
@@ -12781,13 +12784,20 @@ case is a fallback entry: the exported-record shape
 `ethos mission export --dir` under `.punt-labs/ethos/`, such as a
 `missions-closed/` directory) is class 2, sits last, and claims only a path
 no other entry matches, so an agent artifact named `m-1.contract.yaml`
-stays class 3. Temporary-file entries are built from the same helpers the
-writers use to name their temporary files; a test fails when an entry
-matches no helper-built name, and a source scan fails when an in-tree
-writer names a temporary file without a helper. An `ethos doctor` check
-reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/` of
-the working tree it runs in that no entry matches, and reports a symlink
-in those zones as not scanned; other tools' files under `.punt-labs/` are
+stays class 3. Every temporary file or staging directory ethos creates in
+the tree carries one marker, `.ethos-tmp`, in its name, wherever it is
+created (a symlinked `CLAUDE.md`'s temporary file sits beside the link
+target), and two class-4 entries match that marker in any directory. A
+source scan fails when in-tree code creates a temporary file whose name
+does not come from a layout helper; writes under the system temporary
+directory are outside the repository and out of scope. An `ethos doctor`
+check reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
+of the working tree it runs in that no entry matches. It reports, without
+scanning past it, any symlink on the path from the repository root to
+either directory, names a `core.hooksPath` directory under `.punt-labs/`,
+says when the hooks directory was found without git, and says "not
+scanned" rather than claiming a pass when there is no repository or
+neither directory exists. Other tools' files under `.punt-labs/` are
 not ethos's to classify. A prose list cannot stay complete as writers are
 added; a failing test can.
 
