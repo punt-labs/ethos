@@ -418,7 +418,7 @@ handle: bundle-user
 }
 
 func TestSetup_BundleFlag_Invalid(t *testing.T) {
-	_, repo := setupTestEnv(t)
+	home, repo := setupTestEnv(t)
 
 	cfgPath := filepath.Join(repo, "setup.yaml")
 	writeSetupFile(t, cfgPath, `name: Bad Bundle
@@ -428,6 +428,27 @@ handle: bad-bundle
 	_, _, err := execHandler(t, "setup", "--file", cfgPath, "--bundle", "nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `bundle "nonexistent" not found`)
+
+	// The refusal came before any write: no identity, no repo config.
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "bad-bundle.yaml"))
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "claude.yaml"))
+	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
+}
+
+// A bundle named in the --file is checked before any write too.
+func TestSetup_FileBundle_Invalid(t *testing.T) {
+	home, repo := setupTestEnv(t)
+	// An earlier test's --bundle leaves the flag marked changed on the shared command.
+	setupCmd.Flags().Lookup("bundle").Changed = false
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: File Bundle\nhandle: file-bundle\nbundle: nonexistent\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `bundle "nonexistent" not found`)
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "file-bundle.yaml"))
+	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
 }
 
 func TestSetup_Idempotent(t *testing.T) {

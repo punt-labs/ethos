@@ -79,6 +79,9 @@ type setupResult struct {
 func runSetup(cmd *cobra.Command) error {
 	var cfg setupConfig
 	errw := cmd.ErrOrStderr()
+	// bundleNamed is set when the user chose a bundle, by flag or in the file,
+	// as opposed to taking the default.
+	bundleNamed := cmd.Flags().Changed("bundle")
 
 	if setupFile != "" {
 		data, err := os.ReadFile(setupFile)
@@ -88,6 +91,7 @@ func runSetup(cmd *cobra.Command) error {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return fmt.Errorf("setup: parsing %s: %w", setupFile, err)
 		}
+		bundleNamed = bundleNamed || cfg.Bundle != ""
 		// CLI flags override file values.
 		if setupSolo {
 			cfg.Solo = true
@@ -164,6 +168,16 @@ func runSetup(cmd *cobra.Command) error {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	store := identity.NewStore(globalRoot)
+
+	// A bundle the user named must exist before anything is written: finding
+	// out afterwards leaves an identity and a repo config behind a failed setup.
+	// With no bundle installed at all the problem is the missing seed, which
+	// the identity save below names.
+	if bundleNamed && !cfg.Solo && repoRoot != "" {
+		if err := checkNamedBundle(storeRoot, globalRoot, cfg.Bundle); err != nil {
+			return err
+		}
+	}
 
 	result := &setupResult{
 		HumanIdentity: cfg.Handle,
@@ -277,22 +291,9 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// Validate the bundle exists.
-	bundles, err := bundle.List(storeRoot, globalRoot)
+	bundles, err := findBundle(storeRoot, globalRoot, cfg.Bundle)
 	if err != nil {
-		return fmt.Errorf("setup: listing bundles: %w", err)
-	}
-	var match *bundle.Bundle
-	for i := range bundles {
-		if bundles[i].Source == bundle.SourceLegacy {
-			continue
-		}
-		if bundles[i].Name == cfg.Bundle {
-			match = &bundles[i]
-			break
-		}
-	}
-	if match == nil {
-		return fmt.Errorf("setup: bundle %q not found; available bundles:\n%s", cfg.Bundle, listBundleNames(bundles))
+		return err
 	}
 
 	// Check if already active. If --bundle wasn't explicit and a bundle
@@ -858,6 +859,38 @@ func contains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// findBundle lists the bundles visible from storeRoot and globalRoot and
+// returns them, or an error when none is named name.
+func findBundle(storeRoot, globalRoot, name string) ([]bundle.Bundle, error) {
+	bundles, err := bundle.List(storeRoot, globalRoot)
+	if err != nil {
+		return nil, fmt.Errorf("setup: listing bundles: %w", err)
+	}
+	for _, b := range bundles {
+		if b.Source != bundle.SourceLegacy && b.Name == name {
+			return bundles, nil
+		}
+	}
+	return nil, fmt.Errorf("setup: bundle %q not found; available bundles:\n%s", name, listBundleNames(bundles))
+}
+
+// checkNamedBundle fails when bundles are installed and none is named name.
+func checkNamedBundle(storeRoot, globalRoot, name string) error {
+	bundles, err := bundle.List(storeRoot, globalRoot)
+	if err != nil {
+		return fmt.Errorf("setup: listing bundles: %w", err)
+	}
+	installed := false
+	for _, b := range bundles {
+		installed = installed || b.Source != bundle.SourceLegacy
+	}
+	if !installed {
+		return nil
+	}
+	_, err = findBundle(storeRoot, globalRoot, name)
+	return err
 }
 
 // locateSetupRoots returns the checkout and the shared store setup writes to.
