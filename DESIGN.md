@@ -12879,7 +12879,7 @@ assigned to `_` inside `internal/resolve`. The shell hooks
 `git interpret-trailers` unbounded, with git tracing switched off, and
 exit 1 with git's error when either fails or when the repository root
 is not a single absolute directory path (`/…`, or a drive path `C:/…`
-on Windows). A merge commit (`git merge --no-ff`) is not sealed: git
+when `uname -s` reports MINGW, MSYS or CYGWIN). A merge commit (`git merge --no-ff`) is not sealed: git
 writes its tree before any hook can stage a chunk, so its live lines are
 sealed by the next ordinary commit and nothing is lost. In an enabled repository they also block
 the commit when the `ethos` binary is missing, when a component of the
@@ -12897,16 +12897,14 @@ SIGKILL to what remains), and a timeout does the same, so the clone
 stops with its ssh or helper children. They run with the C locale and
 no inherited repository variables (the user's command-scope
 configuration, `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`, is
-kept). Whether the remote is ssh is decided on the URL git will
-contact, after `insteadOf` rewriting (`git ls-remote --get-url`). For
-an ssh remote, or a relative submodule URL, the user's ssh command
-(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`) is kept, and
-`ssh -o BatchMode=yes` is set only when none is; for any other remote
-no ssh command is set at all. They run no terminal prompt or askpass
-helper, and ssh's own prompts (an unknown host key, a passphrase) find
-no terminal, so a missing credential fails instead of waiting; a failed
-ssh clone says to load the key with `ssh-add` or accept the host key
-with `ssh` first. On Windows there are no process groups: a timeout kills git
+kept). Ethos sets and reads no ssh setting: whatever ssh command the
+user configured (`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`, an
+`insteadOf` rewrite) applies as git resolves it. They run no terminal
+prompt or askpass helper, and ssh's own prompts (an unknown host key, a
+passphrase) find no terminal, so a missing credential fails instead of
+waiting; when git's error output shows an ssh authentication or
+host-key failure, ethos adds that the user should load the key with
+`ssh-add` or accept the host key with `ssh` first. On Windows there are no process groups: a timeout kills git
 at once and its children may outlive it. Git tracing is switched off
 through the environment (`GIT_TRACE2*=0` overrides configured targets)
 and any remaining trace lines are removed from stderr. A configuration
@@ -12924,9 +12922,10 @@ that only chooses the wording of an error: bad-revision messages in
 in the hooks-directory advice. Every git read declares what an absent
 answer is (a configuration key that is not set, no such remote, no
 upstream, a path `git check-ignore` does not match, or that discovery
-failure); a broken `.git` link, or a `.git` symlink git cannot follow
-for any reason in the directory or an ancestor below the ceiling, is
-never absent. Any other failure, a timeout included, is an error that
+failure); a broken `.git` link, a `.git` symlink git cannot follow for
+any reason, or a `.git` that exists but cannot be read, in the
+directory or an ancestor below the ceiling, is never absent, even
+though git itself skips it and reports "not a git repository". Any other failure, a timeout included, is an error that
 carries git's message and names the command and the directory. A git
 failure is therefore never read as "no repository", "no remote", "not a
 gitlink" or an empty identity. One function, `resolve.Roots()`, locates
@@ -12942,12 +12941,18 @@ an error, not "no configuration", and never stops a command that
 handles the error itself. An unusable bundle or `repo-only` policy, or
 an unknown `resolution:` value, is also reported where the user sees
 it, as a configuration failure. Every store command exits 1, except
-the three that repair it: `team deactivate`, `team add-bundle`, and
-`team activate`, which then records the bundle without assigning the
-leadership roles and says to run it again once the configuration is
-valid. No hook (session start, `subagent-start`, `pre-compact`)
-answers a persona; `ethos serve` refuses every guarded read and write;
-`ethos doctor` fails a "Repository configuration" row. Identity reads (`git config user.*`) and the origin
+`team deactivate`, `team add-bundle` and `team activate`, which can
+repair a bundle problem: activate checks the chosen bundle against the
+`repo-only` policy before writing, and when the configuration is
+unusable it records the bundle without assigning the leadership roles
+and says to run it again once the configuration is valid. None of the
+three repairs an unknown `resolution:` value; activate says that value
+must be fixed in `.punt-labs/ethos.yaml`. When the configuration or the
+store cannot be used, no hook (session start, `subagent-start`,
+`pre-compact`) answers a persona, `ethos serve` refuses every guarded
+read and write (the MCP `adr create` included), and `ethos doctor`
+fails a "Repository configuration" or "Repository store" row and marks
+the identity rows "not checked". Identity reads (`git config user.*`) and the origin
 read run in the located checkout. With no checkout, the identity read
 runs as a plain `git config` from a neutral directory outside any
 repository, so included files and command-scope configuration apply
