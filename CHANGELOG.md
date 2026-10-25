@@ -278,15 +278,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "not a repository", "no store" or "no configuration". A malformed or
   dangling `ethos.yaml` no longer stops the hooks, `ethos doctor` or
   `ethos serve`; they report it, as they do an unusable `active_bundle`,
-  `repo-only` policy or unknown `resolution:` value, which also makes
-  every store command exit 1 and session start answer no persona. In an
+  `repo-only` policy or unknown `resolution:` value. That also makes
+  every store command except `team activate`, `team deactivate` and
+  `team add-bundle` exit 1, no hook answer a persona, and `ethos serve`
+  refuse its reads; `team activate` then records the bundle without
+  assigning the leadership roles. In an
   enabled repository, `pre-commit` and
   `commit-msg` block the commit when `ethos` is not installed, the
   `.punt-labs/ethos` path is broken, or the `enabled` marker is not a
   regular file; `ethos enable` refuses such a marker. Git tracing set in
   the environment or in git configuration no longer makes ethos fail.
   An unreadable git configuration file is reported instead of treated as
-  "not set". On Unix, `ethos team add-bundle` keeps your ssh command,
+  "not set". On Unix, `ethos team add-bundle` keeps your ssh command
+  (also when `insteadOf` rewrites an https URL to ssh),
   runs its clone with no terminal so an ssh or credential prompt fails
   at once instead of waiting, and Ctrl-C, a closed terminal or a timeout
   stops the clone with its ssh children. Identity and origin reads use

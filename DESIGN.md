@@ -12878,7 +12878,8 @@ assigned to `_` inside `internal/resolve`. The shell hooks
 `pre-commit.sh` and `commit-msg.sh` run `git rev-parse` and
 `git interpret-trailers` unbounded, with git tracing switched off, and
 exit 1 with git's error when either fails or when the repository root
-is not a single absolute directory path. A merge commit (`git merge --no-ff`) is not sealed: git
+is not a single absolute directory path (`/…`, or a drive path `C:/…`
+on Windows). A merge commit (`git merge --no-ff`) is not sealed: git
 writes its tree before any hook can stage a chunk, so its live lines are
 sealed by the next ordinary commit and nothing is lost. In an enabled repository they also block
 the commit when the `ethos` binary is missing, when a component of the
@@ -12894,13 +12895,18 @@ session with no controlling terminal; when ethos receives Ctrl-C,
 SIGTERM, SIGHUP or SIGQUIT it sends SIGTERM to their process group (and
 SIGKILL to what remains), and a timeout does the same, so the clone
 stops with its ssh or helper children. They run with the C locale and
-no inherited repository variables, keep the user's ssh command
-(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`; read only for an ssh
-remote) and run no terminal prompt or askpass helper, and ssh's own
-prompts (an unknown host key, a passphrase) find no terminal, so a
-missing credential fails instead of waiting; a failed ssh clone says
-to load the key with `ssh-add` or accept the host key with `ssh`
-first. On Windows there are no process groups: a timeout kills git
+no inherited repository variables (the user's command-scope
+configuration, `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`, is
+kept). Whether the remote is ssh is decided on the URL git will
+contact, after `insteadOf` rewriting (`git ls-remote --get-url`). For
+an ssh remote, or a relative submodule URL, the user's ssh command
+(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`) is kept, and
+`ssh -o BatchMode=yes` is set only when none is; for any other remote
+no ssh command is set at all. They run no terminal prompt or askpass
+helper, and ssh's own prompts (an unknown host key, a passphrase) find
+no terminal, so a missing credential fails instead of waiting; a failed
+ssh clone says to load the key with `ssh-add` or accept the host key
+with `ssh` first. On Windows there are no process groups: a timeout kills git
 at once and its children may outlive it. Git tracing is switched off
 through the environment (`GIT_TRACE2*=0` overrides configured targets)
 and any remaining trace lines are removed from stderr. A configuration
@@ -12935,10 +12941,13 @@ directory means "no store yet"; a dangling or malformed `ethos.yaml` is
 an error, not "no configuration", and never stops a command that
 handles the error itself. An unusable bundle or `repo-only` policy, or
 an unknown `resolution:` value, is also reported where the user sees
-it, as a configuration failure: every store command exits 1 (except
-`team activate`, `team deactivate` and `team add-bundle`, which exist
-to repair it), session start answers no persona, and `ethos doctor`
-fails a "Repository configuration" row. Identity reads (`git config user.*`) and the origin
+it, as a configuration failure. Every store command exits 1, except
+the three that repair it: `team deactivate`, `team add-bundle`, and
+`team activate`, which then records the bundle without assigning the
+leadership roles and says to run it again once the configuration is
+valid. No hook (session start, `subagent-start`, `pre-compact`)
+answers a persona; `ethos serve` refuses every guarded read and write;
+`ethos doctor` fails a "Repository configuration" row. Identity reads (`git config user.*`) and the origin
 read run in the located checkout. With no checkout, the identity read
 runs as a plain `git config` from a neutral directory outside any
 repository, so included files and command-scope configuration apply
