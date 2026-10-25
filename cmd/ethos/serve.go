@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -41,6 +43,11 @@ func runServeImpl() error {
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
+	var storeOpt mcp.Option = func(*mcp.Handler) {}
+	if _, err := resolve.LocateStoreRoot(); err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		fmt.Fprintf(os.Stderr, "ethos serve: %v; write tools will refuse\n", err)
+		storeOpt = mcp.WithStoreError(err)
+	}
 	adrs := adr.NewStore(filepath.Join(home, ".punt-labs", "ethos", "adrs"))
 	mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles,
 		mcp.WithSessionStore(sessionStore()),
@@ -51,6 +58,7 @@ func runServeImpl() error {
 		// Vendor gets its own full-chain stores for the same reason the
 		// CLI does: it copies from global into the repo layer.
 		mcp.WithVendorRunner(vendorRunner()),
+		storeOpt,
 	).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {

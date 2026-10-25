@@ -39,6 +39,7 @@ type Handler struct {
 	missionStore  *mission.Store
 	adrStore      *adr.Store
 	vendor        VendorRunner
+	storeErr      error // why the repository store could not be located, if so
 }
 
 // Option configures optional Handler fields.
@@ -128,9 +129,9 @@ func NewHandlerWithOptions(s identity.IdentityStore, talents, personalities, wri
 // RegisterTools adds all ethos MCP tools to the given server.
 func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// Identity tool (consolidated)
-	s.AddTool(h.identityTool(), h.handleIdentity)
+	h.addTool(s, h.identityTool(), h.handleIdentity)
 	// Extension tool (consolidated)
-	s.AddTool(h.extTool(), h.handleExt)
+	h.addTool(s, h.extTool(), h.handleExt)
 	// Session tool (consolidated)
 	s.AddTool(h.sessionTool(), h.handleSession)
 	// Doctor tool (standalone admin tool)
@@ -139,15 +140,15 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	h.registerAttributeTools(s)
 	// Role tool (if store configured)
 	if h.roles != nil {
-		s.AddTool(h.roleTool(), h.handleRole)
+		h.addTool(s, h.roleTool(), h.handleRole)
 	}
 	// Team tool (if store configured)
 	if h.teams != nil {
-		s.AddTool(h.teamTool(), h.handleTeam)
+		h.addTool(s, h.teamTool(), h.handleTeam)
 	}
 	// Mission tool (if store configured)
 	if h.missionStore != nil {
-		s.AddTool(h.missionTool(), h.handleMission)
+		h.addTool(s, h.missionTool(), h.handleMission)
 	}
 	// ADR tool (if store configured)
 	if h.adrStore != nil {
@@ -155,7 +156,7 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	}
 	// Vendor tool (if a runner is configured)
 	if h.vendor != nil {
-		s.AddTool(h.vendorTool(), h.handleVendor)
+		h.addTool(s, h.vendorTool(), h.handleVendor)
 	}
 }
 
