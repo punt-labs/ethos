@@ -821,7 +821,7 @@ func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 	// "Audit trailer hook", ethos-e05k added "Code archetype delegated-worker
 	// guard", and DES-079 added "Unclassified files", bumping the count from
 	// 12 to 15.
-	assert.Contains(t, text, "17 checks")
+	assert.Contains(t, text, "15 checks")
 	// Table should contain check names.
 	assert.Contains(t, text, "Identity directory")
 	assert.Contains(t, text, "Human identity")

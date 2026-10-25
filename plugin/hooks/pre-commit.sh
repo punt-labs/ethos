@@ -26,11 +26,6 @@
 # runs (a later assignment would reset $?).
 _host_status=$?
 
-# The hook this script runs as: pre-commit, or pre-merge-commit (git merge
-# --no-ff runs that one and not pre-commit; the same seal belongs in both).
-_hook=${0##*/}
-_hook=${_hook%.sh}
-
 # §2.7 marker gate: ethos does no commit-time work unless it is enabled in
 # this repo. REPO_ROOT is resolved inside the hook (worktree-safe: a worktree
 # resolves to its own work-tree root, where its .punt-labs/ethos/ lives), not
@@ -61,7 +56,7 @@ if [ "$_revparse_status" -ne 0 ]; then
   else
     _revparse_msg=$(git rev-parse --show-toplevel 2>&1 >/dev/null)
   fi
-  printf 'ethos: %s: git rev-parse --show-toplevel failed: %s\n' "$_hook" "$_revparse_msg" >&2
+  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$_revparse_msg" >&2
   exit 1
 fi
 [ -n "$_revparse_err" ] && rm -f "$_revparse_err"
@@ -72,24 +67,24 @@ fi
 _ethos_path="$REPO_ROOT/.punt-labs"
 for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enabled"; do
   if [ -L "$_component" ] && [ ! -e "$_component" ]; then
-    printf 'ethos: %s: %s is a dangling link; repair or remove it\n' "$_hook" "$_component" >&2
+    printf 'ethos: pre-commit: %s is a dangling link; repair or remove it\n' "$_component" >&2
     exit 1
   fi
   [ -e "$_component" ] || break
   case "$_component" in
   */enabled)
     if [ ! -f "$_component" ]; then
-      printf 'ethos: %s: the enabled marker %s is not a regular file\n' "$_hook" "$_component" >&2
+      printf 'ethos: pre-commit: the enabled marker %s is not a regular file\n' "$_component" >&2
       exit 1
     fi
     ;;
   *)
     if [ ! -d "$_component" ]; then
-      printf 'ethos: %s: %s is not a directory\n' "$_hook" "$_component" >&2
+      printf 'ethos: pre-commit: %s is not a directory\n' "$_component" >&2
       exit 1
     fi
     if [ ! -r "$_component" ] || [ ! -x "$_component" ]; then
-      printf 'ethos: %s: %s cannot be read\n' "$_hook" "$_component" >&2
+      printf 'ethos: pre-commit: %s cannot be read\n' "$_component" >&2
       exit 1
     fi
     ;;
@@ -106,7 +101,7 @@ elif [ -x "$HOME/.local/bin/ethos" ]; then
 else
   # Enabled here, and no binary: the commit would carry audit lines that were
   # never sealed. Say so and block, rather than pass quietly.
-  printf 'ethos: %s: ethos is enabled here but not installed; the commit is not sealed\n' "$_hook" >&2
+  printf 'ethos: pre-commit: ethos is enabled here but not installed; the commit is not sealed\n' >&2
   exit 1
 fi
 

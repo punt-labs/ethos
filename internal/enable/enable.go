@@ -293,8 +293,6 @@ var hookSpecs = map[string]struct {
 }{
 	layout.HookPreCommit: {hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
 	layout.HookCommitMsg: {hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
-	// The same seal script, in the hook a non-fast-forward merge runs.
-	layout.HookPreMergeCommit: {hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
 }
 
 // unchainTarget resolves the hooks directory disable strips. A degraded lookup

@@ -775,20 +775,7 @@ type HookSpec struct {
 }
 
 // hookSpecs is every hook doctor verifies, one per layout.HookNames entry.
-var hookSpecs = []HookSpec{sealHookSpec, trailerHookSpec, mergeSealHookSpec}
-
-// mergeSealHookSpec is the seal in pre-merge-commit: `git merge --no-ff` runs it
-// and not pre-commit, so a merge commit would otherwise carry unsealed audit
-// lines.
-var mergeSealHookSpec = HookSpec{
-	Name:       "Merge seal hook",
-	ShortName:  "merge seal",
-	File:       layout.HookPreMergeCommit,
-	Tag:        hooks.SealTag,
-	Ident:      hooks.SealIdent,
-	Canonical:  hooks.PreCommit,
-	InvokeArgs: []string{"audit", "seal"},
-}
+var hookSpecs = []HookSpec{sealHookSpec, trailerHookSpec}
 
 var sealHookSpec = HookSpec{
 	Name:       "Seal hook",

@@ -198,16 +198,8 @@ echo "$f"
 // ready to make, and a PATH that holds git and no ethos.
 func realRepoWithHooks(t *testing.T) (repo string, run func(args ...string) (string, error)) {
 	t.Helper()
-	repo, _, run = realRepoWithHooksAt(t)
-	return repo, run
-}
-
-// realRepoWithHooksAt is realRepoWithHooks that also returns the HOME the hooks
-// run under: they find ethos in $HOME/.local/bin when it is not on PATH.
-func realRepoWithHooksAt(t *testing.T) (repo, home string, run func(args ...string) (string, error)) {
-	t.Helper()
 	repo = t.TempDir()
-	home = t.TempDir()
+	home := t.TempDir()
 	env := append(testhelpers.GitEnv(),
 		"HOME="+home, "PATH=/usr/bin:/bin", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x")
@@ -225,7 +217,7 @@ func realRepoWithHooksAt(t *testing.T) (repo, home string, run func(args ...stri
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "hooks", h), body, 0o755))
 	}
-	return repo, home, run
+	return repo, run
 }
 
 // A .punt-labs or .punt-labs/ethos that git cannot follow is not "ethos is
@@ -319,57 +311,4 @@ func TestHooksBlockWhenEnabledAndEthosMissing(t *testing.T) {
 	out, err = run("merge", "--no-ff", "-m", "merge", "side")
 	require.Error(t, err, "the merge is blocked by commit-msg: %s", out)
 	assert.Contains(t, out, "commit-msg: ethos is enabled here but not installed; the commit is not sealed")
-}
-
-// git merge --no-ff runs pre-merge-commit and commit-msg and not pre-commit:
-// the seal runs in the first, from the same script, and a failing seal blocks
-// the merge.
-func TestMergeCommitIsSealed(t *testing.T) {
-	repo, home, run := realRepoWithHooksAt(t)
-	marker := filepath.Join(t.TempDir(), "sealed")
-	ethos := "#!/bin/sh\nif [ \"$1\" = audit ]; then echo \"$*\" >> '" + marker + "'; [ -f '" + marker + ".fail' ] && exit 2; fi\nexit 0\n"
-	require.NoError(t, os.MkdirAll(filepath.Join(home, ".local", "bin"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(home, ".local", "bin", "ethos"), []byte(ethos), 0o755))
-	body, err := os.ReadFile("pre-commit.sh")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "hooks", "pre-merge-commit"), body, 0o755))
-
-	// Two branches with a commit each, made with the hooks out of the way.
-	quiet := func(args ...string) {
-		out, err := run(append([]string{"-c", "core.hooksPath=/nonexistent"}, args...)...)
-		require.NoError(t, err, out)
-	}
-	write := func(name string) {
-		require.NoError(t, os.WriteFile(filepath.Join(repo, name), []byte(name), 0o644))
-		quiet("add", name)
-	}
-	write("base.txt")
-	quiet("commit", "-q", "-m", "base")
-	quiet("checkout", "-q", "-b", "side")
-	write("side.txt")
-	quiet("commit", "-q", "-m", "side")
-	quiet("checkout", "-q", "main")
-	write("main.txt")
-	quiet("commit", "-q", "-m", "main")
-	// Enabled from here on.
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
-
-	// A failing seal blocks the merge.
-	require.NoError(t, os.WriteFile(marker+".fail", nil, 0o644))
-	out, err := run("merge", "--no-ff", "-m", "merge", "side")
-	require.Error(t, err, "the merge is blocked: %s", out)
-	got, rerr := os.ReadFile(marker)
-	require.NoError(t, rerr, "the seal ran in pre-merge-commit")
-	assert.Contains(t, string(got), "audit seal")
-	_, _ = run("merge", "--abort")
-
-	// A passing one lets it through, and the seal ran once for the merge.
-	require.NoError(t, os.Remove(marker+".fail"))
-	require.NoError(t, os.Remove(marker))
-	out, err = run("merge", "--no-ff", "-m", "merge", "side")
-	require.NoError(t, err, out)
-	got, rerr = os.ReadFile(marker)
-	require.NoError(t, rerr)
-	assert.Equal(t, "audit seal\n", string(got))
 }
