@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"io"
 	"io/fs"
 	"os"
@@ -463,7 +464,7 @@ func userConfigEnv() []string {
 // GIT_CONFIG_COUNT and -c) and no repository's, and a broken .git in the
 // process's working directory cannot fail it. cleanup removes the directory.
 func Neutral() (dir string, env []string, cleanup func(), err error) {
-	dir, err = os.MkdirTemp("", "ethos-git-")
+	dir, err = os.MkdirTemp("", layout.ScratchDirPattern("ethos-git"))
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("making a neutral directory for git: %w", err)
 	}
