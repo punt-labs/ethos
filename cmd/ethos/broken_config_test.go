@@ -150,3 +150,32 @@ func TestServeSurvivesABrokenConfig(t *testing.T) {
 		assert.Contains(t, w.Content[0].(mcp.TextContent).Text, "refusing")
 	}
 }
+
+// The MCP doctor tool, through serve, shows the failing Repository store row
+// for a broken store, as the CLI does.
+func TestServeDoctorShowsAFailingStoreRow(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	t.Setenv("HOME", se.home)
+	t.Chdir(se.repo)
+	cfg := breakConfig(t, se.repo, "malformed")
+	srv := server.NewMCPServer("test", "0", server.WithToolCapabilities(true))
+	buildServeHandler(se.home, locateServeStore()).RegisterTools(srv)
+	var req mcp.CallToolRequest
+	req.Params.Name = "doctor"
+	res, err := srv.GetTool("doctor").Handler(context.Background(), req)
+	require.NoError(t, err)
+	text := ""
+	for _, c := range res.Content {
+		if tc, ok := c.(mcp.TextContent); ok {
+			text += tc.Text + "\n"
+		}
+	}
+	var row string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "Repository store") {
+			row = line
+		}
+	}
+	assert.Contains(t, row, "FAIL", text)
+	assert.Contains(t, row, filepath.Base(cfg), text)
+}

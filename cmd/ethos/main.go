@@ -288,11 +288,7 @@ func runDoctor(cmd *cobra.Command) error {
 	// read inside CheckOrphanedAgentFiles (#370). The store failure includes a
 	// broken .punt-labs/ethos path and an unreadable config, so the
 	// "Repository store" row fails for a store ethos cannot use.
-	storeRoot, storeErr := r.Store, r.StoreFailure()
-	if storeErr != nil {
-		storeRoot = "" // a store ethos cannot use is not read as one
-	}
-	results := doctor.RunAll(is, ss, r.Checkout, r.CheckoutErr, storeRoot, storeErr, ts)
+	results := doctor.RunAllFor(r.Located, is, ss, ts)
 
 	out := cmd.OutOrStdout()
 	if jsonOutput {

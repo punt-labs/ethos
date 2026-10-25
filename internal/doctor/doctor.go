@@ -46,6 +46,18 @@ func (r Result) Passed() bool {
 	return r.Status == "PASS" || r.Status == "WARN"
 }
 
+// RunAllFor is RunAll for a located repository: a store ethos cannot use
+// (StoreFailure) is passed as no store root, so no check reads a broken store
+// as if it were usable, and the "Repository store" row fails. The CLI and the
+// MCP doctor tool both go through it.
+func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore) []Result {
+	storeRoot, storeErr := loc.Store, loc.StoreFailure()
+	if storeErr != nil {
+		storeRoot = ""
+	}
+	return RunAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, teams)
+}
+
 // RunAll executes every standard health check and returns the results.
 //
 // repoRoot is the current work tree (LocateRepoRoot) — the checkout whose
