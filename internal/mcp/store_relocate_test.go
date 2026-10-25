@@ -27,10 +27,10 @@ func TestStoreRelocatedPerCall(t *testing.T) {
 		return StoreLocation{Root: "/r", EthosRoot: "/r/.punt-labs/ethos"}
 	}
 	var builds atomic.Int32
-	build := func(storeErr error) *Handler {
+	build := func(l StoreLocation) *Handler {
 		builds.Add(1)
 		s := identity.NewStore(t.TempDir())
-		if storeErr == nil {
+		if l.Err == nil {
 			// The repository layer: what the repaired store holds.
 			require.NoError(t, s.Save(&identity.Identity{Name: "Mal Reynolds", Handle: "mal", Kind: "human"}))
 		}
@@ -38,12 +38,12 @@ func TestStoreRelocatedPerCall(t *testing.T) {
 			attribute.NewStore(s.Root(), attribute.Talents),
 			attribute.NewStore(s.Root(), attribute.Personalities),
 			attribute.NewStore(s.Root(), attribute.WritingStyles),
-			WithStoreError(storeErr),
+			WithStoreError(l.Err),
 		)
 	}
 
 	loc := locate()
-	h := build(loc.Err)
+	h := build(loc)
 	h.RelocateStore(loc, locate, build)
 	srv := server.NewMCPServer("test", "0.0.0", server.WithToolCapabilities(true))
 	h.RegisterTools(srv)
@@ -87,17 +87,17 @@ func TestStoreRelocatedOnLocationChange(t *testing.T) {
 	loc.Store(StoreLocation{})
 	locate := func() StoreLocation { return loc.Load().(StoreLocation) }
 	var builds atomic.Int32
-	build := func(storeErr error) *Handler {
+	build := func(l StoreLocation) *Handler {
 		builds.Add(1)
 		s := identity.NewStore(t.TempDir())
 		return NewHandlerWithOptions(s,
 			attribute.NewStore(s.Root(), attribute.Talents),
 			attribute.NewStore(s.Root(), attribute.Personalities),
 			attribute.NewStore(s.Root(), attribute.WritingStyles),
-			WithStoreError(storeErr),
+			WithStoreError(l.Err),
 		)
 	}
-	h := build(nil)
+	h := build(StoreLocation{})
 	h.RelocateStore(locate(), locate, build)
 	builds.Store(0)
 

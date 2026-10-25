@@ -64,13 +64,14 @@ type toolMethod func(*Handler, context.Context, mcplib.CallToolRequest) (*mcplib
 type StoreLocation struct {
 	Root      string
 	EthosRoot string
+	Checkout  string
 	Err       error
 }
 
 // same reports whether a and b are the same answer. Errors compare by text:
 // a freshly built error for the same .git is the same answer.
 func (a StoreLocation) same(b StoreLocation) bool {
-	return a.Root == b.Root && a.EthosRoot == b.EthosRoot && errText(a.Err) == errText(b.Err)
+	return a.Root == b.Root && a.EthosRoot == b.EthosRoot && a.Checkout == b.Checkout && errText(a.Err) == errText(b.Err)
 }
 
 // storeRelocation re-locates the repository store on every tool call and
@@ -78,8 +79,8 @@ func (a StoreLocation) same(b StoreLocation) bool {
 // broken) .git, a repository entered, or a store created takes effect in a
 // running server.
 type storeRelocation struct {
-	locate func() StoreLocation          // the store's location now
-	build  func(storeErr error) *Handler // a handler whose stores match that answer
+	locate func() StoreLocation             // the store's location now
+	build  func(loc StoreLocation) *Handler // a handler whose stores match that answer
 	mu     sync.Mutex
 	loc    StoreLocation // the answer cur was built for
 	cur    *Handler
@@ -89,7 +90,7 @@ type storeRelocation struct {
 // call (cheap: resolve caches answers) and run on a handler built by build
 // for the current answer. h, built for loc, serves until the answer differs
 // from loc in any part.
-func (h *Handler) RelocateStore(loc StoreLocation, locate func() StoreLocation, build func(storeErr error) *Handler) {
+func (h *Handler) RelocateStore(loc StoreLocation, locate func() StoreLocation, build func(loc StoreLocation) *Handler) {
 	h.relocation = &storeRelocation{locate: locate, build: build, loc: loc, cur: h}
 }
 
@@ -104,7 +105,7 @@ func (h *Handler) current() *Handler {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !loc.same(r.loc) {
-		r.cur = r.build(loc.Err)
+		r.cur = r.build(loc)
 		r.loc = loc
 	}
 	return r.cur

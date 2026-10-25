@@ -286,6 +286,8 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: writing repo config: %w", err)
 	}
 	fmt.Fprintf(errw, "wrote: %s\n", configPath)
+	// The repo config now exists: stores built from here on must see it.
+	refreshRoots()
 
 	// --- Bundle activation ---
 	if cfg.Solo {
@@ -362,6 +364,9 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// --- Generate agent files ---
+	// Setup has just created the repo store (the leadership team lives in it):
+	// the stores built from here on must see it.
+	refreshRoots()
 	is := identityStore()
 	ts := layeredTeamStore(is)
 	rs := layeredRoleStore(is)

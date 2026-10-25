@@ -23,7 +23,7 @@ func pipelineStore() *mission.PipelineStore {
 		os.Exit(1)
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	repoRoot := ethosRootOrGlobal()
+	repoRoot := ethosRootForStores()
 	bundleRoot := resolveBundleRoot()
 	return mission.NewPipelineStoreWithBundle(repoRoot, bundleRoot, globalRoot)
 }
@@ -198,7 +198,7 @@ func runPipelineInstantiate(name string) error {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	repoRoot := ethosRootOrGlobal()
+	repoRoot := ethosRootForStores()
 	as := mission.NewArchetypeStore(repoRoot, globalRoot)
 
 	// Validate that every stage resolves a non-empty worker and evaluator

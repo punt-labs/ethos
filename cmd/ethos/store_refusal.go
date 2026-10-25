@@ -1,12 +1,12 @@
 package main
 
 import (
-	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
+	"sync"
 
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -132,17 +132,46 @@ func exemptFromStoreRefusal(cmd *cobra.Command) bool {
 	return storeUses[path] != storeRefuses
 }
 
-// refuseUnlocatableStore fails a command whose repository store cannot be
-// located for any reason but "not in a repository" — an unreadable .git, a
-// refused ETHOS_REPO_ROOT. Falling back to the global store there would write
-// to the wrong tree and exit 0.
-func refuseUnlocatableStore(cmd *cobra.Command, _ []string) error {
-	if exemptFromStoreRefusal(cmd) {
-		return nil
+// establishRoots is the root PersistentPreRunE. It locates the repository once
+// and stores the answer for everything the command builds (cmdRoots). A command
+// that reads or writes the repository store is refused, exit 2, when the store
+// or its .punt-labs/ethos cannot be located or read for any reason but "not in
+// a repository" — an unreadable .git, a refused ETHOS_REPO_ROOT, a dangling
+// store symlink. Falling back to the global store there would write to the
+// wrong tree and exit 0. Every other class runs on the global stores when a
+// lookup failed: that is the class's explicit choice (repoRoots.Global).
+func establishRoots(cmd *cobra.Command, _ []string) error {
+	r := locateRoots()
+	r.Global = exemptFromStoreRefusal(cmd)
+	if !r.Global {
+		if err := firstError(r.StoreErr, r.EthosErr); err != nil {
+			name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: %s: %v; refusing to use the global store instead\n", name, err)
+			return failClosed{}
+		}
+	} else if err := r.err(); err != nil {
+		noteRootFailure(err)
 	}
-	if _, err := resolve.LocateStoreRoot(); err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
-		return fmt.Errorf("%s: %w; refusing to use the global store instead", name, err)
+	cmdRoots.Store(r)
+	return nil
+}
+
+func firstError(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
 	}
 	return nil
+}
+
+// rootNotices holds the failures noteRootFailure has already printed.
+var rootNotices sync.Map
+
+// noteRootFailure says once per cause that a command whose class runs on the
+// global stores could not locate the repository.
+func noteRootFailure(err error) {
+	if _, dup := rootNotices.LoadOrStore(err.Error(), true); !dup {
+		fmt.Fprintf(os.Stderr, "ethos: %v; this command runs on the global stores only\n", err)
+	}
 }

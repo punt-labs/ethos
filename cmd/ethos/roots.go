@@ -5,101 +5,175 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
+	"sync/atomic"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/spf13/cobra"
 )
 
-// The repository lookups a command makes never read a failure as "not in a
-// repository". resolve.StoreRootIfAny, CheckoutRootIfAny and EthosRootIfAny
-// return "" only outside a repository; every other failure is an error.
+// A command locates the repository ONCE — in the root PersistentPreRunE
+// (establishRoots) — and everything it builds reads that one answer
+// (repoRoots). No constructor looks the repository up again, so there is no
+// second lookup that can disagree with the first after the resolver's cache
+// expires, and no failure is turned into "" on the way down.
 //
-// The *OrGlobal helpers below are for store constructors, which cannot return
-// an error. They degrade to the global stores on a failure, say so on stderr
-// (once per cause), and are safe only because the failure is already handled
-// where it matters: a command that touches the store is refused before it
-// runs (refuseUnlocatableStore), hook and doctor paths carry the error
-// (deps.StoreErr, doctor's "Repository store" row), and ethos serve guards
-// every tool. A path that must not degrade calls resolve.StoreRootIfAny or
-// requireStore and returns the error.
+// A lookup that failed is an error in the located value. A store command is
+// refused before it runs. A command whose class works without a store
+// (storeGlobalOnly: it touches only global stores; storeHandlesError: it
+// reports on or repairs the store itself) runs on the global stores: that is
+// an explicit choice of its class (repoRoots.Global), never a fallback, and
+// it is the only way a failure leaves a constructor with "".
 
-// rootNotices holds the failures noteRootFailure has already printed.
-var rootNotices sync.Map
+// repoRoots is where the repository is, as located once for a command.
+type repoRoots struct {
+	Store    string // the repository whose .punt-labs/ethos is the store; "" outside a repository
+	Ethos    string // <Store>/.punt-labs/ethos; "" when absent
+	Checkout string // the current work tree; "" outside a repository
 
-// noteRootFailure says once per cause that the repository store could not be
-// located and the global stores are in use.
-func noteRootFailure(err error) {
-	if _, dup := rootNotices.LoadOrStore(err.Error(), true); !dup {
-		fmt.Fprintf(os.Stderr, "ethos: %v; using the global stores only\n", err)
-	}
+	StoreErr    error // why the store cannot be located
+	EthosErr    error // why .punt-labs/ethos cannot be read
+	CheckoutErr error // why the checkout cannot be located
+
+	// Global: the command's class runs on the global stores when a lookup
+	// failed (see above). False means a failure here is a bug: the command
+	// should have been refused first.
+	Global bool
 }
 
-// storeRootOrGlobal is the store root for a store constructor: "" outside a
-// repository and, with a notice, when it could not be located.
-func storeRootOrGlobal() string {
-	root, err := resolve.StoreRootIfAny()
-	if err != nil {
-		noteRootFailure(err)
-		return ""
+// locateRoots looks the repository up, once: the store, its .punt-labs/ethos,
+// and the checkout. "Outside a repository" is "", nil; any other failure is
+// the error.
+func locateRoots() *repoRoots {
+	r := &repoRoots{}
+	r.Store, r.StoreErr = resolve.StoreRootIfAny()
+	if r.StoreErr == nil && r.Store != "" {
+		r.Ethos, r.EthosErr = resolve.EthosRootOf(r.Store)
 	}
-	return root
+	r.Checkout, r.CheckoutErr = resolve.CheckoutRootIfAny()
+	return r
 }
 
-// ethosRootOrGlobal is storeRootOrGlobal for the .punt-labs/ethos directory
-// ("" outside a repository, before the directory exists, or on a failure).
-func ethosRootOrGlobal() string {
-	root, err := resolve.EthosRootIfAny()
-	if err != nil {
-		noteRootFailure(err)
-		return ""
+// err is the first failure to locate anything the stores need.
+func (r *repoRoots) err() error {
+	switch {
+	case r.StoreErr != nil:
+		return r.StoreErr
+	case r.EthosErr != nil:
+		return r.EthosErr
+	case r.CheckoutErr != nil:
+		return r.CheckoutErr
 	}
-	return root
+	return nil
 }
 
-// checkoutRootOrGlobal is the checkout root for a store constructor.
-func checkoutRootOrGlobal() string {
-	root, err := resolve.CheckoutRootIfAny()
-	if err != nil {
-		noteRootFailure(err)
-		return ""
-	}
-	return root
+// cmdRoots is the located repository for the running command, set by
+// establishRoots and by ethos serve for each handler it builds.
+var cmdRoots atomic.Pointer[repoRoots]
+
+// refreshRoots locates the repository again, for a command that has just
+// created what it located (setup writes the repo config and the store, enable
+// deposits it): the stores built after that point must see it. It is the one
+// deliberate second lookup, made by the command that changed the answer.
+func refreshRoots() {
+	old := cmdRoots.Load()
+	r := locateRoots()
+	r.Global = old == nil || old.Global
+	cmdRoots.Store(r)
 }
+
+func init() {
+	// The located repository belongs to one command: forget it when the
+	// command finishes, so the next one (in a test, or a second Execute in the
+	// same process) locates for itself.
+	cobra.OnFinalize(func() { cmdRoots.Store(nil) })
+}
+
+// currentRoots is the located repository the constructors read. Outside a
+// command (a test calling a constructor directly) nothing was established, so
+// it locates now, without remembering the answer.
+func currentRoots() *repoRoots {
+	if r := cmdRoots.Load(); r != nil {
+		return r
+	}
+	r := locateRoots()
+	r.Global = true
+	return r
+}
+
+// storeRoot is the store root for a constructor. A failed lookup is only
+// tolerated for a Global command, which gets the global stores ("").
+func (r *repoRoots) storeRoot() string {
+	r.mustBeUsable(r.StoreErr)
+	return r.Store
+}
+
+// ethosRoot is .punt-labs/ethos for a constructor; see storeRoot.
+func (r *repoRoots) ethosRoot() string {
+	if r.StoreErr == nil {
+		r.mustBeUsable(r.EthosErr)
+	} else {
+		r.mustBeUsable(r.StoreErr)
+	}
+	return r.Ethos
+}
+
+// checkoutRoot is the checkout for a constructor; see storeRoot.
+func (r *repoRoots) checkoutRoot() string {
+	r.mustBeUsable(r.CheckoutErr)
+	return r.Checkout
+}
+
+// mustBeUsable returns when err is nil or the command is Global (the global
+// stores are its explicit choice). Otherwise a store command reached a
+// constructor with a failed lookup: it exits 2 naming the cause rather than
+// use the global store.
+func (r *repoRoots) mustBeUsable(err error) {
+	if err == nil || r.Global {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ethos: %v; refusing to use the global store instead\n", err)
+	os.Exit(2)
+}
+
+func storeRootForStores() string    { return currentRoots().storeRoot() }
+func ethosRootForStores() string    { return currentRoots().ethosRoot() }
+func checkoutRootForStores() string { return currentRoots().checkoutRoot() }
 
 // requireCheckout is the checkout root for a command that must run inside a
 // repository. Outside one it prints "<name> must run inside a repo" and
 // returns usageError (exit 2). Any other failure prints the cause and returns
 // failClosed: the command refuses rather than act on a guess.
 func requireCheckout(errOut io.Writer, name string) (string, error) {
-	root, err := resolve.LocateRepoRoot()
+	r := currentRoots()
 	switch {
-	case errors.Is(err, resolve.ErrNotInRepo):
-		fmt.Fprintf(errOut, "ethos: %s must run inside a repo\n", name)
-		return "", usageError{}
-	case err != nil:
+	case r.CheckoutErr != nil:
+		err := r.CheckoutErr
 		if errors.Is(err, gitenv.ErrTimeout) && name == "audit seal" {
 			err = hook.SealGitError(cwdOrDot(), err)
 		}
 		fmt.Fprintf(errOut, "ethos: %s: %v\n", name, err)
 		return "", failClosed{}
+	case r.Checkout == "":
+		fmt.Fprintf(errOut, "ethos: %s must run inside a repo\n", name)
+		return "", usageError{}
 	}
-	return root, nil
+	return r.Checkout, nil
 }
 
 // requireStore is requireCheckout for the store root.
 func requireStore(errOut io.Writer, name string) (string, error) {
-	root, err := resolve.LocateStoreRoot()
+	r := currentRoots()
 	switch {
-	case errors.Is(err, resolve.ErrNotInRepo):
+	case r.StoreErr != nil:
+		fmt.Fprintf(errOut, "ethos: %s: %v\n", name, r.StoreErr)
+		return "", failClosed{}
+	case r.Store == "":
 		fmt.Fprintf(errOut, "ethos: %s must run inside a repo\n", name)
 		return "", usageError{}
-	case err != nil:
-		fmt.Fprintf(errOut, "ethos: %s: %v\n", name, err)
-		return "", failClosed{}
 	}
-	return root, nil
+	return r.Store, nil
 }
 
 func cwdOrDot() string {

@@ -32,7 +32,7 @@ func globalStore() *identity.Store {
 // role, team, and attribute stores are derived from the returned store,
 // so every layer answers from the same reading of the repo config.
 func identityStore() identity.IdentityStore {
-	repoRoot := ethosRootOrGlobal()
+	repoRoot := ethosRootForStores()
 	bundleRoot := resolveBundleRoot()
 	return newIdentityStore(repoRoot, bundleRoot, repoAuthoritativeMode(repoRoot, bundleRoot))
 }
@@ -51,7 +51,7 @@ func identityStore() identity.IdentityStore {
 // Everything vendor WRITES is still verified under repo-only, by the
 // completeness check it runs on its own output.
 func vendorSourceStore() identity.IdentityStore {
-	repoRoot := ethosRootOrGlobal()
+	repoRoot := ethosRootForStores()
 	bundleRoot := resolveBundleRoot()
 	// Resolve the mode anyway, so a misconfigured repo-only repo still
 	// fails at startup rather than silently vendoring under a config

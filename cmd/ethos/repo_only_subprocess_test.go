@@ -94,7 +94,7 @@ func TestCLI_RefusedRepoRootOverrideCannotFallBackToGlobal(t *testing.T) {
 	se.env = append(se.env, "ETHOS_REPO_ROOT="+se.repo)
 	stdout, stderr, exit := runCLI(t, se, "list")
 
-	assert.Equal(t, 1, exit, "must not succeed by falling back to global")
+	assert.Equal(t, 2, exit, "must not succeed by falling back to global")
 	assert.Contains(t, stderr, "refusing to use")
 	assert.NotContains(t, stdout, "test-agent")
 }

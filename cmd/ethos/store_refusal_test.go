@@ -283,3 +283,57 @@ func TestCLI_UnreadableRepositoryConfigRefusesStoreCommands(t *testing.T) {
 	assert.Contains(t, string(combined), cfg)
 	assert.Contains(t, string(combined), "refusing")
 }
+
+// treeFiles lists every file under root, relative, for before/after checks.
+func treeFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var files []string
+	require.NoError(t, filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			rel, _ := filepath.Rel(root, p)
+			files = append(files, rel)
+		}
+		return nil
+	}))
+	return files
+}
+
+// A .punt-labs/ethos that is a dangling symlink is a store ethos cannot read.
+// A store command refuses (exit 2) rather than create the identity or talent
+// in the global store; nothing is written under HOME.
+func TestCLI_DanglingEthosStoreRefusesWrites(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	store := filepath.Join(se.repo, ".punt-labs", "ethos")
+	require.NoError(t, os.RemoveAll(store))
+	if err := os.Symlink(filepath.Join(se.repo, "nowhere"), store); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	before := treeFiles(t, se.home)
+	content := filepath.Join(t.TempDir(), "t.md")
+	require.NoError(t, os.WriteFile(content, []byte("# t\n"), 0o644))
+	idFile := filepath.Join(t.TempDir(), "id.yaml")
+	require.NoError(t, os.WriteFile(idFile, []byte("name: N\nhandle: n\nkind: agent\n"), 0o644))
+
+	for name, args := range map[string][]string{
+		"talent create":   {"talent", "create", "go", "-f", content},
+		"identity create": {"identity", "create", "--file", idFile},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := exec.Command(ethosBinary, args...)
+			c.Dir = se.repo
+			c.Env = withForcedNotUnderClaudeCode(se.env)
+			out, err := c.CombinedOutput()
+			var ee *exec.ExitError
+			require.ErrorAs(t, err, &ee, string(out))
+			assert.Equal(t, 2, ee.ExitCode(), string(out))
+			assert.Contains(t, string(out), store)
+		})
+	}
+	assert.Equal(t, before, treeFiles(t, se.home), "nothing is written under HOME")
+}

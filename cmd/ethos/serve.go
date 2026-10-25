@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -10,7 +9,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -34,12 +32,12 @@ func runServeImpl() error {
 	if loc.Err != nil {
 		fmt.Fprintf(os.Stderr, "ethos serve: %v; write tools will refuse until it is repaired\n", loc.Err)
 	}
-	h := buildServeHandler(home, loc.Err)
+	h := buildServeHandler(home, loc)
 	// The store is located again on every tool call, and the stores rebuilt
 	// when the answer changes: repairing .git, entering a repository, or a
 	// store created by enable or setup takes effect without a restart.
-	h.RelocateStore(loc, locateServeStore, func(storeErr error) *mcp.Handler {
-		return buildServeHandler(home, storeErr)
+	h.RelocateStore(loc, locateServeStore, func(loc mcp.StoreLocation) *mcp.Handler {
+		return buildServeHandler(home, loc)
 	})
 	h.RegisterTools(s)
 
@@ -49,29 +47,27 @@ func runServeImpl() error {
 	return nil
 }
 
-// locateServeStore is where the repository store is for the working
-// directory now: its root and .punt-labs/ethos, or why it cannot be located.
-// Outside any repository both roots are "" and there is no error.
+// locateServeStore is where the repository is for the working directory now,
+// located once (locateRoots): the store root, its .punt-labs/ethos, the
+// checkout, and why any of them cannot be located. Outside any repository the
+// roots are "" and there is no error; any other failure — a dangling store
+// symlink included — is the error.
 func locateServeStore() mcp.StoreLocation {
-	root, err := resolve.LocateStoreRoot()
-	if err != nil {
-		if errors.Is(err, resolve.ErrNotInRepo) {
-			return mcp.StoreLocation{}
-		}
-		return mcp.StoreLocation{Err: err}
+	r := locateRoots()
+	return mcp.StoreLocation{
+		Root: r.Store, EthosRoot: r.Ethos, Checkout: r.Checkout,
+		Err: firstError(r.StoreErr, r.EthosErr, r.CheckoutErr),
 	}
-	loc := mcp.StoreLocation{Root: root}
-	ethos := filepath.Join(root, ".punt-labs", "ethos")
-	if info, err := os.Stat(ethos); err == nil && info.IsDir() {
-		loc.EthosRoot = ethos
-	}
-	return loc
 }
 
-// buildServeHandler builds the MCP handler with every store resolved for the
-// current working directory. A non-nil storeErr makes the guarded tools
-// refuse writes and note that reads come from the global store only.
-func buildServeHandler(home string, storeErr error) *mcp.Handler {
+// buildServeHandler builds the MCP handler with every store built from loc,
+// the one location it was triggered with: nothing here locates again. A
+// non-nil loc.Err makes the guarded tools refuse writes and note that reads
+// come from the global store only; ethos serve is a command that handles the
+// error itself, so its constructors take the global stores for it.
+func buildServeHandler(home string, loc mcp.StoreLocation) *mcp.Handler {
+	storeErr := loc.Err
+	cmdRoots.Store(&repoRoots{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, StoreErr: loc.Err, Global: true})
 	is := identityStore()
 	talents := layeredAttributeStore(is, attribute.Talents)
 	personalities := layeredAttributeStore(is, attribute.Personalities)

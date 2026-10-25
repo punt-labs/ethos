@@ -504,11 +504,33 @@ func EthosRootIfAny() (string, error) {
 	if err != nil || repoRoot == "" {
 		return "", err
 	}
-	ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
-	if info, err := os.Stat(ethosRoot); err == nil && info.IsDir() {
-		return ethosRoot, nil
+	return EthosRootOf(repoRoot)
+}
+
+// EthosRootOf is <storeRoot>/.punt-labs/ethos when it is a directory, "" with a
+// nil error only when it does not exist, and an error for every other failure:
+// a dangling symlink, a regular file, a permission error, a symlink loop. Each
+// of those is a store ethos cannot read, never "no store yet".
+func EthosRootOf(storeRoot string) (string, error) {
+	ethosRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
+	info, err := os.Stat(ethosRoot)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && !isDanglingLink(ethosRoot):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("examining the ethos store %s: %w", ethosRoot, err)
+	case !info.IsDir():
+		return "", fmt.Errorf("the ethos store %s is not a directory", ethosRoot)
 	}
-	return "", nil
+	return ethosRoot, nil
+}
+
+// isDanglingLink reports whether p is a symlink whose target does not exist:
+// os.Stat reports that as fs.ErrNotExist, but the store is not absent, it is
+// broken.
+func isDanglingLink(p string) bool {
+	info, err := os.Lstat(p)
+	return err == nil && info.Mode()&fs.ModeSymlink != 0
 }
 
 // LoadRepoConfig reads repo-local ethos configuration. Tries

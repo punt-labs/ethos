@@ -48,7 +48,7 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	repoRoot := storeRootOrGlobal()
+	repoRoot := storeRootForStores()
 	warnIfGlobalFallback(repoRoot)
 	// The record resolves to the store root (main in a worktree); the DES-058
 	// audit concern (live zone + sealed chunks) resolves to the checkout so
@@ -61,7 +61,7 @@ func missionStore() *mission.Store {
 // missionCheckoutRoot returns the per-checkout root for the DES-058 audit
 // zone of a mission store whose record root is storeRoot. When storeRoot is
 // "" — outside any repository, or a store that could not be located and
-// degraded to the global tree (storeRootOrGlobal) — it returns "" so the audit
+// degraded to the global tree (a Global command's explicit choice) — it returns "" so the audit
 // zone falls back to the global tree WITH the records, and a refused
 // ETHOS_REPO_ROOT cannot be re-accepted here and split the contract (global)
 // from the live events/seal (under the refused path). In the legitimate
@@ -71,7 +71,7 @@ func missionCheckoutRoot(storeRoot string) string {
 	if storeRoot == "" {
 		return ""
 	}
-	return checkoutRootOrGlobal()
+	return checkoutRootForStores()
 }
 
 // refuseBadStoreOverride hard-errors a mission WRITE op when the repository
@@ -162,7 +162,7 @@ func missionStoreForCreate() *mission.Store {
 	// fallback. NewStore + WithRepoRoot would only wire the trace
 	// summary and leave per-mission storage on the global tree
 	// (m-2026-05-23-004 escalation).
-	storeRoot := storeRootOrGlobal()
+	storeRoot := storeRootForStores()
 	warnIfGlobalFallback(storeRoot)
 	// Record → store root; DES-058 audit (live + sealed chunks) → checkout
 	// root, matching the pre-commit seal (Bugbot HIGH #370).
@@ -176,7 +176,7 @@ func missionStoreForCreate() *mission.Store {
 			"ethos: mission: cannot wire role overlap check: %v\n", err)
 		os.Exit(1)
 	}
-	repoRoot := ethosRootOrGlobal()
+	repoRoot := ethosRootForStores()
 	as := mission.NewArchetypeStore(repoRoot, root)
 	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as)
 }
@@ -2293,7 +2293,7 @@ func bindDispatchedMission(op, missionID, worker string) {
 	// was ~30 duplicated lines with the MCP twin
 	// (internal/mcp/mission_tools.go's bindDispatchedMission) into one
 	// shared implementation.
-	repoRoot := storeRootOrGlobal()
+	repoRoot := storeRootForStores()
 	store := mission.NewStoreWithRoots(repoRoot, globalRoot)
 	remedy := fmt.Sprintf(
 		"run `ethos mission release` to clear every pending dispatch in this session, "+
@@ -2345,7 +2345,7 @@ func clearClosedSessionBindings(missionID string) {
 // configured — the common case for dispatch is a leader session inside
 // a repo, but dispatch should not fail when run outside one.
 func resolveLeader() string {
-	repoRoot := storeRootOrGlobal()
+	repoRoot := storeRootForStores()
 	agent, err := resolve.ResolveAgent(repoRoot)
 	if err == nil && agent != "" {
 		return agent
