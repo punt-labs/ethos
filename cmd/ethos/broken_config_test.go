@@ -501,8 +501,8 @@ var policyBreaks = map[string]string{
 }
 
 // On a policy issue subagent-start and pre-compact inject no persona, record
-// none, and tell the session why, as session-start does. (main exited 1 in
-// both hooks.) The agent identity exists only in the global store.
+// none, and tell the session why, as session-start does. The agent identity
+// exists only in the global store.
 func TestSubagentStartAndPreCompactRefuseAPersonaOnAPolicyIssue(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -538,7 +538,8 @@ func TestSubagentStartAndPreCompactRefuseAPersonaOnAPolicyIssue(t *testing.T) {
 
 // With the store or its configuration unreadable, subagent-start and pre-compact
 // answer no persona: a different identity of the same handle in the global store
-// is not the repository's. (A regression against main, which exited 1.)
+// is not the repository's. Before hookIssue, configIssue() was nil while the
+// store failed, so both hooks answered the global identity.
 func TestHooksRefuseAGlobalPersonaWhenTheConfigCannotBeRead(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
