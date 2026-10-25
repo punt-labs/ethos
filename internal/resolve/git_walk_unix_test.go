@@ -151,11 +151,12 @@ func within(t *testing.T, limit time.Duration, fn func()) {
 }
 
 // git itself blocks reading a FIFO commondir. Its command is stopped after
-// gitenv.Timeout and the answer is a refusal naming git and the directory:
+// the gitenv deadline (shortened here) and the answer is a refusal naming git and the directory:
 // never a hang, never the hand rules in its place. IsWorkingTree reports the
 // same refusal rather than "not a working tree".
 func TestGitThatHangsIsARefusal(t *testing.T) {
 	requireGit(t)
+	testhelpers.GitTimeout(t, 200*time.Millisecond)
 	inner, _ := shapeIn(t, gitShape{func(t *testing.T, inner string) {
 		t.Helper()
 		admin := filepath.Join(t.TempDir(), "admin")
@@ -165,7 +166,7 @@ func TestGitThatHangsIsARefusal(t *testing.T) {
 	}, handError})
 	var root string
 	var err, wtErr error
-	within(t, 2*gitenv.Timeout+10*time.Second, func() {
+	within(t, 10*time.Second, func() {
 		captureStderr(t, func() { root, err = LocateRepoRoot() })
 		_, wtErr = IsWorkingTree(inner)
 	})
@@ -180,13 +181,14 @@ func TestGitThatHangsIsARefusal(t *testing.T) {
 // A git whose --version does not answer is a refusal too, not a silent
 // switch to the hand rules.
 func TestGitProbeThatHangsIsARefusal(t *testing.T) {
+	testhelpers.GitTimeout(t, 200*time.Millisecond)
 	sleep, err := exec.LookPath("sleep")
 	require.NoError(t, err)
 	fakeGit(t, "exec "+sleep+" 60\n")
 	dir := t.TempDir()
 	testhelpers.MakeGitDir(t, dir)
 	t.Chdir(dir)
-	within(t, gitenv.Timeout+10*time.Second, func() {
+	within(t, 10*time.Second, func() {
 		captureStderr(t, func() { _, err = LocateRepoRoot() })
 	})
 	require.ErrorIs(t, err, gitenv.ErrTimeout)

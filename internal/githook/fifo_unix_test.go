@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // hooksDirWithin runs HooksDir(dir) and fails the test if it does not return
@@ -67,12 +68,13 @@ func TestManualHooksDirFIFOCommondir(t *testing.T) {
 }
 
 // With git on PATH, git itself blocks reading a FIFO commondir. The lookup
-// stops it after gitenv.Timeout and reports a degraded lookup whose reason
+// stops it at the gitenv deadline (shortened here) and reports a degraded lookup whose reason
 // names git and the directory: Verified refuses it, nothing hangs.
 func TestHooksDirGitTimeoutIsARefusal(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	testhelpers.GitTimeout(t, 200*time.Millisecond)
 	dir := t.TempDir()
 	admin := filepath.Join(t.TempDir(), "admin")
 	makeGitDir(t, admin)
@@ -85,7 +87,7 @@ func TestHooksDirGitTimeoutIsARefusal(t *testing.T) {
 	var l Lookup
 	select {
 	case l = <-done:
-	case <-time.After(gitenv.Timeout + 10*time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("HooksDir did not return: git was not stopped")
 	}
 	if _, err := l.Verified(); err == nil {

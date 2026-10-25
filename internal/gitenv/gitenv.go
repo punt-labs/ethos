@@ -9,13 +9,26 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// Timeout bounds every git command ethos runs to find a repository or its
-// hooks. git blocks forever on some layouts (it reads a FIFO commondir); a
-// command that has not answered by then is a refusal, never a hang.
+// Timeout bounds every git command ethos runs. git blocks forever on some
+// layouts (it reads a FIFO commondir); a command that has not answered by
+// then is an error, never a hang.
 const Timeout = 10 * time.Second
+
+// deadline is the bound Output applies: Timeout, unless a test shortened it.
+var deadline atomic.Int64
+
+func init() { deadline.Store(int64(Timeout)) }
+
+// SetTimeout sets the bound Output applies and returns the previous one, for
+// a test that must not wait Timeout for a git that hangs. Use it through
+// testhelpers.GitTimeout, which restores the previous bound.
+func SetTimeout(d time.Duration) time.Duration {
+	return time.Duration(deadline.Swap(int64(d)))
+}
 
 // ErrTimeout is wrapped by the error Output returns when git did not answer
 // within Timeout.
@@ -24,14 +37,15 @@ var ErrTimeout = errors.New("git did not answer")
 // Output runs git with args — as `git -C dir args...` when dir is not "" —
 // in the Parsed environment, and returns its stdout. A git that exits non-zero
 // returns its *exec.ExitError (stderr captured). A git still running after
-// Timeout is killed and reported as ErrTimeout naming git, the arguments and
+// Timeout (or the bound SetTimeout set) is killed and reported as ErrTimeout naming git, the arguments and
 // the directory.
 func Output(dir, git string, args ...string) ([]byte, error) {
 	full := args
 	if dir != "" {
 		full = append([]string{"-C", dir}, args...)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	limit := time.Duration(deadline.Load())
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, git, full...)
 	cmd.Env = Parsed()
@@ -43,7 +57,7 @@ func Output(dir, git string, args ...string) ([]byte, error) {
 			where = " in " + dir
 		}
 		return nil, fmt.Errorf("%w: %s %s%s did not answer within %v; refusing rather than guessing",
-			ErrTimeout, git, strings.Join(args, " "), where, Timeout)
+			ErrTimeout, git, strings.Join(args, " "), where, limit)
 	}
 	return out, err
 }

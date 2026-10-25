@@ -5,6 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"testing"
+	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 // Git test isolation.
@@ -117,4 +121,12 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+// GitTimeout shortens the bound gitenv.Output applies to d for the rest of
+// the test, so a test of a git that hangs does not wait gitenv.Timeout.
+func GitTimeout(t testing.TB, d time.Duration) {
+	t.Helper()
+	prev := gitenv.SetTimeout(d)
+	t.Cleanup(func() { gitenv.SetTimeout(prev) })
 }

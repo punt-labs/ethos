@@ -38,13 +38,16 @@ func TestOutputTimesOut(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs a shell script git")
 	}
+	restore := SetTimeout(200 * time.Millisecond)
+	t.Cleanup(func() { SetTimeout(restore) })
 	dir := t.TempDir()
 	git := filepath.Join(dir, "git")
 	require.NoError(t, os.WriteFile(git, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755))
 	start := time.Now()
 	_, err := Output(dir, git, "rev-parse", "--show-toplevel")
 	require.ErrorIs(t, err, ErrTimeout)
-	assert.Less(t, time.Since(start), Timeout+5*time.Second)
+	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.Contains(t, err.Error(), "200ms")
 	assert.Contains(t, err.Error(), git)
 	assert.Contains(t, err.Error(), dir)
 	assert.Contains(t, err.Error(), "rev-parse --show-toplevel")
@@ -71,4 +74,13 @@ func TestOutput(t *testing.T) {
 	var ee *exec.ExitError
 	require.ErrorAs(t, err, &ee)
 	assert.Equal(t, "oops\n", string(ee.Stderr))
+}
+
+// Production waits 10s for git; a test that shortens the deadline gets the
+// previous value back to restore.
+func TestTimeoutDefault(t *testing.T) {
+	assert.Equal(t, 10*time.Second, Timeout)
+	prev := SetTimeout(time.Millisecond)
+	assert.Equal(t, Timeout, prev, "the deadline starts at Timeout")
+	assert.Equal(t, time.Millisecond, SetTimeout(prev))
 }

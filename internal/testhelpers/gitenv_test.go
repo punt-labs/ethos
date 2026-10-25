@@ -4,7 +4,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,4 +43,15 @@ func TestIsolateGit(t *testing.T) {
 		assert.False(t, set, v)
 	}
 	assert.Equal(t, os.TempDir(), os.Getenv("GIT_CEILING_DIRECTORIES"))
+}
+
+// GitTimeout shortens the git deadline for one test and restores it after.
+func TestGitTimeoutRestores(t *testing.T) {
+	t.Run("shortened", func(t *testing.T) {
+		GitTimeout(t, time.Millisecond)
+		prev := gitenv.SetTimeout(time.Millisecond)
+		assert.Equal(t, time.Millisecond, prev)
+	})
+	prev := gitenv.SetTimeout(gitenv.Timeout)
+	assert.Equal(t, gitenv.Timeout, prev, "restored when the test ended")
 }
