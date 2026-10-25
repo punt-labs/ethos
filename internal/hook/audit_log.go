@@ -38,15 +38,15 @@ import (
 
 // ErrAuditDropped is wrapped by the error HandleAuditLog returns when the
 // entry was not written. The tool call still proceeds; the caller puts the
-// loss in front of the session (WriteAuditDropNotice).
+// loss in front of the session (WriteAuditNotice).
 var ErrAuditDropped = errors.New("audit entry not written")
 
-// WriteAuditDropNotice writes the PostToolUse hook output that tells the
-// session an audit entry was dropped: a systemMessage for the operator and
-// additionalContext for the model. stderr alone reaches only a log file
-// nobody reads.
-func WriteAuditDropNotice(w io.Writer, dropped error) error {
-	msg := "ethos: " + dropped.Error()
+// WriteAuditNotice writes the PostToolUse hook output that tells the
+// session about an audit entry that was dropped, or written without its
+// lock: a systemMessage for the operator and additionalContext for the
+// model. stderr alone reaches only a log file nobody reads.
+func WriteAuditNotice(w io.Writer, notice error) error {
+	msg := "ethos: " + notice.Error()
 	var out struct {
 		SystemMessage      string `json:"systemMessage"`
 		HookSpecificOutput struct {
@@ -73,36 +73,30 @@ func dropped(cause error, e auditEntry, sessionID string) error {
 }
 
 // HandleAuditLog appends one JSONL line to the session audit log.
-// Called from the PostToolUse hook for every tool invocation. A lost
-// entry is returned as an error wrapping ErrAuditDropped; audit logging
-// is advisory, not a gate, so the caller never blocks the tool call on
-// it. Every
-// failure path writes a warning to stderr and returns nil so a
-// broken audit pipeline cannot block the tool call.
+// Called from the PostToolUse hook for every tool invocation. Audit
+// logging is advisory, not a gate: the caller never blocks the tool call
+// on it. Every lost entry — an unreadable payload, a payload with no
+// session_id, an unresolvable path, a failed write — is reported on
+// stderr and returned as an error wrapping ErrAuditDropped, which the
+// caller shows in the session (WriteAuditNotice). A nil return means the
+// entry was written.
 //
-// DES-054 phase 1 storage layout:
+// Storage layout:
 //
-//   - When repoRoot is set, the write lands in
-//     <repoRoot>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
-//     The per-session directory is created on first write; subsequent
-//     writes in the same session reuse the existing date directory
-//     even if the wall clock has rolled over a day boundary.
+//   - When repoRoot is set (DES-058), the write appends to the
+//     machine-local live file
+//     <repoRoot>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl;
+//     a seal later moves it into chunks under the tracked
+//     <repoRoot>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/
+//     directory, which is reused across a day boundary.
 //   - When repoRoot is empty, the write falls back to the legacy
 //     <globalSessionsDir>/<session-id>.audit.jsonl shape so the hook
 //     keeps working in non-repo contexts (e.g. cron tasks, ad-hoc
 //     CLI sessions outside a git tree).
 //
-// The function never silently drops a write: an mkdir or open
-// failure writes a warning to stderr but allows the tool call to
-// proceed. Migration: in phase 1, repo-tree writes use the new
-// <repoRoot>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl layout; only
-// sessions launched outside a repo still write to the legacy
-// <globalSessionsDir>/<id>.audit.jsonl path. A v3.11.0 reader sees
-// only the legacy path, so repo-tree sessions written under v3.12
-// are not visible to a v3.11.0 reader regardless of date. See
-// resolveAuditWritePath and resolveRepoSessionDir in audit_paths.go.
-// Phase 2 will introduce a unified reader that tries the repo tree
-// first and falls back to the legacy path.
+// A v3.11.0 reader sees only the legacy global path, so repo-tree
+// sessions are not visible to it. See resolveAuditWritePath and
+// resolveRepoSessionDir in audit_paths.go.
 func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
@@ -112,7 +106,8 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 
 	sessionID, _ := input["session_id"].(string)
 	if sessionID == "" {
-		return nil
+		tool, _ := input["tool_name"].(string)
+		return dropped(errors.New("the payload has no session_id"), auditEntry{Tool: tool}, "")
 	}
 
 	now := time.Now().UTC()

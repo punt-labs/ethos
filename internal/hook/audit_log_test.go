@@ -50,7 +50,8 @@ func TestHandleAuditLog_NoSessionID(t *testing.T) {
 	require.NoError(t, err)
 
 	err = HandleAuditLog(bytes.NewReader(data), "", dir)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrAuditDropped, "a payload with no session_id is a lost entry")
+	assert.Contains(t, err.Error(), "session_id")
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
@@ -561,11 +562,11 @@ func TestHandleAuditLog_StderrCarriesEntryWhenPathResolverFails(t *testing.T) {
 		"path-resolver failure must still surface the lost tool input")
 }
 
-// WriteAuditDropNotice puts a dropped entry in front of the session: the
+// WriteAuditNotice puts a dropped entry in front of the session: the
 // operator sees systemMessage, the model sees additionalContext.
-func TestWriteAuditDropNotice(t *testing.T) {
+func TestWriteAuditNotice(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, WriteAuditDropNotice(&buf, fmt.Errorf("%w: disk full", ErrAuditDropped)))
+	require.NoError(t, WriteAuditNotice(&buf, fmt.Errorf("%w: disk full", ErrAuditDropped)))
 	var out struct {
 		SystemMessage      string `json:"systemMessage"`
 		HookSpecificOutput struct {

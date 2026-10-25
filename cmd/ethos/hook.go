@@ -281,19 +281,21 @@ func runHookAuditLog() error {
 	if err != nil {
 		return fmt.Errorf("hook audit-log: %w", err)
 	}
-	// A dropped entry never blocks the tool call, but it is put in front of
-	// the session (systemMessage and additionalContext), not left on the
-	// hook's stderr, which goes to a log file nobody reads.
-	if dropErr := writeAuditLog(home + "/.punt-labs/ethos/sessions"); dropErr != nil {
-		if err := hook.WriteAuditDropNotice(os.Stdout, dropErr); err != nil {
+	// A dropped or unlocked entry never blocks the tool call, but it is put
+	// in front of the session (systemMessage and additionalContext), not
+	// left on the hook's stderr, which goes to a log file nobody reads.
+	if notice := writeAuditLog(home + "/.punt-labs/ethos/sessions"); notice != nil {
+		if err := hook.WriteAuditNotice(os.Stdout, notice); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
 		}
 	}
 	return nil
 }
 
-// writeAuditLog records the PostToolUse payload on stdin and returns the
-// error wrapping hook.ErrAuditDropped when the entry was not written.
+// writeAuditLog records the PostToolUse payload on stdin. It returns the
+// error wrapping hook.ErrAuditDropped when the entry was not written, and
+// an error naming the lock when the entry was written without it; either
+// is shown in the session. nil means the entry was written under its lock.
 //
 // DES-054 phase 1: prefer the date-keyed repo-tree layout when the hook
 // fires inside a repo; fall back to the legacy global sessions directory
@@ -355,7 +357,11 @@ func writeAuditLog(sessionsDir string) error {
 		fmt.Fprintf(os.Stderr,
 			"ethos: audit-log: acquiring %s %s: %v; falling through unlocked\n",
 			lockName, sessionID, lockErr)
-		return record()
+		if err := record(); err != nil {
+			return fmt.Errorf("%w (tried without the %s: %v)", err, lockName, lockErr)
+		}
+		return fmt.Errorf("audit entry written without the %s (%v); a concurrent write may interleave with it",
+			lockName, lockErr)
 	}
 	return dropErr
 }
