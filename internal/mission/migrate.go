@@ -482,7 +482,7 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.RemoveAll(staging)
+			removeStaging(os.Stderr, staging)
 		}
 	}()
 
@@ -524,6 +524,22 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 // reflections.yaml) are optional. The copy is whole-file: open both
 // fds, io.Copy, fsync, close. The destination is created with mode
 // 0o600 to match the contract file mode used by writeContract.
+// removeStaging deletes a migrate staging directory and says on w when it
+// cannot: a leftover staging directory is one the user must remove by hand.
+// The path is reported repo-relative, so a home directory does not leak.
+func removeStaging(w io.Writer, staging string) {
+	err := os.RemoveAll(staging)
+	if err == nil {
+		return
+	}
+	// A PathError's text carries the absolute path; keep the cause only.
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		err = fmt.Errorf("%s: %w", pe.Op, pe.Err)
+	}
+	fmt.Fprintf(w, "ethos: mission migrate: could not remove staging directory %s: %v\n", relRepoPath(staging), err)
+}
+
 func copyIfExists(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
