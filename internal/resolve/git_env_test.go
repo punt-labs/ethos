@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -317,4 +318,41 @@ func TestRelativeCommonDirFromSymlinkedSubdirectory(t *testing.T) {
 	store, err := LocateStoreRoot()
 	require.NoError(t, err)
 	assert.Equal(t, realpath(t, main), realpath(t, store))
+}
+
+// A failed probe is retried after locateTTL: a git that starts to run (the
+// command line tools installed under a running server) is used again. A
+// successful probe is kept.
+func TestFailedGitProbeRetried(t *testing.T) {
+	clock := time.Now()
+	orig := locateNow
+	locateNow = func() time.Time { return clock }
+	t.Cleanup(func() { locateNow = orig })
+
+	count := filepath.Join(t.TempDir(), "count")
+	ok := filepath.Join(t.TempDir(), "ok")
+	fakeGit(t, `echo x >> "`+count+`"
+[ -e "`+ok+`" ] && { echo "git version 2.43.0"; exit 0; }
+echo "xcrun: error: invalid active developer path" >&2
+exit 1
+`)
+	runs := func() int {
+		data, err := os.ReadFile(count)
+		require.NoError(t, err)
+		return strings.Count(string(data), "x")
+	}
+	captureStderr(t, func() { assert.Empty(t, usableGit()) })
+	require.NoError(t, os.WriteFile(ok, nil, 0o644))
+
+	clock = clock.Add(locateTTL - time.Second)
+	captureStderr(t, func() { assert.Empty(t, usableGit(), "within the TTL the failure stands") })
+	assert.Equal(t, 1, runs())
+
+	clock = clock.Add(2 * time.Second)
+	assert.NotEmpty(t, usableGit(), "past the TTL the probe runs again")
+	assert.Equal(t, 2, runs())
+
+	clock = clock.Add(10 * locateTTL)
+	assert.NotEmpty(t, usableGit())
+	assert.Equal(t, 2, runs(), "a successful probe is kept")
 }

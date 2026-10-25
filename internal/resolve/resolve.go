@@ -860,13 +860,16 @@ func locate(start string) located {
 	return r
 }
 
-// gitProbe is what `git --version` said about one git binary.
+// gitProbe is what `git --version` said about one git binary, and when.
 type gitProbe struct {
-	version string // "git version 2.43.0"
-	err     error  // why it did not run
+	version string    // "git version 2.43.0"
+	err     error     // why it did not run
+	at      time.Time // when the probe ran
 }
 
-// probes holds one gitProbe per git path: the probe runs once per process.
+// probes holds one gitProbe per git path. A success is kept for the life of
+// the process; a failure is retried after locateTTL, so a long-running server
+// uses a git that has started to run.
 var probes sync.Map
 
 // usableGit returns the git on PATH when it runs, else "". A git that is on
@@ -884,15 +887,18 @@ func usableGit() string {
 	return git
 }
 
-// probeGit runs `git --version` for git once and remembers the answer.
+// probeGit runs `git --version` for git and remembers the answer: a success
+// for good, a failure for locateTTL.
 func probeGit(git string) gitProbe {
 	if v, ok := probes.Load(git); ok {
-		return v.(gitProbe)
+		if p := v.(gitProbe); p.err == nil || locateNow().Sub(p.at) < locateTTL {
+			return p
+		}
 	}
 	cmd := exec.Command(git, "--version")
 	cmd.Env = gitenv.Parsed()
 	out, err := cmd.Output()
-	p := gitProbe{version: strings.TrimSpace(string(out))}
+	p := gitProbe{version: strings.TrimSpace(string(out)), at: locateNow()}
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
@@ -900,8 +906,8 @@ func probeGit(git string) gitProbe {
 		}
 		p.err = err
 	}
-	v, _ := probes.LoadOrStore(git, p)
-	return v.(gitProbe)
+	probes.Store(git, p)
+	return p
 }
 
 // gitLocate asks git for the work tree root, the git dir and the common dir of
