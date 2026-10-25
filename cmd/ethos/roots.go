@@ -151,7 +151,7 @@ func requireCheckout(errOut io.Writer, name string) (string, error) {
 	case r.CheckoutErr != nil:
 		err := r.CheckoutErr
 		if errors.Is(err, gitenv.ErrTimeout) && name == "audit seal" {
-			err = hook.SealGitError(cwdOrDot(), err)
+			err = hook.SealGitError(cwdOrDot(), "locating the checkout (git rev-parse)", err, true)
 		}
 		fmt.Fprintf(errOut, "ethos: %s: %v\n", name, err)
 		return "", failClosed{}

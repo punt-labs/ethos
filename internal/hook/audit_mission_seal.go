@@ -23,7 +23,7 @@ func WithLiveMissionLock(repoRoot, missionID, sessionID string, fn func() error)
 func SealMission(repoRoot, missionID string, now time.Time, opts SealOptions) (SealResult, error) {
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
-		return SealResult{}, SealGitError(repoRoot, err)
+		return SealResult{}, SealGitError(repoRoot, "checking for a gitlink mount (git ls-files)", err, true)
 	}
 	if gitlink {
 		fmt.Fprintf(os.Stderr,

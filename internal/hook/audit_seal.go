@@ -55,7 +55,7 @@ type SealResult struct {
 func SealRepo(repoRoot string, now time.Time, opts SealOptions) (SealResult, error) {
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
-		return SealResult{}, SealGitError(repoRoot, err)
+		return SealResult{}, SealGitError(repoRoot, "checking for a gitlink mount (git ls-files)", err, true)
 	}
 	if gitlink {
 		fmt.Fprintf(os.Stderr,
@@ -135,13 +135,20 @@ func sessionSealUnit(repoRoot, sessionID, sealedDir string, now time.Time, opts 
 // tree as it found it:
 //
 //  1. every read-only git query — one `git status` over the chunks already on
-//     disk, to find orphans a crashed seal left unstaged;
+//     disk, to find orphans a crashed seal left unstaged, and where the index
+//     lives;
 //  2. every chunk write, each under its unit's flock;
-//  3. one `git add` of the orphans and the new chunks.
+//  3. one `git add` of the orphans and the new chunks, after a snapshot of
+//     the index.
 //
 // A failure in phase 1 happens before anything is written. A failure in phase
 // 2 or 3 removes the chunks this run wrote (the live files are untouched, so
-// the next seal rewrites them). A dry run only counts.
+// the next seal rewrites them) and, after phase 3's git has exited, puts the
+// snapshot back over the index: `git add` of several paths can stage some and
+// then fail, and the index is part of the tree. SweepStaleTemps (removing
+// leftover temp files) and MkdirAll (creating empty directories) may persist:
+// neither changes tracked content, so they are not part of "unchanged". A dry
+// run only counts.
 func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResult) error {
 	if opts.DryRun {
 		for _, u := range units {
@@ -167,15 +174,19 @@ func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResul
 		var err error
 		pending, err = audit.UntrackedOrModified(repoRoot, existing)
 		if err != nil {
-			return SealGitError(repoRoot, err)
+			return SealGitError(repoRoot, "reading the status of the chunks already on disk (git status)", err, true)
 		}
+	}
+	indexPath, err := gitIndexPath(repoRoot)
+	if err != nil {
+		return SealGitError(repoRoot, "locating the index (git rev-parse --git-path index)", err, true)
 	}
 
 	var wrote []string
 	for _, u := range units {
 		out, err := u.write()
 		if err != nil {
-			return rollbackSeal(wrote, fmt.Errorf("sealing %s: %w", u.label, err))
+			return rollbackSeal(wrote, nil, fmt.Errorf("sealing %s: %w", u.label, err), "writing chunks")
 		}
 		if out.wroteChunk {
 			res.SessionsSealed++
@@ -197,28 +208,110 @@ func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResul
 	if len(toAdd) == 0 {
 		return nil
 	}
-	if err := audit.GitAdd(repoRoot, toAdd...); err != nil {
-		return rollbackSeal(wrote, SealGitError(repoRoot, err))
+	snap, err := snapshotIndex(indexPath)
+	if err != nil {
+		return rollbackSeal(wrote, nil, fmt.Errorf("snapshotting the index: %w", err), "snapshotting the index")
 	}
+	if err := audit.GitAdd(repoRoot, toAdd...); err != nil {
+		return rollbackSeal(wrote, snap, SealGitError(repoRoot, "staging chunks (git add)", err, false), "staging chunks (git add)")
+	}
+	snap.discard()
 	res.ChunksStaged += len(toAdd)
 	return nil
 }
 
-// rollbackSeal removes the chunks a failed seal wrote, so the tree is as it
-// was; the live files still hold every line. It returns cause, with a note
-// when a chunk could not be removed (the next seal stages it as an orphan).
-func rollbackSeal(wrote []string, cause error) error {
-	var failed []string
-	for _, p := range wrote {
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			failed = append(failed, fmt.Sprintf("%s: %v", p, err))
+// gitIndexPath is where git keeps the index for repoRoot: $GIT_INDEX_FILE, or
+// the index of this checkout (a linked worktree has its own).
+func gitIndexPath(repoRoot string) (string, error) {
+	out, _, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Dir: repoRoot, Env: gitenv.Inherited(), Args: []string{"rev-parse", "--git-path", "index"},
+	}, 0)
+	if err != nil {
+		return "", err
+	}
+	p := strings.TrimSpace(string(out))
+	if p == "" {
+		return "", errors.New("git printed no index path")
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(repoRoot, p)
+	}
+	return p, nil
+}
+
+// indexSnapshot is a copy of the index taken before `git add`, in a sibling
+// file (same directory, so a restore is a rename).
+type indexSnapshot struct {
+	path, snap string
+	existed    bool // false: there was no index, and restoring removes the one git made
+}
+
+// snapshotIndex copies the index at path to path+".ethos-tmp". A missing index
+// is recorded, not an error: a repository with no commits has none.
+func snapshotIndex(path string) (*indexSnapshot, error) {
+	s := &indexSnapshot{path: path, snap: path + ".ethos-tmp"}
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return s, nil
+	case err != nil:
+		return nil, err
+	}
+	s.existed = true
+	if err := os.WriteFile(s.snap, data, 0o600); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// restore puts the snapshot back over the index (git has exited), or removes
+// the index when there was none.
+func (s *indexSnapshot) restore() error {
+	if !s.existed {
+		if err := os.Remove(s.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return os.Rename(s.snap, s.path)
+}
+
+// discard removes the snapshot after a successful add.
+func (s *indexSnapshot) discard() {
+	if s.existed {
+		_ = os.Remove(s.snap)
+	}
+}
+
+// rollbackSeal undoes a failed seal: it restores the index from snap (nil
+// before the add), then removes the chunks this run wrote (the live files hold
+// every line). It returns the failure naming the phase, saying the tree is
+// unchanged only when every step succeeded and listing what is left when one
+// did not.
+func rollbackSeal(wrote []string, snap *indexSnapshot, cause error, phase string) error {
+	var left []string
+	if snap != nil {
+		if err := snap.restore(); err != nil {
+			left = append(left, fmt.Sprintf("restoring the index from %s: %v", snap.snap, err))
 		}
 	}
-	if len(failed) > 0 {
-		return fmt.Errorf("%w; the chunks this run wrote could not all be removed (%s); the next seal stages them",
-			cause, strings.Join(failed, "; "))
+	for _, p := range wrote {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			left = append(left, fmt.Sprintf("removing chunk %s: %v", p, err))
+		}
 	}
-	return cause
+	return sealStageFailure("", phase, cause, left)
+}
+
+// sealStageFailure is the error for a seal that failed after it began
+// writing: cause, with the phase named. left is what the rollback could not
+// undo; with none, the tree is unchanged and the message says so.
+func sealStageFailure(repoRoot, phase string, cause error, left []string) error {
+	if len(left) == 0 {
+		return fmt.Errorf("%w; nothing was sealed or staged, the commit is blocked and the tree is unchanged", cause)
+	}
+	return fmt.Errorf("%w; the commit is blocked, but the rollback of %s did not finish: %s; "+
+		"the next seal stages the chunks", cause, phase, strings.Join(left, "; "))
 }
 
 // resolveSealDir resolves a session's sealed directory, dating a brand-new one
@@ -439,14 +532,21 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 	return ids, nil
 }
 
-// SealGitError says why a seal could not start. A git that did not answer
-// within its bound blocks the commit by design: the seal runs in pre-commit,
-// and sealing on a guess could stage the wrong tree. The message names the
-// directory and says nothing was sealed or staged.
-func SealGitError(repoRoot string, err error) error {
+// SealGitError says why a git step of the seal failed, naming the phase. A git
+// that did not answer says so and where. unchanged says whether the tree is
+// known to be as it was (a read-only phase, or nothing written yet): the
+// message claims "the tree is unchanged" only then. A failure after chunks were
+// written passes false and is finished by rollbackSeal, which makes the claim
+// only once the rollback has actually succeeded.
+func SealGitError(repoRoot, phase string, err error, unchanged bool) error {
+	var e error
 	if errors.Is(err, gitenv.ErrTimeout) {
-		return fmt.Errorf("the seal could not run because git did not answer in %s (%w); "+
-			"nothing was sealed or staged, the commit is blocked and the tree is unchanged", repoRoot, err)
+		e = fmt.Errorf("the seal could not run because git did not answer in %s while %s (%w)", repoRoot, phase, err)
+	} else {
+		e = fmt.Errorf("%s: %w", phase, err)
 	}
-	return fmt.Errorf("checking for a gitlink mount: %w", err)
+	if unchanged {
+		return fmt.Errorf("%w; nothing was sealed or staged, the commit is blocked and the tree is unchanged", e)
+	}
+	return e
 }
