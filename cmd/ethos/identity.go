@@ -106,30 +106,39 @@ func requiredExt(repoRoot, bundleRoot string) map[string][]string {
 }
 
 // repoAuthoritativeMode reports whether this repo runs in repo-only mode,
-// and exits with a diagnostic when repo-only is configured but cannot be
+// and reports a diagnostic when repo-only is configured but cannot be
 // honored. The two fatal invariants — no repo layer at all, and an
 // active bundle sourced from the user's home — are checked by
 // bundle.VerifyRepoOnly, the one place that logic lives so
 // cmd/validate-content carries the same two guards rather than a second
 // copy of them (ethos-ccjz).
 //
-// Exiting here matches resolveBundleRoot and globalStore: a
-// misconfiguration the user asked for is reported at startup, not
+// A store command refuses here (configFatal) and any other reports the cause
+// and runs on the global stores, so a misconfiguration is reported, not
 // worked around.
 func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 	mode, err := resolve.ResolveResolution(resolutionConfigRoot())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return unusableRepoOnly(err)
 	}
 	if mode != resolve.ResolutionRepoOnly {
 		return false
 	}
 	if err := bundle.VerifyRepoOnly(repoRoot, bundleRoot, activeBundle()); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return unusableRepoOnly(err)
 	}
 	return true
+}
+
+// unusableRepoOnly handles a resolution policy that cannot be honoured. A store
+// command refuses (exit 2, never the global store in its place); a command
+// that handles the error itself says why and runs on the global stores, so a
+// hook or doctor can report it and a running server survives it. It is never
+// "not repo-only": the caller gets false only after the cause was printed.
+func unusableRepoOnly(err error) bool {
+	currentRoots().configFatal(err)
+	fmt.Fprintf(os.Stderr, "ethos: %v; using the global stores only\n", err)
+	return false
 }
 
 // resolutionConfigRoot returns the tree whose .punt-labs/ethos.yaml

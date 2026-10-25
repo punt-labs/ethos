@@ -537,6 +537,7 @@ func ConfigOf(storeRoot string) (*RepoConfig, error) { return loadRepoConfig(sto
 // .punt-labs/ethos/config.yaml. Returns nil, nil when neither exists.
 func loadRepoConfig(repoRoot string) (*RepoConfig, error) {
 	newPath := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
+	used := newPath
 	data, err := readConfigFile(newPath)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -544,6 +545,7 @@ func loadRepoConfig(repoRoot string) (*RepoConfig, error) {
 		}
 		// New path not found — try legacy path.
 		oldPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "config.yaml")
+		used = oldPath
 		data, err = readConfigFile(oldPath)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -554,7 +556,7 @@ func loadRepoConfig(repoRoot string) (*RepoConfig, error) {
 	}
 	var cfg RepoConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing repo config: %w", err)
+		return nil, fmt.Errorf("parsing repo config %s: %w", used, err)
 	}
 	return &cfg, nil
 }

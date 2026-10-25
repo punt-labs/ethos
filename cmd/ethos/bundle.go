@@ -17,25 +17,28 @@ import (
 // cmd/validate-content resolves the bundle layer the same way rather
 // than through a second, drifting copy (ethos-ccjz).
 //
-// Configuration errors (malformed ethos.yaml, missing named bundle) are
-// fatal: the user asked for a specific bundle and silent fall-through
-// would hide the misconfiguration. The process exits with a diagnostic
-// on stderr. This matches how other fatal startup errors are handled.
-func resolveBundle() (root string, active *bundle.Bundle) {
-	root, active, err := bundle.ResolveRoot(storeRootForStores(), defaultGlobalRoot())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v\n", err)
-		os.Exit(1)
-	}
-	return root, active
+// A configuration error (malformed ethos.yaml, missing named bundle) is
+// returned, never fatal here: the user asked for a specific bundle and silent
+// fall-through would hide the misconfiguration, but a hook, doctor or a
+// running server must be able to report it instead of dying. A broken store
+// never reaches this far for them: storeRootForStores gives "" for it.
+func resolveBundle() (root string, active *bundle.Bundle, err error) {
+	return bundle.ResolveRoot(storeRootForStores(), defaultGlobalRoot())
 }
 
 // resolveBundleRoot returns the active bundle's root path for layered
 // store construction, or "" if no bundle is active or if the active
 // "bundle" is the legacy .punt-labs/ethos/ directory (which already
-// serves as the repo-local layer).
+// serves as the repo-local layer). A bundle error is the command's class's to
+// handle (configFatal): a store command refuses, a command that handles the
+// error runs on the global stores and says why on stderr.
 func resolveBundleRoot() string {
-	root, _ := resolveBundle()
+	root, _, err := resolveBundle()
+	if err != nil {
+		currentRoots().configFatal(fmt.Errorf("bundle resolution failed: %w", err))
+		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v; using the global stores only\n", err)
+		return ""
+	}
 	return root
 }
 
@@ -43,7 +46,10 @@ func resolveBundleRoot() string {
 // active. Callers that need the bundle's Source (the DES-057 repo-only
 // startup check) use this rather than the path.
 func activeBundle() *bundle.Bundle {
-	_, active := resolveBundle()
+	_, active, err := resolveBundle()
+	if err != nil {
+		return nil // resolveBundleRoot reported it
+	}
 	return active
 }
 

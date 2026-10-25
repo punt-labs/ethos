@@ -86,19 +86,23 @@ func currentRoots() *repoRoots {
 	return r
 }
 
-// storeRoot is the store root for a constructor. A failed lookup is only
-// tolerated for a Global command, which gets the global stores ("").
+// storeRoot is the store root for a constructor. A store ethos cannot use — a
+// store, .punt-labs/ethos or config error, StoreFailure — is only tolerated for
+// a Global command, which gets the global stores (""): the broken store's
+// config is never read.
 func (r *repoRoots) storeRoot() string {
-	r.mustBeUsable(r.StoreErr)
+	if err := r.StoreFailure(); err != nil {
+		r.mustBeUsable(err)
+		return ""
+	}
 	return r.Store
 }
 
 // ethosRoot is .punt-labs/ethos for a constructor; see storeRoot.
 func (r *repoRoots) ethosRoot() string {
-	if r.StoreErr == nil {
-		r.mustBeUsable(r.EthosErr)
-	} else {
-		r.mustBeUsable(r.StoreErr)
+	if err := r.StoreFailure(); err != nil {
+		r.mustBeUsable(err)
+		return ""
 	}
 	return r.Ethos
 }
@@ -119,6 +123,18 @@ func (r *repoRoots) mustBeUsable(err error) {
 	}
 	fmt.Fprintf(os.Stderr, "ethos: %v; refusing to use the global store instead\n", err)
 	os.Exit(2)
+}
+
+// configFatal handles a configuration the user chose and ethos cannot honour
+// (an unusable resolution policy, a missing named bundle). A Global command
+// returns, and the caller reports it and runs on the global stores; a store
+// command exits 1 with the cause, as such a misconfiguration always has.
+func (r *repoRoots) configFatal(err error) {
+	if r.Global {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+	os.Exit(1)
 }
 
 func storeRootForStores() string    { return currentRoots().storeRoot() }
