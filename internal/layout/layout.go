@@ -115,11 +115,12 @@ func normalize(p string) string {
 }
 
 // Table is the ordered path-class table. Class-4 entries come first so that a
-// lock inside a mission directory, or an ext/<ns>.local.yaml file, is never
-// tracked; that precedence is the only overlap the table resolves by order
-// between non-fallback entries. A Fallback entry is the other exemption: it
-// claims only what no other entry does, so it may overlap any of them. Every
-// other pair of entries must be disjoint, which the package tests check.
+// lock inside a mission directory, an ext/<ns>.local.yaml file, or a staging
+// file is never tracked; order resolves those overlaps. A Fallback entry is the
+// other exemption: it claims only what no other entry does, so it may overlap
+// any of them. Every pair of entries of different classes, other than class 4
+// and fallback entries, must be disjoint, which the package tests check;
+// entries of one class may overlap.
 var Table = []Entry{
 	// Class 4: never tracked.
 	{Pattern: ".punt-labs/**/*.local.*", Class: Never},
@@ -127,19 +128,10 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions.jsonl.lock", Class: Never},
 	{Pattern: ".punt-labs/ethos/identities/*.yaml.lock", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
-	// Temporary names writers create for an atomic rename.
-	temp(".punt-labs/**/*" + TmpSuffix),
-	temp(".claude/agents/*" + TmpSuffix),
-	temp(".punt-labs/ethos/" + DotTempPattern("CLAUDE.md")),
-	temp(".punt-labs/ethos/" + DotTempPattern("ETHOS-SETUP.md")),
-	temp(".punt-labs/ethos/" + DotTempPattern(".vendored-manifest")),
-	temp(SiblingTempPattern(".gitignore")),
-	temp(DotTempPattern("CLAUDE.md")),
-	temp("**/" + DotTempPattern("pre-commit")),
-	temp("**/" + DotTempPattern("commit-msg")),
-	// The staging directory of `ethos mission migrate`, and what is in it if a
-	// crash leaves it behind.
-	temp(".punt-labs/ethos/missions/" + MigrateStagingPrefix("*") + "*/**"),
+	// Every staging name a helper in temp.go builds contains TmpMarker: the
+	// file, and a staging directory with whatever a crash leaves in it.
+	temp("**/*" + TmpMarker + "*"),
+	temp("**/*" + TmpMarker + "*/**"),
 
 	// Class 3: trace tier. The live files and the record: blame archive sit
 	// in the machine-local zone; the rest are written at tracked paths today.

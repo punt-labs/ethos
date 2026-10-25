@@ -12,12 +12,15 @@ import (
 // with another name is classified by the path the caller asked to write.
 func TestGitignoreStagingNameFollowsTheLogicalPath(t *testing.T) {
 	root := t.TempDir()
-	target := filepath.Join(root, "shared-ignore")
+	if err := os.Mkdir(filepath.Join(root, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "config", "shared-ignore")
 	if err := os.WriteFile(target, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(root, ".gitignore")
-	if err := os.Symlink("shared-ignore", link); err != nil {
+	if err := os.Symlink("config/shared-ignore", link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 

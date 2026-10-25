@@ -10,15 +10,18 @@ import (
 
 // TestStagingNameFollowsTheLogicalPath: a CLAUDE.md symlinked to AGENTS.md is
 // classified by the path the caller asked to write, so the staging file, which
-// lives in the link target's directory, takes its name from CLAUDE.md.
+// lives in the link target's directory (docs/ here, a directory no table entry names), is still class 4.
 func TestStagingNameFollowsTheLogicalPath(t *testing.T) {
 	root := t.TempDir()
-	target := filepath.Join(root, "AGENTS.md")
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "docs", "AGENTS.md")
 	if err := os.WriteFile(target, []byte("# agents\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(root, "CLAUDE.md")
-	if err := os.Symlink("AGENTS.md", link); err != nil {
+	if err := os.Symlink("docs/AGENTS.md", link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	real, _, err := resolveTarget(link)

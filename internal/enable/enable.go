@@ -20,6 +20,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/claudemd"
 	"github.com/punt-labs/ethos/v4/internal/githook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
@@ -235,45 +236,47 @@ func chainHooks(repoRoot string, rep *Report) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating hooks dir %s: %w", dir, err)
 	}
-	specs := []struct {
-		name  string
-		src   []byte
-		tag   string
-		ident string
-	}{
-		{"pre-commit", hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
-		{"commit-msg", hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
-	}
-	for _, s := range specs {
-		res, err := githook.Chain(filepath.Join(dir, s.name), s.src, s.tag, s.ident)
+	for _, name := range layout.HookNames() {
+		s, ok := hookSpecs[name]
+		if !ok {
+			return fmt.Errorf("no hook template for %s", name)
+		}
+		res, err := githook.Chain(filepath.Join(dir, name), s.src, s.tag, s.ident)
 		if err != nil {
-			return fmt.Errorf("chaining %s: %w", s.name, err)
+			return fmt.Errorf("chaining %s: %w", name, err)
 		}
 		rep.Warnings = append(rep.Warnings, res.Warnings...)
-		rep.step("hook:"+s.name, res.Action, res.Path)
+		rep.step("hook:"+name, res.Action, res.Path)
 	}
 	return nil
+}
+
+// hookSpecs is what `ethos enable` chains into each hook named by
+// layout.HookNames.
+var hookSpecs = map[string]struct {
+	src   []byte
+	tag   string
+	ident string
+}{
+	"pre-commit": {hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
+	"commit-msg": {hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
 }
 
 // unchainHooks strips the seal and trailer sections from the shared hooks.
 func unchainHooks(repoRoot string, rep *Report) error {
 	dir, warns := githook.HooksDir(repoRoot)
 	rep.Warnings = append(rep.Warnings, warns...)
-	specs := []struct {
-		name  string
-		tag   string
-		ident string
-	}{
-		{"pre-commit", hooks.SealTag, hooks.SealIdent},
-		{"commit-msg", hooks.TrailerTag, hooks.TrailerIdent},
-	}
-	for _, s := range specs {
-		res, err := githook.Unchain(filepath.Join(dir, s.name), s.tag, s.ident)
+	for _, name := range layout.HookNames() {
+		s, ok := hookSpecs[name]
+		if !ok {
+			return fmt.Errorf("no hook template for %s", name)
+		}
+		res, err := githook.Unchain(filepath.Join(dir, name), s.tag, s.ident)
 		if err != nil {
-			return fmt.Errorf("unchaining %s: %w", s.name, err)
+			return fmt.Errorf("unchaining %s: %w", name, err)
 		}
 		rep.Warnings = append(rep.Warnings, res.Warnings...)
-		rep.step("hook:"+s.name, res.Action, res.Path)
+		rep.step("hook:"+name, res.Action, res.Path)
 	}
 	return nil
 }

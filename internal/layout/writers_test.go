@@ -321,7 +321,8 @@ func TestSymlinkedTargetsAreClassified(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	gitIn(t, root, "init", "-q")
-	for target, link := range map[string]string{"AGENTS.md": "CLAUDE.md", "shared.ignore": ".gitignore"} {
+	for target, link := range map[string]string{"docs/AGENTS.md": "CLAUDE.md", "config/shared.ignore": ".gitignore"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(target)), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(root, target), []byte("# user file\n"), 0o644))
 		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
 			t.Skipf("symlinks unavailable: %v", err)
@@ -342,7 +343,7 @@ func TestSymlinkedTargetsAreClassified(t *testing.T) {
 		if rel == ".git" && d.IsDir() {
 			return filepath.SkipDir
 		}
-		if d.IsDir() || rel == "AGENTS.md" || rel == "shared.ignore" {
+		if d.IsDir() || rel == "docs/AGENTS.md" || rel == "config/shared.ignore" {
 			return nil
 		}
 		if _, _, ok := layout.Classify(filepath.ToSlash(rel)); !ok {

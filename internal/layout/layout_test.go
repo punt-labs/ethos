@@ -129,7 +129,7 @@ func TestClassify(t *testing.T) {
 		// Class 4 wins over the class that would otherwise match.
 		{".punt-labs/ethos/missions/m-1/.lock", layout.Never, true},
 		{".punt-labs/ethos/missions/.create.lock", layout.Never, true},
-		{".punt-labs/ethos/missions/m-1/delegations/d-1/record.yaml.tmp", layout.Never, true},
+		{".punt-labs/ethos/missions/m-1/delegations/d-1/record.yaml" + layout.TmpMarker, layout.Never, true},
 		{".punt-labs/ethos/identities/bwk.ext/quarry.local.yaml", layout.Never, true},
 		{".punt-labs/ethos/identities/bwk.yaml.lock", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/s-1.lock", layout.Never, true},
@@ -426,51 +426,55 @@ func fill(pattern string) string {
 	return pattern[:i] + "123456" + pattern[i+1:]
 }
 
-// TestTempEntriesAreFedByHelpers proves two things about the table and the
-// helpers in temp.go: each name a helper builds, in the shape a writer uses it,
-// classifies as class 4; and each Temp entry matches at least one such name, so
-// no Temp entry is dead. It does not prove that writers call the helpers;
-// TestTempNamesComeFromLayoutHelpers scans the source for that.
-func TestTempEntriesAreFedByHelpers(t *testing.T) {
-	names := []string{
-		layout.TmpPath(".punt-labs/ethos/identities/bwk.yaml"),
-		layout.TmpPath(".punt-labs/ethos/missions/m-1/contract.yaml"),
-		layout.TmpPath(".punt-labs/ethos.yaml"),
-		".punt-labs/ethos/missions/m-1/delegations/d-1/" + fill(layout.TmpPattern("record", ".yaml")),
-		".punt-labs/ethos/missions/m-1/delegations/d-1/" + fill(layout.TmpPattern("prompt", ".md")),
-		".punt-labs/ethos/sessions/2026-10-24-s/" + layout.DotTmp("audit-1-2.jsonl"),
-		".punt-labs/ethos/missions/m-1/" + layout.DotTmp("log-s-1-2.jsonl"),
-		".claude/agents/" + fill(layout.SeedTmpPattern("bwk.md")),
-		".punt-labs/ethos/" + fill(layout.DotTempPattern("CLAUDE.md")),
-		".punt-labs/ethos/" + fill(layout.DotTempPattern("ETHOS-SETUP.md")),
-		".punt-labs/ethos/" + fill(layout.DotTempPattern(".vendored-manifest")),
-		fill(layout.SiblingTempPattern(".gitignore")),
-		fill(layout.DotTempPattern("CLAUDE.md")),
-		".githooks/" + fill(layout.DotTempPattern("pre-commit")),
-		".githooks/" + fill(layout.DotTempPattern("commit-msg")),
-		".punt-labs/ethos/missions/" + fill(layout.MigrateStagingPrefix("m-1")+"*") + "/contract.yaml",
+// TestTempHelpersMakeClassFourNames: whatever base name a helper is given, in
+// whatever directory the writer uses it, the name contains TmpMarker and
+// classifies as class 4. A base the table has never heard of (a new hook, a
+// symlink target in an unlisted directory) is covered because no entry names it.
+func TestTempHelpersMakeClassFourNames(t *testing.T) {
+	bases := []string{"post-merge", "AGENTS.md", "shared.ignore", "pre-commit", ".vendored-manifest", "x"}
+	dirs := []string{"", "docs", ".githooks", ".punt-labs/ethos", ".punt-labs/ethos/missions/m-1/delegations/d-1", "a/b/c"}
+	helpers := map[string]func(base string) string{
+		"TmpPath":             layout.TmpPath,
+		"DotTmp":              layout.DotTmp,
+		"SeedTmpPattern":      func(b string) string { return fill(layout.SeedTmpPattern(b)) },
+		"DotTempPattern":      func(b string) string { return fill(layout.DotTempPattern(b)) },
+		"SiblingTempPattern":  func(b string) string { return fill(layout.SiblingTempPattern(b)) },
+		"TmpPattern":          func(b string) string { return fill(layout.TmpPattern(b, ".yaml")) },
+		"MigrateStagingFile":  func(b string) string { return fill(layout.MigrateStagingPrefix(b)+"*") + "/contract.yaml" },
+		"MigrateStagingEntry": func(b string) string { return fill(layout.MigrateStagingPrefix(b) + "*") },
 	}
-	for _, n := range names {
-		if c, e, ok := layout.Classify(n); !ok || c != layout.Never {
-			t.Errorf("helper name %q classified %v, %q, %v; want class 4", n, c, e.Pattern, ok)
-		}
-	}
-	for _, e := range layout.Table {
-		if !e.Temp {
-			continue
-		}
-		fed := false
-		for _, n := range names {
-			if layout.Match(e.Pattern, n) {
-				fed = true
+	for name, h := range helpers {
+		for _, b := range bases {
+			n := h(b)
+			if !strings.Contains(n, layout.TmpMarker) {
+				t.Errorf("%s(%q) = %q does not contain %q", name, b, n, layout.TmpMarker)
+			}
+			for _, d := range dirs {
+				p := path.Join(d, n)
+				if c, e, ok := layout.Classify(p); !ok || c != layout.Never {
+					t.Errorf("%s(%q) in %q: %q classified %v, %q, %v; want class 4", name, b, d, p, c, e.Pattern, ok)
+				}
 			}
 		}
-		if !fed {
-			t.Errorf("temp entry %q matches no name built by a helper in temp.go", e.Pattern)
+	}
+}
+
+// TestTempEntriesAreTheMarker: the table names the marker and nothing else for
+// temporary names. Per-base entries are what let a name slip through; a second
+// temp shape needs a deliberate edit here.
+func TestTempEntriesAreTheMarker(t *testing.T) {
+	var got []string
+	for _, e := range layout.Table {
+		if e.Temp {
+			got = append(got, e.Pattern)
+			if e.Class != layout.Never {
+				t.Errorf("temp entry %q is class %v, want class 4", e.Pattern, e.Class)
+			}
 		}
-		if e.Class != layout.Never {
-			t.Errorf("temp entry %q is class %v, want class 4", e.Pattern, e.Class)
-		}
+	}
+	want := []string{"**/*" + layout.TmpMarker + "*", "**/*" + layout.TmpMarker + "*/**"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("temp entries = %q, want %q", got, want)
 	}
 }
 
@@ -482,7 +486,7 @@ func TestMigrateStagingIsClassFour(t *testing.T) {
 	c := writerCorpus(t)
 	n := 0
 	for _, p := range c.paths {
-		if !strings.Contains(p, "."+"m-2026-10-24-904.migrate-") {
+		if !strings.Contains(p, ".m-2026-10-24-904.") {
 			continue
 		}
 		n++

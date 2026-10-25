@@ -9,8 +9,10 @@ import (
 	"strings"
 )
 
-// hookNames are the git hooks `ethos enable` writes.
-var hookNames = []string{"pre-commit", "commit-msg"}
+// HookNames returns the git hooks `ethos enable` writes. It is the one list
+// `ethos enable` and the path-class table both read, so a hook added to enable
+// is classified by the same edit.
+func HookNames() []string { return []string{"pre-commit", "commit-msg"} }
 
 // HookEntries returns class-1 entries for the hook files `ethos enable` writes
 // into hooksDir, when core.hooksPath places that directory inside the working
@@ -32,8 +34,9 @@ func HookEntries(repoRoot, hooksDir string) ([]Entry, error) {
 			return nil, nil
 		}
 	}
-	out := make([]Entry, 0, len(hookNames))
-	for _, n := range hookNames {
+	names := HookNames()
+	out := make([]Entry, 0, len(names))
+	for _, n := range names {
 		out = append(out, Entry{Pattern: escape(path.Join(rel, n)), Class: Source})
 	}
 	return out, nil
@@ -47,8 +50,9 @@ func PuntLabsHookPaths(repoRoot, hooksDir string) ([]string, error) {
 	if err != nil || !ok || !underOrEqual(rel, ".punt-labs") {
 		return nil, err
 	}
-	out := make([]string, 0, len(hookNames))
-	for _, n := range hookNames {
+	names := HookNames()
+	out := make([]string, 0, len(names))
+	for _, n := range names {
 		out = append(out, path.Join(rel, n))
 	}
 	return out, nil
