@@ -2073,24 +2073,166 @@ func TestRunAllGateKeepsFail(t *testing.T) {
 
 // TestRunAllGatesEveryLocatedCheck: every check RunAll hands a located input
 // goes through checkout (repoRoot) or store (storeRoot, the identity store s,
-// the team store teams), and each turns a refused root into a WARN. A located
-// input is one of those names, a value derived from one (an alias, or
-// hasRepoLocalTeam's result), however it reaches the call. The calls are found
-// in the source, so a check added later without the gate fails here instead of
+// the team store teams). A located input is one of those names, a value
+// derived from one (an alias, or hasRepoLocalTeam's result), however it
+// reaches the call. A call outside both gates also fails when the function it
+// calls locates a repository itself — calls resolve.*Repo* or resolve.Locate*,
+// directly or through any function in internal/doctor or internal/githook —
+// since its result would then bypass the gates. The calls are found in the
+// source, so a check added later without the gate fails here instead of
 // reading PASS for a tree it never examined.
 func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "doctor.go", nil, 0)
-	require.NoError(t, err)
+	runAll := parseRunAll(t, "doctor.go")
+	locating := locatingFuncs(t, map[string]string{"doctor": ".", "githook": filepath.Join("..", "githook")})
+	gated, ungated := gateAudit(runAll, locating)
+	assert.Empty(t, ungated, "checks given a located input, or locating a repository themselves, outside checkout(...) or store(...)")
+	assert.GreaterOrEqual(t, len(gated), 13, "the scan found too few gated checks: %v", gated)
+}
 
-	var runAll *ast.FuncDecl
+// The audit catches a check that locates a repository through a chain of
+// helpers ending in githook, and accepts the same call inside a gate.
+func TestGateAuditCatchesTransitiveLocator(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(src), 0o644))
+	}
+	write("doctor/doctor.go", `package doctor
+
+func RunAll(repoRoot string) []Result {
+	var results []Result
+	checkout := func(r Result) Result { return r }
+	results = append(results, sneaky())
+	results = append(results, checkout(sneaky()))
+	results = append(results, quiet())
+	return results
+}
+
+func sneaky() Result { return helper() }
+
+func helper() Result { githook.Find(); return Result{} }
+
+func quiet() Result { return Result{} }
+`)
+	write("githook/githook.go", `package githook
+
+func Find() { _, _ = resolve.LocateRepoRoot() }
+`)
+	runAll := parseRunAll(t, filepath.Join(dir, "doctor", "doctor.go"))
+	locating := locatingFuncs(t, map[string]string{
+		"doctor": filepath.Join(dir, "doctor"), "githook": filepath.Join(dir, "githook"),
+	})
+	assert.True(t, locating["doctor.helper"])
+	assert.True(t, locating["doctor.sneaky"])
+	assert.False(t, locating["doctor.quiet"])
+	_, ungated := gateAudit(runAll, locating)
+	assert.Equal(t, []string{"sneaky"}, ungated)
+}
+
+// parseRunAll returns the RunAll declaration in file.
+func parseRunAll(t *testing.T, file string) *ast.FuncDecl {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+	require.NoError(t, err)
 	for _, d := range f.Decls {
 		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "RunAll" {
-			runAll = fn
+			return fn
 		}
 	}
-	require.NotNil(t, runAll)
+	t.Fatalf("no RunAll in %s", file)
+	return nil
+}
 
+// locatorCall reports whether call is resolve.X for a repository locator: X
+// contains "Repo" or starts with "Locate".
+func locatorCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	name := sel.Sel.Name
+	return ok && pkg.Name == "resolve" && (strings.Contains(name, "Repo") || strings.HasPrefix(name, "Locate"))
+}
+
+// locatingFuncs returns the functions and methods ("pkg.Name") in the
+// non-test files of the packages named by dirs (package name → directory)
+// that call a repository locator, directly or through other functions in
+// those packages. A method call is matched by name, over-approximating.
+func locatingFuncs(t *testing.T, dirs map[string]string) map[string]bool {
+	t.Helper()
+	locating := map[string]bool{}
+	calls := map[string][]string{}
+	for pkg, dir := range dirs {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		require.NotEmpty(t, files, dir)
+		for _, file := range files {
+			if strings.HasSuffix(file, "_test.go") {
+				continue
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+			require.NoError(t, err)
+			for _, d := range f.Decls {
+				fn, ok := d.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				key := pkg + "." + fn.Name.Name
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					if locatorCall(call) {
+						locating[key] = true
+					} else if c := calleeKey(pkg, call, dirs); c != "" {
+						calls[key] = append(calls[key], c)
+					}
+					return true
+				})
+			}
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for key, cs := range calls {
+			if locating[key] {
+				continue
+			}
+			for _, c := range cs {
+				if locating[c] {
+					locating[key], changed = true, true
+					break
+				}
+			}
+		}
+	}
+	return locating
+}
+
+// calleeKey names the function a call in package pkg invokes, as "pkg.Name",
+// when it can be in one of dirs' packages; "" otherwise.
+func calleeKey(pkg string, call *ast.CallExpr, dirs map[string]string) string {
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		return pkg + "." + f.Name
+	case *ast.SelectorExpr:
+		if x, ok := f.X.(*ast.Ident); ok {
+			if _, isPkg := dirs[x.Name]; isPkg {
+				return x.Name + "." + f.Sel.Name
+			}
+		}
+		return pkg + "." + f.Sel.Name // a method call, matched by name
+	}
+	return ""
+}
+
+// gateAudit walks RunAll and returns the checks called inside a gate and those
+// called outside one with a located input or a locating callee.
+func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated []string) {
 	const kindCheckout, kindStore = 1, 2
 	located := map[string]int{
 		"repoRoot": kindCheckout, "storeRoot": kindStore, "s": kindStore, "teams": kindStore,
@@ -2138,7 +2280,6 @@ func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 		})
 	}
 
-	var gated, ungated []string
 	var walk func(n ast.Node, inCheckout, inStore bool)
 	walk = func(n ast.Node, inCheckout, inStore bool) {
 		ast.Inspect(n, func(c ast.Node) bool {
@@ -2154,6 +2295,10 @@ func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 			}
 			name := types.ExprString(call.Fun)
 			if _, isPure := pure[name]; isPure {
+				return true
+			}
+			if !inCheckout && !inStore && locating[calleeKey("doctor", call, map[string]string{"doctor": "", "githook": ""})] {
+				ungated = append(ungated, name)
 				return true
 			}
 			kind := 0
@@ -2172,7 +2317,5 @@ func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 		})
 	}
 	walk(runAll.Body, false, false)
-
-	assert.Empty(t, ungated, "checks given a located input outside checkout(...) or store(...)")
-	assert.GreaterOrEqual(t, len(gated), 13, "the scan found too few gated checks: %v", gated)
+	return gated, ungated
 }
