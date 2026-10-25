@@ -6,6 +6,7 @@ package resolve
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -521,8 +522,42 @@ func ethosRootOf(storeRoot string) (string, error) {
 			return "", fmt.Errorf("the ethos store path %s is not a directory", dir)
 		}
 	}
+	if err := checkDirAccess(dir); err != nil {
+		return "", fmt.Errorf("the ethos store %s cannot be read: %w", dir, err)
+	}
 	return dir, nil
 }
+
+// checkDirAccess opens dir and reads one name (the read permission), and looks
+// up a name that is not there (the search permission: ENOENT when it can be
+// searched, EACCES when it cannot). A store directory ethos cannot list or
+// search is a store it cannot use, not a missing one.
+func checkDirAccess(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	_, rerr := f.Readdirnames(1)
+	cerr := f.Close()
+	if rerr != nil && !errors.Is(rerr, io.EOF) {
+		return rerr
+	}
+	if cerr != nil {
+		return cerr
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".ethos-access-probe")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// EthosDirOf is .punt-labs/ethos under root, validated component by component
+// as Roots validates the store: "" with a nil error when a component is simply
+// absent, an error for a dangling link, a non-directory or a directory that
+// cannot be read. It is not a locator: it examines a root the caller already
+// has (a checkout from Located), so a check that reads a marker there does not
+// mistake an unreadable store for a missing one.
+func EthosDirOf(root string) (string, error) { return ethosRootOf(root) }
 
 // ConfigOf reads the repo-local ethos configuration under a store root that
 // Roots (or a caller holding its result) established: .punt-labs/ethos.yaml

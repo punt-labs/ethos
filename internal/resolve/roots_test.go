@@ -100,3 +100,26 @@ func TestRootsOutsideARepository(t *testing.T) {
 	assert.Empty(t, l.Store)
 	assert.Empty(t, l.Checkout)
 }
+
+// A store directory ethos cannot list or search is an error, not a missing
+// store: mode 000 and mode 600 (listable, not searchable) both.
+func TestRootsUnreadableStoreDirectoryIsAnError(t *testing.T) {
+	for _, mode := range []os.FileMode{0o000, 0o600} {
+		t.Run(mode.String(), func(t *testing.T) {
+			skipIfRoot(t)
+			root := t.TempDir()
+			store := filepath.Join(root, ".punt-labs", "ethos")
+			require.NoError(t, os.MkdirAll(store, 0o755))
+			require.NoError(t, os.Chmod(store, mode))
+			t.Cleanup(func() { _ = os.Chmod(store, 0o755) })
+			t.Setenv("ETHOS_REPO_ROOT", root)
+
+			loc := Roots()
+			require.Error(t, loc.StoreFailure())
+			assert.Contains(t, loc.StoreFailure().Error(), store)
+			assert.Empty(t, loc.Ethos)
+			_, err := EthosDirOf(root)
+			require.Error(t, err)
+		})
+	}
+}

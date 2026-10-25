@@ -152,9 +152,16 @@ func unlocated(root string, err error) bool {
 // store that it saw the global layer only, when the repository store was not
 // located. The status is kept: the check did run, and a FAIL must stay a FAIL.
 func gateStore(r Result, root string, err error) Result {
-	if unlocated(root, err) {
-		r.Detail += " (global layer only; repo store not located: " + err.Error() + ")"
+	if !unlocated(root, err) {
+		return r
 	}
+	// A check that examined nothing because the store was not located did not
+	// find "not in a repo": it did not run.
+	if strings.HasPrefix(r.Detail, "not in a repo") {
+		r.Status, r.Detail = "WARN", "not checked: the repository store could not be located: "+err.Error()
+		return r
+	}
+	r.Detail += " (global layer only; repo store not located: " + err.Error() + ")"
 	return r
 }
 
@@ -463,11 +470,19 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// "not enabled" — a doubly-broken repo (unreadable .punt-labs/ethos plus a
 	// lost hook) would then read PASS while commits flow unsealed. Surface it
 	// as a FAIL instead of guessing dormancy (S4).
+	// The store path is validated first: a dangling link, a file, or a
+	// directory ethos cannot read is no marker to find, and not "not enabled".
 	markerPresent := false
-	if _, err := os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "enabled")); err == nil {
-		markerPresent = true
-	} else if !os.IsNotExist(err) {
+	ethos, err := resolve.EthosDirOf(repoRoot)
+	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
+	}
+	if ethos != "" { // a store that is simply absent is dormant
+		if _, err := os.Stat(filepath.Join(ethos, "enabled")); err == nil {
+			markerPresent = true
+		} else if !os.IsNotExist(err) {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
+		}
 	}
 	lk := githook.HooksDir(repoRoot)
 	// A degraded lookup did not read core.hooksPath: the directory it guessed

@@ -2040,6 +2040,12 @@ func TestRunAllRefusedStore(t *testing.T) {
 	assert.True(t, AnyFailed(results), "doctor exits non-zero when every command would refuse")
 	for _, name := range storeChecks {
 		r, b := find(results, name), find(base, name)
+		if b.Detail == "not in a repo" {
+			// It examined nothing: it did not find "not in a repo", it did not run.
+			assert.Equal(t, "WARN", r.Status, name)
+			assert.Equal(t, "not checked: the repository store could not be located: "+refused.Error(), r.Detail, name)
+			continue
+		}
 		assert.Equal(t, b.Status, r.Status, "%s keeps its status: %s", name, r.Detail)
 		assert.Equal(t, b.Detail+" (global layer only; repo store not located: "+refused.Error()+")", r.Detail, name)
 	}
@@ -2320,4 +2326,28 @@ func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated [
 	}
 	walk(runAll.Body, false, false)
 	return gated, ungated
+}
+
+// An unreadable store directory is not "not enabled": the hook presence check
+// FAILs naming it, and a store that was not located turns a "not in a repo" row
+// into a WARN that says it was not checked.
+func TestHookPresenceUnreadableStoreIsNotDormant(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	repo := repoTemp(t)
+	store := filepath.Join(repo, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(store, 0o755))
+	require.NoError(t, os.Chmod(store, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(store, 0o755) })
+
+	r := CheckSealHook(repo)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "cannot determine enablement here")
+	assert.NotContains(t, r.Detail, "not enabled")
+
+	g := gateStore(Result{Name: "x", Status: "PASS", Detail: "not in a repo"}, "", errors.New("store broken"))
+	assert.Equal(t, "WARN", g.Status)
+	assert.Contains(t, g.Detail, "not checked")
+	assert.NotContains(t, g.Detail, "not in a repo")
 }
