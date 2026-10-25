@@ -251,6 +251,14 @@ func (s *Store) auditRoot() string {
 // Root returns the store's root directory.
 func (s *Store) Root() string { return s.root }
 
+// RepoRoot is the repository whose .punt-labs/ethos holds the shared mission
+// record ("" when none is wired).
+func (s *Store) RepoRoot() string { return s.repoRoot }
+
+// CheckoutRoot is the per-checkout root of the audit zone ("" when none is
+// wired; the audit zone then falls back to RepoRoot).
+func (s *Store) CheckoutRoot() string { return s.checkoutRoot }
+
 // validateContract resolves the archetype from the contract's Type
 // (if an archetype store is wired) and runs ValidateWithArchetype.
 // When no archetype store is set, falls back to Validate() (all rules).

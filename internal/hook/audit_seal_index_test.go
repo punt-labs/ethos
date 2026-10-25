@@ -1,12 +1,15 @@
 package hook
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,4 +58,16 @@ func TestSealErrorDoesNotClaimUnchangedWhenRollbackFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "restoring the index: boom")
 	ok := sealStageFailure("/r", "staging chunks (git add)", cause, nil)
 	assert.Contains(t, ok.Error(), "the commit is blocked and the tree is unchanged")
+}
+
+// A nil error is never classified as a timeout: SealGitError names a timeout
+// only for an error that is one.
+func TestSealGitErrorClassifiesOnlyARealTimeout(t *testing.T) {
+	plain := SealGitError("/r", "reading the status", errors.New("fatal: boom"), true)
+	assert.NotContains(t, plain.Error(), "did not answer")
+	assert.Contains(t, plain.Error(), "fatal: boom")
+	to := SealGitError("/r", "reading the status", fmt.Errorf("x: %w", gitenv.ErrTimeout), true)
+	assert.Contains(t, to.Error(), "did not answer in /r while reading the status")
+	nilErr := SealGitError("/r", "reading the status", nil, true)
+	assert.NotContains(t, nilErr.Error(), "did not answer")
 }

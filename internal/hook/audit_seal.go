@@ -540,7 +540,7 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 // only once the rollback has actually succeeded.
 func SealGitError(repoRoot, phase string, err error, unchanged bool) error {
 	var e error
-	if errors.Is(err, gitenv.ErrTimeout) {
+	if err != nil && errors.Is(err, gitenv.ErrTimeout) {
 		e = fmt.Errorf("the seal could not run because git did not answer in %s while %s (%w)", repoRoot, phase, err)
 	} else {
 		e = fmt.Errorf("%s: %w", phase, err)

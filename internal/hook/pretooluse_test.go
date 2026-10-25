@@ -3359,9 +3359,9 @@ func TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry(t *testing
 
 // testStoreRoot is the store root the dispatch hook would locate from the
 // test's working directory.
-func testStoreRoot(t *testing.T) string {
+func testStoreRoot(t *testing.T) tierBRoots {
 	t.Helper()
-	root, err := tierBStoreRoot()
+	roots, err := locateTierBRoots()
 	require.NoError(t, err)
-	return root
+	return roots
 }

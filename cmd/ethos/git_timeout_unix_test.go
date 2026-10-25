@@ -100,7 +100,7 @@ func TestVerifyResultAgainstNumstatGitTimeout(t *testing.T) {
 	testhelpers.HangingGit(t)
 	err := verifyResultAgainstNumstat(&mission.Result{}, "main")
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
-	assert.Contains(t, err.Error(), "invalid base ref")
+	assert.NotContains(t, err.Error(), "invalid base ref", "a git that did not answer is not a bad ref")
 }
 
 // team add-bundle --apply refuses a clone that does not finish within
@@ -180,4 +180,37 @@ func TestActiveRepoSessionsSkipsUnresolvedRosters(t *testing.T) {
 	assert.Equal(t, []string{"sess-none"}, ids)
 	assert.Contains(t, errb.String(), "sess-un")
 	assert.Contains(t, errb.String(), "git did not answer")
+}
+
+// --verify separates a ref git does not know from every other git failure: the
+// first is "invalid base ref"; the others name their cause and are never
+// reported as a bad ref.
+func TestVerifyDistinguishesAnInvalidRefFromOtherGitFailures(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cases := map[string]struct {
+		stderr  string
+		invalid bool
+	}{
+		"bad revision":      {"fatal: bad revision 'nope'", true},
+		"unknown revision":  {"fatal: ambiguous argument 'nope': unknown revision or path not in the working tree.", true},
+		"single revision":   {"fatal: Needed a single revision", true},
+		"dubious ownership": {"fatal: detected dubious ownership in repository at '/x'", false},
+		"not a repository":  {"fatal: not a git repository (or any of the parent directories): .git", false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			bin := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho \""+c.stderr+"\" >&2\nexit 128\n"), 0o755))
+			t.Setenv("PATH", bin)
+			var err error
+			testhelpers.CaptureStderr(t, func() { err = verifyResultAgainstNumstat(&mission.Result{}, "nope") })
+			require.Error(t, err)
+			if c.invalid {
+				assert.Contains(t, err.Error(), "invalid base ref")
+			} else {
+				assert.NotContains(t, err.Error(), "invalid base ref")
+				assert.Contains(t, err.Error(), c.stderr[len("fatal: "):])
+			}
+		})
+	}
 }

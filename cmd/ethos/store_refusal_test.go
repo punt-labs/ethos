@@ -337,3 +337,28 @@ func TestCLI_DanglingEthosStoreRefusesWrites(t *testing.T) {
 	}
 	assert.Equal(t, before, treeFiles(t, se.home), "nothing is written under HOME")
 }
+
+// A repo config that cannot be read is an error for the leader lookup, not
+// "claude": scaffold, dispatch and correct refuse rather than write a contract
+// or a correction under the wrong author.
+func TestCLI_UnreadableRepoConfigRefusesLeaderCommands(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	require.NoError(t, os.WriteFile(filepath.Join(se.repo, ".punt-labs", "ethos.yaml"), []byte("agent: [unclosed\n"), 0o644))
+	for name, args := range map[string][]string{
+		"scaffold": {"mission", "scaffold", "contract"},
+		"dispatch": {"mission", "dispatch", "--worker", "bwk", "--evaluator", "djb", "--write-set", "a.go", "--criteria", "c"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := exec.Command(ethosBinary, args...)
+			c.Dir = se.repo
+			c.Env = withForcedNotUnderClaudeCode(se.env)
+			out, err := c.CombinedOutput()
+			require.Error(t, err, string(out))
+			assert.Contains(t, string(out), "repo config")
+			assert.NotContains(t, string(out), "leader: claude", "no contract is written under a guessed leader")
+		})
+	}
+}

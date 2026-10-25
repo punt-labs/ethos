@@ -2,9 +2,11 @@ package ui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -22,9 +24,10 @@ func TestGitBlameGitTimeout(t *testing.T) {
 	assert.Contains(t, out, "did not answer")
 }
 
-// A commit lookup that failed is not cached: the next line of the same commit
-// asks git again, so one transient failure does not blank the whole file.
-func TestLookupCommitDoesNotCacheAFailure(t *testing.T) {
+// A commit lookup that failed is remembered for the rest of that request, so a
+// page does not ask git again for every line of the same commit; the next
+// request asks afresh.
+func TestLookupCommitCachesAFailureForTheRequestOnly(t *testing.T) {
 	bin := t.TempDir()
 	count := filepath.Join(bin, "count")
 	sha := strings.Repeat("a", 40)
@@ -43,9 +46,45 @@ esac
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
 	t.Setenv("PATH", bin)
 	s := &Server{repoRoot: t.TempDir(), storeRoot: t.TempDir()}
-	var lines []blameLine
-	testhelpers.CaptureStderr(t, func() { lines = s.gitBlameWithTrailers("a.go") })
-	require.Len(t, lines, 2)
-	assert.Empty(t, lines[0].Mission, "the failed lookup has no mission")
-	assert.Equal(t, "m-2026-01-01-001", lines[1].Mission, "the second line retried and got it")
+	var first []blameLine
+	testhelpers.CaptureStderr(t, func() { first = s.gitBlameWithTrailers("a.go") })
+	require.Len(t, first, 2)
+	assert.Empty(t, first[0].Mission, "the failed lookup has no mission")
+	assert.Empty(t, first[1].Mission, "the second line reuses the failed answer for this request")
+	data, err := os.ReadFile(count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), "x"), "git log was asked once for the commit")
+
+	var next []blameLine
+	testhelpers.CaptureStderr(t, func() { next = s.gitBlameWithTrailers("a.go") })
+	require.Len(t, next, 2)
+	assert.Equal(t, "m-2026-01-01-001", next[0].Mission, "the next request asks again")
+}
+
+// A git that hangs costs one timeout per page, not one per commit: after the
+// first timeout the rest of the request does not ask git again.
+func TestBlamePageStopsAskingGitAfterATimeout(t *testing.T) {
+	bin := t.TempDir()
+	count := filepath.Join(bin, "count")
+	sha1, sha2 := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	script := `#!/bin/sh
+PATH=/usr/bin:/bin
+case "$1" in
+blame)
+  printf '` + sha1 + ` 1 1 1\nauthor A\n\tone\n` + sha2 + ` 2 2 1\nauthor B\n\ttwo\n' ;;
+log)
+  echo x >> ` + count + `
+  exec ` + sleep + ` 60 ;;
+esac
+`
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
+	t.Setenv("PATH", bin)
+	testhelpers.GitTimeout(t, 200*time.Millisecond)
+	s := &Server{repoRoot: t.TempDir(), storeRoot: t.TempDir()}
+	testhelpers.CaptureStderr(t, func() { s.gitBlameWithTrailers("a.go") })
+	data, err := os.ReadFile(count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), "x"), "one timeout for the page, not one per commit")
 }

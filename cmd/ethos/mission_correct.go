@@ -221,11 +221,15 @@ func buildCorrection(cmd *cobra.Command, id string) (*mission.Correction, error)
 		if err != nil {
 			return nil, err
 		}
+		leader, err := resolveLeader()
+		if err != nil {
+			return nil, err
+		}
 		c = &mission.Correction{
 			Mission:    id,
 			Round:      missionCorrectRound,
 			Kind:       mission.CorrectionKind(missionCorrectKind),
-			Author:     resolveLeader(),
+			Author:     leader,
 			Claim:      missionCorrectClaim,
 			Corrected:  missionCorrectCorrected,
 			Supersedes: missionCorrectSupersedes,
@@ -236,7 +240,11 @@ func buildCorrection(cmd *cobra.Command, id string) (*mission.Correction, error)
 		c.Mission = id
 	}
 	if strings.TrimSpace(c.Author) == "" {
-		c.Author = resolveLeader()
+		leader, err := resolveLeader()
+		if err != nil {
+			return nil, err
+		}
+		c.Author = leader
 	}
 	return c, nil
 }

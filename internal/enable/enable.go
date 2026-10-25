@@ -257,7 +257,7 @@ func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 	l := githook.HooksDir(repoRoot)
 	dir, err := l.Verified()
 	if err != nil {
-		return l, "", fmt.Errorf("cannot install hooks: %s", l.Explain())
+		return l, "", fmt.Errorf("cannot install hooks: %w", l.Refusal())
 	}
 	return l, dir, nil
 }

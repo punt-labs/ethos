@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -758,7 +760,11 @@ Example:
   ethos mission create --file contract.yaml`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Print(mission.ScaffoldContractYAML(resolveLeader()))
+		leader, err := resolveLeader()
+		if err != nil {
+			return err
+		}
+		fmt.Print(mission.ScaffoldContractYAML(leader))
 		return nil
 	},
 }
@@ -1797,10 +1803,15 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	// --end-of-options sandboxes the base argument: git treats
 	// everything after it as a positional, so a base like
 	// "--output=/tmp/x" cannot smuggle a flag into rev-parse or diff.
+	var checkErr bytes.Buffer
 	if _, err := gitenv.Run(gitenv.Spec{
-		Git: "git", Args: []string{"rev-parse", "--verify", "--end-of-options", base}, Stderr: os.Stderr,
+		Git: "git", Args: []string{"rev-parse", "--verify", "--end-of-options", base}, Stderr: &checkErr,
 	}); err != nil {
-		return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
+		os.Stderr.Write(checkErr.Bytes())
+		if isInvalidRef(err, checkErr.String()) {
+			return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
+		}
+		return fmt.Errorf("--verify: git could not check the base ref %q: %w: %s", base, err, strings.TrimSpace(checkErr.String()))
 	}
 
 	// --no-renames tells git to report renames as a delete+add pair
@@ -2060,8 +2071,12 @@ func runMissionDispatch() error {
 		return fmt.Errorf("mission dispatch: --criteria is required")
 	}
 
+	leader, err := resolveLeader()
+	if err != nil {
+		return fmt.Errorf("mission dispatch: %w", err)
+	}
 	c := mission.Contract{
-		Leader:          resolveLeader(),
+		Leader:          leader,
 		Worker:          dispatchWorker,
 		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
 		WriteSet:        splitPathFlag("write-set", dispatchWriteSet),
@@ -2343,14 +2358,19 @@ func clearClosedSessionBindings(missionID string) {
 // resolveLeader returns the agent handle from the repo's ethos config.
 // Falls back to "claude" when not in a repo or when no agent is
 // configured — the common case for dispatch is a leader session inside
-// a repo, but dispatch should not fail when run outside one.
-func resolveLeader() string {
+// a repo, but dispatch should not fail when run outside one. A repo config that
+// cannot be read is an error, not "claude": a contract or correction must not
+// be written under a guessed author.
+func resolveLeader() (string, error) {
 	repoRoot := storeRootForStores()
 	agent, err := resolve.ResolveAgent(repoRoot)
-	if err == nil && agent != "" {
-		return agent
+	if err != nil {
+		return "", fmt.Errorf("resolving the leader from the repo config: %w", err)
 	}
-	return "claude"
+	if agent != "" {
+		return agent, nil
+	}
+	return "claude", nil
 }
 
 // splitPathFlag splits a path-list flag value into entries and reports
@@ -2890,4 +2910,21 @@ func printCorrections(cs []mission.Correction) {
 			fmt.Printf("      evidence:   %d\n", len(c.Evidence))
 		}
 	}
+}
+
+// isInvalidRef reports whether a failed `git rev-parse --verify` means the ref
+// does not exist (exit 128 with git's "bad revision", "unknown revision" or
+// "Needed a single revision"), as opposed to git failing for another reason: a
+// timeout, dubious ownership, not a repository.
+func isInvalidRef(err error, stderr string) bool {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 128 {
+		return false
+	}
+	for _, m := range []string{"bad revision", "unknown revision", "Needed a single revision"} {
+		if strings.Contains(stderr, m) {
+			return true
+		}
+	}
+	return false
 }

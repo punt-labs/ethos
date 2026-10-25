@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -160,6 +161,10 @@ func (s *Server) git(args ...string) ([]byte, error) {
 	return out, err
 }
 
+// errGitDown is the answer for a git question skipped because an earlier one in
+// the same request timed out.
+var errGitDown = errors.New("git did not answer earlier in this request")
+
 func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 	out, err := s.git("blame", "--porcelain", relPath)
 	if err != nil {
@@ -198,6 +203,20 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		}
 	}
 
+	// down is set by the first timeout: a git that hangs costs one timeout per
+	// page, not one per commit, so the rest of the request does not ask again.
+	down := false
+	ask := func(args ...string) ([]byte, error) {
+		if down {
+			return nil, errGitDown
+		}
+		out, err := s.git(args...)
+		if errors.Is(err, gitenv.ErrTimeout) {
+			down = true
+		}
+		return out, err
+	}
+
 	// Cache commit lookups.
 	type commitInfo struct {
 		mission    string
@@ -227,15 +246,10 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 			return c
 		}
 		c := &commitInfo{}
-		// A lookup in which git failed is returned but not cached: the next
-		// line of the same commit asks again.
-		failed := false
 
 		// Try trailers first.
-		out, err := s.git("log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
-		if err != nil {
-			failed = true
-		} else {
+		out, err := ask("log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
+		if err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) >= 1 {
 				c.mission = strings.TrimSpace(lines[0])
@@ -248,9 +262,7 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		// Fallback: parse bead/ticket ID from commit subject, look
 		// up the mission in missions.jsonl.
 		if c.mission == "" {
-			if subj, err := s.git("log", "--format=%s", "-1", sha); err != nil {
-				failed = true
-			} else {
+			if subj, err := ask("log", "--format=%s", "-1", sha); err == nil {
 				subject := string(subj)
 				// Match ethos-XXXX or punt-labs-XXXX in parens at end of subject.
 				for _, candidate := range extractTicketIDs(subject) {
@@ -265,9 +277,9 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 			}
 		}
 
-		if !failed {
-			commitCache[sha] = c
-		}
+		// Cached even when git failed: for the rest of this request (this call)
+		// a failed commit is not asked about again. The next request asks anew.
+		commitCache[sha] = c
 		return c
 	}
 

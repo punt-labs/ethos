@@ -76,10 +76,24 @@ func (e *workTreeError) Error() string {
 // hooks git never runs, or miss the ones it does.
 func (l Lookup) Verified() (string, error) {
 	if l.Degraded {
-		return "", fmt.Errorf("hooks directory not verified: %s", l.Reason)
+		return "", fmt.Errorf("hooks directory not verified: %w", &lookupRefusal{msg: l.Reason, cause: l.cause})
 	}
 	return l.dir, nil
 }
+
+// Refusal is the error for declining to act on a degraded lookup. Its text is
+// Explain (the reason and the remedy); it unwraps to the cause, so a caller can
+// ask errors.Is(err, gitenv.ErrTimeout) or errors.As a workTreeError.
+func (l Lookup) Refusal() error { return &lookupRefusal{msg: l.Explain(), cause: l.cause} }
+
+// lookupRefusal carries a lookup's explanation and its cause.
+type lookupRefusal struct {
+	msg   string
+	cause error
+}
+
+func (e *lookupRefusal) Error() string { return e.msg }
+func (e *lookupRefusal) Unwrap() error { return e.cause }
 
 // HooksDir returns the hooks directory git runs for the repo at repoRoot.
 //
