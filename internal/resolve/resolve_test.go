@@ -1986,3 +1986,32 @@ func TestUnreadableGitConfigIsAnErrorNotUnset(t *testing.T) {
 	require.Error(t, err, "got %q", handle)
 	assert.Contains(t, err.Error(), cfg)
 }
+
+// A trace2 target in the user's config (normal and perf, brief or not) writes
+// to every git's stderr. The environment switches it off for every git ethos
+// runs, so an unset user.name is unset: GitConfig answers "" and Resolve falls
+// through to the next step instead of reporting an error.
+func TestTrace2FromConfigDoesNotMakeUnsetAnError(t *testing.T) {
+	for name, cfg := range map[string]string{
+		"normal": "[trace2]\n\tnormalTarget = true\n\tnormalBrief = true\n",
+		"perf":   "[trace2]\n\tperfTarget = true\n\tperfBrief = true\n",
+		"event":  "[trace2]\n\teventTarget = true\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "gitconfig")
+			require.NoError(t, os.WriteFile(path, []byte(cfg), 0o644))
+			t.Setenv("GIT_CONFIG_GLOBAL", path)
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			v, err := GitConfig("", "user.name")
+			require.NoError(t, err)
+			assert.Empty(t, v)
+
+			s := identity.NewStore(t.TempDir())
+			require.NoError(t, s.Save(&identity.Identity{Name: "Os User", Handle: "osuser", Kind: "human"}))
+			t.Setenv("USER", "osuser")
+			handle, err := Resolve(s, nil, "")
+			require.NoError(t, err)
+			assert.Equal(t, "osuser", handle)
+		})
+	}
+}

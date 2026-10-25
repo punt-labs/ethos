@@ -305,7 +305,7 @@ func TestRunNilEnvStripsTrace(t *testing.T) {
 	git := fakeGitScript(t, "echo \"[$GIT_TRACE][$GIT_TRACE2_EVENT][$GIT_CONFIG_PARAMETERS]\"\n")
 	out, err := Run(Spec{Git: git})
 	require.NoError(t, err)
-	assert.Equal(t, "[][][]\n", string(out))
+	assert.Equal(t, "[][0][]\n", string(out), "trace output is switched off, not just removed")
 }
 
 // A .git symlink to nothing in an ancestor is found from a subdirectory, up to

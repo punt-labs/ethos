@@ -1721,11 +1721,6 @@ func GitConfig(checkout, key string) (string, error) {
 	case err != nil:
 		return "", fmt.Errorf("reading git config %s in %s: %w", key, where, err)
 	case absent:
-		// "Unset" is only believed when every config file could be read: a git
-		// that skips an unreadable file exits 1 as for an unset key.
-		if err := gitenv.UnreadableUserConfig(); err != nil {
-			return "", fmt.Errorf("reading git config %s in %s: %w", key, where, err)
-		}
 		return "", nil
 	}
 	v := strings.TrimSpace(string(out))

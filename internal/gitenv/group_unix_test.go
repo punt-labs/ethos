@@ -157,3 +157,22 @@ func TestCtrlCDoesNotLeaveANetworkGitRunning(t *testing.T) {
 	assert.NoError(t, syscall.Kill(pid, 0), "an ordinary git runs in its own group and is not reached by a terminal's SIGINT")
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 }
+
+// An unreadable config while reading core.sshCommand is an error: the user's
+// ssh choice may be in the file, so the network git does not run.
+func TestNetworkGitRefusesWhenCoreSshCommandCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[core]\n\tsshCommand = ssh -i key\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
+	require.NoError(t, os.Unsetenv("GIT_SSH"))
+	git := fakeGitScript(t, "case \"$1\" in config) exit 1;; esac\necho ran\n")
+	_, err := Run(Spec{Git: git, Network: true, Args: []string{"clone", "u"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), cfg)
+}

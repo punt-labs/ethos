@@ -100,37 +100,39 @@ type Spec struct {
 // networkArgs are prepended to a Network git's arguments.
 var networkArgs = []string{"-c", "core.askPass=", "-c", "credential.interactive=never"}
 
-// networkEnv returns what Network adds to git's environment for the git run by
-// s, given the environment it will have: no prompting of any kind, and an ssh in
-// BatchMode only when the user has not chosen one.
-func networkEnv(s Spec, env []string) []string {
+// networkEnv returns what Network adds to git's environment: no prompting of any
+// kind, and an ssh in BatchMode only when the user has not chosen one.
+func networkEnv(chosen bool) []string {
 	add := []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "SSH_ASKPASS_REQUIRE=never"}
-	if !sshChosen(s, env) {
+	if !chosen {
 		add = append(add, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
 	}
 	return add
 }
 
 // sshChosen reports whether GIT_SSH_COMMAND, GIT_SSH or core.sshCommand is set
-// for the git run by s. A config that cannot be read counts as chosen: the
-// user's ssh is never overridden on a guess.
-func sshChosen(s Spec, env []string) bool {
+// for the git run by s. A config that cannot be read is an error: the user's ssh
+// is neither overridden nor assumed on a guess.
+func sshChosen(s Spec, env []string) (bool, error) {
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "GIT_SSH_COMMAND=") || strings.HasPrefix(kv, "GIT_SSH=") {
-			return true
+			return true, nil
 		}
 	}
 	probe := Spec{Git: s.Git, Dir: s.Dir, Env: env, Args: []string{"config", "core.sshCommand"}}
 	if s.Dir == "" {
 		dir, nenv, cleanup, err := Neutral()
 		if err != nil {
-			return true
+			return false, err
 		}
 		defer cleanup()
 		probe.Dir, probe.Env = dir, nenv
 	}
 	_, absent, err := Read(probe, AbsentUnset)
-	return err != nil || !absent
+	if err != nil {
+		return false, fmt.Errorf("reading core.sshCommand: %w", err)
+	}
+	return !absent, nil
 }
 
 // groupGrace is how long the rest of a TERMed process group has to finish
@@ -174,14 +176,22 @@ func Run(s Spec) ([]byte, error) {
 	}
 	cmd := exec.CommandContext(ctx, s.Git, s.Args...)
 	cmd.Dir = s.Dir
-	cmd.Env = stripTrace(s.Env)
+	// Trace2 is switched off by the environment, which overrides a target set in
+	// the user's config (trace2.normalTarget and kin): its output on stderr
+	// would otherwise be part of what the unset rule reads. stripTrace remains
+	// the fallback for the other trace variables.
+	cmd.Env = append(stripTrace(s.Env), "GIT_TRACE2=0", "GIT_TRACE2_PERF=0", "GIT_TRACE2_EVENT=0")
 	args := s.Args
 	if s.Network {
 		base := cmd.Env
 		if base == nil {
 			base = os.Environ()
 		}
-		cmd.Env = append(append([]string(nil), base...), networkEnv(s, base)...)
+		chosen, cerr := sshChosen(s, base)
+		if cerr != nil {
+			return nil, cerr
+		}
+		cmd.Env = append(append([]string(nil), base...), networkEnv(chosen)...)
 		args = append(append([]string(nil), networkArgs...), s.Args...)
 	}
 	cmd.Args = append([]string{s.Git}, args...)
@@ -461,6 +471,11 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	stderr := strings.TrimSpace(string(ee.Stderr))
 	switch {
 	case absent&AbsentUnset != 0 && ee.ExitCode() == 1 && WithoutTrace(stderr) == "":
+		// "Unset" is believed only when every config file could be read: a git
+		// that skips an unreadable file exits 1 as for an unset key.
+		if uerr := UnreadableUserConfig(); uerr != nil {
+			return nil, false, fmt.Errorf("git %s: %w", strings.Join(s.Args, " "), uerr)
+		}
 		return nil, true, nil
 	case absent&AbsentNoRemote != 0 && ee.ExitCode() == 2:
 		return nil, true, nil
