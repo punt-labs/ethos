@@ -38,7 +38,10 @@ const (
 // pointers in ~/.punt-labs/ethos/sessions and resolve the session from the
 // environment, never an identity (session join and session leave included —
 // runSessionJoin and runSessionLeave use only sessionStore and
-// resolveSessionContext). session purge checks the checkout's audit files
+// resolveSessionContext). iam and session iam (runIam) likewise only join the
+// persona to the roster: the persona is recorded as given, never looked up
+// or validated against the identity store. session start refuses: its
+// --persona and its default root resolve through the identity store. session purge checks the checkout's audit files
 // (FindRepoRoot), not the store. session write-current is doctor's own
 // remedy for a broken session pointer. adr list, show and settle use only
 // ~/.punt-labs/ethos/adrs; adr create resolves its default author through the
@@ -62,6 +65,7 @@ var storeUses = map[string]storeUse{
 	"ethos session end": storeGlobalOnly, "ethos session join": storeGlobalOnly,
 	"ethos session leave": storeGlobalOnly, "ethos session create": storeGlobalOnly,
 	"ethos session delete": storeGlobalOnly, "ethos session delete-current": storeGlobalOnly,
+	"ethos iam": storeGlobalOnly, "ethos session iam": storeGlobalOnly,
 	"ethos adr list": storeGlobalOnly, "ethos adr show": storeGlobalOnly,
 	"ethos adr settle": storeGlobalOnly,
 
@@ -79,7 +83,7 @@ var storeUses = map[string]storeUse{
 	"ethos adr create": storeRefuses, "ethos create": storeRefuses, "ethos export": storeRefuses,
 	"ethos ext del": storeRefuses, "ethos ext delete": storeRefuses, "ethos ext get": storeRefuses,
 	"ethos ext list": storeRefuses, "ethos ext set": storeRefuses, "ethos find missions": storeRefuses,
-	"ethos iam": storeRefuses, "ethos identity": storeRefuses, "ethos identity create": storeRefuses,
+	"ethos identity": storeRefuses, "ethos identity create": storeRefuses,
 	"ethos identity get": storeRefuses, "ethos identity list": storeRefuses,
 	"ethos identity show": storeRefuses, "ethos identity whoami": storeRefuses,
 	"ethos import": storeRefuses, "ethos list": storeRefuses,
@@ -100,8 +104,8 @@ var storeUses = map[string]storeUse{
 	"ethos personality show": storeRefuses, "ethos resolve-agent": storeRefuses,
 	"ethos role create": storeRefuses, "ethos role delete": storeRefuses,
 	"ethos role list": storeRefuses, "ethos role show": storeRefuses,
-	"ethos session iam": storeRefuses, "ethos session start": storeRefuses,
-	"ethos show": storeRefuses, "ethos talent add": storeRefuses, "ethos talent create": storeRefuses,
+	"ethos session start": storeRefuses,
+	"ethos show":          storeRefuses, "ethos talent add": storeRefuses, "ethos talent create": storeRefuses,
 	"ethos talent delete": storeRefuses, "ethos talent list": storeRefuses,
 	"ethos talent remove": storeRefuses, "ethos talent show": storeRefuses,
 	"ethos team activate": storeRefuses, "ethos team active": storeRefuses,

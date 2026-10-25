@@ -144,8 +144,6 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 		{"identity", "list"},
 		{"whoami"},
 		{"identity", "whoami"},
-		{"iam", "x"},
-		{"session", "iam", "x"},
 		{"session", "start"},
 		{"adr", "create", "--title", "t", "--decision", "d"},
 	} {
@@ -181,6 +179,8 @@ func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
 		{"session", "create", "--session", "s", "--root-id", "r", "--primary-id", "p"},
 		{"session", "delete", "--session", "s"},
 		{"session", "delete-current", "--pid", "1"},
+		{"iam", "x"},
+		{"session", "iam", "x"},
 		{"adr", "list"},
 		{"adr", "show", "x"},
 		{"adr", "settle", "x"},
@@ -228,9 +228,10 @@ func TestStoreRefusalExemptions(t *testing.T) {
 			{"session", "write-current"}, {"session", "purge"}, {"session", "end"},
 			{"session", "join"}, {"session", "leave"}, {"session", "create"},
 			{"session", "delete"}, {"session", "delete-current"},
+			{"iam"}, {"session", "iam"},
 			{"adr", "list"}, {"adr", "show"}, {"adr", "settle"}},
 		storeRefuses: {{"identity", "list"}, {"mission", "list"},
-			{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session", "iam"},
+			{"whoami"}, {"identity", "whoami"},
 			{"session", "start"}, {"adr", "create"}},
 	}
 	for want, cmds := range cases {
