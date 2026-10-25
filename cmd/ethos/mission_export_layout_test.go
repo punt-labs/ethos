@@ -80,3 +80,13 @@ budget:
 	_, err := os.Stat(filepath.Join(sub, ".punt-labs"))
 	assert.True(t, os.IsNotExist(err), "export from a subdirectory wrote a .punt-labs tree there")
 }
+
+// TestMissionExportDirectoryNamesTheCause: with no --dir and no repository
+// root, the error says why, not just that there is none.
+func TestMissionExportDirectoryNamesTheCause(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "nope"))
+	_, err := missionExportDirectory("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	assert.Contains(t, err.Error(), "pass --dir")
+}

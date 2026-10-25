@@ -1620,3 +1620,51 @@ func runGit(t *testing.T, dir string, args ...string) {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
 }
+
+// --- LocateRepoRoot tests ---
+
+func TestLocateRepoRoot(t *testing.T) {
+	t.Run("finds the root", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+		t.Chdir(root)
+		got, err := LocateRepoRoot()
+		require.NoError(t, err)
+		assert.Equal(t, root, got)
+	})
+
+	t.Run("invalid override names ETHOS_REPO_ROOT", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "nope"))
+		got, err := LocateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	})
+
+	t.Run("not in a repository", func(t *testing.T) {
+		if _, err := os.Stat("/.git"); err == nil {
+			t.Skip("/ is inside a repository")
+		}
+		t.Chdir("/")
+		got, err := LocateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not inside a git repository")
+	})
+
+	t.Run("unreadable working directory", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gone")
+		require.NoError(t, os.Mkdir(dir, 0o755))
+		t.Chdir(dir)
+		if err := os.Remove(dir); err != nil {
+			t.Skipf("cannot remove the working directory: %v", err)
+		}
+		if _, err := os.Getwd(); err == nil {
+			t.Skip("Getwd still works after removal on this platform")
+		}
+		got, err := LocateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "working directory")
+	})
+}

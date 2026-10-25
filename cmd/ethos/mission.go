@@ -1973,9 +1973,9 @@ func missionExportDirectory(flag string) (string, error) {
 	if flag != "" {
 		return flag, nil
 	}
-	root := resolve.FindRepoRoot()
-	if root == "" {
-		return "", fmt.Errorf("choosing the export directory: not inside a git repository; pass --dir")
+	root, err := resolve.LocateRepoRoot()
+	if err != nil {
+		return "", fmt.Errorf("choosing the export directory: %w; pass --dir", err)
 	}
 	return filepath.Join(root, missionExportDefaultDir), nil
 }

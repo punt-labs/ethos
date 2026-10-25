@@ -657,23 +657,31 @@ func RepoRootOverride() (value string, set bool) {
 // path is never returned — resolution reports "no repo," which surfaces the
 // global-fallback warning downstream.
 func repoRootOverride(requireStore bool) (root string, set bool) {
+	root, set, err := checkRepoRootOverride(requireStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+	}
+	return root, set
+}
+
+// checkRepoRootOverride is repoRootOverride without the stderr message: it
+// returns the reason an override was refused as an error.
+func checkRepoRootOverride(requireStore bool) (root string, set bool, err error) {
 	v, ok := RepoRootOverride()
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
 	if info, err := os.Stat(v); err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it\n", v)
-		return "", true
+		return "", true, fmt.Errorf("ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it", v)
 	}
 	if requireStore {
 		store := filepath.Join(v, ".punt-labs", "ethos")
 		if info, err := os.Stat(store); err != nil || !info.IsDir() {
-			fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q has no %s store; refusing to use it\n",
+			return "", true, fmt.Errorf("ETHOS_REPO_ROOT=%q has no %s store; refusing to use it",
 				v, filepath.Join(".punt-labs", "ethos"))
-			return "", true
 		}
 	}
-	return v, true
+	return v, true, nil
 }
 
 // FindRepoRoot returns the current work tree root — the directory holding
@@ -691,17 +699,33 @@ func FindRepoRoot() string {
 	if root, set := repoRootOverride(false); set {
 		return root
 	}
-	dir, err := os.Getwd()
-	if err != nil {
-		return ""
+	root, _ := walkRepoRoot()
+	return root
+}
+
+// LocateRepoRoot is FindRepoRoot with the reason it found nothing: an invalid
+// ETHOS_REPO_ROOT, an unreadable working directory, or a working directory
+// outside any repository. It prints nothing; the caller reports the error.
+func LocateRepoRoot() (string, error) {
+	if root, set, err := checkRepoRootOverride(false); set {
+		return root, err
 	}
-	for {
+	return walkRepoRoot()
+}
+
+// walkRepoRoot walks up from the working directory to the first .git marker.
+func walkRepoRoot() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting the working directory: %w", err)
+	}
+	for dir := cwd; ; {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir
+			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return "", fmt.Errorf("%s is not inside a git repository", cwd)
 		}
 		dir = parent
 	}
