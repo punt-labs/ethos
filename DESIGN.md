@@ -12876,37 +12876,48 @@ gaps: a helper that blanks a `Located` field, a guarded block that logs
 the error and then falls through to the empty value, and an error
 assigned to `_` inside `internal/resolve`. The shell hooks
 `pre-commit.sh` and `commit-msg.sh` run `git rev-parse` and
-`git interpret-trailers` unbounded and exit 1 with git's error when
-either fails. A merge commit (`git merge --no-ff`) is not sealed: git
+`git interpret-trailers` unbounded, with git tracing switched off, and
+exit 1 with git's error when either fails or when the repository root
+is not a single absolute directory path. A merge commit (`git merge --no-ff`) is not sealed: git
 writes its tree before any hook can stage a chunk, so its live lines are
 sealed by the next ordinary commit and nothing is lost. In an enabled repository they also block
 the commit when the `ethos` binary is missing, when a component of the
 `.punt-labs/ethos` path is a dangling link, a non-directory or
 unreadable, or when the `enabled` marker exists but is not a regular
 file; only a marker that is simply absent means "not enabled", and
-`ethos doctor` and `ethos enable` apply the same rule. On a timeout
+`ethos doctor`, `ethos enable` and `ethos disable` (for sibling
+worktrees) apply the same rule. On a timeout
 git's process group receives SIGTERM, so git can remove its index lock,
 and SIGKILL after a one-second grace for the whole group. On Unix, git
 commands that reach the network (the team-bundle clone) run in a new
-session with no controlling terminal; ethos forwards Ctrl-C, SIGTERM,
-SIGHUP and SIGQUIT to their process group, and a timeout kills it with
-its ssh or helper children. They keep the user's ssh command
-(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`) and run no terminal
-prompt or askpass helper, and ssh's own prompts (an unknown host key, a
-passphrase) find no terminal, so a missing credential fails instead of
-waiting. On Windows there are no process groups: a timeout kills git
+session with no controlling terminal; when ethos receives Ctrl-C,
+SIGTERM, SIGHUP or SIGQUIT it sends SIGTERM to their process group (and
+SIGKILL to what remains), and a timeout does the same, so the clone
+stops with its ssh or helper children. They run with the C locale and
+no inherited repository variables, keep the user's ssh command
+(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`; read only for an ssh
+remote) and run no terminal prompt or askpass helper, and ssh's own
+prompts (an unknown host key, a passphrase) find no terminal, so a
+missing credential fails instead of waiting; a failed ssh clone says
+to load the key with `ssh-add` or accept the host key with `ssh`
+first. On Windows there are no process groups: a timeout kills git
 at once and its children may outlive it. Git tracing is switched off
 through the environment (`GIT_TRACE2*=0` overrides configured targets)
 and any remaining trace lines are removed from stderr. A configuration
 key counts as unset only when `git config` exits 1 with nothing on
 stderr, and every user configuration file (global, XDG, system and
-`GIT_CONFIG_*`) can be read; an unreadable one is an error. Other git
-stderr text an answer depends on: git's "not a git repository (or any"
-discovery message; "no upstream" messages in the session working
-context, read as "no upstream"; `index.lock` "File exists" in the
-seal, read as "another process holds the lock"; and bad-revision
-messages, which only choose the wording of an error. Every git read declares what an absent answer is (a
-configuration key that is not set, no such remote, no upstream, or that discovery
+`GIT_CONFIG_*`) can be read; an unreadable one is an error (a
+`git config --file` read of one named file needs no such check: git
+fails loudly on an unreadable file). Other git stderr text an answer
+depends on: git's "not a git repository (or any" discovery message;
+in the session working context, "no upstream", detached-HEAD and
+bad-revision messages, all read as "no upstream"; `index.lock` "File
+exists" in the seal, read as "another process holds the lock". Text
+that only chooses the wording of an error: bad-revision messages in
+`mission result --verify`, and "dubious ownership" or `safe.directory`
+in the hooks-directory advice. Every git read declares what an absent
+answer is (a configuration key that is not set, no such remote, no
+upstream, a path `git check-ignore` does not match, or that discovery
 failure); a broken `.git` link, or a `.git` symlink git cannot follow
 for any reason in the directory or an ancestor below the ceiling, is
 never absent. Any other failure, a timeout included, is an error that
@@ -12922,10 +12933,12 @@ cannot be listed or searched (`.punt-labs` and the final directory
 included) is an error, and only an absent
 directory means "no store yet"; a dangling or malformed `ethos.yaml` is
 an error, not "no configuration", and never stops a command that
-handles the error itself. An unusable bundle or `repo-only` policy is
-also reported where the user sees it, as a configuration failure: a
-store command exits 1, and `ethos doctor` fails a "Repository
-configuration" row. Identity reads (`git config user.*`) and the origin
+handles the error itself. An unusable bundle or `repo-only` policy, or
+an unknown `resolution:` value, is also reported where the user sees
+it, as a configuration failure: every store command exits 1 (except
+`team activate`, `team deactivate` and `team add-bundle`, which exist
+to repair it), session start answers no persona, and `ethos doctor`
+fails a "Repository configuration" row. Identity reads (`git config user.*`) and the origin
 read run in the located checkout. With no checkout, the identity read
 runs as a plain `git config` from a neutral directory outside any
 repository, so included files and command-scope configuration apply

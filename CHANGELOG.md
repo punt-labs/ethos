@@ -256,7 +256,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   how to fix it: repair or remove the `.git` named, or set
   `ETHOS_REPO_ROOT`.
 - **Every git command the `ethos` binary runs has a time limit**: 10
-  seconds, or 5 minutes for a team-bundle clone. A git that fails or does
+  seconds in general, 2 seconds for the session-start working context,
+  and 5 minutes for a team-bundle clone. A git that fails or does
   not answer is reported as an error naming the command and directory,
   never read as "no repository", "no remote" or an empty identity.
   Identity resolution fails instead of falling back to `$USER`; session
@@ -276,8 +277,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors**, reported by every command and hook, instead of reading as
   "not a repository", "no store" or "no configuration". A malformed or
   dangling `ethos.yaml` no longer stops the hooks, `ethos doctor` or
-  `ethos serve`; they report it, as they do an unusable `active_bundle`
-  or `repo-only` policy. In an enabled repository, `pre-commit` and
+  `ethos serve`; they report it, as they do an unusable `active_bundle`,
+  `repo-only` policy or unknown `resolution:` value, which also makes
+  every store command exit 1 and session start answer no persona. In an
+  enabled repository, `pre-commit` and
   `commit-msg` block the commit when `ethos` is not installed, the
   `.punt-labs/ethos` path is broken, or the `enabled` marker is not a
   regular file; `ethos enable` refuses such a marker. Git tracing set in
