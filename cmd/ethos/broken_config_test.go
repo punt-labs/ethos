@@ -179,3 +179,34 @@ func TestServeDoctorShowsAFailingStoreRow(t *testing.T) {
 	assert.Contains(t, row, "FAIL", text)
 	assert.Contains(t, row, filepath.Base(cfg), text)
 }
+
+// doctor from a linked worktree whose main repository leaves core.bare unset,
+// with a trace2 target in the user's git config: the store is found, not a
+// failing Repository store row.
+func TestCLI_DoctorLinkedWorktreeUnderTrace2(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(main, ".punt-labs", "ethos"), 0o755))
+	gitCmd(t, main, "init", "-q")
+	gitCmd(t, main, "-c", "user.email=t@x", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "i")
+	gitCmd(t, main, "config", "--unset", "core.bare")
+	wt := filepath.Join(base, "wt")
+	gitCmd(t, main, "worktree", "add", "-q", wt)
+	cfg := filepath.Join(base, "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[trace2]\n\tnormalTarget = 2\n"), 0o644))
+
+	c := exec.Command(ethosBinary, "doctor")
+	c.Dir = wt
+	c.Env = append(withForcedNotUnderClaudeCode(se.env), "GIT_CONFIG_GLOBAL="+cfg)
+	out, _ := c.CombinedOutput()
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "Repository store") {
+			t.Fatalf("a Repository store row means the store was not found: %s\n%s", line, out)
+		}
+	}
+	assert.Contains(t, string(out), "Duplicate fields")
+}

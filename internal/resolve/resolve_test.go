@@ -1861,3 +1861,29 @@ func TestCheckoutRootIfAnySilentOutsideARepo(t *testing.T) {
 	assert.Empty(t, got)
 	assert.Empty(t, out)
 }
+
+// A trace2 target in the user's git config writes to every git's stderr.
+// `git config core.bare` still answers "unset" by its exit status, so a linked
+// worktree still finds the main work tree's store. Classifying by empty stderr
+// would turn this into a refusal.
+func TestLinkedWorktreeStoreUnderTrace2(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(main, ".punt-labs", "ethos"), 0o755))
+	gitRepo(t, main)
+	runGit(t, main, "config", "--unset", "core.bare") // so `git config core.bare` exits 1
+	wt := filepath.Join(base, "wt")
+	runGit(t, main, "worktree", "add", wt)
+
+	cfg := filepath.Join(base, "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[trace2]\n\tnormalTarget = 2\n\teventTarget = 2\n\tperfTarget = 2\n"), 0o644))
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	chdir(t, wt)
+
+	loc := Roots()
+	require.NoError(t, loc.StoreFailure(), "core.bare unset is exit 1, whatever git wrote to stderr")
+	assert.Equal(t, realpath(t, main), realpath(t, loc.Store))
+}

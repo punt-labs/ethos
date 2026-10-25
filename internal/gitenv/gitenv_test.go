@@ -250,16 +250,6 @@ func TestRead(t *testing.T) {
 	})
 }
 
-// A trace2 target in the user's git config (or environment) writes to git's
-// stderr; Read must still see `git config` for an unset key as exit 1, so it
-// switches the three trace2 targets off on the command line.
-func TestReadSwitchesTrace2Off(t *testing.T) {
-	git := fakeGitScript(t, "echo \"$@\"\n")
-	out, _, err := Read(Spec{Git: git, Args: []string{"config", "k"}}, AbsentUnset)
-	require.NoError(t, err)
-	assert.Equal(t, "-c trace2.normalTarget= -c trace2.eventTarget= -c trace2.perfTarget= config k\n", string(out))
-}
-
 // With real git: trace2 sent to stderr by the user's config and by
 // GIT_CONFIG_PARAMETERS does not make an unset key an error.
 func TestReadUnsetKeyUnderTrace2(t *testing.T) {

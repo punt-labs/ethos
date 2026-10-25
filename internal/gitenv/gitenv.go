@@ -352,21 +352,16 @@ const (
 // returns an error carrying git's stderr, wrapping the *exec.ExitError (or
 // ErrTimeout, or exec.ErrNotFound) for errors.Is and errors.As.
 func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
-	// -c with an empty value turns a trace2 target off whatever the user's
-	// config or environment says: trace output on stderr would turn "key unset"
-	// (exit 1, empty stderr) into a failure.
-	if err := DanglingDotGit(s.Dir); err != nil {
+	if err := DanglingDotGit(s.Dir); err != nil { // Run checks only a non-empty Dir
 		return nil, false, err
 	}
-	shown := s.Args
-	s.Args = append([]string{"-c", "trace2.normalTarget=", "-c", "trace2.eventTarget=", "-c", "trace2.perfTarget="}, s.Args...)
 	out, err = Run(s)
 	if err == nil {
 		return out, false, nil
 	}
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		return nil, false, fmt.Errorf("git %s: %w", strings.Join(shown, " "), err)
+		return nil, false, fmt.Errorf("git %s: %w", strings.Join(s.Args, " "), err)
 	}
 	stderr := strings.TrimSpace(string(ee.Stderr))
 	switch {
@@ -377,7 +372,7 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	case absent&AbsentNotRepo != 0 && IsNotARepo(stderr):
 		return nil, true, nil
 	}
-	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(shown, " "), err, stderr)
+	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(s.Args, " "), err, stderr)
 }
 
 // DanglingDotGit reports a .git in dir that is a symlink to nothing (or a

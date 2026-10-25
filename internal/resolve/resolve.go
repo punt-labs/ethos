@@ -1299,8 +1299,11 @@ func configBare(git, common string) (bool, error) {
 	switch {
 	case err == nil:
 		return strings.TrimSpace(string(out)) == "true", nil
-	case errors.As(err, &ee) && ee.ExitCode() == 1 && len(ee.Stderr) == 0:
-		return false, nil // unset, or no config file
+	case errors.As(err, &ee) && ee.ExitCode() == 1:
+		// Unset, or no config file: git config has no other exit 1, and what it
+		// wrote to stderr (a trace2 target in the user's config) is not part of
+		// the answer.
+		return false, nil
 	case errors.As(err, &ee) && len(ee.Stderr) > 0:
 		return false, fmt.Errorf("git config --file %s core.bare: %s", cfg, strings.TrimSpace(string(ee.Stderr)))
 	default:
