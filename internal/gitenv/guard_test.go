@@ -2,6 +2,8 @@ package gitenv
 
 import (
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -25,7 +27,17 @@ import (
 //     value: `f := exec.Command`), the *exec.Cmd methods Run, Start, Output
 //     and CombinedOutput, and exec.Cmd literals and new(exec.Cmd);
 //   - os.StartProcess, syscall.StartProcess, syscall.Exec, syscall.ForkExec;
-//   - golang.org/x/sys/unix Exec*.
+//   - golang.org/x/sys/unix Exec*;
+//   - syscall.CreateProcess and golang.org/x/sys/windows CreateProcess*;
+//   - syscall.Syscall, Syscall6, RawSyscall and RawSyscall6 whose number is
+//     SYS_EXECVE, SYS_EXECVEAT or SYS_CLONE (the constant, by name).
+//
+// A non-test package with a cgo file also fails: C code can start a program
+// where no Go reference shows it.
+//
+// This is a tripwire for the shapes ethos code uses and their common variants,
+// not a proof. It does not chase reflect, an interface that hides the call, or
+// a recovered panic.
 //
 // A non-test package that imports internal/testhelpers also fails: the helper
 // package starts git itself and is for tests.
@@ -53,6 +65,55 @@ var allowedProcessUses = map[string][]string{
 	"internal/testhelpers/gitenv.go": {"exec.Command", "exec.Command", "(*exec.Cmd).CombinedOutput"},
 }
 
+// rawSyscalls are the raw system-call entry points; the number is the first
+// argument.
+var rawSyscalls = map[string]bool{"Syscall": true, "Syscall6": true, "RawSyscall": true, "RawSyscall6": true}
+
+// startingSyscalls are the system-call numbers that start a program or a
+// process.
+var startingSyscalls = map[string]bool{"SYS_EXECVE": true, "SYS_EXECVEAT": true, "SYS_CLONE": true}
+
+// startsViaSyscall names call when it is a raw syscall whose number constant is
+// one of startingSyscalls, in syscall or golang.org/x/sys/unix.
+func startsViaSyscall(info *types.Info, call *ast.CallExpr) string {
+	if len(call.Args) == 0 {
+		return ""
+	}
+	var fid *ast.Ident
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		fid = f
+	case *ast.SelectorExpr:
+		fid = f.Sel
+	default:
+		return ""
+	}
+	fn, ok := info.Uses[fid].(*types.Func)
+	if !ok || fn.Pkg() == nil || !rawSyscalls[fn.Name()] || (fn.Pkg().Path() != "syscall" && fn.Pkg().Path() != "golang.org/x/sys/unix") {
+		return ""
+	}
+	var nid *ast.Ident
+	switch a := call.Args[0].(type) {
+	case *ast.Ident:
+		nid = a
+	case *ast.SelectorExpr:
+		nid = a.Sel
+	case *ast.CallExpr: // uintptr(syscall.SYS_EXECVE)
+		if len(a.Args) == 1 {
+			switch b := a.Args[0].(type) {
+			case *ast.Ident:
+				nid = b
+			case *ast.SelectorExpr:
+				nid = b.Sel
+			}
+		}
+	}
+	if nid != nil && startingSyscalls[nid.Name] {
+		return fn.Pkg().Name() + "." + fn.Name() + "(" + nid.Name + ")"
+	}
+	return ""
+}
+
 var execMethods = map[string]bool{"Run": true, "Start": true, "Output": true, "CombinedOutput": true}
 
 // startsProgram names obj when referencing it starts, or can start, a
@@ -71,8 +132,10 @@ func startsProgram(obj types.Object) string {
 		return "(*exec.Cmd)." + fn.Name()
 	case pkg == "os" && fn.Name() == "StartProcess":
 		return "os.StartProcess"
-	case pkg == "syscall" && (fn.Name() == "StartProcess" || fn.Name() == "Exec" || fn.Name() == "ForkExec"):
+	case pkg == "syscall" && (fn.Name() == "StartProcess" || fn.Name() == "Exec" || fn.Name() == "ForkExec" || fn.Name() == "CreateProcess"):
 		return "syscall." + fn.Name()
+	case pkg == "golang.org/x/sys/windows" && strings.HasPrefix(fn.Name(), "CreateProcess"):
+		return "windows." + fn.Name()
 	case pkg == "golang.org/x/sys/unix" && strings.HasPrefix(fn.Name(), "Exec"):
 		return "unix." + fn.Name()
 	}
@@ -80,14 +143,36 @@ func startsProgram(obj types.Object) string {
 }
 
 func recvIsCmd(t types.Type) bool {
+	t = types.Unalias(t)
 	if p, ok := t.(*types.Pointer); ok {
-		t = p.Elem()
+		t = types.Unalias(p.Elem())
 	}
 	n, ok := t.(*types.Named)
 	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "os/exec" && n.Obj().Name() == "Cmd"
 }
 
 func isExecCmd(t types.Type) bool { return t != nil && recvIsCmd(t) }
+
+// cgoFiles lists the files of p that import "C", whether they are compiled in
+// or ignored because cgo is off here.
+func cgoFiles(p *packages.Package) []string {
+	var out []string
+	for _, name := range append(append([]string(nil), p.GoFiles...), p.IgnoredFiles...) {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ImportsOnly)
+		if err != nil {
+			continue
+		}
+		for _, imp := range f.Imports {
+			if imp.Path.Value == `"C"` {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
 
 // processUses returns, per file (repo-relative, slash-separated), the
 // descriptors of every program start in the non-test packages, and the
@@ -119,6 +204,10 @@ func processUses(t *testing.T, root string) (uses map[string][]string, helperImp
 			} else if _, ok := p.Imports[modulePath(p)+"/internal/testhelpers"]; ok {
 				importers[p.PkgPath] = true
 			}
+			for _, name := range cgoFiles(p) {
+				rel, _ := filepath.Rel(root, name)
+				uses[filepath.ToSlash(rel)] = append(uses[filepath.ToSlash(rel)], `import "C"`)
+			}
 			for _, f := range p.Syntax {
 				pos := p.Fset.Position(f.Pos())
 				rel, rerr := filepath.Rel(root, pos.Filename)
@@ -149,6 +238,9 @@ func processUses(t *testing.T, root string) (uses map[string][]string, helperImp
 							add(v, "exec.Cmd{}")
 						}
 					case *ast.CallExpr:
+						if d := startsViaSyscall(p.TypesInfo, v); d != "" {
+							add(v, d)
+						}
 						if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "new" && len(v.Args) == 1 {
 							if _, isBuiltin := p.TypesInfo.Uses[id].(*types.Builtin); isBuiltin && isExecCmd(p.TypesInfo.TypeOf(v.Args[0])) {
 								add(v, "new(exec.Cmd)")
