@@ -480,3 +480,44 @@ func TestSessionStartRefusesAPersonaOnAPolicyIssue(t *testing.T) {
 	assert.NotContains(t, res.HookSpecificOutput.AdditionalContext, "Active identity", "no identity was answered")
 	assert.NotContains(t, res.HookSpecificOutput.AdditionalContext, "Test Agent")
 }
+
+var policyBreaks = map[string]string{
+	"unknown resolution": "agent: test-agent\nresolution: repo_only\n",
+	"missing bundle":     "agent: test-agent\nactive_bundle: missingbundle\n",
+}
+
+// On a policy issue subagent-start and pre-compact inject no persona, record
+// none, and tell the session why, as session-start does. (main exited 1 in
+// both hooks.) The agent identity exists only in the global store.
+func TestSubagentStartAndPreCompactRefuseAPersonaOnAPolicyIssue(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	for name, yaml := range policyBreaks {
+		t.Run(name, func(t *testing.T) {
+			se := setupCLISubprocessEnv(t)
+			ids := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+			require.NoError(t, os.MkdirAll(ids, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(ids, "ghost-agent.yaml"),
+				[]byte("name: Ghost Agent\nhandle: ghost-agent\nkind: agent\n"), 0o644))
+
+			// A roster written while the config was healthy, with a primary persona.
+			runHookIn(t, se, se.repo, "session-start", `{"session_id":"pol-s1","hook_event_name":"SessionStart"}`)
+			cfg := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
+			require.NoError(t, os.RemoveAll(cfg))
+			require.NoError(t, os.WriteFile(cfg, []byte(yaml), 0o644))
+
+			stdout, stderr, _ := runHookIn(t, se, se.repo, "subagent-start",
+				`{"session_id":"pol-s1","agent_id":"a-9","agent_type":"ghost-agent","hook_event_name":"SubagentStart"}`)
+			assert.Contains(t, stdout, "no persona or identity was answered", stderr)
+			assert.NotContains(t, stdout, "Ghost Agent", "no persona from the global store")
+			roster, err := os.ReadFile(filepath.Join(se.home, ".punt-labs", "ethos", "sessions", "pol-s1.yaml"))
+			require.NoError(t, err)
+			assert.NotContains(t, string(roster), "persona: ghost-agent", "no persona recorded (the agent_type is the caller's own string)")
+
+			stdout, stderr, _ = runHookIn(t, se, se.repo, "pre-compact", `{"session_id":"pol-s1","hook_event_name":"PreCompact"}`)
+			assert.Contains(t, stdout, "no persona or identity was answered", stderr)
+			assert.NotContains(t, stdout, "Test Agent", "no persona is re-injected")
+		})
+	}
+}

@@ -86,6 +86,10 @@ type SubagentStartDeps struct {
 	// that declares a mission is refused with this reason rather than
 	// gated against the wrong store.
 	StoreErr error
+	// Issue is why the repository's bundle or policy could not be honoured, if
+	// so (bundle.ConfigIssue). On a policy issue no persona is injected or
+	// recorded, and the session is told why, as session-start tells it.
+	Issue error
 }
 
 // HandleSubagentStart reads the SubagentStart hook payload from stdin,
@@ -176,7 +180,8 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	// Resolve persona: if an identity exists with the same handle as
 	// agent_type, use it as the persona.
 	persona := ""
-	if agentType != "" && deps.Identities.Exists(agentType) {
+	refused := policyIssue(deps.Issue)
+	if !refused && agentType != "" && deps.Identities.Exists(agentType) {
 		persona = agentType
 	}
 
@@ -238,6 +243,10 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 		// Prepended so the SPAWNED SUBAGENT sees it first, ahead of its
 		// own persona block, if it has one.
 		sections = append(sections, diagnostic)
+	}
+
+	if refused {
+		sections = append(sections, storeUnlocatedNote(deps.Issue))
 	}
 
 	if persona != "" {

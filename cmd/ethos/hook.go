@@ -163,6 +163,7 @@ func runHookSubagentStart() error {
 	deps := hook.SubagentStartDeps{
 		Identities: s,
 		Sessions:   sessionStore(),
+		Issue:      currentRoots().configIssue(),
 	}
 	// RepoRoot is the work-tree root for the write-set walk (files under
 	// review live in this checkout); StoreRoot is the mission store's repo
@@ -217,6 +218,7 @@ func runHookPreCompact() error {
 		Sessions:   sessionStore(),
 		Teams:      layeredTeamStore(is),
 		Roles:      layeredRoleStore(is),
+		Issue:      currentRoots().configIssue(),
 	}
 	if err := hook.HandlePreCompact(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook pre-compact: %w", err)

@@ -20,6 +20,9 @@ type PreCompactDeps struct {
 	Sessions   *session.Store
 	Teams      *team.LayeredStore
 	Roles      *role.LayeredStore
+	// Issue is why the repository's bundle or policy could not be honoured
+	// (bundle.ConfigIssue). On a policy issue no persona is injected.
+	Issue error
 }
 
 // HandlePreCompact reads the PreCompact hook payload from stdin,
@@ -46,6 +49,13 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: failed to load session %q: %v\n", sessionID, err)
 		return nil // sidecar: don't block compaction
+	}
+
+	// A policy that cannot be honoured refuses the persona: the layers left are
+	// not the ones the repository chose. Say why, as session-start does.
+	if policyIssue(deps.Issue) {
+		_, err = fmt.Fprint(os.Stdout, storeUnlocatedNote(deps.Issue))
+		return err
 	}
 
 	// Find the primary agent: the participant whose Parent is the
