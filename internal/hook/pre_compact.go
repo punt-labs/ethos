@@ -20,8 +20,9 @@ type PreCompactDeps struct {
 	Sessions   *session.Store
 	Teams      *team.LayeredStore
 	Roles      *role.LayeredStore
-	// Issue is why the repository's bundle or policy could not be honoured
-	// (bundle.ConfigIssue). On a policy issue no persona is injected.
+	// Issue is why the repository cannot be answered for: its store or
+	// configuration could not be read, or its bundle or policy could not be
+	// honoured. Then no persona is injected, whatever the global store holds.
 	Issue error
 }
 
@@ -51,9 +52,10 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		return nil // sidecar: don't block compaction
 	}
 
-	// A policy that cannot be honoured refuses the persona: the layers left are
-	// not the ones the repository chose. Say why, as session-start does.
-	if policyIssue(deps.Issue) {
+	// A store or configuration that cannot be used refuses the persona: the
+	// layers left are not the ones the repository chose. Say why, as
+	// session-start does.
+	if deps.Issue != nil {
 		_, err = fmt.Fprint(os.Stdout, storeUnlocatedNote(deps.Issue))
 		return err
 	}

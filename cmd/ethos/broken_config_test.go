@@ -527,3 +527,51 @@ func TestSubagentStartAndPreCompactRefuseAPersonaOnAPolicyIssue(t *testing.T) {
 		})
 	}
 }
+
+// With the store or its configuration unreadable, subagent-start and pre-compact
+// answer no persona: a different identity of the same handle in the global store
+// is not the repository's. (A regression against main, which exited 1.)
+func TestHooksRefuseAGlobalPersonaWhenTheConfigCannotBeRead(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	breaks := map[string]func(t *testing.T, cfg string){
+		"malformed": func(t *testing.T, cfg string) {
+			require.NoError(t, os.WriteFile(cfg, []byte("agent: [unclosed\n"), 0o644))
+		},
+		"dangling": func(t *testing.T, cfg string) {
+			require.NoError(t, os.Remove(cfg))
+			require.NoError(t, os.Symlink(cfg+".nowhere", cfg))
+		},
+		"mode 000": func(t *testing.T, cfg string) {
+			if os.Geteuid() == 0 {
+				t.Skip("root ignores permissions")
+			}
+			require.NoError(t, os.Chmod(cfg, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+		},
+	}
+	for name, brk := range breaks {
+		t.Run(name, func(t *testing.T) {
+			se := setupCLISubprocessEnv(t)
+			repoIDs := filepath.Join(se.repo, ".punt-labs", "ethos", "identities")
+			globalIDs := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+			require.NoError(t, os.MkdirAll(globalIDs, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(repoIDs, "agentx.yaml"), []byte("name: Repo Agent X\nhandle: agentx\nkind: agent\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(globalIDs, "agentx.yaml"), []byte("name: Global Agent X\nhandle: agentx\nkind: agent\n"), 0o644))
+			cfg := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
+			require.NoError(t, os.WriteFile(cfg, []byte("agent: agentx\n"), 0o644))
+			runHookIn(t, se, se.repo, "session-start", `{"session_id":"gp-s1","hook_event_name":"SessionStart"}`)
+			brk(t, cfg)
+
+			stdout, stderr, _ := runHookIn(t, se, se.repo, "subagent-start",
+				`{"session_id":"gp-s1","agent_id":"a-7","agent_type":"agentx","hook_event_name":"SubagentStart"}`)
+			assert.NotContains(t, stdout, "Global Agent X", stderr)
+			assert.Contains(t, stdout, "persona", "the session is told why: "+stdout)
+			stdout, stderr, _ = runHookIn(t, se, se.repo, "pre-compact", `{"session_id":"gp-s1","hook_event_name":"PreCompact"}`)
+			assert.NotContains(t, stdout, "Global Agent X", stderr)
+			assert.NotContains(t, stdout, "Repo Agent X", "no persona at all")
+			assert.Contains(t, stdout, "persona", stdout)
+		})
+	}
+}

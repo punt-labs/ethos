@@ -147,6 +147,17 @@ func (r *repoRoots) configIssue() error {
 	return bundle.ConfigIssue(r.Store, r.Ethos, defaultGlobalRoot())
 }
 
+// hookIssue is why a hook that injects a persona must refuse: the store or its
+// configuration could not be read (StoreFailure, which is never "outside a
+// repository"), or the bundle or policy could not be honoured. nil when it can
+// answer.
+func (r *repoRoots) hookIssue() error {
+	if err := r.StoreFailure(); err != nil {
+		return err
+	}
+	return r.configIssue()
+}
+
 // checkoutForGit is the checkout the git identity is read in. A checkout that
 // could not be located is the error: an identity read from "no repository"
 // when the repository could not be found would be the wrong answer.
