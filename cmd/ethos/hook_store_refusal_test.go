@@ -60,11 +60,22 @@ func TestCLI_HookAuditLogSkipsWhenCheckoutUnlocatable(t *testing.T) {
 	se, inner := nestedGitEnv(t, emptyGitFile)
 	const sid = "auditskip1"
 	payload := `{"session_id":"` + sid + `","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`
-	_, stderr, code := runHookIn(t, se, inner, "audit-log", payload)
+	stdout, stderr, code := runHookIn(t, se, inner, "audit-log", payload)
 	assert.Equal(t, 0, code, stderr)
 	assert.Contains(t, stderr, "audit-log")
 	assert.Contains(t, stderr, filepath.Join(inner, ".git"))
 	assert.Contains(t, stderr, "not written")
+	// The session sees the dropped entry, not only the hook's stderr log.
+	var res struct {
+		SystemMessage      string `json:"systemMessage"`
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
+	assert.Contains(t, res.SystemMessage, "audit entry not written")
+	assert.Contains(t, res.SystemMessage, filepath.Join(inner, ".git"))
+	assert.Equal(t, res.SystemMessage, res.HookSpecificOutput.AdditionalContext)
 	assert.Empty(t, pathsNaming(t, se.home, sid), "nothing in the global store")
 	assert.Empty(t, pathsNaming(t, se.repo, sid), "nothing in the enclosing repository")
 }

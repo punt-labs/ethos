@@ -558,25 +558,70 @@ func TestReadsContain(t *testing.T) {
 	}
 }
 
-// TestEnvRepoRoot_PrefersEnvVar pins that ETHOS_REPO_ROOT takes
+// TestTierBRepoRoot_PrefersEnvVar pins that ETHOS_REPO_ROOT takes
 // precedence over the fallback. The override must name an existing
 // directory — a nonexistent one is refused (ethos-yofr SFH F1) — so the
 // test points it at a real temp dir.
-func TestEnvRepoRoot_PrefersEnvVar(t *testing.T) {
+func TestTierBRepoRoot_PrefersEnvVar(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ETHOS_REPO_ROOT", dir)
-	got := envRepoRoot()
+	got, err := tierBRepoRoot()
+	require.NoError(t, err)
 	assert.Equal(t, dir, got)
 }
 
-// TestEnvRepoRoot_FallbackUsedWhenEnvUnset confirms the helper
-// falls back to tierBRepoRoot when the env var is not set. The
-// concrete fallback value depends on the test cwd; we only assert
-// non-empty.
-func TestEnvRepoRoot_FallbackUsedWhenEnvUnset(t *testing.T) {
+// TestTierBRepoRoot_FallbackUsedWhenEnvUnset confirms the helper
+// resolves the checkout from the working directory when the env var is
+// not set: the package directory is inside this repository.
+func TestTierBRepoRoot_FallbackUsedWhenEnvUnset(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", "")
-	got := envRepoRoot()
+	got, err := tierBRepoRoot()
+	require.NoError(t, err)
 	assert.NotEmpty(t, got)
+}
+
+// tierBRepoRoot never answers with the working directory: a checkout that
+// cannot be located is an error naming the reason, and outside a
+// repository there is no checkout at all.
+func TestTierBRepoRootNeverCwd(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	t.Run("refused .git", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), nil, 0o644))
+		t.Chdir(dir)
+		got, err := tierBRepoRoot()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), filepath.Join(dir, ".git"))
+		assert.Empty(t, got)
+	})
+	t.Run("outside a repository", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		got, err := tierBRepoRoot()
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+}
+
+// With the checkout unlocated, a contract with preconditions cannot be
+// evaluated: strict blocks with the reason, strict=false allows, and a
+// contract with no preconditions is not affected.
+func TestGateContractUnlocatedCheckout(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), nil, 0o644))
+	t.Chdir(dir)
+	pre := []mission.Precondition{{Message: "read it first"}}
+	input := map[string]any{"file_path": "a.go"}
+
+	reason, deny := gateContract(makeContractWithPreconditions(pre, mission.Inputs{}, nil), "Edit", input, "s1")
+	assert.True(t, deny)
+	assert.Contains(t, reason, filepath.Join(dir, ".git"))
+
+	reason, deny = gateContract(makeContractWithPreconditions(pre, mission.Inputs{}, boolPtr(false)), "Edit", input, "s1")
+	assert.False(t, deny, reason)
+
+	reason, deny = gateContract(makeContractWithPreconditions(nil, mission.Inputs{}, nil), "Edit", input, "s1")
+	assert.False(t, deny, reason)
 }
 
 // TestEvaluatePreconditions_SessionIDLooksLikePath defends against a

@@ -1024,7 +1024,7 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 // "resolving MISSION_ID not found" — the core ethos-yofr symptom (CR#1).
 //
 // It returns exactly what StoreRepoRoot returns, INCLUDING "" — it must NOT
-// bare-Getwd-fall-back the way tierBRepoRoot does. StoreRepoRoot returns ""
+// fall back to the working directory. StoreRepoRoot returns ""
 // in two cases: no git repo at all, and (crucially) a set-but-invalid
 // ETHOS_REPO_ROOT, where F1's repoRootOverride deliberately returns "" so
 // the caller does not resolve some other tree. Substituting the raw cwd here
@@ -1039,31 +1039,21 @@ func tierBStoreRoot() string {
 }
 
 // tierBRepoRoot resolves the current work tree root for the per-checkout
-// portions of the hook — the audit/precondition read path (via
-// preconditions.go's envRepoRoot fallback), whose entries live in the
-// committing checkout, not the shared store. Store portions use
-// tierBStoreRoot instead (CR#1).
+// portions of the hook — the audit/precondition read path, whose entries
+// live in the committing checkout, not the shared store. Store portions use
+// tierBStoreRoot instead.
 //
-// Resolution order:
-//  1. ETHOS_REPO_ROOT env override
-//  2. resolve.FindRepoRoot (walk for .git)
-//  3. os.Getwd fallback (logs to stderr; downstream sites defend
-//     against an empty return)
-func tierBRepoRoot() string {
-	if root := resolve.EnvRepoRoot(); root != "" {
-		return root
+// It resolves through resolve.LocateRepoRoot (ETHOS_REPO_ROOT, then git).
+// Outside a repository it returns ("", nil): there is no checkout. Any
+// other failure is returned as the error, never answered with the working
+// directory, which would read audit entries from whatever directory the
+// hook happened to start in.
+func tierBRepoRoot() (string, error) {
+	root, err := resolve.LocateRepoRoot()
+	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		return "", fmt.Errorf("locating the checkout: %w", err)
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		// Getwd failure here is rare (deleted cwd, permission loss).
-		// Downstream call sites are defensive against the empty
-		// return, but a silent fall-through leaves no trace — surface
-		// the underlying error so the operator can correlate a
-		// downstream "repoRoot is required" with its cause.
-		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: getwd failed: %v\n", err)
-		return ""
-	}
-	return cwd
+	return root, nil
 }
 
 // tierBGlobalRoot resolves the global ethos root used for per-
@@ -1114,15 +1104,21 @@ func tierBMissionStore() (*mission.Store, error) {
 	// (PR #370 sweep).
 	//
 	// The checkout root FOLLOWS the store root to "" when the store refuses:
-	// tierBStoreRoot is StoreRepoRoot (fail-closed on a bad ETHOS_REPO_ROOT),
-	// but tierBRepoRoot (EnvRepoRoot, requireStore=false) re-accepts the
-	// refused path. Pairing them unconditionally would let the audit zone
+	// tierBStoreRoot is StoreRepoRoot (fail-closed on a bad ETHOS_REPO_ROOT,
+	// which must hold a store), but tierBRepoRoot accepts an override
+	// directory with no store, so it would re-accept the refused path. Pairing them unconditionally would let the audit zone
 	// resurrect a path the store already refused (PR #370 override-resurrection
 	// class, same guard as missionCheckoutRoot + runUI).
 	storeRoot := tierBStoreRoot()
 	checkoutRoot := ""
 	if storeRoot != "" {
-		checkoutRoot = tierBRepoRoot()
+		root, err := tierBRepoRoot()
+		if err != nil {
+			// Unreachable while the store resolved (both come from one
+			// location), but a refusal is never replaced by a guess.
+			fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: %v; mission audit zone not set\n", err)
+		}
+		checkoutRoot = root
 	}
 	return mission.NewStoreWithRoots(storeRoot, globalRoot).
 		WithCheckoutRoot(checkoutRoot), nil

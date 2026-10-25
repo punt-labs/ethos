@@ -196,12 +196,27 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 	if err != nil {
 		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err), true
 	}
-	// envRepoRoot honors ETHOS_REPO_ROOT before falling back to cwd-
-	// derived tierBRepoRoot, so an operator running the hook from a
-	// subdirectory or with an explicit override sees consistent
-	// repo resolution between the dispatch path and the precondition
-	// evaluator (Copilot + Bugbot on PR #328).
-	repoRoot := envRepoRoot()
+	return gateContract(contract, toolName, toolInput, sessionID)
+}
+
+// gateContract applies a loaded contract's preconditions to one tool call,
+// with the same fail policy as evalContractPreconditions. A checkout that
+// cannot be located leaves a contract with preconditions unevaluable: it
+// blocks under strict and warns under strict=false, and never reads audit
+// entries from the working directory instead.
+func gateContract(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID string) (string, bool) {
+	repoRoot, rootErr := tierBRepoRoot()
+	if rootErr != nil {
+		if len(contract.Preconditions) == 0 {
+			return "", false
+		}
+		reason := fmt.Sprintf("ethos pre-tool-use: preconditions cannot be evaluated: %v", rootErr)
+		if contract.EffectiveStrictPreconditions() {
+			return reason, true
+		}
+		fmt.Fprintf(os.Stderr, "%s; strict_preconditions=false, allowing\n", reason)
+		return "", false
+	}
 	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot)
 	if !deny {
 		return "", false
@@ -355,18 +370,13 @@ func pathAllowed(target string, entries []string, repoRoot string) bool {
 // resolution branch may trust, or "" when no such root can be
 // validated.
 //
-// This is deliberately NOT envRepoRoot(), whose own last-resort
-// fallback — tierBRepoRoot's bare os.Getwd() (pretooluse_dispatch.go)
-// — exists so Tier B mission-store resolution always has SOME
-// directory to try, even an unmarked one; that fallback is safe there
-// because a missing/wrong store just fails a subsequent Load, fail-
-// closed. It is NOT safe here: pathAllowed's repo-relative branch
-// resolves a target against whatever root it is given and then
-// compares the RESULT against a relative write_set entry. If the hook
-// process's cwd is merely some subdirectory of the repo rather than
-// the repo root itself (a verifier subprocess launched from
-// <repo>/internal, say) and ETHOS_REPO_ROOT is unset, treating that
-// cwd as the root resolves "<repo>/internal/docs/x.md" to "docs/x.md"
+// It must never be a bare working directory: pathAllowed's
+// repo-relative branch resolves a target against whatever root it is
+// given and then compares the RESULT against a relative write_set
+// entry. If the hook process's cwd is merely some subdirectory of the
+// repo rather than the repo root itself (a verifier subprocess
+// launched from <repo>/internal, say) and ETHOS_REPO_ROOT is unset,
+// treating that cwd as the root resolves "<repo>/internal/docs/x.md" to "docs/x.md"
 // against the wrong base — one directory too shallow — so a
 // write_set entry like "docs/**" wrongly admits a file it never
 // authorized. Before repo-relative resolution existed, such a target

@@ -635,11 +635,8 @@ func TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal(t *testing.T) {
 // TestHandlePreToolUse_RepoRootValidation pins the MEDIUM finding from
 // the re-verification round: pathAllowed's repo-relative branch must
 // never resolve against an unmarked directory. allowlistRepoRoot uses
-// resolve.FindRepoRoot (a .git-marker walk), never envRepoRoot's own
-// last-resort bare-os.Getwd() fallback (tierBRepoRoot,
-// pretooluse_dispatch.go) — that fallback is safe for Tier B
-// mission-store resolution (a missing store just fails a subsequent
-// Load, fail-closed) but not here: resolving a target against a
+// resolve.FindRepoRoot (a .git-marker walk), never a bare working
+// directory: resolving a target against a
 // directory that is merely SOME subdirectory of the real repo, not
 // the root itself, computes a repo-relative form one level too
 // shallow and lets an ordinary write_set entry admit a file it never

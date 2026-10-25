@@ -25,6 +25,8 @@
 package hook
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,9 +36,47 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
+// ErrAuditDropped is wrapped by the error HandleAuditLog returns when the
+// entry was not written. The tool call still proceeds; the caller puts the
+// loss in front of the session (WriteAuditDropNotice).
+var ErrAuditDropped = errors.New("audit entry not written")
+
+// WriteAuditDropNotice writes the PostToolUse hook output that tells the
+// session an audit entry was dropped: a systemMessage for the operator and
+// additionalContext for the model. stderr alone reaches only a log file
+// nobody reads.
+func WriteAuditDropNotice(w io.Writer, dropped error) error {
+	msg := "ethos: " + dropped.Error()
+	var out struct {
+		SystemMessage      string `json:"systemMessage"`
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	out.SystemMessage = msg
+	out.HookSpecificOutput.HookEventName = "PostToolUse"
+	out.HookSpecificOutput.AdditionalContext = msg
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		return fmt.Errorf("writing the audit drop notice: %w", err)
+	}
+	return nil
+}
+
+// dropped reports a lost entry: the reason, the session and the tool, and
+// the preview on stderr only (it may be long).
+func dropped(cause error, e auditEntry, sessionID string) error {
+	fmt.Fprintf(os.Stderr,
+		"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
+		cause, sessionID, e.Tool, e.ToolInputPreview)
+	return fmt.Errorf("%w: %v; session=%s tool=%s", ErrAuditDropped, cause, sessionID, e.Tool)
+}
+
 // HandleAuditLog appends one JSONL line to the session audit log.
-// Called from the PostToolUse hook for every tool invocation. Never
-// returns an error — audit logging is advisory, not a gate. Every
+// Called from the PostToolUse hook for every tool invocation. A lost
+// entry is returned as an error wrapping ErrAuditDropped; audit logging
+// is advisory, not a gate, so the caller never blocks the tool call on
+// it. Every
 // failure path writes a warning to stderr and returns nil so a
 // broken audit pipeline cannot block the tool call.
 //
@@ -67,7 +107,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: reading input: %v\n", err)
-		return nil
+		return fmt.Errorf("%w: reading input: %v", ErrAuditDropped, err)
 	}
 
 	sessionID, _ := input["session_id"].(string)
@@ -86,19 +126,15 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 		livePath := liveAuditPath(repoRoot, sessionID)
 		sealedDir, dirErr := resolveRepoSessionDir(repoRoot, sessionID, now)
 		if dirErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
-				dirErr, sessionID, entry.Tool, entry.ToolInputPreview)
-			return nil
+			return dropped(dirErr, entry, sessionID)
 		}
 		legacyPath := filepath.Join(sealedDir, "audit.jsonl")
 		if _, writeErr := appendLiveAudit(livePath, sealedDir, legacyPath, entry, now); writeErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
-				writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
+			lost := dropped(writeErr, entry, sessionID)
 			if sentErr := emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID, now, writeErr.Error()); sentErr != nil {
 				fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
 			}
+			return lost
 		}
 		return nil
 	}
@@ -110,18 +146,13 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 		// and the preview to stderr so an operator running -v can
 		// still reconstruct the lost tool input from terminal scroll
 		// or the systemd journal.
-		fmt.Fprintf(os.Stderr,
-			"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
-			err, sessionID, entry.Tool, entry.ToolInputPreview)
-		return nil
+		return dropped(err, entry, sessionID)
 	}
 	if writeErr := writeAuditEntry(path, entry); writeErr != nil {
 		// The full entry did not persist. Always emit the entry's
 		// reason and preview to stderr so the lost tool input is
 		// recoverable even when the sentinel itself cannot land.
-		fmt.Fprintf(os.Stderr,
-			"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
-			writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
+		lost := dropped(writeErr, entry, sessionID)
 		// Attempt the in-band sentinel so the loss is discoverable
 		// without an operator scraping stderr: the line is sealed like
 		// any other, and `ethos audit show`'s diagnostics block scans
@@ -134,6 +165,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 		if sentErr := emitLegacySentinel(path, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
 		}
+		return lost
 	}
 	return nil
 }
