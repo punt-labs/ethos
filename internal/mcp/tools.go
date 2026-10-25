@@ -234,7 +234,11 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 }
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	handle, err := resolve.Resolve(h.store, h.sessionStore, resolve.Roots().Checkout)
+	loc := resolve.Roots()
+	if loc.CheckoutErr != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("whoami: locating the checkout: %v", loc.CheckoutErr)), nil
+	}
+	handle, err := resolve.Resolve(h.store, h.sessionStore, loc.Checkout)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
 	}

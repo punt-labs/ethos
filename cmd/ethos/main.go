@@ -326,7 +326,7 @@ func runWhoami(cmd *cobra.Command) error {
 	is := identityStore()
 	ss := sessionStore()
 
-	handle, err := resolve.Resolve(is, ss, currentRoots().Checkout)
+	handle, err := resolve.Resolve(is, ss, currentRoots().checkoutForGit())
 	if err != nil {
 		return err
 	}

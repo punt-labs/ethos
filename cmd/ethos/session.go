@@ -500,7 +500,7 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    matching ETHOS_AGENT_ID export reflects it), else ETHOS_AGENT_ID,
 	//    else the repo default agent, else the human.
 	store := identityStore()
-	human, err := resolve.Resolve(store, nil, currentRoots().Checkout)
+	human, err := resolve.Resolve(store, nil, currentRoots().checkoutForGit())
 	if err != nil {
 		return fmt.Errorf("session start: resolving identity: %w", err)
 	}

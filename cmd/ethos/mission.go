@@ -1736,7 +1736,11 @@ func runMissionResult(idOrPrefix, file string) error {
 	// and git is a consumer-side convenience, not part of the contract
 	// schema.
 	if missionResultVerify {
-		if err := verifyResultAgainstNumstat(r, missionResultBase, currentRoots().Checkout); err != nil {
+		loc := currentRoots()
+		if loc.CheckoutErr != nil {
+			return fmt.Errorf("mission result: %s: --verify: locating the checkout: %w", file, loc.CheckoutErr)
+		}
+		if err := verifyResultAgainstNumstat(r, missionResultBase, loc.Checkout); err != nil {
 			return fmt.Errorf("mission result: %s: %w", file, err)
 		}
 	}

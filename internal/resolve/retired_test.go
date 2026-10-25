@@ -45,19 +45,24 @@ func TestNoFunctionTurnsALocateFailureIntoEmpty(t *testing.T) {
 	require.NoError(t, err)
 	found := map[string]bool{}
 	for _, goos := range []string{"linux", "darwin", "windows"} {
-		pkgs, err := packages.Load(&packages.Config{
-			Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
-			Dir:  root, Tests: false,
-			Env: append(os.Environ(), "GOOS="+goos, "CGO_ENABLED=0"),
-		}, "./internal/...", "./cmd/...", "./plugin/...")
-		require.NoError(t, err)
-		for _, p := range pkgs {
-			for _, e := range p.Errors {
-				t.Fatalf("loading %s for %s: %v", p.PkgPath, goos, e)
-			}
-			for _, f := range p.Syntax {
-				for _, v := range scanLocateFailures(p, f) {
-					found[v] = true
+		for _, goarch := range []string{"amd64", "arm64"} {
+			pkgs, err := packages.Load(&packages.Config{
+				Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
+				Dir:  root, Tests: false,
+				Env: append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0"),
+			}, "./internal/...", "./cmd/...", "./plugin/...")
+			require.NoError(t, err)
+			for _, p := range pkgs {
+				for _, e := range p.Errors {
+					t.Fatalf("loading %s for %s/%s: %v", p.PkgPath, goos, goarch, e)
+				}
+				for _, f := range p.Syntax {
+					for _, v := range scanLocateFailures(p, f) {
+						found[v] = true
+					}
+					for _, v := range scanLocatedUse(p, f) {
+						found[v] = true
+					}
 				}
 			}
 		}
@@ -153,7 +158,7 @@ func scanLocateFailures(p *packages.Package, f *ast.File) []string {
 		ast.Inspect(body, func(n ast.Node) bool {
 			switch v := n.(type) {
 			case *ast.IfStmt:
-				if testsNonNil(info, v.Cond, tracked) && !separatesCases(info, v.Cond) && emptiesWithoutError(info, v.Body, errorType) {
+				if testsNonNil(info, v.Cond, tracked) && !separatesCases(info, v.Cond, tracked) && emptiesWithoutError(info, v.Body, errorType) {
 					report(v)
 				}
 				if testsNil(info, v.Cond, tracked) && v.Else != nil && emptiesWithoutError(info, v.Else, errorType) {
@@ -170,7 +175,7 @@ func scanLocateFailures(p *packages.Package, f *ast.File) []string {
 					}
 					for _, e := range cc.List {
 						switch {
-						case v.Tag == nil && testsNonNil(info, e, tracked) && !separatesCases(info, e):
+						case v.Tag == nil && testsNonNil(info, e, tracked) && !separatesCases(info, e, tracked):
 							if emptiesWithoutError(info, &ast.BlockStmt{List: cc.Body}, errorType) {
 								report(cc)
 							}
@@ -235,7 +240,7 @@ func comparesToNil(info *types.Info, cond ast.Expr, tracked map[types.Object]boo
 		if !ok || b.Op != op {
 			return true
 		}
-		if isTracked(info, b.X, tracked) && isNilIdent(b.Y) {
+		if (isTracked(info, b.X, tracked) && isNilIdent(b.Y)) || (isNilIdent(b.X) && isTracked(info, b.Y, tracked)) {
 			found = true
 		}
 		return true
@@ -243,30 +248,76 @@ func comparesToNil(info *types.Info, cond ast.Expr, tracked map[types.Object]boo
 	return found
 }
 
-// separatesCases reports whether cond refers to resolve.ErrNotInRepo or
-// fs.ErrNotExist (or os.ErrNotExist, the same value): the one distinction a
-// caller may make before answering "". The variables are matched by object, so
-// a local named ErrNotInRepo does not count.
-func separatesCases(info *types.Info, cond ast.Expr) bool {
-	found := false
-	ast.Inspect(cond, func(n ast.Node) bool {
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
+// separatesCases reports whether cond runs its block only for the one error a
+// caller may answer "" for: a conjunction (&&) with a positive
+// errors.Is(err, resolve.ErrNotInRepo) or errors.Is(err, fs.ErrNotExist) (or
+// os.ErrNotExist, the same value), or `err == <sentinel>`. Any || lets other
+// errors in, and a negated test (`!errors.Is(...)`) runs the block for every
+// other error: neither separates. The sentinels are matched by package-level
+// object, so a local named ErrNotInRepo does not count.
+func separatesCases(info *types.Info, cond ast.Expr, tracked map[types.Object]bool) bool {
+	hasOr := false
+	positive := false
+	var walk func(e ast.Expr, negated bool)
+	walk = func(e ast.Expr, negated bool) {
+		switch v := e.(type) {
+		case *ast.ParenExpr:
+			walk(v.X, negated)
+		case *ast.UnaryExpr:
+			if v.Op == token.NOT {
+				walk(v.X, !negated)
+			}
+		case *ast.BinaryExpr:
+			switch v.Op {
+			case token.LOR:
+				hasOr = true
+			case token.LAND:
+				walk(v.X, negated)
+				walk(v.Y, negated)
+			case token.EQL:
+				if !negated && ((isTracked(info, v.X, tracked) && isSentinel(info, v.Y)) || (isTracked(info, v.Y, tracked) && isSentinel(info, v.X))) {
+					positive = true
+				}
+			}
+		case *ast.CallExpr:
+			if !negated && isErrorsIs(info, v) && len(v.Args) == 2 && isTracked(info, v.Args[0], tracked) && isSentinel(info, v.Args[1]) {
+				positive = true
+			}
 		}
-		v, ok := info.Uses[id].(*types.Var)
-		if !ok || v.Pkg() == nil || v.Parent() != v.Pkg().Scope() {
-			return true // not a package-level variable
-		}
-		switch path := v.Pkg().Path(); {
-		case v.Name() == "ErrNotInRepo" && strings.HasSuffix(path, "/internal/resolve"):
-			found = true
-		case v.Name() == "ErrNotExist" && (path == "io/fs" || path == "os"):
-			found = true
-		}
-		return true
-	})
-	return found
+	}
+	walk(cond, false)
+	return positive && !hasOr
+}
+
+// isErrorsIs reports whether call is errors.Is.
+func isErrorsIs(info *types.Info, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	fn, ok := info.Uses[sel.Sel].(*types.Func)
+	return ok && fn.Pkg() != nil && fn.Pkg().Path() == "errors" && fn.Name() == "Is"
+}
+
+// isSentinel reports whether e names resolve.ErrNotInRepo or fs.ErrNotExist
+// (os.ErrNotExist), by package-level variable.
+func isSentinel(info *types.Info, e ast.Expr) bool {
+	var id *ast.Ident
+	switch v := e.(type) {
+	case *ast.Ident:
+		id = v
+	case *ast.SelectorExpr:
+		id = v.Sel
+	default:
+		return false
+	}
+	v, ok := info.Uses[id].(*types.Var)
+	if !ok || v.Pkg() == nil || v.Parent() != v.Pkg().Scope() {
+		return false
+	}
+	path := v.Pkg().Path()
+	return (v.Name() == "ErrNotInRepo" && strings.HasSuffix(path, "/internal/resolve")) ||
+		(v.Name() == "ErrNotExist" && (path == "io/fs" || path == "os"))
 }
 
 // emptiesWithoutError reports whether body returns, or assigns, the empty
@@ -283,6 +334,10 @@ func emptiesWithoutError(info *types.Info, body ast.Node, errorType types.Type) 
 		case *ast.FuncLit:
 			return false
 		case *ast.ReturnStmt:
+			if len(v.Results) == 0 {
+				bad = true // a bare return with named results hands back whatever they hold, a nil error included
+				return true
+			}
 			empty, hasErr := false, false
 			for _, r := range v.Results {
 				if isEmptyString(r) {
@@ -299,7 +354,10 @@ func emptiesWithoutError(info *types.Info, body ast.Node, errorType types.Type) 
 					}
 				}
 			}
-			if empty && !hasErr {
+			// "" without an error, or any value with a literal nil error: the
+			// failure was turned into success.
+			last := v.Results[len(v.Results)-1]
+			if (empty && !hasErr) || (isNilIdent(last) && len(v.Results) > 1) {
 				bad = true
 			}
 		case *ast.AssignStmt:
@@ -312,4 +370,159 @@ func emptiesWithoutError(info *types.Info, body ast.Node, errorType types.Type) 
 		return true
 	})
 	return bad
+}
+
+// matchingErrors are the Located fields and methods that carry the error for
+// each part: using the part without looking at one of them ignores the error.
+var matchingErrors = map[string][]string{
+	"Store":    {"StoreErr", "StoreFailure", "Err"},
+	"Ethos":    {"EthosErr", "StoreFailure", "Err"},
+	"Checkout": {"CheckoutErr", "Err"},
+}
+
+// scanLocatedUse flags a function that uses a located part (.Store, .Ethos,
+// .Checkout of a resolve.Located, or of a struct that embeds one) without
+// looking at the error that goes with it on the same value: not
+// .StoreErr/.StoreFailure()/.Err() for Store, and so on. A part read off a
+// call result (`currentRoots().Checkout`) has no variable to check the error
+// on, so it is flagged. It is a tripwire for the shapes ethos code uses, in
+// every package: it does not follow the value through a field, an argument or a
+// closure called elsewhere.
+func scanLocatedUse(p *packages.Package, f *ast.File) []string {
+	located := locatedType(p)
+	if located == nil {
+		return nil
+	}
+	info := p.TypesInfo
+	var out []string
+	analyze := func(name string, body *ast.BlockStmt) {
+		type use struct {
+			pos  token.Pos
+			part string
+			base types.Object // nil for a call result or other expression
+		}
+		var uses []use
+		mentioned := map[types.Object]map[string]bool{}
+		note := func(base types.Object, field string) {
+			if mentioned[base] == nil {
+				mentioned[base] = map[string]bool{}
+			}
+			mentioned[base][field] = true
+		}
+		ast.Inspect(body, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			s := info.Selections[sel]
+			if s == nil || !isLocatedMember(located, s.Obj()) {
+				return true
+			}
+			base := baseObject(info, sel.X)
+			if _, isPart := matchingErrors[sel.Sel.Name]; isPart && s.Kind() == types.FieldVal {
+				uses = append(uses, use{sel.Pos(), sel.Sel.Name, base})
+				return true
+			}
+			note(base, sel.Sel.Name) // an error field or a method such as Err
+			return true
+		})
+		for _, u := range uses {
+			ok := false
+			if u.base != nil {
+				for _, e := range matchingErrors[u.part] {
+					if mentioned[u.base][e] {
+						ok = true
+					}
+				}
+			}
+			if !ok {
+				out = append(out, p.Fset.Position(u.pos).String()+": "+name+": ."+u.part+" is used without looking at its error")
+			}
+		}
+	}
+	for _, d := range f.Decls {
+		switch v := d.(type) {
+		case *ast.FuncDecl:
+			if v.Body != nil {
+				analyze(v.Name.Name, v.Body)
+			}
+		case *ast.GenDecl:
+			ast.Inspect(v, func(n ast.Node) bool {
+				if fl, ok := n.(*ast.FuncLit); ok {
+					analyze("func literal", fl.Body)
+					return false
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// locatedType finds resolve.Located among p's imports (or p itself).
+func locatedType(p *packages.Package) *types.Struct {
+	var pkg *types.Package
+	if strings.HasSuffix(p.PkgPath, "/internal/resolve") {
+		pkg = p.Types
+	} else {
+		for _, imp := range p.Types.Imports() {
+			if strings.HasSuffix(imp.Path(), "/internal/resolve") {
+				pkg = imp
+			}
+		}
+	}
+	if pkg == nil {
+		return nil
+	}
+	obj := pkg.Scope().Lookup("Located")
+	if obj == nil {
+		return nil
+	}
+	st, _ := obj.Type().Underlying().(*types.Struct)
+	return st
+}
+
+// isLocatedMember reports whether obj is a field of Located (reached directly or
+// through an embedding) or one of its methods.
+func isLocatedMember(located *types.Struct, obj types.Object) bool {
+	switch o := obj.(type) {
+	case *types.Var:
+		for i := 0; i < located.NumFields(); i++ {
+			if located.Field(i) == o {
+				return true
+			}
+		}
+	case *types.Func:
+		sig, _ := o.Type().(*types.Signature)
+		if sig == nil || sig.Recv() == nil {
+			return false
+		}
+		t := sig.Recv().Type()
+		if ptr, ok := t.(*types.Pointer); ok {
+			t = ptr.Elem()
+		}
+		n, ok := types.Unalias(t).(*types.Named)
+		return ok && n.Obj().Name() == "Located" && n.Obj().Pkg() != nil && strings.HasSuffix(n.Obj().Pkg().Path(), "/internal/resolve")
+	}
+	return false
+}
+
+// baseObject is the variable at the left of a selector chain (r in r.Checkout
+// and r.Located.Checkout), or nil when the chain starts at a call or another
+// expression.
+func baseObject(info *types.Info, e ast.Expr) types.Object {
+	for {
+		switch v := e.(type) {
+		case *ast.Ident:
+			return info.ObjectOf(v)
+		case *ast.SelectorExpr:
+			e = v.X
+		case *ast.ParenExpr:
+			e = v.X
+		case *ast.StarExpr:
+			e = v.X
+		default:
+			return nil
+		}
+	}
 }

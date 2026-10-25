@@ -39,10 +39,19 @@ import (
 // not a proof. It does not chase reflect, an interface that hides the call, or
 // a recovered panic.
 //
+// Every exec.Command and exec.CommandContext is recorded with its program: a
+// string literal as `exec.Command("open")`, anything else as its identifier,
+// `exec.Command(editor)`. The allowlist lists those exactly, so a reviewer sees
+// what each file may run, and a literal "git" fails outside the test helper:
+// git goes through gitenv.
+//
 // A non-test package that imports internal/testhelpers also fails: the helper
 // package starts git itself and is for tests.
 
 var guardGOOS = []string{"linux", "darwin", "windows"}
+
+// guardGOARCH: files behind an architecture tag are real code too.
+var guardGOARCH = []string{"amd64", "arm64"}
 
 // allowedProcessUses names every non-test Go file outside this package that
 // starts a program, with exactly what it does there, counted. A file not
@@ -54,15 +63,15 @@ var guardGOOS = []string{"linux", "darwin", "windows"}
 var allowedProcessUses = map[string][]string{
 	// The sandbox runs an untrusted hook, and sh for a hook that returned
 	// ENOEXEC; each gets SIGTERM on the process group, then a grace, then KILL.
-	"internal/doctor/sandbox.go": {"exec.CommandContext", "exec.CommandContext", "(*exec.Cmd).Run", "(*exec.Cmd).Run"},
+	"internal/doctor/sandbox.go": {"exec.CommandContext(hookPath)", `exec.CommandContext("sh")`, "(*exec.Cmd).Run", "(*exec.Cmd).Run"},
 
 	// Not git.
-	"cmd/ethos/ui.go":        {"exec.Command", "exec.Command", "(*exec.Cmd).Start", "(*exec.Cmd).Start"}, // opens the browser
-	"cmd/ethos/attribute.go": {"exec.Command", "(*exec.Cmd).Run"},                                        // $EDITOR
-	"cmd/ethos/uninstall.go": {"exec.Command", "(*exec.Cmd).Run"},                                        // the claude CLI
+	"cmd/ethos/ui.go":        {`exec.Command("open")`, `exec.Command("xdg-open")`, "(*exec.Cmd).Start", "(*exec.Cmd).Start"}, // opens the browser
+	"cmd/ethos/attribute.go": {"exec.Command(editor)", "(*exec.Cmd).Run"},                                                    // $EDITOR
+	"cmd/ethos/uninstall.go": {"exec.Command(claude)", "(*exec.Cmd).Run"},                                                    // the claude CLI
 
 	// A test helper compiled into a non-test file: its callers set the bound.
-	"internal/testhelpers/gitenv.go": {"exec.Command", "exec.Command", "(*exec.Cmd).CombinedOutput"},
+	"internal/testhelpers/gitenv.go": {`exec.Command("git")`, "exec.Command(real)", "(*exec.Cmd).CombinedOutput"},
 }
 
 // rawSyscalls are the raw system-call entry points; the number is the first
@@ -151,6 +160,41 @@ func recvIsCmd(t types.Type) bool {
 	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == "os/exec" && n.Obj().Name() == "Cmd"
 }
 
+// execCommandDescriptor describes a call to exec.Command or exec.CommandContext
+// by its program: `exec.Command("open")` for a string literal,
+// `exec.CommandContext(hookPath)` for an identifier, `exec.Command(<expr>)`
+// for anything else. A function value (`f := exec.Command`) is not a call and
+// is reported by the reference scan as "exec.Command".
+func execCommandDescriptor(info *types.Info, call *ast.CallExpr) string {
+	var id *ast.Ident
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		id = f
+	case *ast.SelectorExpr:
+		id = f.Sel
+	default:
+		return ""
+	}
+	d := startsProgram(info.Uses[id])
+	if d != "exec.Command" && d != "exec.CommandContext" {
+		return ""
+	}
+	i := 0
+	if d == "exec.CommandContext" {
+		i = 1
+	}
+	if len(call.Args) <= i {
+		return d + "(<missing>)"
+	}
+	switch a := call.Args[i].(type) {
+	case *ast.BasicLit:
+		return d + "(" + a.Value + ")"
+	case *ast.Ident:
+		return d + "(" + a.Name + ")"
+	}
+	return d + "(<expr>)"
+}
+
 func isExecCmd(t types.Type) bool { return t != nil && recvIsCmd(t) }
 
 // cgoFiles lists the files of p that import "C", whether they are compiled in
@@ -184,11 +228,12 @@ func processUses(t *testing.T, root string) (uses map[string][]string, helperImp
 	seen := map[string]map[string]bool{} // file -> "descriptor@pos" already counted (a file is loaded once per GOOS)
 	uses = map[string][]string{}
 	importers := map[string]bool{}
-	for _, goos := range guardGOOS {
+	for _, target := range guardTargets() {
+		goos := target[0]
 		cfg := &packages.Config{
 			Mode:  packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 			Dir:   root,
-			Env:   append(append([]string(nil), os.Environ()...), "GOOS="+goos, "CGO_ENABLED=0"),
+			Env:   append(append([]string(nil), os.Environ()...), "GOOS="+target[0], "GOARCH="+target[1], "CGO_ENABLED=0"),
 			Tests: false,
 		}
 		pkgs, err := packages.Load(cfg, "./internal/...", "./cmd/...", "./plugin/...")
@@ -230,7 +275,11 @@ func processUses(t *testing.T, root string) (uses map[string][]string, helperImp
 				ast.Inspect(f, func(n ast.Node) bool {
 					switch v := n.(type) {
 					case *ast.Ident:
-						if d := startsProgram(p.TypesInfo.Uses[v]); d != "" {
+						d := startsProgram(p.TypesInfo.Uses[v])
+						if d == "exec.Command" || d == "exec.CommandContext" {
+							return true // described with its program at the call, below
+						}
+						if d != "" {
 							add(v, d)
 						}
 					case *ast.CompositeLit:
@@ -239,6 +288,9 @@ func processUses(t *testing.T, root string) (uses map[string][]string, helperImp
 						}
 					case *ast.CallExpr:
 						if d := startsViaSyscall(p.TypesInfo, v); d != "" {
+							add(v, d)
+						}
+						if d := execCommandDescriptor(p.TypesInfo, v); d != "" {
 							add(v, d)
 						}
 						if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "new" && len(v.Args) == 1 {
@@ -260,6 +312,17 @@ func processUses(t *testing.T, root string) (uses map[string][]string, helperImp
 		sort.Strings(v)
 	}
 	return uses, helperImporters
+}
+
+// guardTargets is every GOOS x GOARCH the scans load.
+func guardTargets() [][2]string {
+	var out [][2]string
+	for _, os := range guardGOOS {
+		for _, arch := range guardGOARCH {
+			out = append(out, [2]string{os, arch})
+		}
+	}
+	return out
 }
 
 // modulePath is the module path of p, from its own package path.
@@ -299,6 +362,14 @@ func TestNoUnaccountedProcessStarts(t *testing.T) {
 	}
 	for f := range allowedProcessUses {
 		assert.Contains(t, found, f, "%s is allowlisted but starts nothing: remove it from the list", f)
+	}
+	for f, descs := range found {
+		if f == "internal/testhelpers/gitenv.go" {
+			continue
+		}
+		for _, d := range descs {
+			assert.NotContains(t, d, `("git")`, "%s: git goes through gitenv", f)
+		}
 	}
 	assert.Empty(t, importers, "non-test packages must not import internal/testhelpers, which starts git itself")
 }

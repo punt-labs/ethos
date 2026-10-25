@@ -584,7 +584,7 @@ func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 	// Prompt 3: Email (default: git user.email). The created identity must
 	// carry an email so it resolves by git email; runSetup hard-fails if this
 	// stays empty and git user.email is unset.
-	defaultEmail, err := resolve.GitConfig(currentRoots().Checkout, "user.email")
+	defaultEmail, err := resolve.GitConfig(currentRoots().checkoutForGit(), "user.email")
 	if err != nil {
 		fmt.Fprintf(errw, "ethos: setup: no email default: %v\n", err)
 	}

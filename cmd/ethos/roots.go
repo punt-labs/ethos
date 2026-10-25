@@ -137,6 +137,17 @@ func (r *repoRoots) configFatal(err error) {
 	os.Exit(1)
 }
 
+// checkoutForGit is the checkout the git identity is read in. When the checkout
+// could not be located the identity comes from the global git config only, and
+// the cause is said on stderr: a lookup failure is not read as "no repository".
+func (r *repoRoots) checkoutForGit() string {
+	if r.CheckoutErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: the checkout could not be located (%v); reading the global git identity only\n", r.CheckoutErr)
+		return ""
+	}
+	return r.Checkout
+}
+
 func storeRootForStores() string    { return currentRoots().storeRoot() }
 func ethosRootForStores() string    { return currentRoots().ethosRoot() }
 func checkoutRootForStores() string { return currentRoots().checkoutRoot() }
