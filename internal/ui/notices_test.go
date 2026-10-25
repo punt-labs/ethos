@@ -164,3 +164,81 @@ func TestServerGitUsesTheParsedEnvironment(t *testing.T) {
 	require.NoError(t, rerr)
 	assert.Equal(t, "C||"+real+"\n", string(out))
 }
+
+// writeDelegation writes a delegation record (and optionally a prompt).
+func writeDelegation(t *testing.T, store, missionID, id, record string) string {
+	t.Helper()
+	dir := mission.RepoStatePath(store, "missions", missionID, "delegations", id)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "record.yaml"), []byte(record), 0o644))
+	return dir
+}
+
+const goodRecord = "id: d-1\ntier: B\nagent_type: bwk\ncreated_at: 2026-07-24T00:00:00Z\nverdict: pass\n"
+
+// A mission page says which delegation records it could not read, and which
+// audit queries failed.
+func TestMissionPageShowsNoticesForUnreadableDelegationsAndAudit(t *testing.T) {
+	store := t.TempDir()
+	id := "m-2026-07-24-120"
+	require.NoError(t, mission.NewStoreWithRoots(store, t.TempDir()).WithCheckoutRoot(store).Create(uiTestContract(id)))
+	writeDelegation(t, store, id, "d-1", goodRecord)
+	writeDelegation(t, store, id, "d-bad", "id: [unclosed\n")
+	srv := uiServer(t, store, store)
+	notAFile := filepath.Join(t.TempDir(), "sessions")
+	require.NoError(t, os.WriteFile(notAFile, []byte("x"), 0o644))
+	srv.globalSessionsDir = notAFile // the legacy audit query cannot read it
+
+	rec := httptest.NewRecorder()
+	srv.handleMission(rec, httptest.NewRequest(http.MethodGet, "/missions/"+id, nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "ethos-notice")
+	assert.Contains(t, body, "delegation d-bad")
+	assert.Contains(t, body, "audit entries for delegation d-1 could not be queried")
+}
+
+// A delegation page says its prompt could not be read, and that the audit
+// query failed; a prompt that was simply never recorded is not a notice.
+func TestDelegationPageShowsNotices(t *testing.T) {
+	store := t.TempDir()
+	id := "m-2026-07-24-121"
+	dir := writeDelegation(t, store, id, "d-1", goodRecord)
+	srv := uiServer(t, store, store)
+	get := func() string {
+		rec := httptest.NewRecorder()
+		srv.handleDelegation(rec, httptest.NewRequest(http.MethodGet, "/delegations/"+id+"/d-1", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		return rec.Body.String()
+	}
+
+	assert.NotContains(t, get(), "ethos-notice", "no prompt recorded, no audit trouble: nothing to say")
+
+	if os.Geteuid() != 0 {
+		prompt := filepath.Join(dir, "prompt.md")
+		require.NoError(t, os.WriteFile(prompt, []byte("p"), 0o644))
+		require.NoError(t, os.Chmod(prompt, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(prompt, 0o644) })
+		assert.Contains(t, get(), "the prompt of d-1 could not be read")
+		require.NoError(t, os.Chmod(prompt, 0o644))
+	}
+
+	notAFile := filepath.Join(t.TempDir(), "sessions")
+	require.NoError(t, os.WriteFile(notAFile, []byte("x"), 0o644))
+	srv.globalSessionsDir = notAFile
+	assert.Contains(t, get(), "audit entries for delegation d-1 could not be queried")
+}
+
+// The file fallback of the browser says when reading stopped early.
+func TestBrowseFallbackReportsAScanError(t *testing.T) {
+	repo := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "long.txt"), []byte("one\n"+strings.Repeat("x", 2<<20)+"\n"), 0o644))
+	fakeGitBody(t, "echo 'fatal: no such path' >&2\nexit 128\n") // blame fails: the fallback runs
+	srv := uiServer(t, repo, repo)
+	rec := httptest.NewRecorder()
+	testhelpers.CaptureStderr(t, func() {
+		srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/browse/long.txt", nil))
+	})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "reading long.txt stopped after line 1")
+}

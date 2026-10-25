@@ -153,6 +153,7 @@ type missionData struct {
 	EventsWarnings      []string
 	AuditEntries        []hook.AuditView
 	AuditCount          int
+	Notices             []string // what could not be read, shown on the page
 }
 
 // missionStore builds the mission store the UI reads from. The record
@@ -181,7 +182,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	delegations := s.loadDelegations(id)
+	delegations, notices := s.loadDelegations(id)
 	results, resultsErr := s.loadResults(store, id)
 	events, warnings, eventsErr := s.loadEvents(store, id)
 
@@ -197,7 +198,10 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	// Aggregate audit entries across all delegations under this mission.
 	var allAudit []hook.AuditView
 	for _, d := range delegations {
-		entries, _ := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, d.ID)
+		entries, aerr := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, d.ID)
+		if aerr != nil {
+			notices = append(notices, fmt.Sprintf("audit entries for delegation %s could not be queried: %v", d.ID, aerr))
+		}
 		allAudit = append(allAudit, entries...)
 	}
 	sort.Slice(allAudit, func(i, j int) bool { return allAudit[i].Ts < allAudit[j].Ts })
@@ -212,6 +216,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		EventsWarnings: warnings,
 		AuditEntries:   allAudit,
 		AuditCount:     len(allAudit),
+		Notices:        notices,
 	}
 	if resultsErr != nil {
 		data.ResultsError = resultsErr.Error()
@@ -236,13 +241,20 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) loadDelegations(missionID string) []*mission.Delegation {
+// loadDelegations reads the delegation records of a mission, and returns a
+// notice for each thing it could not read: the directory (a mission with no
+// delegations yet is not one) and each record that would not load.
+func (s *Server) loadDelegations(missionID string) ([]*mission.Delegation, []string) {
 	dir := mission.RepoStatePath(s.storeRoot, "missions", missionID, "delegations")
 	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, []string{fmt.Sprintf("could not read the delegations of %s: %v", missionID, err)}
 	}
 	var delegations []*mission.Delegation
+	var notices []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -250,12 +262,13 @@ func (s *Server) loadDelegations(missionID string) []*mission.Delegation {
 		recordPath := filepath.Join(dir, e.Name(), "record.yaml")
 		d, loadErr := mission.LoadDelegation(recordPath)
 		if loadErr != nil {
+			notices = append(notices, fmt.Sprintf("delegation %s of %s is not shown: %v", e.Name(), missionID, loadErr))
 			continue
 		}
 		d.Mission = missionID
 		delegations = append(delegations, d)
 	}
-	return delegations
+	return delegations, notices
 }
 
 // loadResults reads the mission's result log. The error return is
@@ -293,6 +306,7 @@ type delegationData struct {
 	Prompt       string
 	AuditEntries []hook.AuditView
 	AuditCount   int
+	Notices      []string // what could not be read, shown on the page
 }
 
 func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
@@ -316,12 +330,20 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 	}
 	d.Mission = missionID
 
+	var notices []string
 	prompt := ""
-	if data, readErr := os.ReadFile(filepath.Join(dir, "prompt.md")); readErr == nil {
-		prompt = string(data)
+	promptData, readErr := os.ReadFile(filepath.Join(dir, "prompt.md"))
+	switch {
+	case readErr == nil:
+		prompt = string(promptData)
+	case !errors.Is(readErr, fs.ErrNotExist): // no prompt recorded is not a failure
+		notices = append(notices, fmt.Sprintf("the prompt of %s could not be read: %v", delegationID, readErr))
 	}
 
-	auditEntries, _ := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, delegationID)
+	auditEntries, aerr := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, delegationID)
+	if aerr != nil {
+		notices = append(notices, fmt.Sprintf("audit entries for delegation %s could not be queried: %v", delegationID, aerr))
+	}
 	sort.Slice(auditEntries, func(i, j int) bool { return auditEntries[i].Ts < auditEntries[j].Ts })
 
 	data := delegationData{
@@ -331,6 +353,7 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 		Prompt:       prompt,
 		AuditEntries: auditEntries,
 		AuditCount:   len(auditEntries),
+		Notices:      notices,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "delegation.html", data); err != nil {
 		http.Error(w, err.Error(), 500)

@@ -137,6 +137,9 @@ func (s *Server) renderFile(w http.ResponseWriter, relPath, absPath string) {
 			lines = append(lines, blameLine{Num: num, Text: sc.Text()})
 			num++
 		}
+		if err := sc.Err(); err != nil {
+			notices = append(notices, fmt.Sprintf("reading %s stopped after line %d: %v; the rest is not shown", relPath, num-1, err))
+		}
 		blameData = lines
 	}
 
