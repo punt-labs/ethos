@@ -451,6 +451,37 @@ func TestSetup_FileBundle_Invalid(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
 }
 
+// With no bundle installed, setup refuses before any write — even when both
+// identities already exist, so no identity save would catch the missing seed
+// and the repo config would otherwise be written first.
+func TestSetup_NoBundlesRefusesBeforeAnyWrite(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default bundle", true: "named bundle"}[named], func(t *testing.T) {
+			home, repo := setupTestEnvNoSeed(t)
+			setupCmd.Flags().Lookup("bundle").Changed = false
+			ids := filepath.Join(home, ".punt-labs", "ethos", "identities")
+			require.NoError(t, os.MkdirAll(ids, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(ids, "seeded-user.yaml"),
+				[]byte("name: Seeded User\nhandle: seeded-user\nkind: human\nemail: s@example.com\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(ids, "claude.yaml"),
+				[]byte("name: Claude\nhandle: claude\nkind: agent\n"), 0o644))
+
+			cfgPath := filepath.Join(t.TempDir(), "setup.yaml")
+			writeSetupFile(t, cfgPath, "name: Seeded User\nhandle: seeded-user\nemail: s@example.com\n")
+			args := []string{"setup", "--file", cfgPath}
+			if named {
+				args = append(args, "--bundle", "foundation")
+			}
+			_, _, err := execHandler(t, args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "no bundles installed; run `ethos seed` first")
+			assert.NoDirExists(t, filepath.Join(repo, ".punt-labs"))
+			assert.NoFileExists(t, filepath.Join(repo, ".gitignore"))
+			assert.NoDirExists(t, filepath.Join(repo, ".claude"))
+		})
+	}
+}
+
 func TestSetup_Idempotent(t *testing.T) {
 	_, repo := setupTestEnv(t)
 
@@ -668,7 +699,16 @@ func TestSetup_HardValidation_UnseededFails(t *testing.T) {
 	cfgPath := filepath.Join(repo, "setup.yaml")
 	writeSetupFile(t, cfgPath, "name: Unseeded User\nhandle: unseeded-user\n")
 
+	// In a repository the missing bundle is found first, before any write.
 	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no bundles installed; run `ethos seed` first")
+	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
+
+	// Solo needs no bundle: the identity's unresolved personality names the
+	// missing seed.
+	_, _, err = execHandler(t, "setup", "--file", cfgPath, "--solo")
+	setupSolo = false
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `references personality "principal-engineer"`)
 	assert.Contains(t, err.Error(), "not installed")
