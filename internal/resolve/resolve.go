@@ -938,7 +938,7 @@ func gitLocate(git, start string) located {
 			}
 		}
 	}
-	store, serr := storeRoot(root, gitDir, common)
+	store, serr := storeRoot(root, gitDir, common, git)
 	return located{loc: location{root: root, store: store, storeErr: serr}, skipped: skipped}
 }
 
@@ -1096,28 +1096,108 @@ func ancestorAt(start, target string) (string, bool) {
 }
 
 // storeRoot returns the work tree that holds the store. A main tree, a
-// submodule (common dir under .git/modules) and a separate git dir, whose git
-// dir is their common dir, keep it in their own work tree. A linked worktree
-// keeps it in the main work tree, the parent of the shared <main>/.git. A
-// linked worktree whose common dir is anything else (a separate git dir, a
-// submodule's .git/modules/<name>) names no work tree: the store is refused
-// rather than guessed.
-func storeRoot(root, gitDir, common string) (string, error) {
+// submodule and a separate git dir, whose git dir is their common dir, keep it
+// in their own work tree. A linked worktree is decided by its common dir: a
+// bare one has no work tree, so the store is the worktree's own; a non-bare
+// one that is the .git of its parent work tree puts the store in that main
+// checkout. Any other common dir (a separate git dir, a submodule's
+// .git/modules/<name>) names no work tree ethos can trust: the store is
+// refused rather than guessed. git, when not "", reads core.bare; otherwise
+// the hand rules do.
+func storeRoot(root, gitDir, common, git string) (string, error) {
 	if sameDir(gitDir, common) {
 		return root, nil
 	}
 	common = filepath.Clean(common)
+	bare, err := configBare(git, common)
+	if err != nil {
+		return "", fmt.Errorf("%s is a linked worktree of the repository at %s, whose core.bare cannot be read (%v); "+
+			"ethos cannot tell where its store is: set ETHOS_REPO_ROOT", root, common, err)
+	}
+	if bare {
+		return root, nil
+	}
 	main := filepath.Dir(common)
-	if filepath.Base(common) != ".git" {
-		return "", fmt.Errorf("%s is a linked worktree of the repository at %s, which is not the .git of a work tree "+
-			"(a separate git dir or a submodule); ethos cannot tell where its store is: "+
+	if !sameDir(filepath.Join(main, ".git"), common) {
+		return "", fmt.Errorf("%s is a linked worktree of the repository at %s, which is neither bare nor the .git of a work tree "+
+			"(a separate git dir or a submodule's git dir); ethos cannot tell where its store is: "+
 			"run from a work tree that holds the store, or set ETHOS_REPO_ROOT", root, common)
 	}
-	if info, err := os.Stat(main); err != nil || !info.IsDir() {
-		return "", fmt.Errorf("%s is a linked worktree of %s, whose work tree %s does not exist; "+
-			"ethos cannot tell where its store is: set ETHOS_REPO_ROOT", root, common, main)
-	}
 	return main, nil
+}
+
+// configBare reports whether the repository at common sets core.bare. git,
+// when not "", is asked; otherwise handConfigBare reads the file.
+func configBare(git, common string) (bool, error) {
+	if git == "" {
+		return handConfigBare(common)
+	}
+	cfg := filepath.Join(common, "config")
+	cmd := exec.Command(git, "config", "--file", cfg, "--bool", "core.bare")
+	cmd.Env = gitenv.Parsed()
+	out, err := cmd.Output()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return strings.TrimSpace(string(out)) == "true", nil
+	case errors.As(err, &ee) && ee.ExitCode() == 1 && len(ee.Stderr) == 0:
+		return false, nil // unset, or no config file
+	case errors.As(err, &ee) && len(ee.Stderr) > 0:
+		return false, fmt.Errorf("git config --file %s core.bare: %s", cfg, strings.TrimSpace(string(ee.Stderr)))
+	default:
+		return false, fmt.Errorf("git config --file %s core.bare: %w", cfg, err)
+	}
+}
+
+// handConfigBare reads core.bare from common/config as git reads a boolean:
+// the last assignment in a [core] section (no subsection) wins; a key with no
+// value is true; true/yes/on/1 and false/no/off/0 and the empty value (false)
+// are accepted, case-insensitively. An absent file or key is false. include
+// directives are not followed.
+func handConfigBare(common string) (bool, error) {
+	cfg := filepath.Join(common, "config")
+	data, err := os.ReadFile(cfg)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", cfg, err)
+	}
+	bare, inCore := false, false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			end := strings.Index(line, "]")
+			if end < 0 {
+				return false, fmt.Errorf("%s: malformed section header %q", cfg, line)
+			}
+			inCore = strings.EqualFold(strings.TrimSpace(line[1:end]), "core")
+			line = strings.TrimSpace(line[end+1:])
+		}
+		if i := strings.IndexAny(line, "#;"); i >= 0 {
+			line = line[:i]
+		}
+		if !inCore || line == "" {
+			continue
+		}
+		key, val, hasVal := strings.Cut(line, "=")
+		if !strings.EqualFold(strings.TrimSpace(key), "bare") {
+			continue
+		}
+		if !hasVal {
+			bare = true
+			continue
+		}
+		switch strings.ToLower(strings.Trim(strings.TrimSpace(val), `"`)) {
+		case "true", "yes", "on", "1":
+			bare = true
+		case "false", "no", "off", "0", "":
+			bare = false
+		default:
+			return false, fmt.Errorf("%s: core.bare = %q is not a boolean", cfg, strings.TrimSpace(val))
+		}
+	}
+	return bare, nil
 }
 
 // sameDir reports whether a and b name the same directory: by file identity
@@ -1145,7 +1225,7 @@ func handLocate(start string) located {
 		}
 		if g.dir != "" {
 			root, _ := ancestorAt(start, dir)
-			store, serr := storeRoot(root, g.dir, g.common)
+			store, serr := storeRoot(root, g.dir, g.common, "")
 			return located{loc: location{root: root, store: store, storeErr: serr}, skipped: skipped}
 		}
 		if skip != "" {
