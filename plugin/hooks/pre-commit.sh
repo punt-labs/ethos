@@ -76,10 +76,11 @@ if [ "$_revparse_status" -ne 0 ]; then
   exit 1
 fi
 [ -n "$_revparse_err" ] && rm -f "$_revparse_err"
-# The root must be one absolute line naming a directory; anything else (a trace
-# line that got through, a relative path) is not a root to trust.
+# The root must be one absolute line (a / path, or a Windows drive path) naming a
+# directory; anything else (a trace line that got through, a relative path) is
+# not a root to trust.
 case "$REPO_ROOT" in
-/*) ;;
+/*|[A-Za-z]:/*) ;;
 *) _revparse_bad=1 ;;
 esac
 case "$REPO_ROOT" in

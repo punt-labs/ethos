@@ -367,3 +367,24 @@ func TestHooksIgnoreATraceOnStdout(t *testing.T) {
 		})
 	}
 }
+
+// A Windows drive path is an absolute root, as a / path is: the hook gets past
+// the root check and goes on to the marker (here a directory literally named
+// "C:" in the working directory stands for the drive).
+func TestHooksAcceptAWindowsDrivePathAsARoot(t *testing.T) {
+	work := t.TempDir()
+	root := filepath.Join(work, "C:", "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+	bin := fakeGitDir(t, "echo 'C:/repo'\n")
+	marker := filepath.Join(t.TempDir(), "sealed")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755))
+	script, err := filepath.Abs("pre-commit.sh")
+	require.NoError(t, err)
+	cmd := exec.Command("/bin/sh", script)
+	cmd.Dir = work
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + bin + ":/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.FileExists(t, marker, "the root check accepted C:/repo and the seal ran")
+}
