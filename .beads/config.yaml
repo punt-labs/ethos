@@ -7,11 +7,16 @@
 # rotations.
 #
 # Issue prefix lives in .beads/metadata.json (alongside dolt_mode and
-# dolt_database) so it travels with the repo.
+# dolt_database) so it travels with the repo. It is repeated below as
+# issue-prefix because `bd linear sync --pull` names new beads from this
+# YAML key, falling back to the shared database's issue_prefix
+# (punt-labs), not metadata.json.
 #
 # This file is intentionally minimal. Most legacy keys (no-db, no-daemon,
 # no-auto-flush, no-auto-import, sync-branch) were removed in bd 1.0+
 # and reading them would be misleading.
+
+issue-prefix: ethos
 
 directory:
   labels:
