@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +86,7 @@ interpret-trailers) echo "fatal: interpret-trailers exploded" >&2; exit 128;;
 esac
 exit 0
 `)
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	msg := filepath.Join(t.TempDir(), "MSG")
 	require.NoError(t, os.WriteFile(msg, []byte("subject\n"), 0o644))
 
@@ -170,6 +173,7 @@ interpret-trailers) echo "git must not run"; exit 0;;
 esac
 exit 0
 `)
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	// The temp file is made, and its .err sibling cannot be: a directory is there.
 	shimMktemp(t, bin, `f=$(/usr/bin/mktemp "$@") || exit 1
 mkdir "$f.err" || exit 1
@@ -187,4 +191,116 @@ echo "$f"
 	got, err := os.ReadFile(msg)
 	require.NoError(t, err)
 	assert.Contains(t, string(got), "Mission: m-2026-01-01-001", "the trailer landed by plain append")
+}
+
+// realRepoWithHooks is a real repository with both hooks installed, a commit
+// ready to make, and a PATH that holds git and no ethos.
+func realRepoWithHooks(t *testing.T) (repo string, run func(args ...string) (string, error)) {
+	t.Helper()
+	repo = t.TempDir()
+	home := t.TempDir()
+	env := append(testhelpers.GitEnv(),
+		"HOME="+home, "PATH=/usr/bin:/bin", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@x",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@x")
+	run = func(args ...string) (string, error) {
+		c := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-C", repo}, args...)...)
+		c.Env = env
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run("init", "-q", "-b", "main"); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	for _, h := range []string{"pre-commit", "commit-msg"} {
+		body, err := os.ReadFile(h + ".sh")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "hooks", h), body, 0o755))
+	}
+	return repo, run
+}
+
+// A .punt-labs or .punt-labs/ethos that git cannot follow is not "ethos is
+// dormant": a real commit is blocked and says why.
+func TestHooksBlockOnAnUnreadableStorePath(t *testing.T) {
+	cases := map[string]func(t *testing.T, repo string){
+		"dangling .punt-labs": func(t *testing.T, repo string) {
+			require.NoError(t, os.Symlink(filepath.Join(repo, "nowhere"), filepath.Join(repo, ".punt-labs")))
+		},
+		"dangling .punt-labs/ethos": func(t *testing.T, repo string) {
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs"), 0o755))
+			require.NoError(t, os.Symlink(filepath.Join(repo, "nowhere"), filepath.Join(repo, ".punt-labs", "ethos")))
+		},
+		".punt-labs/ethos is a file": func(t *testing.T, repo string) {
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos"), []byte("x"), 0o644))
+		},
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			repo, run := realRepoWithHooks(t)
+			mk(t, repo)
+			require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644))
+			_, err := run("add", "a.txt")
+			require.NoError(t, err)
+			out, err := run("commit", "-m", "x")
+			require.Error(t, err, "the commit is blocked: %s", out)
+			assert.Contains(t, out, ".punt-labs")
+			assert.True(t, strings.Contains(out, "dangling link") || strings.Contains(out, "not a directory"), out)
+		})
+	}
+	t.Run("really absent is dormant", func(t *testing.T) {
+		repo, run := realRepoWithHooks(t)
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644))
+		_, err := run("add", "a.txt")
+		require.NoError(t, err)
+		out, err := run("commit", "-m", "x")
+		require.NoError(t, err, out)
+	})
+}
+
+// Enabled with no ethos binary: git commit is blocked by pre-commit, and a
+// merge (which runs commit-msg alone) by commit-msg, with the same words.
+func TestHooksBlockWhenEnabledAndEthosMissing(t *testing.T) {
+	repo, run := realRepoWithHooks(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0o644))
+	_, err := run("add", "a.txt")
+	require.NoError(t, err)
+	// Commit the base with the hooks out of the way.
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "hooks", "pre-commit"), filepath.Join(repo, ".git", "pre-commit.off")))
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "hooks", "commit-msg"), filepath.Join(repo, ".git", "commit-msg.off")))
+	out, err := run("commit", "-q", "-m", "base")
+	require.NoError(t, err, out)
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "pre-commit.off"), filepath.Join(repo, ".git", "hooks", "pre-commit")))
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "commit-msg.off"), filepath.Join(repo, ".git", "hooks", "commit-msg")))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "b.txt"), []byte("y"), 0o644))
+	_, err = run("add", "b.txt")
+	require.NoError(t, err)
+	out, err = run("commit", "-m", "second")
+	require.Error(t, err, out)
+	assert.Contains(t, out, "ethos is enabled here but not installed; the commit is not sealed")
+
+	// A merge that is not a fast-forward runs commit-msg and not pre-commit.
+	_, err = run("reset", "-q", "--mixed")
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(repo, ".git", "hooks", "pre-commit")))
+	_, _ = run("checkout", "-q", "-b", "side")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "c.txt"), []byte("z"), 0o644))
+	_, _ = run("add", "c.txt")
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "hooks", "commit-msg"), filepath.Join(repo, ".git", "commit-msg.off")))
+	out, err = run("commit", "-q", "-m", "side work")
+	require.NoError(t, err, out)
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "commit-msg.off"), filepath.Join(repo, ".git", "hooks", "commit-msg")))
+	_, _ = run("checkout", "-q", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "d.txt"), []byte("w"), 0o644))
+	_, _ = run("add", "d.txt")
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "hooks", "commit-msg"), filepath.Join(repo, ".git", "commit-msg.off")))
+	out, err = run("commit", "-q", "-m", "main work")
+	require.NoError(t, err, out)
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git", "commit-msg.off"), filepath.Join(repo, ".git", "hooks", "commit-msg")))
+	out, err = run("merge", "--no-ff", "-m", "merge", "side")
+	require.Error(t, err, "the merge is blocked by commit-msg: %s", out)
+	assert.Contains(t, out, "commit-msg: ethos is enabled here but not installed; the commit is not sealed")
 }

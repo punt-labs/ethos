@@ -57,7 +57,46 @@ if [ "$_revparse_status" -ne 0 ]; then
   exit 1
 fi
 [ -n "$_revparse_err" ] && rm -f "$_revparse_err"
+# "Marker absent" means only that every component of the path exists and the
+# marker file does not. A .punt-labs or .punt-labs/ethos that is a dangling
+# link, is not a directory, or cannot be searched is a store ethos cannot read:
+# say so and block, never treat it as dormant.
+_ethos_path="$REPO_ROOT/.punt-labs"
+for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enabled"; do
+  if [ -L "$_component" ] && [ ! -e "$_component" ]; then
+    printf 'ethos: commit-msg: %s is a dangling link; repair or remove it\n' "$_component" >&2
+    exit 1
+  fi
+  [ -e "$_component" ] || break
+  case "$_component" in
+  */enabled) ;;
+  *)
+    if [ ! -d "$_component" ]; then
+      printf 'ethos: commit-msg: %s is not a directory\n' "$_component" >&2
+      exit 1
+    fi
+    if [ ! -r "$_component" ] || [ ! -x "$_component" ]; then
+      printf 'ethos: commit-msg: %s cannot be read\n' "$_component" >&2
+      exit 1
+    fi
+    ;;
+  esac
+done
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
+
+# Resolve the binary: PATH first, then the default install dir — the same two
+# steps pre-commit.sh uses. Enabled here and no binary: the commit would carry
+# no trailers and, if this hook runs alone (`git merge --no-ff` runs commit-msg
+# and not pre-commit), unsealed audit lines. Say so and block.
+ethos_bin=""
+if command -v ethos >/dev/null 2>&1; then
+  ethos_bin="ethos"
+elif [ -x "$HOME/.local/bin/ethos" ]; then
+  ethos_bin="$HOME/.local/bin/ethos"
+else
+  printf 'ethos: commit-msg: ethos is enabled here but not installed; the commit is not sealed\n' >&2
+  exit 1
+fi
 
 [ -z "$1" ] && exit "$_host_status"
 msg_file="$1"
@@ -79,14 +118,6 @@ msg_file="$1"
 # No resolvable session, no ethos on PATH, or no active mission means
 # no trailer. The hook never guesses.
 if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
-  # Resolve the binary: PATH first, then the default install dir —
-  # the same two-step pre-commit.sh uses.
-  ethos_bin=""
-  if command -v ethos >/dev/null 2>&1; then
-    ethos_bin="ethos"
-  elif [ -x "$HOME/.local/bin/ethos" ]; then
-    ethos_bin="$HOME/.local/bin/ethos"
-  fi
   if [ -n "$ethos_bin" ]; then
     # KEY=value lines, at most one of each. Strip whitespace so a CRLF
     # or a trailing space cannot end up inside a trailer value.
