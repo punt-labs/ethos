@@ -188,6 +188,13 @@ func gateStore(r Result, root string, err error) Result {
 		r.Status, r.Detail = "WARN", "not checked: "+what+": "+err.Error()
 		return r
 	}
+	// Worded from the failure: a policy that cannot be honoured is not a store
+	// that was not located.
+	var ce *resolve.ConfigError
+	if errors.As(err, &ce) {
+		r.Detail += " (" + ce.What + ": " + err.Error() + ")"
+		return r
+	}
 	r.Detail += " (global layer only; repo store not located: " + err.Error() + ")"
 	return r
 }

@@ -2352,3 +2352,17 @@ func TestHookPresenceUnreadableStoreIsNotDormant(t *testing.T) {
 	assert.Contains(t, g.Detail, "not checked")
 	assert.NotContains(t, g.Detail, "not in a repo")
 }
+
+// gateStore's note on a FAIL is worded from the failure: under a policy issue the
+// store was located, and the note says the configuration is unusable, not that
+// the store was not located.
+func TestGateStoreNoteFollowsTheFailure(t *testing.T) {
+	policy := &resolve.ConfigError{Err: errors.New("unknown resolution"), What: "the repository's bundle or policy configuration is unusable", Policy: true}
+	g := gateStore(Result{Name: "x", Status: "FAIL", Detail: "boom"}, "", policy)
+	assert.Equal(t, "FAIL", g.Status)
+	assert.Contains(t, g.Detail, "the repository's bundle or policy configuration is unusable: unknown resolution")
+	assert.NotContains(t, g.Detail, "not located")
+
+	g = gateStore(Result{Name: "x", Status: "FAIL", Detail: "boom"}, "", errors.New("git refused"))
+	assert.Contains(t, g.Detail, "repo store not located: git refused")
+}
