@@ -352,3 +352,37 @@ func TestHookInvocationObserved_TermBeforeKill(t *testing.T) {
 	require.Error(t, err, "the timeout is reported")
 	assert.FileExists(t, marker, "the hook received SIGTERM before it was killed")
 }
+
+// A hook that hit its deadline is sent SIGTERM, and what it started gets the
+// grace to finish its cleanup before the group is killed: the leader exiting
+// is not the end of the grace.
+func TestHookInvocationObserved_GroupGetsGraceBeforeKill(t *testing.T) {
+	if !sandboxSupported {
+		t.Skip("no sandbox on this platform")
+	}
+	orig := sandboxTimeout
+	sandboxTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { sandboxTimeout = orig })
+	marker := filepath.Join(t.TempDir(), "cleaned")
+	// The leader exits at once on TERM; a child in its group needs 400ms to
+	// clean up, longer than the leader lives and shorter than the grace.
+	body := "#!/bin/sh\n(trap 'sleep 0.4; echo cleaned > '\"" + marker + "\"'; exit 0' TERM; sleep 30 & wait) &\ntrap 'exit 0' TERM\nsleep 30 &\nwait\n"
+	_, err := hookInvocationObserved([]byte(body), []string{"audit", "seal"}, false)
+	require.Error(t, err, "the timeout is reported")
+	require.Eventually(t, func() bool { _, serr := os.Stat(marker); return serr == nil },
+		2*time.Second, 50*time.Millisecond, "the hook's child finished its cleanup before it was killed")
+}
+
+// A process group the sandbox could not end is reported, not dropped.
+func TestHookInvocationObserved_ReportsAGroupItCouldNotReap(t *testing.T) {
+	if !sandboxSupported {
+		t.Skip("no sandbox on this platform")
+	}
+	orig := reapGroup
+	t.Cleanup(func() { reapGroup = orig })
+	reapGroup = func(*exec.Cmd, time.Duration) error { return errors.New("operation not permitted") }
+	_, err := hookInvocationObserved([]byte("#!/bin/sh\nexit 0\n"), []string{"audit", "seal"}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not end the hook's process group")
+	assert.Contains(t, err.Error(), "operation not permitted")
+}

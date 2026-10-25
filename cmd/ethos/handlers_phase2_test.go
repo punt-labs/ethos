@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -571,4 +573,41 @@ func seedIdentity(t *testing.T, se *cliSubprocessEnv, handle string) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, handle+".yaml"), data, 0o644))
+}
+
+// role create reads both lists from one input: the second list is not lost
+// to what the first read buffered, and a read that fails is an error.
+func TestRoleCreateReadsBothListsFromStdin(t *testing.T) {
+	setupPhase2Env(t)
+	resetPhase2Flags(t)
+	rootCmd.SetIn(strings.NewReader("review code\nwrite tests\n\nread\nwrite\n\n"))
+	t.Cleanup(func() { rootCmd.SetIn(nil) })
+
+	_, _, err := execHandler(t, "role", "create", "stdin-role", "--json")
+	require.NoError(t, err)
+	stdout, _, err := execHandler(t, "role", "show", "stdin-role", "--json")
+	require.NoError(t, err)
+	var r struct {
+		Responsibilities []string `json:"responsibilities"`
+		Permissions      []string `json:"permissions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &r), stdout)
+	assert.Equal(t, []string{"review code", "write tests"}, r.Responsibilities)
+	assert.Equal(t, []string{"read", "write"}, r.Permissions)
+}
+
+func TestReadLinesReportsAScanError(t *testing.T) {
+	sc := bufio.NewScanner(strings.NewReader(strings.Repeat("x", 100000) + "\n"))
+	lines, err := readLines(sc)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, bufio.ErrTooLong)
+	assert.Nil(t, lines)
+
+	sc = bufio.NewScanner(strings.NewReader("a\nb\n\nc\n"))
+	lines, err = readLines(sc)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, lines)
+	lines, err = readLines(sc)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c"}, lines)
 }

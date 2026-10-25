@@ -2,7 +2,10 @@
 
 package doctor
 
-import "os/exec"
+import (
+	"os/exec"
+	"time"
+)
 
 // sandboxSupported is false here: without the process-group primitives
 // below, hookInvocationObserved has no way to bound what a hook's
@@ -43,6 +46,6 @@ var sandboxSupported = false
 // thing actually holding the line if that constraint ever widens.
 func setNewProcessGroup(cmd *exec.Cmd) {}
 
-func reapProcessGroup(cmd *exec.Cmd) error { return nil }
+func reapProcessGroup(cmd *exec.Cmd, grace time.Duration) error { return nil }
 
 func termProcessGroup(cmd *exec.Cmd) error { return nil }

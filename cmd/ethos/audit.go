@@ -187,7 +187,7 @@ func init() {
 // (carried refinement (a)). It reads the roster's Started date first, then a
 // purge tombstone's recorded StartDate; "" lets the seal fall back to the live
 // file's first-line date, then now. Best-effort — a read error yields "".
-func sessionStartDateResolver(repoRoot string) func(string) string {
+func sessionStartDateResolver() func(string) string {
 	ss := sessionStore()
 	// When home cannot resolve, skip the tombstone lookup entirely rather than
 	// let filepath.Join degrade to the relative ".punt-labs/ethos/sessions" —
@@ -296,7 +296,7 @@ func runAuditSeal(out, errOut io.Writer) error {
 		DryRun:    auditSealDryRun,
 		Verbose:   auditSealVerbose,
 		Out:       out,
-		StartDate: sessionStartDateResolver(repoRoot),
+		StartDate: sessionStartDateResolver(),
 	}
 	res, err := hook.SealRepo(repoRoot, time.Now().UTC(), opts)
 	if err != nil {

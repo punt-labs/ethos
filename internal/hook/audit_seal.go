@@ -259,13 +259,13 @@ func rollbackSeal(wrote []string, snap *indexSnapshot, cause error, phase string
 			left = append(left, fmt.Sprintf("removing chunk %s: %v", p, err))
 		}
 	}
-	return sealStageFailure("", phase, cause, left)
+	return sealStageFailure(phase, cause, left)
 }
 
 // sealStageFailure is the error for a seal that failed after it began
 // writing: cause, with the phase named. left is what the rollback could not
 // undo; with none, the tree is unchanged and the message says so.
-func sealStageFailure(repoRoot, phase string, cause error, left []string) error {
+func sealStageFailure(phase string, cause error, left []string) error {
 	if len(left) == 0 {
 		return fmt.Errorf("%w (%s); nothing was sealed or staged, the commit is blocked and the tree is unchanged", cause, phase)
 	}

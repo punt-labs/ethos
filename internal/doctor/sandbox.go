@@ -280,7 +280,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	setNewProcessGroup(cmd)
 	// On the deadline the group gets SIGTERM, so the hook can clean up; after
 	// the one-second grace Go kills the direct child, and the unconditional
-	// reap below SIGKILLs the rest of the group.
+	// reap below gives the group the grace again, then SIGKILLs what is left.
 	cmd.Cancel = func() error { return termProcessGroup(cmd) }
 	cmd.WaitDelay = sandboxGrace
 	// The hook's own exit status is not doctor's concern when the stub log
@@ -292,6 +292,18 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// "never got the chance to call ethos" apart from "ran fine and
 	// genuinely never calls ethos" (H1).
 	runErr := cmd.Run()
+	var reapErrs []error
+	reap := func(c *exec.Cmd) {
+		// A group that hit the deadline was sent SIGTERM: it gets the grace to
+		// finish its cleanup before SIGKILL. One that did not is killed at once.
+		var grace time.Duration
+		if ctx.Err() != nil {
+			grace = sandboxGrace
+		}
+		if err := reapGroup(c, grace); err != nil {
+			reapErrs = append(reapErrs, err)
+		}
+	}
 	// A hook may background a child (`cmd &`, nohup) that outlives the
 	// hook's OWN quick, normal exit — cmd.Cancel above only fires on a
 	// context timeout, which never happens in that case, since Run()
@@ -299,7 +311,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// whole process group unconditionally here too, regardless of how Run
 	// returned, so no orphaned grandchild survives into the sandbox's
 	// temp-dir cleanup below — a directory that is about to not exist (S4).
-	_ = reapProcessGroup(cmd)
+	reap(cmd)
 
 	// libc's execvp (which git uses to spawn hooks) falls back to the shell
 	// when a direct execve fails with ENOEXEC — the kernel's answer for a
@@ -316,7 +328,13 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		shCmd.Cancel = func() error { return termProcessGroup(shCmd) }
 		shCmd.WaitDelay = sandboxGrace
 		runErr = shCmd.Run()
-		_ = reapProcessGroup(shCmd)
+		reap(shCmd)
+	}
+
+	// A group that could not be ended may leave a process running into the
+	// temp-dir cleanup: say so, whatever the probe saw.
+	if len(reapErrs) > 0 {
+		return false, fmt.Errorf("the sandbox could not end the hook's process group, so a process it started may still be running: %w", errors.Join(reapErrs...))
 	}
 
 	data, err := os.ReadFile(logPath)
@@ -328,6 +346,9 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	}
 	return matchesInvocation(string(data), nonce, argv), nil
 }
+
+// reapGroup ends a sandboxed command's process group; a test replaces it.
+var reapGroup = reapProcessGroup
 
 // invocationRecordSep terminates one logged invocation record in the stub's
 // log file. \x1e (ASCII record separator) is vanishingly unlikely to appear

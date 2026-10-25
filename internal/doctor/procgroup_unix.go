@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 // sandboxSupported is true here: the process-group primitives below are
@@ -49,8 +50,8 @@ func setNewProcessGroup(cmd *exec.Cmd) {
 // termProcessGroup sends SIGTERM to cmd's process group: the Cancel a
 // sandboxed command gets on its deadline, so the hook can clean up before
 // cmd.WaitDelay (a short grace) expires and Go kills the direct child.
-// reapProcessGroup, called unconditionally after Run, then SIGKILLs whatever
-// is left in the group.
+// reapProcessGroup, called unconditionally after Run, gives the group the
+// rest of the grace to finish and then SIGKILLs whatever is left.
 func termProcessGroup(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
@@ -61,13 +62,17 @@ func termProcessGroup(cmd *exec.Cmd) error {
 	return nil
 }
 
-// reapProcessGroup SIGKILLs cmd's process group (the negative-PID form of
-// kill(2)) rather than only cmd's direct PID — see setNewProcessGroup's
-// doc comment for exactly what that does and does not reach. Called both
-// as cmd's Cancel (on a sandboxTimeout context deadline) and
+// reapProcessGroup ends cmd's process group (the negative-PID form of
+// kill(2)) rather than only cmd's direct PID — see setNewProcessGroup's doc
+// comment for exactly what that does and does not reach. Called
 // unconditionally right after cmd.Run() returns, regardless of how it
 // returned — a backgrounded grandchild is orphaned by its parent's normal
 // exit, not by a timeout, so relying on Cancel alone misses it entirely.
+//
+// grace is how long a group that was sent SIGTERM (a hook that hit its
+// deadline) has to finish its cleanup before SIGKILL: the group is polled
+// until it is empty or the grace is spent. A group that was never TERMed
+// passes 0 and is killed at once.
 //
 // ESRCH ("no such process") is the expected result, not a failure: this is
 // called unconditionally after every Run(), and the common case is a group
@@ -75,11 +80,17 @@ func termProcessGroup(cmd *exec.Cmd) error {
 // #515). Surfacing that as a sandbox error would read as a confusing
 // spurious failure on a perfectly healthy hook. Every other errno (EPERM, a
 // genuinely wedged process) is still returned.
-func reapProcessGroup(cmd *exec.Cmd) error {
+func reapProcessGroup(cmd *exec.Cmd, grace time.Duration) error {
 	if cmd.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+	pgid := cmd.Process.Pid
+	for deadline := time.Now().Add(grace); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if err := syscall.Kill(-pgid, 0); errors.Is(err, syscall.ESRCH) {
+			return nil // nothing left in the group
+		}
+	}
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
 	return nil

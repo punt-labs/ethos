@@ -20,7 +20,7 @@ func TestReapProcessGroup_ESRCH(t *testing.T) {
 	setNewProcessGroup(cmd)
 	require.NoError(t, cmd.Run())
 
-	err := reapProcessGroup(cmd)
+	err := reapProcessGroup(cmd, 0)
 	assert.NoError(t, err, "ESRCH (nothing left to reap) must be swallowed, not surfaced as a sandbox error")
 }
 
@@ -29,5 +29,5 @@ func TestReapProcessGroup_ESRCH(t *testing.T) {
 // dereference.
 func TestReapProcessGroup_NilProcess(t *testing.T) {
 	cmd := exec.Command("true")
-	assert.NoError(t, reapProcessGroup(cmd))
+	assert.NoError(t, reapProcessGroup(cmd, 0))
 }

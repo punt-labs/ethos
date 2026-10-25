@@ -53,10 +53,10 @@ func TestSealRestoresTheIndexWhenAddFailsAfterStagingSome(t *testing.T) {
 // restore itself fails, it says what is left.
 func TestSealErrorDoesNotClaimUnchangedWhenRollbackFails(t *testing.T) {
 	cause := assert.AnError
-	err := sealStageFailure("/r", "staging chunks (git add)", cause, []string{"restoring the index: boom"})
+	err := sealStageFailure("staging chunks (git add)", cause, []string{"restoring the index: boom"})
 	assert.NotContains(t, err.Error(), "the tree is unchanged")
 	assert.Contains(t, err.Error(), "restoring the index: boom")
-	ok := sealStageFailure("/r", "staging chunks (git add)", cause, nil)
+	ok := sealStageFailure("staging chunks (git add)", cause, nil)
 	assert.Contains(t, ok.Error(), "the commit is blocked and the tree is unchanged")
 }
 

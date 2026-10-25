@@ -125,7 +125,7 @@ func TestIndexRestoreRemovesTheIndexGitMade(t *testing.T) {
 // A failure names its phase whether or not the rollback finished.
 func TestSealStageFailureAlwaysNamesThePhase(t *testing.T) {
 	for _, left := range [][]string{nil, {"restoring the index: boom"}} {
-		err := sealStageFailure("/r", "staging chunks (git add)", assert.AnError, left)
+		err := sealStageFailure("staging chunks (git add)", assert.AnError, left)
 		assert.Contains(t, err.Error(), "staging chunks (git add)")
 	}
 }
