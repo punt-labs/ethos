@@ -197,6 +197,17 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 
 	out := cmd.OutOrStdout()
 
+	// The chosen bundle is checked against the resolution policy before anything
+	// is written: under `resolution: repo-only` a global bundle does not travel
+	// with the checkout and is refused, with the reason. (An unreadable or
+	// unknown policy cannot be checked; that is the repair path below.)
+	mode, modeErr := resolve.ResolveResolution(repoRoot)
+	if modeErr == nil && mode == resolve.ResolutionRepoOnly {
+		if err := bundle.VerifyRepoOnly(loc.Ethos, match.Path, match); err != nil {
+			return fmt.Errorf("team activate: %w; nothing was written", err)
+		}
+	}
+
 	// A bundle or policy that cannot be honoured is exactly what activate may be
 	// run to repair. Write the two config keys and nothing else: no identity
 	// lookup, no CEO/COO resolution (both would consult stores the broken
@@ -208,9 +219,17 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		if err := setConfigKey(repoRoot, "active_bundle", name); err != nil {
 			return fmt.Errorf("writing config: %w", err)
 		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team activate: the repository's configuration was unusable (%v); "+
-			"%q is written as the active bundle and the CEO/COO leadership roles were not assigned. "+
-			"Once the configuration is valid, run `ethos team activate %s` again to assign them.\n", issue, name, name)
+		if modeErr != nil {
+			// The resolution: value itself is the failure; activate cannot repair it.
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team activate: the resolution: value in .punt-labs/ethos.yaml is not valid (%v) "+
+				"and must be fixed there: activate does not repair it. %q is written as the active bundle, but the policy "+
+				"it is checked against is unknown and the CEO/COO leadership roles were not assigned; "+
+				"after fixing the value, run `ethos team activate %s` again.\n", modeErr, name, name)
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team activate: the repository's configuration was unusable (%v); "+
+				"%q is written as the active bundle and the CEO/COO leadership roles were not assigned. "+
+				"Once the configuration is valid, run `ethos team activate %s` again to assign them.\n", issue, name, name)
+		}
 		if jsonOutput {
 			return writeJSON(out, map[string]string{"name": name, "status": "activated-leadership-skipped"})
 		}

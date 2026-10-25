@@ -398,3 +398,25 @@ func TestTeamActivate_RepairsAnUnusableConfig(t *testing.T) {
 	assert.Contains(t, body, "active_bundle: gstack")
 	assert.NotContains(t, body, "missingbundle")
 }
+
+// Under `resolution: repo-only` a global bundle is refused before anything is
+// written; an unknown resolution value is not "repaired" by activate, and the
+// message says the value must be fixed in ethos.yaml.
+func TestTeamActivate_ChecksThePolicyBeforeWriting(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	mkBundleDir(t, filepath.Join(env.globalRoot, "bundles"), "gstack", true)
+
+	writeRepoConfigFile(t, env.repo, "agent: claude\nresolution: repo-only\n")
+	before := readRepoConfigFile(t, env.repo)
+	_, _, err := execHandler(t, "team", "activate", "gstack")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "global bundle")
+	assert.Contains(t, err.Error(), "nothing was written")
+	assert.Equal(t, before, readRepoConfigFile(t, env.repo), "the config is untouched")
+
+	writeRepoConfigFile(t, env.repo, "agent: claude\nresolution: repo_only\n")
+	_, stderr, err := execHandler(t, "team", "activate", "gstack")
+	require.NoError(t, err, stderr)
+	assert.Contains(t, stderr, "must be fixed there")
+	assert.NotContains(t, stderr, "once the configuration is valid", "it is not presented as a repair")
+}
