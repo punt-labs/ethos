@@ -99,15 +99,13 @@ func Run(s Spec) ([]byte, error) {
 	cmd.Dir = s.Dir
 	cmd.Env = stripTrace(s.Env)
 	cmd.Stdin = s.Stdin
-	// On the deadline git gets SIGTERM, so it can remove its index.lock; after
-	// the WaitDelay grace Go kills it. A child holding stdout does not stall
-	// the kill either.
-	cmd.Cancel = func() error {
-		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-			return cmd.Process.Kill() // no SIGTERM here (Windows)
-		}
-		return nil
-	}
+	// On the deadline git and its process group get SIGTERM, so git can remove
+	// its index.lock; after the WaitDelay grace Go kills git, and killGroup
+	// what is left of the group (a filter that ignored SIGTERM). A child
+	// holding stdout does not stall the kill either. On Windows there are no
+	// groups and no SIGTERM: the kill is immediate, and only git dies.
+	inOwnGroup(cmd)
+	cmd.Cancel = func() error { return terminate(cmd) }
 	cmd.WaitDelay = time.Second
 	var out []byte
 	var err error
@@ -119,6 +117,7 @@ func Run(s Spec) ([]byte, error) {
 		err = cmd.Run()
 	}
 	if ctx.Err() == context.DeadlineExceeded {
+		killGroup(cmd)
 		return nil, timeoutError(s.Git, s.Args, s.Dir, limit)
 	}
 	return out, err

@@ -287,24 +287,32 @@ func WriteChunkAtomic(dir, tempName, chunkName string, lines [][]byte) error {
 	for _, line := range lines {
 		if _, err := f.Write(append(line, '\n')); err != nil {
 			f.Close()
-			_ = os.Remove(tempPath)
-			return fmt.Errorf("writing temp chunk %s: %w", tempPath, err)
+			return discardTemp(tempPath, fmt.Errorf("writing temp chunk %s: %w", tempPath, err))
 		}
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("syncing temp chunk %s: %w", tempPath, err)
+		return discardTemp(tempPath, fmt.Errorf("syncing temp chunk %s: %w", tempPath, err))
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("closing temp chunk %s: %w", tempPath, err)
+		return discardTemp(tempPath, fmt.Errorf("closing temp chunk %s: %w", tempPath, err))
 	}
 	if err := os.Rename(tempPath, finalPath); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("renaming temp chunk %s -> %s: %w", tempPath, finalPath, err)
+		return discardTemp(tempPath, fmt.Errorf("renaming temp chunk %s -> %s: %w", tempPath, finalPath, err))
 	}
 	return nil
+}
+
+// removeFile removes a temp chunk; a test replaces it.
+var removeFile = os.Remove
+
+// discardTemp removes a temp chunk after cause, and returns cause, saying so
+// when the removal failed too: the leftover is then named, not hidden.
+func discardTemp(path string, cause error) error {
+	if err := removeFile(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w; removing the temp chunk %s also failed: %v", cause, path, err)
+	}
+	return cause
 }
 
 // staleTempAge bounds how long a foreign session's chunk temp may linger

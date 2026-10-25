@@ -1,8 +1,10 @@
 package audit
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,5 +101,35 @@ func TestSweepStaleTempsLegacyName(t *testing.T) {
 	}
 	if exists(dir, foreign) {
 		t.Error("a foreign session's stale legacy temp must be swept")
+	}
+}
+
+// A failed write whose temp chunk cannot be removed says so: the leftover is
+// named, not hidden.
+func TestWriteChunkAtomicReportsAFailedTempRemoval(t *testing.T) {
+	dir := t.TempDir()
+	orig := removeFile
+	t.Cleanup(func() { removeFile = orig })
+	removeFile = func(string) error { return errors.New("read-only file system") }
+
+	// The rename fails: its target directory does not exist.
+	chunk := filepath.Join("missing", "c.jsonl")
+	err := WriteChunkAtomic(dir, "t.tmp", chunk, [][]byte{[]byte("x")})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"renaming temp chunk", "removing the temp chunk " + filepath.Join(dir, "t.tmp") + " also failed", "read-only file system"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+
+	removeFile = orig
+	err = WriteChunkAtomic(dir, "t.tmp", chunk, [][]byte{[]byte("x")})
+	if err == nil || strings.Contains(err.Error(), "also failed") {
+		t.Errorf("a removable temp: err = %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "t.tmp")); serr == nil {
+		t.Error("the temp chunk was not removed")
 	}
 }

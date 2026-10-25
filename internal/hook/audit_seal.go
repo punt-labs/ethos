@@ -212,7 +212,10 @@ func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResul
 	if err != nil {
 		return rollbackSeal(wrote, nil, fmt.Errorf("snapshotting the index: %w", err), "snapshotting the index")
 	}
-	if err := audit.GitAdd(repoRoot, toAdd...); err != nil {
+	addStart := time.Now()
+	addErr := audit.GitAdd(repoRoot, toAdd...)
+	snap.addFinished(addStart)
+	if err := addErr; err != nil {
 		return rollbackSeal(wrote, snap, SealGitError(repoRoot, "staging chunks (git add)", err, false), "staging chunks (git add)")
 	}
 	snap.discard()
@@ -237,50 +240,6 @@ func gitIndexPath(repoRoot string) (string, error) {
 		p = filepath.Join(repoRoot, p)
 	}
 	return p, nil
-}
-
-// indexSnapshot is a copy of the index taken before `git add`, in a sibling
-// file (same directory, so a restore is a rename).
-type indexSnapshot struct {
-	path, snap string
-	existed    bool // false: there was no index, and restoring removes the one git made
-}
-
-// snapshotIndex copies the index at path to path+".ethos-tmp". A missing index
-// is recorded, not an error: a repository with no commits has none.
-func snapshotIndex(path string) (*indexSnapshot, error) {
-	s := &indexSnapshot{path: path, snap: path + ".ethos-tmp"}
-	data, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return s, nil
-	case err != nil:
-		return nil, err
-	}
-	s.existed = true
-	if err := os.WriteFile(s.snap, data, 0o600); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-// restore puts the snapshot back over the index (git has exited), or removes
-// the index when there was none.
-func (s *indexSnapshot) restore() error {
-	if !s.existed {
-		if err := os.Remove(s.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		return nil
-	}
-	return os.Rename(s.snap, s.path)
-}
-
-// discard removes the snapshot after a successful add.
-func (s *indexSnapshot) discard() {
-	if s.existed {
-		_ = os.Remove(s.snap)
-	}
 }
 
 // rollbackSeal undoes a failed seal: it restores the index from snap (nil
@@ -308,9 +267,9 @@ func rollbackSeal(wrote []string, snap *indexSnapshot, cause error, phase string
 // undo; with none, the tree is unchanged and the message says so.
 func sealStageFailure(repoRoot, phase string, cause error, left []string) error {
 	if len(left) == 0 {
-		return fmt.Errorf("%w; nothing was sealed or staged, the commit is blocked and the tree is unchanged", cause)
+		return fmt.Errorf("%w (%s); nothing was sealed or staged, the commit is blocked and the tree is unchanged", cause, phase)
 	}
-	return fmt.Errorf("%w; the commit is blocked, but the rollback of %s did not finish: %s; "+
+	return fmt.Errorf("%w (%s); the commit is blocked, but the rollback did not finish: %s; "+
 		"the next seal stages the chunks", cause, phase, strings.Join(left, "; "))
 }
 
