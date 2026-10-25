@@ -12788,9 +12788,14 @@ stays class 3. Every temporary file or staging directory ethos creates in
 the tree carries one marker, `.ethos-tmp`, in its name, wherever it is
 created (a symlinked `CLAUDE.md`'s temporary file sits beside the link
 target), and two class-4 entries match that marker in any directory. A
-source scan fails when in-tree code creates a temporary file whose name
-does not come from a layout helper; writes under the system temporary
-directory are outside the repository and out of scope. An `ethos doctor`
+source scan fails when a temporary-file call (`os.CreateTemp`,
+`os.MkdirTemp`, `ioutil.TempFile`, `ioutil.TempDir`) takes a pattern
+not built by a layout helper, or when a string literal looks like a
+staging name (`.tmp`, `tmp-`); a staging name built another way (for
+example `dest + ".new"`) is not caught by the scan and is reported by
+`ethos doctor` only if it is left under `.punt-labs/ethos/`. Writes
+under the system temporary directory are outside the repository and
+out of scope. An `ethos doctor`
 check reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
 of the working tree it runs in that no entry matches. It reports, without
 scanning past it, any symlink on the path from the repository root to

@@ -193,10 +193,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Every temporary file and staging directory ethos creates inside a
-  repository now has `.ethos-tmp` in its name** (DES-079). Temporary
-  files left by a crash of an earlier version keep their old `.tmp`
-  names; `ethos doctor` lists them as unrecognized, and they can be
-  deleted.
+  repository now has `.ethos-tmp` in its name** (DES-079). A crash of an
+  earlier version can have left a temporary file under its old name:
+  `*.tmp`, `*.jsonl.tmp`, `.<id>.migrate-*/` under
+  `.punt-labs/ethos/missions/`, `.CLAUDE.md.tmp*` or `.CLAUDE.md.*`,
+  `.ETHOS-SETUP.md.*`, `.gitignore.*`, or `.pre-commit.*` and
+  `.commit-msg.*` in the hooks directory. Any of these can be deleted.
+  `ethos doctor` lists the ones under `.punt-labs/ethos/` and
+  `.punt-labs/local/ethos/` as unrecognized; it does not see the others.
+  The audit sweep still recognizes and removes old `*.jsonl.tmp` chunks.
 - **`ethos mission export` without `--dir` writes to
   `.punt-labs/ethos/missions/` under the repository root**, not under the
   current directory. It fails outside a repository.
