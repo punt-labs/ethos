@@ -470,7 +470,8 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(s.Args, " "), err, stderr)
 }
 
-// DanglingDotGit reports a .git that is a symlink to nothing (or a loop) in dir
+// DanglingDotGit reports a .git that is a symlink git cannot follow (to nothing,
+// a loop, through a non-directory, or without permission) in dir
 // or in any directory git would examine above it: Walk's directories, nearest
 // first, up to the GIT_CEILING_DIRECTORIES or filesystem boundary, as the hand
 // rules walk. git skips such a link and answers for whatever repository
@@ -494,8 +495,18 @@ func DanglingDotGit(dir string) error {
 			continue
 		}
 		if li.Mode()&os.ModeSymlink != 0 {
-			if _, err := os.Stat(dot); errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
-				return fmt.Errorf("%s is a symlink to nothing: git would skip it and answer for an enclosing repository, or none; remove or repair it", dot)
+			// A link git cannot follow, for whatever reason (nothing there, a
+			// loop, a parent that is not a directory, no permission), is skipped
+			// by git; ethos refuses it.
+			if _, err := os.Stat(dot); err != nil {
+				why := "a symlink to nothing"
+				switch {
+				case errors.Is(err, syscall.ELOOP):
+					why = "a symlink loop"
+				case !errors.Is(err, fs.ErrNotExist):
+					why = fmt.Sprintf("a symlink that cannot be followed (%v)", err)
+				}
+				return fmt.Errorf("%s is %s: git would skip it and answer for an enclosing repository, or none; remove or repair it", dot, why)
 			}
 		}
 		if info, err := os.Stat(dot); err == nil {

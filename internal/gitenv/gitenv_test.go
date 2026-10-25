@@ -329,3 +329,35 @@ func TestDanglingDotGitInAnAncestor(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(inner, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
 	assert.NoError(t, DanglingDotGit(sub))
 }
+
+// A .git symlink git cannot follow is refused whatever the reason, and a loop
+// is named as one.
+func TestDanglingDotGitReasons(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", base)
+	cases := map[string]struct {
+		mk   func(dir string) error
+		want string
+	}{
+		"nothing there": {func(d string) error { return os.Symlink(filepath.Join(d, "absent"), filepath.Join(d, ".git")) }, "a symlink to nothing"},
+		"a loop":        {func(d string) error { return os.Symlink(filepath.Join(d, ".git"), filepath.Join(d, ".git")) }, "a symlink loop"},
+		"through a file": {func(d string) error {
+			if err := os.WriteFile(filepath.Join(d, "f"), nil, 0o644); err != nil {
+				return err
+			}
+			return os.Symlink(filepath.Join(d, "f", "x"), filepath.Join(d, ".git"))
+		}, "cannot be followed"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := filepath.Join(base, strings.ReplaceAll(name, " ", "-"))
+			require.NoError(t, os.Mkdir(d, 0o755))
+			if err := c.mk(d); err != nil {
+				t.Skipf("cannot build: %v", err)
+			}
+			err := DanglingDotGit(d)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), c.want)
+		})
+	}
+}
