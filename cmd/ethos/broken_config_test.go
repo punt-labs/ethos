@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -609,4 +611,49 @@ func TestUnreadableDotGitIsNotOutsideARepository(t *testing.T) {
 	assert.NotContains(t, string(out), "Global Only")
 	assert.Contains(t, string(out), dot)
 	assert.Contains(t, string(out), "cannot be read")
+}
+
+// Every store command refuses under an unusable bundle configuration, not only
+// the ones a test happened to name: walk the command tree, run each runnable
+// command of the store-refusing class (but the ones that repair the
+// configuration) with dummy arguments, and require exit 1 naming the cause.
+func TestEveryStoreCommandRefusesUnderAConfigIssue(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	cfg := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
+	require.NoError(t, os.RemoveAll(cfg))
+	require.NoError(t, os.WriteFile(cfg, []byte("active_bundle: nosuchbundle\n"), 0o644))
+
+	rootCmd.InitDefaultHelpCmd()
+	var checked []string
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+		path := c.CommandPath()
+		if storeUses[path] != storeRefuses || repairsConfig[path] || !c.Runnable() || slices.Contains(cobraCommands, path) {
+			return
+		}
+		var args []string
+		for i := 0; i < 6 && c.Args != nil && c.Args(c, args) != nil; i++ {
+			args = append(args, "x")
+		}
+		argv := append(strings.Fields(strings.TrimPrefix(path, rootCmd.Name()+" ")), args...)
+		t.Run(path, func(t *testing.T) {
+			cmd := exec.Command(ethosBinary, argv...)
+			cmd.Dir = se.repo
+			cmd.Env = withForcedNotUnderClaudeCode(se.env)
+			out, err := cmd.CombinedOutput()
+			var ee *exec.ExitError
+			require.ErrorAs(t, err, &ee, "%v: %s", argv, out)
+			assert.Equal(t, 1, ee.ExitCode(), "%v: %s", argv, out)
+			assert.Contains(t, string(out), "bundle or policy configuration is unusable", "%v", argv)
+		})
+		checked = append(checked, path)
+	}
+	walk(rootCmd)
+	assert.Greater(t, len(checked), 30, "the walk found the store commands: %v", checked)
 }
