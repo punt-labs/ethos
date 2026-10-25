@@ -392,6 +392,12 @@ func TestBundleErrorIsToldEverywhere(t *testing.T) {
 	require.ErrorAs(t, err, &ee, string(out))
 	assert.Contains(t, string(out), "Repository configuration")
 	assert.Contains(t, string(out), "no-such-bundle")
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "Human identity") || strings.Contains(line, "Default agent") {
+			assert.Contains(t, line, "WARN", "an identity row under a policy issue did not check the repository: %s", line)
+			assert.Contains(t, line, "not checked")
+		}
+	}
 
 	// serve: a note on reads, writes refused; MCP whoami errors.
 	t.Setenv("HOME", se.home)

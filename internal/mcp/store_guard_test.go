@@ -260,3 +260,31 @@ func TestRefusalWordingFollowsTheKindOfFailure(t *testing.T) {
 	write := callRegistered(t, srv, "talent", "create")
 	assert.Contains(t, resultText(t, write), "the repository configuration could not be read")
 }
+
+// adr create refuses while the store or its configuration cannot be used, as the
+// CLI's does; the ADR reads stay unguarded.
+func TestADRCreateRefusesWhenStoreUnlocatable(t *testing.T) {
+	for name, storeErr := range map[string]error{
+		"store":  errNoStore,
+		"policy": &resolve.ConfigError{Err: errors.New("unknown resolution"), What: "the repository's bundle or policy configuration is unusable", Policy: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := fullServer(t, WithStoreError(storeErr))
+			st := srv.GetTool("adr")
+			require.NotNil(t, st)
+			call := func(method string, args map[string]any) *mcplib.CallToolResult {
+				args["method"] = method
+				res, err := st.Handler(context.Background(), callTool(args))
+				require.NoError(t, err)
+				return res
+			}
+			create := call("create", map[string]any{"title": "t", "decision": "d", "context": "c"})
+			require.True(t, create.IsError)
+			assert.Contains(t, resultText(t, create), "refusing")
+			assert.Contains(t, resultText(t, create), storeErr.Error())
+
+			list := call("list", map[string]any{})
+			assert.False(t, list.IsError, "reads stay unguarded: %s", resultText(t, list))
+		})
+	}
+}

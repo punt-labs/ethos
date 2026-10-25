@@ -66,6 +66,13 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 		}
 		if issue := bundle.ConfigIssue(loc.Store, loc.Ethos, global); issue != nil {
 			what, _, _ := resolve.Describe(issue)
+			// The identity rows answered from layers the broken configuration
+			// governs: they did not check the repository.
+			for i, r := range results {
+				if r.Name == "Human identity" || r.Name == "Default agent" {
+					results[i] = gateStore(r, "", issue)
+				}
+			}
 			results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
 		}
 	}
