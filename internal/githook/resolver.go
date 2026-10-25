@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // Lookup is the answer to "where does git run this repo's hooks".
@@ -198,39 +199,17 @@ func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
 	}
 }
 
-// manualGitDir resolves repoRoot's git directory without git: ".git" itself, or
-// the target of its "gitdir:" line. The result is not checked to exist.
-func manualGitDir(repoRoot string) string {
-	dot := filepath.Join(repoRoot, ".git")
-	gd := dot
-	if info, err := os.Stat(dot); err != nil || !info.IsDir() {
-		if data, err := os.ReadFile(dot); err == nil {
-			line := strings.TrimSpace(string(data))
-			if target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")); target != line && target != "" {
-				gd = target
-				if !filepath.IsAbs(gd) {
-					gd = filepath.Join(repoRoot, gd)
-				}
-			}
-		}
-	}
-	return gd
-}
-
-// manualHooksDir resolves the hooks dir without git by reading the git
-// directory and its "commondir", so a worktree still lands on the common
-// ".git/hooks" git actually runs.
+// manualHooksDir resolves the hooks dir without git, by resolve's rules for a
+// .git (resolve.HandGitDirs), so a worktree still lands on the common
+// ".git/hooks" git actually runs and nothing but a regular file or a
+// directory is ever opened. When those rules find no git directory it names
+// <repoRoot>/.git/hooks, the default: the lookup is degraded and only shown.
 func manualHooksDir(repoRoot string) string {
-	gd := manualGitDir(repoRoot)
-	if data, err := os.ReadFile(filepath.Join(gd, "commondir")); err == nil {
-		if common := strings.TrimSpace(string(data)); common != "" {
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(gd, common)
-			}
-			gd = common
-		}
+	_, common, err := resolve.HandGitDirs(repoRoot)
+	if err != nil {
+		return filepath.Join(repoRoot, ".git", "hooks")
 	}
-	return filepath.Join(gd, "hooks")
+	return filepath.Join(common, "hooks")
 }
 
 // gitOut runs git in repoRoot and returns its trimmed stdout. A failing git's

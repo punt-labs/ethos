@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,4 +87,51 @@ func TestUnreadableGitDirectory(t *testing.T) {
 		assert.NotErrorIs(t, err, ErrNotInRepo)
 		assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
 	})
+}
+
+// Without git, a commondir that is a FIFO is refused, never opened. (git
+// itself blocks reading one, so there is no git answer to compare.)
+func TestHandRulesNeverOpenAFIFOCommondir(t *testing.T) {
+	inner, _ := shapeIn(t, gitShape{func(t *testing.T, inner string) {
+		t.Helper()
+		admin := filepath.Join(t.TempDir(), "admin")
+		makeGitDirAt(t, admin)
+		require.NoError(t, syscall.Mkfifo(filepath.Join(admin, "commondir"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(inner, ".git"), []byte("gitdir: "+admin+"\n"), 0o644))
+	}, handError})
+	hideGit(t)
+	type answer struct {
+		dir string
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		_, c, err := HandGitDirs(inner)
+		done <- answer{c, err}
+	}()
+	select {
+	case a := <-done:
+		require.Error(t, a.err)
+		assert.Contains(t, a.err.Error(), "not a regular file")
+	case <-time.After(5 * time.Second):
+		t.Fatal("HandGitDirs blocked on a FIFO commondir")
+	}
+}
+
+// HandGitDirs names the git dir and the common dir of a linked worktree, and
+// says why there is none otherwise.
+func TestHandGitDirs(t *testing.T) {
+	inner, outer := shapeIn(t, gitShapes["linked worktree"])
+	dir, common, err := HandGitDirs(inner)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(outer, ".git", "worktrees", "inner"), dir)
+	assert.Equal(t, realpath(t, filepath.Join(outer, ".git")), realpath(t, common))
+
+	_, _, err = HandGitDirs(t.TempDir())
+	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	empty, _ := shapeIn(t, gitShapes["empty directory"])
+	_, _, err = HandGitDirs(empty)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a repository")
 }

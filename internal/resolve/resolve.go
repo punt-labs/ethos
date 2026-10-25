@@ -1239,7 +1239,7 @@ func configBare(git, common string) (bool, error) {
 // key is false. include directives are not followed.
 func handConfigBare(common string) (bool, error) {
 	cfg := filepath.Join(common, "config")
-	data, err := os.ReadFile(cfg)
+	data, err := readRegular(cfg)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
@@ -1428,7 +1428,7 @@ func checkGitDir(gd string) (common, reason string, err error) {
 	}
 	common = gd
 	cd := filepath.Join(gd, "commondir")
-	data, err = os.ReadFile(cd)
+	data, err = readRegular(cd)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		// no commondir: gd is its own common dir
@@ -1464,6 +1464,39 @@ func checkGitDir(gd string) (common, reason string, err error) {
 		}
 	}
 	return common, "", nil
+}
+
+// readRegular reads p only when it is a regular file, so a FIFO or a device
+// never blocks the caller. An absent p is fs.ErrNotExist; anything other than
+// a regular file is errInvalidGit.
+func readRegular(p string) ([]byte, error) {
+	info, err := os.Stat(p)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file: %w", p, errInvalidGit)
+	}
+	return os.ReadFile(p)
+}
+
+// HandGitDirs returns the git directory and the common directory of the .git
+// in root, by the hand rules (examineGit) and without running git: it never
+// opens anything but a regular file or a directory. An error says why there
+// is none: root/.git is absent, walked past, refused, or unreadable.
+func HandGitDirs(root string) (dir, common string, err error) {
+	dot := filepath.Join(root, ".git")
+	g, skip, err := examineGit(dot)
+	switch {
+	case err != nil:
+		return "", "", err
+	case g.dir != "":
+		return g.dir, g.common, nil
+	case skip != "":
+		return "", "", fmt.Errorf("%s is not a repository: %s", dot, skip)
+	default:
+		return "", "", fmt.Errorf("%s: %w", dot, fs.ErrNotExist)
+	}
 }
 
 // validHead reports whether HEAD's content is what git accepts: "ref:"

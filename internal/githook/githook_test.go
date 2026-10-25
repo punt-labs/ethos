@@ -728,6 +728,7 @@ func TestManualHooksDirWorktree(t *testing.T) {
 	// and a commondir file; manualHooksDir must land on the common hooks.
 	root := t.TempDir()
 	commonGit := filepath.Join(root, "maindir", ".git")
+	makeGitDir(t, commonGit)
 	if err := os.MkdirAll(filepath.Join(commonGit, "hooks"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -742,6 +743,7 @@ func TestManualHooksDirWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wtGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(wtGitDir, "HEAD"), "ref: refs/heads/wt\n")
 	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+wtGitDir+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1114,4 +1116,22 @@ func TestLookupRemedy(t *testing.T) {
 			t.Errorf("Explain = %q, want the bare reason", got)
 		}
 	})
+}
+
+// makeGitDir makes d the minimal git directory git accepts.
+func makeGitDir(t *testing.T, d string) {
+	t.Helper()
+	for _, sub := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(d, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(d, "HEAD"), "ref: refs/heads/main\n")
+}
+
+func writeFile(t *testing.T, p, content string) {
+	t.Helper()
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
