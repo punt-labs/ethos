@@ -280,18 +280,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or `repo-only` policy. In an enabled repository, `pre-commit` and
   `commit-msg` block the commit when `ethos` is not installed, the
   `.punt-labs/ethos` path is broken, or the `enabled` marker is not a
-  regular file. Git tracing set in the environment or in git
-  configuration no longer makes ethos fail. An unreadable git
-  configuration file is reported instead of treated as "not set".
-  `ethos team add-bundle` keeps your ssh command, fails instead of
-  waiting for a credential prompt, and Ctrl-C or a timeout stops its
-  clone with its ssh children. Identity and origin reads use the located
-  repository, not the current directory; outside a repository they
-  still honour included git configuration files.
-- **`ethos enable` installs a `pre-merge-commit` hook**, so a
-  `git merge --no-ff` commit is sealed like any other. Re-run
-  `ethos enable` in an already enabled repository; until then
-  `ethos doctor` fails the "Audit merge seal hook" row.
+  regular file; `ethos enable` refuses such a marker. Git tracing set in
+  the environment or in git configuration no longer makes ethos fail.
+  An unreadable git configuration file is reported instead of treated as
+  "not set". On Unix, `ethos team add-bundle` keeps your ssh command,
+  runs its clone with no terminal so an ssh or credential prompt fails
+  at once instead of waiting, and Ctrl-C, a closed terminal or a timeout
+  stops the clone with its ssh children. Identity and origin reads use
+  the located repository, not the current directory; outside a
+  repository the identity read still honours included git configuration
+  files. A merge commit is not sealed; its audit lines are sealed by
+  the next ordinary commit.
 - **The MCP `identity` tool refuses while the repository store or its
   configuration cannot be read**, instead of answering from the global
   store.

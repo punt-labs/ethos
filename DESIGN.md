@@ -12871,32 +12871,42 @@ than execve, execveat and clone, `CreateProcessAsUser` and
 binary named by full path in an allowlisted call. The second flags a
 function that discards a location error, or turns one other than "not
 in a repository" or "does not exist" into an empty root, including an
-error field of `resolve.Located` that a guarded block ignores; a helper
-that blanks a `Located` field is not detected. The shell hooks
-`pre-commit.sh`, `pre-merge-commit` (the same script, so a
-`git merge --no-ff` commit is sealed too) and `commit-msg.sh` run
-`git rev-parse` and `git interpret-trailers` unbounded and exit 1 with
-git's error when either fails. In an enabled repository they also block
+error field of `resolve.Located` that a guarded block ignores. Known
+gaps: a helper that blanks a `Located` field, a guarded block that logs
+the error and then falls through to the empty value, and an error
+assigned to `_` inside `internal/resolve`. The shell hooks
+`pre-commit.sh` and `commit-msg.sh` run `git rev-parse` and
+`git interpret-trailers` unbounded and exit 1 with git's error when
+either fails. A merge commit (`git merge --no-ff`) is not sealed: git
+writes its tree before any hook can stage a chunk, so its live lines are
+sealed by the next ordinary commit and nothing is lost. In an enabled repository they also block
 the commit when the `ethos` binary is missing, when a component of the
 `.punt-labs/ethos` path is a dangling link, a non-directory or
 unreadable, or when the `enabled` marker exists but is not a regular
 file; only a marker that is simply absent means "not enabled", and
-`ethos doctor` applies the same rule. On a timeout git's process group
-receives SIGTERM, so git can remove its index lock, and SIGKILL after a
-one-second grace for the whole group (on Windows the kill is
-immediate). Git commands that reach the network (the team-bundle clone)
-run in their own process group; ethos forwards Ctrl-C and SIGTERM to
-it, and a timeout kills it with its ssh or helper children. They keep
-the user's ssh command (`GIT_SSH_COMMAND`, `GIT_SSH`,
-`core.sshCommand`) and run no terminal prompt or askpass helper, so a
-missing credential fails instead of waiting. Git's tracing variables
-are removed from its environment. A configuration key counts as unset
-only when `git config` exits 1 with nothing on stderr once trace lines
-are removed, and every user configuration file (global, XDG, system and
-`GIT_CONFIG_*`) can be read; an unreadable one is an error. Git's
-"not a git repository (or any" message is the only other stderr text an
-answer depends on. Every git read declares what an absent answer is (a
-configuration key that is not set, no such remote, or that discovery
+`ethos doctor` and `ethos enable` apply the same rule. On a timeout
+git's process group receives SIGTERM, so git can remove its index lock,
+and SIGKILL after a one-second grace for the whole group. On Unix, git
+commands that reach the network (the team-bundle clone) run in a new
+session with no controlling terminal; ethos forwards Ctrl-C, SIGTERM,
+SIGHUP and SIGQUIT to their process group, and a timeout kills it with
+its ssh or helper children. They keep the user's ssh command
+(`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`) and run no terminal
+prompt or askpass helper, and ssh's own prompts (an unknown host key, a
+passphrase) find no terminal, so a missing credential fails instead of
+waiting. On Windows there are no process groups: a timeout kills git
+at once and its children may outlive it. Git tracing is switched off
+through the environment (`GIT_TRACE2*=0` overrides configured targets)
+and any remaining trace lines are removed from stderr. A configuration
+key counts as unset only when `git config` exits 1 with nothing on
+stderr, and every user configuration file (global, XDG, system and
+`GIT_CONFIG_*`) can be read; an unreadable one is an error. Other git
+stderr text an answer depends on: git's "not a git repository (or any"
+discovery message; "no upstream" messages in the session working
+context, read as "no upstream"; `index.lock` "File exists" in the
+seal, read as "another process holds the lock"; and bad-revision
+messages, which only choose the wording of an error. Every git read declares what an absent answer is (a
+configuration key that is not set, no such remote, no upstream, or that discovery
 failure); a broken `.git` link, or a `.git` symlink git cannot follow
 for any reason in the directory or an ancestor below the ceiling, is
 never absent. Any other failure, a timeout included, is an error that
@@ -12907,16 +12917,20 @@ the store, its `.punt-labs/ethos` directory, the checkout and the
 repository configuration, with an error for each; the lower-level
 lookups are unexported, so no other package can locate the repository
 another way. It checks every component of the `.punt-labs/ethos` path:
-a dangling symlink at any level, a non-directory or an unreadable entry
-(the final directory included) is an error, and only an absent
+a dangling symlink at any level, a non-directory, or a component that
+cannot be listed or searched (`.punt-labs` and the final directory
+included) is an error, and only an absent
 directory means "no store yet"; a dangling or malformed `ethos.yaml` is
 an error, not "no configuration", and never stops a command that
-handles the error itself; an unusable bundle or `repo-only` policy is
-reported the same way. Identity and repository reads (`git config
-user.*`, the origin remote) run in the located checkout; with no
-checkout they run as a plain `git config` from a neutral directory
-outside any repository, so included files and command-scope
-configuration still apply and the working directory has no effect. The CLI,
+handles the error itself. An unusable bundle or `repo-only` policy is
+also reported where the user sees it, as a configuration failure: a
+store command exits 1, and `ethos doctor` fails a "Repository
+configuration" row. Identity reads (`git config user.*`) and the origin
+read run in the located checkout. With no checkout, the identity read
+runs as a plain `git config` from a neutral directory outside any
+repository, so included files and command-scope configuration apply
+and the working directory has no effect; with no checkout there is no
+origin. The CLI,
 every hook, `ethos serve` (per call), setup, doctor, the UI and the
 mission, session, vendor and team commands use it. A command that
 needs the store exits 2 when any part cannot be read. Commands
@@ -12948,7 +12962,11 @@ checked again just before the rename; if another process changed it,
 the seal leaves it and says so. A leftover lock is removed only after
 the seal's own `git add` timed out, and only when no process holds the
 same file (compared by inode); when the open files of another user's
-processes cannot be read the lock is left and named. Any removal is
+processes cannot be read the lock is left and named. This check sees
+only processes listed in `/proc`: with `/proc` mounted `hidepid` or
+across PID namespaces a holder can be missed, which is bounded by the
+"newer than its own `git add`" rule. On systems without `/proc` the
+lock is always left. Any removal is
 reported. The seal then removes the chunks and the sealed-chunk
 directories it created and blocks the commit; the error names the
 failed step and states whether the tree is as it was or what is left.
@@ -13302,7 +13320,11 @@ command, prompt or contract was committed verbatim.
    dash-encoded form (each bounded only at its end, so `HOME=/root` does
    not match `/rootfs`), `/home/<name>` or `/Users/<name>`, or
    `-home-<name>-` or `-Users-<name>-`, anywhere; or a placeholder
-   followed by `..` steps that climb out of it. A mission writer refuses
+   followed by `..` steps that climb out of it. Normalization does not
+   collapse a path component that contains whitespace, because shell
+   text such as `cd <repo>/docs && make; cd ../../..` would then read as
+   a climb; a home hidden behind a whitespace-only component followed by
+   `..` (`/home/ /../bob/x`) is therefore not seen. A mission writer refuses
    it, naming the field and the rule but not the value; the audit writer
    replaces it with `[redacted-path]` and never blocks a tool call. One
    exemption keeps enforcement working: a path field whose value is a
