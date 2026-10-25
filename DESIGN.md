@@ -11266,18 +11266,18 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
 - **git is now a hard dependency of this specific check.** The rest of
   this codebase deliberately supports a git-less environment for
   identity/team/session resolution (`internal/githook.HooksDir`'s manual
-  fallback, `internal/resolve.FindRepoRoot`'s `.git`-stat-only walk).
+  fallback, and `internal/resolve`'s repository walk, which applies git's
+  `.git` rules without running git).
   `hookInvocationObserved` cannot honor that: the hook body itself calls
   `git rev-parse --show-toplevel`, so a git-less host could never run the
   real hook either — this is not a new dependency introduced by the
   sandbox. When `git` is absent, `checkHookPresence` FAILs loudly in an
   enabled repository, the safe direction, rather than silently reusing
   the old lexical scanner as a fallback (rejected below). Amended by
-  DES-079 slice 1: the failure now comes earlier, from the hooks-directory
-  lookup itself ("cannot verify hooks: …", with advice that matches the
-cause), because a
-  lookup made without git cannot see `core.hooksPath`; a dormant
-  repository passes with that reason noted. The same slice makes
+  DES-079 slice 1: the failure now comes earlier, from the
+  hooks-directory lookup itself ("cannot verify hooks: …", with advice
+  that matches the cause), because a lookup made without git cannot see
+  `core.hooksPath`; a dormant repository warns. The same slice makes
   `ethos enable` require git to install hooks and makes `ethos disable`
   refuse an unverified hooks directory unless `--force` is given, in
   which case it leaves the hook sections in place and says so.
@@ -12812,8 +12812,9 @@ example `dest + ".new"`) is not caught by the scan and is reported by
 `ethos doctor` only if it is left under `.punt-labs/ethos/`. Writes
 under the system temporary directory (`TMPDIR`) are out of scope even
 when `TMPDIR` lies inside the working tree, as it does in this
-organization; the one such write, doctor's hook sandbox, still carries
-the marker and is removed before doctor returns. An `ethos doctor`
+organization; such writes (doctor's hook sandbox, the attribute editor's
+scratch file) still carry the marker and are removed before the command
+returns. An `ethos doctor`
 check reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
 of the working tree it runs in that no entry matches. It reports, without
 scanning past it, any symlink on the path from the repository root to
@@ -12831,17 +12832,24 @@ warns in a dormant one. When there is no repository or neither
 directory exists the check still passes, and its detail starts with
 "not scanned" and the reason.
 
-Finding the repository follows git: a `.git` that is not a git
-directory or a `gitdir:` file (a dangling symlink, an empty or garbage
-file) is skipped with one warning and the search continues upward, as
-git does; a `.git` that cannot be read (permission denied, a symlink
-loop) is an error. On that error, or a refused `ETHOS_REPO_ROOT`, every
-`ethos doctor` check that reads the checkout or the store warns with the
-reason instead of passing, a test parses `RunAll` to keep that true for
-new checks, and every other command refuses rather than fall back to
-the global store (`doctor`, `setup`, `enable`, `disable`, hooks, the
-MCP server and a few read-only utilities are exempt and handle the
-error themselves). `ethos enable` requires git to install hooks.
+Finding the repository applies git's own `.git` rules, without running
+git, and tests compare each case with `git rev-parse --show-toplevel`.
+The search continues upward past a missing `.git`, a dangling symlink, a
+symlink loop, a `.git` that is not a regular file or directory (never
+read), and a `.git/` directory that is not a git directory (HEAD plus
+`objects/` and `refs/`, or a `commondir`). An empty or garbage `.git`
+file, a `gitdir:` naming a missing directory, or a `.git` that cannot be
+read for permission is an error, as it is for git. On that error, or a
+refused `ETHOS_REPO_ROOT`, every `ethos doctor` check that reads the
+checkout or the store warns with the reason instead of passing (a test
+parses `RunAll` to keep that true for new checks); the MCP server's
+write tools refuse and its read tools say the store could not be
+located; the session hooks say why the persona is missing; and every
+other command refuses rather than fall back to the global store.
+`doctor`, `setup`, `seed`, `enable`, `disable`, `hook`, `serve`,
+`audit` and a few utilities (`version`, `help`, `completion`,
+`uninstall`, `schema`) are exempt from that refusal because they handle
+the error themselves. `ethos enable` requires git to install hooks.
 `ethos disable` refuses an unverified hooks directory unless `--force`
 is given; with `--force` it removes the import and marker and reports
 that hook sections may remain. Output a user directs into
@@ -13153,17 +13161,33 @@ command, prompt or contract was committed verbatim.
    reason instead of matching the reader's own home. Audit lines carry a
    path-format marker; a `~` in a read recorded on a line without it is
    not trusted, because older lines wrote another user's home as `~`.
-   Leak-freedom is one check, run by every in-scope writer (the record
-   writers, `migrate`, `scrub` and the audit writer) on every output
-   value after the passes: a value that contains the home directory,
-   `/home/<name>`, `/Users/<name>`, a dash-encoded home, or the user name
-   as a path segment, anywhere and not directly after a placeholder,
-   leaks. A mission writer refuses it, naming the field and not the
-   value; the audit writer replaces the value with `[redacted-path]`.
-   The check over-matches by design: a relative entry such as
-   `testdata/home/alice/x` is refused. Go fuzz tests drive every writer
-   and assert that each output passes the check or is refused, and that
-   the path pass is idempotent. Identifiers,
+   Leak-freedom is one check, run at every sink that writes the tracked
+   tree (the record writers, `migrate`, `scrub`, export, seal,
+   quarantine and the audit writer) on every key and value after the
+   passes. It is a plain substring test, case-insensitive, over the value
+   as written and over its normalized, unescaped and percent-decoded
+   spellings (normalization only adds spellings, never replaces one). A
+   value leaks if it contains this machine's home directory or its
+   dash-encoded form (each bounded only at its end, so `HOME=/root` does
+   not match `/rootfs`), `/home/<name>` or `/Users/<name>`, or
+   `-home-<name>-` or `-Users-<name>-`, anywhere; or a placeholder
+   followed by `..` steps that climb out of it. A mission writer refuses
+   it, naming the field and the rule but not the value; the audit writer
+   replaces it with `[redacted-path]` and never blocks a tool call. One
+   exemption keeps enforcement working: a path field whose value is a
+   plain repository-relative path (no leading `/`, `~` or `<`, no `..`)
+   is judged by the two rules about this machine's home only, so a write
+   set naming `app/home/page.tsx` is accepted. Everywhere else the check
+   over-matches by design: prose or a command containing
+   `app/home/page.tsx`, `fix-home-page-layout` or `https://x/home/docs`
+   is refused in a mission record and replaced in an audit line. Ten
+   review rounds of boundary-aware rules each found a new leak, which is
+   why the rule has no position logic. Go fuzz tests drive every sink,
+   check each output against an oracle written separately as the same
+   substring rules, and assert that the path pass is idempotent.
+   Accepted residuals, not checked: double percent-encoding, Unicode
+   look-alike slashes, duplicate JSON keys in raw text, and the loss of a
+   whole very large audit value when part of it leaks. Identifiers,
    hashes, enums and timestamps get no pass. The contract writer
    validates the redacted form and refuses the write if redaction made
    it invalid. Matching by name over-redacts some ordinary text

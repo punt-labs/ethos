@@ -230,14 +230,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dormant one ("cannot verify hooks"), the hook-currency check warns, and
   the advice matches the cause (install git, fix `safe.directory`, or run
   from the repository's top level).
-- **Finding the repository follows git.** A `.git` that is not a git
-  directory or `gitdir:` file (a dangling symlink, an empty file) is
-  skipped with one warning and the search continues upward. A `.git` that
-  cannot be read (permission denied, a symlink loop), or a refused
-  `ETHOS_REPO_ROOT`, makes every `ethos doctor` check that reads the
-  checkout or the store warn with the reason, visible to MCP clients,
-  and makes other commands refuse instead of silently using the global
-  store. `ethos setup` checks this before writing any identity.
+- **Finding the repository follows git's `.git` rules.** The search
+  continues upward past a dangling symlink, a symlink loop, a non-file
+  `.git` (never read, so a FIFO no longer hangs ethos) and a `.git/` that
+  is not a git directory; an empty or garbage `.git` file, a `gitdir:`
+  naming a missing directory, or an unreadable `.git` is an error, as in
+  git. On that error, or a refused `ETHOS_REPO_ROOT`, every `ethos doctor`
+  check that reads the checkout or the store warns with the reason, the
+  MCP server's write tools refuse, the session hooks say why the persona
+  is missing, and other commands (now including `session`, `whoami`,
+  `iam` and `adr`) refuse instead of silently using the global store.
+  `ethos setup` checks this, and that a named bundle exists, before
+  writing anything; `ethos seed` warns on a malformed repository config.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
