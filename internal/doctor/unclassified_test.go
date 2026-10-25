@@ -261,6 +261,45 @@ func TestCheckUnclassifiedFiles_SubdirectoryOfAnotherRepoIsNotVerified(t *testin
 	assert.Contains(t, r.Detail, "work tree")
 }
 
+// gitlink writes root/rel as a gitfile naming a real git directory, as a
+// submodule's .git is.
+func gitlink(t *testing.T, root, rel string) {
+	t.Helper()
+	target := t.TempDir()
+	testhelpers.MakeGitDir(t, target)
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+	require.NoError(t, os.WriteFile(p, []byte("gitdir: "+filepath.Join(target, ".git")+"\n"), 0o644))
+}
+
+// TestCheckUnclassifiedFiles_InvalidGitIsNotAWorkingTree: git does not treat an
+// empty .git file, a dangling symlink or an empty .git directory as a
+// repository, so the directory is scanned like any other.
+func TestCheckUnclassifiedFiles_InvalidGitIsNotAWorkingTree(t *testing.T) {
+	cases := map[string]func(t *testing.T, dot string){
+		"empty file": func(t *testing.T, dot string) { require.NoError(t, os.WriteFile(dot, nil, 0o644)) },
+		"dangling symlink": func(t *testing.T, dot string) {
+			if err := os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+		},
+		"empty directory": func(t *testing.T, dot string) { require.NoError(t, os.Mkdir(dot, 0o755)) },
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			gitIn(t, root, "init", "-q")
+			touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")
+			touch(t, root, ".punt-labs/ethos/vendored/stray.bin")
+			mk(t, filepath.Join(root, ".punt-labs", "ethos", "vendored", ".git"))
+			r := CheckUnclassifiedFiles(root)
+			assert.Equal(t, "WARN", r.Status, r.Detail)
+			assert.Contains(t, r.Detail, "stray.bin")
+			assert.NotContains(t, r.Detail, "separate git working tree")
+		})
+	}
+}
+
 // TestCheckUnclassifiedFiles_NestedWorkingTreeIsNotScanned: a directory with
 // its own .git inside a zone (a submodule) is another repository's files.
 func TestCheckUnclassifiedFiles_NestedWorkingTreeIsNotScanned(t *testing.T) {
@@ -268,7 +307,7 @@ func TestCheckUnclassifiedFiles_NestedWorkingTreeIsNotScanned(t *testing.T) {
 	gitIn(t, root, "init", "-q")
 	touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")
 	touch(t, root, ".punt-labs/ethos/vendored/stray.bin")
-	touch(t, root, ".punt-labs/ethos/vendored/.git") // gitlink file
+	gitlink(t, root, ".punt-labs/ethos/vendored/.git")
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "WARN", r.Status, r.Detail)
 	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos/vendored is a separate git working tree")
@@ -281,7 +320,7 @@ func TestCheckUnclassifiedFiles_ZoneRootSubmoduleIsNotScanned(t *testing.T) {
 	root := t.TempDir()
 	gitIn(t, root, "init", "-q")
 	touch(t, root, ".punt-labs/ethos/stray.bin")
-	touch(t, root, ".punt-labs/ethos/.git")
+	gitlink(t, root, ".punt-labs/ethos/.git")
 	r := CheckUnclassifiedFiles(root)
 	assert.Equal(t, "WARN", r.Status, r.Detail)
 	assert.Contains(t, r.Detail, "not scanned: .punt-labs/ethos is a separate git working tree")

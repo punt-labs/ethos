@@ -12,6 +12,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // unclassifiedZones are the two trees whose files ethos owns. Files other
@@ -174,15 +175,17 @@ func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
 			return fmt.Errorf("%s: %w", p, err)
 		}
 		if d.IsDir() {
-			if _, err := os.Lstat(filepath.Join(p, ".git")); err == nil {
+			tree, err := resolve.IsWorkingTree(p)
+			if err != nil {
+				return fmt.Errorf("checking %s for .git: %w", p, err)
+			}
+			if tree {
 				rel, err := filepath.Rel(root, p)
 				if err != nil {
 					return err
 				}
 				s.skipped[filepath.ToSlash(rel)+" is a separate git working tree"] = true
 				return fs.SkipDir
-			} else if !errors.Is(err, fs.ErrNotExist) {
-				return fmt.Errorf("checking %s for .git: %w", p, err)
 			}
 			if p == zoneRoot {
 				walked = true

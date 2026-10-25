@@ -811,15 +811,31 @@ func examineGit(dot string) (found bool, skip string, err error) {
 	target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
 	target = strings.TrimSpace(target)
 	if !ok || target == "" {
-		return false, "", fmt.Errorf("%s is not a valid gitfile (want \"gitdir: <path>\")", dot)
+		return false, "", fmt.Errorf("%s is not a valid gitfile (want \"gitdir: <path>\"): %w", dot, errInvalidGit)
 	}
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(filepath.Dir(dot), target)
 	}
 	if info, err := os.Stat(target); err != nil || !info.IsDir() {
-		return false, "", fmt.Errorf("%s names %s, which is not a git directory", dot, target)
+		return false, "", fmt.Errorf("%s names %s, which is not a git directory: %w", dot, target, errInvalidGit)
 	}
 	return true, "", nil
+}
+
+// errInvalidGit marks a .git that git refuses: an examination error that is the
+// file's content, not a failure to read it.
+var errInvalidGit = errors.New("invalid git file")
+
+// IsWorkingTree reports whether dir holds a .git that git accepts as a
+// repository: a git directory or a gitfile naming one. A .git git skips or
+// refuses (missing, dangling, empty, garbage) is not a working tree; an error
+// is returned only when the .git cannot be read.
+func IsWorkingTree(dir string) (bool, error) {
+	found, _, err := examineGit(filepath.Join(dir, ".git"))
+	if errors.Is(err, errInvalidGit) {
+		return false, nil
+	}
+	return found, err
 }
 
 // isGitDir reports whether dir looks like a git directory as git judges it:
