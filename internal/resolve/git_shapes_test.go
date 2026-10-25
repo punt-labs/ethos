@@ -202,7 +202,8 @@ func TestShapesHandRules(t *testing.T) {
 				require.Error(t, err)
 				assert.NotErrorIs(t, err, ErrNotInRepo)
 				assert.Empty(t, got)
-				assert.Contains(t, err.Error(), inner)
+				// The hand rules walk the physical path, as git does.
+				assert.Contains(t, err.Error(), realpath(t, inner))
 			case handInner:
 				require.NoError(t, err)
 				assert.Equal(t, inner, got)

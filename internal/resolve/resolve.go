@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -976,23 +975,10 @@ func gitLocateError(start string, err error) error {
 		// ceiling boundary it stopped at, does not make this a refusal.
 		return fmt.Errorf("%s is %w", start, ErrNotInRepo)
 	}
-	if dot := firstDotGit(start, ceilings()); dot != "" && !strings.Contains(msg, filepath.Dir(dot)) {
+	if dot := firstDotGit(start); dot != "" && !strings.Contains(msg, filepath.Dir(dot)) {
 		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, msg)
 	}
 	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, msg)
-}
-
-// ceilings returns the GIT_CEILING_DIRECTORIES entries, symlinks resolved
-// where they can be.
-func ceilings() []string {
-	var cs []string
-	for _, c := range filepath.SplitList(os.Getenv("GIT_CEILING_DIRECTORIES")) {
-		if c == "" || !filepath.IsAbs(c) {
-			continue // git ignores a relative entry; an empty one only changes symlink handling
-		}
-		cs = append(cs, realDir(c))
-	}
-	return cs
 }
 
 // realDir returns p with symlinks resolved, or p cleaned when it cannot be.
@@ -1003,21 +989,88 @@ func realDir(p string) string {
 	return filepath.Clean(p)
 }
 
-// firstDotGit returns the nearest .git entry git examines from start: at
-// start, or above it up to (not including) the first ceiling. "" when there
-// is none.
-func firstDotGit(start string, ceil []string) string {
-	for dir := start; ; {
+// firstDotGit returns the nearest .git entry git examines from start, or "".
+func firstDotGit(start string) string {
+	for _, dir := range gitWalk(start) {
 		dot := filepath.Join(dir, ".git")
 		if _, err := os.Lstat(dot); !errors.Is(err, fs.ErrNotExist) {
 			return dot
 		}
+	}
+	return ""
+}
+
+// gitWalk returns the directories git examines for a repository from start,
+// nearest first, as git's setup_git_directory does: from the physical working
+// directory (getcwd resolves symlinks) upward, stopping before the longest
+// GIT_CEILING_DIRECTORIES entry that is a proper ancestor of it, so neither
+// that entry nor anything above it is examined.
+func gitWalk(start string) []string {
+	dir := realDir(start)
+	off := ceilingOffset(dir, gitCeilings())
+	dirs := []string{dir}
+	for {
 		parent := filepath.Dir(dir)
-		if parent == dir || slices.Contains(ceil, realDir(parent)) {
-			return ""
+		if parent == dir {
+			return dirs
 		}
+		// git cuts the path at the separator that ends parent: index 0 for
+		// the root, else the length of parent.
+		cut := len(parent)
+		if parent == string(filepath.Separator) {
+			cut = 0
+		}
+		if cut <= off {
+			return dirs
+		}
+		dirs = append(dirs, parent)
 		dir = parent
 	}
+}
+
+// gitCeilings returns the GIT_CEILING_DIRECTORIES entries as git uses them
+// (canonicalize_ceiling_entry): a relative entry is ignored; an entry before
+// any empty entry is resolved to its real path, and ignored when that fails;
+// an entry after an empty entry is kept exactly as written.
+func gitCeilings() []string {
+	var out []string
+	asWritten := false
+	for _, c := range strings.Split(os.Getenv("GIT_CEILING_DIRECTORIES"), string(os.PathListSeparator)) {
+		switch {
+		case c == "":
+			asWritten = true
+		case !filepath.IsAbs(c):
+		case asWritten:
+			out = append(out, c)
+		default:
+			if r, err := filepath.EvalSymlinks(c); err == nil {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
+// ceilingOffset is git's longest_ancestor_length: the length of the longest
+// ceiling that is a proper ancestor of path (a trailing separator not
+// counted), or -1 when none is. The comparison is on the strings, as git's.
+func ceilingOffset(path string, ceils []string) int {
+	sep := string(filepath.Separator)
+	if path == sep {
+		return -1
+	}
+	longest := -1
+	for _, c := range ceils {
+		n := len(c)
+		if strings.HasSuffix(c, sep) {
+			n--
+		}
+		if !strings.HasPrefix(path, c[:n]) || len(path) <= n+1 || path[n:n+1] != sep {
+			continue
+		}
+		longest = max(longest, n)
+	}
+	return longest
 }
 
 // ancestorAt returns the ancestor of start (or start itself) that is the
@@ -1076,29 +1129,28 @@ func sameDir(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
 }
 
-// handLocate walks up from start to the first .git the hand rules accept (see
-// examineGit). Used only when git is not on PATH.
+// handLocate walks the directories git would examine from start (gitWalk:
+// the physical path, stopping at GIT_CEILING_DIRECTORIES) to the first .git
+// the hand rules accept (see examineGit). The root keeps the caller's path
+// form where it is an ancestor of start. Used only without a git that runs.
 func handLocate(start string) located {
 	var skipped []string
-	for dir := start; ; {
+	for _, dir := range gitWalk(start) {
 		dot := filepath.Join(dir, ".git")
 		g, skip, err := examineGit(dot)
 		if err != nil {
 			return located{skipped: skipped, err: err}
 		}
 		if g.dir != "" {
-			store, serr := storeRoot(dir, g.dir, g.common)
-			return located{loc: location{root: dir, store: store, storeErr: serr}, skipped: skipped}
+			root, _ := ancestorAt(start, dir)
+			store, serr := storeRoot(root, g.dir, g.common)
+			return located{loc: location{root: root, store: store, storeErr: serr}, skipped: skipped}
 		}
 		if skip != "" {
 			skipped = append(skipped, dot+": "+skip)
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return located{skipped: skipped, err: fmt.Errorf("%s is %w", start, ErrNotInRepo)}
-		}
-		dir = parent
 	}
+	return located{skipped: skipped, err: fmt.Errorf("%s is %w", start, ErrNotInRepo)}
 }
 
 // gitDirs is a git directory and its common directory.
