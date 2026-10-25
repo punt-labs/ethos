@@ -39,6 +39,12 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
+	// ETHOS_REPO_ROOT may be relative; every comparison below needs one spelling.
+	repoRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("making repository root absolute: %v", err)}
+	}
+
 	hooksDir, warns := githook.HooksDir(repoRoot)
 	table, err := layout.TableFor(repoRoot, hooksDir)
 	if err != nil {

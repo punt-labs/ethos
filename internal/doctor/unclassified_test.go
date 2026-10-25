@@ -225,3 +225,33 @@ func TestCheckUnclassifiedFiles_UnresolvableHooksDirFails(t *testing.T) {
 	assert.Equal(t, "FAIL", r.Status)
 	assert.Contains(t, r.Detail, "loop")
 }
+
+// TestCheckUnclassifiedFiles_NamesADegradedHooksLookup: with git off PATH the
+// hooks directory is found by hand and core.hooksPath is not read; the check
+// says so rather than classifying against a directory it may have guessed.
+func TestCheckUnclassifiedFiles_NamesADegradedHooksLookup(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	r := CheckUnclassifiedFiles(root)
+	assert.Equal(t, "PASS", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "git did not resolve the hooks directory")
+	assert.Contains(t, r.Detail, "core.hooksPath is ignored")
+}
+
+// TestCheckUnclassifiedFiles_RelativeRoot: ETHOS_REPO_ROOT may be relative.
+func TestCheckUnclassifiedFiles_RelativeRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "repo")
+	gitIn(t, parent, "init", "-q", "repo")
+	gitIn(t, root, "config", "core.hooksPath", ".githooks")
+	touch(t, root, ".punt-labs/ethos/stray.bin")
+	t.Chdir(parent)
+
+	r := CheckUnclassifiedFiles("repo")
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, ".punt-labs/ethos/stray.bin")
+	assert.NotContains(t, r.Detail, "git did not resolve", "git answered for the absolute root")
+}

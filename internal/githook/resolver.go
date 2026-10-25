@@ -1,6 +1,7 @@
 package githook
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,37 +17,60 @@ import (
 // (shared across every repo using that hooksPath).
 //
 // It asks git directly first — `git rev-parse --git-path hooks` honors
-// core.hooksPath and resolves a worktree's common dir. When git is
-// unavailable it falls back to reading .git and commondir by hand, so a
-// worktree still lands on the common hooks dir git actually runs. This is the
-// one resolver install, enable, and doctor share, so they cannot drift; the
-// manual fallback is kept (not install.sh's git-required form) so enable
-// resolves in a git-less environment where doctor already succeeds.
+// core.hooksPath and resolves a worktree's common dir. When git cannot answer
+// it falls back to reading .git and commondir by hand, so a worktree still
+// lands on the common hooks dir git actually runs. That fallback cannot see
+// core.hooksPath, so it adds a warning saying the lookup was degraded and why.
+// This is the one resolver install, enable, and doctor share, so they cannot
+// drift; the manual fallback is kept (not install.sh's git-required form) so
+// enable resolves in a git-less environment where doctor already succeeds.
+//
+// repoRoot is made absolute first; ETHOS_REPO_ROOT may be relative.
 func HooksDir(repoRoot string) (string, []string) {
-	if dir, warns, ok := gitHooksPath(repoRoot); ok {
-		return dir, warns
+	if abs, err := filepath.Abs(repoRoot); err == nil {
+		repoRoot = abs
 	}
-	return manualHooksDir(repoRoot), nil
+	dir, warns, err := gitHooksPath(repoRoot)
+	switch {
+	case err == nil:
+		return dir, warns
+	case errors.Is(err, errNotWorkTreeRoot):
+		// git answered for some other work tree, so this root has no git
+		// configuration to ignore; the manual lookup is the whole answer.
+		return manualHooksDir(repoRoot), nil
+	}
+	dir = manualHooksDir(repoRoot)
+	return dir, []string{fmt.Sprintf(
+		"git did not resolve the hooks directory (%v); core.hooksPath is ignored and %s is assumed", err, dir)}
 }
 
-// gitHooksPath returns git's own resolution of the hooks directory, warnings
-// about a diverted core.hooksPath, and whether git answered. The
-// work-tree-root anchor matters: without it git would walk up from a non-repo
-// repoRoot and resolve an ancestor repo's hooks.
-func gitHooksPath(repoRoot string) (string, []string, bool) {
+// errNotWorkTreeRoot says git ran and reported a work tree other than repoRoot.
+var errNotWorkTreeRoot = errors.New("not the root of a git work tree")
+
+// gitHooksPath returns git's own resolution of the hooks directory and
+// warnings about a diverted core.hooksPath. A non-nil error says why git did
+// not answer. The work-tree-root anchor matters: without it git would walk up
+// from a non-repo repoRoot and resolve an ancestor repo's hooks.
+func gitHooksPath(repoRoot string) (string, []string, error) {
 	top, err := gitOut(repoRoot, "rev-parse", "--show-toplevel")
-	if err != nil || !textscan.SamePath(top, repoRoot) {
-		return "", nil, false
+	if err != nil {
+		return "", nil, fmt.Errorf("git rev-parse --show-toplevel: %w", err)
+	}
+	if !textscan.SamePath(top, repoRoot) {
+		return "", nil, fmt.Errorf("git reports the work tree at %s, not %s: %w", top, repoRoot, errNotWorkTreeRoot)
 	}
 	hdRaw, err := gitOut(repoRoot, "rev-parse", "--git-path", "hooks")
-	if err != nil || hdRaw == "" {
-		return "", nil, false
+	if err != nil {
+		return "", nil, fmt.Errorf("git rev-parse --git-path hooks: %w", err)
+	}
+	if hdRaw == "" {
+		return "", nil, fmt.Errorf("git rev-parse --git-path hooks printed nothing")
 	}
 	hd := hdRaw
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
 	}
-	return hd, classifyHooksPath(repoRoot, top, hdRaw), true
+	return hd, classifyHooksPath(repoRoot, top, hdRaw), nil
 }
 
 // classifyHooksPath warns when the resolved hooks dir is not under the git

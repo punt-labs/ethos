@@ -875,3 +875,48 @@ func run(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, errb.String())
 	}
 }
+
+// TestHooksDirDegradedLookupWarns: when git cannot answer, the manual fallback
+// ignores core.hooksPath; the result says so.
+func TestHooksDirDegradedLookupWarns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	hd, warns := HooksDir(dir)
+	if want := filepath.Join(dir, ".git", "hooks"); hd != want {
+		t.Errorf("hooks dir = %q, want %q", hd, want)
+	}
+	if !hasWarning(warns, "core.hooksPath") || !hasWarning(warns, "git") {
+		t.Errorf("warnings = %v, want one naming git and core.hooksPath as ignored", warns)
+	}
+}
+
+// TestHooksDirRelativeRoot: a relative repo root (ETHOS_REPO_ROOT may be one)
+// resolves to the same absolute directory as the absolute spelling of it.
+func TestHooksDirRelativeRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "repo")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, dir)
+	gitConfig(t, dir, "core.hooksPath", ".husky")
+	t.Chdir(parent)
+
+	hd, warns := HooksDir("repo")
+	if !filepath.IsAbs(hd) || !strings.HasSuffix(hd, filepath.Join("repo", ".husky")) {
+		t.Errorf("hooks dir = %q, want absolute .../repo/.husky", hd)
+	}
+	if !hasWarning(warns, "inside the work tree") {
+		t.Errorf("warnings = %v, want 'inside the work tree'", warns)
+	}
+	if hasWarning(warns, "ignored") {
+		t.Errorf("git answered, but the lookup is reported degraded: %v", warns)
+	}
+}

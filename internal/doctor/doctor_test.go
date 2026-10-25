@@ -466,7 +466,9 @@ func TestCheckSealHook(t *testing.T) {
 		t.Setenv("PATH", t.TempDir()) // no git anywhere on PATH
 		r := CheckSealHook(dir)
 		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
-		assert.Equal(t, "not enabled here", r.Detail)
+		// The degraded hooks-dir lookup is named, but never fails a dormant repo.
+		assert.True(t, strings.HasPrefix(r.Detail, "not enabled here"), r.Detail)
+		assert.Contains(t, r.Detail, "core.hooksPath is ignored")
 	})
 
 	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
