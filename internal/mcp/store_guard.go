@@ -57,21 +57,40 @@ var storeWrites = map[string][]string{
 // on the handler whose stores match the store's current location.
 type toolMethod func(*Handler, context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error)
 
+// StoreLocation is one answer to "where is the repository store": the store
+// root ("" outside any repository), the repository's .punt-labs/ethos when it
+// exists ("" until enable or setup creates it), and why the store could not
+// be located (nil when it was, or outside any repository).
+type StoreLocation struct {
+	Root      string
+	EthosRoot string
+	Err       error
+}
+
+// same reports whether a and b are the same answer. Errors compare by text:
+// a freshly built error for the same .git is the same answer.
+func (a StoreLocation) same(b StoreLocation) bool {
+	return a.Root == b.Root && a.EthosRoot == b.EthosRoot && errText(a.Err) == errText(b.Err)
+}
+
 // storeRelocation re-locates the repository store on every tool call and
 // rebuilds the handler when the answer changes, so a repaired (or newly
-// broken) .git takes effect in a running server.
+// broken) .git, a repository entered, or a store created takes effect in a
+// running server.
 type storeRelocation struct {
-	locate func() error                  // nil when located or outside any repository
+	locate func() StoreLocation          // the store's location now
 	build  func(storeErr error) *Handler // a handler whose stores match that answer
 	mu     sync.Mutex
+	loc    StoreLocation // the answer cur was built for
 	cur    *Handler
 }
 
 // RelocateStore makes the registered tools locate the store again on every
 // call (cheap: resolve caches answers) and run on a handler built by build
-// for the current answer. h serves until the answer differs from its own.
-func (h *Handler) RelocateStore(locate func() error, build func(storeErr error) *Handler) {
-	h.relocation = &storeRelocation{locate: locate, build: build, cur: h}
+// for the current answer. h, built for loc, serves until the answer differs
+// from loc in any part.
+func (h *Handler) RelocateStore(loc StoreLocation, locate func() StoreLocation, build func(storeErr error) *Handler) {
+	h.relocation = &storeRelocation{locate: locate, build: build, loc: loc, cur: h}
 }
 
 // current returns the handler a tool call runs on: h itself, or, with
@@ -81,11 +100,12 @@ func (h *Handler) current() *Handler {
 	if r == nil {
 		return h
 	}
-	err := r.locate()
+	loc := r.locate()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if errText(err) != errText(r.cur.storeErr) {
-		r.cur = r.build(err)
+	if !loc.same(r.loc) {
+		r.cur = r.build(loc.Err)
+		r.loc = loc
 	}
 	return r.cur
 }

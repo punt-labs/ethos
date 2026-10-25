@@ -30,14 +30,15 @@ func runServeImpl() error {
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	storeErr := locateServeStore()
-	if storeErr != nil {
-		fmt.Fprintf(os.Stderr, "ethos serve: %v; write tools will refuse until it is repaired\n", storeErr)
+	loc := locateServeStore()
+	if loc.Err != nil {
+		fmt.Fprintf(os.Stderr, "ethos serve: %v; write tools will refuse until it is repaired\n", loc.Err)
 	}
-	h := buildServeHandler(home, storeErr)
+	h := buildServeHandler(home, loc.Err)
 	// The store is located again on every tool call, and the stores rebuilt
-	// when the answer changes: repairing .git takes effect without a restart.
-	h.RelocateStore(locateServeStore, func(storeErr error) *mcp.Handler {
+	// when the answer changes: repairing .git, entering a repository, or a
+	// store created by enable or setup takes effect without a restart.
+	h.RelocateStore(loc, locateServeStore, func(storeErr error) *mcp.Handler {
 		return buildServeHandler(home, storeErr)
 	})
 	h.RegisterTools(s)
@@ -48,13 +49,23 @@ func runServeImpl() error {
 	return nil
 }
 
-// locateServeStore is why the repository store cannot be located, or nil when
-// it is located or the server runs outside any repository.
-func locateServeStore() error {
-	if _, err := resolve.LocateStoreRoot(); err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		return err
+// locateServeStore is where the repository store is for the working
+// directory now: its root and .punt-labs/ethos, or why it cannot be located.
+// Outside any repository both roots are "" and there is no error.
+func locateServeStore() mcp.StoreLocation {
+	root, err := resolve.LocateStoreRoot()
+	if err != nil {
+		if errors.Is(err, resolve.ErrNotInRepo) {
+			return mcp.StoreLocation{}
+		}
+		return mcp.StoreLocation{Err: err}
 	}
-	return nil
+	loc := mcp.StoreLocation{Root: root}
+	ethos := filepath.Join(root, ".punt-labs", "ethos")
+	if info, err := os.Stat(ethos); err == nil && info.IsDir() {
+		loc.EthosRoot = ethos
+	}
+	return loc
 }
 
 // buildServeHandler builds the MCP handler with every store resolved for the

@@ -55,3 +55,28 @@ func TestMCP_RepairedGitTakesEffectWithoutRestart(t *testing.T) {
 	result = callTool(t, c, "identity", map[string]interface{}{"method": "list"})
 	assert.NotContains(t, allText(t, result), "could not be located")
 }
+
+// A running `ethos serve` whose repository gains its store (enable or setup
+// ran) writes to that store on the next call, not the global one it started
+// with.
+func TestMCP_StoreCreatedTakesEffectWithoutRestart(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	env := setupMCPTestEnv(t)
+	store := filepath.Join(env.repo, ".punt-labs", "ethos")
+	saved := filepath.Join(env.repo, "saved-ethos")
+	require.NoError(t, os.Rename(store, saved))
+
+	c := startMCPClient(t, env)
+	result := callTool(t, c, "identity", map[string]interface{}{"method": "list"})
+	require.False(t, result.IsError, allText(t, result))
+
+	require.NoError(t, os.Rename(saved, store)) // enable creates the store
+
+	create := map[string]interface{}{"method": "create", "name": "River Tam", "handle": "river", "kind": "human"}
+	result = callTool(t, c, "identity", create)
+	assert.False(t, result.IsError, allText(t, result))
+	assert.FileExists(t, filepath.Join(store, "identities", "river.yaml"), "the write lands in the new repository store")
+	assert.NoFileExists(t, filepath.Join(env.home, ".punt-labs", "ethos", "identities", "river.yaml"))
+}

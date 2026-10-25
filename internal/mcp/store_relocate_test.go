@@ -20,11 +20,11 @@ import (
 func TestStoreRelocatedPerCall(t *testing.T) {
 	var broken atomic.Bool
 	broken.Store(true)
-	locate := func() error {
+	locate := func() StoreLocation {
 		if broken.Load() {
-			return errNoStore
+			return StoreLocation{Err: errNoStore}
 		}
-		return nil
+		return StoreLocation{Root: "/r", EthosRoot: "/r/.punt-labs/ethos"}
 	}
 	var builds atomic.Int32
 	build := func(storeErr error) *Handler {
@@ -42,8 +42,9 @@ func TestStoreRelocatedPerCall(t *testing.T) {
 		)
 	}
 
-	h := build(locate())
-	h.RelocateStore(locate, build)
+	loc := locate()
+	h := build(loc.Err)
+	h.RelocateStore(loc, locate, build)
 	srv := server.NewMCPServer("test", "0.0.0", server.WithToolCapabilities(true))
 	h.RegisterTools(srv)
 	builds.Store(0)
@@ -76,4 +77,45 @@ func TestStoreRelocatedPerCall(t *testing.T) {
 	broken.Store(true) // and breaks it again
 	assert.Contains(t, call("create"), "refusing")
 	assert.Equal(t, int32(2), builds.Load())
+}
+
+// The handler is rebuilt whenever the location changes, not only its error:
+// a server started outside any repository that is then run in one (or whose
+// repository gains a store from enable or setup) uses the repository store.
+func TestStoreRelocatedOnLocationChange(t *testing.T) {
+	var loc atomic.Value
+	loc.Store(StoreLocation{})
+	locate := func() StoreLocation { return loc.Load().(StoreLocation) }
+	var builds atomic.Int32
+	build := func(storeErr error) *Handler {
+		builds.Add(1)
+		s := identity.NewStore(t.TempDir())
+		return NewHandlerWithOptions(s,
+			attribute.NewStore(s.Root(), attribute.Talents),
+			attribute.NewStore(s.Root(), attribute.Personalities),
+			attribute.NewStore(s.Root(), attribute.WritingStyles),
+			WithStoreError(storeErr),
+		)
+	}
+	h := build(nil)
+	h.RelocateStore(locate(), locate, build)
+	builds.Store(0)
+
+	cur := h.current()
+	assert.Same(t, h, cur, "unchanged: the first handler serves")
+
+	steps := []StoreLocation{
+		{Root: "/r"}, // not in a repository → in one, no store yet
+		{Root: "/r", EthosRoot: "/r/.punt-labs/ethos"}, // enable or setup created the store
+		{Root: "/s", EthosRoot: "/s/.punt-labs/ethos"}, // another repository
+		{}, // outside any repository again
+	}
+	for i, step := range steps {
+		loc.Store(step)
+		next := h.current()
+		assert.NotSame(t, cur, next, "step %d: %+v rebuilds", i, step)
+		assert.Equal(t, int32(i+1), builds.Load())
+		assert.Same(t, next, h.current(), "step %d: no rebuild while unchanged", i)
+		cur = next
+	}
 }
