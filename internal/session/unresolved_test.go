@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
@@ -48,8 +50,34 @@ func TestPurgeSkipsUnresolvedRepoRosters(t *testing.T) {
 	assert.NotContains(t, refused, "sess-un")
 	assert.Contains(t, out, "sess-un")
 	assert.Contains(t, out, "git did not answer")
+	assert.Contains(t, out, "ethos session delete --session sess-un", "the notice names the fix")
+	assert.Contains(t, out, "--force")
 	assert.Contains(t, purged, "sess-origin-less", "a no-origin roster still matches a no-origin checkout")
 	ids, err := s.List()
 	require.NoError(t, err)
 	assert.Contains(t, ids, "sess-un", "the skipped roster is kept")
+}
+
+// Under --force an unresolved roster is removed, with no tombstone: a
+// tombstone with Repo "" would match no-origin checkouts.
+func TestPurgeForceRemovesUnresolvedRosters(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.CreateUnresolved("sess-un", root, primary, "git did not answer", t.TempDir(), "h"))
+	var purged []string
+	var err error
+	testhelpers.CaptureStderr(t, func() {
+		purged, _, err = s.PurgeTombstoned(t.TempDir(), "", true)
+	})
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-un")
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "sess-un")
+	tombstones, err := os.ReadDir(filepath.Join(s.root, "sessions"))
+	require.NoError(t, err)
+	for _, e := range tombstones {
+		assert.NotContains(t, e.Name(), "tombstone", "no loss tombstone is written")
+	}
 }

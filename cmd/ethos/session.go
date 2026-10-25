@@ -348,7 +348,10 @@ func printRoster(cmd *cobra.Command, ss *session.Store, sessionID string) error 
 	}
 
 	fmt.Fprintf(out, "Session: %s\n", roster.Session)
-	if roster.Repo != "" {
+	switch {
+	case roster.RepoUnresolved != "":
+		fmt.Fprintf(out, "Repo:    unresolved (%s)\n", roster.RepoUnresolved)
+	case roster.Repo != "":
 		fmt.Fprintf(out, "Repo:    %s\n", roster.Repo)
 	}
 	if roster.Host != "" {
@@ -783,6 +786,7 @@ func runSessionList(cmd *cobra.Command) error {
 		Session      string `json:"session"`
 		Started      string `json:"started"`
 		Repo         string `json:"repo,omitempty"`
+		Unresolved   string `json:"repo_unresolved,omitempty"`
 		Host         string `json:"host,omitempty"`
 		Participants int    `json:"participants"`
 	}
@@ -798,6 +802,7 @@ func runSessionList(cmd *cobra.Command) error {
 			Session:      id,
 			Started:      roster.Started,
 			Repo:         roster.Repo,
+			Unresolved:   roster.RepoUnresolved,
 			Host:         roster.Host,
 			Participants: len(roster.Participants),
 		})
@@ -820,7 +825,10 @@ func runSessionList(cmd *cobra.Command) error {
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
 		repo := e.Repo
-		if repo == "" {
+		switch {
+		case e.Unresolved != "":
+			repo = "unresolved"
+		case repo == "":
 			repo = "-"
 		}
 		rows[i] = []string{

@@ -561,10 +561,24 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	// would otherwise claim it. Leave it, with a notice, for a purge run once
 	// its identity can be established.
 	if roster.RepoUnresolved != "" {
+		if !force {
+			fmt.Fprintf(os.Stderr,
+				"ethos: purge: skipping %s: its repository identity was not resolved when it started (%s), so it is never matched against this checkout; "+
+					"remove it with `ethos session delete --session %s`, or re-run `ethos session purge --force`\n",
+				roster.Session, roster.RepoUnresolved, roster.Session)
+			return false, false
+		}
+		// Under --force there is no identity to record a loss tombstone against
+		// (a tombstone with Repo "" would match no-origin checkouts), so the
+		// roster is removed and the loss is not recorded.
+		if err := s.deleteFiles(roster.Session); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", roster.Session, err)
+			return false, true
+		}
 		fmt.Fprintf(os.Stderr,
-			"ethos: purge: skipping %s: its repository identity was not resolved when it started (%s); it is never matched against this checkout\n",
+			"ethos: purge: force-purged %s, whose repository identity was never resolved (%s); its unsealed state was not verified and no loss is recorded\n",
 			roster.Session, roster.RepoUnresolved)
-		return false, false
+		return true, false
 	}
 	// A session bound to a different repo identity has its live audit zone under
 	// another checkout by construction; this checkout cannot probe it, so leave

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -546,4 +547,41 @@ func seedAttr(t *testing.T, se *cliSubprocessEnv, kind, slug, content string) {
 	dir := filepath.Join(se.home, ".punt-labs", "ethos", kind)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, slug+".md"), []byte(content), 0o644))
+}
+
+// A roster whose repository identity was unresolved is shown as such: `list`
+// says "unresolved" where a no-origin checkout says "-", and `show` prints the
+// reason. `purge --force` removes it.
+func TestUnresolvedRosterListShowPurge(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	ss := sessionStore()
+	root := session.Participant{AgentID: "u"}
+	primary := session.Participant{AgentID: "9999999", Parent: "u"}
+	require.NoError(t, ss.CreateUnresolved("sess-unres-1", root, primary, "git did not answer", se.repo, "h"))
+	require.NoError(t, ss.CreateInCheckout("sess-noorigin-1", root, primary, "", se.repo, "h"))
+
+	list, _, err := execHandler(t, "session", "list")
+	require.NoError(t, err)
+	for _, line := range strings.Split(list, "\n") {
+		switch {
+		case strings.Contains(line, "sess-unr"):
+			assert.Contains(t, line, "unresolved", "the unresolved roster says so: %q", line)
+		case strings.Contains(line, "sess-noo"):
+			assert.NotContains(t, line, "unresolved", "a no-origin roster is not unresolved: %q", line)
+		}
+	}
+
+	show, _, err := execHandler(t, "session", "show", "sess-unres-1")
+	require.NoError(t, err)
+	assert.Contains(t, show, "unresolved")
+	assert.Contains(t, show, "git did not answer")
+
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	_, _, err = execHandler(t, "session", "purge", "--force")
+	require.NoError(t, err)
+	ids, err := ss.List()
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "sess-unres-1", "purge --force removes an unresolved roster")
 }
