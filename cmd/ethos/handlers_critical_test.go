@@ -355,10 +355,10 @@ func TestImportSoulSpec_EmptySoul(t *testing.T) {
 // writes via fmt.Printf, not cobra's cmd.OutOrStdout).
 //
 // runSeed resolves a repo-local agents destination from the process cwd
-// (internal/resolve.FindRepoRoot), so running in-process from this repo's
+// (internal/resolve.CheckoutRootIfAny), so running in-process from this repo's
 // own working tree would self-seed this actual repo's .claude/agents/ as an
 // unwanted test side effect. t.Chdir into an isolated, gitless temp dir for
-// the call's duration so FindRepoRoot finds no repo and the agents category
+// the call's duration so CheckoutRootIfAny finds no repo and the agents category
 // is skipped, matching every existing seed test's global-only expectations.
 func execSeed(t *testing.T, args ...string) (stdout string, err error) {
 	t.Helper()

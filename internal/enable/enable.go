@@ -346,7 +346,7 @@ func unchainHooks(l githook.Lookup, dir string, rep *Report) error {
 // or parsed — a malformed config must not masquerade as absent and draw the
 // setup hint. At most one of the two is non-empty.
 //
-// storeRoot is the shared store (StoreRepoRoot), where setup writes
+// storeRoot is the shared store (StoreRootIfAny), where setup writes
 // .punt-labs/ethos.yaml and identities live — NOT the checkout, or from a
 // worktree the check reads an absent config and spuriously hints "run setup"
 // (#370). An empty storeRoot (no repo / a refused override) yields no hint:

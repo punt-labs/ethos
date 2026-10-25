@@ -178,7 +178,7 @@ func TestAuditMigrate_IdempotentSecondRun(t *testing.T) {
 
 func TestAuditMigrate_OutsideRepo_ExitsUsage(t *testing.T) {
 	// t.TempDir uses TMPDIR which under .envrc points into the
-	// project's .tmp/, so FindRepoRoot would walk up and find the
+	// project's .tmp/, so CheckoutRootIfAny would walk up and find the
 	// project's own .git. Allocate under /tmp explicitly so the walk
 	// returns empty.
 	nonRepo, err := os.MkdirTemp("/tmp", "ethos-audit-norepo-*")
@@ -383,7 +383,7 @@ func TestAuditShow_InvalidFormat(t *testing.T) {
 }
 
 func TestAuditShow_OutsideRepo_ExitsUsage(t *testing.T) {
-	// Like the migrate variant: use /tmp so FindRepoRoot returns empty.
+	// Like the migrate variant: use /tmp so CheckoutRootIfAny returns empty.
 	nonRepo, err := os.MkdirTemp("/tmp", "ethos-audit-show-norepo-*")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(nonRepo) })

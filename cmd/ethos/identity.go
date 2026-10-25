@@ -32,7 +32,7 @@ func globalStore() *identity.Store {
 // role, team, and attribute stores are derived from the returned store,
 // so every layer answers from the same reading of the repo config.
 func identityStore() identity.IdentityStore {
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootOrGlobal()
 	bundleRoot := resolveBundleRoot()
 	return newIdentityStore(repoRoot, bundleRoot, repoAuthoritativeMode(repoRoot, bundleRoot))
 }
@@ -51,7 +51,7 @@ func identityStore() identity.IdentityStore {
 // Everything vendor WRITES is still verified under repo-only, by the
 // completeness check it runs on its own output.
 func vendorSourceStore() identity.IdentityStore {
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootOrGlobal()
 	bundleRoot := resolveBundleRoot()
 	// Resolve the mode anyway, so a misconfigured repo-only repo still
 	// fails at startup rather than silently vendoring under a config
@@ -135,8 +135,8 @@ func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 // resolutionConfigRoot returns the tree whose .punt-labs/ethos.yaml
 // carries the resolution policy.
 //
-// It is StoreRepoRoot, except when a set ETHOS_REPO_ROOT was REFUSED —
-// StoreRepoRoot returns "" for a refused override, which would leave the
+// It is StoreRootIfAny, except when a set ETHOS_REPO_ROOT was REFUSED —
+// StoreRootIfAny returns "" for a refused override, which would leave the
 // repo's own config unread and let a repo-only repo fall back to global
 // on a warning alone. Reading the mode from the override path directly
 // means the refusal cannot launder itself into the silent fallback

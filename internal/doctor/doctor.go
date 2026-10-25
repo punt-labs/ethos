@@ -50,7 +50,7 @@ func (r Result) Passed() bool {
 //
 // repoRoot is the current work tree (LocateRepoRoot) — the checkout whose
 // .claude/agents and seal hook the checks inspect. storeRoot is the shared
-// mission/config store (StoreRepoRoot); it differs from repoRoot only inside
+// mission/config store (StoreRootIfAny); it differs from repoRoot only inside
 // a linked worktree, and only the team-config read in CheckOrphanedAgentFiles
 // needs it (Bugbot #370 class: resolving the active team from the worktree
 // while activation wrote it to the store produced false orphan reports).
@@ -245,7 +245,7 @@ func PassedCount(results []Result) int {
 // .claude/agents/ is per-checkout state (session_start and agent_installer
 // write it there), so the glob is checkout-rooted. storeRoot is the shared
 // store: the active team lives in .punt-labs/ethos.yaml resolved via
-// StoreRepoRoot by every other reader and the writer (team activate), so the
+// StoreRootIfAny by every other reader and the writer (team activate), so the
 // team read must use it too — resolving the team from the worktree while
 // activation wrote it to the store would compute "expected" agents from the
 // wrong team and flag valid agents as orphaned (Bugbot #370 class). They
@@ -955,7 +955,7 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) Result {
 // the returned bool, so prepending "error: " would double-label.
 //
 // repoRoot is the checkout, used only for the "in a git repo" guard.
-// storeRoot is the shared store: the agent: key resolves via StoreRepoRoot
+// storeRoot is the shared store: the agent: key resolves via StoreRootIfAny
 // in every other consumer (session_start's persona, resolveLeader, ethos
 // resolve-agent), so this health check must read it from the same tree — or
 // from a worktree it would report a default agent that disagrees with the

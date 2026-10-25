@@ -10,7 +10,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/hook"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -239,6 +238,13 @@ func activeRepoSessions(repoRoot string, errOut io.Writer) []hook.ActiveSession 
 		if err != nil {
 			continue
 		}
+		if roster.RepoUnresolved != "" {
+			// Its repository identity was never resolved: it cannot be
+			// matched to this checkout, a no-origin one included.
+			fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check skips session %s: its repository identity was not resolved when it started (%s)\n",
+				id, roster.RepoUnresolved)
+			continue
+		}
 		if roster.Repo == repoID {
 			out = append(out, hook.ActiveSession{Session: id, Checkout: roster.Checkout})
 		}
@@ -250,10 +256,9 @@ func activeRepoSessions(repoRoot string, errOut io.Writer) []hook.ActiveSession 
 // retires a corrupt chunk named by chunkPath and recovers what the live file
 // holds, printing a one-line summary of the marker it wrote.
 func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
-	repoRoot := resolve.EnvRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: audit quarantine must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireCheckout(errOut, "audit quarantine")
+	if err != nil {
+		return err
 	}
 	// Resolve a relative path against the repo root so the operator can pass
 	// the path exactly as the seal/read error printed it.
@@ -283,10 +288,9 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 // stderr and returns failClosed so the process exits 2, blocking the
 // commit. A gitlink-mounted no-op and a nothing-to-seal run both exit 0.
 func runAuditSeal(out, errOut io.Writer) error {
-	repoRoot := resolve.EnvRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: audit seal must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireCheckout(errOut, "audit seal")
+	if err != nil {
+		return err
 	}
 	opts := hook.SealOptions{
 		DryRun:    auditSealDryRun,
@@ -335,10 +339,9 @@ func runAuditSeal(out, errOut io.Writer) error {
 // "must run inside a repo" with exit code 2 when no repo root can be
 // found.
 func runAuditMigrate(out, errOut io.Writer) error {
-	repoRoot := resolve.EnvRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: audit migrate must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireCheckout(errOut, "audit migrate")
+	if err != nil {
+		return err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -379,10 +382,9 @@ func runAuditMigrate(out, errOut io.Writer) error {
 // for matching entries, then renders them as JSONL or as a one-line
 // text summary per entry.
 func runAuditShow(out, errOut io.Writer) error {
-	repoRoot := resolve.EnvRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: audit show must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireCheckout(errOut, "audit show")
+	if err != nil {
+		return err
 	}
 	switch auditShowFormat {
 	case "json", "text":

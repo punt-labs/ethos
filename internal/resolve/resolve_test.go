@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -1241,7 +1240,7 @@ func TestResolveResolution_NoRepoOrConfig(t *testing.T) {
 	assert.Equal(t, ResolutionLayered, got)
 }
 
-// --- FindRepoRoot tests ---
+// --- CheckoutRootIfAny tests ---
 
 func TestFindRepoRoot_FindsGitDir(t *testing.T) {
 	root := t.TempDir()
@@ -1254,7 +1253,9 @@ func TestFindRepoRoot_FindsGitDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 	require.NoError(t, os.Chdir(subdir))
 
-	assert.Equal(t, root, FindRepoRoot())
+	got, err := CheckoutRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, root, got)
 }
 
 func TestFindRepoRoot_NoGitDir(t *testing.T) {
@@ -1266,7 +1267,8 @@ func TestFindRepoRoot_NoGitDir(t *testing.T) {
 
 	// May find a .git above the temp dir on some systems.
 	// The important thing is it doesn't panic or error.
-	result := FindRepoRoot()
+	result, err := CheckoutRootIfAny()
+	require.NoError(t, err)
 	if result != "" {
 		// Found a .git somewhere above — valid on dev machines.
 		_, err := os.Stat(filepath.Join(result, ".git"))
@@ -1275,9 +1277,9 @@ func TestFindRepoRoot_NoGitDir(t *testing.T) {
 }
 
 // TestStoreRepoRoot_LinkedWorktree pins the ethos-yofr fix: from inside a
-// linked git worktree, StoreRepoRoot (and FindRepoEthosRoot, which rides on
+// linked git worktree, StoreRootIfAny (and EthosRootIfAny, which rides on
 // it) resolves the MAIN work tree that holds .punt-labs/ethos, while
-// FindRepoRoot keeps returning the worktree for per-checkout state.
+// CheckoutRootIfAny keeps returning the worktree for per-checkout state.
 func TestStoreRepoRoot_LinkedWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -1297,12 +1299,18 @@ func TestStoreRepoRoot_LinkedWorktree(t *testing.T) {
 
 	chdir(t, wt)
 
-	assert.Equal(t, realpath(t, main), realpath(t, StoreRepoRoot()),
+	store, err := StoreRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, main), realpath(t, store),
 		"the store must resolve to the main work tree that holds .punt-labs/ethos")
-	assert.Equal(t, realpath(t, ethosRoot), realpath(t, FindRepoEthosRoot()),
-		"FindRepoEthosRoot rides on StoreRepoRoot, so the repo store resolves from the worktree")
-	assert.Equal(t, realpath(t, wt), realpath(t, FindRepoRoot()),
-		"FindRepoRoot stays worktree-local for per-checkout state")
+	ethos, err := EthosRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, ethosRoot), realpath(t, ethos),
+		"EthosRootIfAny rides on the store root, so the repo store resolves from the worktree")
+	checkout, err := CheckoutRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, wt), realpath(t, checkout),
+		"CheckoutRootIfAny stays worktree-local for per-checkout state")
 }
 
 // TestRepoRoot_EnvOverrideValid pins that a well-formed ETHOS_REPO_ROOT
@@ -1312,9 +1320,12 @@ func TestRepoRoot_EnvOverrideValid(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755))
 	t.Setenv("ETHOS_REPO_ROOT", dir)
-	assert.Equal(t, dir, FindRepoRoot())
-	assert.Equal(t, dir, StoreRepoRoot())
-	assert.Equal(t, dir, EnvRepoRoot())
+	checkout, err := CheckoutRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, dir, checkout)
+	store, err := StoreRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, dir, store)
 }
 
 // TestRepoRoot_EnvOverrideInvalid pins the SFH F1 fix: an override that
@@ -1325,41 +1336,43 @@ func TestRepoRoot_EnvOverrideInvalid(t *testing.T) {
 	t.Run("nonexistent path is refused", func(t *testing.T) {
 		bogus := filepath.Join(t.TempDir(), "does-not-exist")
 		t.Setenv("ETHOS_REPO_ROOT", bogus)
-		out := captureStderr(t, func() {
-			assert.Equal(t, "", StoreRepoRoot())
-			assert.Equal(t, "", FindRepoRoot())
-		})
-		assert.Contains(t, out, bogus)
-		assert.Contains(t, out, "refusing to use it")
+		store, err := StoreRootIfAny()
+		require.Error(t, err)
+		assert.Empty(t, store)
+		assert.Contains(t, err.Error(), bogus)
+		assert.Contains(t, err.Error(), "refusing to use it")
+		checkout, err := CheckoutRootIfAny()
+		require.Error(t, err)
+		assert.Empty(t, checkout)
 	})
 
-	t.Run("no store is refused by StoreRepoRoot but accepted by FindRepoRoot", func(t *testing.T) {
+	t.Run("no store is refused by StoreRootIfAny but accepted by CheckoutRootIfAny", func(t *testing.T) {
 		dir := t.TempDir() // exists, but has no .punt-labs/ethos
 		t.Setenv("ETHOS_REPO_ROOT", dir)
-		out := captureStderr(t, func() {
-			assert.Equal(t, "", StoreRepoRoot(),
-				"StoreRepoRoot requires a .punt-labs/ethos store")
-			assert.Equal(t, dir, FindRepoRoot(),
-				"FindRepoRoot only requires the directory to exist (per-checkout state)")
-		})
-		assert.Contains(t, out, dir)
-		assert.Contains(t, out, ".punt-labs")
+		store, err := StoreRootIfAny()
+		require.Error(t, err, "the store root requires a .punt-labs/ethos store")
+		assert.Empty(t, store)
+		assert.Contains(t, err.Error(), dir)
+		assert.Contains(t, err.Error(), ".punt-labs")
+		checkout, err := CheckoutRootIfAny()
+		require.NoError(t, err, "the checkout root only requires the directory to exist")
+		assert.Equal(t, dir, checkout)
 	})
 }
 
 // The resolvers run on every command and hook: the same refusal or stale
 // worktree is said once per process, not once per call.
 func TestResolverMessagesPrintOnce(t *testing.T) {
-	t.Run("refused override", func(t *testing.T) {
+	t.Run("refused override is an error, not a message", func(t *testing.T) {
 		bogus := filepath.Join(t.TempDir(), "does-not-exist")
 		t.Setenv("ETHOS_REPO_ROOT", bogus)
 		out := captureStderr(t, func() {
-			StoreRepoRoot()
-			StoreRepoRoot()
-			FindRepoRoot()
-			FindRepoRoot()
+			_, err := StoreRootIfAny()
+			assert.Error(t, err)
+			_, err = CheckoutRootIfAny()
+			assert.Error(t, err)
 		})
-		assert.Equal(t, 1, strings.Count(out, bogus))
+		assert.Empty(t, out, "the refusal is returned to the caller; nothing is printed on its behalf")
 	})
 
 }
@@ -1740,14 +1753,14 @@ func unexaminableGit(t *testing.T, mk func(dot string) error) string {
 
 func emptyGitFile(dot string) error { return os.WriteFile(dot, nil, 0o644) }
 
-// A .git that git itself cannot read stops StoreRepoRoot: walking past it
+// A .git that git itself cannot read stops StoreRootIfAny: walking past it
 // would resolve the enclosing repository and write into the wrong store.
-func TestStoreRepoRootStopsAtUnexaminableGit(t *testing.T) {
+func TestStoreRootIfAnyStopsAtUnexaminableGit(t *testing.T) {
 	inner := unexaminableGit(t, emptyGitFile)
-	var got string
-	out := captureStderr(t, func() { got = StoreRepoRoot() })
+	got, err := StoreRootIfAny()
+	require.Error(t, err)
 	assert.Empty(t, got)
-	assert.Contains(t, out, filepath.Join(inner, ".git"))
+	assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
 }
 
 func TestLocateStoreRoot(t *testing.T) {
@@ -1797,23 +1810,25 @@ func TestLocateStoreRoot(t *testing.T) {
 	})
 }
 
-// FindRepoRoot reports why it found nothing when the cause is not simply
+// CheckoutRootIfAny reports why it found nothing when the cause is not simply
 // "outside a repository".
-func TestFindRepoRootReportsUnexaminableGit(t *testing.T) {
+func TestCheckoutRootIfAnyReportsUnexaminableGit(t *testing.T) {
 	inner := unexaminableGit(t, emptyGitFile)
-	var got string
-	out := captureStderr(t, func() { got = FindRepoRoot() })
+	got, err := CheckoutRootIfAny()
+	require.Error(t, err)
 	assert.Empty(t, got)
-	assert.Contains(t, out, filepath.Join(inner, ".git"))
+	assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
 }
 
-func TestFindRepoRootSilentOutsideARepo(t *testing.T) {
+func TestCheckoutRootIfAnySilentOutsideARepo(t *testing.T) {
 	if _, err := os.Stat("/.git"); err == nil {
 		t.Skip("/ is inside a repository")
 	}
 	t.Chdir("/")
 	var got string
-	out := captureStderr(t, func() { got = FindRepoRoot() })
+	var err error
+	out := captureStderr(t, func() { got, err = CheckoutRootIfAny() })
+	require.NoError(t, err, "outside a repository is not a failure")
 	assert.Empty(t, got)
 	assert.Empty(t, out)
 }

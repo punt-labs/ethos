@@ -185,8 +185,8 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // genuine read error there still propagates, since each is a single,
 // currently-relevant file rather than an unbounded pool of historical
 // chunks.
-// checkoutRoot names the current work tree (resolve.EnvRepoRoot /
-// FindRepoRoot), distinct from repoRoot (the store root — the main
+// checkoutRoot names the current work tree (resolve.CheckoutRootIfAny /
+// CheckoutRootIfAny), distinct from repoRoot (the store root — the main
 // work tree) when the caller is running from a linked worktree. Both
 // the sealed scan and the live scan below cover repoRoot AND, when
 // different, checkoutRoot — see collectSealedContractIDs and
@@ -205,7 +205,7 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // PR #508 round 4, finding H1: a session running inside a linked
 // worktree writes its live (not-yet-sealed) audit file under THAT
 // worktree's own .punt-labs/local/ethos/sessions/, never under the
-// main tree StoreRepoRoot points at — so a repoRoot-only live scan
+// main tree StoreRootIfAny points at — so a repoRoot-only live scan
 // is blind to exactly the most recent, most likely-to-be-open
 // sessions when the caller (or `mission create`/`dispatch`) is
 // itself running from a worktree, which per the leader's own report

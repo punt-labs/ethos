@@ -119,7 +119,7 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(globalIDs, "test-agent.yaml"), idData, 0o644))
 
-	// Repo: git init so FindRepoRoot stops here.
+	// Repo: git init so CheckoutRootIfAny stops here.
 	repoEthos := filepath.Join(repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(filepath.Join(repoEthos, "identities"), 0o755))
 
@@ -163,7 +163,7 @@ func startMCPClient(t *testing.T, env *mcpTestEnv) *client.Client {
 	t.Helper()
 
 	// Use WithCommandFunc to set CWD on the subprocess so
-	// FindRepoRoot discovers the fake repo.
+	// CheckoutRootIfAny discovers the fake repo.
 	cmdFunc := func(ctx context.Context, command string, envVars []string, args []string) (*exec.Cmd, error) {
 		cmd := exec.CommandContext(ctx, command, args...)
 		cmd.Dir = env.repo

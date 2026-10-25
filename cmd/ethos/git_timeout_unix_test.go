@@ -12,6 +12,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -153,4 +154,30 @@ func TestAuditSealGitTimeoutFailsClosed(t *testing.T) {
 	assert.Contains(t, msg, repo)
 	assert.Contains(t, msg, "nothing was sealed or staged")
 	assert.Contains(t, msg, "the commit is blocked and the tree is unchanged")
+}
+
+// The vacuum cross-check never matches a roster whose repository identity was
+// unresolved against a no-origin checkout (identity ""): it skips it with a
+// notice, while a roster that recorded "" for a no-origin checkout matches.
+func TestActiveRepoSessionsSkipsUnresolvedRosters(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ss := sessionStore()
+	root := session.Participant{AgentID: "u"}
+	primary := session.Participant{AgentID: "9999999", Parent: "u"}
+	require.NoError(t, ss.CreateUnresolved("sess-un", root, primary, "git did not answer", "/co", "h"))
+	require.NoError(t, ss.CreateInCheckout("sess-none", root, primary, "", "/co", "h"))
+	fake := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fake, "git"), []byte("#!/bin/sh\necho 'error: No such remote' >&2\nexit 2\n"), 0o755))
+	t.Setenv("PATH", fake)
+
+	var errb bytes.Buffer
+	got := activeRepoSessions(t.TempDir(), &errb)
+	var ids []string
+	for _, a := range got {
+		ids = append(ids, a.Session)
+	}
+	assert.Equal(t, []string{"sess-none"}, ids)
+	assert.Contains(t, errb.String(), "sess-un")
+	assert.Contains(t, errb.String(), "git did not answer")
 }

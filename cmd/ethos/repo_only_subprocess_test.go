@@ -82,7 +82,7 @@ func TestCLI_RepoOnlyWithoutStoreIsFatal(t *testing.T) {
 	assert.Contains(t, stderr, "no identity store")
 }
 
-// A REFUSED ETHOS_REPO_ROOT leaves StoreRepoRoot empty. If the mode were
+// A REFUSED ETHOS_REPO_ROOT leaves StoreRootIfAny empty. If the mode were
 // read from that empty root, the repo's own config would go unread and a
 // repo-only repo would list global identities on a warning alone, exit
 // 0 — laundering the refusal into the silent fallback repo-only forbids.

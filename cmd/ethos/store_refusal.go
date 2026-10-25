@@ -42,7 +42,7 @@ const (
 // persona to the roster: the persona is recorded as given, never looked up
 // or validated against the identity store. session start refuses: its
 // --persona and its default root resolve through the identity store. session purge checks the checkout's audit files
-// (FindRepoRoot), not the store. session write-current is doctor's own
+// (CheckoutRootIfAny), not the store. session write-current is doctor's own
 // remedy for a broken session pointer. adr list, show and settle use only
 // ~/.punt-labs/ethos/adrs; adr create resolves its default author through the
 // identity store, so it refuses. The MCP session and adr tools stay

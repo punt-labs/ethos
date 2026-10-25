@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -36,24 +37,25 @@ func init() {
 }
 
 func runUI() error {
-	repoRoot := resolve.EnvRepoRoot()
-	if repoRoot == "" {
+	repoRoot, err := resolve.LocateRepoRoot()
+	if errors.Is(err, resolve.ErrNotInRepo) {
 		return fmt.Errorf("ethos ui must run inside a repo (no .git found)")
+	}
+	if err != nil {
+		return fmt.Errorf("ethos ui: locating the checkout: %w", err)
 	}
 	// storeRoot resolves the mission store through the git common dir, so the
 	// dashboard shows the main work tree's missions when run from a linked
 	// worktree (CR#2). Take it VERBATIM — no fallback to repoRoot. repoRoot
-	// (EnvRepoRoot, requireStore=false) would re-accept an ETHOS_REPO_ROOT
-	// that StoreRepoRoot deliberately refused (F1 fail-closed), resurrecting
+	// (CheckoutRootIfAny, requireStore=false) would re-accept an ETHOS_REPO_ROOT
+	// that StoreRootIfAny deliberately refused (F1 fail-closed), resurrecting
 	// the very override the store resolver rejected (Bugbot MED on PR #370,
 	// same class as tierBStoreRoot's dropped Getwd fallback). When the store
 	// root cannot be resolved — a refused override — fail loud rather than
 	// serve a repo-scoped dashboard off a relative or wrong tree.
-	storeRoot := resolve.StoreRepoRoot()
-	if storeRoot == "" {
-		return fmt.Errorf("ui: cannot resolve the mission store root " +
-			"(ETHOS_REPO_ROOT was set but refused); unset it or point it at a " +
-			"repo with a .punt-labs/ethos store")
+	storeRoot, err := resolve.LocateStoreRoot()
+	if err != nil {
+		return fmt.Errorf("ui: cannot resolve the mission store root: %w", err)
 	}
 
 	srv, err := ui.NewServer(repoRoot, storeRoot)

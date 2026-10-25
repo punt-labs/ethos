@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// gitInitDir runs `git init` in dir so FindRepoRoot stops there rather
+// gitInitDir runs `git init` in dir so CheckoutRootIfAny stops there rather
 // than walking up past the temp dir into a real git ancestor. It sets a
 // repo-local user.email — the realistic state of a fresh clone, and what
 // setup defaults the identity's email from.
@@ -154,7 +154,7 @@ func TestRunDoctor_Failure(t *testing.T) {
 	// misconfiguration: the store holds an identity, but none matches the
 	// caller (USER=nobody). An empty store is a fresh-install WARN, not a
 	// FAIL, so a non-matching identity must be present. Git-init the cwd so
-	// FindRepoRoot does not walk up into a real git ancestor.
+	// CheckoutRootIfAny does not walk up into a real git ancestor.
 	home := t.TempDir()
 	globalIDs := filepath.Join(home, ".punt-labs", "ethos", "identities")
 	require.NoError(t, os.MkdirAll(globalIDs, 0o755))
@@ -478,7 +478,7 @@ func TestRunResolveAgent_Configured(t *testing.T) {
 }
 
 func TestRunResolveAgent_NotConfigured(t *testing.T) {
-	// Git-init repo without ethos.yaml: FindRepoRoot finds repo, but
+	// Git-init repo without ethos.yaml: CheckoutRootIfAny finds repo, but
 	// ResolveAgent returns empty, so handler prints nothing and exits 0.
 	home := t.TempDir()
 	repo := t.TempDir()

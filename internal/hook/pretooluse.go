@@ -11,7 +11,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.
@@ -123,7 +122,14 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
-	repoRoot := allowlistRepoRoot()
+	repoRoot, rootErr := tierBRepoRoot()
+	if rootErr != nil {
+		// The checkout cannot be located, so a repo-relative target cannot
+		// be resolved against it: deny, naming the cause, rather than fall
+		// back to comparing the raw path.
+		return json.NewEncoder(w).Encode(preToolUseDeny(fmt.Sprintf(
+			"ethos pre-tool-use: cannot check %s against the write allowlist: %v", target, rootErr)))
+	}
 	entries := splitAllowlist(allowlist)
 	if pathAllowed(target, entries, repoRoot) {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
@@ -366,33 +372,18 @@ func pathAllowed(target string, entries []string, repoRoot string) bool {
 	return false
 }
 
-// allowlistRepoRoot returns the repo root pathAllowed's repo-relative
-// resolution branch may trust, or "" when no such root can be
-// validated.
-//
-// It must never be a bare working directory: pathAllowed's
-// repo-relative branch resolves a target against whatever root it is
-// given and then compares the RESULT against a relative write_set
-// entry. If the hook process's cwd is merely some subdirectory of the
-// repo rather than the repo root itself (a verifier subprocess
-// launched from <repo>/internal, say) and ETHOS_REPO_ROOT is unset,
-// treating that cwd as the root resolves "<repo>/internal/docs/x.md" to "docs/x.md"
-// against the wrong base — one directory too shallow — so a
-// write_set entry like "docs/**" wrongly admits a file it never
-// authorized. Before repo-relative resolution existed, such a target
-// was always denied (right answer, wrong reason); this must not
-// become a NEW way to be admitted.
-//
-// resolve.FindRepoRoot is reused rather than re-deriving the same
-// check: it already honors ETHOS_REPO_ROOT first, then walks upward
-// for the .git marker, and returns "" — never a bare, unmarked cwd —
-// when neither resolves. An empty return here means pathAllowed's
-// repoRoot parameter is "", which its own repoRoot != "" guard
-// already treats as "skip the repo-relative try, raw comparison
-// only" — i.e. the pre-fix behavior, not a new admission.
-func allowlistRepoRoot() string {
-	return resolve.FindRepoRoot()
-}
+// The repo root pathAllowed's repo-relative resolution branch may trust is
+// tierBRepoRoot's: the checkout resolve.LocateRepoRoot validated, or "" outside
+// any repository. It must never be a bare working directory:
+// pathAllowed's repo-relative branch resolves a target against whatever root
+// it is given and then compares the RESULT against a relative write_set
+// entry. If the hook process's cwd is merely some subdirectory of the repo
+// (a verifier subprocess launched from <repo>/internal, say) and
+// ETHOS_REPO_ROOT is unset, treating that cwd as the root resolves
+// "<repo>/internal/docs/x" against a write_set entry like "docs/**" and
+// wrongly admits a file it never authorized. An empty root means pathAllowed
+// skips the repo-relative try (raw comparison only), not a new admission; a
+// root that cannot be located at all is a deny naming the cause.
 
 // tierAAdvice is the one-line suggestion emitted to stderr when an
 // ad-hoc Agent spawn fires PreToolUse without a governance context.

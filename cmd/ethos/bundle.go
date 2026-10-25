@@ -8,7 +8,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/layout"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,7 +22,7 @@ import (
 // would hide the misconfiguration. The process exits with a diagnostic
 // on stderr. This matches how other fatal startup errors are handled.
 func resolveBundle() (root string, active *bundle.Bundle) {
-	root, active, err := bundle.ResolveRoot(resolve.StoreRepoRoot(), defaultGlobalRoot())
+	root, active, err := bundle.ResolveRoot(storeRootOrGlobal(), defaultGlobalRoot())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v\n", err)
 		os.Exit(1)

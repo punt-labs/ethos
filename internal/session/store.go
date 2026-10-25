@@ -56,6 +56,18 @@ func (s *Store) Create(sessionID string, root, primary Participant, repo, host s
 // checkout read the live files where they were actually written, instead of
 // concluding from their absence here that they were lost.
 func (s *Store) CreateInCheckout(sessionID string, root, primary Participant, repo, checkout, host string) error {
+	return s.create(sessionID, root, primary, repo, "", checkout, host)
+}
+
+// CreateUnresolved is CreateInCheckout for a session whose repository identity
+// could not be resolved: it records unresolved (the reason) in
+// repo_unresolved and no Repo. Purge and the vacuum cross-check skip such a
+// roster with a notice; they never match it against a checkout with no origin.
+func (s *Store) CreateUnresolved(sessionID string, root, primary Participant, unresolved, checkout, host string) error {
+	return s.create(sessionID, root, primary, "", unresolved, checkout, host)
+}
+
+func (s *Store) create(sessionID string, root, primary Participant, repo, unresolved, checkout, host string) error {
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
 	}
@@ -80,12 +92,13 @@ func (s *Store) CreateInCheckout(sessionID string, root, primary Participant, re
 	}
 
 	roster := &Roster{
-		Session:      sessionID,
-		Started:      now,
-		Repo:         repo,
-		Checkout:     checkout,
-		Host:         host,
-		Participants: participants,
+		Session:        sessionID,
+		Started:        now,
+		Repo:           repo,
+		RepoUnresolved: unresolved,
+		Checkout:       checkout,
+		Host:           host,
+		Participants:   participants,
 	}
 
 	return s.withLock(sessionID, func() error {
@@ -543,6 +556,16 @@ func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, re
 // session is purged but a flagged tombstone records the unproven loss.
 func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, force bool) (bool, bool) {
 	repo := roster.Repo
+	// A roster whose repository identity was never resolved cannot be matched
+	// to any checkout, this one included: a no-origin checkout records "" and
+	// would otherwise claim it. Leave it, with a notice, for a purge run once
+	// its identity can be established.
+	if roster.RepoUnresolved != "" {
+		fmt.Fprintf(os.Stderr,
+			"ethos: purge: skipping %s: its repository identity was not resolved when it started (%s); it is never matched against this checkout\n",
+			roster.Session, roster.RepoUnresolved)
+		return false, false
+	}
 	// A session bound to a different repo identity has its live audit zone under
 	// another checkout by construction; this checkout cannot probe it, so leave
 	// it for a purge run inside the checkout that owns it (fail-safe: never delete

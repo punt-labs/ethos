@@ -555,7 +555,7 @@ func TestSetup_NoTTY_NoFile(t *testing.T) {
 
 func TestSetup_NotInGitRepo(t *testing.T) {
 	// t.TempDir uses TMPDIR which may be inside the repo (.tmp/).
-	// Create an isolated dir under /tmp so FindRepoRoot finds no .git.
+	// Create an isolated dir under /tmp so CheckoutRootIfAny finds no .git.
 	noRepo, err := os.MkdirTemp("/tmp", "ethos-setup-norepo-*")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(noRepo) })
@@ -1262,7 +1262,7 @@ writing_style: concise-quantified
 }
 
 // TestSetup_BadOverrideFailsLoudNotSilentSkip pins the Bugbot HIGH F-A on PR
-// #370: a set-but-refused ETHOS_REPO_ROOT (nonexistent) makes FindRepoRoot
+// #370: a set-but-refused ETHOS_REPO_ROOT (nonexistent) makes CheckoutRootIfAny
 // return "" even though the cwd IS a real repo. setup must fail loud, not
 // silently create identities, skip repo config/bundle/team, and report success.
 func TestSetup_BadOverrideFailsLoudNotSilentSkip(t *testing.T) {

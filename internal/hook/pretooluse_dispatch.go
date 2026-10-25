@@ -736,7 +736,7 @@ var dispatchTierBConfirmedOpen = func() {}
 //
 // Releases run LIFO via defer.
 //
-// repoRoot resolution uses resolve.FindRepoRoot — when there is no
+// repoRoot resolution uses resolve.CheckoutRootIfAny — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
 //
@@ -1031,7 +1031,7 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 // Tier B dispatch reads and writes — the contract Load, the per-mission
 // lock, the delegation skeleton (record.yaml), the MISSION_ARTIFACTS_DIR
 // env, the depth-walk scan, and the aborted-close. It resolves through the
-// git common dir (resolve.StoreRepoRoot) so a leader dispatching from a
+// git common dir (resolve.StoreRootIfAny) so a leader dispatching from a
 // linked worktree writes and reads the SAME store the CLI's `mission create`
 // wrote to (the main work tree), not the worktree's empty tree. Without this
 // the CLI and the dispatch hook disagree and delegation is refused with

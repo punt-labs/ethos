@@ -285,7 +285,7 @@ func runDoctor(cmd *cobra.Command) error {
 	ts := teamStore()
 	repoRoot, rootErr := resolve.LocateRepoRoot()
 	storeRoot, storeErr := resolve.LocateStoreRoot()
-	// repoRoot = checkout (agents/seal hook); StoreRepoRoot = shared store
+	// repoRoot = checkout (agents/seal hook); StoreRootIfAny = shared store
 	// for the team-config read inside CheckOrphanedAgentFiles (#370).
 	results := doctor.RunAll(is, ss, repoRoot, rootErr, storeRoot, storeErr, ts)
 
@@ -357,7 +357,10 @@ func runWhoami(cmd *cobra.Command) error {
 }
 
 func runResolveAgent(cmd *cobra.Command) error {
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot, err := resolve.StoreRootIfAny()
+	if err != nil {
+		return fmt.Errorf("resolve-agent: locating the repository store: %w", err)
+	}
 	handle, err := resolve.ResolveAgent(repoRoot)
 	if err != nil {
 		return err

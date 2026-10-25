@@ -800,7 +800,9 @@ func (h *Handler) handleCorrectMission(req mcplib.CallToolRequest) (*mcplib.Call
 	// correction is durable on disk even if no commit immediately
 	// follows. Best-effort — the correction is already recorded.
 	var warnings []string
-	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+	if repoRoot, rErr := resolve.CheckoutRootIfAny(); rErr != nil {
+		warnings = append(warnings, fmt.Sprintf("sealing mission log: locating the checkout: %v", rErr))
+	} else if repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			warnings = append(warnings, fmt.Sprintf("sealing mission log: %v", sErr))
 		}

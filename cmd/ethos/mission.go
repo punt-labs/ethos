@@ -48,7 +48,7 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot := storeRootOrGlobal()
 	warnIfGlobalFallback(repoRoot)
 	// The record resolves to the store root (main in a worktree); the DES-058
 	// audit concern (live zone + sealed chunks) resolves to the checkout so
@@ -60,34 +60,32 @@ func missionStore() *mission.Store {
 
 // missionCheckoutRoot returns the per-checkout root for the DES-058 audit
 // zone of a mission store whose record root is storeRoot. When storeRoot is
-// "" — no repo, or a set-but-invalid ETHOS_REPO_ROOT that StoreRepoRoot
-// fail-closed refused — it returns "" so the audit zone falls back to the
-// global tree WITH the records, instead of honoring the refused override:
-// EnvRepoRoot (FindRepoRoot, requireStore=false) re-accepts the bad path,
-// which would split the contract (global) from the live events/seal (under
-// the refused path). Same fail-closed principle as runUI (Bugbot MED #370).
-// In the legitimate worktree case storeRoot is the main tree (non-empty) and
-// this returns EnvRepoRoot (the worktree), keeping audit per-checkout.
+// "" — outside any repository, or a store that could not be located and
+// degraded to the global tree (storeRootOrGlobal) — it returns "" so the audit
+// zone falls back to the global tree WITH the records, and a refused
+// ETHOS_REPO_ROOT cannot be re-accepted here and split the contract (global)
+// from the live events/seal (under the refused path). In the legitimate
+// worktree case storeRoot is the main tree (non-empty) and this returns the
+// worktree checkout, keeping audit per-checkout.
 func missionCheckoutRoot(storeRoot string) string {
 	if storeRoot == "" {
 		return ""
 	}
-	return resolve.EnvRepoRoot()
+	return checkoutRootOrGlobal()
 }
 
-// refuseBadStoreOverride hard-errors a mission WRITE op when ETHOS_REPO_ROOT
-// is set but StoreRepoRoot refused it — a create/dispatch/claim must not
-// silently land a mission in the global store behind a typo'd override (the
-// yofr symptom gated behind a bad env var), matching setup's fail-loud (#370
-// F-A). It fires ONLY when an override was set AND refused; a genuinely unset
-// override with no repo keeps the legitimate warn+global mission mode
-// (warnIfGlobalFallback), which reads/writes support. Reads stay on
-// warn+global — a read hitting global is not destructive.
+// refuseBadStoreOverride hard-errors a mission WRITE op when the repository
+// store cannot be located for any reason but "not in a repository": a refused
+// ETHOS_REPO_ROOT, a .git git refuses, a git that does not answer. A
+// create/dispatch/claim must not silently land a mission in the global store
+// behind a typo'd override or a broken .git (the yofr symptom), matching
+// setup's fail-loud (#370 F-A). A genuinely unset override with no repo keeps
+// the legitimate warn+global mission mode (warnIfGlobalFallback), which
+// reads/writes support. Reads stay on warn+global — a read hitting global is
+// not destructive.
 func refuseBadStoreOverride(op string) error {
-	if _, set := resolve.RepoRootOverride(); set && resolve.StoreRepoRoot() == "" {
-		return fmt.Errorf("mission %s: ETHOS_REPO_ROOT was refused (missing "+
-			"directory or no .punt-labs/ethos store); unset it or point it at a "+
-			"repo with a store", op)
+	if _, err := resolve.LocateStoreRoot(); err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		return fmt.Errorf("mission %s: %w; refusing to use the global store instead", op, err)
 	}
 	return nil
 }
@@ -164,7 +162,7 @@ func missionStoreForCreate() *mission.Store {
 	// fallback. NewStore + WithRepoRoot would only wire the trace
 	// summary and leave per-mission storage on the global tree
 	// (m-2026-05-23-004 escalation).
-	storeRoot := resolve.StoreRepoRoot()
+	storeRoot := storeRootOrGlobal()
 	warnIfGlobalFallback(storeRoot)
 	// Record → store root; DES-058 audit (live + sealed chunks) → checkout
 	// root, matching the pre-commit seal (Bugbot HIGH #370).
@@ -178,7 +176,7 @@ func missionStoreForCreate() *mission.Store {
 			"ethos: mission: cannot wire role overlap check: %v\n", err)
 		os.Exit(1)
 	}
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootOrGlobal()
 	as := mission.NewArchetypeStore(repoRoot, root)
 	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as)
 }
@@ -1032,10 +1030,9 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 	if !missionMigrateToRepo {
 		return fmt.Errorf("mission migrate: only --to-repo is supported")
 	}
-	repoRoot := resolve.StoreRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: mission migrate must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireStore(errOut, "mission migrate")
+	if err != nil {
+		return err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1529,10 +1526,12 @@ func runMissionClose(idOrPrefix, status string) error {
 	//
 	// Seal against the CHECKOUT root, not the store root: the live zone it
 	// consumes and the chunks it stages belong to the committing checkout,
-	// and this must resolve the same tree the pre-commit seal (EnvRepoRoot)
+	// and this must resolve the same tree the pre-commit seal (CheckoutRootIfAny)
 	// does — else it seals a tree the worktree never commits (Bugbot HIGH
 	// on PR #370).
-	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+	if repoRoot, rErr := resolve.CheckoutRootIfAny(); rErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: locating the checkout: %v\n", rErr)
+	} else if repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
 		}
@@ -1612,7 +1611,9 @@ func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 	// Parity with close: seal the checkout's mission-log tail so the
 	// abandon event is complete on disk even if no commit immediately
 	// follows. Non-fatal — the mission is already abandoned.
-	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+	if repoRoot, rErr := resolve.CheckoutRootIfAny(); rErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: locating the checkout: %v\n", rErr)
+	} else if repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: %v\n", sErr)
 		}
@@ -2292,7 +2293,7 @@ func bindDispatchedMission(op, missionID, worker string) {
 	// was ~30 duplicated lines with the MCP twin
 	// (internal/mcp/mission_tools.go's bindDispatchedMission) into one
 	// shared implementation.
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot := storeRootOrGlobal()
 	store := mission.NewStoreWithRoots(repoRoot, globalRoot)
 	remedy := fmt.Sprintf(
 		"run `ethos mission release` to clear every pending dispatch in this session, "+
@@ -2344,7 +2345,7 @@ func clearClosedSessionBindings(missionID string) {
 // configured — the common case for dispatch is a leader session inside
 // a repo, but dispatch should not fail when run outside one.
 func resolveLeader() string {
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot := storeRootOrGlobal()
 	agent, err := resolve.ResolveAgent(repoRoot)
 	if err == nil && agent != "" {
 		return agent

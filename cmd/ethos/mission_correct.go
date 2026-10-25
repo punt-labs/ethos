@@ -157,7 +157,11 @@ func runMissionCorrect(cmd *cobra.Command, idOrPrefix string) error {
 	// caller reading only stdout must not be blind to a durability
 	// warning that a human running interactively would see on stderr.
 	var warnings []string
-	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+	if repoRoot, rErr := resolve.CheckoutRootIfAny(); rErr != nil {
+		msg := fmt.Sprintf("sealing mission log: locating the checkout: %v", rErr)
+		fmt.Fprintf(os.Stderr, "ethos: mission correct: %s\n", msg)
+		warnings = append(warnings, msg)
+	} else if repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			msg := fmt.Sprintf("sealing mission log: %v", sErr)
 			fmt.Fprintf(os.Stderr, "ethos: mission correct: %s\n", msg)

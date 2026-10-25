@@ -28,7 +28,7 @@ type cliSubprocessEnv struct {
 
 // setupCLISubprocessEnv creates the minimal filesystem the ethos binary
 // needs: a global identity store, a repo with config, and a real git init
-// so FindRepoRoot stops at the fake repo rather than the real one.
+// so CheckoutRootIfAny stops at the fake repo rather than the real one.
 func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 	t.Helper()
 
@@ -49,7 +49,7 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(globalIDs, "test-agent.yaml"), idData, 0o644))
 
-	// Repo: git init so FindRepoRoot stops here.
+	// Repo: git init so CheckoutRootIfAny stops here.
 	repoEthos := filepath.Join(repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(filepath.Join(repoEthos, "identities"), 0o755))
 

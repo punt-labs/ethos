@@ -314,7 +314,7 @@ func runHookAuditLog() error {
 func writeAuditLog(sessionsDir string) error {
 	data := drainAuditStdin()
 	sessionID := peekSessionID(data)
-	// LocateRepoRoot is the checkout EnvRepoRoot resolves — ETHOS_REPO_ROOT
+	// LocateRepoRoot is the checkout CheckoutRootIfAny resolves — ETHOS_REPO_ROOT
 	// first, then git — with the reason it found none, so the audit-write
 	// path picks the same repo as preconditions, dispatch, inheritance, and
 	// the migrate/show CLI commands. Outside a repository the legacy global

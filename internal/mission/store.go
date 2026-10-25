@@ -44,7 +44,7 @@ type Store struct {
 	// SHARED mission RECORD lives — contracts, results, reflections,
 	// delegations, and the missions.jsonl trace, all under
 	// <repoRoot>/.punt-labs/ethos/missions/. This is the store root
-	// (StoreRepoRoot): in a linked worktree it resolves to the main work
+	// (StoreRootIfAny): in a linked worktree it resolves to the main work
 	// tree so every checkout sees the same record. Set via WithRepoRoot
 	// (legacy single-tree mode) or NewStoreWithRoots (two-tree mode).
 	repoRoot string
@@ -53,7 +53,7 @@ type Store struct {
 	// audit concern lives under — the machine-local live zone
 	// (<checkoutRoot>/.punt-labs/local/ethos/) and the sealed mission chunks
 	// the pre-commit seal writes and stages. It is the current work tree
-	// (FindRepoRoot/EnvRepoRoot), NOT the store root: audit chunks travel in
+	// (CheckoutRootIfAny), NOT the store root: audit chunks travel in
 	// the committing checkout's commit and the pre-commit seal runs there, so
 	// the live append, the seal, and the reader must all agree on the
 	// worktree, while the record resolves to the main store (Bugbot HIGH on
@@ -224,8 +224,8 @@ func (s *Store) WithRepoRoot(root string) *Store {
 // WithCheckoutRoot sets the per-checkout root for the DES-058 audit
 // concern — the live zone and sealed mission chunks. When unset the audit
 // path falls back to repoRoot (auditRoot), preserving single-tree and test
-// behavior. Callers in a worktree pass the work-tree root (FindRepoRoot/
-// EnvRepoRoot) so live appends and the pre-commit seal agree on the
+// behavior. Callers in a worktree pass the work-tree root (CheckoutRootIfAny)
+// so live appends and the pre-commit seal agree on the
 // committing checkout while the record resolves to the main store (Bugbot
 // HIGH on PR #370). Returns the receiver so construction stays compact:
 //

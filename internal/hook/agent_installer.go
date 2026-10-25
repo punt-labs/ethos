@@ -36,7 +36,10 @@ func InstallAgentDefinitions(ethosRoot string, generated map[string]bool) ([]str
 		return nil, fmt.Errorf("reading agents dir %s: %w", srcDir, err)
 	}
 
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot, err := resolve.CheckoutRootIfAny()
+	if err != nil {
+		return nil, fmt.Errorf("locating the checkout for agent installation: %w", err)
+	}
 	if repoRoot == "" {
 		return nil, fmt.Errorf("no git repo found for agent installation")
 	}

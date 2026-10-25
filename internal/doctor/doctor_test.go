@@ -62,7 +62,7 @@ func newFixture(t *testing.T) (*identity.Store, *session.Store, string) {
 
 // outsideRepoTempDir creates a tempdir at /tmp so none of its ancestors
 // contain a .git directory. Required for tests that must exercise the
-// "not in a git repo" branch of FindRepoRoot — t.TempDir() honors
+// "not in a git repo" branch of CheckoutRootIfAny — t.TempDir() honors
 // $TMPDIR, which is set to .tmp inside the ethos repo.
 func outsideRepoTempDir(t *testing.T) string {
 	t.Helper()

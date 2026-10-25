@@ -73,7 +73,7 @@ func isolateGitConfig(t *testing.T, user string) {
 
 // setupRepoWithAgent creates a fake repo root with .git/ and a
 // .punt-labs/ethos.yaml that sets the agent to the given handle.
-// It chdir's into the repo root so resolve.FindRepoRoot works.
+// It chdir's into the repo root so resolve.CheckoutRootIfAny works.
 func setupRepoWithAgent(t *testing.T, agentHandle string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
@@ -84,7 +84,7 @@ func setupRepoWithAgent(t *testing.T, agentHandle string) string {
 	cfg := "agent: " + agentHandle + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(puntDir, "ethos.yaml"), []byte(cfg), 0o644))
 
-	// Create the ethos subdir so FindRepoEthosRoot finds it.
+	// Create the ethos subdir so EthosRootIfAny finds it.
 	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
 
 	orig, err := os.Getwd()
@@ -773,7 +773,7 @@ func TestCreateSessionRoster_RecordsCheckout(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", checkout)
 	ss := session.NewStore(t.TempDir())
 
-	createSessionRoster(ss, "sess-checkout", nil, "claude")
+	createSessionRoster(ss, "sess-checkout", nil, nil, "claude")
 
 	roster, err := ss.Load("sess-checkout")
 	require.NoError(t, err)
@@ -790,7 +790,7 @@ func TestCreateSessionRoster_NoRepoRecordsNoCheckout(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "nope"))
 	ss := session.NewStore(t.TempDir())
 
-	createSessionRoster(ss, "sess-norepo", nil, "claude")
+	createSessionRoster(ss, "sess-norepo", nil, nil, "claude")
 
 	roster, err := ss.Load("sess-norepo")
 	require.NoError(t, err)
@@ -806,7 +806,8 @@ func TestResolveCheckoutMatchesLiveWritePath(t *testing.T) {
 	checkout := t.TempDir()
 	t.Setenv("ETHOS_REPO_ROOT", checkout)
 
-	got := ResolveCheckout()
+	got, err := ResolveCheckout()
+	require.NoError(t, err)
 	assert.Equal(t, checkout, got)
 	assert.Equal(t, liveAuditPath(checkout, "s"), liveAuditPath(got, "s"),
 		"the recorded checkout must resolve the same live path the writer uses")

@@ -50,7 +50,7 @@ type SealResult struct {
 func SealRepo(repoRoot string, now time.Time, opts SealOptions) (SealResult, error) {
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
-		return SealResult{}, sealGitError(repoRoot, err)
+		return SealResult{}, SealGitError(repoRoot, err)
 	}
 	if gitlink {
 		fmt.Fprintf(os.Stderr,
@@ -331,11 +331,11 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 	return ids, nil
 }
 
-// sealGitError says why a seal could not start. A git that did not answer
+// SealGitError says why a seal could not start. A git that did not answer
 // within its bound blocks the commit by design: the seal runs in pre-commit,
 // and sealing on a guess could stage the wrong tree. The message names the
 // directory and says nothing was sealed or staged.
-func sealGitError(repoRoot string, err error) error {
+func SealGitError(repoRoot string, err error) error {
 	if errors.Is(err, gitenv.ErrTimeout) {
 		return fmt.Errorf("the seal could not run because git did not answer in %s (%w); "+
 			"nothing was sealed or staged, the commit is blocked and the tree is unchanged", repoRoot, err)

@@ -71,13 +71,13 @@ type SubagentStartDeps struct {
 	// isolation block to resolve write_set entries to concrete files on
 	// disk via WalkWriteSet. The files under review live in this checkout
 	// (a linked worktree holds the branch), so this is the work-tree root
-	// (FindRepoRoot). Empty means the walk is skipped.
+	// (CheckoutRootIfAny). Empty means the walk is skipped.
 	RepoRoot string
 	// StoreRoot is the repo whose .punt-labs/ethos mission store the
 	// hash-refusal path closes the delegation skeleton in. The skeleton
 	// was written by the Tier B dispatch against the store root, so the
 	// close must target the same tree — the main work tree in a linked
-	// worktree (StoreRepoRoot), not this checkout (CR#3). Empty skips the
+	// worktree (StoreRootIfAny), not this checkout (CR#3). Empty skips the
 	// close.
 	StoreRoot string
 	// StoreErr says the checkout or the store could not be located (for a

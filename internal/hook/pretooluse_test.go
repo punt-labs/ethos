@@ -635,7 +635,7 @@ func TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal(t *testing.T) {
 // TestHandlePreToolUse_RepoRootValidation pins the MEDIUM finding from
 // the re-verification round: pathAllowed's repo-relative branch must
 // never resolve against an unmarked directory. allowlistRepoRoot uses
-// resolve.FindRepoRoot (a .git-marker walk), never a bare working
+// resolve.CheckoutRootIfAny (a .git-marker walk), never a bare working
 // directory: resolving a target against a
 // directory that is merely SOME subdirectory of the real repo, not
 // the root itself, computes a repo-relative form one level too
@@ -1124,7 +1124,7 @@ func stageContract(t *testing.T, home, missionID string) {
 }
 
 // stageRepoRoot creates a fake repo directory and runs git init so
-// FindRepoRoot stops there rather than walking up to the real ethos
+// CheckoutRootIfAny stops there rather than walking up to the real ethos
 // checkout. Returns the repo path. The test chdirs into the repo and
 // restores cwd on cleanup.
 func stageRepoRoot(t *testing.T) string {
@@ -1311,7 +1311,7 @@ func TestTierBDispatch_FromWorktreeResolvesMainStore(t *testing.T) {
 
 // TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree pins the
 // code-review round-2 finding: a set-but-invalid ETHOS_REPO_ROOT makes
-// StoreRepoRoot return "" (F1 fail-closed). tierBStoreRoot must NOT
+// StoreRootIfAny return "" (F1 fail-closed). tierBStoreRoot must NOT
 // substitute the raw worktree cwd — doing so would resolve the store into
 // the worktree's own tree, reintroducing ethos-yofr behind a bad override.
 // The mission is staged in the global tree so Load succeeds and the write
@@ -1373,7 +1373,7 @@ func TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree(t *testing.T) {
 	require.NoError(t, os.Chdir(wt))
 
 	// A bad override: an existing directory with no .punt-labs/ethos store.
-	// F1 makes StoreRepoRoot return ""; tierBStoreRoot must not fall back to
+	// F1 makes StoreRootIfAny return ""; tierBStoreRoot must not fall back to
 	// the worktree cwd.
 	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")

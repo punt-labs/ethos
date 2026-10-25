@@ -119,7 +119,11 @@ func runVendor(cmd *cobra.Command, args []string) error {
 	// the moment the .local rule must exist — before the operator's first
 	// `ethos ext set --local` has anywhere to leak to.
 	if plan.Applied {
-		added, ignoreErr := ensureLocalExtIgnored(resolve.EnvRepoRoot())
+		checkout, coErr := resolve.CheckoutRootIfAny()
+		if coErr != nil {
+			return fmt.Errorf("locating the checkout for the .local ignore rule: %w", coErr)
+		}
+		added, ignoreErr := ensureLocalExtIgnored(checkout)
 		if ignoreErr != nil {
 			return ignoreErr
 		}
@@ -167,7 +171,11 @@ func vendorRunner() mcp.VendorRunner {
 			return nil, err
 		}
 		if plan.Applied {
-			if _, err := ensureLocalExtIgnored(resolve.EnvRepoRoot()); err != nil {
+			checkout, coErr := resolve.CheckoutRootIfAny()
+			if coErr != nil {
+				return nil, fmt.Errorf("locating the checkout for the .local ignore rule: %w", coErr)
+			}
+			if _, err := ensureLocalExtIgnored(checkout); err != nil {
 				return nil, err
 			}
 		}
@@ -184,7 +192,10 @@ func vendorDest(is identity.IdentityStore) (string, error) {
 	if ls, ok := is.(*identity.LayeredStore); ok && ls.RepoRoot() != "" {
 		return ls.RepoRoot(), nil
 	}
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot, err := resolve.StoreRootIfAny()
+	if err != nil {
+		return "", fmt.Errorf("locating the repository store: %w", err)
+	}
 	if repoRoot == "" {
 		return "", fmt.Errorf("not in a git repository — name a destination with --to")
 	}

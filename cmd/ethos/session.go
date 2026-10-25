@@ -506,7 +506,7 @@ func runSessionStart(cmd *cobra.Command) error {
 		primaryID = os.Getenv("ETHOS_AGENT_ID")
 	}
 	if primaryID == "" {
-		agent, aerr := resolve.ResolveAgent(resolve.StoreRepoRoot())
+		agent, aerr := resolve.ResolveAgent(storeRootOrGlobal())
 		if aerr != nil {
 			return fmt.Errorf("session start: resolving agent: %w", aerr)
 		}
@@ -524,8 +524,15 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    exactly as the hook resolves them — R6 convergence).
 	root := session.Participant{AgentID: human, Persona: human}
 	primary := session.Participant{AgentID: primaryID, Persona: primaryPersona, Parent: human}
-	if err := ss.CreateInCheckout(id, root, primary,
-		hook.ResolveRepo(), resolve.EnvRepoRoot(), hook.ResolveHost()); err != nil {
+	repo, repoErr := hook.ResolveRepo()
+	checkout, coErr := hook.ResolveCheckout()
+	if repoErr != nil || coErr != nil {
+		// The command fails loud and writes no roster: a repo identity that
+		// could not be resolved is never recorded as a Repo "" it did not
+		// earn, and a roster nothing points at would only linger.
+		return fmt.Errorf("session start: the repository could not be resolved: %w", errors.Join(repoErr, coErr))
+	}
+	if err := ss.CreateInCheckout(id, root, primary, repo, checkout, hook.ResolveHost()); err != nil {
 		return fmt.Errorf("session start: creating roster: %w", err)
 	}
 
@@ -876,7 +883,10 @@ func runSessionPurge(cmd *cobra.Command) error {
 	// sessions whose recorded identity matches this checkout's (repoID); a purge
 	// run outside any repo leaves every repo-bound session for its owning
 	// checkout.
-	repoRoot := resolve.EnvRepoRoot()
+	repoRoot, err := resolve.CheckoutRootIfAny()
+	if err != nil {
+		return fmt.Errorf("session purge: locating the checkout: %w", err)
+	}
 	repoID, err := audit.RepoIdentity(repoRoot)
 	if err != nil {
 		return err

@@ -54,6 +54,13 @@ type RepoConfig struct {
 	MaxDelegationDepth int    `yaml:"max_delegation_depth,omitempty"` // DES-054 v5 depth ceiling; 0 == default
 }
 
+// ErrNoIdentityMatch is wrapped by the error Resolve returns when every step
+// ran and none matched: an absence of identity, not a failure to look. A
+// caller that falls back on "no identity" checks for it; any other Resolve
+// error is a failure (git did not answer, a store would not read) and must
+// not be treated as no identity.
+var ErrNoIdentityMatch = errors.New("no identity matches")
+
 // Resolve returns the identity handle for the current caller.
 //
 // Resolution chain (stops at first match):
@@ -128,8 +135,8 @@ func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no identity matches git user %q, email %q, or OS user %q%s",
-		gitName, gitEmail, osUser, repoOnlyHint(store))
+	return "", fmt.Errorf("%w git user %q, email %q, or OS user %q%s",
+		ErrNoIdentityMatch, gitName, gitEmail, osUser, repoOnlyHint(store))
 }
 
 // repoOnlyHint explains a no-match under DES-057 repo-only mode, or
@@ -485,21 +492,23 @@ func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 	return sessionPersona{handle: p.Persona, found: true}, nil
 }
 
-// FindRepoEthosRoot returns the path to .punt-labs/ethos/ for the repo the
-// store should read and write, or empty string if not in a repo or the
-// directory doesn't exist. It resolves through StoreRepoRoot, so a linked
-// worktree finds the main work tree's store rather than its own empty
-// checkout (ethos-yofr).
-func FindRepoEthosRoot() string {
-	repoRoot := StoreRepoRoot()
-	if repoRoot == "" {
-		return ""
+// EthosRootIfAny returns the path to .punt-labs/ethos/ for the repository the
+// store should read and write. It is "" with a nil error outside any
+// repository and when that directory does not exist yet. Any other failure — a
+// refused ETHOS_REPO_ROOT, a .git git refuses, a linked worktree whose store
+// cannot be named — is the error: a caller must refuse, never fall back to the
+// global store. In a linked worktree it finds the main work tree's store
+// rather than the worktree's own empty checkout (ethos-yofr).
+func EthosRootIfAny() (string, error) {
+	repoRoot, err := StoreRootIfAny()
+	if err != nil || repoRoot == "" {
+		return "", err
 	}
 	ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
 	if info, err := os.Stat(ethosRoot); err == nil && info.IsDir() {
-		return ethosRoot
+		return ethosRoot, nil
 	}
-	return ""
+	return "", nil
 }
 
 // LoadRepoConfig reads repo-local ethos configuration. Tries
@@ -650,33 +659,20 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 // and whether it is set, WITHOUT validating it or emitting any warning. It
 // lets a caller distinguish "no override, genuinely not in a repo" (set ==
 // false) from "an override was set but the resolver refused it" (set == true
-// while FindRepoRoot/StoreRepoRoot returned ""). setup uses it to fail loud on
+// while LocateRepoRoot/LocateStoreRoot refused it). setup uses it to fail loud on
 // a bad override instead of silently degrading to no-repo mode (#370 F-A).
 func RepoRootOverride() (value string, set bool) {
 	v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT"))
 	return v, v != ""
 }
 
-// repoRootOverride returns the ETHOS_REPO_ROOT override and whether it was
-// set. A set override is validated: it must name an existing directory, and
-// when requireStore is set it must also hold a .punt-labs/ethos store. A
-// set-but-invalid override is a loud error naming the bad root and what is
-// missing — an override that lies about the location silently writes to the
-// wrong tree, the exact ethos-yofr symptom (SFH F1). On an invalid override
-// it returns ("", true): "an override was set" so the caller does NOT fall
-// through to auto-resolution and quietly pick a different tree, and the bad
-// path is never returned — resolution reports "no repo," which surfaces the
-// global-fallback warning downstream.
-func repoRootOverride(requireStore bool) (root string, set bool) {
-	root, set, err := checkRepoRootOverride(requireStore)
-	if err != nil {
-		warnOnce("ethos: %v", err)
-	}
-	return root, set
-}
-
-// checkRepoRootOverride is repoRootOverride without the stderr message: it
-// returns the reason an override was refused as an error.
+// checkRepoRootOverride validates an ETHOS_REPO_ROOT override: it must name an
+// existing directory, and when requireStore is set it must also hold a
+// .punt-labs/ethos store. A set-but-invalid override is a loud error naming the
+// bad root and what is missing — an override that lies about the location
+// silently writes to the wrong tree, the exact ethos-yofr symptom (SFH F1). On
+// an invalid override it returns ("", true, err): the caller does NOT fall
+// through to auto-resolution and quietly pick a different tree.
 func checkRepoRootOverride(requireStore bool) (root string, set bool, err error) {
 	v, ok := RepoRootOverride()
 	if !ok {
@@ -695,28 +691,24 @@ func checkRepoRootOverride(requireStore bool) (root string, set bool, err error)
 	return v, true, nil
 }
 
-// FindRepoRoot returns the current work tree root — the directory holding
-// the .git marker for the cwd's checkout — or empty string when the cwd is
-// not inside a repo. In a linked worktree it returns the WORKTREE root, not
-// the main one: per-checkout operations (enable/disable markers, generated
-// .claude/agents, audit chunks that must travel in this worktree's commit)
-// belong to the checkout, not the shared store. Store readers and writers
-// use StoreRepoRoot instead.
-//
-// ETHOS_REPO_ROOT (whitespace-trimmed) overrides resolution so an operator
-// can force the root when auto-resolution is wrong; it must name an existing
-// directory (see repoRootOverride). Any failure other than "outside a
-// repository" is printed to stderr, so a .git git refuses is not reported as
-// "not in a git repository".
-func FindRepoRoot() string {
-	if root, set := repoRootOverride(false); set {
-		return root
+// CheckoutRootIfAny is the current work tree root — the directory holding the
+// .git marker for the cwd's checkout — or "" with a nil error outside any
+// repository. Any other failure (an invalid ETHOS_REPO_ROOT, a .git git
+// refuses, a git that does not answer) is the error. In a linked worktree it
+// is the WORKTREE root, not the main one: per-checkout operations
+// (enable/disable markers, generated .claude/agents, audit chunks that must
+// travel in this worktree's commit) belong to the checkout, not the shared
+// store; store readers and writers use StoreRootIfAny. ETHOS_REPO_ROOT
+// overrides resolution (see LocateRepoRoot).
+func CheckoutRootIfAny() (string, error) {
+	root, err := LocateRepoRoot()
+	if errors.Is(err, ErrNotInRepo) {
+		return "", nil
 	}
-	loc, err := locateCwd()
-	if err != nil && !errors.Is(err, ErrNotInRepo) {
-		warnOnce("ethos: %v", err)
+	if err != nil {
+		return "", err
 	}
-	return loc.root
+	return root, nil
 }
 
 // warned holds the messages warnOnce has printed.
@@ -736,7 +728,7 @@ func warnOnce(format string, args ...any) {
 	fmt.Fprintln(os.Stderr, msg)
 }
 
-// LocateRepoRoot is FindRepoRoot with the reason it found nothing: an invalid
+// LocateRepoRoot locates the current work tree root, with the reason it found nothing: an invalid
 // ETHOS_REPO_ROOT, an unreadable working directory, a .git git refuses, or a
 // working directory outside any repository. It returns the error rather than
 // printing it; a .git it walked past is still noted on stderr (warnOnce).
@@ -757,31 +749,32 @@ var ErrOverrideNoStore = errors.New("no ethos store at the overridden root")
 // directory is outside any repository, the one failure that is not a problem.
 var ErrNotInRepo = errors.New("not inside a git repository")
 
-// StoreRepoRoot returns the root of the repository whose .punt-labs/ethos
-// store the caller should read and write, or empty string when the cwd is
-// not inside a repo.
+// StoreRootIfAny is the root of the repository whose .punt-labs/ethos store
+// the caller should read and write, or "" with a nil error outside any
+// repository. Any other failure — a refused ETHOS_REPO_ROOT, a .git git
+// refuses, a worktree whose store cannot be named — is the error, and a
+// writer must refuse rather than fall back to the global store.
 //
-// It differs from FindRepoRoot only inside a linked worktree. Git keeps one
-// shared object store per repo; a linked worktree's .git is a file pointing
+// It differs from CheckoutRootIfAny only inside a linked worktree. Git keeps
+// one shared object store per repo; a linked worktree's .git is a file pointing
 // at the main work tree's .git, and — in the org-standard submodule layout —
 // the worktree's own .punt-labs/ethos is an empty, unpopulated checkout.
 // Resolving through the common dir means an agent working in
 // <repo>/.claude/worktrees/x reads and writes the store at
 // <repo>/.punt-labs/ethos rather than a different, empty tree that silently
 // degrades to the global store (ethos-yofr).
-//
-// ETHOS_REPO_ROOT (whitespace-trimmed) overrides resolution; it is validated
-// to hold a .punt-labs/ethos store, else refused loudly (see
-// repoRootOverride). Otherwise see locate.
-func StoreRepoRoot() string {
+func StoreRootIfAny() (string, error) {
 	root, err := LocateStoreRoot()
-	if err != nil && !errors.Is(err, ErrNotInRepo) {
-		warnOnce("ethos: %v", err)
+	if errors.Is(err, ErrNotInRepo) {
+		return "", nil
 	}
-	return root
+	if err != nil {
+		return "", err
+	}
+	return root, nil
 }
 
-// LocateStoreRoot is StoreRepoRoot with the reason it found nothing: a refused
+// LocateStoreRoot locates the store root, with the reason it found nothing: a refused
 // ETHOS_REPO_ROOT, a .git git refuses, or a working directory outside any
 // repository (wrapping ErrNotInRepo, the one failure that is not a problem). A
 // writer must refuse on any other error rather than fall back to the global
@@ -1592,18 +1585,6 @@ func checkReadable(p string) error {
 		return fmt.Errorf("closing %s: %w", p, err)
 	}
 	return nil
-}
-
-// EnvRepoRoot is the canonical name several DES-054 hook and CLI call
-// sites use to address the repo tree for per-checkout state (audit chunks,
-// missions.jsonl trace). It resolves the current work tree, honoring
-// ETHOS_REPO_ROOT first — kept distinct from StoreRepoRoot because audit
-// and trace files must travel in the committing checkout, not the shared
-// store. Centralizing the env+walk pair keeps audit-write and
-// precondition-read resolving identically (Bugbot HIGH/MED across PR #328:
-// a previous split let them disagree on which repo is "this one").
-func EnvRepoRoot() string {
-	return FindRepoRoot()
 }
 
 // RepoName returns the repository name (e.g. "punt-labs/ethos") for the

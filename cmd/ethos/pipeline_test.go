@@ -639,7 +639,7 @@ func TestPipelineCLI_InstantiateReal(t *testing.T) {
 	}
 	home := pipelineTestEnv(t)
 	seedPipelineYAML(t, home, "quick-test", quickPipeline)
-	// Fake repo so FindRepoRoot stops here rather than walking up
+	// Fake repo so CheckoutRootIfAny stops here rather than walking up
 	// to the real ethos repo (TMPDIR points at <repo>/.tmp).
 	testhelpers.MakeGitDir(t, home)
 
@@ -807,7 +807,7 @@ func TestPipelineCLI_ListByPipeline(t *testing.T) {
 	}
 	home := pipelineTestEnv(t)
 	seedPipelineYAML(t, home, "quick-test", quickPipeline)
-	// Fake repo so FindRepoRoot stops here, not the surrounding repo.
+	// Fake repo so CheckoutRootIfAny stops here, not the surrounding repo.
 	testhelpers.MakeGitDir(t, home)
 
 	env := append(os.Environ(), "HOME="+home)

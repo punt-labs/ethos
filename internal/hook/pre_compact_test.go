@@ -36,7 +36,7 @@ func makeDeps(s identity.IdentityStore, ss *session.Store) PreCompactDeps {
 
 // setupRepoWithTeam creates a fake repo root with .git/ and a
 // .punt-labs/ethos.yaml that sets both agent and team. It chdir's
-// into the repo root so resolve.FindRepoRoot + ResolveTeam work.
+// into the repo root so resolve.CheckoutRootIfAny + ResolveTeam work.
 func setupRepoWithTeam(t *testing.T, agentHandle, teamName string) {
 	t.Helper()
 	repoRoot := t.TempDir()

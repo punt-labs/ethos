@@ -115,7 +115,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 			repoRoot := t.TempDir()
 			testhelpers.MakeGitDir(t, repoRoot)
 
-			// Chdir to the repo root so FindRepoRoot works.
+			// Chdir to the repo root so CheckoutRootIfAny works.
 			orig, err := os.Getwd()
 			require.NoError(t, err)
 			require.NoError(t, os.Chdir(repoRoot))
@@ -159,7 +159,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 }
 
 // setupStubRepo builds a temp git repo holding one stub agent file and
-// chdirs into it, so FindRepoRoot and FindRepoEthosRoot resolve there
+// chdirs into it, so CheckoutRootIfAny and EthosRootIfAny resolve there
 // rather than into the real checkout. Returns the repo root.
 func setupStubRepo(t *testing.T, stub string) string {
 	t.Helper()
