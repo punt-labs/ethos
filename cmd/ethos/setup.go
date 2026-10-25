@@ -142,20 +142,33 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: no email — set git user.email or pass email: in --file")
 	}
 
-	// Validate the leadership assignment BEFORE any write, so a bad handle or
-	// a malformed bundle team fails with nothing persisted (no identity, no
-	// repo config, no bundle activation). The handle-collision check is cheap
-	// and unconditional — "claude" is reserved for the COO agent. The
-	// incomplete-pair check is a read-only load of the target bundle's team.
-	if err := precheckLeadership(&cfg); err != nil {
-		return fmt.Errorf("setup: %w", err)
-	}
-
 	// Locate the checkout and the shared store BEFORE any write, applying
 	// both refusals, so a refusal leaves no identity behind.
 	repoRoot, storeRoot, err := locateSetupRoots()
 	if err != nil {
 		return err
+	}
+
+	// Without --bundle, a re-run keeps the active bundle (see Bundle
+	// activation below), so the active bundle is the one every check before
+	// the first write validates — not the "foundation" default.
+	if !cfg.Solo && repoRoot != "" && !cmd.Flags().Changed("bundle") {
+		current, err := resolve.ResolveActiveBundle(storeRoot)
+		if err != nil {
+			return fmt.Errorf("setup: reading active bundle: %w", err)
+		}
+		if current != "" {
+			cfg.Bundle = current
+		}
+	}
+
+	// Validate the leadership assignment BEFORE any write, so a bad handle or
+	// a malformed bundle team fails with nothing persisted (no identity, no
+	// repo config, no bundle activation). The handle-collision check is cheap
+	// and unconditional — "claude" is reserved for the COO agent. The
+	// incomplete-pair check is a read-only load of the target bundle's team.
+	if err := precheckLeadership(&cfg, storeRoot); err != nil {
+		return fmt.Errorf("setup: %w", err)
 	}
 
 	home, err := os.UserHomeDir()
@@ -442,14 +455,14 @@ const cooIdentity = "claude"
 // leadership pair. Bundle-not-found and team-load issues are left to the
 // authoritative activation path; this fails only on a definitively illegal
 // rebind.
-func precheckLeadership(cfg *setupConfig) error {
+func precheckLeadership(cfg *setupConfig, storeRoot string) error {
 	if cfg.Handle == cooIdentity {
 		return fmt.Errorf("handle %q is reserved for the COO agent; choose a different handle", cfg.Handle)
 	}
 	if cfg.Solo {
 		return nil
 	}
-	bundleRoot := bundleRootByName(resolve.StoreRepoRoot(), defaultGlobalRoot(), cfg.Bundle)
+	bundleRoot := bundleRootByName(storeRoot, defaultGlobalRoot(), cfg.Bundle)
 	if bundleRoot == "" {
 		return nil // not in a repo, or bundle unresolved — validated later
 	}
