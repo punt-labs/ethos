@@ -102,7 +102,7 @@ func missionTestEnv(t *testing.T) string {
 	// of finding the real ethos repo — prevents trace writes from
 	// polluting the real .ethos/missions.jsonl.
 	repoDir := filepath.Join(tmp, "repo")
-	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoDir)
 	oldDir, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(repoDir))
@@ -237,7 +237,7 @@ func seedEvaluator(t *testing.T, root string) {
 // is not enough.
 func chdirToFakeRepo(t *testing.T, dir string) {
 	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, dir)
 	t.Chdir(dir)
 }
 

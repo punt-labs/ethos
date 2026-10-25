@@ -10,6 +10,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -487,7 +488,7 @@ func TestBuildTeamSection_ResolveError(t *testing.T) {
 	// A malformed ethos.yaml causes ResolveTeam to return an error.
 	// BuildTeamSection must surface it as a visible warning section.
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -510,7 +511,7 @@ func TestBuildTeamSection_ResolveError(t *testing.T) {
 func TestBuildTeamSection_TeamLoadError(t *testing.T) {
 	// A valid config naming a team that doesn't exist on disk.
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	require.NoError(t, os.WriteFile(

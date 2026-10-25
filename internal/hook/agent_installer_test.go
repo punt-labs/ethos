@@ -7,6 +7,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,7 +113,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up a fake repo root with .git marker.
 			repoRoot := t.TempDir()
-			require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+			testhelpers.MakeGitDir(t, repoRoot)
 
 			// Chdir to the repo root so FindRepoRoot works.
 			orig, err := os.Getwd()
@@ -163,7 +164,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 func setupStubRepo(t *testing.T, stub string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 
 	orig, err := os.Getwd()
 	require.NoError(t, err)

@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func emptyGitFile(dot string) error { return os.WriteFile(dot, nil, 0o644) }
+
 // nestedGitEnv is an outer repository holding a store and an inner directory
 // whose .git is built by mk.
 func nestedGitEnv(t *testing.T, mk func(dot string) error) (se *cliSubprocessEnv, inner string) {
@@ -42,15 +44,17 @@ func createIdentityFrom(t *testing.T, se *cliSubprocessEnv, dir string) (string,
 	return string(out), code
 }
 
-// A .git that git skips (dangling, empty, garbage) must not divert a write to
-// the global store: git treats inner as part of outer, and so does ethos.
-func TestCLI_InvalidInnerGitUsesOuterStore(t *testing.T) {
+// A .git that git skips (a dangling symlink, an empty directory, a symlink
+// loop) must not divert a write to the global store: git treats inner as part of
+// outer, and so does ethos.
+func TestCLI_SkippedInnerGitUsesOuterStore(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
 	cases := map[string]func(dot string) error{
 		"dangling": func(dot string) error { return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot) },
-		"empty":    func(dot string) error { return os.WriteFile(dot, nil, 0o644) },
+		"empty":    func(dot string) error { return os.Mkdir(dot, 0o755) },
+		"loop":     func(dot string) error { return os.Symlink(dot, dot) },
 	}
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -63,12 +67,35 @@ func TestCLI_InvalidInnerGitUsesOuterStore(t *testing.T) {
 	}
 }
 
-// A .git git itself cannot read is a refusal, never a silent global write.
+// A .git git refuses (an empty or garbage gitfile, a gitdir to nowhere) is a
+// refusal: git stops there, so ethos must not write to the outer or global store.
+func TestCLI_InvalidInnerGitRefuses(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	cases := map[string]func(dot string) error{
+		"empty":   emptyGitFile,
+		"garbage": func(dot string) error { return os.WriteFile(dot, []byte("not a gitfile\n"), 0o644) },
+		"nowhere": func(dot string) error { return os.WriteFile(dot, []byte("gitdir: /nonexistent\n"), 0o644) },
+	}
+	for name, mk := range cases {
+		t.Run(name, func(t *testing.T) {
+			se, inner := nestedGitEnv(t, mk)
+			out, code := createIdentityFrom(t, se, inner)
+			assert.NotEqual(t, 0, code, out)
+			assert.Contains(t, out, filepath.Join(inner, ".git"))
+			assert.NoFileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "nested.yaml"))
+			assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nested.yaml"))
+		})
+	}
+}
+
+// A .git git refuses is a refusal, never a silent global write.
 func TestCLI_UnreadableGitRefusesWrites(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
-	se, inner := nestedGitEnv(t, func(dot string) error { return os.Symlink(dot, dot) })
+	se, inner := nestedGitEnv(t, emptyGitFile)
 	out, code := createIdentityFrom(t, se, inner)
 	assert.NotEqual(t, 0, code, out)
 	assert.Contains(t, out, filepath.Join(inner, ".git"))
@@ -81,7 +108,7 @@ func TestCLI_DoctorRunsOnUnreadableGit(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
-	se, inner := nestedGitEnv(t, func(dot string) error { return os.Symlink(dot, dot) })
+	se, inner := nestedGitEnv(t, emptyGitFile)
 	cmd := exec.Command(ethosBinary, "doctor")
 	cmd.Dir = inner
 	cmd.Env = withForcedNotUnderClaudeCode(se.env)
@@ -95,7 +122,7 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
-	se, inner := nestedGitEnv(t, func(dot string) error { return os.Symlink(dot, dot) })
+	se, inner := nestedGitEnv(t, emptyGitFile)
 	for _, args := range [][]string{
 		{"seed"},
 		{"vendor"},

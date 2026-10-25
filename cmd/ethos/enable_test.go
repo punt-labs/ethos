@@ -140,15 +140,15 @@ func TestEnableNotInRepoExits2(t *testing.T) {
 	}
 }
 
-// A .git that cannot be examined is reported with its cause, not as "not in a
+// A .git git refuses (an empty gitfile) is reported with its cause, not as "not in a
 // git repository".
 func TestEnableDisableReportUnexaminableGit(t *testing.T) {
 	for _, verb := range []string{"enable", "disable"} {
 		t.Run(verb, func(t *testing.T) {
 			dir := t.TempDir()
 			dot := filepath.Join(dir, ".git")
-			if err := os.Symlink(dot, dot); err != nil {
-				t.Skipf("symlink: %v", err)
+			if err := os.WriteFile(dot, nil, 0o644); err != nil {
+				t.Fatalf("writing %s: %v", dot, err)
 			}
 			t.Chdir(dir)
 			_, errOut, err := runEnableCmd(t, verb)

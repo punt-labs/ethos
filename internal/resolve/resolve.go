@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -742,11 +743,12 @@ func LocateRepoRoot() (string, error) {
 var ErrNotInRepo = errors.New("not inside a git repository")
 
 // walkRepoRoot walks up from the working directory to the first .git marker,
-// as git does. A .git that is not a directory or a gitdir file (a dangling
-// symlink, an empty or garbage file) is skipped, as git skips it, and warn (if
-// not nil) is told. A .git that git itself cannot read (permission denied, a
-// symlink loop) is an error: skipping it would resolve an enclosing
-// repository's root, and write into the wrong tree.
+// as git does. A .git that git skips (missing, a dangling symlink, an empty
+// directory, a FIFO or other special file) is passed over and warn (if not
+// nil) is told. A .git that git refuses (an empty or garbage gitfile, a gitdir
+// to nowhere) or cannot read (permission denied, a symlink loop) is an error:
+// skipping it would resolve an enclosing repository's root, and write into the
+// wrong tree.
 func walkRepoRoot(warn func(format string, args ...any)) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -772,31 +774,74 @@ func walkRepoRoot(warn func(format string, args ...any)) (string, error) {
 	}
 }
 
-// examineGit classifies a .git path: found when it is a directory or a gitdir
-// file; otherwise a skip reason when git would skip it (empty when the path
-// simply does not exist); an error when it cannot be read.
+// examineGit classifies a .git path by git's own rules: found when it is a git
+// directory or a gitfile naming one; otherwise a skip reason when git walks
+// past it (empty when the path simply does not exist); an error when git
+// refuses it or it cannot be read. It never reads anything but a regular file.
 func examineGit(dot string) (found bool, skip string, err error) {
+	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
+		return false, "", nil
+	} else if err != nil {
+		return false, "", fmt.Errorf("examining %s: %w", dot, err)
+	}
 	info, err := os.Stat(dot)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if _, lerr := os.Lstat(dot); lerr == nil {
-			return false, "dangling symlink", nil
-		}
-		return false, "", nil
+		return false, "dangling symlink", nil
+	case errors.Is(err, syscall.ELOOP):
+		return false, "symlink loop", nil // git skips it too
 	case err != nil:
 		return false, "", fmt.Errorf("examining %s: %w", dot, err)
 	case info.IsDir():
+		ok, err := isGitDir(dot)
+		if err != nil {
+			return false, "", fmt.Errorf("examining %s: %w", dot, err)
+		}
+		if !ok {
+			return false, "not a git directory", nil
+		}
 		return true, "", nil
+	case !info.Mode().IsRegular():
+		return false, "not a directory or a gitfile", nil
 	}
 	data, err := os.ReadFile(dot)
 	if err != nil {
 		return false, "", fmt.Errorf("examining %s: %w", dot, err)
 	}
 	target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
-	if !ok || strings.TrimSpace(target) == "" {
-		return false, "not a git directory or gitdir file", nil
+	target = strings.TrimSpace(target)
+	if !ok || target == "" {
+		return false, "", fmt.Errorf("%s is not a valid gitfile (want \"gitdir: <path>\")", dot)
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(dot), target)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		return false, "", fmt.Errorf("%s names %s, which is not a git directory", dot, target)
 	}
 	return true, "", nil
+}
+
+// isGitDir reports whether dir looks like a git directory as git judges it:
+// HEAD with objects/ and refs/, or a commondir file (a linked worktree's). An
+// entry that cannot be examined is an error, not a "no".
+func isGitDir(dir string) (bool, error) {
+	has := func(name string) (bool, error) {
+		_, err := os.Stat(filepath.Join(dir, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	if ok, err := has("commondir"); ok || err != nil {
+		return ok, err
+	}
+	for _, name := range []string{"HEAD", "objects", "refs"} {
+		if ok, err := has(name); !ok || err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // StoreRepoRoot returns the root of the repository whose .punt-labs/ethos

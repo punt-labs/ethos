@@ -553,7 +553,7 @@ email: no-repo@example.com
 	assert.True(t, os.IsNotExist(statErr))
 }
 
-// A .git that cannot be examined fails setup with the cause; it is not "no
+// A .git git refuses (an empty gitfile) fails setup with the cause; it is not "no
 // repo" and must not skip the repo config silently.
 func TestSetup_UnexaminableGitFails(t *testing.T) {
 	noRepo, err := os.MkdirTemp("/tmp", "ethos-setup-baddot-*")
@@ -563,9 +563,7 @@ func TestSetup_UnexaminableGitFails(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(home) })
 	dot := filepath.Join(noRepo, ".git")
-	if err := os.Symlink(dot, dot); err != nil {
-		t.Skipf("symlink: %v", err)
-	}
+	require.NoError(t, os.WriteFile(dot, nil, 0o644))
 
 	setupBundle = "foundation"
 	setupSolo = false

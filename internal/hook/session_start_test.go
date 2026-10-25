@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +77,7 @@ func isolateGitConfig(t *testing.T, user string) {
 func setupRepoWithAgent(t *testing.T, agentHandle string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
@@ -99,7 +100,7 @@ func setupRepoWithAgent(t *testing.T, agentHandle string) string {
 func setupRepoWithAgentLegacy(t *testing.T, agentHandle string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 
 	ethosDir := filepath.Join(repoRoot, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(ethosDir, 0o755))
@@ -588,7 +589,7 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 	// cfg.Team == "missing-team", calls teams.Load("missing-team"),
 	// and returns a wrapped not-found error.
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -691,7 +692,7 @@ func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
 	// content" or similar. Any unambiguously-broken yaml would do; this
 	// shape matches the spec's suggested fixture.
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	require.NoError(t, os.WriteFile(

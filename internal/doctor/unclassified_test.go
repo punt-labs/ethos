@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,7 +237,7 @@ func TestCheckUnclassifiedFiles_UnresolvableHooksDirFails(t *testing.T) {
 // says so rather than classifying against a directory it may have guessed.
 func TestCheckUnclassifiedFiles_NamesADegradedHooksLookup(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, root)
 	touch(t, root, ".punt-labs/ethos/identities/bwk.yaml")
 	t.Setenv("PATH", t.TempDir()) // no git
 
@@ -386,7 +387,7 @@ func repoTemp(t *testing.T) string {
 // directory adds to the finding; it does not replace it.
 func TestCheckUnclassifiedFiles_DegradedKeepsTheScanResult(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, root)
 	touch(t, root, ".punt-labs/ethos/stray.bin")
 	t.Setenv("PATH", t.TempDir()) // no git
 
@@ -396,7 +397,7 @@ func TestCheckUnclassifiedFiles_DegradedKeepsTheScanResult(t *testing.T) {
 	assert.Contains(t, r.Detail, "hooks directory not verified:")
 
 	clean := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(clean, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, clean)
 	touch(t, clean, ".punt-labs/ethos/identities/bwk.yaml")
 	r = CheckUnclassifiedFiles(clean)
 	assert.Equal(t, "WARN", r.Status, r.Detail)

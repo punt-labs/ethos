@@ -12,6 +12,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func makeDeps(s identity.IdentityStore, ss *session.Store) PreCompactDeps {
 func setupRepoWithTeam(t *testing.T, agentHandle, teamName string) {
 	t.Helper()
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	cfg := "agent: " + agentHandle + "\nteam: " + teamName + "\n"
