@@ -101,11 +101,47 @@ type Spec struct {
 	// does not leave a clone running. The caught signal itself is not delivered.
 	Network bool
 
-	// Remote is the URL a Network git talks to, when the caller knows it. The
-	// user's ssh choice (core.sshCommand) is looked up only for an ssh transport
-	// (IsSSHTransport): an https or file remote is not blocked, nor changed, by
-	// an ssh setting. "" looks it up, as for any remote that might use ssh.
+	// Remote is the URL a Network git talks to, when the caller knows it. It is
+	// resolved first with `git ls-remote --get-url`, which applies insteadOf, and
+	// the result decides: for an ssh URL the user's ssh (GIT_SSH_COMMAND, GIT_SSH,
+	// core.sshCommand) is honoured, BatchMode is added only when none is set, and
+	// an unreadable user config refuses; for any other URL no ssh setting is
+	// read, added or refused. A relative URL (submodule add) or "" is unknown:
+	// the user's ssh is honoured, BatchMode is added only when the config could
+	// be read and names none, and nothing blocks.
 	Remote string
+}
+
+// EffectiveURL is url after git's insteadOf rewriting, from `git ls-remote
+// --get-url` run in dir ("" is a neutral directory) with env. When git cannot
+// say, it is url itself: the classification then rests on the literal URL.
+func EffectiveURL(dir string, env []string, url string) string {
+	spec := Spec{Git: "git", Dir: dir, Env: env, Args: []string{"ls-remote", "--get-url", url}}
+	if dir == "" {
+		ndir, nenv, cleanup, err := Neutral()
+		if err != nil {
+			return url
+		}
+		defer cleanup()
+		spec.Dir = ndir
+		if env == nil {
+			spec.Env = nenv
+		}
+	}
+	out, err := Run(spec)
+	if err != nil {
+		return url
+	}
+	if eff := strings.TrimSpace(string(out)); eff != "" && !strings.Contains(eff, "\n") {
+		return eff
+	}
+	return url
+}
+
+// IsRelativeURL reports whether url is relative to a superproject's remote
+// (./x or ../x), as `git submodule add` takes it.
+func IsRelativeURL(url string) bool {
+	return strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../")
 }
 
 // IsSSHTransport reports whether git would reach url over ssh: an ssh://,
@@ -128,13 +164,33 @@ func IsSSHTransport(url string) bool {
 var networkArgs = []string{"-c", "core.askPass=", "-c", "credential.interactive=never"}
 
 // networkEnv returns what Network adds to git's environment: no prompting of any
-// kind, and an ssh in BatchMode only when the user has not chosen one.
-func networkEnv(chosen bool) []string {
+// kind, and, by the effective URL (see Spec.Remote), an ssh in BatchMode only
+// when the user has not chosen one. An unreadable config refuses only for an
+// ssh URL.
+func networkEnv(s Spec, env []string) ([]string, error) {
 	add := []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "SSH_ASKPASS_REQUIRE=never"}
-	if !chosen {
+	kind := "unknown"
+	if s.Remote != "" && !IsRelativeURL(s.Remote) {
+		eff := EffectiveURL(s.Dir, env, s.Remote)
+		if IsSSHTransport(eff) {
+			kind = "ssh"
+		} else {
+			kind = "other"
+		}
+	}
+	if kind == "other" {
+		return add, nil // no ssh setting is read, added or refused
+	}
+	chosen, err := sshChosen(s, env)
+	switch {
+	case err != nil && kind == "ssh":
+		return nil, err
+	case err != nil:
+		return add, nil // unknown remote: never override on a guess, never block
+	case !chosen:
 		add = append(add, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
 	}
-	return add
+	return add, nil
 }
 
 // sshChosen reports whether GIT_SSH_COMMAND, GIT_SSH or core.sshCommand is set
@@ -216,14 +272,11 @@ func Run(s Spec) ([]byte, error) {
 		if base == nil {
 			base = os.Environ()
 		}
-		chosen := false
-		if s.Remote == "" || IsSSHTransport(s.Remote) {
-			var cerr error
-			if chosen, cerr = sshChosen(s, base); cerr != nil {
-				return nil, cerr
-			}
+		extra, nerr := networkEnv(s, base)
+		if nerr != nil {
+			return nil, nerr
 		}
-		cmd.Env = append(append([]string(nil), base...), networkEnv(chosen)...)
+		cmd.Env = append(append([]string(nil), base...), extra...)
 		args = append(append([]string(nil), networkArgs...), s.Args...)
 	}
 	cmd.Args = append([]string{s.Git}, args...)

@@ -171,8 +171,15 @@ func TestNetworkGitRefusesWhenCoreSshCommandCannotBeRead(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
 	require.NoError(t, os.Unsetenv("GIT_SSH"))
-	git := fakeGitScript(t, "case \"$1\" in config) exit 1;; esac\necho ran\n")
-	_, err := Run(Spec{Git: git, Network: true, Args: []string{"clone", "u"}})
+	git := fakeGitScript(t, "case \"$1\" in config) exit 1;; ls-remote) echo \"$3\"; exit 0;; esac\necho ran\n")
+	_, err := Run(Spec{Git: git, Network: true, Remote: "git@example.invalid:o/r.git", Args: []string{"clone", "u"}})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), cfg)
+	assert.Contains(t, err.Error(), cfg, "an ssh remote refuses")
+
+	out, err := Run(Spec{Git: git, Network: true, Remote: "https://example.invalid/o/r.git", Args: []string{"clone", "u"}})
+	require.NoError(t, err, "an https remote reads no ssh setting")
+	assert.Equal(t, "ran\n", string(out))
+
+	_, err = Run(Spec{Git: git, Network: true, Remote: "../sibling", Args: []string{"clone", "u"}})
+	require.NoError(t, err, "a relative URL is unknown: nothing blocks, and nothing is overridden")
 }

@@ -290,3 +290,49 @@ func TestTeamAddBundleSSHFailureHint(t *testing.T) {
 		assert.NotContains(t, err.Error(), hint, "git never ran: no ssh advice")
 	}
 }
+
+// An insteadOf rewrite from https to ssh makes the effective URL ssh: the user's
+// own ssh (core.sshCommand, GIT_SSH_COMMAND or GIT_SSH) is the one that runs, ethos
+// does not replace it, and the ssh advice is printed when the clone fails.
+func TestTeamAddBundleInsteadOfKeepsTheUsersSSH(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	prevApply, prevGlobal, prevName := addBundleApply, addBundleGlobal, addBundleName
+	addBundleApply, addBundleGlobal, addBundleName = true, true, ""
+	t.Cleanup(func() { addBundleApply, addBundleGlobal, addBundleName = prevApply, prevGlobal, prevName })
+
+	for _, how := range []string{"core.sshCommand", "GIT_SSH_COMMAND", "GIT_SSH"} {
+		t.Run(how, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "ssh.log")
+			ssh := filepath.Join(dir, "my-ssh")
+			require.NoError(t, os.WriteFile(ssh, []byte("#!/bin/sh\necho \"called $*\" >> '"+log+"'\nexit 1\n"), 0o755))
+			cfg := "[url \"ssh://git@example.invalid/\"]\n\tinsteadOf = https://example.invalid/\n"
+			if how == "core.sshCommand" {
+				cfg += "[core]\n\tsshCommand = " + ssh + "\n"
+			}
+			path := filepath.Join(dir, "gitconfig")
+			require.NoError(t, os.WriteFile(path, []byte(cfg), 0o644))
+			t.Setenv("GIT_CONFIG_GLOBAL", path)
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			require.NoError(t, os.Unsetenv("GIT_SSH_COMMAND"))
+			require.NoError(t, os.Unsetenv("GIT_SSH"))
+			if how != "core.sshCommand" {
+				t.Setenv(how, ssh)
+			}
+			t.Setenv("HOME", t.TempDir())
+			t.Chdir(t.TempDir())
+
+			cmd := &cobra.Command{}
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			err := runTeamAddBundle(cmd, "https://example.invalid/o/bundle.git")
+			require.Error(t, err)
+			data, rerr := os.ReadFile(log)
+			require.NoError(t, rerr, "the user's ssh was not called: %v", err)
+			assert.Contains(t, string(data), "called", how)
+			assert.Contains(t, err.Error(), "add-bundle runs ssh without a terminal", "the effective URL is ssh: %v", err)
+		})
+	}
+}

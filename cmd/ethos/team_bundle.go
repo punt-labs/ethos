@@ -522,8 +522,10 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	if err != nil {
 		wrapped := fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
 		var ee *exec.ExitError
-		if gitenv.IsSSHTransport(url) && errors.As(err, &ee) {
-			// git ran and failed: over ssh, with no terminal, that is most often a
+		if errors.As(err, &ee) && !gitenv.IsRelativeURL(url) &&
+			gitenv.IsSSHTransport(gitenv.EffectiveURL(gitDir, gitenv.UserConfigEnv(), url)) {
+			// git ran and failed, and the effective URL (after insteadOf) is ssh:
+			// with no terminal, that is most often a
 			// host key or a passphrase it could not ask for.
 			wrapped = fmt.Errorf("%w; add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key", wrapped)
 		}
