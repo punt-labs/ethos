@@ -12858,13 +12858,26 @@ filesystem boundary. Every git command ethos runs has a time limit:
 10 seconds (`gitenv.Timeout`) for lookups, reads and the audit-seal
 commands, 5 minutes for a team-bundle clone, and the existing 2- and
 10-second limits for the working-context and doctor-sandbox commands.
-A test fails on any other way of starting git. A git that does not
-answer within the limit is a refusal that names git, its arguments and
-the directory; it is never read as "no repository", "no remote" or an
-empty identity. Reading the git user name and email is bounded the same
-way, so identity resolution fails on a hung git instead of falling back
-to `$USER`, and the pre-commit seal fails closed, blocking the commit
-and leaving the tree unchanged. Tests compare 28 `.git` shapes with
+In Go code, a test accounts for every program ethos starts outside
+`internal/gitenv`, by file, and fails on any start of git it does not
+list; the shell hooks `pre-commit.sh` and `commit-msg.sh` run
+`git rev-parse` unbounded and exit 1 with git's error when it fails. On
+a timeout git receives SIGTERM, so it can remove its index lock, and
+SIGKILL one second later. Every git read declares what an absent answer
+is (a configuration key that is not set, no such remote, not a
+repository); any other failure, a timeout included, is an error that
+carries git's message and names the command and the directory. A git
+failure is therefore never read as "no repository", "no remote", "not a
+gitlink" or an empty identity, and the lookups that returned an empty
+root on failure are removed. Identity resolution fails on a git error
+instead of falling back to `$USER`. When session start cannot resolve
+the identity, the repository or the checkout, the session is told why,
+and the roster records `repo_unresolved` with the reason instead of an
+empty repository; purge and the vacuum cross-check skip such rosters
+and say so. The pre-commit seal runs its read-only git queries before
+writing any chunk, then writes every chunk and stages them in one
+`git add`. If that fails it removes the chunks it wrote, blocks the
+commit and leaves the tree as it was. Tests compare 28 `.git` shapes with
 `git rev-parse` and run the same shapes with git hidden. On a refusal,
 or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one
 failing row; checks that read the store keep their own status and note
@@ -12877,7 +12890,8 @@ session hooks say why the persona is missing, the audit hook skips the
 entry and says so in the session (as it does for an entry with no
 session id), and `subagent-start` reports that it cannot evaluate the
 verifier gate. While the store is unlocated, `pre-tool-use` denies
-mission-bound tool calls and every `Agent` spawn. The deny message names
+mission-bound tool calls and every `Agent` spawn, including a spawn with
+no session id. The deny message names
 the failure and the fix: repair or remove the `.git` named, or set
 `ETHOS_REPO_ROOT` to the repository that holds the store. It never
 consults the global mission store instead. Every CLI command is classified in

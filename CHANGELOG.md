@@ -255,12 +255,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mission-bound tool calls and every `Agent` spawn**, and the message says
   how to fix it: repair or remove the `.git` named, or set
   `ETHOS_REPO_ROOT`.
-- **Every git command ethos runs has a time limit**: 10 seconds, or 5
-  minutes for a team-bundle clone. A git that does not answer is
-  reported as an error naming the command and directory, never read as
-  "no repository" or "no remote". Identity resolution fails on a hung git
-  instead of falling back to `$USER`, and the pre-commit audit seal
-  blocks the commit and leaves the tree unchanged.
+- **Every git command the `ethos` binary runs has a time limit**: 10
+  seconds, or 5 minutes for a team-bundle clone. A git that fails or does
+  not answer is reported as an error naming the command and directory,
+  never read as "no repository", "no remote" or an empty identity.
+  Identity resolution fails instead of falling back to `$USER`; session
+  start tells the session why and records the repository as unresolved;
+  the pre-commit audit seal blocks the commit and leaves the tree
+  unchanged. The `pre-commit` and `commit-msg` hook scripts exit 1 with
+  git's error when `git rev-parse` fails, instead of skipping the seal.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
