@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1002,14 +1003,22 @@ func firstDotGit(start string) string {
 	return ""
 }
 
+// deviceOf is the device lookup gitWalk uses; a test may replace it.
+var deviceOf = statDevice
+
 // gitWalk returns the directories git examines for a repository from start,
 // nearest first, as git's setup_git_directory does: from the physical working
 // directory (getcwd resolves symlinks) upward, stopping before the longest
 // GIT_CEILING_DIRECTORIES entry that is a proper ancestor of it, so neither
-// that entry nor anything above it is examined.
+// that entry nor anything above it is examined, and stopping before a parent
+// on a different filesystem from the working directory unless
+// GIT_DISCOVERY_ACROSS_FILESYSTEM is a true boolean. A parent whose device
+// cannot be read is treated as a boundary (git dies there instead).
 func gitWalk(start string) []string {
 	dir := realDir(start)
 	off := ceilingOffset(dir, gitCeilings())
+	dev, devOK := deviceOf(dir)
+	oneFS := devOK && !acrossFilesystems()
 	dirs := []string{dir}
 	for {
 		parent := filepath.Dir(dir)
@@ -1025,9 +1034,43 @@ func gitWalk(start string) []string {
 		if cut <= off {
 			return dirs
 		}
+		if oneFS {
+			if d, ok := deviceOf(parent); !ok || d != dev {
+				return dirs
+			}
+		}
 		dirs = append(dirs, parent)
 		dir = parent
 	}
+}
+
+// acrossFilesystems reports whether GIT_DISCOVERY_ACROSS_FILESYSTEM lets the
+// walk cross a mount point. Unset or not a boolean is false; git dies on a
+// value that is not a boolean.
+func acrossFilesystems() bool {
+	v, set := os.LookupEnv("GIT_DISCOVERY_ACROSS_FILESYSTEM")
+	if !set {
+		return false
+	}
+	b, ok := parseGitBool(v)
+	return ok && b
+}
+
+// parseGitBool parses a git boolean value: true/yes/on and false/no/off,
+// case-insensitively, the empty string (false), or an integer (non-zero is
+// true). ok is false for anything else.
+func parseGitBool(s string) (b, ok bool) {
+	switch strings.ToLower(s) {
+	case "true", "yes", "on":
+		return true, true
+	case "false", "no", "off", "":
+		return false, true
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return false, false
+	}
+	return n != 0, true
 }
 
 // gitCeilings returns the GIT_CEILING_DIRECTORIES entries as git uses them
@@ -1151,9 +1194,8 @@ func configBare(git, common string) (bool, error) {
 
 // handConfigBare reads core.bare from common/config as git reads a boolean:
 // the last assignment in a [core] section (no subsection) wins; a key with no
-// value is true; true/yes/on/1 and false/no/off/0 and the empty value (false)
-// are accepted, case-insensitively. An absent file or key is false. include
-// directives are not followed.
+// value is true; any other value is read by parseGitBool. An absent file or
+// key is false. include directives are not followed.
 func handConfigBare(common string) (bool, error) {
 	cfg := filepath.Join(common, "config")
 	data, err := os.ReadFile(cfg)
@@ -1188,14 +1230,11 @@ func handConfigBare(common string) (bool, error) {
 			bare = true
 			continue
 		}
-		switch strings.ToLower(strings.Trim(strings.TrimSpace(val), `"`)) {
-		case "true", "yes", "on", "1":
-			bare = true
-		case "false", "no", "off", "0", "":
-			bare = false
-		default:
+		b, ok := parseGitBool(strings.Trim(strings.TrimSpace(val), `"`))
+		if !ok {
 			return false, fmt.Errorf("%s: core.bare = %q is not a boolean", cfg, strings.TrimSpace(val))
 		}
+		bare = b
 	}
 	return bare, nil
 }
@@ -1212,9 +1251,24 @@ func sameDir(a, b string) bool {
 }
 
 // handLocate walks the directories git would examine from start (gitWalk:
-// the physical path, stopping at GIT_CEILING_DIRECTORIES) to the first .git
-// the hand rules accept (see examineGit). The root keeps the caller's path
-// form where it is an ancestor of start. Used only without a git that runs.
+// the physical path, stopping at GIT_CEILING_DIRECTORIES and at a filesystem
+// boundary) to the first .git the hand rules accept (see examineGit). A
+// directory that is itself a git directory (a bare repository, or the inside
+// of a .git) is refused, as git refuses it: not a work tree. The root keeps
+// the caller's path form where it is an ancestor of start. Used only without
+// a git that runs.
+//
+// The hand rules still differ from git in these ways:
+//   - an unreadable .git directory is refused, where git skips it and
+//     resolves the enclosing repository;
+//   - core.worktree in a .git directory is not honoured: the work tree is
+//     always the directory holding .git;
+//   - safe.directory ownership checks, safe.bareRepository, and the
+//     repository format version and extensions are not checked;
+//   - include directives are not followed when reading core.bare;
+//   - a GIT_DISCOVERY_ACROSS_FILESYSTEM that is not a boolean is read as
+//     unset, where git dies; a parent whose device cannot be read ends the
+//     walk, where git dies.
 func handLocate(start string) located {
 	var skipped []string
 	for _, dir := range gitWalk(start) {
@@ -1231,6 +1285,12 @@ func handLocate(start string) located {
 		if skip != "" {
 			skipped = append(skipped, dot+": "+skip)
 		}
+		if _, reason, err := checkGitDir(dir); err == nil && reason == "" {
+			// git finds dir itself to be a git directory: a bare repository
+			// or the inside of a .git, neither a work tree.
+			return located{skipped: skipped, err: fmt.Errorf(
+				"%s is inside the git directory %s, not a work tree; ethos must be run in a work tree", start, dir)}
+		}
 	}
 	return located{skipped: skipped, err: fmt.Errorf("%s is %w", start, ErrNotInRepo)}
 }
@@ -1246,10 +1306,10 @@ type gitDirs struct{ dir, common string }
 //
 // The rules follow git where it is strict: a gitfile is the exact bytes
 // "gitdir: " at offset 0 then a path (only trailing CR/LF stripped), and its
-// target must itself be a git directory (checkGitDir). They are stricter than
-// git in one place: a .git directory that cannot be read is an error, where
-// git skips it and resolves the enclosing repository — writing there would
-// put the store in a tree the user may not mean.
+// target must itself be a git directory (checkGitDir). A .git directory that
+// cannot be read is an error, where git skips it and resolves the enclosing
+// repository — writing there would put the store in a tree the user may not
+// mean. handLocate lists the other differences from git.
 func examineGit(dot string) (g gitDirs, skip string, err error) {
 	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
 		return gitDirs{}, "", nil
