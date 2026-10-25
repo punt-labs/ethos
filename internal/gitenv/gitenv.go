@@ -622,14 +622,14 @@ func UnreadableUserConfig() error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("the git config %s cannot be examined: %w", f, err)
+			return &UnreadableConfigError{Path: f, Err: fmt.Errorf("the git config %s cannot be examined: %w", f, err)}
 		}
 		if !info.Mode().IsRegular() {
 			continue
 		}
 		h, err := os.Open(f)
 		if err != nil {
-			return fmt.Errorf("the git config %s cannot be read: %w", f, err)
+			return &UnreadableConfigError{Path: f, Err: fmt.Errorf("the git config %s cannot be read: %w", f, err)}
 		}
 		_ = h.Close()
 	}
@@ -642,3 +642,13 @@ func UnreadableUserConfig() error {
 func unreadableDotGit(dot string, err error) error {
 	return fmt.Errorf("%s exists and cannot be read (%v): git would say \"not a git repository\" or answer for an enclosing repository; fix its permissions", dot, err)
 }
+
+// UnreadableConfigError is UnreadableUserConfig's error: Path is the config file
+// git cannot read (and may skip silently).
+type UnreadableConfigError struct {
+	Path string
+	Err  error
+}
+
+func (e *UnreadableConfigError) Error() string { return e.Err.Error() }
+func (e *UnreadableConfigError) Unwrap() error { return e.Err }

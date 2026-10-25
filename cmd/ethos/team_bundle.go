@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -557,18 +556,27 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		return nil
 	}
 
-	// git's own stderr is shown as it comes and also kept: the advice below is
-	// decided from what git said, not from the URL (insteadOf, a superproject's
-	// config and a relative URL all make the URL a poor witness).
-	var gitErr bytes.Buffer
+	// A user config git cannot read is skipped by git without a word: its
+	// core.sshCommand, insteadOf and credential settings would not apply. Say so
+	// before the clone, then go on.
+	var unreadable *gitenv.UnreadableConfigError
+	if uerr := gitenv.UnreadableUserConfig(); errors.As(uerr, &unreadable) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team add-bundle: git will ignore %s: its core.sshCommand, insteadOf and credential settings do not apply (%v)\n",
+			unreadable.Path, unreadable.Err)
+	}
+
+	// git's stderr is ethos's own, untouched: clone progress shows when it is a
+	// terminal, and no pipe of ours can hold Wait open after git exits. The ssh
+	// advice is decided only after a failure, from a short second look at the
+	// remote (sshHint), never from what git printed here.
 	_, err := gitenv.Run(gitenv.Spec{
 		Git: gitArgs[0], Args: gitArgs[1:], Dir: gitDir, Env: gitenv.UserConfigEnv(),
-		Stdout: out, Stderr: io.MultiWriter(cmd.ErrOrStderr(), &gitErr), Limit: cloneLimit, Network: true,
+		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit, Network: true,
 	})
 	if err != nil {
 		wrapped := fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && sshFailed(gitErr.String()) {
+		if errors.As(err, &ee) && sshHint(url) {
 			wrapped = fmt.Errorf("%w; add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key", wrapped)
 		}
 		return wrapped
@@ -584,17 +592,44 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	return nil
 }
 
-// sshFailed reports whether git's stderr shows an ssh transport failure that a
-// terminal prompt would have answered: a key that was refused, a host key that
-// was not accepted, or ssh's own error lines.
-func sshFailed(stderr string) bool {
-	for _, marker := range []string{"Permission denied (publickey", "Host key verification failed", "Could not read from remote repository"} {
-		if strings.Contains(stderr, marker) {
-			return true
-		}
+// sshHint reports whether the remote refuses for a reason a terminal would have
+// answered. It looks again, only after a failure, with `git ls-remote` bounded
+// at hintLimit and run as the clone ran (no terminal, no prompts), and reads
+// what git says. A relative URL (submodule add) cannot be looked at this way.
+func sshHint(url string) bool {
+	if strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../") {
+		return false
 	}
-	for _, line := range strings.Split(stderr, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "ssh:") {
+	// In a neutral directory: the user's own config applies, and no repository's
+	// (a submodule clone does not apply its superproject's insteadOf either).
+	ndir, nenv, cleanup, nerr := gitenv.Neutral()
+	if nerr != nil {
+		return false
+	}
+	defer cleanup()
+	_, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: ndir, Env: nenv, Network: true, Limit: hintLimit,
+		Args: []string{"ls-remote", "--exit-code", url, "HEAD"},
+	})
+	var ee *exec.ExitError
+	return errors.As(err, &ee) && sshFailed(string(ee.Stderr))
+}
+
+// hintLimit bounds sshHint's second look.
+var hintLimit = 20 * time.Second
+
+// sshFailed reports whether git's stderr shows ssh failing in a way a terminal
+// prompt would have fixed: a key refused or no way to ask for one, or a host key
+// not accepted. Generic transport text ("Could not read from remote repository",
+// a repository not found, a refused connection, a DNS failure) is not evidence
+// of that and gets no advice.
+func sshFailed(stderr string) bool {
+	for _, marker := range []string{
+		"Permission denied (publickey", "Permission denied (password", "Permission denied (keyboard-interactive",
+		"Host key verification failed",
+		"Enter passphrase", "read_passphrase", "Could not open a connection to your authentication agent",
+	} {
+		if strings.Contains(stderr, marker) {
 			return true
 		}
 	}

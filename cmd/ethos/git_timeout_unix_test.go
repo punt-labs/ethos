@@ -247,41 +247,55 @@ func resolvedPath(t *testing.T, p string) string {
 	return r
 }
 
-// add-bundle's advice is decided from git's stderr, not the URL: git saying ssh
-// failed (a refused key, an unaccepted host key, an ssh: line) gets the ssh-add
-// advice; an https failure does not; and an unreadable ~/.gitconfig does not stop
-// an https clone (ethos reads no ssh setting).
-func TestTeamAddBundleAdviceFollowsGitsStderr(t *testing.T) {
+// add-bundle's advice comes from what git says when it looks at the remote again
+// after a failure (ls-remote), and only ssh-specific text counts: a refused key or
+// an unaccepted host key gets the ssh-add advice; a repository that is not found,
+// a refused connection, a DNS failure, a nonexistent file:// remote (each with the
+// generic "Could not read from remote repository" line git adds) do not. The URL
+// is not the witness. An unreadable ~/.gitconfig is named before the clone, and
+// the clone goes on.
+func TestTeamAddBundleAdviceFollowsGitsAnswer(t *testing.T) {
 	prevApply, prevGlobal, prevName := addBundleApply, addBundleGlobal, addBundleName
 	addBundleApply, addBundleGlobal, addBundleName = true, true, ""
 	t.Cleanup(func() { addBundleApply, addBundleGlobal, addBundleName = prevApply, prevGlobal, prevName })
 	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
 	const hint = "add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key"
-	run := func(stderr, url string) error {
+	run := func(lsRemoteStderr, url string) (string, error) {
 		bin := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho '"+stderr+"' >&2\nexit 128\n"), 0o755))
+		script := "#!/bin/sh\nwhile [ \"$1\" = -c ]; do shift 2; done\ncase \"$1\" in\nclone|submodule) echo 'clone progress' >&2; exit 128;;\nls-remote) printf '%s\\n' '" + lsRemoteStderr + "' >&2; exit 128;;\nesac\nexit 1\n"
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
 		t.Setenv("PATH", bin)
+		var errBuf bytes.Buffer
 		cmd := &cobra.Command{}
 		cmd.SetOut(&bytes.Buffer{})
-		cmd.SetErr(&bytes.Buffer{})
-		return runTeamAddBundle(cmd, url)
+		cmd.SetErr(&errBuf)
+		err := runTeamAddBundle(cmd, url)
+		return errBuf.String(), err
 	}
-	for _, stderr := range []string{
-		"git@h: Permission denied (publickey).",
-		"Host key verification failed.",
-		"fatal: Could not read from remote repository.",
-		"ssh: Could not resolve hostname h",
+	for name, stderr := range map[string]string{
+		"publickey":  "git@h: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+		"password":   "git@h: Permission denied (password).\nfatal: Could not read from remote repository.",
+		"host key":   "Host key verification failed.\nfatal: Could not read from remote repository.",
+		"agent":      "Could not open a connection to your authentication agent.",
+		"passphrase": "Enter passphrase for key /k: read_passphrase: cannot open /dev/tty",
 	} {
-		err := run(stderr, "https://example.invalid/o/b.git") // the URL is not the witness
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), hint, stderr)
+		_, err := run(stderr, "git@example.invalid:o/b.git")
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), hint, name)
 	}
-	err := run("fatal: unable to access 'https://h/o/b.git/': Could not resolve host: h", "https://example.invalid/o/b.git")
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "ssh", "an https failure gets no ssh advice")
-	err = run("fatal: repository not found", "git@example.invalid:o/b.git")
-	assert.NotContains(t, err.Error(), hint, "an ssh URL alone is not a reason")
+	for name, stderr := range map[string]string{
+		"repository not found": "ERROR: Repository not found.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
+		"file nonexistent":     "fatal: '/no/such/dir' does not appear to be a git repository\nfatal: Could not read from remote repository.",
+		"connection refused":   "ssh: connect to host h port 22: Connection refused\nfatal: Could not read from remote repository.",
+		"dns":                  "ssh: Could not resolve hostname h: Name or service not known\nfatal: Could not read from remote repository.",
+		"https dns":            "fatal: unable to access 'https://h/o/b.git/': Could not resolve host: h",
+	} {
+		_, err := run(stderr, "git@example.invalid:o/b.git")
+		require.Error(t, err, name)
+		assert.NotContains(t, err.Error(), hint, name)
+		assert.NotContains(t, err.Error(), "ssh-add", name)
+	}
 
 	if os.Geteuid() != 0 {
 		cfg := filepath.Join(t.TempDir(), "gitconfig")
@@ -289,9 +303,11 @@ func TestTeamAddBundleAdviceFollowsGitsStderr(t *testing.T) {
 		require.NoError(t, os.Chmod(cfg, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
 		t.Setenv("GIT_CONFIG_GLOBAL", cfg)
-		err := run("fatal: unable to access: Could not resolve host", "https://example.invalid/o/b.git")
+		stderr, err := run("fatal: unable to access: Could not resolve host", "https://example.invalid/o/b.git")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "exit status 128", "git ran: the unreadable config did not stop the clone")
+		assert.Contains(t, stderr, "git will ignore "+cfg)
+		assert.Contains(t, stderr, "its core.sshCommand, insteadOf and credential settings do not apply")
 	}
 }
 
