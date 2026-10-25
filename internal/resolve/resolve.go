@@ -1214,7 +1214,14 @@ func configBare(git, common string) (bool, error) {
 		return handConfigBare(common)
 	}
 	cfg := filepath.Join(common, "config")
-	out, err := gitenv.Output("", git, "config", "--file", cfg, "--bool", "core.bare")
+	// In a neutral directory: `git config --file` reads no repository, and a
+	// broken .git in the working directory must not fail it.
+	dir, env, cleanup, nerr := gitenv.Neutral()
+	if nerr != nil {
+		return false, nerr
+	}
+	defer cleanup()
+	out, err := gitenv.Run(gitenv.Spec{Git: git, Dir: dir, Env: env, Args: []string{"config", "--file", cfg, "--bool", "core.bare"}})
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
@@ -1653,39 +1660,41 @@ func parseRepoName(url string) string {
 // GitConfig reads a single git config value as git would from checkout, the
 // work tree the resolver located (its own config, then global, then system).
 // With no checkout ("" — outside a repository, or one that could not be
-// located) only the global and system config are read, never the working
-// directory's repository: under ETHOS_REPO_ROOT that is some other repository.
+// located) git runs in a neutral directory outside any repository, so only the
+// user's config is read, never the working directory's repository: under
+// ETHOS_REPO_ROOT that is some other repository.
 // Returns ("", nil) when the key is unset, and when git is not installed:
 // identity resolution does not require git, so a missing git has no config to
 // read. Every other failure — a timeout, a corrupt config, dubious ownership —
 // is an error carrying git's message, never an unset key.
 func GitConfig(checkout, key string) (string, error) {
-	scopes := [][]string{{}}
+	spec := gitenv.Spec{Git: "git", Dir: checkout, Args: []string{"config", key}, Env: gitenv.Parsed()}
 	where := checkout
 	if checkout == "" {
-		scopes = [][]string{{"--global"}, {"--system"}}
-		where = "the global git config"
-	}
-	for _, scope := range scopes {
-		args := append(append([]string{"config"}, scope...), key)
-		out, absent, err := gitenv.Read(gitenv.Spec{
-			Git: "git", Dir: checkout, Args: args, Env: gitenv.Parsed(),
-		}, gitenv.AbsentUnset)
-		switch {
-		case errors.Is(err, exec.ErrNotFound):
-			return "", nil
-		case err != nil:
-			return "", fmt.Errorf("reading git config %s in %s: %w", key, where, err)
-		case absent:
-			continue
+		// A plain `git config` in a directory outside any repository: the whole
+		// user config ([include], GIT_CONFIG_COUNT, -c) and no repository's.
+		dir, env, cleanup, err := gitenv.Neutral()
+		if err != nil {
+			return "", err
 		}
-		v := strings.TrimSpace(string(out))
-		// Strip surrounding quotes — some git configs store values with
-		// embedded quotes (e.g., user.name = "\"jmf-pobox\"").
-		if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
-			v = v[1 : len(v)-1]
-		}
-		return v, nil
+		defer cleanup()
+		spec.Dir, spec.Env = dir, env
+		where = "the user's git config"
 	}
-	return "", nil
+	out, absent, err := gitenv.Read(spec, gitenv.AbsentUnset)
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("reading git config %s in %s: %w", key, where, err)
+	case absent:
+		return "", nil
+	}
+	v := strings.TrimSpace(string(out))
+	// Strip surrounding quotes — some git configs store values with
+	// embedded quotes (e.g., user.name = "\"jmf-pobox\"").
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		v = v[1 : len(v)-1]
+	}
+	return v, nil
 }

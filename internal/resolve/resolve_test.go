@@ -1921,3 +1921,39 @@ func TestGitReadsUseTheLocatedCheckout(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, repo, "no checkout: no repository name")
 }
+
+// GitConfig with no checkout is a plain `git config` outside any repository:
+// [include] in the global config, GIT_CONFIG_COUNT config and a broken .git in
+// the working directory are all as git itself would see them.
+func TestGitConfigWithNoCheckoutSeesTheWholeUserConfig(t *testing.T) {
+	base := t.TempDir()
+	inc := filepath.Join(base, "included")
+	require.NoError(t, os.WriteFile(inc, []byte("[user]\n\tname = from-include\n"), 0o644))
+	global := filepath.Join(base, "gitconfig")
+	require.NoError(t, os.WriteFile(global, []byte("[include]\n\tpath = "+inc+"\n[user]\n\temail = global@example.com\n"), 0o644))
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	t.Run("include", func(t *testing.T) {
+		v, err := GitConfig("", "user.name")
+		require.NoError(t, err)
+		assert.Equal(t, "from-include", v)
+	})
+	t.Run("GIT_CONFIG_COUNT", func(t *testing.T) {
+		t.Setenv("GIT_CONFIG_COUNT", "1")
+		t.Setenv("GIT_CONFIG_KEY_0", "user.signingkey")
+		t.Setenv("GIT_CONFIG_VALUE_0", "KEY123")
+		v, err := GitConfig("", "user.signingkey")
+		require.NoError(t, err)
+		assert.Equal(t, "KEY123", v)
+	})
+	t.Run("a cwd with an invalid gitfile", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".git"), []byte("not a gitfile\n"), 0o644))
+		chdir(t, cwd)
+		v, err := GitConfig("", "user.email")
+		require.NoError(t, err, "the user's config does not depend on the working directory's repository")
+		assert.Equal(t, "global@example.com", v)
+	})
+}

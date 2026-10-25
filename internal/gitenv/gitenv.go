@@ -440,3 +440,38 @@ func DanglingDotGit(dir string) error {
 	}
 	return nil
 }
+
+// userConfigEnv is Parsed without dropping GIT_CONFIG_PARAMETERS and
+// GIT_CONFIG_COUNT: those are the user's own config (`git -c`, the environment),
+// not a repository's, and a read of the user's config must see them.
+func userConfigEnv() []string {
+	keep := map[string]bool{"GIT_CONFIG_PARAMETERS": true, "GIT_CONFIG_COUNT": true}
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if (!dropped[name] || keep[name]) && name != "LC_ALL" && name != "LANGUAGE" {
+			env = append(env, kv)
+		}
+	}
+	return append(stripTrace(env), "LC_ALL=C", "LANGUAGE=")
+}
+
+// Neutral makes a fresh empty directory outside any repository and the Parsed
+// environment for running git there: GIT_CEILING_DIRECTORIES names its parent,
+// so git never walks up into a repository that encloses the temp directory. A
+// git run there reads the user's whole config (system, global, [include],
+// GIT_CONFIG_COUNT and -c) and no repository's, and a broken .git in the
+// process's working directory cannot fail it. cleanup removes the directory.
+func Neutral() (dir string, env []string, cleanup func(), err error) {
+	dir, err = os.MkdirTemp("", "ethos-git-")
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("making a neutral directory for git: %w", err)
+	}
+	// Resolve symlinks (macOS /var -> /private/var) so the ceiling matches
+	// the physical path git walks.
+	if r, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+		dir = r
+	}
+	env = append(userConfigEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
+	return dir, env, func() { _ = os.RemoveAll(dir) }, nil
+}
