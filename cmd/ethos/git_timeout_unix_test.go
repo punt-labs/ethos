@@ -123,3 +123,34 @@ func TestTeamAddBundleCloneTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "clone")
 	assert.Contains(t, err.Error(), "200ms")
 }
+
+// session purge returns the timeout when git does not answer reading this
+// checkout's identity: no purge runs against an empty identity.
+func TestSessionPurgeGitTimeout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
+	testhelpers.HangingGit(t)
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	err := runSessionPurge(cmd)
+	require.ErrorIs(t, err, gitenv.ErrTimeout)
+}
+
+// audit seal fails closed when git does not answer, and says the seal could
+// not run, where, and that nothing was sealed or staged and the commit is
+// blocked with the tree unchanged.
+func TestAuditSealGitTimeoutFailsClosed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	t.Setenv("ETHOS_REPO_ROOT", repo)
+	testhelpers.HangingGit(t)
+	var out, errb bytes.Buffer
+	err := runAuditSeal(&out, &errb)
+	assert.ErrorIs(t, err, failClosed{})
+	msg := errb.String()
+	assert.Contains(t, msg, "the seal could not run because git did not answer")
+	assert.Contains(t, msg, repo)
+	assert.Contains(t, msg, "nothing was sealed or staged")
+	assert.Contains(t, msg, "the commit is blocked and the tree is unchanged")
+}

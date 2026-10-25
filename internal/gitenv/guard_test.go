@@ -84,6 +84,8 @@ func isGitName(e ast.Expr) bool {
 
 // Every git command ethos starts goes through gitenv (bounded by its
 // deadline), except the allowlisted sites that carry their own context.
+// The scan covers internal/, cmd/ and plugin/ only: tests/ is test
+// infrastructure, not shipped code.
 func TestNoUnboundedGitCommands(t *testing.T) {
 	found := gitStarts(t, filepath.Join("..", ".."))
 	var files []string

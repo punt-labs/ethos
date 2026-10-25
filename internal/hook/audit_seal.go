@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 // SealOptions configures a seal run.
@@ -49,7 +50,7 @@ type SealResult struct {
 func SealRepo(repoRoot string, now time.Time, opts SealOptions) (SealResult, error) {
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
-		return SealResult{}, fmt.Errorf("checking for a gitlink mount: %w", err)
+		return SealResult{}, sealGitError(repoRoot, err)
 	}
 	if gitlink {
 		fmt.Fprintf(os.Stderr,
@@ -328,4 +329,16 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+// sealGitError says why a seal could not start. A git that did not answer
+// within its bound blocks the commit by design: the seal runs in pre-commit,
+// and sealing on a guess could stage the wrong tree. The message names the
+// directory and says nothing was sealed or staged.
+func sealGitError(repoRoot string, err error) error {
+	if errors.Is(err, gitenv.ErrTimeout) {
+		return fmt.Errorf("the seal could not run because git did not answer in %s (%w); "+
+			"nothing was sealed or staged, the commit is blocked and the tree is unchanged", repoRoot, err)
+	}
+	return fmt.Errorf("checking for a gitlink mount: %w", err)
 }

@@ -46,7 +46,7 @@ func sealMissionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *S
 func SealMission(repoRoot, missionID string, now time.Time, opts SealOptions) (SealResult, error) {
 	gitlink, err := audit.IsGitlinkMount(repoRoot)
 	if err != nil {
-		return SealResult{}, fmt.Errorf("checking for a gitlink mount: %w", err)
+		return SealResult{}, sealGitError(repoRoot, err)
 	}
 	if gitlink {
 		fmt.Fprintf(os.Stderr,
