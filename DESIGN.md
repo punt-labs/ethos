@@ -12832,34 +12832,45 @@ warns in a dormant one. When there is no repository or neither
 directory exists the check still passes, and its detail starts with
 "not scanned" and the reason.
 
-Finding the repository asks git when git is installed: one
-`git rev-parse --show-toplevel --git-dir --git-common-dir` call decides
-the working tree and the store (a linked worktree's store is the main
-checkout's), so `GIT_DIR`, `GIT_WORK_TREE` and `GIT_CEILING_DIRECTORIES`
-apply. Git's "not a git repository" means not in a repository; any other
-git failure (dubious ownership, an invalid gitfile, an unreadable
+Finding the repository asks git when a working git is installed: one
+`git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`
+call, run in the C locale with `GIT_DIR`, `GIT_WORK_TREE` and
+`GIT_COMMON_DIR` cleared, decides the working tree and the store. A
+linked worktree's store is the main checkout's; when the common git
+directory is not `<main>/.git` of an existing working tree (a separate
+git directory, a submodule's worktree) the store is refused rather
+than guessed. `GIT_CEILING_DIRECTORIES` applies, with or without git.
+Git's "not a git repository" means not in a repository; any other git
+failure (dubious ownership, an invalid gitfile, an unreadable
 `commondir`, a run inside `.git/` or a bare repository) is a refusal
 carrying git's message. Answers are cached per process for at most 30
-seconds, and a refusal is never cached. Without git, strict hand rules
-apply: a `.git/` counts only with a valid `HEAD` and `objects/` and
+seconds (so each hook process still runs git once), and a refusal is
+never cached. Without git, or with a git that is too old or does not
+run, strict hand rules apply: a `.git/` counts only with a valid `HEAD` and `objects/` and
 `refs/` directories, a `.git` file only when it starts with exactly
 `gitdir:` followed by one space and names a git directory, a dangling symlink or non-file
 `.git` is skipped unread, and an unreadable `.git/` is refused, which is
 stricter than git. Tests compare 28 `.git` shapes with
 `git rev-parse` and run the same shapes with git hidden. On a refusal,
 or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one
-failing row, keeps every check's own status and notes when a check saw
-only the global layer (a test parses `RunAll` to keep the gate on every
-check); the MCP server runs only its read methods and appends a note in
-a separate content block; the session hooks say why the persona is
-missing, the audit hook skips the entry, and `subagent-start` refuses a
-spawn that declares a mission; and every other command refuses rather
-than fall back to the global store. `doctor`, `setup`, `seed`, `enable`,
-`disable`, `hook`, `serve`, `audit`, the global-only `session`, `adr`,
-`whoami` and `iam`, and a few utilities (`version`, `help`,
-`completion`, `uninstall`, `schema`) are exempt from that refusal
-because they handle the error themselves or never use the repository
-store. `ethos enable` requires git to install hooks.
+failing row; checks that read the store keep their own status and note
+that they saw only the global layer, and checks that read the checkout
+report "not checked" with the reason, a FAIL staying a FAIL (a test
+parses `RunAll` to keep the gate on every check). The MCP server
+locates the store on every call, runs only its read methods while the
+store is unlocated, and appends a note in a separate content block; the
+session hooks say why the persona is missing, the audit hook skips the
+entry and says so in the session, and `subagent-start` reports that it
+cannot evaluate the verifier gate. Every CLI command is classified in
+one table, which a test checks against the full command tree: commands
+that touch only global stores (session roster commands, `iam`,
+`adr list`/`show`/`settle`) and commands that handle the error
+themselves (`doctor`, `setup`, `seed`, `enable`, `disable`, `hook`,
+`serve`, `audit` and a few utilities) run; every other command,
+including `whoami`, `session start` and `adr create`, refuses rather
+than fall back to the global store. Git runs in the C locale with its
+location variables cleared, so a translated message or an exported
+`GIT_DIR` cannot change the answer. `ethos enable` requires git to install hooks.
 `ethos disable` refuses an unverified hooks directory unless `--force`
 is given; with `--force` it removes the import and marker and reports
 that hook sections may remain. Output a user directs into

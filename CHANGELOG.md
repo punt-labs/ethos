@@ -231,20 +231,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the advice matches the cause (install git, fix `safe.directory`, or run
   from the repository's top level).
 - **Finding the repository asks git.** With git installed, ethos uses
-  `git rev-parse` to find the working tree and the store, so it agrees
-  with git on every `.git` shape and honors `GIT_DIR`, `GIT_WORK_TREE`
-  and `GIT_CEILING_DIRECTORIES`; without git it applies strict `.git`
-  rules (and never reads a non-file `.git`, so a FIFO no longer hangs
-  it). Git's "not a git repository" means not in a repository; any other
-  git failure, or a refused `ETHOS_REPO_ROOT`, makes `ethos doctor` fail
-  a "Repository store" row (and note which checks saw only the global
-  layer), the MCP server run only its read methods, the session hooks
-  say why the persona is missing, the audit hook skip the entry, and
-  other commands refuse instead of silently using the global store.
-  `session`, `adr`, `whoami` and `iam` use only global stores and are
-  not affected. `ethos setup` checks this, and that the bundle exists
-  ("no bundles installed; run `ethos seed` first"), before writing
-  anything; `ethos seed` warns on a malformed repository config.
+  `git rev-parse` (in the C locale, with `GIT_DIR` and `GIT_WORK_TREE`
+  cleared, and honoring `GIT_CEILING_DIRECTORIES`) to find the working
+  tree and the store, so it agrees with git on every `.git` shape; with
+  git missing, too old or not working it applies strict `.git` rules
+  (and never reads a non-file `.git`, so a FIFO no longer hangs it). Git's
+  "not a git repository" means not in a repository; any other git
+  failure, or a refused `ETHOS_REPO_ROOT`, makes `ethos doctor` fail a
+  "Repository store" row, the MCP server run only its read methods, the
+  session hooks say why the persona is missing, the audit hook skip the
+  entry and say so, and other commands refuse instead of silently using
+  the global store. Every command is classified; those that touch only
+  global stores (session roster commands, `iam`, `adr list`/`show`/
+  `settle`) still run, while `whoami`, `session start` and `adr create`
+  refuse. `ethos serve` picks up a repaired repository without a
+  restart. `ethos setup` checks all of this, and that the bundle it will
+  use exists ("no bundles installed; run `ethos seed` first"), before
+  writing anything; `ethos seed` warns on a malformed repository config.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
