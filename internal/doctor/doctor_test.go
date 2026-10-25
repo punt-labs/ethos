@@ -460,9 +460,10 @@ func TestCheckSealHook(t *testing.T) {
 	// failure unrelated to the hook at all — no git on PATH, here — leaked
 	// through as a FAIL on a repo that was never enabled, contradicting
 	// that documented state. No `exec.LookPath("git")` skip: the whole
-	// point is that a dormant repo must PASS even when the sandbox
-	// couldn't have run at all.
-	t.Run("dormant: no git on PATH is PASS with the unverified note — execution never attempted (S2/P1)", func(t *testing.T) {
+	// point is that a dormant repo never FAILs, even when the sandbox
+	// couldn't have run at all; it is a WARN, since the hooks git really runs
+	// cannot be inspected.
+	t.Run("dormant: no git on PATH is WARN cannot verify hooks — execution never attempted (S2/P1)", func(t *testing.T) {
 		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
@@ -470,11 +471,11 @@ func TestCheckSealHook(t *testing.T) {
 
 		t.Setenv("PATH", t.TempDir()) // no git anywhere on PATH
 		r := CheckSealHook(dir)
-		// The degraded hooks-dir lookup is named as a note, and it never fails a
-		// dormant repo.
-		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
-		assert.True(t, strings.HasPrefix(r.Detail, "not enabled here"), r.Detail)
-		assert.Contains(t, r.Detail, "hooks directory not verified:")
+		// The degraded hooks-dir lookup is named, and it never fails a dormant
+		// repo.
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
+		assert.Contains(t, r.Detail, "install git")
 	})
 
 	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
@@ -1202,7 +1203,7 @@ func TestCheckHookPresence_Bfml_Hy40Regression(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 
-	results := RunAll(s, ss, repo, nil, repo, nil)
+	results := RunAll(s, ss, repo, nil, repo, nil, nil)
 
 	var trailerPresence *Result
 	for i := range results {
@@ -1492,7 +1493,7 @@ func TestRunAllHookCurrencyIndependentOfEnabledMarker(t *testing.T) {
 	require.NoError(t, err)
 	// No enabled marker written — the repo stays dormant.
 
-	results := RunAll(s, ss, repo, nil, repo, nil)
+	results := RunAll(s, ss, repo, nil, repo, nil, nil)
 	var sealCurrency, trailerCurrency *Result
 	for i := range results {
 		switch results[i].Name {
@@ -1526,7 +1527,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
-	results := RunAll(s, ss, "", nil, "", nil)
+	results := RunAll(s, ss, "", nil, "", nil, nil)
 	require.Len(t, results, 15)
 
 	names := make([]string, len(results))
@@ -1557,7 +1558,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-	results = RunAll(s, ss, "", nil, "", nil)
+	results = RunAll(s, ss, "", nil, "", nil, nil)
 	assert.False(t, AllPassed(results))
 	assert.Less(t, PassedCount(results), 14)
 
@@ -1895,8 +1896,9 @@ func TestChecklistAgentNames_Real(t *testing.T) {
 // TestHookChecksOnADegradedLookup: with git off PATH core.hooksPath cannot be
 // read, so no hook check may report a verdict on the directory it guessed. An
 // enabled repo whose hooks cannot be verified FAILs the presence check (a
-// green line would hide an unsealed repo); a dormant one PASSes with the note;
-// the currency check only WARNs.
+// green line would hide an unsealed repo); a dormant one WARNs, since a stale
+// chained hook in the directory git really runs would stay hidden; the currency
+// check only WARNs.
 func TestHookChecksOnADegradedLookup(t *testing.T) {
 	enabled := repoTemp(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(enabled, ".punt-labs", "ethos"), 0o755))
@@ -1913,15 +1915,30 @@ func TestHookChecksOnADegradedLookup(t *testing.T) {
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
 
 	r = CheckSealHook(dormant)
-	assert.Equal(t, "PASS", r.Status, r.Detail)
-	assert.True(t, strings.HasPrefix(r.Detail, "not enabled here"), r.Detail)
-	assert.Contains(t, r.Detail, "hooks directory not verified:")
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
+	assert.Contains(t, r.Detail, "git rev-parse")
 
 	for name, dir := range map[string]string{"enabled": enabled, "dormant": dormant} {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
 		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
 	}
+}
+
+// TestHookChecksAdviceFollowsCause: with git installed, a root git reports as
+// part of another repository is told to run from its top level, never to
+// install git.
+func TestHookChecksAdviceFollowsCause(t *testing.T) {
+	parent := repoTemp(t)
+	sub := filepath.Join(parent, "sub")
+	require.NoError(t, os.MkdirAll(filepath.Join(sub, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+
+	r := CheckSealHook(sub)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "top level")
+	assert.NotContains(t, r.Detail, "install git")
 }
 
 // TestRunAllRefusedRootOverride: a refused ETHOS_REPO_ROOT is a WARN on every
@@ -1947,7 +1964,7 @@ func TestRunAllRefusedRootOverride(t *testing.T) {
 	}
 
 	refused := fmt.Errorf("ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it", "/nope")
-	results := RunAll(s, ss, "", refused, "", nil)
+	results := RunAll(s, ss, "", refused, "", nil, nil)
 	for _, name := range checkout {
 		r := find(results, name)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
@@ -1955,18 +1972,58 @@ func TestRunAllRefusedRootOverride(t *testing.T) {
 	}
 
 	outside := fmt.Errorf("/ is %w", resolve.ErrNotInRepo)
-	results = RunAll(s, ss, "", outside, "", nil)
+	results = RunAll(s, ss, "", outside, "", nil, nil)
 	for _, name := range checkout {
 		assert.Equal(t, "PASS", find(results, name).Status, name)
 	}
 	assert.Equal(t, "not scanned: not in a repository", find(results, "Unclassified files").Detail)
 }
 
-// TestRunAllGatesEveryCheckoutCheck: every check RunAll hands repoRoot goes
-// through checkout, which turns a refused root into a WARN. The calls are
-// found in the source, so a check added later without the gate fails here
-// instead of reading PASS "not in a repo" for a checkout it never examined.
-func TestRunAllGatesEveryCheckoutCheck(t *testing.T) {
+// TestRunAllRefusedStore: a store root that was refused or could not be
+// resolved is a WARN on every check that reads the store, where being outside a
+// repository stays PASS "not in a repo".
+func TestRunAllRefusedStore(t *testing.T) {
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	storeChecks := []string{
+		"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard",
+	}
+	find := func(results []Result, name string) Result {
+		for _, r := range results {
+			if r.Name == name {
+				return r
+			}
+		}
+		t.Fatalf("no result named %q in %+v", name, results)
+		return Result{}
+	}
+
+	refused := fmt.Errorf("ETHOS_REPO_ROOT=%q has no .punt-labs/ethos store; refusing to use it", "/nope")
+	results := RunAll(s, ss, "", nil, "", refused, nil)
+	for _, name := range storeChecks {
+		r := find(results, name)
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Equal(t, "not checked: "+refused.Error(), r.Detail, name)
+	}
+
+	outside := fmt.Errorf("/ is %w", resolve.ErrNotInRepo)
+	results = RunAll(s, ss, "", nil, "", outside, nil)
+	for _, name := range storeChecks {
+		r := find(results, name)
+		assert.Equal(t, "PASS", r.Status, name)
+		assert.Equal(t, "not in a repo", r.Detail, name)
+	}
+}
+
+// TestRunAllGatesEveryLocatedCheck: every check RunAll hands repoRoot goes
+// through checkout, and every check it hands storeRoot goes through store; each
+// turns a refused root into a WARN. The calls are found in the source, so a
+// check added later without the gate fails here instead of reading PASS "not
+// in a repo" for a tree it never examined.
+func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "doctor.go", nil, 0)
 	require.NoError(t, err)
@@ -1979,36 +2036,45 @@ func TestRunAllGatesEveryCheckoutCheck(t *testing.T) {
 	}
 	require.NotNil(t, runAll)
 
-	usesRepoRoot := func(call *ast.CallExpr) bool {
+	uses := func(call *ast.CallExpr, name string) bool {
 		for _, a := range call.Args {
-			if id, ok := a.(*ast.Ident); ok && id.Name == "repoRoot" {
+			if id, ok := a.(*ast.Ident); ok && id.Name == name {
 				return true
 			}
 		}
 		return false
 	}
-	isCheckout := func(call *ast.CallExpr) bool {
-		id, ok := call.Fun.(*ast.Ident)
-		return ok && id.Name == "checkout"
-	}
+	// hasRepoLocalTeam only chooses a message and reports false for ""; gate
+	// builds the gates themselves.
+	pure := map[string]bool{"hasRepoLocalTeam": true, "gate": true}
 
 	var gated, ungated []string
-	var walk func(n ast.Node, inCheckout bool)
-	walk = func(n ast.Node, inCheckout bool) {
+	var walk func(n ast.Node, inCheckout, inStore bool)
+	walk = func(n ast.Node, inCheckout, inStore bool) {
 		ast.Inspect(n, func(c ast.Node) bool {
 			call, ok := c.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			if isCheckout(call) {
+			if id, ok := call.Fun.(*ast.Ident); ok && (id.Name == "checkout" || id.Name == "store") {
 				for _, a := range call.Args {
-					walk(a, true)
+					walk(a, inCheckout || id.Name == "checkout", inStore || id.Name == "store")
 				}
 				return false
 			}
-			if usesRepoRoot(call) {
-				name := types.ExprString(call.Fun)
-				if inCheckout {
+			name := types.ExprString(call.Fun)
+			if pure[name] {
+				return true
+			}
+			ok = true
+			if uses(call, "repoRoot") && !inCheckout {
+				ok = false
+			}
+			if uses(call, "storeRoot") && !inStore {
+				ok = false
+			}
+			if uses(call, "repoRoot") || uses(call, "storeRoot") {
+				if ok {
 					gated = append(gated, name)
 				} else {
 					ungated = append(ungated, name)
@@ -2017,8 +2083,8 @@ func TestRunAllGatesEveryCheckoutCheck(t *testing.T) {
 			return true
 		})
 	}
-	walk(runAll.Body, false)
+	walk(runAll.Body, false, false)
 
-	assert.Empty(t, ungated, "checks given repoRoot outside checkout(...)")
-	assert.GreaterOrEqual(t, len(gated), 7, "the scan found too few gated checks: %v", gated)
+	assert.Empty(t, ungated, "checks given repoRoot or storeRoot outside checkout(...) or store(...)")
+	assert.GreaterOrEqual(t, len(gated), 10, "the scan found too few gated checks: %v", gated)
 }

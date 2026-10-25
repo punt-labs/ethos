@@ -59,20 +59,24 @@ func (r Result) Passed() bool {
 // ETHOS_REPO_ROOT was refused, or the checkout could not be examined, the
 // checks that read the checkout report WARN with that reason instead of
 // passing as "not in a repo"; being outside any repository is not a problem.
-func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, teams *team.LayeredStore) []Result {
+//
+// storeErr is LocateStoreRoot's error, with the same contract for the checks
+// that read the store: a refused store root is a WARN, not "not in a repo".
+func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr error, teams *team.LayeredStore) []Result {
 	results := make([]Result, 0, 15) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
-	// unlocated is why the checkout checks below cannot say anything, or nil.
-	var unlocated error
-	if repoRoot == "" && rootErr != nil && !errors.Is(rootErr, resolve.ErrNotInRepo) {
-		unlocated = rootErr
-	}
-	checkout := func(r Result) Result {
-		if unlocated != nil {
-			r.Status, r.Detail = "WARN", "not checked: "+unlocated.Error()
+	// gate turns a check's result into a WARN when its tree could not be
+	// located for a reason other than "not in a repository".
+	gate := func(root string, err error) func(Result) Result {
+		return func(r Result) Result {
+			if root == "" && err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+				r.Status, r.Detail = "WARN", "not checked: "+err.Error()
+			}
+			return r
 		}
-		return r
 	}
+	checkout := gate(repoRoot, rootErr)
+	store := gate(storeRoot, storeErr)
 
 	dir, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
 	results = append(results, passFail("Identity directory", dir, ok))
@@ -84,12 +88,12 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
 	// guard stays on the checkout (repoRoot) (#370).
-	results = append(results, checkout(defaultAgentResult(repoRoot, storeRoot)))
+	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot))))
 
 	dup, ok := CheckDuplicateFields(s, ss)
 	results = append(results, passFail("Duplicate fields", dup, ok))
 
-	results = append(results, checkout(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s)))
+	results = append(results, checkout(store(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))))
 	results = append(results, checkout(CheckSealHook(repoRoot)))
 
 	// ethos-bfml/ethos-hy40: the trailer hook gets the same presence check
@@ -109,7 +113,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// matching every other resolution consumer; the git-boundary check
 	// reads the checkout (repoRoot), because the index and .gitignore
 	// belong to the tree being committed.
-	results = append(results, CheckRepoSetComplete(s, storeRoot))
+	results = append(results, store(CheckRepoSetComplete(s, storeRoot)))
 	results = append(results, checkout(CheckLocalExtNotTracked(repoRoot)))
 	results = append(results, CheckExtCredentialNames(s))
 
@@ -117,12 +121,12 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// are invisible to every mission-reading surface — the exact
 	// failure mode `ethos mission correct` exists to replace. Reads
 	// storeRoot (the shared record), matching CheckRepoSetComplete.
-	results = append(results, CheckNoHandEditedMissionFiles(storeRoot))
+	results = append(results, store(CheckNoHandEditedMissionFiles(storeRoot)))
 
 	// ethos-e05k: the delegated-worker invariant on the "implement" and
 	// "test" archetypes is data-driven from the deployed YAML, so a binary
 	// upgrade with no `ethos seed` re-run silently loses enforcement.
-	results = append(results, CheckDelegatedWorkerArchetypes(storeRoot))
+	results = append(results, store(CheckDelegatedWorkerArchetypes(storeRoot)))
 
 	// DES-079: every file ethos owns has a class in the path-class table.
 	results = append(results, checkout(CheckUnclassifiedFiles(repoRoot)))
@@ -379,7 +383,7 @@ func CheckTrailerHook(repoRoot string) Result { return checkHookPresence(repoRoo
 // checkHookPresence reports on spec's hook, keyed on the enabled marker
 // (§2.11). Four states, each resolved against the hooks directory git itself
 // names; when git cannot name it (a degraded lookup) an enabled repo is a FAIL
-// ("cannot verify hooks") and a dormant one a PASS carrying the reason:
+// and a dormant one a WARN, both "cannot verify hooks" with the reason:
 //
 //   - Enabled (marker present): FAIL when the hook is missing or inactive;
 //     PASS when it carries an active call, proven by executing it
@@ -417,13 +421,15 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// A degraded lookup did not read core.hooksPath: the directory it guessed
 	// may not be the one git runs, so a verdict on its files would be a guess.
 	// An enabled repo must not read green on a guess (its commits may be
-	// unsealed); a dormant one has nothing to verify and carries the note.
+	// unsealed); a dormant one is a WARN, because a stale chained hook in the
+	// directory git really runs would otherwise stay hidden.
 	dir, lkErr := lk.Verified()
 	if lkErr != nil {
+		status := "WARN"
 		if markerPresent {
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot verify hooks: %s; install git", lk.Reason)}
+			status = "FAIL"
 		}
-		return Result{Name: name, Status: "PASS", Detail: "not enabled here (" + lkErr.Error() + ")"}
+		return Result{Name: name, Status: status, Detail: "cannot verify hooks: " + lk.Explain()}
 	}
 	hooksDirWarnings := lk.Warnings
 	// A diverted core.hooksPath (inside the work tree, or outside the repo
