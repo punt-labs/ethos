@@ -28,8 +28,9 @@ type gitShape struct {
 
 // strictShapes are the shapes git walks past to the enclosing repository and
 // ethos refuses, because the enclosing repository is not the one the user is
-// in: a .git symlink that points nowhere, or loops.
-var strictShapes = map[string]bool{"dangling symlink": true, "symlink loop": true}
+// in: a .git symlink that points nowhere, or loops, or a .git directory that
+// exists and cannot be read.
+var strictShapes = map[string]bool{"dangling symlink": true, "symlink loop": true, "mode-000 .git directory": true}
 
 // gitShapes are the .git shapes the resolver must classify. With git on PATH
 // git decides each one; without it the hand rules give hand.

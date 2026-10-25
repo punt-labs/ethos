@@ -60,10 +60,14 @@ func TestUnreadableGitDirectory(t *testing.T) {
 		want, err := gitTopLevel(t, inner)
 		require.NoError(t, err, "git skips an unreadable .git directory")
 		require.Equal(t, realpath(t, outer), realpath(t, want))
+		// ethos does not: answering for the enclosing repository would be a wrong
+		// answer for the one the user is in.
 		var got string
 		captureStderr(t, func() { got, err = locateRepoRoot() })
-		require.NoError(t, err)
-		assert.Equal(t, outer, got)
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepo)
+		assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
 	})
 	t.Run("no git: stricter than git", func(t *testing.T) {
 		inner, _ := shapeIn(t, gitShapes["mode-000 .git directory"])

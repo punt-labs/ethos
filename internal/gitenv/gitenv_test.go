@@ -361,3 +361,39 @@ func TestDanglingDotGitReasons(t *testing.T) {
 		})
 	}
 }
+
+// A .git that exists but cannot be read (mode 000) is refused, in the directory
+// and in an ancestor below the ceiling, whether it is a directory or a gitfile.
+func TestDanglingDotGitUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", base)
+	for name, mk := range map[string]func(dot string){
+		"directory": func(dot string) {
+			require.NoError(t, os.MkdirAll(dot, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dot, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+			require.NoError(t, os.Chmod(dot, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(dot, 0o755) })
+		},
+		"gitfile": func(dot string) {
+			require.NoError(t, os.WriteFile(dot, []byte("gitdir: /x\n"), 0o644))
+			require.NoError(t, os.Chmod(dot, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(dot, 0o644) })
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := filepath.Join(base, name)
+			sub := filepath.Join(r, "sub")
+			require.NoError(t, os.MkdirAll(sub, 0o755))
+			mk(filepath.Join(r, ".git"))
+			for _, dir := range []string{r, sub} {
+				err := DanglingDotGit(dir)
+				require.Error(t, err, dir)
+				assert.Contains(t, err.Error(), "cannot be read")
+				assert.Contains(t, err.Error(), filepath.Join(r, ".git"))
+			}
+		})
+	}
+}

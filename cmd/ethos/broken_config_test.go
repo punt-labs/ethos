@@ -575,3 +575,32 @@ func TestHooksRefuseAGlobalPersonaWhenTheConfigCannotBeRead(t *testing.T) {
 		})
 	}
 }
+
+// With git installed, `chmod 000 .git` makes git say "not a git repository".
+// ethos does not read that as "not in a repository": identity get answers neither
+// the global identity nor silently.
+func TestUnreadableDotGitIsNotOutsideARepository(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	se := setupCLISubprocessEnv(t)
+	ids := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+	require.NoError(t, os.MkdirAll(ids, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(ids, "globalonly.yaml"), []byte("name: Global Only\nhandle: globalonly\nkind: human\n"), 0o644))
+	dot := filepath.Join(se.repo, ".git")
+	require.NoError(t, os.Chmod(dot, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dot, 0o755) })
+
+	c := exec.Command(ethosBinary, "identity", "get", "globalonly")
+	c.Dir = se.repo
+	c.Env = withForcedNotUnderClaudeCode(se.env)
+	out, err := c.CombinedOutput()
+	var ee *exec.ExitError
+	require.ErrorAs(t, err, &ee, string(out))
+	assert.NotContains(t, string(out), "Global Only")
+	assert.Contains(t, string(out), dot)
+	assert.Contains(t, string(out), "cannot be read")
+}

@@ -57,6 +57,12 @@ var setupShapes = map[string]func(t *testing.T, outer, inner string){
 	},
 }
 
+// ethosRefusesWhatGitSkips are the shapes git walks past to an enclosing
+// repository and ethos refuses (DanglingDotGit): a .git that exists and cannot
+// be read would otherwise be answered for from the enclosing repository, or as
+// "not a git repository".
+var ethosRefusesWhatGitSkips = map[string]bool{"mode-000 .git directory": true}
+
 // writeEntries makes dir holding entries: "name/" a directory, "name=content"
 // a file.
 func writeEntries(t *testing.T, dir string, entries ...string) {
@@ -115,8 +121,8 @@ func TestSetup_InsideGitShapesWritesOnlyWhereGitResolves(t *testing.T) {
 
 			outerCfg := filepath.Join(outer, ".punt-labs")
 			innerCfg := filepath.Join(inner, ".punt-labs")
-			if gitErr != nil {
-				require.Error(t, err, "git refuses this .git, so setup must refuse")
+			if gitErr != nil || ethosRefusesWhatGitSkips[name] {
+				require.Error(t, err, "git refuses this .git (or skips one ethos refuses), so setup must refuse")
 				assert.NoDirExists(t, outerCfg)
 				assert.NoDirExists(t, innerCfg)
 				assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "shape-user.yaml"),

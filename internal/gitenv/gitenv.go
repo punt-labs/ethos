@@ -457,8 +457,10 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(s.Args, " "), err, stderr)
 }
 
-// DanglingDotGit reports a .git that is a symlink git cannot follow (to nothing,
-// a loop, through a non-directory, or without permission) in dir
+// DanglingDotGit reports a .git that git cannot use and silently walks past or
+// misreports: a symlink git cannot follow (to nothing, a loop, through a
+// non-directory, or without permission), or a .git (directory or gitfile) that
+// exists and cannot be read, in dir
 // or in any directory git would examine above it: Walk's directories, nearest
 // first, up to the GIT_CEILING_DIRECTORIES or filesystem boundary, as the hand
 // rules walk. git skips such a link and answers for whatever repository
@@ -503,11 +505,23 @@ func DanglingDotGitEnv(dir string, env []string) error {
 		}
 		if info, err := os.Stat(dot); err == nil {
 			if info.Mode().IsRegular() {
-				return nil // a gitfile: the repository
+				// A gitfile: the repository, if it can be read. One that cannot is
+				// refused: git would say "not a git repository" or skip it.
+				f, oerr := os.Open(dot)
+				if oerr != nil {
+					return unreadableDotGit(dot, oerr)
+				}
+				_ = f.Close()
+				return nil
 			}
 			if info.IsDir() {
-				if h, err := os.Stat(filepath.Join(dot, "HEAD")); err == nil && h.Mode().IsRegular() {
+				h, herr := os.Stat(filepath.Join(dot, "HEAD"))
+				switch {
+				case herr == nil && h.Mode().IsRegular():
 					return nil
+				case herr != nil && !errors.Is(herr, fs.ErrNotExist):
+					// Not "no HEAD": the directory cannot be searched (mode 000).
+					return unreadableDotGit(dot, herr)
 				}
 			}
 		}
@@ -620,4 +634,11 @@ func UnreadableUserConfig() error {
 		_ = h.Close()
 	}
 	return nil
+}
+
+// unreadableDotGit is the refusal for a .git that exists and cannot be read. git
+// answers "not a git repository" for it, or skips it for an enclosing repository;
+// neither is the truth, so a read there is refused.
+func unreadableDotGit(dot string, err error) error {
+	return fmt.Errorf("%s exists and cannot be read (%v): git would say \"not a git repository\" or answer for an enclosing repository; fix its permissions", dot, err)
 }
