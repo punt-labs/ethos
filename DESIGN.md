@@ -12762,7 +12762,9 @@ Every file ethos writes inside a repository's working tree at a path it
 chooses belongs to exactly one of the four classes below. Output the user
 directs to a path of their choosing is outside the classification, with
 one exception: mission records written by `ethos mission export --dir`
-under `.punt-labs/ethos/` are class 2 (the fallback entry below).
+under `.punt-labs/ethos/` are class 2 (the fallback entry below) unless
+another entry claims the path, as `identities/` or a mission's
+`artifacts/` does.
 `ethos export --to` (an identity in another format: `SOUL.md`,
 `IDENTITY.md`, `STYLE.md`) writes to the directory its `--dir` names,
 the current directory by default, and is outside the classification
@@ -12808,12 +12810,18 @@ of the working tree it runs in that no entry matches. It reports, without
 scanning past it, any symlink on the path from the repository root to
 either directory, skips a nested git working tree inside them (such as
 `.punt-labs/ethos` checked out as a submodule) and reports it as not
-scanned, names a `core.hooksPath` directory under `.punt-labs/`, warns
-whenever the hooks directory could not be verified with git (git
-missing or failing, or the repository root not being git's top level),
-and says "not scanned" rather than claiming a pass when there is no
-repository or neither directory exists. `ethos enable` refuses to
-create a hooks directory under a `.git` that does not exist. Other tools' files under `.punt-labs/` are
+scanned, names a `core.hooksPath` directory under `.punt-labs/` that
+holds an ethos hook file, and warns whenever the hooks directory could
+not be verified with git (git missing or failing, or the repository
+root not being git's top level); the hook-presence and hook-currency
+checks warn the same way. When there is no repository or neither
+directory exists the check still passes, and its detail starts with
+"not scanned" and the reason; an `ETHOS_REPO_ROOT` override that is
+refused is a warning, not a pass. `ethos enable` refuses to install
+hooks when the hooks directory could not be verified and the git
+directory it would write into does not exist (a stale linked worktree,
+a moved submodule), and `ethos disable` refuses to strip hooks from a
+directory it could not verify. Other tools' files under `.punt-labs/` are
 not ethos's to classify. A prose list cannot stay complete as writers are
 added; a failing test can.
 
@@ -12882,13 +12890,11 @@ needs:
 - The output of plain `ethos mission export <id>` at its default
   directory: `missions/<id>.contract.yaml` and `missions/<id>.result.yaml`
   (`cmd/ethos/mission.go:964`). The same content as the mission's
-  `contract.yaml` and final result, redacted. With `--dir`, the output
-  location is the caller's choice and outside this classification. Today
-  the default directory is a relative path resolved against the current
-  directory (`cmd/ethos/mission.go:1976-1977`), so an export run from a
-  subdirectory writes `<subdir>/.punt-labs/ethos/missions/`, which no
-  class covers; bead `ethos-g3g3` resolves it against the repository
-  root.
+  `contract.yaml` and final result, redacted. The default directory is
+  resolved against the repository root, whatever the working directory.
+  With `--dir`, the output location is the caller's choice: class 2
+  under `.punt-labs/ethos/` unless another entry claims the path, and
+  outside this classification elsewhere.
 - ADRs, as `.punt-labs/ethos/adrs/<id>.yaml` (operator ruling 2026-10-24).
   A design decision is part of the provenance of the code it shaped. Today
   `ethos adr` stores ADRs in `~/.punt-labs/ethos/adrs` (`cmd/ethos/adr.go`,

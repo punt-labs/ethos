@@ -213,9 +213,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   git's own error. It skips a nested git working tree under
   `.punt-labs/ethos/`, such as an old team-registry submodule, and reports
   it as not scanned.
-- **`ethos enable` refuses to create a hooks directory under a `.git`
-  that does not exist**, which happened when the repository root was a
-  subdirectory of another repository.
+- **`ethos enable` refuses to install hooks into a git directory that
+  does not exist** (a repository root that is a subdirectory of another
+  repository, a stale linked worktree, a moved submodule), and
+  **`ethos disable` refuses to strip hooks from a hooks directory it
+  could not verify with git**. The `ethos doctor` hook-presence and
+  hook-currency checks warn in the same case, and a refused
+  `ETHOS_REPO_ROOT` override is now a warning with its reason, visible
+  to MCP clients, instead of a pass.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
