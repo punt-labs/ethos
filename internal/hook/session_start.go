@@ -21,6 +21,8 @@ import (
 
 // SessionStartResult is the JSON output of the session-start hook.
 type SessionStartResult struct {
+	// SystemMessage is shown to the user; set only to report a problem.
+	SystemMessage      string `json:"systemMessage,omitempty"`
 	HookSpecificOutput struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext,omitempty"`
@@ -60,7 +62,11 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// The shell wrapper's `|| true` keeps Claude Code session startup
 	// fail-open (cli.md §Hook Architecture); the non-zero exit code is
 	// the signal for direct CLI invocation and `ethos doctor`.
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot, storeErr := resolve.LocateStoreRoot()
+	note := storeUnlocatedNote(storeErr)
+	if note != "" {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
+	}
 	agentPersona, err := resolve.ResolveAgent(repoRoot)
 	if err != nil {
 		return fmt.Errorf("resolving agent: %w", err)
@@ -71,13 +77,13 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// Emit the agent's persona block (not the human's).
 	// The agent persona comes from repo config (.punt-labs/ethos.yaml).
 	if agentPersona == "" {
-		return emitHumanFallback(resolvedID)
+		return emitHumanFallback(resolvedID, note)
 	}
 
 	agentID, agentLoadErr := store.Load(agentPersona)
 	if agentLoadErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to load agent identity %q: %v\n", agentPersona, agentLoadErr)
-		return emitHumanFallback(resolvedID)
+		return emitHumanFallback(resolvedID, note)
 	}
 	for _, w := range agentID.Warnings {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: agent identity %q: %s\n", agentPersona, w)
@@ -199,14 +205,24 @@ func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identi
 }
 
 // emitHumanFallback emits a one-liner for the human identity when no
-// agent persona is configured or agent loading fails. Returns nil when
-// no human identity is available either.
-func emitHumanFallback(resolvedID *identity.Identity) error {
-	if resolvedID == nil {
+// agent persona is configured or agent loading fails, followed by note (why the
+// repository store was not located) when there is one. Emits nothing when there
+// is neither a human identity nor a note.
+func emitHumanFallback(resolvedID *identity.Identity, note string) error {
+	var msg string
+	if resolvedID != nil {
+		msg = fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
+	}
+	if note != "" {
+		if msg != "" {
+			msg += " "
+		}
+		msg += note
+	}
+	if msg == "" {
 		return nil
 	}
-	msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
-	result := SessionStartResult{}
+	result := SessionStartResult{SystemMessage: note}
 	result.HookSpecificOutput.HookEventName = "SessionStart"
 	result.HookSpecificOutput.AdditionalContext = msg
 	return json.NewEncoder(os.Stdout).Encode(result)

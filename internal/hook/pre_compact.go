@@ -63,6 +63,13 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	}
 	if agentPersona == "" {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: no agent persona found in session %q roster\n", sessionID)
+		// A session that started with the store unlocatable has no persona
+		// because of that; say so rather than compact in silence.
+		_, storeErr := resolve.LocateStoreRoot()
+		if note := storeUnlocatedNote(storeErr); note != "" {
+			_, err = fmt.Fprint(os.Stdout, note)
+			return err
+		}
 		return nil
 	}
 
@@ -115,7 +122,11 @@ func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identi
 		return ""
 	}
 
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot, storeErr := resolve.LocateStoreRoot()
+	if note := storeUnlocatedNote(storeErr); note != "" {
+		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %s\n", note)
+		return "## Team\n\n(" + note + ")"
+	}
 	teamName, err := resolve.ResolveTeam(repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %v\n", err)
