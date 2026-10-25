@@ -3039,7 +3039,7 @@ func TestMatchDispatchPending_AmbiguitySignal(t *testing.T) {
 	var matched string
 	stderrText := captureStderr(t, func() {
 		var err error
-		matched, err = matchDispatchPending(globalRoot, sessionID, "bwk")
+		matched, err = matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
 		require.NoError(t, err)
 	})
 
@@ -3072,7 +3072,7 @@ func TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers(t *testing.T)
 	var matched string
 	stderrText := captureStderr(t, func() {
 		var err error
-		matched, err = matchDispatchPending(globalRoot, sessionID, "bwk")
+		matched, err = matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
 		require.NoError(t, err)
 	})
 
@@ -3121,7 +3121,7 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNames
 
 	var out bytes.Buffer
 	toolInput := map[string]any{"subagent_type": "bwk"}
-	require.NoError(t, dispatchTierB(&out, sessionID, missionID, toolInput, mission.BoundViaSidecarDispatch, nil))
+	require.NoError(t, dispatchTierB(&out, testStoreRoot(t), sessionID, missionID, toolInput, mission.BoundViaSidecarDispatch, nil))
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
@@ -3165,7 +3165,7 @@ func TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch(t *testing.T) {
 		release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
 		require.NoError(t, err)
 		defer release()
-		m, err := matchDispatchPending(globalRoot, sessionID, "bwk")
+		m, err := matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
 		require.NoError(t, err)
 		if m != "" {
 			require.NoError(t, mission.ConsumeDispatchPending(globalRoot, sessionID, m))
@@ -3338,7 +3338,7 @@ func TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry(t *testing
 	var matched string
 	stderrText := captureStderr(t, func() {
 		var err error
-		matched, err = matchDispatchPending(globalRoot, sessionID, "bwk")
+		matched, err = matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
 		require.NoError(t, err)
 	})
 
@@ -3355,4 +3355,13 @@ func TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry(t *testing
 	entriesList, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
 	require.Len(t, entriesList, 2)
+}
+
+// testStoreRoot is the store root the dispatch hook would locate from the
+// test's working directory.
+func testStoreRoot(t *testing.T) string {
+	t.Helper()
+	root, err := tierBStoreRoot()
+	require.NoError(t, err)
+	return root
 }

@@ -50,7 +50,7 @@ func tryTierBByInheritance(repoRoot, parentDelegation, childAgentType string) (s
 		return "", false
 	}
 
-	store, err := tierBMissionStore()
+	store, err := tierBMissionStore(repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: inheritance: resolving mission store: %v; falling through to Tier A\n",
@@ -253,22 +253,18 @@ var pretooluseInheritReader = tryTierBByInheritance
 // unset. If PARENT_DELEGATION_ID is present the resolver tries
 // inheritance; on a hit the spawn becomes Tier B with the inherited
 // missionID, otherwise it falls through to Tier A.
-func dispatchTierBOrTierA(w io.Writer, sessionID string, toolInput map[string]any) error {
+func dispatchTierBOrTierA(w io.Writer, storeRoot, sessionID string, toolInput map[string]any) error {
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
 	if parentDelegation == "" {
 		return dispatchTierA(w, sessionID)
 	}
 	childAgentType := spawnAgentType(toolInput)
-	repoRoot, err := tierBStoreRoot()
-	if err != nil {
-		return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: %v", err))
-	}
-	if missionID, ok := pretooluseInheritReader(repoRoot, parentDelegation, childAgentType); ok {
+	if missionID, ok := pretooluseInheritReader(storeRoot, parentDelegation, childAgentType); ok {
 		// Inherited from a parent delegation's SpawnPattern match, not
 		// from the active-mission sidecar — DES-076's consume callback
 		// is not applicable here, and BoundViaInherited (round 2) names
 		// this admission path for the disclaim eligibility check.
-		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaInherited, nil)
+		return dispatchTierB(w, storeRoot, sessionID, missionID, toolInput, mission.BoundViaInherited, nil)
 	}
 	return dispatchTierA(w, sessionID)
 }

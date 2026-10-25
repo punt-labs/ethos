@@ -127,6 +127,9 @@ func TestCLI_HookPreToolUseDeniesWhenStoreUnlocatable(t *testing.T) {
 			payload: `{"session_id":"pre-s1","tool_name":"Agent","tool_input":{"subagent_type":"bwk","prompt":"p"}}`,
 			env:     []string{"MISSION_ID=m-2026-01-01-001"},
 		},
+		"Agent with no session_id": {
+			payload: `{"tool_name":"Agent","tool_input":{"subagent_type":"bwk","prompt":"p"}}`,
+		},
 		"Agent without a mission": {
 			payload: `{"session_id":"pre-s1","tool_name":"Agent","tool_input":{"subagent_type":"bwk","prompt":"p"}}`,
 		},

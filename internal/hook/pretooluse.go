@@ -192,7 +192,11 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 		// Tier A spawn — no contract, no preconditions.
 		return "", false
 	}
-	store, err := tierBMissionStore()
+	storeRoot, rootErr := tierBStoreRoot()
+	if rootErr != nil {
+		return fmt.Sprintf("ethos pre-tool-use: %v", rootErr), true
+	}
+	store, err := tierBMissionStore(storeRoot)
 	if err != nil {
 		// Persistence layer unreachable. The contract cannot be read
 		// so the strict pointer cannot be consulted; fail-closed.

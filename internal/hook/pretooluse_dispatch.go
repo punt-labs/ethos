@@ -78,6 +78,16 @@ import (
 // (previously by overwriting the shared slot; now via separate,
 // non-destructive storage that lets both coexist).
 func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
+	// Locate the mission store ONCE, before any branch: every path below
+	// (the pending-dispatch lock failure, an empty session_id, MISSION_ID,
+	// the sidecar claim, inheritance, Tier A) runs against this one answer.
+	// A store that cannot be located denies the spawn with the cause; no path
+	// reads the global store in its place, and none locates it a second time
+	// and could disagree.
+	storeRoot, rootErr := tierBStoreRoot()
+	if rootErr != nil {
+		return writeAgentBlock(w, "ethos pre-tool-use: "+rootErr.Error())
+	}
 	// Review probe finding F3 (m-2026-09-08-004 round 2): two concurrent
 	// Agent() tool calls in the same session — a normal shape, this
 	// org's own conventions call for batching independent tool calls in
@@ -105,24 +115,24 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) erro
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: dispatch-pending: resolving global root: %v; "+
 				"falling through without pending-dispatch matching\n", err)
-		return dispatchTierBOrTierA(w, sessionID, toolInput)
+		return dispatchTierBOrTierA(w, storeRoot, sessionID, toolInput)
 	}
 	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: dispatch-pending: acquiring lock for %q: %v; "+
 				"falling through without pending-dispatch matching\n", sessionID, err)
-		return dispatchTierBOrTierA(w, sessionID, toolInput)
+		return dispatchTierBOrTierA(w, storeRoot, sessionID, toolInput)
 	}
 	defer release()
 
 	if missionID := os.Getenv("MISSION_ID"); missionID != "" {
-		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv,
+		return dispatchTierB(w, storeRoot, sessionID, missionID, toolInput, mission.BoundViaMissionIDEnv,
 			func() { consumeDispatchBinding(sessionID, missionID) })
 	}
 	agentType := spawnAgentType(toolInput)
 
-	missionID, boundVia, err := readActiveMissionForDispatch(sessionID, agentType)
+	missionID, boundVia, err := readActiveMissionForDispatch(storeRoot, sessionID, agentType)
 	if err != nil {
 		return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: %v", err))
 	}
@@ -131,9 +141,9 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) erro
 		if boundVia == mission.BoundViaSidecarDispatch {
 			onDispatched = func() { consumeDispatchBinding(sessionID, missionID) }
 		}
-		return dispatchTierB(w, sessionID, missionID, toolInput, boundVia, onDispatched)
+		return dispatchTierB(w, storeRoot, sessionID, missionID, toolInput, boundVia, onDispatched)
 	}
-	return dispatchTierBOrTierA(w, sessionID, toolInput)
+	return dispatchTierBOrTierA(w, storeRoot, sessionID, toolInput)
 }
 
 // spawnAgentType reports the agent type this Agent() call is spawning:
@@ -173,7 +183,7 @@ func spawnAgentType(toolInput map[string]any) string {
 // err is non-nil only when the mission store cannot be located: the
 // caller denies the spawn with it rather than attribute it from the
 // global store.
-func readActiveMissionForDispatch(sessionID, agentType string) (missionID, boundVia string, err error) {
+func readActiveMissionForDispatch(storeRoot, sessionID, agentType string) (missionID, boundVia string, err error) {
 	if sessionID == "" {
 		return "", "", nil
 	}
@@ -198,7 +208,7 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 	// certain without a Load, a subsequently-unloadable contract is a
 	// genuine, actionable problem for THIS specific spawn, not ambient
 	// noise behind every spawn in the session.
-	pendingMissionID, err := matchDispatchPending(globalRoot, sessionID, agentType)
+	pendingMissionID, err := matchDispatchPending(storeRoot, globalRoot, sessionID, agentType)
 	if err != nil {
 		return "", "", err
 	}
@@ -239,7 +249,7 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 			sessionID, binding.MissionID, binding.Origin)
 		return "", "", nil
 	}
-	if reason := staleBindingReason(binding.MissionID); reason != "" {
+	if reason := staleBindingReason(storeRoot, binding.MissionID); reason != "" {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: active-mission: session %q is bound to %s but %s; "+
 				"run `ethos mission claim <id>` (or `ethos mission release`) — spawning without a mission\n",
@@ -321,7 +331,7 @@ func readActiveMissionForDispatch(sessionID, agentType string) (missionID, bound
 // because OTHER pending entries exist for a different Worker (a
 // session dispatching both `bwk` and `rmh` work is not ambiguous for a
 // `bwk` spawn).
-func matchDispatchPending(globalRoot, sessionID, agentType string) (string, error) {
+func matchDispatchPending(storeRoot, globalRoot, sessionID, agentType string) (string, error) {
 	// J1 (full-branch review, m-2026-09-08-004 round 3): classification
 	// now runs through mission.ClassifyPendingDispatches, the SAME
 	// function the CLI/MCP dispatch-time queue-position advisory calls
@@ -329,7 +339,7 @@ func matchDispatchPending(globalRoot, sessionID, agentType string) (string, erro
 	// non-blocking; a store that cannot be located is returned, and the
 	// spawn is denied with it: classifying against the global store in
 	// its place could bind the spawn to the wrong mission.
-	store, err := tierBMissionStore()
+	store, err := tierBMissionStore(storeRoot)
 	if err != nil {
 		return "", fmt.Errorf("dispatch-pending: resolving mission store: %w", err)
 	}
@@ -578,8 +588,8 @@ func consumeDispatchBinding(sessionID, missionID string) {
 // binding must never silently admit (DES-054 round-3 rule, pinned by
 // TestDispatchAgent_ActiveMissionSidecarMalformedRefuses). Returning
 // "" here hands it to that path unchanged.
-func staleBindingReason(missionID string) string {
-	store, err := tierBMissionStore()
+func staleBindingReason(storeRoot, missionID string) string {
+	store, err := tierBMissionStore(storeRoot)
 	if err != nil {
 		return ""
 	}
@@ -757,9 +767,9 @@ var dispatchTierBConfirmedOpen = func() {}
 // leaves the binding in place so a retry of the same call can still
 // find it. Every caller but the active-mission sidecar's matching-spawn
 // path passes nil.
-func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any, boundVia string, onDispatched func()) error {
+func dispatchTierB(w io.Writer, storeRoot, sessionID, missionID string, toolInput map[string]any, boundVia string, onDispatched func()) error {
 	agentType := spawnAgentType(toolInput)
-	store, err := tierBMissionStore()
+	store, err := tierBMissionStore(storeRoot)
 	if err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: resolving mission store: %v", err))
@@ -780,7 +790,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	// fallback in this file.
 	if reason := nonOpenReason(c.Status); reason != "" {
 		warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason)
-		return dispatchTierBOrTierA(w, sessionID, toolInput) // status re-check fallback: never consumes onDispatched
+		return dispatchTierBOrTierA(w, storeRoot, sessionID, toolInput) // status re-check fallback: never consumes onDispatched
 	}
 
 	delegationID, releaseID, err := mission.NewID(mission.NamespaceDelegations, time.Now())
@@ -797,10 +807,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	success := false
 	defer func() { releaseID(success) }()
 
-	repoRoot, err := tierBStoreRoot()
-	if err != nil {
-		return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: %v", err))
-	}
+	repoRoot := storeRoot
 	dispatchTierBConfirmedOpen()
 	releaseMission, err := mission.AcquireMissionLock(repoRoot, missionID)
 	if err != nil {
@@ -844,11 +851,11 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 			"ethos: pre-tool-use: MISSION_ID: session %q, mission %s: TOCTOU re-check Load failed: %v; "+
 				"falling through to Tier A/B fallback rather than writing a delegation on unverified status\n",
 			sessionID, missionID, err)
-		return dispatchTierBOrTierA(w, sessionID, toolInput)
+		return dispatchTierBOrTierA(w, storeRoot, sessionID, toolInput)
 	}
 	if reason := nonOpenReason(recheck.Status); reason != "" {
 		warnNonOpenMission(sessionID, missionID, agentType, boundVia, reason)
-		return dispatchTierBOrTierA(w, sessionID, toolInput)
+		return dispatchTierBOrTierA(w, storeRoot, sessionID, toolInput)
 	}
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
@@ -1098,7 +1105,7 @@ func tierBGlobalRoot() (string, error) {
 // Errors from os.UserHomeDir surface as a block decision rather than
 // a silent allow; the hook fails closed when its persistence layer is
 // not reachable.
-func tierBMissionStore() (*mission.Store, error) {
+func tierBMissionStore(storeRoot string) (*mission.Store, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("user home dir: %w", err)
@@ -1110,7 +1117,7 @@ func tierBMissionStore() (*mission.Store, error) {
 	// trace-only and would miss contracts that live in the repo tree
 	// (Copilot HIGH-equivalent on PR #327: Tier B dispatch would
 	// block "malformed MISSION_ID" on any in-repo contract).
-	// Use tierBStoreRoot() so the mission Store walks the same tree as the
+	// Use the storeRoot dispatchAgent located once so the mission Store walks the same tree as the
 	// dispatch skeleton write and the CLI's `mission create` — the main work
 	// tree in a linked worktree (CR#1). Without this the dispatch hook reads
 	// a different store than the CLI wrote and refuses the spawn.
@@ -1128,10 +1135,6 @@ func tierBMissionStore() (*mission.Store, error) {
 	// store, so it would re-accept the refused path. Pairing them unconditionally would let the audit zone
 	// resurrect a path the store already refused (PR #370 override-resurrection
 	// class, same guard as missionCheckoutRoot + runUI).
-	storeRoot, err := tierBStoreRoot()
-	if err != nil {
-		return nil, err
-	}
 	checkoutRoot := ""
 	if storeRoot != "" {
 		root, err := tierBRepoRoot()
