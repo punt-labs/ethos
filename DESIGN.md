@@ -12858,42 +12858,64 @@ filesystem boundary. Every git command ethos runs has a time limit:
 10 seconds (`gitenv.Timeout`) for lookups, reads and the audit-seal
 commands, 5 minutes for a team-bundle clone, and the existing 2- and
 10-second limits for the working-context and doctor-sandbox commands.
-In Go code, a type-checked test accounts for every way a non-test
-package can start a program (any reference to `exec.Command`, an
-`exec.Cmd` start, `os.StartProcess`, the `syscall` and `x/sys/unix`
-exec calls), counted by file, and fails on any start of git outside
-`internal/gitenv`; no non-test package may import the unbounded test
-helpers. The shell hooks `pre-commit.sh` and `commit-msg.sh` run
-`git rev-parse` and `git interpret-trailers` unbounded and exit 1 with
-git's error when either fails. On a timeout git receives SIGTERM, so it
-can remove its index lock, and SIGKILL one second later. Git's tracing
-variables are cleared, so trace output cannot turn an answer into a
-failure. Every git read declares what an absent answer is (a
-configuration key that is not set, no such remote, or git's "not a git
-repository (or any" discovery failure; a broken `.git` link is not
-absent); any other failure, a timeout included, is an error that
+Two type-checked tests act as tripwires for regressions; they are not
+proofs. The first flags, counted by file, the ways ethos code starts a
+program and their common variants (references to `exec.Command`,
+`exec.Cmd` starts through an alias, `os.StartProcess`, `CreateProcess`,
+the `syscall` and `x/sys/unix` exec calls and raw exec syscalls, any
+cgo file), and fails on a start of git outside `internal/gitenv`; no
+non-test package may import the unbounded test helpers. Starts hidden
+behind reflection or an interface are not detected. The second flags a
+function that discards a location error or turns one other than "not
+in a repository" or "does not exist" into an empty root. The shell
+hooks `pre-commit.sh` and `commit-msg.sh` run `git rev-parse` and
+`git interpret-trailers` unbounded and exit 1 with git's error when
+either fails; in an enabled repository a missing `ethos` binary also
+blocks the commit. On a timeout git's process group receives SIGTERM,
+so git can remove its index lock, and SIGKILL one second later (on
+Windows the kill is immediate). Git tracing is switched off for every
+read, from the environment and from configuration, so trace output
+cannot turn an answer into a failure. Every git read declares what an
+absent answer is (a configuration key that is not set, no such remote,
+or git's "not a git repository (or any" discovery failure); a broken
+`.git` link, a dangling or looping `.git` symlink included, is never
+absent. Any other failure, a timeout included, is an error that
 carries git's message and names the command and the directory. A git
 failure is therefore never read as "no repository", "no remote", "not a
-gitlink" or an empty identity. The lookups that returned an empty root
-on failure are removed, and a type-checked test fails on any function
-that turns a location error other than "not in a repository" or "does
-not exist" into an empty root. Each command locates the store, its
-`.punt-labs/ethos` directory and the checkout once, before it runs; a
-command that needs the store exits 2 when any of them cannot be read,
-and only commands classified as global-only use the global stores.
-Session start reads the origin from the located checkout, so an
-`ETHOS_REPO_ROOT` override records that repository's origin. Identity resolution fails on a git error
+gitlink" or an empty identity. One function, `resolve.Roots()`, locates
+the store, its `.punt-labs/ethos` directory, the checkout and the
+repository configuration, with an error for each; the lower-level
+lookups are unexported, so no other package can locate the repository
+another way. It checks every component of the `.punt-labs/ethos` path:
+a dangling symlink at any level, a non-directory or an unreadable entry
+is an error, and only an absent directory means "no store yet"; a
+dangling `ethos.yaml` is an error, not "no configuration". The CLI,
+every hook, `ethos serve` (per call), setup, doctor, the UI and the
+mission, session, vendor and team commands use it. A command that
+needs the store exits 2 when any part cannot be read. Commands
+classified as global-only use the global stores; commands that handle
+the error themselves report a broken store where the user sees it
+(`ethos doctor` fails a "Repository store" row, session start tells the
+session, `pre-tool-use` denies, `subagent-start` reports the verifier
+gate as undecidable, `ethos serve` notes it on reads and denies writes,
+setup refuses). Session start reads the origin from the located
+checkout, so an `ETHOS_REPO_ROOT` override records that repository's
+origin. Identity resolution fails on a git error
 instead of falling back to `$USER`. When session start cannot resolve
 the identity, the repository or the checkout, the session is told why,
 and the roster records `repo_unresolved` with the reason instead of an
 empty repository; purge and the vacuum cross-check skip such rosters
-and say so, and `ethos session purge --force` removes them. The
-pre-commit seal runs its read-only git queries before writing any
-chunk, then writes every chunk, snapshots the index and stages the
-chunks in one `git add`. If anything fails after the writes it restores
-the index from the snapshot, removes the chunks it wrote and blocks the
-commit; the error names the failed step and states whether the tree is
-as it was or what is left. Removing leftover temporary files and
+and say so (`--json` lists them as skipped), and
+`ethos session purge --force` removes them. The pre-commit seal runs
+its read-only git queries before writing any chunk, then writes every
+chunk, snapshots the index (keeping its mode) and stages the chunks in
+one `git add`. If anything fails after the writes it restores the index
+under `index.lock`, as git does, but only when the index still holds
+what its own `git add` left; if another process changed it, the seal
+leaves it and says so. It then removes the chunks it wrote and blocks
+the commit; the error names the failed step and states whether the
+tree is as it was or what is left, including a lock left by a killed
+git that it could not prove was its own. Removing leftover temporary files and
 creating empty directories during the seal are not undone. Tests compare 28 `.git` shapes with
 `git rev-parse` and run the same shapes with git hidden. On a refusal,
 or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one

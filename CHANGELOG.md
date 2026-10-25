@@ -271,11 +271,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be read (a dangling symlink, a file, no permission), instead of
   writing to the global store. The repository is located once per
   command.
+- **A dangling or looping `.git` symlink, a dangling `.punt-labs` or
+  `.punt-labs/ethos` symlink, and a dangling `.punt-labs/ethos.yaml` are
+  errors**, reported by every command and hook, instead of reading as
+  "not a repository", "no store" or "no configuration". In an enabled
+  repository, `pre-commit` blocks the commit when `ethos` is not
+  installed. Git tracing set in the environment or in git configuration
+  no longer makes ethos fail.
 - **Session rosters whose repository could not be resolved** show
   `unresolved` in `ethos session list` (`repo_unresolved` in its JSON),
   and `ethos session show` prints the reason. `ethos session purge`
-  skips them and names the fix; `ethos session purge --force` removes
-  them.
+  skips them, names the fix and lists them under `skipped` in `--json`;
+  `ethos session purge --force` removes them.
 - **`ethos mission dispatch`, `scaffold` and `correct` refuse a malformed
   `.punt-labs/ethos.yaml`** instead of recording `claude` as the leader.
 
