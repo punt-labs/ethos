@@ -3,6 +3,7 @@ package githook
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1056,4 +1057,59 @@ func mkGitDir(t *testing.T, gd string) {
 	if err := os.WriteFile(filepath.Join(gd, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestLookupRemedy: the advice follows the cause. "install git" is for a
+// missing git alone; a safe.directory refusal and a work-tree mismatch each get
+// their own, and an unknown cause gets none.
+func TestLookupRemedy(t *testing.T) {
+	t.Run("git missing", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		if got := HooksDir(dir).Remedy(); !strings.Contains(got, "install git") {
+			t.Errorf("Remedy = %q, want install git", got)
+		}
+	})
+
+	t.Run("work tree mismatch", func(t *testing.T) {
+		parent := t.TempDir()
+		gitInit(t, parent)
+		sub := filepath.Join(parent, "sub")
+		if err := os.Mkdir(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := HooksDir(sub).Remedy()
+		if !strings.Contains(got, "ETHOS_REPO_ROOT") || !strings.Contains(got, "top level") {
+			t.Errorf("Remedy = %q, want the top-level advice", got)
+		}
+		if strings.Contains(got, "install git") {
+			t.Errorf("Remedy = %q, git is installed", got)
+		}
+	})
+
+	t.Run("safe.directory refusal", func(t *testing.T) {
+		stderr := "fatal: detected dubious ownership in repository at '/x'\n" +
+			"To add an exception for this directory, call:\n\n\tgit config --global --add safe.directory /x"
+		l := degradedLookup("/x", "/x/.git/hooks", fmt.Errorf("git rev-parse --show-toplevel: exit status 128: %s", stderr))
+		got := l.Remedy()
+		if !strings.Contains(got, "safe.directory") {
+			t.Errorf("Remedy = %q, want the safe.directory advice", got)
+		}
+		if strings.Contains(got, "install git") {
+			t.Errorf("Remedy = %q, git is installed", got)
+		}
+	})
+
+	t.Run("unknown cause", func(t *testing.T) {
+		l := degradedLookup("/x", "/x/.git/hooks", errors.New("something else"))
+		if got := l.Remedy(); got != "" {
+			t.Errorf("Remedy = %q, want none", got)
+		}
+		if got := l.Explain(); got != "something else" {
+			t.Errorf("Explain = %q, want the bare reason", got)
+		}
+	})
 }

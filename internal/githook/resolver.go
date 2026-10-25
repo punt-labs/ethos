@@ -23,11 +23,48 @@ type Lookup struct {
 	Warnings []string
 	Degraded bool
 	Reason   string
+	cause    error // why the lookup is degraded; Remedy classifies it
 }
 
 // Display returns the hooks directory for a message or a read-only scan. Do not
 // create or write into it: it may be a guess.
 func (l Lookup) Display() string { return l.dir }
+
+// Explain returns Reason, followed by the advice for its cause when there is
+// one.
+func (l Lookup) Explain() string {
+	if r := l.Remedy(); r != "" {
+		return l.Reason + "; " + r
+	}
+	return l.Reason
+}
+
+// Remedy returns advice matched to why the lookup is degraded, or "" when the
+// cause is not one it recognizes: telling a user to install git when git is
+// installed sends them the wrong way.
+func (l Lookup) Remedy() string {
+	var mismatch *workTreeError
+	msg := ""
+	if l.cause != nil {
+		msg = l.cause.Error()
+	}
+	switch {
+	case errors.Is(l.cause, exec.ErrNotFound):
+		return "install git"
+	case strings.Contains(msg, "dubious ownership") || strings.Contains(msg, "safe.directory"):
+		return "fix safe.directory"
+	case errors.As(l.cause, &mismatch):
+		return "run from, or point ETHOS_REPO_ROOT at, the repository's top level"
+	}
+	return ""
+}
+
+// workTreeError says git reports a work tree other than the one asked about.
+type workTreeError struct{ top, root string }
+
+func (e *workTreeError) Error() string {
+	return fmt.Sprintf("git reports the work tree at %s, not %s; %s is a subdirectory of another repository or has no .git of its own", e.top, e.root, e.root)
+}
 
 // Verified returns the hooks directory only when git itself named it. A
 // degraded lookup ignores core.hooksPath, so acting on its directory may touch
@@ -54,24 +91,25 @@ func (l Lookup) Verified() (string, error) {
 func HooksDir(repoRoot string) Lookup {
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
-		return degradedLookup(repoRoot, manualHooksDir(repoRoot), fmt.Sprintf("making %s absolute: %v", repoRoot, err))
+		return degradedLookup(repoRoot, manualHooksDir(repoRoot), fmt.Errorf("making %s absolute: %w", repoRoot, err))
 	}
 	l, err := gitHooksPath(root)
 	if err != nil {
-		return degradedLookup(root, manualHooksDir(root), err.Error())
+		return degradedLookup(root, manualHooksDir(root), err)
 	}
 	return l
 }
 
 // degradedLookup builds the Lookup for a hooks dir found without git's help.
-func degradedLookup(root, dir, reason string) Lookup {
+func degradedLookup(root, dir string, cause error) Lookup {
 	return Lookup{
 		dir:      dir,
 		root:     root,
 		Degraded: true,
-		Reason:   reason,
+		Reason:   cause.Error(),
+		cause:    cause,
 		Warnings: []string{fmt.Sprintf(
-			"git did not resolve the hooks directory (%s); core.hooksPath is ignored and %s is assumed", reason, dir)},
+			"git did not resolve the hooks directory (%s); core.hooksPath is ignored and %s is assumed", cause, dir)},
 	}
 }
 
@@ -85,7 +123,7 @@ func gitHooksPath(repoRoot string) (Lookup, error) {
 		return Lookup{}, fmt.Errorf("git rev-parse --show-toplevel: %w", err)
 	}
 	if !sameFile(top, repoRoot) {
-		return Lookup{}, fmt.Errorf("git reports the work tree at %s, not %s; %s is a subdirectory of another repository or has no .git of its own", top, repoRoot, repoRoot)
+		return Lookup{}, &workTreeError{top: top, root: repoRoot}
 	}
 	hdRaw, err := gitOut(repoRoot, "rev-parse", "--git-path", "hooks")
 	if err != nil {
@@ -103,6 +141,7 @@ func gitHooksPath(repoRoot string) (Lookup, error) {
 	if err != nil {
 		l.Degraded = true
 		l.Reason = err.Error()
+		l.cause = err
 		l.Warnings = append(l.Warnings, "hooks directory classification incomplete: "+l.Reason)
 	}
 	return l, nil

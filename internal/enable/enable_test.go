@@ -596,14 +596,45 @@ func TestEnableRequiresVerifiedHooksDir(t *testing.T) {
 	if err == nil {
 		t.Fatal("Enable with an unverified hooks directory succeeded")
 	}
-	if !strings.Contains(err.Error(), "git is required to install hooks") {
-		t.Errorf("error = %q, want it to say git is required to install hooks", err)
+	if !strings.Contains(err.Error(), "cannot install hooks") || !strings.Contains(err.Error(), "install git") {
+		t.Errorf("error = %q, want it to say hooks cannot be installed and to install git", err)
 	}
 	if exists(filepath.Join(dir, ".git", "hooks", "pre-commit")) {
 		t.Error("Enable wrote a hook into .git/hooks")
 	}
 	if exists(filepath.Join(dir, markerRel)) {
 		t.Error("Enable wrote the marker before refusing")
+	}
+}
+
+// TestHooksRefusalAdviceFollowsCause: a root git reports as part of another
+// repository is refused with the advice for that cause, never "install git"
+// (git is installed), by both enable and disable.
+func TestHooksRefusalAdviceFollowsCause(t *testing.T) {
+	parent := gitRepo(t)
+	sub := filepath.Join(parent, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(sub); err != nil {
+		t.Run("enable", func(t *testing.T) { checkMismatchAdvice(t, err) })
+	} else {
+		t.Fatal("Enable in a subdirectory of another repository succeeded")
+	}
+	if _, err := Disable(sub, false); err != nil {
+		t.Run("disable", func(t *testing.T) { checkMismatchAdvice(t, err) })
+	} else {
+		t.Fatal("Disable in a subdirectory of another repository succeeded")
+	}
+}
+
+func checkMismatchAdvice(t *testing.T, err error) {
+	t.Helper()
+	if strings.Contains(err.Error(), "install git") {
+		t.Errorf("error = %q, git is installed", err)
+	}
+	if !strings.Contains(err.Error(), "ETHOS_REPO_ROOT") || !strings.Contains(err.Error(), "top level") {
+		t.Errorf("error = %q, want the top-level advice", err)
 	}
 }
 
@@ -624,7 +655,7 @@ func TestDisableRefusesDegradedLookup(t *testing.T) {
 	if err == nil {
 		t.Fatal("Disable with an unverified hooks directory succeeded")
 	}
-	for _, want := range []string{"not verified", "safe.directory", "--force"} {
+	for _, want := range []string{"not verified", "install git", "--force"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want it to contain %q", err, want)
 		}

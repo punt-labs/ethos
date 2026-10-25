@@ -94,7 +94,8 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 
 	// Refuse before writing anything: a root with no .git of its own would
 	// get hook files git never runs.
-	if _, _, err := hooksTarget(repoRoot); err != nil {
+	lk, hooksDir, err := hooksTarget(repoRoot)
+	if err != nil {
 		return rep, err
 	}
 
@@ -141,7 +142,7 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 		rep.step("import", "already", CanonicalImport+" already present")
 	}
 
-	if err := chainHooks(repoRoot, rep); err != nil {
+	if err := chainHooks(lk, hooksDir, rep); err != nil {
 		return rep, err
 	}
 
@@ -250,18 +251,14 @@ func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 	l := githook.HooksDir(repoRoot)
 	dir, err := l.Verified()
 	if err != nil {
-		return l, "", fmt.Errorf("git is required to install hooks: %s", l.Reason)
+		return l, "", fmt.Errorf("cannot install hooks: %s", l.Explain())
 	}
 	return l, dir, nil
 }
 
-// chainHooks resolves the shared hooks directory and chains the seal and
-// trailer sections into pre-commit and commit-msg.
-func chainHooks(repoRoot string, rep *Report) error {
-	l, dir, err := hooksTarget(repoRoot)
-	if err != nil {
-		return err
-	}
+// chainHooks chains the seal and trailer sections into pre-commit and
+// commit-msg in dir, the hooks directory hooksTarget verified.
+func chainHooks(l githook.Lookup, dir string, rep *Report) error {
 	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating hooks dir %s: %w", dir, err)
@@ -306,7 +303,11 @@ func unchainTarget(repoRoot string, force bool) (githook.Lookup, string, error) 
 	case force:
 		return l, "", nil
 	}
-	return l, "", fmt.Errorf("%w; install git or fix safe.directory, or re-run with --force to remove the import and marker and leave hook sections in place", err)
+	msg := err.Error()
+	if r := l.Remedy(); r != "" {
+		msg += "; " + r
+	}
+	return l, "", fmt.Errorf("%s; or re-run with --force to remove the import and marker and leave hook sections in place", msg)
 }
 
 // unchainHooks strips the seal and trailer sections from the hooks in dir. An
