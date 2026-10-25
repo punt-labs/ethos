@@ -80,6 +80,12 @@ type SubagentStartDeps struct {
 	// worktree (StoreRepoRoot), not this checkout (CR#3). Empty skips the
 	// close.
 	StoreRoot string
+	// StoreErr says the checkout or the store could not be located (for a
+	// reason other than being outside a repository). Missions is then nil
+	// — the only store reachable would be the global one — and a spawn
+	// that declares a mission is refused with this reason rather than
+	// gated against the wrong store.
+	StoreErr error
 }
 
 // HandleSubagentStart reads the SubagentStart hook payload from stdin,
@@ -635,6 +641,14 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 //     hashes of the CURRENT content so the operator can cross-reference
 //     which file they edited, and two recovery options.
 func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDeps) (verifierMissions []verifierMission, diagnostic string, err error) {
+	if deps.StoreErr != nil {
+		if strings.TrimSpace(declaredMissionID) != "" {
+			return nil, "", fmt.Errorf("verifier gate for mission %s: repository store not located: %w; refusing the spawn rather than gating it against the global store",
+				strings.TrimSpace(declaredMissionID), deps.StoreErr)
+		}
+		fmt.Fprintf(os.Stderr, "ethos: subagent-start: repository store not located (%v); verifier gate not evaluated\n", deps.StoreErr)
+		return nil, "", nil
+	}
 	if deps.Missions == nil {
 		return nil, "", nil // legacy install: no mission store
 	}

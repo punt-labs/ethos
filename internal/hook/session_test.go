@@ -2,13 +2,16 @@ package hook
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -203,4 +206,37 @@ func TestHandleSubagentStop_MissingFields(t *testing.T) {
 	input := bytes.NewReader([]byte(`{}`))
 	err := HandleSubagentStop(input, ss)
 	require.NoError(t, err) // No-op, no error.
+}
+
+// With the store unlocated, a spawn that declares a mission is refused with the
+// reason before it joins the roster: the verifier gate cannot run against the
+// global store. A spawn that declares none joins, with a stderr note.
+func TestHandleSubagentStart_StoreErrRefusesDeclaredMission(t *testing.T) {
+	s, ss := testStores(t)
+	require.NoError(t, ss.Create("store-err-1",
+		session.Participant{AgentID: "user1", Persona: "alice"},
+		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", ""))
+	storeErr := errors.New("git cannot resolve the repository at /x/.git")
+	input := `{"agent_id": "sub-1", "agent_type": "bwk", "session_id": "store-err-1"}`
+	deps := SubagentStartDeps{Identities: s, Sessions: ss, StoreErr: storeErr}
+
+	t.Setenv("MISSION_ID", "m-2026-01-01-001")
+	err := HandleSubagentStartWithDeps(strings.NewReader(input), deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verifier gate")
+	assert.Contains(t, err.Error(), storeErr.Error())
+	roster, lerr := ss.Load("store-err-1")
+	require.NoError(t, lerr)
+	assert.Len(t, roster.Participants, 2, "a refused spawn leaves no trace in the roster")
+
+	t.Setenv("MISSION_ID", "")
+	out := testhelpers.CaptureStderr(t, func() {
+		require.NoError(t, HandleSubagentStartWithDeps(strings.NewReader(input), deps))
+	})
+	assert.Contains(t, out, "verifier gate not evaluated")
+	assert.Contains(t, out, storeErr.Error())
+	roster, lerr = ss.Load("store-err-1")
+	require.NoError(t, lerr)
+	assert.Len(t, roster.Participants, 3)
 }

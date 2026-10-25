@@ -159,31 +159,50 @@ func runHookSessionEnd() error {
 
 func runHookSubagentStart() error {
 	s := identityStore()
-	ss := sessionStore()
-	// Phase 3.3: wire the mission store and live hash sources so the
-	// verifier hash gate enforces frozen-evaluator pinning at every
-	// subagent spawn. A drift between mission create and verifier
-	// spawn refuses the spawn with a fatal, operator-readable error.
-	ms := missionStore()
-	hashSources, err := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
-	if err != nil {
-		return fmt.Errorf("hook subagent-start: %w", err)
-	}
 	deps := hook.SubagentStartDeps{
 		Identities: s,
-		Sessions:   ss,
-		Missions:   ms,
-		Hash:       hashSources,
-		// RepoRoot is the work-tree root for the write-set walk (files
-		// under review live in this checkout); StoreRoot is the mission
-		// store's repo for the hash-refusal skeleton close (CR#3).
-		RepoRoot:  resolve.FindRepoRoot(),
-		StoreRoot: resolve.StoreRepoRoot(),
+		Sessions:   sessionStore(),
+	}
+	// RepoRoot is the work-tree root for the write-set walk (files under
+	// review live in this checkout); StoreRoot is the mission store's repo
+	// for the hash-refusal skeleton close (CR#3). When either cannot be
+	// located, the mission store would be the global one — the wrong
+	// store for the gate — so none is wired and the gate refuses instead.
+	repoRoot, storeRoot, err := locateHookRoots()
+	if err != nil {
+		deps.StoreErr = err
+	} else {
+		// Phase 3.3: wire the mission store and live hash sources so the
+		// verifier hash gate enforces frozen-evaluator pinning at every
+		// subagent spawn. A drift between mission create and verifier
+		// spawn refuses the spawn with a fatal, operator-readable error.
+		hashSources, err := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
+		if err != nil {
+			return fmt.Errorf("hook subagent-start: %w", err)
+		}
+		deps.Missions = missionStore()
+		deps.Hash = hashSources
+		deps.RepoRoot = repoRoot
+		deps.StoreRoot = storeRoot
 	}
 	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook subagent-start: %w", err)
 	}
 	return nil
+}
+
+// locateHookRoots returns the checkout and the store root. Both are empty
+// outside a repository; any other failure to locate either is the error.
+func locateHookRoots() (repoRoot, storeRoot string, err error) {
+	repoRoot, err = resolve.LocateRepoRoot()
+	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		return "", "", err
+	}
+	storeRoot, err = resolve.LocateStoreRoot()
+	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		return "", "", err
+	}
+	return repoRoot, storeRoot, nil
 }
 
 func runHookSubagentStop() error {
@@ -283,11 +302,18 @@ func runHookAuditLog() error {
 	// here.
 	data := drainAuditStdin()
 	sessionID := peekSessionID(data)
-	// resolve.EnvRepoRoot is the canonical resolver — ETHOS_REPO_ROOT
-	// first, then FindRepoRoot. Centralized so the audit-write path
-	// picks the same repo as preconditions, dispatch, inheritance,
-	// and the migrate/show CLI commands.
-	repoRoot := resolve.EnvRepoRoot()
+	// LocateRepoRoot is the checkout EnvRepoRoot resolves — ETHOS_REPO_ROOT
+	// first, then git — with the reason it found none, so the audit-write
+	// path picks the same repo as preconditions, dispatch, inheritance, and
+	// the migrate/show CLI commands. Outside a repository the legacy global
+	// path is right; any other failure would put the entry in the wrong
+	// tree, so the entry is not written and stderr says why. The hook never
+	// blocks the tool call.
+	repoRoot, err := resolve.LocateRepoRoot()
+	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v; audit entry not written rather than written to the global store\n", err)
+		return nil
+	}
 	if sessionID == "" {
 		_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
 		return nil
