@@ -506,22 +506,21 @@ func DanglingDotGitEnv(dir string, env []string) error {
 		if info, err := os.Stat(dot); err == nil {
 			if info.Mode().IsRegular() {
 				// A gitfile: the repository, if it can be read. One that cannot is
-				// refused: git would say "not a git repository" or skip it.
+				// refused: git stops with "error opening ...: Permission denied".
 				f, oerr := os.Open(dot)
 				if oerr != nil {
-					return unreadableDotGit(dot, oerr)
+					return fmt.Errorf("%s is a gitfile that cannot be read (error opening '%s': %v): git refuses it with that error; fix its permissions", dot, dot, oerr)
 				}
 				_ = f.Close()
 				return nil
 			}
 			if info.IsDir() {
-				h, herr := os.Stat(filepath.Join(dot, "HEAD"))
-				switch {
-				case herr == nil && h.Mode().IsRegular():
+				ok, err := usableGitDir(dot)
+				if err != nil {
+					return err
+				}
+				if ok {
 					return nil
-				case herr != nil && !errors.Is(herr, fs.ErrNotExist):
-					// Not "no HEAD": the directory cannot be searched (mode 000).
-					return unreadableDotGit(dot, herr)
 				}
 			}
 		}
@@ -636,11 +635,45 @@ func UnreadableUserConfig() error {
 	return nil
 }
 
-// unreadableDotGit is the refusal for a .git that exists and cannot be read. git
-// answers "not a git repository" for it, or skips it for an enclosing repository;
+// usableGitDir applies git's own tests to a .git directory: HEAD must open for
+// reading, and objects/ and refs/ must be searchable (git's is_git_directory).
+// It is (true, nil) for a repository git uses; (false, nil) for a directory git
+// skips because something simply is not there (no HEAD, no objects: an empty
+// .git); and an error for one that is there and git cannot use. For a directory
+// git would say "not a git repository" or answer for an enclosing repository;
 // neither is the truth, so a read there is refused.
-func unreadableDotGit(dot string, err error) error {
-	return fmt.Errorf("%s exists and cannot be read (%v): git would say \"not a git repository\" or answer for an enclosing repository; fix its permissions", dot, err)
+func usableGitDir(dot string) (bool, error) {
+	refuse := func(what string, err error) error {
+		return fmt.Errorf("%s exists but its %s cannot be used (%v): git would say \"not a git repository\" or answer for an enclosing repository; fix its permissions", dot, what, err)
+	}
+	h, err := os.Stat(filepath.Join(dot, "HEAD"))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, refuse("HEAD", err) // the directory cannot be searched (mode 000)
+	case !h.Mode().IsRegular():
+		return false, nil
+	}
+	f, err := os.Open(filepath.Join(dot, "HEAD"))
+	if err != nil {
+		return false, refuse("HEAD", err)
+	}
+	_ = f.Close()
+	for _, name := range []string{"objects", "refs"} {
+		d := filepath.Join(dot, name)
+		if info, err := os.Stat(d); err != nil || !info.IsDir() {
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return false, refuse(name, err)
+			}
+			return false, nil
+		}
+		// Searchable: a name that is not there is ENOENT when it can be searched.
+		if _, err := os.Lstat(filepath.Join(d, ".ethos-access-probe")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return false, refuse(name, err)
+		}
+	}
+	return true, nil
 }
 
 // UnreadableConfigError is UnreadableUserConfig's error: Path is the config file

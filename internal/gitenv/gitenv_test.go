@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -325,8 +326,7 @@ func TestDanglingDotGitInAnAncestor(t *testing.T) {
 
 	// A real repository between the subdirectory and the link ends the walk.
 	inner := filepath.Join(r, "sub")
-	require.NoError(t, os.MkdirAll(filepath.Join(inner, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(inner, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+	mkGitDir(t, filepath.Join(inner, ".git"))
 	assert.NoError(t, DanglingDotGit(sub))
 }
 
@@ -391,8 +391,59 @@ func TestDanglingDotGitUnreadable(t *testing.T) {
 			for _, dir := range []string{r, sub} {
 				err := DanglingDotGit(dir)
 				require.Error(t, err, dir)
-				assert.Contains(t, err.Error(), "cannot be read")
+				want := map[string]string{"directory": "cannot be used", "gitfile": "cannot be read"}[name]
+				assert.Contains(t, err.Error(), want)
 				assert.Contains(t, err.Error(), filepath.Join(r, ".git"))
+			}
+		})
+	}
+}
+
+// mkGitDir makes a .git git accepts: HEAD, objects/ and refs/.
+func mkGitDir(t *testing.T, dot string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(dot, "objects"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dot, "refs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dot, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+}
+
+// git's own tests of a .git: a HEAD it cannot open, or objects/ or refs/ it
+// cannot search, make git walk past it (or say "not a git repository"); ethos
+// refuses each. A .git it accepts at mode 0300 or 0500 still resolves, and so
+// does git.
+func TestDanglingDotGitAppliesGitsOwnChecks(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	base := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", base)
+	for _, part := range []string{"HEAD", "objects", "refs"} {
+		t.Run(part+" mode 000", func(t *testing.T) {
+			r := filepath.Join(base, part)
+			dot := filepath.Join(r, ".git")
+			mkGitDir(t, dot)
+			p := filepath.Join(dot, part)
+			require.NoError(t, os.Chmod(p, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(p, 0o755) })
+			err := DanglingDotGit(r)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), dot)
+			assert.Contains(t, err.Error(), part)
+		})
+	}
+	for _, mode := range []os.FileMode{0o300, 0o500, 0o100} {
+		t.Run("dot git mode "+mode.String(), func(t *testing.T) {
+			r := filepath.Join(base, "m"+strconv.Itoa(int(mode)))
+			dot := filepath.Join(r, ".git")
+			mkGitDir(t, dot)
+			require.NoError(t, os.Chmod(dot, mode))
+			t.Cleanup(func() { _ = os.Chmod(dot, 0o755) })
+			assert.NoError(t, DanglingDotGit(r), "a .git git accepts resolves")
+			if git, err := exec.LookPath("git"); err == nil {
+				c := exec.Command(git, "-C", r, "rev-parse", "--git-dir")
+				c.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+base, "GIT_CONFIG_NOSYSTEM=1")
+				out, gerr := c.CombinedOutput()
+				assert.NoError(t, gerr, "git accepts it too: %s", out)
 			}
 		})
 	}
