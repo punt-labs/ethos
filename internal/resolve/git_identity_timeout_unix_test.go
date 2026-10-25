@@ -111,3 +111,16 @@ func TestGitMissingFromPath(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, exec.ErrNotFound)
 }
+
+// A .git git cannot use (a gitfile to a missing directory, a worktree whose
+// main checkout is gone) is a failure for RepoName, not "no origin".
+func TestRepoNameBrokenGitDirIsAnError(t *testing.T) {
+	for name, dir := range testhelpers.BrokenGitDirs(t) {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(dir)
+			got, err := RepoName()
+			require.Error(t, err)
+			assert.Empty(t, got)
+		})
+	}
+}

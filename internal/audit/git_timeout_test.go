@@ -85,3 +85,18 @@ func TestGitReadsClassifyFailures(t *testing.T) {
 		assert.ErrorIs(t, err, exec.ErrNotFound)
 	})
 }
+
+// A .git git cannot use is a failure, not "no gitlink" and not an empty
+// identity.
+func TestBrokenGitDirIsAnErrorForAudit(t *testing.T) {
+	for name, dir := range testhelpers.BrokenGitDirs(t) {
+		t.Run(name, func(t *testing.T) {
+			g, err := IsGitlinkMount(dir)
+			require.Error(t, err)
+			assert.False(t, g)
+			id, err := RepoIdentity(dir)
+			require.Error(t, err)
+			assert.Empty(t, id)
+		})
+	}
+}

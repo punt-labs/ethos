@@ -304,7 +304,7 @@ func gitExcludes(repoRoot string, probes []string) (bool, error) {
 		var ee *exec.ExitError
 		// Exit 1 is "no path matched" — an answer, and the answer is no.
 		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
-			if strings.Contains(stderr.String(), "not a git repository") {
+			if gitenv.IsNotARepo(stderr.String()) {
 				return false, nil // nothing in a non-repository is covered
 			}
 			return false, fmt.Errorf("git check-ignore: %w: %s", err, strings.TrimSpace(stderr.String()))

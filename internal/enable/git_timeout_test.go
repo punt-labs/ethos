@@ -35,3 +35,14 @@ func TestEnableGitTimeouts(t *testing.T) {
 		assert.Empty(t, got)
 	})
 }
+
+// A .git git cannot use is an error for LocalIgnored, not "nothing covered".
+func TestLocalIgnoredBrokenGitDirIsAnError(t *testing.T) {
+	for name, dir := range testhelpers.BrokenGitDirs(t) {
+		t.Run(name, func(t *testing.T) {
+			got, err := LocalIgnored(dir)
+			require.Error(t, err)
+			assert.False(t, got)
+		})
+	}
+}

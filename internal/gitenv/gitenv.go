@@ -157,6 +157,27 @@ var dropped = func() map[string]bool {
 	return m
 }()
 
+// isTrace reports whether name makes git write diagnostics to stderr:
+// GIT_TRACE, GIT_TRACE_*, GIT_TRACE2, GIT_TRACE2_* and GIT_CURL_VERBOSE. A
+// read classifies git's stderr, so trace noise would turn "key unset" (exit 1,
+// empty stderr) into a failure.
+func isTrace(name string) bool {
+	return name == "GIT_CURL_VERBOSE" || strings.HasPrefix(name, "GIT_TRACE")
+}
+
+// NotARepoMessage is what git prints when it walked up and found no
+// repository at all. It is NOT in the message for a .git git found and could
+// not use (a gitfile naming a missing directory, a worktree whose main
+// checkout is gone): that one says "not a git repository: <path>" and is a
+// failure, not "outside a repository". One matcher, used by Read, the
+// resolver and enable.
+const NotARepoMessage = "not a git repository (or any"
+
+// IsNotARepo reports whether git's stderr says it found no repository.
+func IsNotARepo(stderr string) bool {
+	return strings.Contains(stderr, NotARepoMessage)
+}
+
 // Parsed returns the current environment with git's messages in the C locale
 // (LC_ALL=C, LANGUAGE empty) and none of LocalEnvVars. ethos matches git's
 // English messages ("not a git repository", "dubious ownership"); a
@@ -165,7 +186,7 @@ func Parsed() []string {
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if !dropped[name] {
+		if !dropped[name] && !isTrace(name) {
 			env = append(env, kv)
 		}
 	}
@@ -180,7 +201,7 @@ func Inherited() []string {
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if name != "LC_ALL" && name != "LANGUAGE" {
+		if name != "LC_ALL" && name != "LANGUAGE" && !isTrace(name) {
 			env = append(env, kv)
 		}
 	}
@@ -221,7 +242,7 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 		return nil, true, nil
 	case absent&AbsentNoRemote != 0 && ee.ExitCode() == 2:
 		return nil, true, nil
-	case absent&AbsentNotRepo != 0 && strings.Contains(stderr, "not a git repository"):
+	case absent&AbsentNotRepo != 0 && IsNotARepo(stderr):
 		return nil, true, nil
 	}
 	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(s.Args, " "), err, stderr)

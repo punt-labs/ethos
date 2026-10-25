@@ -994,7 +994,7 @@ func gitLocateError(start string, err error) error {
 		return fmt.Errorf("running git rev-parse in %s: %w", start, err)
 	}
 	msg := strings.TrimSpace(string(ee.Stderr))
-	if strings.Contains(msg, "not a git repository (or any") {
+	if gitenv.IsNotARepo(msg) {
 		// git is the authority: a .git it walked past, or a mount or
 		// ceiling boundary it stopped at, does not make this a refusal.
 		return fmt.Errorf("%s is %w", start, ErrNotInRepo)

@@ -124,3 +124,16 @@ func TestHandleSessionStartNamesLookupFailure(t *testing.T) {
 	assert.Contains(t, res.HookSpecificOutput.AdditionalContext, "did not answer")
 	assert.Contains(t, res.SystemMessage, "did not answer")
 }
+
+// A .git git cannot use is a failure for ResolveRepo, so the roster records
+// repo_unresolved rather than Repo "".
+func TestResolveRepoBrokenGitDirIsAnError(t *testing.T) {
+	for name, dir := range testhelpers.BrokenGitDirs(t) {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(dir)
+			got, err := ResolveRepo()
+			require.Error(t, err)
+			assert.Empty(t, got)
+		})
+	}
+}

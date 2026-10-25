@@ -175,3 +175,48 @@ func ShimGit(t testing.TB, hang ...string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	GitTimeout(t, 200*time.Millisecond)
 }
+
+// BrokenGitDirs returns directories whose .git git cannot use, and that are
+// not "outside a repository": a gitfile naming a directory that does not
+// exist, and a linked worktree whose main checkout is gone. A read run in
+// any of them must be an error, never an absent value.
+func BrokenGitDirs(t testing.TB) map[string]string {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("needs git")
+	}
+	base := t.TempDir()
+	dirs := map[string]string{}
+
+	broken := filepath.Join(base, "broken-gitfile")
+	if err := os.Mkdir(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, ".git"), []byte("gitdir: /nonexistent/x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dirs["gitfile to a missing directory"] = broken
+
+	main := filepath.Join(base, "main")
+	wt := filepath.Join(base, "wt")
+	if err := os.Mkdir(main, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"-C", main, "init", "-q"},
+		{"-C", main, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"},
+		{"-C", main, "worktree", "add", "-q", wt},
+	} {
+		cmd := exec.Command(real, args...)
+		cmd.Env = GitEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.RemoveAll(main); err != nil {
+		t.Fatal(err)
+	}
+	dirs["worktree whose main checkout is gone"] = wt
+	return dirs
+}

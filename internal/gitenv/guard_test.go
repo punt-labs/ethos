@@ -62,7 +62,7 @@ var allowedProcessUses = map[string][]string{
 	"cmd/ethos/uninstall.go": {"import", `Command(<expr>)`},                        // the claude CLI
 
 	// A test helper compiled into a non-test file: its callers set the bound.
-	"internal/testhelpers/gitenv.go": {"import", `Command("git")`},
+	"internal/testhelpers/gitenv.go": {"import", `Command("git")`, `Command(<expr>)`},
 }
 
 // processUses returns, per file, the descriptors of every os/exec import and
