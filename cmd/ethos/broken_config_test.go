@@ -78,7 +78,7 @@ func TestCLI_BrokenConfigSubagentStartAndPreCompactReport(t *testing.T) {
 
 			stdout, stderr, _ = runHookIn(t, se, se.repo, "pre-compact",
 				`{"session_id":"cfg-s2","hook_event_name":"PreCompact"}`)
-			assert.Contains(t, stdout+stderr, "could not be located", "pre-compact says so")
+			assert.Contains(t, stdout+stderr, "the repository configuration could not be read", "pre-compact says so, in the words for a config")
 			assert.Contains(t, stdout+stderr, filepath.Base(cfg))
 		})
 	}
@@ -322,4 +322,34 @@ func TestUnreadableGitConfigIsReportedEverywhere(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.IsError)
 	assert.Contains(t, res.Content[0].(mcp.TextContent).Text, cfg)
+}
+
+// The store note and the doctor row say "configuration could not be read" when
+// only the config failed, once, never "X; X".
+func TestConfigOnlyFailureIsWordedAsAConfigFailure(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	for _, kind := range configBreaks {
+		t.Run(kind, func(t *testing.T) {
+			se := setupCLISubprocessEnv(t)
+			cfg := breakConfig(t, se.repo, kind)
+			stdout, _, _ := runHookIn(t, se, se.repo, "session-start", `{"session_id":"cw-s1","hook_event_name":"SessionStart"}`)
+			assert.Contains(t, stdout, "the repository configuration could not be read")
+			assert.NotContains(t, stdout, "could not be located")
+			roster, err := os.ReadFile(filepath.Join(se.home, ".punt-labs", "ethos", "sessions", "cw-s1.yaml"))
+			require.NoError(t, err)
+			assert.Equal(t, 1, strings.Count(string(roster), filepath.Base(cfg)), "the cause is said once: %s", roster)
+
+			c := exec.Command(ethosBinary, "doctor")
+			c.Dir = se.repo
+			c.Env = withForcedNotUnderClaudeCode(se.env)
+			out, _ := c.CombinedOutput()
+			assert.Contains(t, string(out), "Repository store                      FAIL  the repository configuration could not be read")
+			if kind == "dangling" {
+				assert.NotContains(t, string(out), "dangling symlink: it is a dangling symlink")
+				assert.NotContains(t, string(out), "dangling config symlink")
+			}
+		})
+	}
 }

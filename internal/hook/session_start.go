@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -263,7 +264,9 @@ func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identi
 	if repoErr != nil || coErr != nil || storeErr != nil {
 		var reasons []string
 		for _, e := range []error{storeErr, repoErr, coErr} {
-			if e != nil {
+			// The same failure often arrives twice (the store and the checkout
+			// share a .git): say it once.
+			if e != nil && !slices.Contains(reasons, e.Error()) {
 				reasons = append(reasons, e.Error())
 			}
 		}

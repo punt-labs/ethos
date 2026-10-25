@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -151,8 +153,9 @@ func (h *Handler) guardStore(tool string, fn mcpserver.ToolHandlerFunc) mcpserve
 		if err != nil || result == nil {
 			return result, err
 		}
+		what, _, answer := resolve.Describe(h.storeErr)
 		result.Content = append(result.Content, mcplib.NewTextContent(fmt.Sprintf(
-			"note: the repository store could not be located (%v); this answer is from the global store only", h.storeErr)))
+			"note: %s (%v); %s", what, h.storeErr, answer)))
 		return result, nil
 	}
 }

@@ -505,7 +505,7 @@ func TestBuildTeamSection_ResolveError(t *testing.T) {
 	got := BuildTeamSection(ts, nil, nil, "")
 
 	assert.Contains(t, got, "## Team")
-	assert.Contains(t, got, "could not be located")
+	assert.Contains(t, got, "the repository configuration could not be read")
 }
 
 func TestBuildTeamSection_TeamLoadError(t *testing.T) {

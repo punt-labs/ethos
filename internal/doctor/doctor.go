@@ -83,7 +83,11 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	store := func(r Result) Result { return gateStore(r, storeRoot, storeErr) }
 
 	if unlocated(storeRoot, storeErr) {
-		results = append(results, Result{Name: "Repository store", Status: "FAIL", Detail: "not located: " + storeErr.Error()})
+		detail := "not located: " + storeErr.Error()
+		if what, _, _ := resolve.Describe(storeErr); what != "the repository store could not be located" {
+			detail = what + ": " + storeErr.Error()
+		}
+		results = append(results, Result{Name: "Repository store", Status: "FAIL", Detail: detail})
 	}
 
 	// The identity store, like the team store, is layered over the repository

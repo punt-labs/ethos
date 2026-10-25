@@ -638,14 +638,14 @@ func readConfigFile(p string) ([]byte, error) {
 	}
 	if errors.Is(err, fs.ErrNotExist) {
 		if li, lerr := os.Lstat(p); lerr == nil && li.Mode()&fs.ModeSymlink != 0 {
-			return nil, fmt.Errorf("reading %s: it is a dangling symlink: %w", p, errDanglingConfig)
+			return nil, fmt.Errorf("reading %s: %w", p, errDanglingConfig)
 		}
 		return nil, err
 	}
 	return nil, fmt.Errorf("reading %s: %w", p, err)
 }
 
-var errDanglingConfig = errors.New("dangling config symlink")
+var errDanglingConfig = errors.New("it is a dangling symlink")
 
 // ResolveAgent returns the default agent identity handle for the repo.
 // Reads .punt-labs/ethos.yaml first, falls back to legacy

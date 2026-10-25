@@ -15,5 +15,6 @@ func storeUnlocatedNote(err error) string {
 	if err == nil || errors.Is(err, resolve.ErrNotInRepo) {
 		return ""
 	}
-	return fmt.Sprintf("Ethos: the repository store could not be located (%v), so this repo's agent persona and team were not loaded.", err)
+	what, effect, _ := resolve.Describe(err)
+	return fmt.Sprintf("Ethos: %s (%v), %s", what, err, effect)
 }
