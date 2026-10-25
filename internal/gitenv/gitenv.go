@@ -147,7 +147,7 @@ const groupGrace = time.Second
 // the directory and the bound.
 func Run(s Spec) ([]byte, error) {
 	if s.Dir != "" {
-		if err := DanglingDotGit(s.Dir); err != nil {
+		if err := DanglingDotGitEnv(s.Dir, s.Env); err != nil {
 			return nil, err
 		}
 	}
@@ -461,7 +461,7 @@ const (
 // returns an error carrying git's stderr, wrapping the *exec.ExitError (or
 // ErrTimeout, or exec.ErrNotFound) for errors.Is and errors.As.
 func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
-	if err := DanglingDotGit(s.Dir); err != nil { // Run checks only a non-empty Dir
+	if err := DanglingDotGitEnv(s.Dir, s.Env); err != nil { // Run checks only a non-empty Dir
 		return nil, false, err
 	}
 	out, err = Run(s)
@@ -499,7 +499,12 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 // directory holding HEAD: that is the repository git uses. An empty dir is the
 // working directory. It is nil when there is none; anything else is git's to
 // judge.
-func DanglingDotGit(dir string) error {
+func DanglingDotGit(dir string) error { return DanglingDotGitEnv(dir, nil) }
+
+// DanglingDotGitEnv is DanglingDotGit for the git that env is for: the walk
+// stops at its GIT_CEILING_DIRECTORIES, so a neutral read under a temp directory
+// is not refused by a dangling .git above it. A nil env is the process's.
+func DanglingDotGitEnv(dir string, env []string) error {
 	if dir == "" {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -507,7 +512,7 @@ func DanglingDotGit(dir string) error {
 		}
 		dir = wd
 	}
-	for _, d := range Walk(dir) {
+	for _, d := range WalkEnv(dir, env) {
 		dot := filepath.Join(d, ".git")
 		li, err := os.Lstat(dot)
 		if err != nil {

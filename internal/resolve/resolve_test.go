@@ -2015,3 +2015,24 @@ func TestTrace2FromConfigDoesNotMakeUnsetAnError(t *testing.T) {
 		})
 	}
 }
+
+// The neutral directory for a user-config read lives under TMPDIR. A dangling
+// .git above TMPDIR must not refuse it: the walk stops at the ceiling the git it
+// is for has, which is the neutral directory's parent.
+func TestNeutralReadIsNotRefusedByADanglingGitAboveTmpdir(t *testing.T) {
+	base := t.TempDir()
+	if err := os.Symlink(filepath.Join(base, "nowhere"), filepath.Join(base, ".git")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	tmp := filepath.Join(base, "tmp")
+	require.NoError(t, os.Mkdir(tmp, 0o755))
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(base, "none"))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "none"), []byte("[user]\n\tname = fine\n"), 0o644))
+	// The process's own ceiling is deliberately unset: only the spec's counts.
+	t.Setenv("GIT_CEILING_DIRECTORIES", "")
+
+	v, err := GitConfig("", "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "fine", v)
+}

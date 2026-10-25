@@ -26,11 +26,16 @@ var deviceOf = statDevice
 // on a different filesystem from the working directory unless
 // GIT_DISCOVERY_ACROSS_FILESYSTEM is a true boolean. A parent whose device
 // cannot be read is treated as a boundary (git dies there instead).
-func Walk(start string) []string {
+func Walk(start string) []string { return WalkEnv(start, nil) }
+
+// WalkEnv is Walk reading GIT_CEILING_DIRECTORIES and
+// GIT_DISCOVERY_ACROSS_FILESYSTEM from env (nil is the process's), as the git
+// that env is for would.
+func WalkEnv(start string, env []string) []string {
 	dir := RealDir(start)
-	off := ceilingOffset(dir, gitCeilings())
+	off := ceilingOffset(dir, gitCeilings(env))
 	dev, devOK := deviceOf(dir)
-	oneFS := devOK && !acrossFilesystems()
+	oneFS := devOK && !acrossFilesystems(env)
 	dirs := []string{dir}
 	for {
 		parent := filepath.Dir(dir)
@@ -59,8 +64,8 @@ func Walk(start string) []string {
 // acrossFilesystems reports whether GIT_DISCOVERY_ACROSS_FILESYSTEM lets the
 // walk cross a mount point. Unset or not a boolean is false; git dies on a
 // value that is not a boolean.
-func acrossFilesystems() bool {
-	v, set := os.LookupEnv("GIT_DISCOVERY_ACROSS_FILESYSTEM")
+func acrossFilesystems(env []string) bool {
+	v, set := lookupEnv(env, "GIT_DISCOVERY_ACROSS_FILESYSTEM")
 	if !set {
 		return false
 	}
@@ -89,10 +94,10 @@ func ParseBool(s string) (b, ok bool) {
 // (canonicalize_ceiling_entry): a relative entry is ignored; an entry before
 // any empty entry is resolved to its real path, and ignored when that fails;
 // an entry after an empty entry is kept exactly as written.
-func gitCeilings() []string {
+func gitCeilings(env []string) []string {
 	var out []string
 	asWritten := false
-	for _, c := range strings.Split(os.Getenv("GIT_CEILING_DIRECTORIES"), string(os.PathListSeparator)) {
+	for _, c := range strings.Split(envValue(env, "GIT_CEILING_DIRECTORIES"), string(os.PathListSeparator)) {
 		switch {
 		case c == "":
 			asWritten = true
@@ -136,4 +141,24 @@ func RealDir(p string) string {
 		return r
 	}
 	return filepath.Clean(p)
+}
+
+// lookupEnv is os.LookupEnv over env, or over the process's when env is nil.
+// The last entry wins, as in an exec'd environment.
+func lookupEnv(env []string, name string) (string, bool) {
+	if env == nil {
+		return os.LookupEnv(name)
+	}
+	v, found := "", false
+	for _, kv := range env {
+		if k, val, ok := strings.Cut(kv, "="); ok && k == name {
+			v, found = val, true
+		}
+	}
+	return v, found
+}
+
+func envValue(env []string, name string) string {
+	v, _ := lookupEnv(env, name)
+	return v
 }
