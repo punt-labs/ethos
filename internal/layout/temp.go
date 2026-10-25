@@ -13,8 +13,8 @@ package layout
 const TmpMarker = ".ethos-tmp"
 
 // LegacyTmpSuffix ended staging names before TmpMarker. Writers no longer
-// produce it; readers that sweep or recover temp files accept it so a crash of
-// an earlier version leaves nothing unrecognised after an upgrade.
+// produce it. The audit sweep accepts it; other legacy temp files are reported
+// by doctor as unrecognized.
 const LegacyTmpSuffix = ".tmp"
 
 // TmpPath is the staging name for an atomic write to dest: dest + TmpMarker.
