@@ -11267,7 +11267,7 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
   this codebase deliberately supports a git-less environment for
   identity/team/session resolution (`internal/githook.HooksDir`'s manual
   fallback, and `internal/resolve`'s repository walk, which applies git's
-  `.git` rules without running git).
+  `.git` rules when git itself is not installed).
   `hookInvocationObserved` cannot honor that: the hook body itself calls
   `git rev-parse --show-toplevel`, so a git-less host could never run the
   real hook either — this is not a new dependency introduced by the
@@ -12694,7 +12694,7 @@ Full writeups, including two historical exploit traces, are in
 **Status**: Settled 2026-10-23 by operator ruling; ADRs added to the blame
 tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
 store in the repository) and `ethos-3e3f` (redaction, DES-080).
-Implementation in progress: the DES-080 redaction is under way; beads `ethos-g3g3` and `ethos-yjh0` are not started.
+Implementation in progress: the DES-080 redaction is under way (PR #539); slice 1 of bead `ethos-g3g3` (the path-class table and the doctor check) is implemented; its later slices and bead `ethos-yjh0` are not started.
 
 ### What this amends
 
@@ -12832,24 +12832,34 @@ warns in a dormant one. When there is no repository or neither
 directory exists the check still passes, and its detail starts with
 "not scanned" and the reason.
 
-Finding the repository applies git's own `.git` rules, without running
-git, and tests compare each case with `git rev-parse --show-toplevel`.
-The search continues upward past a missing `.git`, a dangling symlink, a
-symlink loop, a `.git` that is not a regular file or directory (never
-read), and a `.git/` directory that is not a git directory (HEAD plus
-`objects/` and `refs/`, or a `commondir`). An empty or garbage `.git`
-file, a `gitdir:` naming a missing directory, or a `.git` that cannot be
-read for permission is an error, as it is for git. On that error, or a
-refused `ETHOS_REPO_ROOT`, every `ethos doctor` check that reads the
-checkout or the store warns with the reason instead of passing (a test
-parses `RunAll` to keep that true for new checks); the MCP server's
-write tools refuse and its read tools say the store could not be
-located; the session hooks say why the persona is missing; and every
-other command refuses rather than fall back to the global store.
-`doctor`, `setup`, `seed`, `enable`, `disable`, `hook`, `serve`,
-`audit` and a few utilities (`version`, `help`, `completion`,
-`uninstall`, `schema`) are exempt from that refusal because they handle
-the error themselves. `ethos enable` requires git to install hooks.
+Finding the repository asks git when git is installed: one
+`git rev-parse --show-toplevel --git-dir --git-common-dir` call decides
+the working tree and the store (a linked worktree's store is the main
+checkout's), so `GIT_DIR`, `GIT_WORK_TREE` and `GIT_CEILING_DIRECTORIES`
+apply. Git's "not a git repository" means not in a repository; any other
+git failure (dubious ownership, an invalid gitfile, an unreadable
+`commondir`, a run inside `.git/` or a bare repository) is a refusal
+carrying git's message. Answers are cached per process for at most 30
+seconds, and a refusal is never cached. Without git, strict hand rules
+apply: a `.git/` counts only with a valid `HEAD` and `objects/` and
+`refs/` directories, a `.git` file only when it starts with exactly
+`gitdir:` followed by one space and names a git directory, a dangling symlink or non-file
+`.git` is skipped unread, and an unreadable `.git/` is refused, which is
+stricter than git. Tests compare 28 `.git` shapes with
+`git rev-parse` and run the same shapes with git hidden. On a refusal,
+or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one
+failing row, keeps every check's own status and notes when a check saw
+only the global layer (a test parses `RunAll` to keep the gate on every
+check); the MCP server runs only its read methods and appends a note in
+a separate content block; the session hooks say why the persona is
+missing, the audit hook skips the entry, and `subagent-start` refuses a
+spawn that declares a mission; and every other command refuses rather
+than fall back to the global store. `doctor`, `setup`, `seed`, `enable`,
+`disable`, `hook`, `serve`, `audit`, the global-only `session`, `adr`,
+`whoami` and `iam`, and a few utilities (`version`, `help`,
+`completion`, `uninstall`, `schema`) are exempt from that refusal
+because they handle the error themselves or never use the repository
+store. `ethos enable` requires git to install hooks.
 `ethos disable` refuses an unverified hooks directory unless `--force`
 is given; with `--force` it removes the import and marker and reports
 that hook sections may remain. Output a user directs into
