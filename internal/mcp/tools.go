@@ -133,9 +133,9 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// Extension tool (consolidated)
 	h.addTool(s, h.extTool(), h.handleExt)
 	// Session tool (consolidated)
-	s.AddTool(h.sessionTool(), h.handleSession)
+	h.addTool(s, h.sessionTool(), h.handleSession)
 	// Doctor tool (standalone admin tool)
-	s.AddTool(h.doctorTool(), h.handleDoctor)
+	h.addTool(s, h.doctorTool(), h.handleDoctor)
 	// Attribute tools (consolidated)
 	h.registerAttributeTools(s)
 	// Role tool (if store configured)
@@ -152,7 +152,7 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	}
 	// ADR tool (if store configured)
 	if h.adrStore != nil {
-		s.AddTool(h.adrTool(), h.handleADR)
+		h.addTool(s, h.adrTool(), h.handleADR)
 	}
 	// Vendor tool (if a runner is configured)
 	if h.vendor != nil {
