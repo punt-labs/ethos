@@ -125,7 +125,9 @@ func TestCLI_DoctorRunsOnUnreadableGit(t *testing.T) {
 }
 
 // Every command that reads or writes the store, plus seed, refuses on an
-// unreadable .git instead of using the global store.
+// unreadable .git instead of using the global store. whoami, iam, session
+// start and join, and adr create (its author) resolve through the repository
+// identity store, so they refuse too.
 func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -139,6 +141,13 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 		{"role", "create", "x"},
 		{"mission", "list"},
 		{"identity", "list"},
+		{"whoami"},
+		{"identity", "whoami"},
+		{"iam", "x"},
+		{"session", "iam", "x"},
+		{"session", "start"},
+		{"session", "join", "--agent-id", "a"},
+		{"adr", "create", "--title", "t", "--decision", "d"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
@@ -152,21 +161,23 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 	}
 }
 
-// The commands whose stores are global-only — session (whose write-current is
-// doctor's own remedy), adr, whoami, iam — run on an unreadable .git: none of
-// them refuses on the repository store.
+// The commands that touch only global stores — roster reads, session
+// write-current (doctor's own remedy), session purge, adr list and show — run on
+// an unreadable .git: none of them refuses on the repository store.
 func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
 	se, inner := nestedGitEnv(t, emptyGitFile)
 	for _, args := range [][]string{
-		{"whoami"},
-		{"identity", "whoami"},
-		{"iam", "x"},
 		{"session"},
+		{"session", "list"},
+		{"session", "show"},
+		{"session", "roster"},
 		{"session", "write-current", "--pid", "1", "--session", "s"},
+		{"session", "purge"},
 		{"adr", "list"},
+		{"adr", "show", "x"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
@@ -184,10 +195,13 @@ func TestStoreRefusalExemptions(t *testing.T) {
 	exempt := [][]string{
 		{"version"}, {"doctor"}, {"setup"}, {"seed"}, {"enable"}, {"disable"},
 		{"hook"}, {"serve"}, {"uninstall"}, {"completion"}, {"audit"}, {"role", "schema"},
-		{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session"}, {"session", "write-current"}, {"adr"},
+		{"session"}, {"session", "list"}, {"session", "show"}, {"session", "roster"},
+		{"session", "write-current"}, {"session", "purge"}, {"adr", "list"}, {"adr", "show"},
 	}
 	refused := [][]string{
 		{"identity", "list"}, {"mission", "list"},
+		{"whoami"}, {"iam"}, {"identity", "whoami"}, {"session", "iam"},
+		{"session", "start"}, {"session", "join"}, {"adr", "create"},
 	}
 	find := func(args []string) *cobra.Command {
 		c, _, err := root.Find(args)
