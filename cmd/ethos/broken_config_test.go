@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -253,4 +254,19 @@ func TestServeTeamForRepoUnderADanglingAncestorGit(t *testing.T) {
 	text := res.Content[0].(mcp.TextContent).Text
 	assert.Contains(t, text, filepath.Join(r, ".git"))
 	assert.Contains(t, text, "symlink to nothing")
+}
+
+// ethos audit seal run directly applies the whole refusal: a broken store
+// config blocks the commit (exit 2), it does not seal against a guess.
+func TestAuditSealRefusesABrokenStore(t *testing.T) {
+	repo := t.TempDir()
+	testhelpers.MakeGitDir(t, repo)
+	cmdRoots.Store(&repoRoots{Located: resolve.Located{
+		Store: repo, Checkout: repo, ConfigErr: errors.New("parsing repo config /r/.punt-labs/ethos.yaml: boom"),
+	}, Global: true})
+	t.Cleanup(func() { cmdRoots.Store(nil) })
+	var out, errb bytes.Buffer
+	err := runAuditSeal(&out, &errb)
+	assert.ErrorIs(t, err, failClosed{})
+	assert.Contains(t, errb.String(), "boom")
 }

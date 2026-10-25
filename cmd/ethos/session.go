@@ -937,11 +937,16 @@ func runSessionPurge(cmd *cobra.Command) error {
 		if skipped == nil {
 			skipped = []session.SkippedSession{}
 		}
+		forcedUnresolved := rep.ForcedUnresolved
+		if forcedUnresolved == nil {
+			forcedUnresolved = []session.ForcedSession{}
+		}
 		if werr := writeJSON(out, map[string]any{
-			"sessions":  purged,
-			"pid_files": pidPurged,
-			"refused":   refused,
-			"skipped":   skipped,
+			"sessions":          purged,
+			"pid_files":         pidPurged,
+			"refused":           refused,
+			"skipped":           skipped,
+			"forced_unresolved": forcedUnresolved,
 		}); werr != nil {
 			return werr
 		}
@@ -958,6 +963,9 @@ func runSessionPurge(cmd *cobra.Command) error {
 	}
 	for _, id := range purged {
 		fmt.Fprintf(out, "Purged session %s\n", id)
+	}
+	for _, f := range rep.ForcedUnresolved {
+		fmt.Fprintf(out, "Warning: %s was removed unverified: %s\n", f.Session, f.Warning)
 	}
 	for _, pid := range pidPurged {
 		fmt.Fprintf(out, "Purged PID file %s\n", pid)

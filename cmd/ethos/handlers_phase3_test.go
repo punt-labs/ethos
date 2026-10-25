@@ -529,6 +529,18 @@ func TestRunSessionPurge_UnresolvedSkippedThenForced(t *testing.T) {
 	assert.Contains(t, stderr, "purging as if outside any repository")
 	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
 	assert.Equal(t, []string{"sess-unresolved"}, got.Sessions)
+	var forced struct {
+		Forced []struct {
+			Session string `json:"session"`
+			Reason  string `json:"reason"`
+			Warning string `json:"warning"`
+		} `json:"forced_unresolved"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &forced), stdout)
+	require.Len(t, forced.Forced, 1, "the force-purged unresolved roster is marked")
+	assert.Equal(t, "sess-unresolved", forced.Forced[0].Session)
+	assert.Equal(t, "git did not answer", forced.Forced[0].Reason)
+	assert.Contains(t, forced.Forced[0].Warning, "not verified")
 }
 
 // TestRunSessionPurge_TextRefused is Bugbot R6-2: when the unsealed-lines

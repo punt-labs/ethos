@@ -165,21 +165,26 @@ func TestActiveRepoSessionsSkipsUnresolvedRosters(t *testing.T) {
 	ss := sessionStore()
 	root := session.Participant{AgentID: "u"}
 	primary := session.Participant{AgentID: "9999999", Parent: "u"}
-	require.NoError(t, ss.CreateUnresolved("sess-un", root, primary, "git did not answer", "/co", "h"))
+	here := t.TempDir()
+	require.NoError(t, ss.CreateUnresolved("sess-un", root, primary, "git did not answer", here, "h"))
+	require.NoError(t, ss.CreateUnresolved("sess-unplaced", root, primary, "no checkout either", "", "h"))
+	require.NoError(t, ss.CreateUnresolved("sess-elsewhere", root, primary, "belongs to another checkout", t.TempDir(), "h"))
 	require.NoError(t, ss.CreateInCheckout("sess-none", root, primary, "", "/co", "h"))
 	fake := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(fake, "git"), []byte("#!/bin/sh\necho 'error: No such remote' >&2\nexit 2\n"), 0o755))
 	t.Setenv("PATH", fake)
 
 	var errb bytes.Buffer
-	got := activeRepoSessions(t.TempDir(), &errb)
+	got := activeRepoSessions(here, &errb)
 	var ids []string
 	for _, a := range got {
 		ids = append(ids, a.Session)
 	}
 	assert.Equal(t, []string{"sess-none"}, ids)
-	assert.Contains(t, errb.String(), "sess-un")
+	assert.Contains(t, errb.String(), "sess-un:")
 	assert.Contains(t, errb.String(), "git did not answer")
+	assert.Contains(t, errb.String(), "sess-unplaced", "one whose checkout is unknown cannot be ruled out")
+	assert.NotContains(t, errb.String(), "sess-elsewhere", "a roster recorded in another checkout is not this commit's to be warned about")
 }
 
 // --verify separates a ref git does not know from every other git failure: the

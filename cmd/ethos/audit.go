@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -240,7 +242,12 @@ func activeRepoSessions(repoRoot string, errOut io.Writer) []hook.ActiveSession 
 		}
 		if roster.RepoUnresolved != "" {
 			// Its repository identity was never resolved: it cannot be
-			// matched to this checkout, a no-origin one included.
+			// matched to this checkout, a no-origin one included. One that
+			// recorded another checkout belongs to that checkout's commits, not
+			// this one's, and is not mentioned here.
+			if roster.Checkout != "" && !sameCheckout(roster.Checkout, repoRoot) {
+				continue
+			}
 			fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check skips session %s: its repository identity was not resolved when it started (%s)\n",
 				id, roster.RepoUnresolved)
 			continue
@@ -250,6 +257,20 @@ func activeRepoSessions(repoRoot string, errOut io.Writer) []hook.ActiveSession 
 		}
 	}
 	return out
+}
+
+// sameCheckout reports whether a and b are the same directory, by file
+// identity (a symlinked spelling is the same checkout).
+func sameCheckout(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
 
 // runAuditQuarantine is the audit-quarantine command implementation. It
@@ -288,6 +309,16 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 // stderr and returns failClosed so the process exits 2, blocking the
 // commit. A gitlink-mounted no-op and a nothing-to-seal run both exit 0.
 func runAuditSeal(out, errOut io.Writer) error {
+	// The seal is classed as handling its own errors, so nothing refused it
+	// before: it applies the full refusal itself — the store, its
+	// .punt-labs/ethos path and config, as well as the checkout. A broken store
+	// blocks the commit (exit 2) rather than sealing against a guess.
+	// An ETHOS_REPO_ROOT naming a repository with no store yet is not a broken
+	// store: there is nothing there to seal against, and enable creates it.
+	if err := currentRoots().StoreFailure(); err != nil && !errors.Is(err, resolve.ErrOverrideNoStore) {
+		fmt.Fprintf(errOut, "ethos: audit seal: %v\n", err)
+		return failClosed{}
+	}
 	repoRoot, err := requireCheckout(errOut, "audit seal")
 	if err != nil {
 		return err
