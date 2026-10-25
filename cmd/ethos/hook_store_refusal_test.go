@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/fs"
 	"os/exec"
 	"path/filepath"
@@ -15,20 +16,21 @@ import (
 )
 
 // runHookIn runs `ethos hook <name>` in dir with payload on stdin.
-func runHookIn(t *testing.T, se *cliSubprocessEnv, dir, name, payload string, extraEnv ...string) (stderr string, code int) {
+func runHookIn(t *testing.T, se *cliSubprocessEnv, dir, name, payload string, extraEnv ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	cmd := exec.Command(ethosBinary, "hook", name)
 	cmd.Dir = dir
 	cmd.Env = append(withForcedNotUnderClaudeCode(se.env), extraEnv...)
 	cmd.Stdin = strings.NewReader(payload)
-	var errb bytes.Buffer
+	var outb, errb bytes.Buffer
+	cmd.Stdout = &outb
 	cmd.Stderr = &errb
 	err := cmd.Run()
 	if ee, ok := err.(*exec.ExitError); ok {
-		return errb.String(), ee.ExitCode()
+		return outb.String(), errb.String(), ee.ExitCode()
 	}
 	require.NoError(t, err)
-	return errb.String(), 0
+	return outb.String(), errb.String(), 0
 }
 
 // pathsNaming returns every path under root whose name contains s.
@@ -58,7 +60,7 @@ func TestCLI_HookAuditLogSkipsWhenCheckoutUnlocatable(t *testing.T) {
 	se, inner := nestedGitEnv(t, emptyGitFile)
 	const sid = "auditskip1"
 	payload := `{"session_id":"` + sid + `","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`
-	stderr, code := runHookIn(t, se, inner, "audit-log", payload)
+	_, stderr, code := runHookIn(t, se, inner, "audit-log", payload)
 	assert.Equal(t, 0, code, stderr)
 	assert.Contains(t, stderr, "audit-log")
 	assert.Contains(t, stderr, filepath.Join(inner, ".git"))
@@ -69,7 +71,8 @@ func TestCLI_HookAuditLogSkipsWhenCheckoutUnlocatable(t *testing.T) {
 
 // subagent-start with a declared mission refuses when the store cannot be
 // located: the verifier gate cannot run against the global store. Without a
-// declared mission there is no gate, and the spawn proceeds.
+// declared mission the spawn proceeds, and the session sees that the gate
+// could not be decided (systemMessage), not a stderr line alone.
 func TestCLI_HookSubagentStartRefusesGateWhenStoreUnlocatable(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -77,12 +80,17 @@ func TestCLI_HookSubagentStartRefusesGateWhenStoreUnlocatable(t *testing.T) {
 	se, inner := nestedGitEnv(t, emptyGitFile)
 	payload := `{"agent_id":"agent-1","agent_type":"bwk","session_id":"gate-s1"}`
 
-	stderr, code := runHookIn(t, se, inner, "subagent-start", payload, "MISSION_ID=m-2026-01-01-001")
+	_, stderr, code := runHookIn(t, se, inner, "subagent-start", payload, "MISSION_ID=m-2026-01-01-001")
 	assert.NotEqual(t, 0, code, stderr)
 	assert.Contains(t, stderr, "verifier")
 	assert.Contains(t, stderr, filepath.Join(inner, ".git"))
 
-	stderr, code = runHookIn(t, se, inner, "subagent-start", payload)
+	stdout, stderr, code := runHookIn(t, se, inner, "subagent-start", payload)
 	assert.Equal(t, 0, code, stderr)
-	assert.Contains(t, stderr, "verifier gate not evaluated")
+	var res struct {
+		SystemMessage string `json:"systemMessage"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
+	assert.Contains(t, res.SystemMessage, "cannot determine verifier gate: repository store not located")
+	assert.Contains(t, res.SystemMessage, filepath.Join(inner, ".git"))
 }

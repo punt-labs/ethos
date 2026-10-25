@@ -616,7 +616,10 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 // as far as a best-effort mission-store scan can tell, the evaluator
 // of some open mission, or degrades to an "uncertain" variant when
 // that scan itself hits a store fault and finds no match; a clean
-// scan with no match returns an empty diagnostic, staying quiet. The
+// scan with no match returns an empty diagnostic, staying quiet. With
+// the repository store unlocated (deps.StoreErr) there is no store to
+// scan, so the diagnostic is unconditional: "cannot determine verifier
+// gate: repository store not located: <reason>". The
 // caller is responsible for surfacing a non-empty diagnostic on every
 // path out of HandleSubagentStartWithDeps, session-visible and not
 // stderr-only — see that function's doc comment.
@@ -629,6 +632,8 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 // exclusive with the empty-declaredMissionID branch above).
 //
 // Returns (nil, "", fatal error) when:
+//   - the repository store is unlocated (deps.StoreErr) and the spawn
+//     declares a mission: its gate cannot run against the global store.
 //   - deps.Hash is misconfigured (Missions is non-nil but HashSources
 //     is incomplete). Silent skip would let stale evaluator content
 //     through under a configuration error.
@@ -646,8 +651,13 @@ func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDe
 			return nil, "", fmt.Errorf("verifier gate for mission %s: repository store not located: %w; refusing the spawn rather than gating it against the global store",
 				strings.TrimSpace(declaredMissionID), deps.StoreErr)
 		}
-		fmt.Fprintf(os.Stderr, "ethos: subagent-start: repository store not located (%v); verifier gate not evaluated\n", deps.StoreErr)
-		return nil, "", nil
+		// No declared mission and no store to scan: whether this spawn is
+		// the evaluator of an open mission cannot be known, so the skip is
+		// loud (LoudSkip, docs/spec-hook-gates.tex) and the caller surfaces
+		// the diagnostic session-visibly, not on stderr alone.
+		diagnostic = fmt.Sprintf("cannot determine verifier gate: repository store not located: %v", deps.StoreErr)
+		fmt.Fprintf(os.Stderr, "ethos: subagent-start: warning: %s\n", diagnostic)
+		return nil, diagnostic, nil
 	}
 	if deps.Missions == nil {
 		return nil, "", nil // legacy install: no mission store

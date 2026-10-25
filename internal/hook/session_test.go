@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -230,12 +231,23 @@ func TestHandleSubagentStart_StoreErrRefusesDeclaredMission(t *testing.T) {
 	require.NoError(t, lerr)
 	assert.Len(t, roster.Participants, 2, "a refused spawn leaves no trace in the roster")
 
+	// No declared mission: the spawn joins, and the operator and the subagent
+	// both see why the gate could not be decided (LoudSkip,
+	// docs/spec-hook-gates.tex) — not a stderr line nobody reads.
 	t.Setenv("MISSION_ID", "")
-	out := testhelpers.CaptureStderr(t, func() {
-		require.NoError(t, HandleSubagentStartWithDeps(strings.NewReader(input), deps))
+	var stdout string
+	testhelpers.CaptureStderr(t, func() {
+		var herr error
+		stdout, herr = captureStdout(t, func() error {
+			return HandleSubagentStartWithDeps(strings.NewReader(input), deps)
+		})
+		require.NoError(t, herr)
 	})
-	assert.Contains(t, out, "verifier gate not evaluated")
-	assert.Contains(t, out, storeErr.Error())
+	var res SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
+	want := "cannot determine verifier gate: repository store not located: " + storeErr.Error()
+	assert.Equal(t, want, res.SystemMessage)
+	assert.Contains(t, res.HookSpecificOutput.AdditionalContext, want)
 	roster, lerr = ss.Load("store-err-1")
 	require.NoError(t, lerr)
 	assert.Len(t, roster.Participants, 3)
