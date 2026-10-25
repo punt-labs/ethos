@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -129,4 +131,22 @@ func GitTimeout(t testing.TB, d time.Duration) {
 	t.Helper()
 	prev := gitenv.SetTimeout(d)
 	t.Cleanup(func() { gitenv.SetTimeout(prev) })
+}
+
+// HangingGit puts a git that never answers alone on PATH and shortens the git
+// deadline to 200ms for the rest of the test, so a caller's timeout path runs
+// without waiting gitenv.Timeout. It skips where there is no sh and sleep.
+func HangingGit(t testing.TB) {
+	t.Helper()
+	sleep, err := exec.LookPath("sleep")
+	if err != nil || runtime.GOOS == "windows" {
+		t.Skip("needs sh and sleep")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\nexec " + sleep + " 60\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the hanging git: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	GitTimeout(t, 200*time.Millisecond)
 }

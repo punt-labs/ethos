@@ -1,8 +1,12 @@
 package audit
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 // validateOrgName returns s if it has exactly two non-empty segments
@@ -54,18 +58,24 @@ func ParseGitRemote(url string) string {
 // a roster's Repo field, computed by the same parser, so a roster's Repo and the
 // identity of the checkout that owns it always compare equal.
 //
-// It returns "" when repoRoot is empty, has no origin remote, or the remote URL
-// cannot be parsed. A checkout with no parseable origin also records "" in its
-// rosters, so "" == "" still matches those sessions; callers treat a "" identity
-// as "this checkout's own sessions" and leave differently-identified sessions to
-// the checkout that owns them.
-func RepoIdentity(repoRoot string) string {
+// It returns ("", nil) when repoRoot is empty, has no origin remote, or the
+// remote URL cannot be parsed. A checkout with no parseable origin also
+// records "" in its rosters, so "" == "" still matches those sessions; callers
+// treat a "" identity as "this checkout's own sessions" and leave
+// differently-identified sessions to the checkout that owns them. A git that
+// cannot be run or does not answer is an error, never "": an empty identity
+// would match the wrong sessions.
+func RepoIdentity(repoRoot string) (string, error) {
 	if repoRoot == "" {
-		return ""
+		return "", nil
 	}
-	out, err := exec.Command("git", "-C", repoRoot, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return ""
+	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "remote", "get-url", "origin")
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return ParseGitRemote(string(out)), nil
+	case errors.As(err, &ee), errors.Is(err, exec.ErrNotFound):
+		return "", nil // no origin, not a repository, or no git installed
 	}
-	return ParseGitRemote(string(out))
+	return "", fmt.Errorf("reading the origin of %s: %w", repoRoot, err)
 }

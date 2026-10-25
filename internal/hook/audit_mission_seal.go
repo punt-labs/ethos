@@ -44,7 +44,11 @@ func sealMissionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *S
 // checkout: cross-checkout worker tails ride their own checkouts' triggers.
 // A gitlink-mounted repo defers with a one-line stderr notice.
 func SealMission(repoRoot, missionID string, now time.Time, opts SealOptions) (SealResult, error) {
-	if audit.IsGitlinkMount(repoRoot) {
+	gitlink, err := audit.IsGitlinkMount(repoRoot)
+	if err != nil {
+		return SealResult{}, fmt.Errorf("checking for a gitlink mount: %w", err)
+	}
+	if gitlink {
 		fmt.Fprintf(os.Stderr,
 			"ethos: mission close: sealing deferred: .punt-labs/ethos is a gitlink mount, pending e29s (%s)\n",
 			repoRoot)

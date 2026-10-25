@@ -222,7 +222,11 @@ func sessionStartDateResolver(repoRoot string) func(string) string {
 // returning nil. Each result carries the checkout its roster recorded, so the
 // cross-check probes the live zone where it was written.
 func activeRepoSessions(repoRoot string, errOut io.Writer) []hook.ActiveSession {
-	repoID := audit.RepoIdentity(repoRoot)
+	repoID, err := audit.RepoIdentity(repoRoot)
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit seal: reading the repository identity for the vacuum cross-check: %v\n", err)
+		return nil
+	}
 	ss := sessionStore()
 	ids, err := ss.List()
 	if err != nil {

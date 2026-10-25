@@ -78,3 +78,15 @@ func TestSetupInteractiveGitTimeout(t *testing.T) {
 	assert.Contains(t, errb.String(), "did not answer")
 	assert.Contains(t, errb.String(), "Email: ", "no default is offered")
 }
+
+// The vacuum cross-check's session scan says on its error stream that the
+// repository identity could not be read, rather than matching sessions with
+// an empty one.
+func TestActiveRepoSessionsGitTimeout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	testhelpers.HangingGit(t)
+	var errb bytes.Buffer
+	got := activeRepoSessions(t.TempDir(), &errb)
+	assert.Nil(t, got)
+	assert.Contains(t, errb.String(), "did not answer")
+}

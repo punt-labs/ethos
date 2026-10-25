@@ -877,7 +877,10 @@ func runSessionPurge(cmd *cobra.Command) error {
 	// run outside any repo leaves every repo-bound session for its owning
 	// checkout.
 	repoRoot := resolve.EnvRepoRoot()
-	repoID := audit.RepoIdentity(repoRoot)
+	repoID, err := audit.RepoIdentity(repoRoot)
+	if err != nil {
+		return err
+	}
 	purged, refused, err := ss.PurgeTombstoned(repoRoot, repoID, sessionPurgeForce)
 	if err != nil {
 		return err

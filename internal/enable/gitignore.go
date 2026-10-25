@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
@@ -279,13 +280,15 @@ func covers(repoRoot string, r ignoreRule, present map[string]bool) bool {
 // path matches; any other failure means git could not answer and is returned
 // as an error for the caller to fall back on.
 func gitExcludes(repoRoot string, probes []string) (bool, error) {
-	cmd := exec.Command("git", "-C", repoRoot, "-c", "core.excludesFile="+os.DevNull,
-		"check-ignore", "-v", "-z", "--no-index", "--stdin")
-	cmd.Stdin = strings.NewReader(strings.Join(probes, "\x00") + "\x00")
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	_, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: repoRoot,
+		Args: []string{"-c", "core.excludesFile=" + os.DevNull,
+			"check-ignore", "-v", "-z", "--no-index", "--stdin"},
+		Stdin:  strings.NewReader(strings.Join(probes, "\x00") + "\x00"),
+		Stdout: &stdout, Stderr: &stderr,
+	})
+	if err != nil {
 		var ee *exec.ExitError
 		// Exit 1 is "no path matched" — an answer, and the answer is no.
 		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
@@ -424,13 +427,13 @@ func writeGitignore(path string, data []byte) error {
 // folded into this warning. Untracking (git rm --cached) is the operator's
 // call, so the caller only warns.
 func trackedRuntimeFiles(repoRoot string) ([]string, error) {
-	args := []string{"-C", repoRoot, "ls-files", "-z", "--"}
+	args := []string{"ls-files", "-z", "--"}
 	for _, r := range gitignoreRules {
 		if r.runtime {
 			args = append(args, ":(glob)"+r.pattern)
 		}
 	}
-	out, err := exec.Command("git", args...).Output()
+	out, err := gitenv.OutputEnv(repoRoot, "git", nil, args...)
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {

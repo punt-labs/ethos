@@ -110,16 +110,22 @@ func TestRepoIdentity(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir, "init")
 		gitInit(t, dir, "remote", "add", "origin", "git@github.com:punt-labs/ethos.git")
-		assert.Equal(t, "punt-labs/ethos", RepoIdentity(dir))
+		got, err := RepoIdentity(dir)
+		require.NoError(t, err)
+		assert.Equal(t, "punt-labs/ethos", got)
 	})
 
 	t.Run("no origin yields empty", func(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir, "init")
-		assert.Equal(t, "", RepoIdentity(dir))
+		got, err := RepoIdentity(dir)
+		require.NoError(t, err)
+		assert.Equal(t, "", got)
 	})
 
 	t.Run("empty root yields empty", func(t *testing.T) {
-		assert.Equal(t, "", RepoIdentity(""))
+		got, err := RepoIdentity("")
+		require.NoError(t, err)
+		assert.Equal(t, "", got)
 	})
 }

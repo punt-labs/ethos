@@ -47,7 +47,11 @@ type SealResult struct {
 // is a no-op exit 0 with a one-line stderr deferral notice; the live lines
 // stay in .punt-labs/local/ and the clean-tree goal is already met.
 func SealRepo(repoRoot string, now time.Time, opts SealOptions) (SealResult, error) {
-	if audit.IsGitlinkMount(repoRoot) {
+	gitlink, err := audit.IsGitlinkMount(repoRoot)
+	if err != nil {
+		return SealResult{}, fmt.Errorf("checking for a gitlink mount: %w", err)
+	}
+	if gitlink {
 		fmt.Fprintf(os.Stderr,
 			"ethos: audit seal: sealing deferred: .punt-labs/ethos is a gitlink mount, pending e29s (%s)\n",
 			repoRoot)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/claudemd"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -87,7 +88,11 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 
 	// Guard the gitlink case: a submodule-mounted .punt-labs/ethos is a
 	// foreign git repo the vendored zone cannot be written into.
-	if audit.IsGitlinkMount(repoRoot) {
+	gitlink, err := audit.IsGitlinkMount(repoRoot)
+	if err != nil {
+		return rep, fmt.Errorf("checking for a gitlink mount: %w", err)
+	}
+	if gitlink {
 		return rep, fmt.Errorf(
 			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
 	}
@@ -370,7 +375,7 @@ func configStatus(storeRoot string) (hint, warning string) {
 // sibling marker whose stat fails for a non-IsNotExist reason is counted as
 // enabled with the errno named, never silently treated as disabled.
 func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "worktree", "list", "--porcelain").Output()
+	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "worktree", "list", "--porcelain")
 	if err != nil {
 		// Surface git's own diagnostic (dubious ownership, not a repo, …)
 		// rather than a bare "exit status 128".
