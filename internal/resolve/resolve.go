@@ -944,7 +944,9 @@ func gitLocate(git, start string) located {
 
 // parseRevParse reads the three lines gitLocate asks for: the top level and
 // the git dir, both absolute, and the common dir, which git prints relative
-// to the directory it ran in (start) when it is not absolute.
+// to the directory it ran in when it is not absolute. That directory is the
+// physical one (git's getcwd resolves symlinks), not start's logical form, so
+// a relative common dir is joined to start with its symlinks resolved.
 func parseRevParse(start, out string) (top, gitDir, common string, ok bool) {
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != 3 {
@@ -955,7 +957,7 @@ func parseRevParse(start, out string) (top, gitDir, common string, ok bool) {
 		return "", "", "", false
 	}
 	if !filepath.IsAbs(common) {
-		common = filepath.Join(start, common)
+		common = filepath.Join(realDir(start), common)
 	}
 	return top, gitDir, common, true
 }

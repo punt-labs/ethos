@@ -297,3 +297,24 @@ func TestLinkedWorktreeWithoutMainWorkTree(t *testing.T) {
 		}
 	}
 }
+
+// git prints a relative common dir against the PHYSICAL working directory
+// (getcwd resolves symlinks), so from a symlinked subdirectory at a different
+// depth the logical path is the wrong base: the store must still be the work
+// tree, never the directory above it.
+func TestRelativeCommonDirFromSymlinkedSubdirectory(t *testing.T) {
+	requireGit(t)
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	initRepo(t, main)
+	sub := filepath.Join(main, "a", "b", "c")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(sub, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Chdir(link)
+	store, err := LocateStoreRoot()
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, main), realpath(t, store))
+}
