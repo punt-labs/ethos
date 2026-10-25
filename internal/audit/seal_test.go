@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // writeTemp creates a chunk temp file and stamps its mtime.
@@ -76,5 +78,26 @@ func TestSweepStaleTempsSessionNamespaceSweepsAll(t *testing.T) {
 func TestSweepStaleTempsMissingDir(t *testing.T) {
 	if err := SweepStaleTemps(filepath.Join(t.TempDir(), "nope"), MissionNS, "A", time.Now()); err != nil {
 		t.Fatalf("missing dir must be a no-op, got %v", err)
+	}
+}
+
+// TestSweepStaleTempsLegacyName: a temp left by a crash of a version that
+// staged with ".tmp" is still recognised and swept.
+func TestSweepStaleTempsLegacyName(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	own := "." + MissionChunkFile("A", 100, 200) + layout.LegacyTmpSuffix
+	foreign := "." + MissionChunkFile("B", 100, 200) + layout.LegacyTmpSuffix
+	writeTemp(t, dir, own, now)
+	writeTemp(t, dir, foreign, now.Add(-staleTempAge-time.Minute))
+
+	if err := SweepStaleTemps(dir, MissionNS, "A", now); err != nil {
+		t.Fatal(err)
+	}
+	if exists(dir, own) {
+		t.Error("own session's legacy temp must be swept")
+	}
+	if exists(dir, foreign) {
+		t.Error("a foreign session's stale legacy temp must be swept")
 	}
 }

@@ -3,6 +3,8 @@ package audit
 import (
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 func TestTSToField(t *testing.T) {
@@ -86,6 +88,19 @@ func TestClassify(t *testing.T) {
 				t.Errorf("Classify(%q, %v) = %v, want %v", tt.file, tt.ns, kind, tt.want)
 			}
 		})
+	}
+}
+
+// TestClassifyLegacyTemp: a temp named by a version that staged with ".tmp"
+// classifies as KindTemp and keeps its chunk identity.
+func TestClassifyLegacyTemp(t *testing.T) {
+	file := "." + SessionChunkFile(100, 200) + layout.LegacyTmpSuffix
+	got, kind := Classify(file, SessionNS)
+	if kind != KindTemp {
+		t.Fatalf("Classify(%q) kind = %v, want KindTemp", file, kind)
+	}
+	if got.First != 100 || got.Last != 200 {
+		t.Errorf("Classify(%q) = %+v, want range 100-200", file, got)
 	}
 }
 

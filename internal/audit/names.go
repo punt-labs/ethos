@@ -155,16 +155,23 @@ func MissionTempFile(session string, first, last int64) string {
 func Classify(name string, ns Namespace) (ChunkName, Kind) {
 	prefix := chunkPrefix(ns)
 
-	if strings.HasPrefix(name, "."+prefix) && strings.HasSuffix(name, ".jsonl"+layout.TmpMarker) {
-		// Recover the temp's identity so a namespace-wide sweep can tell one
-		// session's in-flight temp from another's (SweepStaleTemps). The stem
-		// is the chunk name the temp renames to; an unparseable stem stays a
-		// bare KindTemp so the sweep still treats it as an orphan candidate.
-		stem := strings.TrimSuffix(strings.TrimPrefix(name, "."), ".jsonl"+layout.TmpMarker)
-		if cn, ok := parseChunkStem(stem, ns); ok {
-			return cn, KindTemp
+	if strings.HasPrefix(name, "."+prefix) {
+		// The legacy suffix is accepted so a temp left by an earlier version's
+		// crash is still swept.
+		for _, suffix := range []string{layout.TmpMarker, layout.LegacyTmpSuffix} {
+			if strings.HasSuffix(name, ".jsonl"+suffix) {
+				// Recover the temp's identity so a namespace-wide sweep can
+				// tell one session's in-flight temp from another's
+				// (SweepStaleTemps). The stem is the chunk name the temp
+				// renames to; an unparseable stem stays a bare KindTemp so the
+				// sweep still treats it as an orphan candidate.
+				stem := strings.TrimSuffix(strings.TrimPrefix(name, "."), ".jsonl"+suffix)
+				if cn, ok := parseChunkStem(stem, ns); ok {
+					return cn, KindTemp
+				}
+				return ChunkName{Namespace: ns}, KindTemp
+			}
 		}
-		return ChunkName{Namespace: ns}, KindTemp
 	}
 	if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".quarantine") {
 		stem := strings.TrimSuffix(name, ".quarantine")

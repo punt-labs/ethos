@@ -12,6 +12,11 @@ package layout
 // inside a working tree. It is not a suffix a real file would carry.
 const TmpMarker = ".ethos-tmp"
 
+// LegacyTmpSuffix ended staging names before TmpMarker. Writers no longer
+// produce it; readers that sweep or recover temp files accept it so a crash of
+// an earlier version leaves nothing unrecognised after an upgrade.
+const LegacyTmpSuffix = ".tmp"
+
 // TmpPath is the staging name for an atomic write to dest: dest + TmpMarker.
 func TmpPath(dest string) string { return dest + TmpMarker }
 
