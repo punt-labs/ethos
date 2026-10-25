@@ -179,7 +179,7 @@ func ShimGit(t testing.TB, hang ...string) {
 
 // BrokenGitDirs returns directories whose .git git cannot use, and that are
 // not "outside a repository": a gitfile naming a directory that does not
-// exist, and a linked worktree whose main checkout is gone. A read run in
+// exist, a .git symlink that points nowhere, and a linked worktree whose main checkout is gone. A read run in
 // any of them must be an error, never an absent value.
 func BrokenGitDirs(t testing.TB) map[string]string {
 	t.Helper()
@@ -198,6 +198,17 @@ func BrokenGitDirs(t testing.TB) map[string]string {
 		t.Fatal(err)
 	}
 	dirs["gitfile to a missing directory"] = broken
+
+	// git walks past a symlink that points nowhere, to whatever repository
+	// encloses it; ethos refuses it, because that is not the repository meant.
+	dangling := filepath.Join(base, "dangling-symlink")
+	if err := os.Mkdir(dangling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "nowhere"), filepath.Join(dangling, ".git")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	dirs["dangling .git symlink"] = dangling
 
 	main := filepath.Join(base, "main")
 	wt := filepath.Join(base, "wt")

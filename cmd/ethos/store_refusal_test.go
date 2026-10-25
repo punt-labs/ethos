@@ -48,17 +48,16 @@ func createIdentityFrom(t *testing.T, se *cliSubprocessEnv, dir string) (string,
 	return string(out), code
 }
 
-// A .git that git skips (a dangling symlink, an empty directory, a symlink
-// loop) must not divert a write to the global store: git treats inner as part of
-// outer, and so does ethos.
+// A .git that git skips (an empty directory) must not divert a write to the
+// global store: git treats inner as part of outer, and so does ethos. A .git
+// symlink that points nowhere or loops is refused instead
+// (TestCLI_InvalidInnerGitRefuses): the outer repository is not the one meant.
 func TestCLI_SkippedInnerGitUsesOuterStore(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
 	cases := map[string]func(dot string) error{
-		"dangling": func(dot string) error { return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot) },
-		"empty":    func(dot string) error { return os.Mkdir(dot, 0o755) },
-		"loop":     func(dot string) error { return os.Symlink(dot, dot) },
+		"empty": func(dot string) error { return os.Mkdir(dot, 0o755) },
 	}
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -81,6 +80,10 @@ func TestCLI_InvalidInnerGitRefuses(t *testing.T) {
 		"empty":   emptyGitFile,
 		"garbage": func(dot string) error { return os.WriteFile(dot, []byte("not a gitfile\n"), 0o644) },
 		"nowhere": func(dot string) error { return os.WriteFile(dot, []byte("gitdir: /nonexistent\n"), 0o644) },
+		"dangling symlink": func(dot string) error {
+			return os.Symlink(filepath.Join(filepath.Dir(dot), "absent"), dot)
+		},
+		"symlink loop": func(dot string) error { return os.Symlink(dot, dot) },
 	}
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {

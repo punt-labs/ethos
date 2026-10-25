@@ -26,12 +26,17 @@ type gitShape struct {
 	hand string                           // the hand rules' answer
 }
 
+// strictShapes are the shapes git walks past to the enclosing repository and
+// ethos refuses, because the enclosing repository is not the one the user is
+// in: a .git symlink that points nowhere, or loops.
+var strictShapes = map[string]bool{"dangling symlink": true, "symlink loop": true}
+
 // gitShapes are the .git shapes the resolver must classify. With git on PATH
 // git decides each one; without it the hand rules give hand.
 var gitShapes = map[string]gitShape{
 	"empty directory":   {mkDir(), handOuter},
-	"dangling symlink":  {symlinkTo("absent"), handOuter},
-	"symlink loop":      {symlinkTo(".git"), handOuter},
+	"dangling symlink":  {symlinkTo("absent"), handError},
+	"symlink loop":      {symlinkTo(".git"), handError},
 	"empty file":        {gitfile(""), handError},
 	"garbage file":      {gitfile("not a gitfile\n"), handError},
 	"no gitdir prefix":  {gitfile("/somewhere/else\n"), handError},
@@ -176,8 +181,8 @@ func TestShapesFollowGit(t *testing.T) {
 			var got string
 			var err error
 			captureStderr(t, func() { got, err = locateRepoRoot() })
-			if gitErr != nil {
-				require.Error(t, err, "git refuses this .git, so must we")
+			if gitErr != nil || strictShapes[name] {
+				require.Error(t, err, "git refuses this .git, or ethos does: %v", gitErr)
 				assert.NotErrorIs(t, err, ErrNotInRepo)
 				assert.Empty(t, got)
 				return
@@ -357,4 +362,33 @@ func captureLocate(t *testing.T) (string, error) {
 	var err error
 	captureStderr(t, func() { got, err = locateRepoRoot() })
 	return got, err
+}
+
+// A .git symlink that points nowhere is an error even when no repository
+// encloses it: git would say "not a git repository", which is not the truth.
+func TestDanglingGitOutsideARepositoryIsAnError(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "git", false: "no git"}[withGit], func(t *testing.T) {
+			if withGit {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("git not installed")
+				}
+			}
+			dir := filepath.Join(t.TempDir(), "d")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			if err := os.Symlink(filepath.Join(dir, "absent"), filepath.Join(dir, ".git")); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+			t.Chdir(dir)
+			if !withGit {
+				hideGit(t)
+			}
+			var err error
+			captureStderr(t, func() { _, err = locateRepoRoot() })
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrNotInRepo)
+			assert.Contains(t, err.Error(), filepath.Join(dir, ".git"))
+		})
+	}
 }

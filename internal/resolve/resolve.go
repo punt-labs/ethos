@@ -980,6 +980,9 @@ func gitLocate(git, start string) located {
 		return located{err: fmt.Errorf("finding the repository for %s: %w", start, err)}
 	}
 	if err != nil {
+		if dot := danglingOnWalk(gitWalk(start)); dot != nil {
+			return located{err: dot}
+		}
 		return located{err: gitLocateError(start, err)}
 	}
 	top, gitDir, common, ok := parseRevParse(start, string(out))
@@ -993,6 +996,9 @@ func gitLocate(git, start string) located {
 	if under {
 		// Every .git between start and the root git chose was walked past.
 		for dir := start; dir != root; dir = filepath.Dir(dir) {
+			if derr := gitenv.DanglingDotGit(dir); derr != nil {
+				return located{err: derr}
+			}
 			dot := filepath.Join(dir, ".git")
 			if _, err := os.Lstat(dot); !errors.Is(err, fs.ErrNotExist) {
 				skipped = append(skipped, dot+": git does not accept it as a repository")
@@ -1001,6 +1007,16 @@ func gitLocate(git, start string) located {
 	}
 	store, serr := storeRoot(root, gitDir, common, git)
 	return located{loc: location{root: root, store: store, storeErr: serr}, skipped: skipped}
+}
+
+// danglingOnWalk is the first dangling .git symlink among dirs, or nil.
+func danglingOnWalk(dirs []string) error {
+	for _, d := range dirs {
+		if err := gitenv.DanglingDotGit(d); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // parseRevParse reads the three lines gitLocate asks for: the top level and
@@ -1411,10 +1427,10 @@ func examineGit(dot string) (g gitDirs, skip string, err error) {
 	}
 	info, err := os.Stat(dot)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return gitDirs{}, "dangling symlink", nil
-	case errors.Is(err, syscall.ELOOP):
-		return gitDirs{}, "symlink loop", nil
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ELOOP):
+		// git walks past it to an enclosing repository; that is not the one
+		// the user is in, so it is refused, not skipped.
+		return gitDirs{}, "", gitenv.DanglingDotGit(filepath.Dir(dot))
 	case err != nil:
 		return gitDirs{}, "", fmt.Errorf("examining %s: %w", dot, err)
 	case info.IsDir():

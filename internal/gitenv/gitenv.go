@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -45,6 +47,9 @@ var ErrTimeout = errors.New("git did not answer")
 func Output(dir, git string, args ...string) ([]byte, error) {
 	full := args
 	if dir != "" {
+		if err := DanglingDotGit(dir); err != nil {
+			return nil, err
+		}
 		full = append([]string{"-C", dir}, args...)
 	}
 	out, err := Run(Spec{Git: git, Args: full, Env: Parsed()})
@@ -79,6 +84,11 @@ type Spec struct {
 // the bound is killed and reported as ErrTimeout naming git, the arguments,
 // the directory and the bound.
 func Run(s Spec) ([]byte, error) {
+	if s.Dir != "" {
+		if err := DanglingDotGit(s.Dir); err != nil {
+			return nil, err
+		}
+	}
 	limit := s.Limit
 	if limit == 0 {
 		limit = time.Duration(deadline.Load())
@@ -346,6 +356,9 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	// -c with an empty value turns a trace2 target off whatever the user's
 	// config or environment says: trace output on stderr would turn "key unset"
 	// (exit 1, empty stderr) into a failure.
+	if err := DanglingDotGit(s.Dir); err != nil {
+		return nil, false, err
+	}
 	shown := s.Args
 	s.Args = append([]string{"-c", "trace2.normalTarget=", "-c", "trace2.eventTarget=", "-c", "trace2.perfTarget="}, s.Args...)
 	out, err = Run(s)
@@ -366,4 +379,28 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 		return nil, true, nil
 	}
 	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(shown, " "), err, stderr)
+}
+
+// DanglingDotGit reports a .git in dir that is a symlink to nothing (or a
+// loop). git walks past it to whatever repository encloses dir, or says "not a
+// git repository"; neither is the truth, so a read in dir is refused. An empty
+// dir is the working directory. It is nil when there is no .git or it can be
+// followed; anything else is git's to judge.
+func DanglingDotGit(dir string) error {
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil // git reports it
+		}
+		dir = wd
+	}
+	dot := filepath.Join(dir, ".git")
+	li, err := os.Lstat(dot)
+	if err != nil || li.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	if _, err := os.Stat(dot); errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) {
+		return fmt.Errorf("%s is a symlink to nothing: git would skip it and answer for an enclosing repository, or none; remove or repair it", dot)
+	}
+	return nil
 }
