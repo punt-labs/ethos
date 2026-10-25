@@ -19,7 +19,9 @@ func TestGitBlameGitTimeout(t *testing.T) {
 	testhelpers.HangingGit(t)
 	s := &Server{repoRoot: t.TempDir()}
 	out := testhelpers.CaptureStderr(t, func() {
-		assert.Nil(t, s.gitBlameWithTrailers("a.go"))
+		lines, notices := s.gitBlameWithTrailers("a.go")
+		assert.Nil(t, lines)
+		assert.Contains(t, notices[0], "git blame failed")
 	})
 	assert.Contains(t, out, "did not answer")
 }
@@ -48,7 +50,7 @@ esac
 	t.Setenv("PATH", bin)
 	s := &Server{repoRoot: t.TempDir(), storeRoot: t.TempDir()}
 	var first []blameLine
-	testhelpers.CaptureStderr(t, func() { first = s.gitBlameWithTrailers("a.go") })
+	testhelpers.CaptureStderr(t, func() { first, _ = s.gitBlameWithTrailers("a.go") })
 	require.Len(t, first, 2)
 	assert.Empty(t, first[0].Mission, "the failed lookup has no mission")
 	assert.Empty(t, first[1].Mission, "the second line reuses the failed answer for this request")
@@ -57,7 +59,7 @@ esac
 	assert.Equal(t, 1, strings.Count(string(data), "x"), "git log was asked once for the commit")
 
 	var next []blameLine
-	testhelpers.CaptureStderr(t, func() { next = s.gitBlameWithTrailers("a.go") })
+	testhelpers.CaptureStderr(t, func() { next, _ = s.gitBlameWithTrailers("a.go") })
 	require.Len(t, next, 2)
 	assert.Equal(t, "m-2026-01-01-001", next[0].Mission, "the next request asks again")
 }
@@ -85,7 +87,7 @@ esac
 	t.Setenv("PATH", bin)
 	testhelpers.GitTimeout(t, 200*time.Millisecond)
 	s := &Server{repoRoot: t.TempDir(), storeRoot: t.TempDir()}
-	testhelpers.CaptureStderr(t, func() { s.gitBlameWithTrailers("a.go") })
+	testhelpers.CaptureStderr(t, func() { _, _ = s.gitBlameWithTrailers("a.go") })
 	data, err := os.ReadFile(count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(data), "x"), "one timeout for the page, not one per commit")

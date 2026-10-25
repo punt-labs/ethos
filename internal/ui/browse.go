@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ type browseData struct {
 	Parent  string
 	Entries []dirEntry
 	Lines   []blameLine
+	Notices []string // what could not be looked up, shown on the page
 }
 
 type dirEntry struct {
@@ -118,7 +120,7 @@ func (s *Server) renderDir(w http.ResponseWriter, relPath, absPath string) {
 }
 
 func (s *Server) renderFile(w http.ResponseWriter, relPath, absPath string) {
-	blameData := s.gitBlameWithTrailers(relPath)
+	blameData, notices := s.gitBlameWithTrailers(relPath)
 
 	// Fallback: if blame fails, just show the file contents.
 	if blameData == nil {
@@ -139,22 +141,24 @@ func (s *Server) renderFile(w http.ResponseWriter, relPath, absPath string) {
 	}
 
 	data := browseData{
-		Title: filepath.Base(relPath),
-		Path:  relPath,
-		IsDir: false,
-		Lines: blameData,
+		Title:   filepath.Base(relPath),
+		Path:    relPath,
+		IsDir:   false,
+		Lines:   blameData,
+		Notices: notices,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "browse.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
 	}
 }
 
-// git runs git in the repository root under the gitenv deadline. Every
+// git runs git in the repository root (the located checkout) in the Parsed
+// environment, under the gitenv deadline. Every
 // failure — an untracked file, an unknown commit, a timeout — is an error
 // carrying git's message to the caller and a notice on stderr, so a page with
 // no attribution has its reason in the log. None is read as an empty answer.
 func (s *Server) git(args ...string) ([]byte, error) {
-	out, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: s.repoRoot, Args: args, Env: gitenv.Inherited()}, 0)
+	out, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: s.repoRoot, Args: args, Env: gitenv.Parsed()}, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos ui: %v\n", err)
 	}
@@ -165,10 +169,14 @@ func (s *Server) git(args ...string) ([]byte, error) {
 // the same request timed out.
 var errGitDown = errors.New("git did not answer earlier in this request")
 
-func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
+// gitBlameWithTrailers returns the blame of relPath with each line's mission
+// and delegation, and a notice for everything git could not answer: a blame
+// that failed (nil lines, so the caller shows the file without attribution),
+// or commits whose lookup failed (their lines are shown unattributed).
+func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
 	out, err := s.git("blame", "--porcelain", relPath)
 	if err != nil {
-		return nil
+		return nil, []string{fmt.Sprintf("git blame failed, so the file is shown without attribution: %v", err)}
 	}
 
 	// Parse porcelain blame output.
@@ -223,18 +231,29 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		delegation string
 	}
 	commitCache := map[string]*commitInfo{}
+	failedLookups := 0
+	var firstLookupErr error
+	fail := func(err error) {
+		if failedLookups == 0 {
+			firstLookupErr = err
+		}
+		failedLookups++
+	}
 
 	// ticketToMission maps bead/ticket IDs (e.g., "ethos-ozrb") to
 	// mission IDs by scanning missions.jsonl. Built lazily on first
 	// fallback hit.
 	var ticketMap map[string]string
 
+	var notices []string
 	buildTicketMap := func() {
 		if ticketMap != nil {
 			return
 		}
 		ticketMap = map[string]string{}
-		for _, row := range s.readMissionsJSONL() {
+		rows, ns := s.readMissionsJSONL()
+		notices = append(notices, ns...)
+		for _, row := range rows {
 			if row.Ticket != "" {
 				ticketMap[row.Ticket] = row.ID
 			}
@@ -248,8 +267,11 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		c := &commitInfo{}
 
 		// Try trailers first.
+		var lookupErr error // the first git failure for this commit
 		out, err := ask("log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
-		if err == nil {
+		if err != nil {
+			lookupErr = err
+		} else {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) >= 1 {
 				c.mission = strings.TrimSpace(lines[0])
@@ -262,7 +284,12 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		// Fallback: parse bead/ticket ID from commit subject, look
 		// up the mission in missions.jsonl.
 		if c.mission == "" {
-			if subj, err := ask("log", "--format=%s", "-1", sha); err == nil {
+			subj, err := ask("log", "--format=%s", "-1", sha)
+			if err != nil {
+				if lookupErr == nil {
+					lookupErr = err
+				}
+			} else {
 				subject := string(subj)
 				// Match ethos-XXXX or punt-labs-XXXX in parens at end of subject.
 				for _, candidate := range extractTicketIDs(subject) {
@@ -270,11 +297,19 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 					if mid, ok := ticketMap[candidate]; ok {
 						c.mission = mid
 						// Find the first delegation under this mission.
-						c.delegation = s.firstDelegation(mid)
+						var derr error
+						c.delegation, derr = s.firstDelegation(mid)
+						if derr != nil && lookupErr == nil {
+							lookupErr = derr
+						}
 						break
 					}
 				}
 			}
+		}
+
+		if lookupErr != nil {
+			fail(lookupErr)
 		}
 
 		// Cached even when git failed: for the rest of this request (this call)
@@ -284,6 +319,8 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 	}
 
 	// Build blame lines with delegation info.
+	badAgents := 0
+	var firstAgentErr error
 	var result []blameLine
 	for _, h := range hunks {
 		bl := blameLine{
@@ -296,20 +333,33 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		if ci.delegation != "" {
 			bl.Mission = ci.mission
 			bl.Delegation = ci.delegation
-			bl.Agent = s.delegationAgent(ci.mission, ci.delegation)
+			agent, aerr := s.delegationAgent(ci.mission, ci.delegation)
+			if aerr != nil {
+				if badAgents == 0 {
+					firstAgentErr = aerr
+				}
+				badAgents++
+			}
+			bl.Agent = agent
 		} else if ci.mission != "" {
 			bl.Mission = ci.mission
 			bl.Agent = "mission"
 		}
 		result = append(result, bl)
 	}
-	return result
+	if failedLookups > 0 {
+		notices = append(notices, fmt.Sprintf("%d commit lookup(s) could not be looked up, so their lines are shown without a mission: %v", failedLookups, firstLookupErr))
+	}
+	if badAgents > 0 {
+		notices = append(notices, fmt.Sprintf("%d delegation record(s) could not be read, so those lines show no agent: %v", badAgents, firstAgentErr))
+	}
+	return result, notices
 }
 
 // delegationAgent reads the agent_type from a delegation record.
-func (s *Server) delegationAgent(missionID, delegationID string) string {
+func (s *Server) delegationAgent(missionID, delegationID string) (string, error) {
 	if missionID == "" || delegationID == "" {
-		return ""
+		return "", nil
 	}
 	recordPath := filepath.Join(
 		s.storeRoot, ".punt-labs", "ethos", "missions",
@@ -317,9 +367,9 @@ func (s *Server) delegationAgent(missionID, delegationID string) string {
 	)
 	d, err := loadDelegationYAML(recordPath)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("delegation %s of %s: %w", delegationID, missionID, err)
 	}
-	return d
+	return d, nil
 }
 
 // extractTicketIDs finds bead-shaped IDs in a commit subject.
@@ -339,18 +389,21 @@ func extractTicketIDs(subject string) []string {
 }
 
 // firstDelegation returns the first delegation ID under a mission dir.
-func (s *Server) firstDelegation(missionID string) string {
+func (s *Server) firstDelegation(missionID string) (string, error) {
 	dir := filepath.Join(s.storeRoot, ".punt-labs", "ethos", "missions", missionID, "delegations")
 	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil // a mission with no delegations yet
+	}
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("reading the delegations of %s: %w", missionID, err)
 	}
 	for _, e := range entries {
 		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			return e.Name()
+			return e.Name(), nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // loadDelegationYAML reads just the agent_type from record.yaml

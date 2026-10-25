@@ -3,7 +3,9 @@ package ui
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +20,7 @@ type dashboardData struct {
 	Title    string
 	Counts   []countCard
 	Missions []missionRow
+	Notices  []string // what could not be read, shown on the page
 }
 
 type countCard struct {
@@ -41,7 +44,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows := s.readMissionsJSONL()
+	rows, notices := s.readMissionsJSONL()
 
 	counts := map[string]int{}
 	for _, row := range rows {
@@ -71,23 +74,36 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Title:    "Dashboard",
 		Counts:   cards,
 		Missions: recent,
+		Notices:  notices,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
 	}
 }
 
-func (s *Server) readMissionsJSONL() []missionRow {
+// readMissionsJSONL returns the mission rows in missions.jsonl and a notice
+// for everything it could not read: a file that cannot be opened, lines that
+// do not parse (counted, the first named by number), and a scan that stopped
+// early (a line longer than the scanner's buffer). A file that does not exist
+// yet is not a problem. The rows read before a failure are kept.
+func (s *Server) readMissionsJSONL() ([]missionRow, []string) {
 	path := mission.RepoStatePath(s.storeRoot, "missions.jsonl")
 	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, []string{fmt.Sprintf("could not read %s: %v", path, err)}
 	}
 	defer f.Close()
 
 	var rows []missionRow
+	var notices []string
+	bad, firstBad, n := 0, 0, 0
+	var firstErr error
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
+		n++
 		var entry struct {
 			ID        string `json:"id"`
 			Status    string `json:"status"`
@@ -98,6 +114,10 @@ func (s *Server) readMissionsJSONL() []missionRow {
 			Ticket    string `json:"ticket"`
 		}
 		if err := json.Unmarshal(sc.Bytes(), &entry); err != nil {
+			if bad == 0 {
+				firstBad, firstErr = n, err
+			}
+			bad++
 			continue
 		}
 		rows = append(rows, missionRow{
@@ -110,7 +130,13 @@ func (s *Server) readMissionsJSONL() []missionRow {
 			Ticket:    entry.Ticket,
 		})
 	}
-	return rows
+	if bad > 0 {
+		notices = append(notices, fmt.Sprintf("%s: %d line(s) did not parse and are not shown; the first is line %d: %v", path, bad, firstBad, firstErr))
+	}
+	if err := sc.Err(); err != nil {
+		notices = append(notices, fmt.Sprintf("%s: reading stopped after line %d: %v; later missions are not shown", path, n, err))
+	}
+	return rows, notices
 }
 
 type missionData struct {
