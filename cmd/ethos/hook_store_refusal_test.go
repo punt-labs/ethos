@@ -143,7 +143,11 @@ func TestCLI_HookPreToolUseDeniesWhenStoreUnlocatable(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
 			assert.Equal(t, "deny", res.HookSpecificOutput.PermissionDecision, stdout)
-			assert.Contains(t, res.HookSpecificOutput.PermissionDecisionReason, filepath.Join(inner, ".git"))
+			reason := res.HookSpecificOutput.PermissionDecisionReason
+			assert.Contains(t, reason, filepath.Join(inner, ".git"))
+			// The reason says what to fix, not only what failed.
+			assert.Contains(t, reason, "repair or remove")
+			assert.Contains(t, reason, "ETHOS_REPO_ROOT")
 		})
 	}
 }

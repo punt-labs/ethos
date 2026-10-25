@@ -1050,7 +1050,9 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 func tierBStoreRoot() (string, error) {
 	root, err := resolve.LocateStoreRoot()
 	if err != nil && !errors.Is(err, resolve.ErrNotInRepo) {
-		return "", fmt.Errorf("locating the mission store: %w", err)
+		return "", fmt.Errorf("locating the mission store: %w; mission-bound tool calls and Agent spawns are refused here "+
+			"until it is fixed: repair or remove the .git named above, or set ETHOS_REPO_ROOT to the "+
+			"repository that holds the .punt-labs/ethos store", err)
 	}
 	return root, nil
 }
