@@ -534,12 +534,12 @@ func TestVerifyResultAgainstNumstat(t *testing.T) {
 	}
 
 	// Verify against main should pass.
-	err := verifyResultAgainstNumstat(r, "main")
+	err := verifyResultAgainstNumstat(r, "main", se.repo)
 	require.NoError(t, err)
 
 	// Modify the result to have wrong counts — should fail.
 	r.FilesChanged[0].Added = 99
-	err = verifyResultAgainstNumstat(r, "main")
+	err = verifyResultAgainstNumstat(r, "main", se.repo)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "added=99")
 	assert.Contains(t, err.Error(), "added=2")

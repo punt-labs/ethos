@@ -96,9 +96,9 @@ func TestActiveRepoSessionsGitTimeout(t *testing.T) {
 // mission --verify reports a git that did not answer as the error, naming
 // the timeout, for both of its git commands.
 func TestVerifyResultAgainstNumstatGitTimeout(t *testing.T) {
-	t.Chdir(t.TempDir())
+	checkout := t.TempDir()
 	testhelpers.HangingGit(t)
-	err := verifyResultAgainstNumstat(&mission.Result{}, "main")
+	err := verifyResultAgainstNumstat(&mission.Result{}, "main", checkout)
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
 	assert.NotContains(t, err.Error(), "invalid base ref", "a git that did not answer is not a bad ref")
 }
@@ -203,7 +203,7 @@ func TestVerifyDistinguishesAnInvalidRefFromOtherGitFailures(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho \""+c.stderr+"\" >&2\nexit 128\n"), 0o755))
 			t.Setenv("PATH", bin)
 			var err error
-			testhelpers.CaptureStderr(t, func() { err = verifyResultAgainstNumstat(&mission.Result{}, "nope") })
+			testhelpers.CaptureStderr(t, func() { err = verifyResultAgainstNumstat(&mission.Result{}, "nope", t.TempDir()) })
 			require.Error(t, err)
 			if c.invalid {
 				assert.Contains(t, err.Error(), "invalid base ref")
@@ -213,4 +213,31 @@ func TestVerifyDistinguishesAnInvalidRefFromOtherGitFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --verify runs git in the located checkout, in the C locale, without the
+// GIT_DIR a hook exports: a git that answers only to those is what it runs.
+func TestVerifyResultAgainstNumstatRunsInTheCheckoutInTheCLocale(t *testing.T) {
+	bin := t.TempDir()
+	checkout := t.TempDir()
+	script := "#!/bin/sh\n[ \"$LC_ALL\" = C ] || { echo \"fatal: LC_ALL=$LC_ALL\" >&2; exit 5; }\n" +
+		"[ -z \"$GIT_DIR\" ] || { echo \"fatal: GIT_DIR=$GIT_DIR\" >&2; exit 5; }\n" +
+		"[ \"$(pwd -P)\" = \"" + resolvedPath(t, checkout) + "\" ] || { echo \"fatal: ran in $(pwd -P)\" >&2; exit 5; }\nexit 0\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
+	t.Setenv("PATH", bin)
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("GIT_DIR", "/elsewhere/.git")
+	t.Chdir(t.TempDir())
+	require.NoError(t, verifyResultAgainstNumstat(&mission.Result{}, "main", checkout))
+
+	err := verifyResultAgainstNumstat(&mission.Result{}, "main", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not inside a git work tree")
+}
+
+func resolvedPath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	require.NoError(t, err)
+	return r
 }

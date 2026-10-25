@@ -1800,6 +1800,35 @@ func TestLocateStoreRoot(t *testing.T) {
 		assert.ErrorIs(t, err, ErrOverrideNoStore)
 	})
 
+	// Only a store that is simply not there is "no store yet"; one ethos cannot
+	// read is a refusal enable must not treat as a fresh repository.
+	t.Run("override with a store that cannot be read is not ErrOverrideNoStore", func(t *testing.T) {
+		mk := map[string]func(t *testing.T, root string){
+			"dangling .punt-labs/ethos": func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+				require.NoError(t, os.Symlink(filepath.Join(root, "nowhere"), filepath.Join(root, ".punt-labs", "ethos")))
+			},
+			"dangling .punt-labs": func(t *testing.T, root string) {
+				require.NoError(t, os.Symlink(filepath.Join(root, "nowhere"), filepath.Join(root, ".punt-labs")))
+			},
+			".punt-labs/ethos is a file": func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos"), []byte("x"), 0o644))
+			},
+		}
+		for name, f := range mk {
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				f(t, root)
+				t.Setenv("ETHOS_REPO_ROOT", root)
+				_, err := locateStoreRoot()
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, ErrOverrideNoStore)
+				assert.Contains(t, err.Error(), filepath.Join(root, ".punt-labs"))
+			})
+		}
+	})
+
 	t.Run("outside a repository wraps ErrNotInRepo", func(t *testing.T) {
 		if _, err := os.Stat("/.git"); err == nil {
 			t.Skip("/ is inside a repository")

@@ -3,9 +3,11 @@ package hook
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -61,7 +63,7 @@ func TestBuildWorkingContext_CleanRepo(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
-	out := BuildWorkingContext()
+	out := BuildWorkingContext(dir)
 	assert.Contains(t, out, "## Working Context")
 	assert.Contains(t, out, "Branch: main")
 	assert.Contains(t, out, "Uncommitted changes: 0")
@@ -86,7 +88,7 @@ func TestBuildWorkingContext_DirtyRepo(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
-	out := BuildWorkingContext()
+	out := BuildWorkingContext(dir)
 	assert.Contains(t, out, "Uncommitted changes: 2")
 	assert.Contains(t, out, "README")
 	assert.Contains(t, out, "new.txt")
@@ -112,7 +114,7 @@ func TestBuildWorkingContext_DetachedHEAD(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
-	result := BuildWorkingContext()
+	result := BuildWorkingContext(dir)
 	assert.Contains(t, result, "## Working Context")
 	assert.Contains(t, result, "Branch:")
 	// Should not say "main" since we're detached.
@@ -143,7 +145,7 @@ func TestBuildWorkingContext_NotGitRepo(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
-	out := BuildWorkingContext()
+	out := BuildWorkingContext("")
 	assert.Equal(t, "", out)
 }
 
@@ -166,7 +168,7 @@ func TestBuildWorkingContext_ManyDirtyFiles(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
-	out := BuildWorkingContext()
+	out := BuildWorkingContext(dir)
 	assert.Contains(t, out, "Uncommitted changes: 25")
 	assert.Contains(t, out, "... and 5 more")
 
@@ -194,7 +196,72 @@ func TestBuildWorkingContext_NoUpstreamNoCrash(t *testing.T) {
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 
 	// Should not panic and should not include "Unpushed commits".
-	out := BuildWorkingContext()
+	out := BuildWorkingContext(dir)
 	assert.NotEmpty(t, out)
 	assert.NotContains(t, out, "Unpushed commits")
+}
+
+// The section describes the checkout it is given, not the working directory:
+// a hook started elsewhere (a subdirectory of another repository, a scratch
+// directory) reports the located checkout's state.
+func TestBuildWorkingContext_ReadsTheGivenCheckout(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new\n"), 0o644))
+	t.Chdir(t.TempDir())
+	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
+
+	out := BuildWorkingContext(dir)
+	assert.Contains(t, out, "Branch: main")
+	assert.Contains(t, out, "Uncommitted changes: 1")
+}
+
+// A git run from inside a hook (GIT_DIR exported) and under a translated
+// locale still answers for the checkout, and a branch with no upstream is
+// still no "Unpushed commits" line, not an unknown one.
+func TestBuildWorkingContext_ParsedEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	other := t.TempDir()
+	initGitRepo(t, other)
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANGUAGE", "de")
+
+	out := BuildWorkingContext(dir)
+	assert.Contains(t, out, "Branch: main")
+	assert.NotContains(t, out, "Unpushed commits")
+	assert.NotContains(t, out, "unknown")
+}
+
+// A git that fails is said so in the section: the session is not told nothing.
+func TestBuildWorkingContext_ReportsGitFailures(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	t.Run("status fails", func(t *testing.T) {
+		bin := t.TempDir()
+		real, err := exec.LookPath("git")
+		require.NoError(t, err)
+		script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = status ] && { echo 'fatal: index file corrupt' >&2; exit 128; }; done\nexec " + real + " \"$@\"\n"
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out := BuildWorkingContext(dir)
+		assert.Contains(t, out, "Branch: main")
+		assert.Contains(t, out, "Uncommitted changes: unknown")
+		assert.Contains(t, out, "index file corrupt")
+	})
+	t.Run("git does not answer", func(t *testing.T) {
+		testhelpers.HangingGit(t)
+		orig := gitTimeout
+		gitTimeout = 200 * time.Millisecond
+		t.Cleanup(func() { gitTimeout = orig })
+		start := time.Now()
+		out := BuildWorkingContext(dir)
+		assert.Less(t, time.Since(start), 2*time.Second, "one timeout, not one per question")
+		assert.Contains(t, out, "Uncommitted changes: unknown")
+		assert.Contains(t, out, "Unpushed commits: unknown")
+		assert.Contains(t, out, "Branch: unknown")
+		assert.Contains(t, out, "did not answer")
+	})
 }

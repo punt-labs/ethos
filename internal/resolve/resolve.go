@@ -722,8 +722,13 @@ func checkRepoRootOverride(requireStore bool) (root string, set bool, err error)
 		return "", true, fmt.Errorf("ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it", v)
 	}
 	if requireStore {
-		store := filepath.Join(v, ".punt-labs", "ethos")
-		if info, err := os.Stat(store); err != nil || !info.IsDir() {
+		// Only a store that is not there is the "fresh repository" enable
+		// fills in; one that is there and cannot be read is its own error.
+		ethos, err := ethosRootOf(v)
+		if err != nil {
+			return "", true, fmt.Errorf("ETHOS_REPO_ROOT=%q: refusing to use it: %w", v, err)
+		}
+		if ethos == "" {
 			return "", true, fmt.Errorf("ETHOS_REPO_ROOT=%q has no %s store; refusing to use it: %w",
 				v, filepath.Join(".punt-labs", "ethos"), ErrOverrideNoStore)
 		}

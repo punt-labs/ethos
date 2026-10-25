@@ -1730,7 +1730,7 @@ func runMissionResult(idOrPrefix, file string) error {
 	// and git is a consumer-side convenience, not part of the contract
 	// schema.
 	if missionResultVerify {
-		if err := verifyResultAgainstNumstat(r, missionResultBase); err != nil {
+		if err := verifyResultAgainstNumstat(r, missionResultBase, currentRoots().Checkout); err != nil {
 			return fmt.Errorf("mission result: %s: %w", file, err)
 		}
 	}
@@ -1769,6 +1769,10 @@ func runMissionResult(idOrPrefix, file string) error {
 // rejection — workers may legitimately omit auto-generated files
 // from their accounting.
 //
+// git runs in checkout, the work tree the resolver located, in the C locale
+// (isInvalidRef matches git's English messages) and without a GIT_DIR from an
+// enclosing hook.
+//
 // The base ref is validated with `git rev-parse --verify` before the
 // diff runs so a bad --base value produces a concrete error with
 // "base ref" in the message, not a cryptic git exit code. Git's
@@ -1787,7 +1791,10 @@ func runMissionResult(idOrPrefix, file string) error {
 // submission the validator already admitted. Error messages still
 // quote the operator-supplied path, not the canonical form, so a
 // diagnostic identifies the string the operator typed.
-func verifyResultAgainstNumstat(r *mission.Result, base string) error {
+func verifyResultAgainstNumstat(r *mission.Result, base, checkout string) error {
+	if checkout == "" {
+		return fmt.Errorf("--verify: not inside a git work tree; run it in the checkout the result describes")
+	}
 	base = strings.TrimSpace(base)
 	if base == "" {
 		return fmt.Errorf("--verify: --base must not be empty")
@@ -1805,7 +1812,8 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	// "--output=/tmp/x" cannot smuggle a flag into rev-parse or diff.
 	var checkErr bytes.Buffer
 	if _, err := gitenv.Run(gitenv.Spec{
-		Git: "git", Args: []string{"rev-parse", "--verify", "--end-of-options", base}, Stderr: &checkErr,
+		Git: "git", Dir: checkout, Env: gitenv.Parsed(),
+		Args: []string{"rev-parse", "--verify", "--end-of-options", base}, Stderr: &checkErr,
 	}); err != nil {
 		os.Stderr.Write(checkErr.Bytes())
 		if isInvalidRef(err, checkErr.String()) {
@@ -1830,7 +1838,7 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	// --end-of-options applies to `base+"..HEAD"` only; git treats
 	// `--no-renames` as a real flag before the sandbox.
 	out, err := gitenv.Run(gitenv.Spec{
-		Git:    "git",
+		Git: "git", Dir: checkout, Env: gitenv.Parsed(),
 		Args:   []string{"diff", "--numstat", "--no-renames", "--end-of-options", base + "..HEAD"},
 		Stderr: os.Stderr,
 	})

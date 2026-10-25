@@ -156,7 +156,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		}
 	}
 
-	return emitAgentContext(agentID, agentPersona, store, deps, note)
+	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
 }
 
 // resolveHumanIdentity loads the human caller's identity from git config
@@ -353,7 +353,7 @@ func installAgentDefs(ethosRoot string, generated map[string]bool) {
 
 // emitAgentContext builds and emits the full agent persona block with
 // extensions, team context, and working context.
-func emitAgentContext(agentID *identity.Identity, agentPersona string, store identity.IdentityStore, deps SessionStartDeps, notice string) error {
+func emitAgentContext(agentID *identity.Identity, agentPersona string, store identity.IdentityStore, deps SessionStartDeps, checkout, notice string) error {
 	var sections []string
 	if persona := BuildPersonaBlock(agentID); persona != "" {
 		sections = append(sections, persona)
@@ -366,7 +366,7 @@ func emitAgentContext(agentID *identity.Identity, agentPersona string, store ide
 	if teamCtx := BuildTeamSection(deps.Teams, deps.Roles, store, agentPersona); teamCtx != "" {
 		sections = append(sections, teamCtx)
 	}
-	if workCtx := BuildWorkingContext(); workCtx != "" {
+	if workCtx := BuildWorkingContext(checkout); workCtx != "" {
 		sections = append(sections, workCtx)
 	}
 
