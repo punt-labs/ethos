@@ -2,5 +2,7 @@
 
 package hook
 
-// lockHeld cannot tell whether a process holds path on this system.
-func lockHeld(string) (held, known bool) { return false, false }
+// lockHeldOnThisSystem cannot tell whether a process holds path on this system.
+func lockHeldOnThisSystem(string) (held bool, unknown string) {
+	return false, "this system cannot tell whether a process holds it"
+}

@@ -148,8 +148,11 @@ func sessionSealUnit(repoRoot, sessionID, sealedDir string, now time.Time, opts 
 // snapshot back over the index: `git add` of several paths can stage some and
 // then fail, and the index is part of the tree. SweepStaleTemps (removing
 // leftover temp files) and MkdirAll (creating empty directories) may persist:
-// neither changes tracked content, so they are not part of "unchanged". A dry
-// run only counts.
+// neither changes tracked content, so they are not part of "unchanged". The
+// directories this run creates for the sealed chunks are removed again by the
+// rollback; the live zone's directories and the per-session flock files
+// (under .punt-labs/local) are machine-local and untracked, and stay: a failed
+// seal leaves them as a successful one does. A dry run only counts.
 func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResult) error {
 	if opts.DryRun {
 		for _, u := range units {
@@ -295,7 +298,7 @@ func rollbackSeal(wrote []string, snap *indexSnapshot, newDirs []string, cause e
 	var left []string
 	if snap != nil {
 		if err := snap.restore(); err != nil {
-			left = append(left, fmt.Sprintf("restoring the index from %s: %v", snap.snap, err))
+			left = append(left, fmt.Sprintf("restoring the index: %v", err))
 		}
 		if len(snap.notes) > 0 {
 			cause = fmt.Errorf("%w (%s)", cause, strings.Join(snap.notes, "; "))

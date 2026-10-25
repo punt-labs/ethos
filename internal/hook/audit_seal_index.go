@@ -13,6 +13,10 @@ import (
 // restore did not put the snapshot over another writer's work.
 var errIndexChanged = errors.New("the index was changed by another process after our git add")
 
+// lockHeld is the holder check; a test replaces it, because the real one
+// refuses to call a lock free on a machine with other users' processes.
+var lockHeld = lockHeldOnThisSystem
+
 // lockSlack is how far before our add started a lock's mtime may be and still
 // be taken as ours: file systems with coarse timestamps round it down.
 const lockSlack = time.Second
@@ -128,6 +132,12 @@ func (s *indexSnapshot) restore() error {
 		release()
 		return err
 	}
+	// The index is checked again, lock held, right before it is replaced: if
+	// it changed while the lock file was written, it is left alone.
+	if got, ok := fingerprint(s.path); got != s.after || ok != s.afterOK {
+		release()
+		return errIndexChanged
+	}
 	if err := os.Rename(lock, s.path); err != nil {
 		release()
 		return err
@@ -157,10 +167,10 @@ func (s *indexSnapshot) takeLock(lock string) (*os.File, error) {
 		return nil, fmt.Errorf("index lock %s exists and is older than our git add: another git may hold it; "+
 			"remove it if none is running", lock)
 	}
-	if held, known := lockHeld(lock); held || !known {
+	if held, unknown := lockHeld(lock); held || unknown != "" {
 		why := "a running process holds it"
-		if !known {
-			why = "this system cannot tell whether a process holds it"
+		if unknown != "" {
+			why = unknown + ", so it is not removed"
 		}
 		return nil, fmt.Errorf("index lock %s exists and %s: remove it if no git is running", lock, why)
 	}

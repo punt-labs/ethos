@@ -1,9 +1,12 @@
 package hook
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -70,6 +73,7 @@ func TestIndexRestoreRemovesOurStaleLock(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("checking that no process holds the lock needs /proc")
 	}
+	stubLockHeld(t, false, "")
 	snap, path, _ := indexFixtureTimedOut(t, 0o644, "before", "after", true)
 	require.NoError(t, os.WriteFile(path+".lock", []byte("partial"), 0o644))
 
@@ -105,12 +109,10 @@ func TestLockHeldComparesByInode(t *testing.T) {
 	require.NoError(t, os.Symlink(real, link))
 	f, err := os.Create(filepath.Join(real, "index.lock"))
 	require.NoError(t, err)
-	held, known := lockHeld(filepath.Join(link, "index.lock"))
-	assert.True(t, known)
+	held, _ := lockHeldOnThisSystem(filepath.Join(link, "index.lock"))
 	assert.True(t, held, "held through another spelling of the path")
 	require.NoError(t, f.Close())
-	held, known = lockHeld(filepath.Join(link, "index.lock"))
-	assert.True(t, known)
+	held, _ = lockHeldOnThisSystem(filepath.Join(link, "index.lock"))
 	assert.False(t, held)
 }
 
@@ -167,4 +169,55 @@ func TestSealStageFailureAlwaysNamesThePhase(t *testing.T) {
 		err := sealStageFailure("staging chunks (git add)", assert.AnError, left)
 		assert.Contains(t, err.Error(), "staging chunks (git add)")
 	}
+}
+
+// stubLockHeld replaces the holder check for one test.
+func stubLockHeld(t *testing.T, held bool, unknown string) {
+	t.Helper()
+	orig := lockHeld
+	t.Cleanup(func() { lockHeld = orig })
+	lockHeld = func(string) (bool, string) { return held, unknown }
+}
+
+// When the holder check could not look at every process (another user's), a
+// lock is never removed, and the reason is in the message.
+func TestIndexRestoreKeepsALockItCannotVouchFor(t *testing.T) {
+	stubLockHeld(t, false, "could not check the processes of other users")
+	snap, path, _ := indexFixtureTimedOut(t, 0o644, "before", "after", true)
+	require.NoError(t, os.WriteFile(path+".lock", []byte("maybe theirs"), 0o644))
+	err := snap.restore()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not check the processes of other users")
+	assert.FileExists(t, path+".lock")
+	assert.Empty(t, snap.notes)
+}
+
+// The real check says so when some process's fds are unreadable to it.
+func TestLockHeldReportsUnreadableProcesses(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Geteuid() == 0 {
+		t.Skip("needs /proc and a non-root user")
+	}
+	procs, err := os.ReadDir("/proc")
+	require.NoError(t, err)
+	foreign := false
+	for _, p := range procs {
+		if _, aerr := strconv.Atoi(p.Name()); aerr != nil {
+			continue
+		}
+		if _, rerr := os.ReadDir(filepath.Join("/proc", p.Name(), "fd")); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			foreign = true
+			break
+		}
+	}
+	if !foreign {
+		t.Skip("no process of another user here")
+	}
+	f, err := os.Create(filepath.Join(t.TempDir(), "x.lock"))
+	require.NoError(t, err)
+	defer f.Close()
+	other := filepath.Join(t.TempDir(), "free.lock")
+	require.NoError(t, os.WriteFile(other, nil, 0o644))
+	held, unknown := lockHeldOnThisSystem(other)
+	assert.False(t, held)
+	assert.Contains(t, unknown, "other users")
 }
