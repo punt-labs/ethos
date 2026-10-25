@@ -126,9 +126,9 @@ func TestCLI_DoctorRunsOnUnreadableGit(t *testing.T) {
 }
 
 // Every command that reads or writes the store, plus seed, refuses on an
-// unreadable .git instead of using the global store. whoami, iam, session
-// start and join, and adr create (its author) resolve through the repository
-// identity store, so they refuse too.
+// unreadable .git instead of using the global store. whoami, session start,
+// and adr create (its author) resolve through the repository identity store,
+// so they refuse too.
 func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
