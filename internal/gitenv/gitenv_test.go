@@ -152,3 +152,100 @@ func testhelpersTimeout(t *testing.T, d time.Duration) {
 	prev := SetTimeout(d)
 	t.Cleanup(func() { SetTimeout(prev) })
 }
+
+// Parsed drops every variable git lists in `git rev-parse --local-env-vars`
+// (the repository-local ones: GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, ...) so a
+// git run from a hook answers for the directory it is given, not for the
+// repository the hook's parent git was working on.
+func TestLocalEnvVarsMatchGit(t *testing.T) {
+	out, err := exec.Command("git", "rev-parse", "--local-env-vars").Output()
+	if err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	for _, name := range strings.Fields(string(out)) {
+		assert.Contains(t, LocalEnvVars, name, "git lists %s as repository-local; gitenv must clear it", name)
+	}
+	assert.Contains(t, LocalEnvVars, "GIT_NAMESPACE")
+	for _, name := range LocalEnvVars {
+		t.Setenv(name, "/victim")
+	}
+	for _, kv := range Parsed() {
+		name, _, _ := strings.Cut(kv, "=")
+		assert.NotContains(t, LocalEnvVars, name, "Parsed kept %s", kv)
+	}
+}
+
+// On a timeout git gets SIGTERM first, so it can remove its index.lock, and
+// SIGKILL only after a grace period.
+func TestTimeoutTermsBeforeKill(t *testing.T) {
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "index.lock")
+	term := fakeGitScript(t, "touch '"+lock+"'\ntrap 'rm -f \""+lock+"\"; kill $!; exit 0' TERM\nsleep 60 &\nwait\n")
+	testhelpersTimeout(t, 300*time.Millisecond)
+	_, err := OutputEnv(dir, term, nil, "add")
+	require.ErrorIs(t, err, ErrTimeout)
+	assert.NoFileExists(t, lock, "git was TERMed and removed its lock")
+
+	// A git that ignores TERM is killed after the grace.
+	stubborn := fakeGitScript(t, "trap '' TERM\nsleep 60 &\nwait\n")
+	start := time.Now()
+	_, err = OutputEnv(dir, stubborn, nil, "add")
+	require.ErrorIs(t, err, ErrTimeout)
+	assert.Less(t, time.Since(start), 10*time.Second)
+}
+
+// Read classifies a failed git. The caller names what "absent" means; every
+// other failure is an error carrying git's stderr.
+func TestRead(t *testing.T) {
+	script := func(body string) string { return fakeGitScript(t, body) }
+	cases := map[string]struct {
+		body   string
+		absent Absent
+		want   string // "ok", "absent" or "error"
+		stderr string
+	}{
+		"ok":                   {"echo v\n", AbsentUnset, "ok", ""},
+		"unset key":            {"exit 1\n", AbsentUnset, "absent", ""},
+		"exit 1 with stderr":   {"echo boom >&2; exit 1\n", AbsentUnset, "error", "boom"},
+		"exit 1 not asked for": {"exit 1\n", AbsentNoRemote, "error", ""},
+		"no such remote":       {"echo 'error: No such remote' >&2; exit 2\n", AbsentNoRemote, "absent", ""},
+		"exit 2 not asked for": {"exit 2\n", AbsentUnset, "error", ""},
+		"not a repository":     {"echo 'fatal: not a git repository (or any of the parent directories): .git' >&2; exit 128\n", AbsentNotRepo, "absent", ""},
+		"not a repo not asked": {"echo 'fatal: not a git repository' >&2; exit 128\n", AbsentUnset, "error", "not a git repository"},
+		"other fatal":          {"echo 'fatal: dubious ownership' >&2; exit 128\n", AbsentNotRepo, "error", "dubious ownership"},
+		"several rules":        {"exit 2\n", AbsentUnset | AbsentNoRemote | AbsentNotRepo, "absent", ""},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			out, absent, err := Read(Spec{Git: script(c.body)}, c.absent)
+			switch c.want {
+			case "ok":
+				require.NoError(t, err)
+				assert.False(t, absent)
+				assert.Equal(t, "v\n", string(out))
+			case "absent":
+				require.NoError(t, err)
+				assert.True(t, absent)
+			default:
+				require.Error(t, err)
+				assert.False(t, absent)
+				assert.Contains(t, err.Error(), c.stderr)
+				var ee *exec.ExitError
+				assert.ErrorAs(t, err, &ee)
+			}
+		})
+	}
+
+	t.Run("git not installed is an error", func(t *testing.T) {
+		_, absent, err := Read(Spec{Git: "ethos-test-no-such-git"}, AbsentUnset|AbsentNoRemote|AbsentNotRepo)
+		require.Error(t, err)
+		assert.False(t, absent)
+		assert.ErrorIs(t, err, exec.ErrNotFound)
+	})
+	t.Run("timeout is an error", func(t *testing.T) {
+		testhelpersTimeout(t, 150*time.Millisecond)
+		_, absent, err := Read(Spec{Git: script("exec sleep 60\n")}, AbsentUnset|AbsentNoRemote|AbsentNotRepo)
+		assert.ErrorIs(t, err, ErrTimeout)
+		assert.False(t, absent)
+	})
+}

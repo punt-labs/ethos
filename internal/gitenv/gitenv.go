@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -87,7 +88,16 @@ func Run(s Spec) ([]byte, error) {
 	cmd.Dir = s.Dir
 	cmd.Env = s.Env
 	cmd.Stdin = s.Stdin
-	cmd.WaitDelay = time.Second // a child holding stdout does not stall the kill
+	// On the deadline git gets SIGTERM, so it can remove its index.lock; after
+	// the WaitDelay grace Go kills it. A child holding stdout does not stall
+	// the kill either.
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			return cmd.Process.Kill() // no SIGTERM here (Windows)
+		}
+		return nil
+	}
+	cmd.WaitDelay = time.Second
 	var out []byte
 	var err error
 	if s.Stdout == nil {
@@ -113,23 +123,44 @@ func timeoutError(git string, args []string, dir string, limit time.Duration) er
 		ErrTimeout, git, strings.Join(args, " "), dir, limit)
 }
 
-// dropped are the variables Parsed removes: the locale, which Parsed sets
-// itself, and the repository locations, which would make git answer for the
-// repository they name instead of discovering one from the directory it is
-// given. A pre-commit hook runs with GIT_DIR exported; from a subdirectory,
+// LocalEnvVars are the repository-local variables Parsed removes: the ones
+// `git rev-parse --local-env-vars` lists (a test compares them), plus
+// GIT_NAMESPACE. Left set, they make git answer for the repository they name
+// instead of discovering one from the directory it is given. A pre-commit
+// hook runs with GIT_DIR and GIT_INDEX_FILE exported; from a subdirectory,
 // git would then call that subdirectory the top level.
-var dropped = map[string]bool{
-	"LC_ALL":         true,
-	"LANGUAGE":       true,
-	"GIT_DIR":        true,
-	"GIT_WORK_TREE":  true,
-	"GIT_COMMON_DIR": true,
+var LocalEnvVars = []string{
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_CONFIG",
+	"GIT_CONFIG_PARAMETERS",
+	"GIT_CONFIG_COUNT",
+	"GIT_OBJECT_DIRECTORY",
+	"GIT_DIR",
+	"GIT_WORK_TREE",
+	"GIT_IMPLICIT_WORK_TREE",
+	"GIT_GRAFT_FILE",
+	"GIT_INDEX_FILE",
+	"GIT_NO_REPLACE_OBJECTS",
+	"GIT_REPLACE_REF_BASE",
+	"GIT_PREFIX",
+	"GIT_SHALLOW_FILE",
+	"GIT_COMMON_DIR",
+	"GIT_NAMESPACE",
 }
 
+// dropped is LocalEnvVars plus the locale, which Parsed sets itself.
+var dropped = func() map[string]bool {
+	m := map[string]bool{"LC_ALL": true, "LANGUAGE": true}
+	for _, v := range LocalEnvVars {
+		m[v] = true
+	}
+	return m
+}()
+
 // Parsed returns the current environment with git's messages in the C locale
-// (LC_ALL=C, LANGUAGE empty) and no GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR.
-// ethos matches git's English messages ("not a git repository", "dubious
-// ownership"); a translated message would match nothing.
+// (LC_ALL=C, LANGUAGE empty) and none of LocalEnvVars. ethos matches git's
+// English messages ("not a git repository", "dubious ownership"); a
+// translated message would match nothing.
 func Parsed() []string {
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
@@ -139,4 +170,44 @@ func Parsed() []string {
 		}
 	}
 	return append(env, "LC_ALL=C", "LANGUAGE=")
+}
+
+// Absent says which failed exits of a read mean "there is nothing there".
+// Every other failure is an error: a git failure must never read as an absent
+// value (an empty repo, a missing user, "not a gitlink").
+type Absent int
+
+const (
+	// AbsentUnset: exit 1 with empty stderr — `git config` for an unset key.
+	AbsentUnset Absent = 1 << iota
+	// AbsentNoRemote: exit 2 — `git remote get-url` for a remote that does not exist.
+	AbsentNoRemote
+	// AbsentNotRepo: git's "not a git repository" message.
+	AbsentNotRepo
+)
+
+// Read runs s and classifies the result. A success returns stdout. A failure
+// that matches a rule in absent returns (nil, true, nil). Any other failure —
+// a timeout, git not installed, another exit status, an unexpected message —
+// returns an error carrying git's stderr, wrapping the *exec.ExitError (or
+// ErrTimeout, or exec.ErrNotFound) for errors.Is and errors.As.
+func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
+	out, err = Run(s)
+	if err == nil {
+		return out, false, nil
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return nil, false, fmt.Errorf("git %s: %w", strings.Join(s.Args, " "), err)
+	}
+	stderr := strings.TrimSpace(string(ee.Stderr))
+	switch {
+	case absent&AbsentUnset != 0 && ee.ExitCode() == 1 && stderr == "":
+		return nil, true, nil
+	case absent&AbsentNoRemote != 0 && ee.ExitCode() == 2:
+		return nil, true, nil
+	case absent&AbsentNotRepo != 0 && strings.Contains(stderr, "not a git repository"):
+		return nil, true, nil
+	}
+	return nil, false, fmt.Errorf("git %s: %w: %s", strings.Join(s.Args, " "), err, stderr)
 }
