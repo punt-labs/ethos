@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
@@ -235,6 +236,13 @@ func TestHooksBlockOnAnUnreadableStorePath(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos"), []byte("x"), 0o644))
 		},
 	}
+	cases["marker is a directory"] = func(t *testing.T, repo string) {
+		require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), 0o755))
+	}
+	cases["marker is a FIFO"] = func(t *testing.T, repo string) {
+		require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
+		require.NoError(t, syscall.Mkfifo(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), 0o644))
+	}
 	for name, mk := range cases {
 		t.Run(name, func(t *testing.T) {
 			repo, run := realRepoWithHooks(t)
@@ -245,7 +253,7 @@ func TestHooksBlockOnAnUnreadableStorePath(t *testing.T) {
 			out, err := run("commit", "-m", "x")
 			require.Error(t, err, "the commit is blocked: %s", out)
 			assert.Contains(t, out, ".punt-labs")
-			assert.True(t, strings.Contains(out, "dangling link") || strings.Contains(out, "not a directory"), out)
+			assert.True(t, strings.Contains(out, "dangling link") || strings.Contains(out, "not a directory") || strings.Contains(out, "not a regular file"), out)
 		})
 	}
 	t.Run("really absent is dormant", func(t *testing.T) {

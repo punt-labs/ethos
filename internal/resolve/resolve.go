@@ -551,6 +551,39 @@ func checkDirAccess(dir string) error {
 	return nil
 }
 
+// EnabledMarker reports whether ethos is enabled in the work tree root: the
+// marker .punt-labs/ethos/enabled is there. The path is validated as EthosDirOf
+// does, so a store ethos cannot read is an error, not "not enabled"; and a
+// marker that exists but is not a regular file (a directory, a FIFO, a socket,
+// a link to nothing) is an error too: it is neither enabled nor not. The hook
+// scripts apply the same rule in shell (plugin/hooks/pre-commit.sh).
+func EnabledMarker(root string) (bool, error) {
+	ethos, err := ethosRootOf(root)
+	if err != nil {
+		return false, err
+	}
+	if ethos == "" {
+		return false, nil
+	}
+	marker := filepath.Join(ethos, "enabled")
+	li, err := os.Lstat(marker)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("examining the enabled marker %s: %w", marker, err)
+	}
+	if li.Mode().IsRegular() {
+		return true, nil
+	}
+	if li.Mode()&fs.ModeSymlink != 0 {
+		if si, serr := os.Stat(marker); serr == nil && si.Mode().IsRegular() {
+			return true, nil
+		}
+	}
+	return false, fmt.Errorf("the enabled marker %s is not a regular file", marker)
+}
+
 // EthosDirOf is .punt-labs/ethos under root, validated component by component
 // as Roots validates the store: "" with a nil error when a component is simply
 // absent, an error for a dangling link, a non-directory or a directory that

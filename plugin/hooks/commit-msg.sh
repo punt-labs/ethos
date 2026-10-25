@@ -69,7 +69,12 @@ for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enable
   fi
   [ -e "$_component" ] || break
   case "$_component" in
-  */enabled) ;;
+  */enabled)
+    if [ ! -f "$_component" ]; then
+      printf 'ethos: commit-msg: the enabled marker %s is not a regular file\n' "$_component" >&2
+      exit 1
+    fi
+    ;;
   *)
     if [ ! -d "$_component" ]; then
       printf 'ethos: commit-msg: %s is not a directory\n' "$_component" >&2

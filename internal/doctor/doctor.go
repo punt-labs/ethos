@@ -470,19 +470,12 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// "not enabled" — a doubly-broken repo (unreadable .punt-labs/ethos plus a
 	// lost hook) would then read PASS while commits flow unsealed. Surface it
 	// as a FAIL instead of guessing dormancy (S4).
-	// The store path is validated first: a dangling link, a file, or a
-	// directory ethos cannot read is no marker to find, and not "not enabled".
-	markerPresent := false
-	ethos, err := resolve.EthosDirOf(repoRoot)
+	// resolve.EnabledMarker validates the store path and the marker: a dangling
+	// link, an unreadable directory, or a marker that is not a regular file is
+	// an error here, never "not enabled".
+	markerPresent, err := resolve.EnabledMarker(repoRoot)
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
-	}
-	if ethos != "" { // a store that is simply absent is dormant
-		if _, err := os.Stat(filepath.Join(ethos, "enabled")); err == nil {
-			markerPresent = true
-		} else if !os.IsNotExist(err) {
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
-		}
 	}
 	lk := githook.HooksDir(repoRoot)
 	// A degraded lookup did not read core.hooksPath: the directory it guessed
