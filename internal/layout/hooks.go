@@ -52,7 +52,8 @@ func HookEntries(repoRoot, hooksDir string) ([]Entry, error) {
 
 // PuntLabsHookPaths returns the repoRoot-relative paths of the hook files
 // `ethos enable` writes into hooksDir, when hooksDir is .punt-labs/ or inside
-// it. No table entry claims those files, so a caller can report them.
+// it. layout derives no hook entries for this directory; a zone entry may still
+// match the files, so a caller classifies each one before reporting it.
 func PuntLabsHookPaths(repoRoot, hooksDir string) ([]string, error) {
 	h, ok, err := locate(repoRoot, hooksDir)
 	if err != nil || !ok {

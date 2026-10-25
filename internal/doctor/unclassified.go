@@ -61,7 +61,7 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 			sc.zones++
 		}
 	}
-	if err := sc.collectHookFiles(repoRoot, hooksDir); err != nil {
+	if err := sc.collectHookFiles(table, repoRoot, hooksDir); err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
 
@@ -208,13 +208,13 @@ func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
 
 // collectHookFiles records one note naming the hooks directory, when
 // core.hooksPath puts it at or under .punt-labs/ and ethos hook files exist
-// there. layout refuses entries for such a directory, and a zone entry may
-// claim the files by accident (a mission's artifacts/ is class 3), so the
-// check names the directory rather than rely on the zone walk. The walk's own
+// there. layout derives no hook entries for such a directory, but a zone entry
+// may still claim the files (a mission's artifacts/ is class 3), so the note
+// gives each file the class table assigns it, or "unclassified". The walk's own
 // entries for these files are dropped as duplicates, matched by file identity:
 // on a case-insensitive file system the walk may spell a path differently from
 // core.hooksPath.
-func (s *scan) collectHookFiles(root, hooksDir string) error {
+func (s *scan) collectHookFiles(table []layout.Entry, root, hooksDir string) error {
 	paths, err := layout.PuntLabsHookPaths(root, hooksDir)
 	if err != nil {
 		return fmt.Errorf("resolving hooks directory %s: %w", hooksDir, err)
@@ -228,7 +228,7 @@ func (s *scan) collectHookFiles(root, hooksDir string) error {
 			}
 			return fmt.Errorf("checking hook file %s: %w", rel, err)
 		}
-		names = append(names, path.Base(rel))
+		names = append(names, path.Base(rel)+" ("+classNote(table, rel)+")")
 		if err := dropSameFile(s.files, root, info); err != nil {
 			return err
 		}
@@ -237,9 +237,19 @@ func (s *scan) collectHookFiles(root, hooksDir string) error {
 		return nil
 	}
 	sort.Strings(names)
-	s.notes[fmt.Sprintf("core.hooksPath %s is inside .punt-labs; ethos hook files there are unclassified: %s",
+	s.notes[fmt.Sprintf("core.hooksPath %s is inside .punt-labs; layout derives no hook entries for this directory; a zone entry may still match the files: %s",
 		path.Dir(paths[0]), strings.Join(names, ", "))] = true
 	return nil
+}
+
+// classNote says what table does with rel: "class N via <pattern>", or
+// "unclassified" when no entry matches.
+func classNote(table []layout.Entry, rel string) string {
+	c, e, ok := layout.ClassifyIn(table, rel)
+	if !ok {
+		return "unclassified"
+	}
+	return fmt.Sprintf("class %d via %s", int(c), e.Pattern)
 }
 
 // dropSameFile deletes from files every path (relative to root) that names the

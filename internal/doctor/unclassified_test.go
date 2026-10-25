@@ -183,13 +183,14 @@ func TestCheckUnclassifiedFiles_SymlinkInsideZoneIsReported(t *testing.T) {
 // TestCheckUnclassifiedFiles_HooksDirUnderPuntLabs: layout refuses hook entries
 // for a hooks directory at or under .punt-labs/, so the check names the
 // directory itself. Inside a zone the directory must not be classified by the
-// zone's own entries, such as a mission's artifacts/ (class 3).
+// zone's own entries, such as a mission's artifacts/ (class 3); the note
+// reports the class each file actually gets, or "unclassified".
 func TestCheckUnclassifiedFiles_HooksDirUnderPuntLabs(t *testing.T) {
-	for _, dir := range []string{
-		".punt-labs/githooks",
-		".punt-labs/hooks",
-		".punt-labs/ethos/hooks",
-		".punt-labs/ethos/missions/m-1/artifacts",
+	for dir, got := range map[string]string{
+		".punt-labs/githooks":                     "unclassified",
+		".punt-labs/hooks":                        "unclassified",
+		".punt-labs/ethos/hooks":                  "unclassified",
+		".punt-labs/ethos/missions/m-1/artifacts": "class 3 via .punt-labs/ethos/missions/*/artifacts/**",
 	} {
 		t.Run(dir, func(t *testing.T) {
 			root := t.TempDir()
@@ -201,7 +202,8 @@ func TestCheckUnclassifiedFiles_HooksDirUnderPuntLabs(t *testing.T) {
 			touch(t, root, dir+"/commit-msg")
 			r := CheckUnclassifiedFiles(root)
 			assert.Equal(t, "WARN", r.Status)
-			assert.Contains(t, r.Detail, "core.hooksPath "+dir+" is inside .punt-labs; ethos hook files there are unclassified: commit-msg, pre-commit")
+			assert.Contains(t, r.Detail, "core.hooksPath "+dir+" is inside .punt-labs; layout derives no hook entries for this directory; "+
+				"a zone entry may still match the files: commit-msg ("+got+"), pre-commit ("+got+")")
 		})
 	}
 }
