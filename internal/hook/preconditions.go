@@ -335,7 +335,9 @@ func loadSessionReadsCounted(repoRoot, sessionID string) (map[string]struct{}, i
 			continue
 		}
 		fp, _ := e.ToolInput["file_path"].(string)
-		if fp == "" {
+		// The placeholder stands for a path the writer withheld; it names no
+		// file, and a Write of a file called [redacted-path] must not match it.
+		if fp == "" || fp == redactedPath {
 			continue
 		}
 		// Audit lines carry the same placeholders a stored contract entry

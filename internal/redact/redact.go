@@ -585,12 +585,14 @@ func SecretsValue(v any) (any, bool) {
 		r := SecretsString(x)
 		return r, r != x
 	case map[string]any:
-		// A credential used as a key is redacted too. The renaming is the shared
-		// collision-safe one, so two keys that redact to the same name do not
-		// merge.
+		// A credential used as a key is redacted too. A key the credential
+		// pass changes at all is replaced whole: a partly redacted key could
+		// keep part of the credential, or change again on a second pass. The
+		// renaming is the shared collision-safe one, so two keys that redact to
+		// the same name do not merge.
 		for k := range x {
 			if SecretsString(k) != k {
-				out, _ := RenameKeys(x, SecretsString, false, func(key string, vv any) any {
+				out, _ := RenameKeys(x, wholeSecretKey, false, func(key string, vv any) any {
 					if isSecretEntry(key, vv) {
 						return SecretToken
 					}
@@ -636,6 +638,15 @@ func SecretsValue(v any) (any, bool) {
 	}
 }
 
+// wholeSecretKey is SecretToken for a key the credential pass changes, and the
+// key itself otherwise.
+func wholeSecretKey(k string) string {
+	if SecretsString(k) != k {
+		return SecretToken
+	}
+	return k
+}
+
 func cloneMap(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
@@ -666,7 +677,8 @@ func Prose(s string) string {
 //
 // A map value under a credential-named key (see SecretsString for the
 // names) is replaced with SecretToken whole. String map keys go through f
-// as values do; unexported fields are copied unchanged.
+// as values do, except that a key the credential pass changes becomes
+// SecretToken whole; unexported fields are copied unchanged.
 func Record[T any](v T, f func(string) string) T {
 	return RecordPaths(v, f, f)
 }
@@ -805,7 +817,14 @@ func scrub(v reflect.Value, f, paths func(string) string, renamed *RenameStatus)
 			byName[it.Key().String()] = it.Key()
 			keys = append(keys, it.Key().String())
 		}
-		names, r := planKeys(keys, f, false)
+		// A key the credential pass changes is replaced whole, as
+		// SecretsValue does, whatever f would make of it.
+		names, r := planKeys(keys, func(k string) string {
+			if SecretsString(k) != k {
+				return SecretToken
+			}
+			return f(k)
+		}, false)
 		*renamed = renamed.or(r)
 		for _, k := range keys {
 			key := byName[k]
@@ -937,13 +956,6 @@ func collectStrings(v reflect.Value, name string, path bool, out *[]FieldString)
 var (
 	leakPath = regexp.MustCompile("/(?:home|users)/[^/\\s\"'`]+")
 	leakSlug = regexp.MustCompile("-(?:home|users)-[^\\s/\"'`-]+-")
-	// leakSlugAudit is the slug rule of the audit log's path fields, matched on
-	// each spelling of the value: a -home-<name> or -users-<name> after any byte
-	// that is not a letter or digit (x.-home-bob-x, C--Users-al-repo), or
-	// anywhere in a component that starts with a dash (-var-home-bob,
-	// -System-Volumes-Data-Users-bob). It needs no closing dash. A false positive
-	// there costs a file name, so it is read broadly.
-	leakSlugAudit = regexp.MustCompile("(?i:(?:^|[^a-z0-9])-(?:home|users)-[^\\s/\"'`-]+|(?:^|/)-[^/]*-(?:home|users)-[^\\s/\"'`-]+)")
 )
 
 // Leaks reports whether s names a home directory. See LeakRule.
@@ -1000,31 +1012,22 @@ func HoldsOwnDashHome(s, home string) bool {
 // machine's own home and its dash-encoded form anywhere, and has no foreign-slug
 // rule. It judges a repo-relative value (RepoRelative) in a mission path field, where
 // app/home/page.tsx and nav--home-page.scss are files of the repository, not
-// somebody's home. (The audit log's path fields use AuditPathRule.)
+// somebody's home. (The audit log's path fields use InsideRule inside the checkout and LeakRule elsewhere.)
 func OwnHomeRule(s, home string) string { return leakRule(s, home, ruleOwn) }
 
-// AuditPathRule is the rule for a value in a path field of the audit log. With
-// plain true (a plain repo-relative value that the writer's own redaction
-// leaves as it is) it skips only the rule that reads a /home/<name> or
-// /Users/<name> in the middle of the path as another user's home, which is what
-// app/home/page.tsx needs; with plain false it applies all of LeakRule. Either
-// way it adds leakSlugAudit, so a foreign slug is found broadly, and this
-// machine's home and its dash-encoded form anywhere are refused. Mission path
-// fields do not use it: for a repo-relative value they use OwnHomeRule alone, so
-// they have no foreign-slug rule and no rule about a flag or glob byte.
-func AuditPathRule(s, home string, plain bool) string {
-	if plain {
-		return leakRule(s, home, ruleAuditPlain)
-	}
-	return leakRule(s, home, ruleAuditFull)
-}
+// InsideRule is LeakRule without the rule that reads /home/<name> or
+// /Users/<name> in the middle of a path as another user's home. It judges a
+// path field value of the audit log that names a file of the checkout (see
+// mission.PathRedactor.AuditLeakRule), where app/home/page.tsx is a file. This
+// machine's home and slug, a foreign dash slug and a climb out of a placeholder
+// are still refused.
+func InsideRule(s, home string) string { return leakRule(s, home, ruleInside) }
 
 // The sets of rules leakRule applies.
 const (
-	ruleFull       = iota // all of them
-	ruleOwn               // this machine's own home only
-	ruleAuditPlain        // all but a mid-path /home/<name> or /Users/<name> and climbOut, plus leakSlugAudit
-	ruleAuditFull         // all of them, plus leakSlugAudit
+	ruleFull   = iota // all of them
+	ruleOwn           // this machine's own home only
+	ruleInside        // all but the mid-path /home/<name> and /Users/<name> rule
 )
 
 // relPath is the only shape a path-field value may have to be judged as a
@@ -1078,13 +1081,13 @@ func leakRuleOf(n, home string, mode int) string {
 	if mode == ruleOwn {
 		return ""
 	}
-	if mode != ruleAuditPlain && leakPath.MatchString(n) {
+	if mode != ruleInside && leakPath.MatchString(n) {
 		return "contains a /home/ or /Users/ path"
 	}
-	if leakSlug.MatchString(n) || ((mode == ruleAuditPlain || mode == ruleAuditFull) && leakSlugAudit.MatchString(n)) {
+	if leakSlug.MatchString(n) {
 		return "contains a home-directory slug"
 	}
-	if mode != ruleAuditPlain && climbOut.MatchString(n) {
+	if climbOut.MatchString(n) {
 		return "climbs out of a ~ or <repo> placeholder with .."
 	}
 	return ""

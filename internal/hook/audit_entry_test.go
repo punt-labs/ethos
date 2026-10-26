@@ -214,6 +214,8 @@ func TestRedactToolInput_PathKeysAndLeaks(t *testing.T) {
 		{"run of slashes, foreign", map[string]any{"file_path": "///home/bob/.ssh/id_ed25519"}, map[string]any{"file_path": "//~[redacted-user]/.ssh/id_ed25519"}},
 		{"own home before a comma", map[string]any{"file_path": "/home/zed,bak"}, map[string]any{"file_path": "~,bak"}},
 		{"glued to a flag", map[string]any{"file_path": "-I/home/bob/inc"}, map[string]any{"file_path": "[redacted-path]"}},
+		{"glued to a dash", map[string]any{"file_path": "x-/home/bob/y"}, map[string]any{"file_path": "[redacted-path]"}},
+		{"dash and a numeric name", map[string]any{"file_path": "-/home/0"}, map[string]any{"file_path": "[redacted-path]"}},
 		{"slug inside a name, in prose", map[string]any{"command": "ls %2Fhome%2Fbob%2Fx"}, map[string]any{"command": "[redacted-path]"}},
 		{"list", map[string]any{"paths": []any{"/home/zed/a", "-I/home/bob/b"}}, map[string]any{"paths": []any{"~/a", "[redacted-path]"}}},
 		{"nested", map[string]any{"edits": []any{map[string]any{"old": "%2Fhome%2Fbob%2Fy"}}}, map[string]any{"edits": []any{map[string]any{"old": "[redacted-path]"}}}},
@@ -222,7 +224,7 @@ func TestRedactToolInput_PathKeysAndLeaks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, removed := redactToolInput(map[string]any{"tool_input": tt.in}, "Read", t.TempDir())
 			assert.Equal(t, tt.want, got)
-			if tt.name == "glued to a flag" || tt.name == "slug inside a name, in prose" || tt.name == "list" || tt.name == "nested" {
+			if tt.name == "glued to a flag" || tt.name == "glued to a dash" || tt.name == "dash and a numeric name" || tt.name == "slug inside a name, in prose" || tt.name == "list" || tt.name == "nested" {
 				assert.True(t, removed, "a replaced scalar is content removed")
 			}
 		})

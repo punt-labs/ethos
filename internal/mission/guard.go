@@ -49,7 +49,7 @@ func (c leakChecker) rule(s string) string { return c.ruleFor(s, false) }
 // nav--home-page.scss, @types/users/index.d.ts or -/home/page.tsx. There is no
 // foreign-slug rule, and no rule about a flag or glob byte beside /home/ (bead
 // ethos-ka73). Every other value meets all the rules. The audit log's sinks
-// split off here: they use AuditLeakRule and plainPathField.
+// split off here: they use AuditLeakRule.
 func (c leakChecker) ruleFor(s string, path bool) string {
 	var r string
 	if path && redact.RepoRelative(s) {
@@ -64,10 +64,6 @@ func (c leakChecker) ruleFor(s string, path bool) string {
 		return "holds an absolute path while the home directory is unknown"
 	}
 	return ""
-}
-
-func (c leakChecker) plainPathField(s string) bool {
-	return PathRedactor{Home: c.home}.plainPathField(s)
 }
 
 // LeakRule names the rule s breaks against this process's home directory, or
@@ -85,10 +81,7 @@ func LeakRuleFor(s string, path bool) string { return newLeakChecker().ruleFor(s
 // directory, for the audit guard.
 func AuditLeakRule(s string, path bool) string {
 	c := newLeakChecker()
-	if !path {
-		return c.rule(s)
-	}
-	if r := redact.AuditPathRule(s, c.home, c.plainPathField(s)); r != "" {
+	if r := (PathRedactor{Home: c.home}).AuditLeakRule(s, path); r != "" {
 		return r
 	}
 	if !c.known && redact.AbsolutePath(s) {

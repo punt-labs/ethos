@@ -711,26 +711,32 @@ func (r PathRedactor) Leaks(s string) bool { return r.LeakRule(s) != "" }
 // LeakRule is Leaks naming the rule that matched, without quoting s.
 func (r PathRedactor) LeakRule(s string) string { return redact.LeakRule(s, r.Home) }
 
-// plainPathField is the predicate of the audit log's sinks for "a plain
-// repo-relative path field value": it is a repo-relative path with no flag or
-// glob byte before a path, and the writer's own redaction leaves it as it is
-// (neither its path pass nor redact.HomePaths changes it). A value the writer
-// would rewrite is never exempt, so the guard never accepts what the writer
-// would change. Mission path fields do not use it: they use RepoRelative alone.
-// AuditLeakRule, for the writer and the guard, does.
-func (r PathRedactor) plainPathField(s string) bool {
-	return redact.RepoRelative(s) && !flagOrGlobGlued(s) && r.Path(s) == s && redact.HomePaths(s) == s
+// insideCheckout reports whether a path field value names a file of the
+// checkout or of this machine's home: a repo-relative path
+// (redact.RepoRelative), or <repo>/ or ~/ and a repo-relative path, that
+// neither the writer's path pass nor redact.HomePaths would change (so a value
+// the writer rewrites always meets the full rule) and that has no absolute home
+// glued into it (see gluedHome). app/home/page.tsx, @types/home/page.tsx and
+// ~/x-wt/app/home/page.tsx qualify: under this machine's own home, a
+// directory called home is not another user's home.
+func (r PathRedactor) insideCheckout(s string) bool {
+	rel, ok := strings.CutPrefix(s, "<repo>/")
+	if !ok {
+		rel = strings.TrimPrefix(s, "~/")
+	}
+	return redact.RepoRelative(rel) && r.Path(s) == s && redact.HomePaths(s) == s && !gluedHome(rel)
 }
 
-// flagOrGlobGlued reports whether s begins with, or holds a /home/ or /Users/
-// right after, a byte that a flag or a glob puts before a path (-, +, @, *):
-// -I/home/bob/inc, x-/home/bob, @-home-zed/pkg. A path may begin there, so such
-// a value is judged in full.
-func flagOrGlobGlued(s string) bool {
-	if s != "" && strings.ContainsRune("-+@*", rune(s[0])) {
-		return true
-	}
+// gluedHome reports whether s holds a /home/ or /Users/ with a flag or glob
+// byte before it, or at its start: a value beginning with - or +, or one where
+// the byte before it is -, +, @ or *. -I/home/bob/inc, x-/home/bob/y, -/home/0,
+// x@/home/bob/y and */home/bob/y are an absolute home with a prefix. HomePaths
+// already rewrites these, so the @, * and start-of-value clauses change no
+// output today; they are belt and braces against a change to HomePaths.
+// @types/home/page.tsx is a file: the byte before /home/ is a letter.
+func gluedHome(s string) bool {
 	low := strings.ToLower(s)
+	flag := low != "" && (low[0] == '-' || low[0] == '+')
 	for _, h := range []string{"/home/", "/users/"} {
 		for i := 0; ; {
 			j := strings.Index(low[i:], h)
@@ -738,7 +744,7 @@ func flagOrGlobGlued(s string) bool {
 				break
 			}
 			at := i + j
-			if at > 0 && strings.ContainsRune("-+@*", rune(low[at-1])) {
+			if flag || at == 0 || strings.ContainsRune("-+@*", rune(low[at-1])) {
 				return true
 			}
 			i = at + 1
@@ -748,14 +754,18 @@ func flagOrGlobGlued(s string) bool {
 }
 
 // AuditLeakRule is the check of the audit log's sinks (the writer and the seal
-// guard): for a value in a tool_input path field it is redact.AuditPathRule,
-// which reads a foreign slug broadly, since a false positive there costs only a
-// file name; elsewhere it is LeakRule.
+// guard): redact.LeakRule, as for every string, except that a path field value
+// that names a file of the checkout (insideCheckout) skips the mid-path
+// /home/<name> and /Users/<name> rule (redact.InsideRule). This machine's own
+// home and slug are still refused there.
 func (r PathRedactor) AuditLeakRule(s string, path bool) string {
-	if !path {
+	switch {
+	case !path:
 		return redact.LeakRule(s, r.Home)
+	case r.insideCheckout(s):
+		return redact.InsideRule(s, r.Home)
 	}
-	return redact.AuditPathRule(s, r.Home, r.plainPathField(s))
+	return redact.LeakRule(s, r.Home)
 }
 
 // LeakRuleFor is LeakRule for a value in a path-tagged field when path is

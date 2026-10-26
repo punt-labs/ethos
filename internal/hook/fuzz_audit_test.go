@@ -118,9 +118,9 @@ func auditHoldsHome(v, home string, ownOnly bool) bool {
 }
 
 // Where a string sits in an audit line, for the one place the oracle judges
-// differently: the path fields of tool_input, where a plain repo-relative value
-// (app/home/page.tsx) is a file of the repository and only this machine's own
-// home counts. A value that begins with a flag or glob byte is judged in full.
+// differently: the path fields of tool_input, where a value inside the checkout
+// (app/home/page.tsx, or <repo>/ or ~/ and a repo-relative path) is a file and
+// only this machine's own home counts for the mid-path /home/<name> rule.
 const (
 	auditCtxLine = iota
 	auditCtxInput
@@ -136,9 +136,33 @@ type auditStr struct {
 // auditRelPath is written apart from redact.RepoRelative.
 var auditRelPath = regexp.MustCompile(`^[A-Za-z0-9_.@+*-]+(?:/[A-Za-z0-9_.@+*-]+)*/?$`)
 
+// auditRepoRelative reports whether s names a file of the checkout or of this
+// machine's home: a repo-relative path, or one prefixed by a single <repo>/ or
+// ~/. Only the mid-path /home/<name> rule is skipped for it.
 func auditRepoRelative(s string) bool {
-	if !auditRelPath.MatchString(s) || strings.ContainsRune("-+@*", rune(s[0])) {
+	if rest, ok := strings.CutPrefix(s, "<repo>/"); ok {
+		s = rest
+	} else {
+		s = strings.TrimPrefix(s, "~/")
+	}
+	if !auditRelPath.MatchString(s) || strings.ContainsRune("-+", rune(s[0])) {
 		return false
+	}
+	// An absolute home right after a flag or glob byte, or at the start, is
+	// not a file of the checkout.
+	low := strings.ToLower(s)
+	for _, h := range []string{"/home/", "/users/"} {
+		for i := 0; ; {
+			j := strings.Index(low[i:], h)
+			if j < 0 {
+				break
+			}
+			at := i + j
+			if at == 0 || strings.ContainsRune("-+@*", rune(low[at-1])) {
+				return false
+			}
+			i = at + 1
+		}
 	}
 	for _, seg := range strings.Split(strings.TrimSuffix(s, "/"), "/") {
 		if seg == ".." {
@@ -183,7 +207,7 @@ func auditStringsIn(v any, ctx int, out *[]auditStr) {
 // reaches the appender, whatever fields it has.
 func FuzzAuditNoLeak(f *testing.F) {
 	seeds := []string{
-		"/home/zed/x", "///home/bob/.ssh/id_ed25519", "file:///home/bob/x", "-I/home/bob/inc",
+		"/home/zed/x/home/bob", "~/x/home/bob", "/home/zed/x", "///home/bob/.ssh/id_ed25519", "file:///home/bob/x", "-I/home/bob/inc",
 		"-I/home/alice/inc", "Bash(gcc -I/home/zed/inc:*)", "x-home-zed-proj", "/home/zed,bak",
 		"Read(//home/zed/x)", "~/.claude/projects/-home-zed-Coding/memory/MEMORY.md",
 		"/work/repo/home/alice/x", "~/Users/bob/x", "'/home/zed'", "a:/home/bob/x",

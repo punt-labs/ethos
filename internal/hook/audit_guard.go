@@ -395,12 +395,10 @@ const (
 
 // childCtx is the context of the value under key k of a map in context c. The
 // path fields are the ones the audit writer applies the path pass to
-// (redactPathKeys); like a contract's path-tagged fields they hold files, so a
-// plain repo-relative value in one (app/home/page.tsx) skips only the mid-path
-// /home/<name> and /Users/<name> rule (redact.AuditPathRule). The audit log
-// reads a foreign slug broadly there, after any non-alphanumeric byte or
-// anywhere in a component that starts with a dash, because a false positive
-// costs only a file name; mission path fields have no such rule.
+// (redactPathKeys). Like every string they meet redact.LeakRule, except that a
+// value naming a file of the checkout skips the mid-path /home/<name> and
+// /Users/<name> rule (app/home/page.tsx is a file): see
+// mission.PathRedactor.AuditLeakRule.
 func childCtx(c leakCtx, k string) leakCtx {
 	switch c {
 	case ctxLine:
