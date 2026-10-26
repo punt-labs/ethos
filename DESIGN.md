@@ -12914,12 +12914,11 @@ shows. Before the clone, ethos refuses what it can see locally. For
 a symlink that cannot be followed (a symlink to an empty directory is
 accepted). For a submodule: a path already in the index, a path that is
 a symlink (git would stage the link, not a submodule), and a path that
-exists and is not the top of a git repository whose `origin` is the URL
-given (a missing or different `origin` is refused, naming both URLs).
-A failed or timed-out probe of that path is reported as that failure.
-A matching clone is passed to `git submodule add`, which adopts it if
-it has a commit checked out and otherwise refuses it with its own
-message. After a clone that exits
+exists and is not the top of a git repository. A failed or timed-out
+probe of that path is reported as that failure. An existing clone is
+passed to `git submodule add` whatever its `origin`, as git decides;
+git adopts it if it has a commit checked out and otherwise refuses it
+with its own message. After a clone that exits
 with an error (not a timeout or an interrupt), for a URL that is not
 relative (`./`, `../`), ethos runs a bounded `git ls-remote` on the
 same URL; if its output shows an ssh authentication, host-key or
