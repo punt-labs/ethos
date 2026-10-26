@@ -94,14 +94,14 @@ func TestAddBundleLocalPreconditionsAreRefusedBeforeGit(t *testing.T) {
 		return repo
 	}
 
-	t.Run("submodule path exists in the work tree", func(t *testing.T) {
+	t.Run("submodule path exists and is not a git repository", func(t *testing.T) {
 		repo := submodule(t)
 		dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
 		require.NoError(t, os.MkdirAll(dest, 0o755))
 		logFile := loggedGit(t)
 		_, err := runAddBundle(t, url)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "already exists in the work tree")
+		assert.Contains(t, err.Error(), "is not a git repository")
 		assert.NotContains(t, err.Error(), sshAdvice)
 		assertNoNetwork(t, logFile)
 	})
@@ -174,5 +174,65 @@ func TestAddBundleUnreadableConfigFiles(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, stderr, "git will ignore "+xp)
 		assert.Contains(t, stderr, "git will ignore "+hp)
+	})
+}
+
+// What git accepts is not refused: an existing clone at the submodule path is
+// handed to git submodule add, which adopts it, and a --global destination that
+// is a symlink to an empty directory is cloned into.
+func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
+	const url = "https://example.invalid/o/b.git"
+
+	t.Run("pre-cloned submodule path", func(t *testing.T) {
+		bundleFlags(t, false)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		repo := t.TempDir()
+		gitInitDir(t, repo, t.TempDir())
+		dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
+		require.NoError(t, os.MkdirAll(dest, 0o755))
+		gitInitDir(t, dest, t.TempDir())
+		t.Chdir(repo)
+		logFile := loggedGit(t)
+		_, _ = runAddBundle(t, url)
+		b, _ := os.ReadFile(logFile)
+		assert.Contains(t, string(b), "submodule", "git submodule add was run, not refused beforehand")
+	})
+
+	t.Run("global symlink to an empty directory", func(t *testing.T) {
+		bundleFlags(t, true)
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		empty := t.TempDir()
+		dest := filepath.Join(home, ".punt-labs", "ethos", "bundles", "b")
+		require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+		require.NoError(t, os.Symlink(empty, dest))
+		logFile := filepath.Join(t.TempDir(), "calls.log")
+		bin := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nwhile [ \"$1\" = -c ]; do shift 2; done\necho \"$1\" >> '"+logFile+"'\nexit 0\n"), 0o755))
+		t.Setenv("PATH", bin)
+		_, err := runAddBundle(t, url)
+		require.NoError(t, err)
+		b, _ := os.ReadFile(logFile)
+		assert.Contains(t, string(b), "clone")
+	})
+
+	t.Run("global symlink to nothing is refused", func(t *testing.T) {
+		bundleFlags(t, true)
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		dest := filepath.Join(home, ".punt-labs", "ethos", "bundles", "b")
+		require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+		require.NoError(t, os.Symlink(filepath.Join(home, "absent"), dest))
+		logFile := loggedGit(t)
+		_, err := runAddBundle(t, url)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "symlink to nothing")
+		assertNoNetwork(t, logFile)
 	})
 }

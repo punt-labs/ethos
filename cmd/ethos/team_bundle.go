@@ -595,15 +595,25 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	return nil
 }
 
-// checkBundleDestination refuses a destination git would refuse: a clone into a
-// directory that exists and is not empty, or a submodule add at a path that is
-// already in the index or exists in the work tree (gitDir is the repo root, ""
-// for a clone).
+// checkBundleDestination refuses a destination git itself would refuse. A clone
+// (gitDir "") goes into a directory that is empty or absent; a symlink to an
+// empty directory is accepted, a dangling one is not. A submodule add (gitDir
+// is the repo root) is refused when the path is already in the index, or when
+// it exists and is not a git repository of its own; an existing clone is left
+// for git submodule add, which adopts it.
 func checkBundleDestination(targetDir, gitDir, relTarget string) error {
-	info, err := os.Lstat(targetDir)
-	exists := err == nil
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("examining the bundle destination %s: %w", targetDir, err)
+	_, lerr := os.Lstat(targetDir)
+	if errors.Is(lerr, fs.ErrNotExist) {
+		if gitDir == "" {
+			return nil
+		}
+	} else if lerr != nil {
+		return fmt.Errorf("examining the bundle destination %s: %w", targetDir, lerr)
+	}
+	info, err := os.Stat(targetDir)
+	exists := lerr == nil
+	if exists && err != nil {
+		return fmt.Errorf("the bundle destination %s is a symlink to nothing: remove it, or choose another --name", targetDir)
 	}
 	if gitDir == "" {
 		if !exists {
@@ -620,9 +630,6 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 		}
 		return fmt.Errorf("the bundle destination %s already exists and is not an empty directory: remove it, or choose another --name", targetDir)
 	}
-	if exists {
-		return fmt.Errorf("the bundle path %s already exists in the work tree: remove it, or choose another --name", targetDir)
-	}
 	out, err := gitenv.Output(gitDir, "git", "ls-files", "--", relTarget)
 	if err != nil {
 		return fmt.Errorf("checking whether %s is in the index: %w", relTarget, err)
@@ -630,7 +637,27 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 	if len(bytes.TrimSpace(out)) > 0 {
 		return fmt.Errorf("the bundle path %s is already in the index: choose another --name, or remove it with git rm", relTarget)
 	}
+	if !exists {
+		return nil
+	}
+	if !info.IsDir() || !isOwnGitRepo(targetDir) {
+		return fmt.Errorf("the bundle path %s already exists and is not a git repository: remove it, or choose another --name", targetDir)
+	}
 	return nil
+}
+
+// isOwnGitRepo reports whether dir is the top level of a git work tree.
+func isOwnGitRepo(dir string) bool {
+	out, err := gitenv.Output(dir, "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return false
+	}
+	top, err := os.Stat(strings.TrimSpace(string(out)))
+	if err != nil {
+		return false
+	}
+	d, err := os.Stat(dir)
+	return err == nil && os.SameFile(top, d)
 }
 
 // checkGitConfigReadable names every git config file that cannot be read. An
