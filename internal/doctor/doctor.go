@@ -56,25 +56,21 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 	if storeErr != nil {
 		storeRoot = ""
 	}
-	results := RunAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, teams)
-	// A bundle or policy that cannot be honoured is its own failing row.
+	// A bundle or policy that cannot be honoured is its own failing row, and
+	// every row that read a store read layers the configuration governs.
+	var issue error
 	if storeErr == nil {
 		home, herr := os.UserHomeDir()
 		global := ""
 		if herr == nil {
 			global = filepath.Join(home, ".punt-labs", "ethos")
 		}
-		if issue := bundle.ConfigIssue(loc.Store, loc.Ethos, global); issue != nil {
-			what, _, _ := resolve.Describe(issue)
-			// The identity rows answered from layers the broken configuration
-			// governs: they did not check the repository.
-			for i, r := range results {
-				if r.Name == "Human identity" || r.Name == "Default agent" {
-					results[i] = gateStore(r, "", issue)
-				}
-			}
-			results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
-		}
+		issue = bundle.ConfigIssue(loc.Store, loc.Ethos, global)
+	}
+	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, teams)
+	if issue != nil {
+		what, _, _ := resolve.Describe(issue)
+		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
 	}
 	return results
 }
@@ -98,10 +94,20 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 // non-exempt command refuses in that state — and the checks that read the
 // store are gated (gateStore).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr error, teams *team.LayeredStore) []Result {
+	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, teams)
+}
+
+// runAll is RunAll with the configuration issue that governs the store layers
+// (nil for none): every store check gates on it as it does on a store that was
+// not located.
+func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, teams *team.LayeredStore) []Result {
 	results := make([]Result, 0, 16) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
 	checkout := func(r Result) Result { return gateCheckout(r, repoRoot, rootErr) }
 	store := func(r Result) Result { return gateStore(r, storeRoot, storeErr) }
+	if policy != nil {
+		store = func(r Result) Result { return gateStore(r, "", policy) }
+	}
 
 	if unlocated(storeRoot, storeErr) {
 		detail := "not located: " + storeErr.Error()

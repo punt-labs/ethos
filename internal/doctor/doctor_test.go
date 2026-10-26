@@ -2080,7 +2080,7 @@ func TestRunAllGateKeepsFail(t *testing.T) {
 	assert.Equal(t, "FAIL", got.Status)
 }
 
-// TestRunAllGatesEveryLocatedCheck: every check RunAll hands a located input
+// TestRunAllGatesEveryLocatedCheck: every check runAll (the body of RunAll) hands a located input
 // goes through checkout (repoRoot) or store (storeRoot, the identity store s,
 // the team store teams). A located input is one of those names, a value
 // derived from one (an alias, or hasRepoLocalTeam's result), however it
@@ -2110,7 +2110,7 @@ func TestGateAuditCatchesTransitiveLocator(t *testing.T) {
 	}
 	write("doctor/doctor.go", `package doctor
 
-func RunAll(repoRoot string) []Result {
+func runAll(repoRoot string) []Result {
 	var results []Result
 	checkout := func(r Result) Result { return r }
 	results = append(results, sneaky())
@@ -2146,11 +2146,11 @@ func parseRunAll(t *testing.T, file string) *ast.FuncDecl {
 	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 	require.NoError(t, err)
 	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "RunAll" {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "runAll" {
 			return fn
 		}
 	}
-	t.Fatalf("no RunAll in %s", file)
+	t.Fatalf("no runAll in %s", file)
 	return nil
 }
 
@@ -2365,4 +2365,57 @@ func TestGateStoreNoteFollowsTheFailure(t *testing.T) {
 
 	g = gateStore(Result{Name: "x", Status: "FAIL", Detail: "boom"}, "", errors.New("git refused"))
 	assert.Contains(t, g.Detail, "repo store not located: git refused")
+}
+
+// Under a policy issue every row RunAll classes as a store check is gated, not
+// only the identity rows: a PASS becomes "not checked" with the issue's wording,
+// a FAIL stays FAIL with the note. The store rows are those a store that was not
+// located gates, so a row added to RunAll is covered without this test naming it.
+func TestRunAllForPolicyIssueGatesEveryStoreRow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USER", "mal")
+	repo := t.TempDir()
+	ethosDir := filepath.Join(repo, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "identities"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("active_bundle: nosuchbundle\n"), 0o644))
+	s, ss := identity.NewStore(ethosDir), session.NewStore(ethosDir)
+	writeIdentity(t, ethosDir, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	writeIdentity(t, ethosDir, "zoe", "name: Zoe\nhandle: zoe\nkind: human\n")
+
+	unlocated := errors.New("store not located")
+	base := RunAll(s, ss, repo, nil, repo, nil, nil)
+	gated := RunAll(s, ss, repo, nil, "", unlocated, nil)
+	byName := func(rs []Result) map[string]Result {
+		m := map[string]Result{}
+		for _, r := range rs {
+			m[r.Name] = r
+		}
+		return m
+	}
+	baseRows := byName(base)
+
+	loc := resolve.Located{Store: repo, Ethos: ethosDir, Checkout: repo}
+	got := byName(RunAllFor(loc, s, ss, nil))
+	cfg, ok := got["Repository configuration"]
+	require.True(t, ok, "the failing configuration row")
+	assert.Equal(t, "FAIL", cfg.Status)
+
+	storeRows := 0
+	for _, g := range gated {
+		b, ok := baseRows[g.Name]
+		if !ok || (g.Detail == b.Detail && g.Status == b.Status) {
+			continue // not a store row: the gate left it alone, or it is the gate's own row
+		}
+		storeRows++
+		r := got[g.Name]
+		if b.Status == "PASS" {
+			assert.Equal(t, "WARN", r.Status, g.Name)
+			assert.True(t, strings.HasPrefix(r.Detail, "not checked: the repository's bundle or policy configuration is unusable"), "%s: %s", g.Name, r.Detail)
+			continue
+		}
+		assert.Equal(t, b.Status, r.Status, "%s keeps its status", g.Name)
+		assert.Contains(t, r.Detail, "the repository's bundle or policy configuration is unusable", g.Name)
+		assert.Contains(t, r.Detail, b.Detail, g.Name)
+	}
+	assert.GreaterOrEqual(t, storeRows, 6, "the comparison found too few store rows")
 }
