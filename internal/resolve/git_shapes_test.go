@@ -42,9 +42,12 @@ var gitShapes = map[string]gitShape{
 	"commondir only empty":          {mkDir("commondir="), handError},
 	"garbage HEAD":                  {mkDir("HEAD=garbage\n", "objects/", "refs/"), handError},
 	"HEAD as a directory":           {mkDir("HEAD/", "objects/", "refs/"), handError},
-	"objects as a file":             {mkDir("HEAD=ref: refs/heads/main\n", "objects=", "refs/"), handError},
-	"hex HEAD":                      {mkDir("HEAD=0123456789abcdef0123456789abcdef01234567\n", "objects/", "refs/"), handInner},
-	"dangling commondir":            {mkDir("HEAD=ref: refs/heads/main\n", "commondir=/nonexistent", "objects/", "refs/"), handError},
+	// git takes a HEAD symlink to refs/..., dangling (an unborn branch) or not.
+	"HEAD symlink to refs, dangling":   {mkDir("HEAD->refs/heads/main", "objects/", "refs/"), handInner},
+	"HEAD symlink elsewhere, dangling": {mkDir("HEAD->nowhere", "objects/", "refs/"), handError},
+	"objects as a file":                {mkDir("HEAD=ref: refs/heads/main\n", "objects=", "refs/"), handError},
+	"hex HEAD":                         {mkDir("HEAD=0123456789abcdef0123456789abcdef01234567\n", "objects/", "refs/"), handInner},
+	"dangling commondir":               {mkDir("HEAD=ref: refs/heads/main\n", "commondir=/nonexistent", "objects/", "refs/"), handError},
 
 	"gitdir to a plain directory": {gitfileTo(func(t *testing.T, d string) {
 		require.NoError(t, os.WriteFile(filepath.Join(d, "README"), []byte("x"), 0o644))
@@ -60,7 +63,7 @@ var gitShapes = map[string]gitShape{
 }
 
 // mkDir builds .git as a directory holding entries: "name/" is a directory,
-// "name=content" a file.
+// "name=content" a file, "name->target" a symlink.
 func mkDir(entries ...string) func(t *testing.T, inner string) {
 	return func(t *testing.T, inner string) {
 		t.Helper()
@@ -69,6 +72,12 @@ func mkDir(entries ...string) func(t *testing.T, inner string) {
 		for _, e := range entries {
 			if name, ok := strings.CutSuffix(e, "/"); ok {
 				require.NoError(t, os.Mkdir(filepath.Join(dot, name), 0o755))
+				continue
+			}
+			if name, target, ok := strings.Cut(e, "->"); ok {
+				if err := os.Symlink(target, filepath.Join(dot, name)); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
 				continue
 			}
 			name, content, _ := strings.Cut(e, "=")

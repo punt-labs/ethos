@@ -1460,6 +1460,16 @@ func examineGit(dot string) (g gitDirs, skip string, err error) {
 	return gitDirs{dir: target, common: common}, "", nil
 }
 
+// symlinkToRefs reports whether p is a symlink whose target text starts with
+// refs/, which git accepts as HEAD even when it dangles (an unborn branch).
+func symlinkToRefs(p string) bool {
+	if l, err := os.Lstat(p); err != nil || l.Mode()&fs.ModeSymlink == 0 {
+		return false
+	}
+	t, err := os.Readlink(p)
+	return err == nil && strings.HasPrefix(t, "refs/")
+}
+
 // errInvalidGit marks a .git the hand rules refuse for its content, not for a
 // failure to read it.
 var errInvalidGit = errors.New("invalid git file")
@@ -1472,25 +1482,27 @@ var errInvalidGit = errors.New("invalid git file")
 // examined.
 func checkGitDir(gd string) (common, reason string, err error) {
 	head := filepath.Join(gd, "HEAD")
-	info, err := os.Stat(head)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return "", "no HEAD", nil
-	case err != nil:
-		return "", "", fmt.Errorf("examining %s: %w", head, err)
-	case !info.Mode().IsRegular():
-		return "", "HEAD is not a regular file", nil
-	}
-	data, err := os.ReadFile(head)
-	if err != nil {
-		return "", "", fmt.Errorf("reading %s: %w", head, err)
-	}
-	if !validHead(string(data)) {
-		return "", "HEAD holds neither a ref nor an object id", nil
+	if !symlinkToRefs(head) {
+		info, err := os.Stat(head)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return "", "no HEAD", nil
+		case err != nil:
+			return "", "", fmt.Errorf("examining %s: %w", head, err)
+		case !info.Mode().IsRegular():
+			return "", "HEAD is not a regular file", nil
+		}
+		data, err := os.ReadFile(head)
+		if err != nil {
+			return "", "", fmt.Errorf("reading %s: %w", head, err)
+		}
+		if !validHead(string(data)) {
+			return "", "HEAD holds neither a ref nor an object id", nil
+		}
 	}
 	common = gd
 	cd := filepath.Join(gd, "commondir")
-	data, err = readRegular(cd)
+	data, err := readRegular(cd)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		// no commondir: gd is its own common dir
