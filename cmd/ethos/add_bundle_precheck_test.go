@@ -382,6 +382,7 @@ func TestAddBundleHandsAnExistingCloneToGit(t *testing.T) {
 	t.Run("relative URL", func(t *testing.T) {
 		_, dest := setup(t)
 		gitCmd(t, dest, "remote", "add", "origin", "/somewhere/else/src")
+		addBundleName = "b" // the name would otherwise come from "../src"
 		logFile := loggedGit(t)
 		_, _ = runAddBundle(t, "../src")
 		assert.Contains(t, ran(logFile), "submodule")
