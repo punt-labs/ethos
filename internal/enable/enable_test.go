@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/claudesettings"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
@@ -382,8 +383,8 @@ func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
 	if _, err := Disable(dir, false); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	// Repository locks are retained in the canonical shared-local zone, never
-	// beside host/source files. Ignore status is checked separately below.
+	// Repository locks are retained in their canonical ignored zones. The
+	// shared Claude settings lock is tool-agnostic and intentionally persists.
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -394,7 +395,7 @@ func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
 		if path == filepath.Join(dir, ".punt-labs", "local") {
 			return filepath.SkipDir
 		}
-		if strings.HasSuffix(d.Name(), ".lock") {
+		if strings.HasSuffix(d.Name(), ".lock") && d.Name() != claudesettings.LockName {
 			t.Errorf("work-tree litter: %s", path)
 		}
 		return nil
