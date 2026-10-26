@@ -216,12 +216,12 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		if h.storeErr != nil {
+		if err := h.unusableStore(); err != nil {
 			// The persona is checked against the identity store: a store that
 			// cannot be used must not answer for it (the session tool itself is
 			// unguarded, its roster being global).
-			what, _, _ := resolve.Describe(h.storeErr)
-			return mcplib.NewToolResultError(fmt.Sprintf("iam: %s (%v); the persona is refused rather than checked against the global store", what, h.storeErr)), nil
+			what, _, _ := resolve.Describe(err)
+			return mcplib.NewToolResultError(fmt.Sprintf("iam: %s (%v); the persona is refused rather than checked against the global store", what, err)), nil
 		}
 		if sessionID != sid {
 			return mcplib.NewToolResultError("session_id must match the metadata caller for iam"), nil
@@ -276,6 +276,21 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", joinErr)), nil
 	}
 	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
+}
+
+// unusableStore is why the repository store cannot answer an identity now: the
+// location the handler was built for, or, as handleWhoami checks, the store
+// located again and the bundle or policy configuration read again. nil when it
+// can.
+func (h *Handler) unusableStore() error {
+	if h.storeErr != nil {
+		return h.storeErr
+	}
+	loc := resolve.Roots()
+	if err := loc.Err(); err != nil {
+		return err
+	}
+	return bundle.ConfigIssue(loc.Store, loc.Ethos, h.globalRoot())
 }
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
