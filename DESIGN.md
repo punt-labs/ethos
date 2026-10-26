@@ -12853,9 +12853,10 @@ run, strict hand rules apply: a `.git/` counts only with a valid `HEAD`
 (a regular file, or a symlink whose target starts with `refs/`) and
 searchable `objects/` and `refs/` directories, and a `.git` file only
 when it starts with exactly `gitdir:` followed by one space and names a
-git directory. Any other `.git` (a dangling symlink, a non-file, an
-unreadable `.git/`) is refused unread, which for an unreadable `.git/`
-is stricter than git. The hand rules also refuse a start inside a git
+git directory; a `.git` symlink is judged by what it points to. A
+dangling `.git` symlink, a `.git` that is neither a file nor a
+directory, and an unreadable `.git/` are refused unread, which for an
+unreadable `.git/` is stricter than git. The hand rules also refuse a start inside a git
 directory or a bare repository, and stop the upward search at a
 filesystem boundary. Every git command ethos runs has a time limit:
 10 seconds (`gitenv.Timeout`) for lookups, reads and the audit-seal
@@ -12913,7 +12914,9 @@ see locally: a `--global` destination that is a dangling symlink or
 exists and is not an empty directory (a symlink to an empty directory
 is accepted), or a submodule path already in the index or that exists
 and is not itself the top of a git repository. An existing clone at the
-submodule path is passed to `git submodule add`, which adopts it. After a clone that exits
+submodule path is passed to `git submodule add`, which adopts it if
+it has a commit checked out and otherwise refuses it with its own
+message. After a clone that exits
 with an error (not a timeout or an interrupt), for a URL that is not
 relative (`./`, `../`), ethos runs a bounded `git ls-remote` on the
 same URL; if its output shows an ssh authentication, host-key or
@@ -13031,11 +13034,12 @@ failed step and states whether the tree is as it was or what is left.
 Removing leftover temporary files from earlier runs is not undone, and
 the live-zone directories and per-session lock files it created (both
 never tracked) remain. Tests compare every `.git` shape in
-the shape table (30 on Unix) with `git rev-parse` and run the same
+the shape table (the Unix run adds the shapes only Unix can make) with `git rev-parse` and run the same
 shapes with git hidden. On a refusal, or a refused `ETHOS_REPO_ROOT`,
-`ethos doctor` reports the store as one failing row; every check that
-reads the store or the checkout reports a would-be PASS as WARN "not
-checked" with the reason, and a FAIL stays a FAIL with the cause added
+`ethos doctor` reports the store as one failing row; a check that reads
+the store reports a PASS as WARN "not checked" with the reason, a check
+that reads the checkout reports any result other than FAIL that way,
+and every other result keeps its status with the cause added
 (a test parses `runAll` to keep the gate on every check). The MCP server
 locates the store on every call, runs only its read methods while the
 store is unlocated, and appends a note in a separate content block; the

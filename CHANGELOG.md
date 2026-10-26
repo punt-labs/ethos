@@ -303,7 +303,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration, and before contacting the remote refuses a non-empty
   `--global` destination, a submodule path already in the index, or one
   that exists and is not a git repository (an existing clone there is
-  adopted). On
+  left to `git submodule add`). On
   Unix, `ethos team add-bundle` no longer overrides your ssh command,
   shows git's clone progress, runs its clone with no terminal so an ssh
   or credential prompt fails
