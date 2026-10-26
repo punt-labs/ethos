@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -39,7 +40,9 @@ func fakeGitOnPath(t *testing.T, body string) {
 func TestAddBundleProgressReachesTheTerminal(t *testing.T) {
 	addBundleFlags(t)
 	fakeGitOnPath(t, "if [ -t 2 ]; then echo 'Receiving objects: 100% (3/3), done.' >&2; fi\nexit 0\n")
-	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	// Non-blocking, so the read deadline below applies: a blocking master would
+	// hang the test for as long as git printed nothing.
+	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		t.Skipf("no /dev/ptmx: %v", err)
 	}
@@ -70,7 +73,11 @@ func TestAddBundleProgressReachesTheTerminal(t *testing.T) {
 // clone into a failure (as a copying pipe would, when Wait waits for its end).
 func TestAddBundleStderrHeldOpenByAChildIsNotAFailure(t *testing.T) {
 	addBundleFlags(t)
-	fakeGitOnPath(t, "sleep 5 >&2 &\nexit 0\n")
+	// The fake PATH holds only the fake git, so name sleep by its path: with a
+	// missing sleep the background child never runs and the test proves nothing.
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	fakeGitOnPath(t, sleep+" 5 >&2 &\nexit 0\n")
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	defer r.Close()
