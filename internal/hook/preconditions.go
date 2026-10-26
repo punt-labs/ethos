@@ -181,7 +181,10 @@ func preconditionTargets(
 			// (cache/-~-project/x stands for cache/<slug>-project/x). If the
 			// literal name exists in the checkout, the requirement may mean
 			// that file and is ambiguous; if it does not, the expansion is meant.
-			if !mission.SamePath(resolved, literal) && repoRoot != "" && !filepath.IsAbs(literal) {
+			// A leading ~ is the home placeholder (as at admission), not a name
+			// in the checkout, so a directory literally called ~ is not tested.
+			homeRel := literal == "~" || strings.HasPrefix(literal, "~/")
+			if !mission.SamePath(resolved, literal) && repoRoot != "" && !filepath.IsAbs(literal) && !homeRel {
 				if _, statErr := os.Lstat(filepath.Join(repoRoot, literal)); statErr == nil {
 					ambiguous = true
 				}

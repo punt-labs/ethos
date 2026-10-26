@@ -634,25 +634,22 @@ func homePlaceholderExpanded(v string) (string, error) {
 // refuseAmbiguousRequireRead refuses a require_read entry, new or changed from
 // prior, whose file name is ambiguous (AmbiguousPath), after ${inputs.X}
 // substitution: it would be stored unchanged and expanded at evaluation to a
-// different file. The error names the entry by position, not by value.
+// different file. An entry is skipped only when it is in the same precondition
+// of prior and substitutes to the same value there, so a template whose input
+// changed is judged on its new value. The error names the entry by position, not
+// by value.
 func refuseAmbiguousRequireRead(repoRoot string, c, prior *Contract) error {
-	var had []string
-	if prior != nil {
-		for _, p := range prior.Preconditions {
-			had = append(had, p.RequireRead...)
-		}
-	}
 	for i, p := range c.Preconditions {
 		if p.Form != PreconditionFormExplicit {
 			continue
 		}
 		for j, entry := range p.RequireRead {
-			if slices.Contains(had, entry) {
-				continue
-			}
 			v, err := SubstituteInputs(entry, c)
 			if err != nil {
 				continue // evaluation reports an entry it cannot resolve
+			}
+			if unchangedFromPrior(entry, v, i, prior) {
+				continue
 			}
 			v, err = homePlaceholderExpanded(v)
 			if err != nil {
@@ -668,6 +665,21 @@ func refuseAmbiguousRequireRead(repoRoot string, c, prior *Contract) error {
 		}
 	}
 	return nil
+}
+
+// unchangedFromPrior reports whether entry, which substitutes to v in the
+// contract being written, is an entry of precondition i of prior that
+// substituted to the same v there.
+func unchangedFromPrior(entry, v string, i int, prior *Contract) bool {
+	if prior == nil || i >= len(prior.Preconditions) {
+		return false
+	}
+	pp := prior.Preconditions[i]
+	if !slices.Contains(pp.RequireRead, entry) {
+		return false
+	}
+	pv, err := SubstituteInputs(entry, prior)
+	return err == nil && pv == v
 }
 
 // refuseOwnDashHome refuses a repo-relative path entry holding this machine's

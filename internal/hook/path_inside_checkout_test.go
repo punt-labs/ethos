@@ -337,3 +337,18 @@ func TestRelUnder(t *testing.T) {
 		assert.Equal(t, tt.want, got, "%s %s", tt.root, tt.p)
 	}
 }
+
+// TestPreconditions_HomeRequirementIgnoresALiteralTildeDirectory: a leading ~ or
+// ~/ in a stored require_read is the home placeholder. A checkout that holds a
+// directory literally named ~ does not make the requirement ambiguous, and a
+// Read of $HOME/.claude/CLAUDE.md satisfies it.
+func TestPreconditions_HomeRequirementIgnoresALiteralTildeDirectory(t *testing.T) {
+	home, repo, global := checkoutUnderHome(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "~", ".claude"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "~", ".claude", "CLAUDE.md"), []byte("x"), 0o600))
+	c := redactedRequireRead(t, repo, "~/.claude/CLAUDE.md")
+	auditRead(t, repo, global, "sess-tilde", filepath.Join(home, ".claude", "CLAUDE.md"))
+	reason, deny, err := EvaluatePreconditions(c, "Write", map[string]any{"file_path": "x.go"}, "sess-tilde", repo, repo)
+	require.NoError(t, err)
+	assert.False(t, deny, "the home file was read: %s", reason)
+}

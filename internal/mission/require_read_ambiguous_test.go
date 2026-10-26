@@ -113,3 +113,28 @@ func TestUpdate_LeavesAnUnchangedAmbiguousEntryAlone(t *testing.T) {
 	loaded.Preconditions[0].RequireRead = append(loaded.Preconditions[0].RequireRead, "<repo>/cfg/y.yaml")
 	require.Error(t, s.Update(loaded), "a new entry of the same kind is")
 }
+
+// TestUpdate_JudgesAnUnchangedTemplateWhoseInputChanged: an entry is skipped only
+// when what it substitutes to is what it substituted to in the prior contract.
+// ${inputs.files.0} is the same text, but if the input it names changes to an
+// ambiguous path, the new value is judged.
+func TestUpdate_JudgesAnUnchangedTemplateWhoseInputChanged(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := NewStoreWithRoots(t.TempDir(), t.TempDir())
+	c := newContract("m-2026-08-06-191")
+	c.Inputs.Files = []string{"docs/a.md"}
+	c.Preconditions = []Precondition{{Form: PreconditionFormExplicit, RequireRead: []string{"${inputs.files.0}"}, Message: "m"}}
+	require.NoError(t, s.Create(c))
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	loaded.Budget.Rounds = 4
+	require.NoError(t, s.Update(loaded), "nothing the entry names changed")
+
+	loaded, err = s.Load(c.MissionID)
+	require.NoError(t, err)
+	loaded.Inputs.Files = []string{"cache/-~-project/config.json"}
+	err = s.Update(loaded)
+	require.Error(t, err, "the template is unchanged, its value is not")
+	assert.Contains(t, err.Error(), "redaction placeholder")
+}
