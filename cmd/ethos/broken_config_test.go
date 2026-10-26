@@ -617,8 +617,17 @@ func TestUnreadableDotGitIsNotOutsideARepository(t *testing.T) {
 			out, err := c.CombinedOutput()
 			var ee *exec.ExitError
 			require.ErrorAs(t, err, &ee, string(out))
+			assert.Equal(t, 2, ee.ExitCode(), string(out))
 			assert.NotContains(t, string(out), "Global Only")
 			assert.Contains(t, string(out), dot)
+			// The per-class refusal, so a missing bundle or a missing identity
+			// cannot satisfy this: the unusable part is named.
+			unusable := part
+			if part == "" {
+				unusable = "HEAD" // a mode-000 .git cannot be searched, so HEAD is the first to fail
+			}
+			want := "its " + unusable + " cannot be used"
+			assert.Contains(t, string(out), want)
 		})
 	}
 }
