@@ -104,7 +104,7 @@ func TestAudit_RelativeHomeSegmentIsNotAHome(t *testing.T) {
 	c := makeContractWithPreconditions(
 		[]mission.Precondition{{Form: mission.PreconditionFormImplicit, Message: "read before write"}},
 		mission.Inputs{}, nil)
-	reason, deny, err := EvaluatePreconditions(c, "Write", map[string]any{"file_path": target}, "sess-h", dir)
+	reason, deny, err := EvaluatePreconditions(c, "Write", map[string]any{"file_path": target}, "sess-h", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny, "the Read satisfies the precondition: %q", reason)
 }

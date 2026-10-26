@@ -342,3 +342,65 @@ func TestQuarantineChunk_TwiceIsANoOp(t *testing.T) {
 	assert.Len(t, local2, len(local1), "no new local file")
 	assert.NotContains(t, second, "withheld")
 }
+
+// TestQuarantineChunk_ReasonThatStillLeaksIsReplaced: a reason in a spelling
+// the content pass does not decode (%2Fhome%2Falice%2Fprivate) is replaced by a
+// fixed text before either branch writes it; the quarantine is not refused. The
+// marker, which is staged, holds no byte of it.
+func TestQuarantineChunk_ReasonThatStillLeaksIsReplaced(t *testing.T) {
+	t.Setenv("HOME", "/var/home/zed")
+	for _, mode := range []string{"session", "mission"} {
+		t.Run(mode, func(t *testing.T) {
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			var sealedDir, chunk string
+			if mode == "session" {
+				d, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
+				require.NoError(t, err)
+				sealedDir, chunk = d, audit.SessionChunkFile(100, 300)
+			} else {
+				sealedDir, chunk = sealedMissionDir(repo, "m-2026-07-21-030"), audit.MissionChunkFile("sessX", 100, 300)
+			}
+			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
+
+			m, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "open %2Fhome%2Falice%2Fprivate: bad")
+			require.NoError(t, err)
+			assert.NotContains(t, m.Reason, "alice")
+			assert.NotEmpty(t, m.Reason)
+			data, err := os.ReadFile(filepath.Join(sealedDir, strings.TrimSuffix(chunk, ".jsonl")+".quarantine"))
+			require.NoError(t, err)
+			assert.NotContains(t, string(data), "alice")
+		})
+	}
+}
+
+// TestQuarantineChunk_LeakingTokenOfTheReasonIsReplacedAlone: only the token
+// that names a home is replaced; the rest of the reason, which is what tells
+// the operator why the chunk was retired, stays. A notice says the reason was
+// edited and does not quote it.
+func TestQuarantineChunk_LeakingTokenOfTheReasonIsReplacedAlone(t *testing.T) {
+	t.Setenv("HOME", "/var/home/zed")
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	dir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
+	require.NoError(t, err)
+	chunk := audit.SessionChunkFile(100, 300)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, chunk), []byte("\x00garbage\n"), 0o600))
+
+	var m audit.Marker
+	stderr := captureStderr(t, func() {
+		m, err = QuarantineChunk(repo, filepath.Join(dir, chunk),
+			"open %2Fhome%2Falice%2Fprivate: sha256 mismatch at line 4, disk full during seal")
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "open [redacted-path]: sha256 mismatch at line 4, disk full during seal", m.Reason)
+	data, err := os.ReadFile(filepath.Join(dir, strings.TrimSuffix(chunk, ".jsonl")+".quarantine"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "sha256 mismatch at line 4")
+	assert.NotContains(t, string(data), "alice")
+	assert.Contains(t, stderr, "reason")
+	assert.Contains(t, stderr, "edited")
+	assert.NotContains(t, stderr, "alice")
+}

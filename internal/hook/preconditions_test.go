@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,7 +53,7 @@ func writeSessionReadAudit(t *testing.T, repoRoot, sessionID, readPath string) s
 
 func TestEvaluatePreconditions_NilContractAllows(t *testing.T) {
 	reason, deny, err := EvaluatePreconditions(nil, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-x", t.TempDir())
+		map[string]any{"file_path": "x.go"}, "sess-x", t.TempDir(), t.TempDir())
 	require.NoError(t, err)
 	assert.False(t, deny)
 	assert.Empty(t, reason)
@@ -61,7 +62,7 @@ func TestEvaluatePreconditions_NilContractAllows(t *testing.T) {
 func TestEvaluatePreconditions_EmptyListAllows(t *testing.T) {
 	c := makeContractWithPreconditions(nil, mission.Inputs{}, nil)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-x", t.TempDir())
+		map[string]any{"file_path": "x.go"}, "sess-x", t.TempDir(), t.TempDir())
 	require.NoError(t, err)
 	assert.False(t, deny)
 	assert.Empty(t, reason)
@@ -74,7 +75,7 @@ func TestEvaluatePreconditions_ImplicitUnreadDenies(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "/abs/path/to/store.go"}, "sess-1", dir)
+		map[string]any{"file_path": "/abs/path/to/store.go"}, "sess-1", dir, dir)
 	require.NoError(t, err)
 	assert.True(t, deny)
 	assert.Equal(t, "read before write", reason)
@@ -90,7 +91,7 @@ func TestEvaluatePreconditions_ImplicitReadAllows(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": target}, "sess-2", dir)
+		map[string]any{"file_path": target}, "sess-2", dir, dir)
 	require.NoError(t, err, "Read in audit log must satisfy implicit form")
 	assert.False(t, deny)
 	assert.Empty(t, reason)
@@ -106,7 +107,7 @@ func TestEvaluatePreconditions_ImplicitMultiplePathsOneUnread(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Edit",
-		map[string]any{"files": []any{"a.go", "b.go"}}, "sess-3", dir)
+		map[string]any{"files": []any{"a.go", "b.go"}}, "sess-3", dir, dir)
 	require.NoError(t, err)
 	assert.True(t, deny, "one unread file in a files[] array must deny")
 	assert.Equal(t, "read all listed files", reason)
@@ -121,7 +122,7 @@ func TestEvaluatePreconditions_ImplicitNoPathsAllows(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Bash",
-		map[string]any{"command": "ls"}, "sess-x", dir)
+		map[string]any{"command": "ls"}, "sess-x", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny, "path-free tool input must satisfy implicit form")
 	assert.Empty(t, reason)
@@ -140,7 +141,7 @@ func TestEvaluatePreconditions_ExplicitUnreadDenies(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "internal/mission/store.go"}, "sess-x", dir)
+		map[string]any{"file_path": "internal/mission/store.go"}, "sess-x", dir, dir)
 	require.NoError(t, err)
 	assert.True(t, deny)
 	assert.Equal(t, "read store.go first", reason)
@@ -161,7 +162,7 @@ func TestEvaluatePreconditions_ExplicitReadAllows(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "internal/mission/store.go"}, "sess-y", dir)
+		map[string]any{"file_path": "internal/mission/store.go"}, "sess-y", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny)
 	assert.Empty(t, reason)
@@ -183,7 +184,7 @@ func TestEvaluatePreconditions_ExplicitInputsTicketSubstitution(t *testing.T) {
 		nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "internal/foo/bar.go"}, "sess-z", dir)
+		map[string]any{"file_path": "internal/foo/bar.go"}, "sess-z", dir, dir)
 	require.NoError(t, err, "substituted path that was read must allow")
 	assert.False(t, deny)
 	assert.Empty(t, reason)
@@ -206,7 +207,7 @@ func TestEvaluatePreconditions_ExplicitInputsFilesIndexed(t *testing.T) {
 		nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Edit",
-		map[string]any{"file_path": "internal/a.go"}, "sess-i", dir)
+		map[string]any{"file_path": "internal/a.go"}, "sess-i", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny)
 	assert.Empty(t, reason)
@@ -226,7 +227,7 @@ func TestEvaluatePreconditions_MalformedSubstitutionErrors(t *testing.T) {
 		nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-m", dir)
+		map[string]any{"file_path": "x.go"}, "sess-m", dir, dir)
 	require.Error(t, err, "unknown input key must surface as an unevaluable error")
 	assert.True(t, deny)
 	assert.Equal(t, "read the input file", reason,
@@ -247,7 +248,7 @@ func TestEvaluatePreconditions_FilesOutOfRangeErrors(t *testing.T) {
 		nil,
 	)
 	_, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-r", dir)
+		map[string]any{"file_path": "x.go"}, "sess-r", dir, dir)
 	require.Error(t, err)
 	assert.True(t, deny)
 }
@@ -266,7 +267,7 @@ func TestEvaluatePreconditions_FilesNonIntegerErrors(t *testing.T) {
 		nil,
 	)
 	_, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-n", dir)
+		map[string]any{"file_path": "x.go"}, "sess-n", dir, dir)
 	require.Error(t, err)
 	assert.True(t, deny)
 }
@@ -278,7 +279,7 @@ func TestEvaluatePreconditions_UnknownFormErrors(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	_, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-u", dir)
+		map[string]any{"file_path": "x.go"}, "sess-u", dir, dir)
 	require.Error(t, err)
 	assert.True(t, deny)
 }
@@ -293,7 +294,7 @@ func TestEvaluatePreconditions_BlankMessageFallback(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "/x.go"}, "sess-b", dir)
+		map[string]any{"file_path": "/x.go"}, "sess-b", dir, dir)
 	require.NoError(t, err)
 	assert.True(t, deny)
 	assert.Contains(t, reason, "preconditions[0] failed")
@@ -310,7 +311,7 @@ func TestEvaluatePreconditions_PathCleanedMatch(t *testing.T) {
 	)
 	// Tool input uses dot-slash + extra slashes
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "./internal/hook//store.go"}, "sess-c", dir)
+		map[string]any{"file_path": "./internal/hook//store.go"}, "sess-c", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny, "cleaned form must match: %s", reason)
 }
@@ -324,7 +325,7 @@ func TestEvaluatePreconditions_NotebookPathExtracted(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "NotebookEdit",
-		map[string]any{"notebook_path": "notebook.ipynb"}, "sess-nb", dir)
+		map[string]any{"notebook_path": "notebook.ipynb"}, "sess-nb", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny, "notebook_path must satisfy implicit form: %s", reason)
 }
@@ -346,7 +347,7 @@ func TestEvaluatePreconditions_AuditLogReadFailure(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, evalErr := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-broken", dir)
+		map[string]any{"file_path": "x.go"}, "sess-broken", dir, dir)
 	require.Error(t, evalErr, "unreadable audit log must surface as unevaluable")
 	assert.True(t, deny)
 	assert.Equal(t, "blocked", reason)
@@ -474,7 +475,7 @@ func TestEvaluatePreconditions_StrictModeIndependent(t *testing.T) {
 				mission.Inputs{}, tc.strict,
 			)
 			reason, deny, err := EvaluatePreconditions(c, "Write",
-				map[string]any{"file_path": "x.go"}, "sess-s", dir)
+				map[string]any{"file_path": "x.go"}, "sess-s", dir, dir)
 			require.Error(t, err)
 			assert.True(t, deny)
 			assert.Equal(t, "blocked", reason)
@@ -494,7 +495,7 @@ func TestEvaluatePreconditions_EmptySessionID(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "", dir)
+		map[string]any{"file_path": "x.go"}, "", dir, dir)
 	require.NoError(t, err, "empty session is treated as empty audit log, not unevaluable")
 	assert.True(t, deny)
 	assert.Equal(t, "no session", reason)
@@ -595,7 +596,7 @@ func TestEvaluatePreconditions_SessionIDLooksLikePath(t *testing.T) {
 	)
 	// No panic and a clean deny — no audit log exists for this session.
 	_, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "../escape/sess", dir)
+		map[string]any{"file_path": "x.go"}, "../escape/sess", dir, dir)
 	require.NoError(t, err)
 	assert.True(t, deny)
 	// Sanity: the session dir we resolved is under dir, not escaped.
@@ -626,7 +627,7 @@ func TestEvaluatePreconditions_HandleAuditLogIntegration(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "internal/mission/store.go"}, "sess-int", dir)
+		map[string]any{"file_path": "internal/mission/store.go"}, "sess-int", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny, "audit log written via HandleAuditLog must satisfy precondition: %s", reason)
 }
@@ -648,7 +649,7 @@ func TestEvaluatePreconditions_ReadOfCredentialShapedPathClears(t *testing.T) {
 	)
 	write := map[string]any{"file_path": "internal/x.go"}
 
-	_, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+	_, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo, repo)
 	require.NoError(t, err)
 	require.True(t, deny, "no Read yet: blocked")
 
@@ -660,7 +661,7 @@ func TestEvaluatePreconditions_ReadOfCredentialShapedPathClears(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, HandleAuditLog(bytes.NewReader(payload), repo, global))
 
-	reason, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+	reason, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo, repo)
 	require.NoError(t, err)
 	assert.False(t, deny, "the recorded Read must clear the precondition")
 	assert.Empty(t, reason)
@@ -708,14 +709,14 @@ func TestEvaluatePreconditions_StoredRepoPlaceholderMatchesRelativeRead(t *testi
 		sess := "sess-" + strings.NewReplacer("/", "-", ".", "-").Replace(read)
 		writeSessionReadAudit(t, repo, sess, read)
 		reason, deny, err := EvaluatePreconditions(loaded, "Write",
-			map[string]any{"file_path": "x.go"}, sess, repo)
+			map[string]any{"file_path": "x.go"}, sess, repo, repo)
 		require.NoError(t, err)
 		assert.False(t, deny, "a Read of %q satisfies the stored reference: %s", read, reason)
 	}
 
 	writeSessionReadAudit(t, repo, "sess-other", "cfg/other.yaml")
 	_, deny, err := EvaluatePreconditions(loaded, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-other", repo)
+		map[string]any{"file_path": "x.go"}, "sess-other", repo, repo)
 	require.NoError(t, err)
 	assert.True(t, deny, "a Read of another file does not")
 }
@@ -766,12 +767,12 @@ func TestEvaluatePreconditions_RedactedEntryMatchesRecordedRead(t *testing.T) {
 			write := map[string]any{"file_path": "x.go"}
 			sess := "sess-" + name
 
-			_, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+			_, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo, repo)
 			require.NoError(t, err)
 			require.True(t, deny, "no Read yet")
 
 			auditRead(t, repo, global, sess, abs)
-			reason, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+			reason, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo, repo)
 			require.NoError(t, err)
 			assert.False(t, deny, "the recorded Read satisfies the entry: %s", reason)
 		})
@@ -790,7 +791,7 @@ func TestEvaluatePreconditions_ForeignHomeNeverMatches(t *testing.T) {
 	auditRead(t, repo, global, "sess-f", "/home/bob/notes.md")
 
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-f", repo)
+		map[string]any{"file_path": "x.go"}, "sess-f", repo, repo)
 	require.NoError(t, err)
 	assert.True(t, deny)
 	assert.Contains(t, reason, "read it first")
@@ -812,7 +813,7 @@ func TestEvaluatePreconditions_UnknownHomeIsUnevaluable(t *testing.T) {
 	)
 	t.Setenv("HOME", "")
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "x.go"}, "sess-h", repo)
+		map[string]any{"file_path": "x.go"}, "sess-h", repo, repo)
 	require.Error(t, err)
 	assert.True(t, deny)
 	assert.Equal(t, "read it first", reason)
@@ -860,7 +861,7 @@ func TestEvaluatePreconditions_ImplicitForeignHomeSaysWhy(t *testing.T) {
 		mission.Inputs{}, nil,
 	)
 	reason, deny, err := EvaluatePreconditions(c, "Write",
-		map[string]any{"file_path": "/home/bob/x.go"}, "sess-i", repo)
+		map[string]any{"file_path": "/home/bob/x.go"}, "sess-i", repo, repo)
 	require.NoError(t, err)
 	assert.True(t, deny)
 	assert.Contains(t, reason, "read first")
@@ -953,4 +954,133 @@ func TestMigratedLegacyLine_HomePlaceholderStaysUntrusted(t *testing.T) {
 	reads, err := loadSessionReads(repo, "s")
 	require.NoError(t, err)
 	assert.False(t, readsContain(reads, filepath.Join(home, "notes.md"), repo))
+}
+
+// TestEvaluatePreconditions_LinkedWorktreeEntryExpandsAgainstTheStoreRoot: in a
+// linked worktree the contract is redacted against the store root (the main
+// checkout), so <repo> in it names the store root, while an audit Read is
+// recorded against the checkout. The entry for a file in the worktree is
+// expanded against the store root it was written with, not the checkout, so it
+// does not gain the worktree suffix twice, and the recorded Read satisfies it.
+func TestEvaluatePreconditions_LinkedWorktreeEntryExpandsAgainstTheStoreRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, global := t.TempDir(), t.TempDir()
+	initGitRepo(t, store)
+	for _, args := range [][]string{
+		{"commit", "--allow-empty", "-m", "init"},
+		{"worktree", "add", "-b", "w", filepath.Join(".claude", "worktrees", "w")},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = store
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e.com")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	wt := filepath.Join(store, ".claude", "worktrees", "w")
+	file := filepath.Join(wt, "cfg", "config.yaml")
+
+	c := redactedRequireRead(t, store, file)
+	assert.Equal(t, "<repo>/.claude/worktrees/w/cfg/config.yaml", c.Preconditions[0].RequireRead[0])
+	auditRead(t, wt, global, "sess-wt", file)
+
+	write := map[string]any{"file_path": "x.go"}
+	reason, deny, err := EvaluatePreconditions(c, "Write", write, "sess-wt", wt, store)
+	require.NoError(t, err)
+	assert.False(t, deny, "the recorded Read satisfies the entry: %s", reason)
+}
+
+// linkedWorktree makes a git repo with one linked worktree and returns both
+// roots. HOME is a temp dir that holds the repo, so a path outside the
+// worktree but inside the main checkout is the operator's own, not another
+// user's.
+func linkedWorktree(t *testing.T) (main, wt string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	main = filepath.Join(home, "main")
+	require.NoError(t, os.MkdirAll(main, 0o700))
+	initGitRepo(t, main)
+	for _, args := range [][]string{
+		{"commit", "--allow-empty", "-m", "init"},
+		{"worktree", "add", "-b", "w", filepath.Join(".claude", "worktrees", "w")},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = main
+		cmd.Env = gitEnv(main)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	return main, filepath.Join(main, ".claude", "worktrees", "w")
+}
+
+// createRepoRelativeContract stores, against storeRoot, an open mission whose
+// one precondition requires <repo>/cfg/config.yaml to have been Read.
+func createRepoRelativeContract(t *testing.T, storeRoot, global, id string) {
+	t.Helper()
+	c := &mission.Contract{
+		MissionID:       id,
+		Status:          mission.StatusOpen,
+		CreatedAt:       "2026-05-22T21:30:00Z",
+		UpdatedAt:       "2026-05-22T21:30:00Z",
+		Leader:          "claude",
+		Worker:          "bwk",
+		Evaluator:       mission.Evaluator{Handle: "djb", PinnedAt: "2026-05-22T21:30:00Z"},
+		WriteSet:        []string{"internal/"},
+		Tools:           []string{"Read", "Write"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget:          mission.Budget{Rounds: 3, ReflectionAfterEach: true},
+		CurrentRound:    1,
+		Preconditions: []mission.Precondition{{
+			Form:        mission.PreconditionFormExplicit,
+			RequireRead: []string{"<repo>/cfg/config.yaml"},
+			Message:     "read it first",
+		}},
+	}
+	require.NoError(t, mission.NewStoreWithRoots(storeRoot, global).Create(c))
+}
+
+// TestEvalContractPreconditions_OverrideToALinkedWorktree: with
+// ETHOS_REPO_ROOT set to a linked worktree, the contract is stored against the
+// worktree (resolve.StoreRepoRoot honours the override), so its <repo> entry
+// expands against the worktree too: a Read of that file is recorded and the
+// Write is allowed.
+func TestEvalContractPreconditions_OverrideToALinkedWorktree(t *testing.T) {
+	_, wt := linkedWorktree(t)
+	home := os.Getenv("HOME")
+	require.NoError(t, os.MkdirAll(filepath.Join(wt, ".punt-labs", "ethos"), 0o700))
+	t.Setenv("ETHOS_REPO_ROOT", wt)
+	t.Setenv("MISSION_ID", "m-2026-07-21-040")
+	global := filepath.Join(home, ".punt-labs", "ethos")
+	createRepoRelativeContract(t, wt, global, "m-2026-07-21-040")
+
+	write := map[string]any{"file_path": "x.go"}
+	_, blocked := evalContractPreconditions("Write", write, "sess-ov")
+	require.True(t, blocked, "denied before the Read")
+
+	auditRead(t, wt, global, "sess-ov", filepath.Join(wt, "cfg", "config.yaml"))
+	reason, blocked := evalContractPreconditions("Write", write, "sess-ov")
+	assert.False(t, blocked, "the recorded Read satisfies the entry: %s", reason)
+}
+
+// TestEvalContractPreconditions_LinkedWorktreeWithoutOverride: run from a
+// linked worktree with no override, the contract lives in the main checkout
+// and its <repo> is the main checkout. A Read of the store-root copy allows
+// the Write; a Read of the worktree's own copy alone does not.
+func TestEvalContractPreconditions_LinkedWorktreeWithoutOverride(t *testing.T) {
+	main, wt := linkedWorktree(t)
+	global := filepath.Join(os.Getenv("HOME"), ".punt-labs", "ethos")
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	t.Setenv("MISSION_ID", "m-2026-07-21-041")
+	t.Chdir(wt)
+	createRepoRelativeContract(t, main, global, "m-2026-07-21-041")
+
+	write := map[string]any{"file_path": "x.go"}
+	auditRead(t, wt, global, "sess-nw", filepath.Join(wt, "cfg", "config.yaml"))
+	_, blocked := evalContractPreconditions("Write", write, "sess-nw")
+	require.True(t, blocked, "the worktree copy is not the file the contract names")
+
+	auditRead(t, wt, global, "sess-nw", filepath.Join(main, "cfg", "config.yaml"))
+	reason, blocked := evalContractPreconditions("Write", write, "sess-nw")
+	assert.False(t, blocked, "the store-root copy satisfies the entry: %s", reason)
 }

@@ -572,9 +572,9 @@ func HomePathsValueFlag(v any) (any, bool) {
 }
 
 // SecretsValue applies SecretsString to every string reachable from v (a
-// JSON-shaped value: strings, []any, map[string]any) and replaces the
-// string value of any map key whose name is credential-bearing. It
-// reports whether anything changed.
+// JSON-shaped value: strings, []any, map[string]any) and to every map key, and
+// replaces the string value of any map key whose name is credential-bearing.
+// It reports whether anything changed.
 //
 // A container is cloned only once the first change inside it is found, so
 // an unaffected value comes back as the value that went in and marshals to
@@ -585,6 +585,21 @@ func SecretsValue(v any) (any, bool) {
 		r := SecretsString(x)
 		return r, r != x
 	case map[string]any:
+		// A credential used as a key is redacted too. The renaming is the shared
+		// collision-safe one, so two keys that redact to the same name do not
+		// merge.
+		for k := range x {
+			if SecretsString(k) != k {
+				out, _ := RenameKeys(x, SecretsString, false, func(key string, vv any) any {
+					if isSecretEntry(key, vv) {
+						return SecretToken
+					}
+					swept, _ := SecretsValue(vv)
+					return swept
+				})
+				return out, true
+			}
+		}
 		out, copied := x, false
 		for k, vv := range x {
 			var swept any

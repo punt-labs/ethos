@@ -202,7 +202,8 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 	// repo resolution between the dispatch path and the precondition
 	// evaluator (Copilot + Bugbot on PR #328).
 	repoRoot := envRepoRoot()
-	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot)
+	storeRoot := tierBStoreRoot()
+	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot, storeRoot)
 	if !deny {
 		return "", false
 	}

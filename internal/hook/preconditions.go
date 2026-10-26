@@ -51,13 +51,14 @@ func EvaluatePreconditions(
 	toolInput map[string]any,
 	sessionID string,
 	repoRoot string,
+	storeRoot string,
 ) (denyReason string, deny bool, err error) {
 	if contract == nil || len(contract.Preconditions) == 0 {
 		return "", false, nil
 	}
 	reads, ignored, readErr := loadSessionReadsCounted(repoRoot, sessionID)
 	for i, p := range contract.Preconditions {
-		paths, subErr := preconditionTargets(p, toolName, toolInput, contract, repoRoot)
+		paths, subErr := preconditionTargets(p, toolName, toolInput, contract, storeRoot)
 		if subErr != nil {
 			return preconditionMessage(p, i),
 				true,
@@ -134,7 +135,7 @@ func preconditionTargets(
 	toolName string,
 	toolInput map[string]any,
 	contract *mission.Contract,
-	repoRoot string,
+	storeRoot string,
 ) ([]string, error) {
 	switch p.Form {
 	case mission.PreconditionFormImplicit:
@@ -146,9 +147,11 @@ func preconditionTargets(
 			if err != nil {
 				return nil, err
 			}
-			// A stored entry carries <repo>, ~ and -~ in place of this
-			// machine's paths; compare it as the paths it stands for.
-			resolved, err = mission.ExpandPath(resolved, repoRoot)
+			// A stored entry carries <repo>, ~ and -~ in place of the paths it
+			// was serialized with, and <repo> there is storeRoot, the root the
+			// contract was loaded from. In a linked worktree that is not the
+			// checkout, whose root only the audit log's Reads are relative to.
+			resolved, err = mission.ExpandPath(resolved, storeRoot)
 			if err != nil {
 				return nil, err
 			}

@@ -93,11 +93,13 @@ type ScrubResult struct {
 // left as it was. Like every record writer it fails closed when no redactor
 // can be built.
 //
-// Each file is read, redacted and renamed under the lock its writers hold
-// (the trace lock, the per-mission lock, the delegation lock), so a
-// concurrent close or update is not lost to the rewrite. globalRoot is the
-// shared store root those locks live under. A symlinked artifact or
-// containing directory is refused, as every loader here refuses it.
+// Unless dryRun is set, each file is read, redacted and renamed under the
+// locks its writers hold (the trace lock; the per-mission lock; for a
+// delegation record the shared repo mission lock, then the delegation lock),
+// so a concurrent close or update is not lost to the rewrite. A dry run and a
+// record whose mission directory is gone take no lock: nothing is written.
+// globalRoot is the shared store root those locks live under. A symlinked
+// artifact or containing directory is refused, as every loader here refuses it.
 func ScrubFiles(repoRoot, globalRoot string, rels []string, dryRun bool) (ScrubResult, error) {
 	var res ScrubResult
 	r, err := NewPathRedactor(repoRoot)
@@ -150,6 +152,13 @@ func (s *Store) scrubFileLocked(r PathRedactor, rel string, dryRun bool) (bool, 
 	if err := rejectSymlinkedPath(s.repoRoot, rel); err != nil {
 		return false, err
 	}
+	// A dry run writes nothing, and a record whose mission directory is gone
+	// has nothing to protect: taking a lock would create its file (and the
+	// directory) for a scrub that changes nothing, as Close avoids by
+	// statting the directory first.
+	if dryRun || s.missionDirAbsent(rel) {
+		return scrubFile(r, s.repoRoot, rel, dryRun)
+	}
 	var did bool
 	err := s.withRecordLocks(rel, func() error {
 		var err error
@@ -159,10 +168,21 @@ func (s *Store) scrubFileLocked(r PathRedactor, rel string, dryRun bool) (bool, 
 	return did, err
 }
 
+// missionDirAbsent reports whether rel names a file under a mission directory
+// that does not exist.
+func (s *Store) missionDirAbsent(rel string) bool {
+	parts := strings.Split(path.Clean(rel), "/")
+	if len(parts) < 5 {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(s.repoRoot, filepath.Join(parts[:4]...)))
+	return missingRepoTreeDir(err)
+}
+
 // withRecordLocks runs fn holding the lock that serializes rel's writers:
 // the trace lock for missions.jsonl, the per-mission lock for a mission's
-// contract, results and reflections, the delegation lock for a delegation
-// record. Plain export files have no writer lock.
+// contract, results and reflections, the shared repo mission lock and then the
+// delegation lock for a delegation record. Plain export files have no writer lock.
 func (s *Store) withRecordLocks(rel string, fn func() error) error {
 	rel = path.Clean(rel)
 	parts := strings.Split(rel, "/")
@@ -172,6 +192,15 @@ func (s *Store) withRecordLocks(rel string, fn func() error) error {
 	case len(parts) == 5:
 		return s.withLock(parts[3], fn)
 	case len(parts) == 7:
+		// The close sweep (Store.Close) runs under the exclusive repo mission
+		// lock and rewrites open delegation records; scrub takes the shared
+		// repo mission lock first, in the sweep's order, so it cannot write
+		// back an open snapshot over a record the sweep closed.
+		releaseMission, err := AcquireMissionLock(s.repoRoot, parts[3])
+		if err != nil {
+			return err
+		}
+		defer releaseMission()
 		release, err := AcquireDelegationLock(s.root, parts[5])
 		if err != nil {
 			return err

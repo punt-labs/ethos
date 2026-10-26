@@ -3,7 +3,9 @@ package hook
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -35,7 +37,7 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 				"quarantine: cannot resolve session from directory %q", sealedDir)
 		}
 		livePath := liveAuditPath(repoRoot, sessionID)
-		redactReason := pr.Content
+		redactReason := quarantineReason(pr)
 		var marker audit.Marker
 		err := WithLiveAuditLock(repoRoot, sessionID, func() error {
 			var e error
@@ -48,7 +50,7 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 	if cn, kind := audit.Classify(name, audit.MissionNS); kind == audit.KindValid {
 		missionID := filepath.Base(sealedDir)
 		livePath := liveMissionLogPath(repoRoot, missionID, cn.Session)
-		redactReason := pr.Content
+		redactReason := quarantineReason(pr)
 		guard := missionLineGuard(repoRoot)
 		guardLine := func(l []byte) ([]byte, string) {
 			out, rule, marker := guard(l)
@@ -65,6 +67,35 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 
 	return audit.Marker{}, fmt.Errorf(
 		"quarantine: %q is not a recognizable audit or mission chunk name", name)
+}
+
+// quarantineReason is the redaction of a quarantine reason: the content pass,
+// then each word that still names a home (an encoded spelling the pass does not
+// decode) is replaced alone, so the rest of the reason survives. When no single
+// word can be isolated the reason becomes a fixed text. Either edit prints a
+// notice, which does not quote the reason. The marker is staged, so the reason
+// is never written unchecked; the quarantine is not refused for it.
+func quarantineReason(pr mission.PathRedactor) func(string) string {
+	leaks := func(s string) bool { return mission.LeakRule(s) != "" || pr.Leaks(s) }
+	return func(s string) string {
+		c := pr.Content(s)
+		if !leaks(c) {
+			return c
+		}
+		words := strings.Fields(c)
+		for i, w := range words {
+			core := strings.TrimRight(w, ":,;.)")
+			if core != "" && leaks(core) {
+				words[i] = "[redacted-path]" + w[len(core):]
+			}
+		}
+		out := strings.Join(words, " ")
+		if leaks(out) {
+			out = "reason withheld: it named a home directory"
+		}
+		fmt.Fprintln(os.Stderr, "ethos: quarantine reason edited: it named a home directory")
+		return out
+	}
 }
 
 // corruptRule names the rule the bytes of a retired chunk break, or returns "".
