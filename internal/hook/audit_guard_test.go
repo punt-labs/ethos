@@ -936,3 +936,28 @@ func TestSessionLineGuard_RedactsHeadersAndUnknownFields(t *testing.T) {
 		check(t, chunkLines(t, sealedDir))
 	})
 }
+
+// TestSessionLineGuard_UnusableHomeRedactsAShortAssignment: with a relative HOME
+// (no path redactor) an older live Bash line holding GITHUB_TOKEN=abc and no
+// home path is sealed with the value gone.
+func TestSessionLineGuard_UnusableHomeRedactsAShortAssignment(t *testing.T) {
+	t.Setenv("HOME", "relative/home")
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	_, err := mission.NewPathRedactor(repo)
+	require.Error(t, err, "an unusable home: no path redactor")
+	sid := "sess-short"
+	live := liveAuditPath(repo, sid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	b, err := json.Marshal(map[string]any{
+		"ts": audit.FormatLineTS(100), "session": sid, "tool": "Bash",
+		"tool_input": map[string]any{"command": "GITHUB_TOKEN=abc"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(live, append(b, '\n'), 0o600))
+	lines := sealedLines(t, repo, sid)
+	require.NotEmpty(t, lines)
+	for _, l := range lines {
+		assert.NotContains(t, l, "TOKEN=abc")
+	}
+}

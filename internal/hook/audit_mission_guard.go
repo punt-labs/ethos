@@ -27,7 +27,20 @@ func missionLineGuard(repoRoot string) lineGuard {
 		if out, rule, ok := guardMissionEvent(repoRoot, line); ok {
 			return out, rule, false
 		}
-		return guardAuditLineFull(line)
+		// The line is not an event this schema knows (an unknown top-level
+		// field, say): the credential and address passes run over the whole
+		// payload before the home-only audit guard, which keeps ts.
+		pre, note := line, ""
+		if isJSONObject(line) {
+			if red, changed := credentialPassLine(line); changed {
+				pre, note = red, "held a credential or an address"
+			}
+		}
+		out, rule, marker := guardAuditLineFull(pre)
+		if marker {
+			return out, rule, marker
+		}
+		return out, joinRules(note, rule), false
 	}
 }
 

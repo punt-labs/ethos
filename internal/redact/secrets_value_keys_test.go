@@ -70,3 +70,20 @@ func TestRecord_CredentialKeyIsReplacedWhole(t *testing.T) {
 		assert.Contains(t, out.M, SecretToken+"#2")
 	})
 }
+
+// TestSecretsValue_AuthorizationKeyIsACredential: a structured authorization
+// header, under the key authorization or proxy-authorization in any case, has
+// its value replaced whatever the value looks like; a key that merely holds the
+// word is not one.
+func TestSecretsValue_AuthorizationKeyIsACredential(t *testing.T) {
+	for _, k := range []string{"Authorization", "authorization", "AUTHORIZATION", "Proxy-Authorization"} {
+		for _, v := range []string{"Basic dXNlcjpwYXNz", "Bearer abc.def", "plainvalue"} {
+			out, changed := SecretsValue(map[string]any{"headers": map[string]any{k: v}})
+			assert.True(t, changed, "%s: %s", k, v)
+			assert.Equal(t, map[string]any{"headers": map[string]any{k: SecretToken}}, out)
+		}
+	}
+	out, changed := SecretsValue(map[string]any{"authorization_url": "https://x.example/auth"})
+	assert.False(t, changed)
+	assert.Equal(t, map[string]any{"authorization_url": "https://x.example/auth"}, out)
+}

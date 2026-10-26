@@ -210,3 +210,50 @@ func TestMissionLineGuard_FallbackRedactsCredentialsBeforeRenamingKeys(t *testin
 	assert.NotContains(t, m["_raw"], "hunter2")
 	assert.NotContains(t, m["_raw"], "bob")
 }
+
+// TestMissionLine_UnknownFieldEventIsRedactedWhenSealedAndRecovered: an event with
+// a top-level field the schema lacks fails the strict decode and takes the audit
+// guard's fallback, which is home-only; the credential and address passes run on
+// the whole payload first, in the seal and in quarantine's recovery.
+func TestMissionLine_UnknownFieldEventIsRedactedWhenSealedAndRecovered(t *testing.T) {
+	ts := audit.FormatLineTS(100)
+	line := `{"ts":"` + ts + `","event":"update","actor":"a","extra":"jane@example.com","details":{"password":"hunter2","ok":"fine"}}` + "\n"
+	assertClean := func(t *testing.T, lines []string) {
+		t.Helper()
+		require.NotEmpty(t, lines)
+		for _, l := range lines {
+			assert.NotContains(t, l, "hunter2")
+			assert.NotContains(t, l, "jane@example.com")
+		}
+	}
+
+	t.Run("seal", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		repo := t.TempDir()
+		initGitRepo(t, repo)
+		const mid, sid = "m-2026-07-21-050", "sessM"
+		live := liveMissionLogPath(repo, mid, sid)
+		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+		require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+		_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+		require.NoError(t, err)
+		assertClean(t, chunkLines(t, sealedMissionDir(repo, mid)))
+	})
+
+	t.Run("quarantine", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		repo := t.TempDir()
+		initGitRepo(t, repo)
+		const mid, sid = "m-2026-07-21-051", "sessM"
+		sealedDir := sealedMissionDir(repo, mid)
+		require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+		chunk := audit.MissionChunkFile(sid, 100, 300)
+		require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
+		live := liveMissionLogPath(repo, mid, sid)
+		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+		require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+		_, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+		require.NoError(t, err)
+		assertClean(t, chunkLines(t, sealedDir))
+	})
+}

@@ -231,10 +231,16 @@ func replaceValue(re *regexp.Regexp, s string) string {
 
 // IsSecretKey reports whether name is credential-bearing: it contains
 // token, secret, password, passwd, api_key, apikey, private_key or
-// access_key, case-insensitively.
+// access_key, case-insensitively, or is authorization or proxy-authorization.
 func IsSecretKey(name string) bool {
-	return secretKey.MatchString(name) && !placeholderKey.MatchString(name)
+	return (secretKey.MatchString(name) || authorizationKey.MatchString(name)) && !placeholderKey.MatchString(name)
 }
+
+// authorizationKey matches the whole name of a structured authorization header,
+// authorization or proxy-authorization in any case: its value is a credential
+// (Basic dXNlcjpwYXNz) whatever it looks like. A name that only holds the word
+// (authorization_url) is not one.
+var authorizationKey = regexp.MustCompile(`(?i)^(?:proxy-)?authorization$`)
 
 // placeholderKey matches the names a pass gives a renamed key, with a #N
 // suffix when the name was taken. They hold the word secret and are not

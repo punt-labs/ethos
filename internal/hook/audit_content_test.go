@@ -863,3 +863,19 @@ func TestRedactSensitiveContent_ReadTargetsKeepTheirValue(t *testing.T) {
 	assert.Equal(t, "GITHUB_TOKEN=[redacted-secret]", out["command"])
 	assert.Equal(t, "GITHUB_TOKEN=abc12345", in["command"], "the input is not mutated")
 }
+
+// TestAuditWriter_RedactsAStructuredAuthorizationHeader: a header map in a
+// tool_input of a tool outside the keep-list has its Authorization value replaced.
+func TestAuditWriter_RedactsAStructuredAuthorizationHeader(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, v := range []string{"Basic dXNlcjpwYXNz", "Bearer abc.def.ghi"} {
+		e := buildAuditEntry(map[string]any{"tool_name": "WebFetch", "tool_input": map[string]any{
+			"url": "https://api.example.com/x", "headers": map[string]any{"Authorization": v},
+		}}, "s", t.TempDir(), time.Now())
+		b, err := json.Marshal(e)
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), v)
+		assert.NotContains(t, string(b), strings.Fields(v)[1])
+		assert.Contains(t, string(b), "[redacted-secret]")
+	}
+}
