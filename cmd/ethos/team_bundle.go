@@ -561,7 +561,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 
 	// What a clone or submodule add would refuse for local reasons is checked
 	// before git runs, so the failure is the real one and no network is touched.
-	if err := checkBundleDestination(targetDir, gitDir, relTarget); err != nil {
+	if err := checkBundleDestination(targetDir, gitDir, relTarget, url); err != nil {
 		return err
 	}
 	if err := checkGitConfigReadable(cmd.ErrOrStderr()); err != nil {
@@ -597,12 +597,13 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 
 // checkBundleDestination refuses a destination git itself would refuse. A clone
 // (gitDir "") goes into a directory that is empty or absent; a symlink to an
-// empty directory is accepted, a dangling one is not. A submodule add (gitDir
-// is the repo root) is refused when the path is already in the index, or when
-// it exists and is not a git repository of its own; an existing clone is left
-// for git submodule add, which adopts it.
-func checkBundleDestination(targetDir, gitDir, relTarget string) error {
-	_, lerr := os.Lstat(targetDir)
+// empty directory is accepted, one that cannot be followed is not. A submodule
+// add (gitDir is the repo root) is refused when the path is a symlink (git
+// would stage the link), is already in the index, or exists and is not a git
+// repository of its own. An existing clone whose origin is url is left for git
+// submodule add, which adopts it; one with another origin is refused.
+func checkBundleDestination(targetDir, gitDir, relTarget, url string) error {
+	li, lerr := os.Lstat(targetDir)
 	if errors.Is(lerr, fs.ErrNotExist) {
 		if gitDir == "" {
 			return nil
@@ -610,10 +611,17 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 	} else if lerr != nil {
 		return fmt.Errorf("examining the bundle destination %s: %w", targetDir, lerr)
 	}
-	info, err := os.Stat(targetDir)
 	exists := lerr == nil
+	isLink := exists && li.Mode()&fs.ModeSymlink != 0
+	if gitDir != "" && isLink {
+		return fmt.Errorf("the bundle path %s is a symlink; git submodule add would stage the link, not a submodule: remove it, or choose another --name", targetDir)
+	}
+	info, err := os.Stat(targetDir)
 	if exists && err != nil {
-		return fmt.Errorf("the bundle destination %s is a symlink to nothing: remove it, or choose another --name", targetDir)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("the bundle destination %s is a symlink to nothing: remove it, or choose another --name", targetDir)
+		}
+		return fmt.Errorf("the bundle destination %s is a symlink that cannot be followed: %w", targetDir, err)
 	}
 	if gitDir == "" {
 		if !exists {
@@ -640,24 +648,46 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 	if !exists {
 		return nil
 	}
-	if !info.IsDir() || !isOwnGitRepo(targetDir) {
+	own := false
+	if info.IsDir() {
+		if own, err = isOwnGitRepo(targetDir); err != nil {
+			return fmt.Errorf("examining the bundle path %s: %w", targetDir, err)
+		}
+	}
+	if !own {
 		return fmt.Errorf("the bundle path %s already exists and is not a git repository: remove it, or choose another --name", targetDir)
+	}
+	origin, err := gitenv.Output(targetDir, "git", "remote", "get-url", "origin")
+	if err != nil {
+		return fmt.Errorf("the existing clone at %s has no readable origin remote (%w): remove it, or choose another --name", targetDir, err)
+	}
+	if got := strings.TrimSpace(string(origin)); got != url {
+		return fmt.Errorf("the existing clone at %s has origin %s, not %s: remove it, or choose another --name", targetDir, got, url)
 	}
 	return nil
 }
 
-// isOwnGitRepo reports whether dir is the top level of a git work tree.
-func isOwnGitRepo(dir string) bool {
+// isOwnGitRepo reports whether dir is the top level of a git work tree. Only
+// git's "not a git repository", or a different top level, answers false; a
+// timeout or any other failure is returned as the error.
+func isOwnGitRepo(dir string) (bool, error) {
 	out, err := gitenv.Output(dir, "git", "rev-parse", "--show-toplevel")
 	if err != nil {
-		return false
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			return false, err
+		}
+		if gitenv.IsNotARepo(string(ee.Stderr)) {
+			return false, nil
+		}
+		return false, fmt.Errorf("git rev-parse --show-toplevel: %s", strings.TrimSpace(string(ee.Stderr)))
 	}
 	top, err := os.Stat(strings.TrimSpace(string(out)))
 	if err != nil {
-		return false
+		return false, nil
 	}
 	d, err := os.Stat(dir)
-	return err == nil && os.SameFile(top, d)
+	return err == nil && os.SameFile(top, d), nil
 }
 
 // checkGitConfigReadable names every git config file that cannot be read. An

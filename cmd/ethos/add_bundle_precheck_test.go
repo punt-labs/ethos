@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -193,6 +195,7 @@ func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
 		dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
 		require.NoError(t, os.MkdirAll(dest, 0o755))
 		gitInitDir(t, dest, t.TempDir())
+		gitCmd(t, dest, "remote", "add", "origin", url)
 		t.Chdir(repo)
 		logFile := loggedGit(t)
 		_, _ = runAddBundle(t, url)
@@ -234,5 +237,117 @@ func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "symlink to nothing")
 		assertNoNetwork(t, logFile)
+	})
+}
+
+// What git would do something other than the user meant is refused before git
+// runs: a symlink at the submodule path (git stages the link), an existing
+// clone of another remote or with none, a symlink that cannot be followed.
+func TestAddBundleRefusesWhatGitWouldDoWrong(t *testing.T) {
+	const url = "https://example.invalid/o/b.git"
+	submodule := func(t *testing.T) (repo, dest string) {
+		bundleFlags(t, false)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		repo = t.TempDir()
+		gitInitDir(t, repo, t.TempDir())
+		dest = filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
+		require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+		t.Chdir(repo)
+		return repo, dest
+	}
+
+	t.Run("symlink to a clone", func(t *testing.T) {
+		_, dest := submodule(t)
+		clone := t.TempDir()
+		gitInitDir(t, clone, t.TempDir())
+		gitCmd(t, clone, "remote", "add", "origin", url)
+		require.NoError(t, os.Symlink(clone, dest))
+		logFile := loggedGit(t)
+		_, err := runAddBundle(t, url)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is a symlink; git submodule add would stage the link, not a submodule")
+		assertNoNetwork(t, logFile)
+	})
+
+	t.Run("clone of another remote", func(t *testing.T) {
+		_, dest := submodule(t)
+		require.NoError(t, os.MkdirAll(dest, 0o755))
+		gitInitDir(t, dest, t.TempDir())
+		gitCmd(t, dest, "remote", "add", "origin", "https://example.invalid/other/c.git")
+		logFile := loggedGit(t)
+		_, err := runAddBundle(t, url)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "https://example.invalid/other/c.git")
+		assert.Contains(t, err.Error(), url)
+		assertNoNetwork(t, logFile)
+	})
+
+	t.Run("clone with no origin", func(t *testing.T) {
+		_, dest := submodule(t)
+		require.NoError(t, os.MkdirAll(dest, 0o755))
+		gitInitDir(t, dest, t.TempDir())
+		logFile := loggedGit(t)
+		_, err := runAddBundle(t, url)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no readable origin")
+		assertNoNetwork(t, logFile)
+	})
+
+	t.Run("global symlink that cannot be followed", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores permissions")
+		}
+		bundleFlags(t, true)
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		locked := filepath.Join(t.TempDir(), "locked")
+		require.NoError(t, os.MkdirAll(filepath.Join(locked, "x"), 0o755))
+		require.NoError(t, os.Chmod(locked, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+		dest := filepath.Join(home, ".punt-labs", "ethos", "bundles", "b")
+		require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+		require.NoError(t, os.Symlink(filepath.Join(locked, "x"), dest))
+		_, err := runAddBundle(t, url)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is a symlink that cannot be followed")
+		assert.ErrorIs(t, err, syscall.EACCES)
+	})
+}
+
+// isOwnGitRepo answers "not a git repository" only for git's own answer or a
+// different top level; a timeout or another git failure is the error.
+func TestIsOwnGitRepoReportsFailures(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("timeout", func(t *testing.T) {
+		hangGit(t)
+		ok, err := isOwnGitRepo(dir)
+		assert.False(t, ok)
+		require.ErrorIs(t, err, gitenv.ErrTimeout)
+		assert.NotContains(t, err.Error(), "not a git repository")
+	})
+
+	t.Run("another git failure", func(t *testing.T) {
+		bin := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho 'fatal: detected dubious ownership' >&2\nexit 128\n"), 0o755))
+		t.Setenv("PATH", bin)
+		ok, err := isOwnGitRepo(dir)
+		assert.False(t, ok)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "dubious ownership")
+	})
+
+	t.Run("not a repository", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not installed")
+		}
+		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+		ok, err := isOwnGitRepo(dir)
+		require.NoError(t, err)
+		assert.False(t, ok)
 	})
 }
