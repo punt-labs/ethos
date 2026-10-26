@@ -275,7 +275,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A dangling or looping `.git` symlink, a dangling `.punt-labs` or
   `.punt-labs/ethos` symlink, and a dangling `.punt-labs/ethos.yaml` are
   errors**, reported by every command and hook, instead of reading as
-  "not a repository", and so is a `.git` that cannot be read. A
+  "not a repository", and so is any `.git` git does not accept (an
+  empty or missing `HEAD`, missing `objects`, an unreadable entry, a
+  FIFO): ethos refuses instead of answering from the global store or
+  an enclosing repository. A
   malformed or dangling `ethos.yaml` no longer stops the hooks,
   `ethos doctor` or `ethos serve`; they report it, as they do an
   unusable `active_bundle`, `repo-only` policy or unknown `resolution:`
@@ -292,7 +295,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regular file; `ethos enable` refuses such a marker. Git tracing set in
   the environment or in git configuration no longer makes ethos fail.
   An unreadable git configuration file is reported instead of treated as
-  "not set", and `ethos team add-bundle` names one before cloning. On
+  "not set". `ethos team add-bundle` names every unreadable global or
+  XDG git configuration before cloning, refuses an unreadable system
+  configuration, and refuses a non-empty destination or a submodule
+  path already in use before contacting the remote. On
   Unix, `ethos team add-bundle` no longer overrides your ssh command,
   shows git's clone progress, runs its clone with no terminal so an ssh
   or credential prompt fails

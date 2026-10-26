@@ -12905,12 +12905,18 @@ it switches off ssh's askpass (`SSH_ASKPASS` emptied,
 helper, and ssh's own prompts (an unknown host key, a passphrase) find
 no terminal, so a missing credential fails instead of waiting. git's
 error output goes to the user's terminal unchanged, so clone progress
-shows. After a failed clone, ethos runs a bounded `git ls-remote` on
-the same URL; if its output shows an ssh authentication, host-key or
+shows. Before the clone, ethos refuses what it can see locally: a
+`--global` destination that exists and is not empty, or a submodule
+path already in the work tree or the index. After a clone that exits
+with an error (not a timeout or an interrupt), for a URL that is not
+relative (`./`, `../`), ethos runs a bounded `git ls-remote` on the
+same URL; if its output shows an ssh authentication, host-key or
 passphrase failure, ethos adds that the user should load the key with
-`ssh-add` or accept the host key with `ssh` first. A user git
-configuration file that cannot be read is named before the clone,
-because git ignores it. On Windows there are no process groups: a timeout kills git
+`ssh-add` or accept the host key with `ssh` first. Every global or XDG
+git configuration file that cannot be read is named before the clone,
+because git ignores it; an unreadable system configuration
+(`GIT_CONFIG_SYSTEM`, `/etc/gitconfig`) makes add-bundle refuse,
+because git would refuse it. On Windows there are no process groups: a timeout kills git
 at once and its children may outlive it. Git tracing is switched off
 through the environment (`GIT_TRACE2*=0` overrides configured targets)
 and any remaining trace lines are removed from stderr. A configuration
@@ -12928,13 +12934,16 @@ that only chooses the wording of an error: bad-revision messages in
 in the hooks-directory advice. Every git read declares what an absent
 answer is (a configuration key that is not set, no such remote, no
 upstream, a path `git check-ignore` does not match, or that discovery
-failure); a broken `.git` link, a `.git` symlink git cannot follow for
-any reason, a `.git` file that cannot be opened, or a `.git` directory
-whose `HEAD` cannot be read or whose `objects` or `refs` cannot be
-searched (git's own test), in the directory or an ancestor below the
-ceiling, is never absent, even though git itself skips such a directory
-and reports "not a git repository" (for such a file git reports an
-error). Any other failure, a timeout included, is an error that
+failure). "Not in a repository" means no `.git` entry of any kind
+exists in the directory or an ancestor below the ceiling. A `.git`
+that git does not accept as a repository (a broken link or gitfile, a
+symlink git cannot follow, a FIFO, or a directory whose `HEAD` is
+empty, invalid, missing or unreadable, or whose `objects` or `refs` is
+missing or cannot be searched) is refused, naming that `.git`, even
+though git itself skips such a directory and either reports "not a git
+repository" or answers for an enclosing repository (for an unreadable
+gitfile git reports an error). A `HEAD` that is a symlink to `refs/…`,
+dangling or not, is accepted, as git accepts it. Any other failure, a timeout included, is an error that
 carries git's message and names the command and the directory. A git
 failure is therefore never read as "no repository", "no remote", "not a
 gitlink" or an empty identity. One function, `resolve.Roots()`, locates
