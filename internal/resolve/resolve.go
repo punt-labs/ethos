@@ -1094,7 +1094,7 @@ func walkedPast(start, top, gitDir string) error {
 	for _, d := range gitWalk(start) {
 		di, err := os.Stat(d)
 		atTop := err == nil && os.SameFile(di, ti)
-		if atTop || gerr == nil && DotIsGitDir(filepath.Join(d, ".git"), gi) {
+		if atTop || gerr == nil && dotIsGitDir(filepath.Join(d, ".git"), gi) {
 			for _, p := range passed {
 				if derr := gitenv.DanglingDotGit(p); derr != nil {
 					return derr
@@ -1110,8 +1110,8 @@ func walkedPast(start, top, gitDir string) error {
 	return nil
 }
 
-// DotIsGitDir reports whether dot is the git directory gi, or a gitfile naming it.
-func DotIsGitDir(dot string, gi os.FileInfo) bool {
+// dotIsGitDir reports whether dot is the git directory gi, or a gitfile naming it.
+func dotIsGitDir(dot string, gi os.FileInfo) bool {
 	info, err := os.Stat(dot)
 	if err != nil {
 		return false

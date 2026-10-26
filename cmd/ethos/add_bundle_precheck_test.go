@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +40,11 @@ func loggedGit(t *testing.T) (logFile string) {
 
 func assertNoNetwork(t *testing.T, logFile string) {
 	t.Helper()
-	b, _ := os.ReadFile(logFile)
+	b, err := os.ReadFile(logFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return // git was never run
+	}
+	require.NoError(t, err)
 	for _, c := range strings.Fields(string(b)) {
 		assert.NotContains(t, []string{"clone", "submodule", "ls-remote", "fetch"}, c, "git reached out: %s", b)
 	}
@@ -200,7 +206,8 @@ func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
 		t.Chdir(repo)
 		logFile := loggedGit(t)
 		_, _ = runAddBundle(t, url)
-		b, _ := os.ReadFile(logFile)
+		b, err := os.ReadFile(logFile)
+		require.NoError(t, err)
 		assert.Contains(t, string(b), "submodule", "git submodule add was run, not refused beforehand")
 	})
 
@@ -216,11 +223,12 @@ func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
 		require.NoError(t, os.Symlink(empty, dest))
 		logFile := filepath.Join(t.TempDir(), "calls.log")
 		bin := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nwhile [ \"$1\" = -c ]; do shift 2; done\necho \"$1\" >> '"+logFile+"'\nexit 0\n"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nwhile [ \"$1\" = -c ] || [ \"$1\" = -C ]; do shift 2; done\necho \"$1\" >> '"+logFile+"'\nexit 0\n"), 0o755))
 		t.Setenv("PATH", bin)
 		_, err := runAddBundle(t, url)
 		require.NoError(t, err)
-		b, _ := os.ReadFile(logFile)
+		b, err := os.ReadFile(logFile)
+		require.NoError(t, err)
 		assert.Contains(t, string(b), "clone")
 	})
 
@@ -294,24 +302,40 @@ func TestAddBundleRefusesWhatGitWouldDoWrong(t *testing.T) {
 	})
 }
 
-// isOwnGitRepo answers "not a git repository" only for git's own answer or a
-// different top level; a timeout or another git failure is the error.
+// isOwnGitRepo is git's own adoption test: only git's "not a gitdir" or "not a
+// git repository", or an absent .git, answers false; a timeout or any other git
+// failure is the error, carrying git's stderr.
 func TestIsOwnGitRepoReportsFailures(t *testing.T) {
-	dir := t.TempDir()
+	withDotGit := func(t *testing.T) string {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+		return dir
+	}
+	stub := func(t *testing.T, script string) {
+		bin := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\n"+script), 0o755))
+		t.Setenv("PATH", bin)
+	}
+
+	t.Run("no .git", func(t *testing.T) {
+		ok, _, err := isOwnGitRepo(t.TempDir())
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
 
 	t.Run("timeout", func(t *testing.T) {
+		dir := withDotGit(t)
 		hangGit(t)
-		ok, err := isOwnGitRepo(dir)
+		ok, _, err := isOwnGitRepo(dir)
 		assert.False(t, ok)
 		require.ErrorIs(t, err, gitenv.ErrTimeout)
 		assert.NotContains(t, err.Error(), "not a git repository")
 	})
 
 	t.Run("a failure with no stderr names the exit", func(t *testing.T) {
-		bin := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 3\n"), 0o755))
-		t.Setenv("PATH", bin)
-		ok, err := isOwnGitRepo(dir)
+		dir := withDotGit(t)
+		stub(t, "exit 3\n")
+		ok, _, err := isOwnGitRepo(dir)
 		assert.False(t, ok)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "exit status 3")
@@ -320,35 +344,45 @@ func TestIsOwnGitRepoReportsFailures(t *testing.T) {
 		assert.False(t, strings.HasSuffix(err.Error(), ": "), err.Error())
 	})
 
-	t.Run("a top level that cannot be examined", func(t *testing.T) {
-		bin := t.TempDir()
-		gone := filepath.Join(t.TempDir(), "gone")
-		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho '"+gone+"'\n"), 0o755))
-		t.Setenv("PATH", bin)
-		ok, err := isOwnGitRepo(dir)
-		assert.False(t, ok)
-		require.ErrorIs(t, err, os.ErrNotExist)
-		assert.Contains(t, err.Error(), gone)
-	})
-
 	t.Run("another git failure", func(t *testing.T) {
-		bin := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho 'fatal: detected dubious ownership' >&2\nexit 128\n"), 0o755))
-		t.Setenv("PATH", bin)
-		ok, err := isOwnGitRepo(dir)
+		dir := withDotGit(t)
+		stub(t, "echo 'fatal: detected dubious ownership' >&2\nexit 128\n")
+		ok, _, err := isOwnGitRepo(dir)
 		assert.False(t, ok)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "dubious ownership")
 	})
 
-	t.Run("not a repository", func(t *testing.T) {
+	t.Run("an empty .git directory", func(t *testing.T) {
 		if _, err := exec.LookPath("git"); err != nil {
 			t.Skip("git not installed")
 		}
-		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
-		ok, err := isOwnGitRepo(dir)
+		ok, _, err := isOwnGitRepo(withDotGit(t))
 		require.NoError(t, err)
 		assert.False(t, ok)
+	})
+
+	t.Run("a gitfile to nothing", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not installed")
+		}
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /nonexistent\n"), 0o644))
+		ok, _, err := isOwnGitRepo(dir)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("an empty .git file", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not installed")
+		}
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), nil, 0o644))
+		ok, _, err := isOwnGitRepo(dir)
+		assert.False(t, ok)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid gitfile format")
 	})
 }
 
@@ -396,59 +430,120 @@ func TestAddBundleHandsAnExistingCloneToGit(t *testing.T) {
 	})
 }
 
-// A clone whose core.worktree puts the work tree elsewhere is still a repository
-// of its own: git submodule add adopts it, as on main. One whose core.worktree
-// git cannot enter reports git's error, not "not a git repository".
-func TestIsOwnGitRepoWithACoreWorktree(t *testing.T) {
+// git's adoption test decides, not a guess at it: a clone whose config makes
+// show-toplevel fail or name another tree (core.worktree elsewhere or missing,
+// core.bare true) is still a repository of its own, and is handed to git
+// submodule add, as on main.
+func TestAddBundleAdoptionFollowsGit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	clone := func(t *testing.T, worktree string) string {
+	setConfig := func(t *testing.T, dir, key, val string) {
+		t.Helper()
+		out, err := exec.Command("git", "config", "-f", filepath.Join(dir, ".git", "config"), key, val).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	clone := func(t *testing.T) string {
 		dir := filepath.Join(t.TempDir(), "c")
 		gitInitDir(t, dir, t.TempDir())
-		require.NoError(t, exec.Command("git", "config", "-f", filepath.Join(dir, ".git", "config"), "core.worktree", worktree).Run())
 		return dir
 	}
 
-	t.Run("elsewhere", func(t *testing.T) {
-		ok, err := isOwnGitRepo(clone(t, t.TempDir()))
-		require.NoError(t, err)
-		assert.True(t, ok)
-	})
+	for name, set := range map[string]func(t *testing.T, dir string){
+		"core.worktree elsewhere":         func(t *testing.T, d string) { setConfig(t, d, "core.worktree", t.TempDir()) },
+		"core.bare true":                  func(t *testing.T, d string) { setConfig(t, d, "core.bare", "true") },
+		"core.worktree relative, missing": func(t *testing.T, d string) { setConfig(t, d, "core.worktree", "sub") },
+		"core.worktree absolute, missing": func(t *testing.T, d string) { setConfig(t, d, "core.worktree", "/nonexistent/wt") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := clone(t)
+			set(t, dir)
+			ok, resolved, err := isOwnGitRepo(dir)
+			require.NoError(t, err)
+			assert.True(t, ok)
+			assert.NotEmpty(t, resolved)
+		})
+	}
 
 	t.Run("a gitfile to the git dir", func(t *testing.T) {
-		src := clone(t, t.TempDir())
+		src := clone(t)
 		dir := filepath.Join(t.TempDir(), "g")
 		require.NoError(t, os.Mkdir(dir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(src, ".git")+"\n"), 0o644))
-		ok, err := isOwnGitRepo(dir)
+		ok, resolved, err := isOwnGitRepo(dir)
 		require.NoError(t, err)
 		assert.True(t, ok)
+		assert.Equal(t, filepath.Join(src, ".git"), resolved)
 	})
 
-	t.Run("unenterable", func(t *testing.T) {
-		ok, err := isOwnGitRepo(clone(t, "sub"))
-		assert.False(t, ok)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot chdir")
-	})
-
-	t.Run("adopted through add-bundle", func(t *testing.T) {
-		bundleFlags(t, false)
-		t.Setenv("HOME", t.TempDir())
-		repo := t.TempDir()
-		gitInitDir(t, repo, t.TempDir())
-		dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
-		require.NoError(t, os.MkdirAll(dest, 0o755))
-		gitInitDir(t, dest, t.TempDir())
-		require.NoError(t, exec.Command("git", "config", "-f", filepath.Join(dest, ".git", "config"), "core.worktree", t.TempDir()).Run())
-		t.Chdir(repo)
-		logFile := loggedGit(t)
-		_, _ = runAddBundle(t, "https://example.invalid/o/b.git")
-		b, err := os.ReadFile(logFile)
+	t.Run("plain directory", func(t *testing.T) {
+		ok, _, err := isOwnGitRepo(t.TempDir())
 		require.NoError(t, err)
-		assert.Contains(t, string(b), "submodule")
+		assert.False(t, ok)
 	})
+
+	for _, name := range []string{"core.worktree elsewhere", "core.bare true", "core.worktree relative, missing", "core.worktree absolute, missing"} {
+		t.Run("add-bundle hands it to git submodule add: "+name, func(t *testing.T) {
+			bundleFlags(t, false)
+			t.Setenv("HOME", t.TempDir())
+			repo := t.TempDir()
+			gitInitDir(t, repo, t.TempDir())
+			dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
+			require.NoError(t, os.MkdirAll(dest, 0o755))
+			gitInitDir(t, dest, t.TempDir())
+			switch name {
+			case "core.worktree elsewhere":
+				setConfig(t, dest, "core.worktree", t.TempDir())
+			case "core.bare true":
+				setConfig(t, dest, "core.bare", "true")
+			case "core.worktree relative, missing":
+				setConfig(t, dest, "core.worktree", "sub")
+			default:
+				setConfig(t, dest, "core.worktree", "/nonexistent/wt")
+			}
+			t.Chdir(repo)
+			logFile := loggedGit(t)
+			_, _ = runAddBundle(t, "https://example.invalid/o/b.git")
+			b, err := os.ReadFile(logFile)
+			require.NoError(t, err)
+			assert.Contains(t, string(b), "submodule")
+		})
+	}
+}
+
+// A bundle path whose .git is the superproject's own git dir (a symlink or a
+// gitfile to it) is refused: git submodule add would stage no gitlink, or a
+// gitlink to the superproject's own HEAD.
+func TestAddBundleRefusesTheSuperprojectsOwnGitDir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	for name, link := range map[string]func(t *testing.T, repo, dest string){
+		"symlink": func(t *testing.T, repo, dest string) {
+			require.NoError(t, os.Symlink(filepath.Join(repo, ".git"), filepath.Join(dest, ".git")))
+		},
+		"gitfile": func(t *testing.T, repo, dest string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dest, ".git"), []byte("gitdir: "+filepath.Join(repo, ".git")+"\n"), 0o644))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundleFlags(t, false)
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			repo := t.TempDir()
+			gitInitDir(t, repo, t.TempDir())
+			dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
+			require.NoError(t, os.MkdirAll(dest, 0o755))
+			link(t, repo, dest)
+			t.Chdir(repo)
+			logFile := loggedGit(t)
+			_, err := runAddBundle(t, "https://example.invalid/o/b.git")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "the bundle path's .git is this repository's own git dir")
+			assertNoNetwork(t, logFile)
+		})
+	}
 }

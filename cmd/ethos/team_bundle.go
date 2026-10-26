@@ -648,75 +648,74 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 	if !exists {
 		return nil
 	}
-	own := false
+	own, resolved := false, ""
 	if info.IsDir() {
-		if own, err = isOwnGitRepo(targetDir); err != nil {
+		if own, resolved, err = isOwnGitRepo(targetDir); err != nil {
 			return fmt.Errorf("examining the bundle path %s: %w", targetDir, err)
 		}
 	}
 	if !own {
 		return fmt.Errorf("the bundle path %s already exists and is not a git repository: remove it, or choose another --name", targetDir)
 	}
+	return refuseOwnGitDir(gitDir, resolved)
+}
+
+// refuseOwnGitDir refuses a bundle path whose .git resolves to the
+// superproject's own git dir or common dir (a symlink or a gitfile to it): git
+// submodule add would report success with no gitlink, or a gitlink to the
+// superproject's own HEAD.
+func refuseOwnGitDir(gitDir, resolved string) error {
+	ri, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("examining the git dir %s of the bundle path: %w", resolved, err)
+	}
+	for _, flag := range []string{"--absolute-git-dir", "--git-common-dir"} {
+		out, err := gitenv.Output(gitDir, "git", "rev-parse", flag)
+		if err != nil {
+			return fmt.Errorf("git rev-parse %s in %s: %w", flag, gitDir, err)
+		}
+		p := strings.TrimSpace(string(out))
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(gitDir, p)
+		}
+		pi, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("examining the superproject git dir %s: %w", p, err)
+		}
+		if os.SameFile(ri, pi) {
+			return fmt.Errorf("the bundle path's .git is this repository's own git dir (%s): remove it, or choose another --name", p)
+		}
+	}
 	return nil
 }
 
-// isOwnGitRepo reports whether dir is a git repository of its own: the top
-// level of its work tree, or a repository whose core.worktree puts the work tree
-// elsewhere (its git dir is dir/.git, or the target of the gitfile there). It is
-// (false, nil) only for git's "not a git repository" or a clean answer naming
-// another repository. Git failing to run or finish (a timeout), exiting non-zero
-// for any other reason, or a stat failure on dir or on the top level git
-// reported, is the error.
-func isOwnGitRepo(dir string) (bool, error) {
-	out, err := gitOut(dir, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return notARepo(err)
+// isOwnGitRepo reports whether dir is a git repository of its own by git's own
+// adoption test, `git rev-parse --resolve-git-dir dir/.git`, run from dir's
+// parent so no repository around it is consulted. It returns the resolved git
+// dir. It is (false, nil) when dir/.git is absent or git says "not a gitdir" or
+// "not a git repository"; any other failure, including a timeout, is the error
+// and carries git's stderr.
+func isOwnGitRepo(dir string) (bool, string, error) {
+	dot := filepath.Join(dir, ".git")
+	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
+		return false, "", nil
 	}
-	topPath := strings.TrimSpace(string(out))
-	top, err := os.Stat(topPath)
-	if err != nil {
-		return false, fmt.Errorf("examining the top level %s git reported: %w", topPath, err)
+	out, err := gitenv.Output(filepath.Dir(dir), "git", "rev-parse", "--resolve-git-dir", dot)
+	if err == nil {
+		return true, strings.TrimSpace(string(out)), nil
 	}
-	d, err := os.Stat(dir)
-	if err != nil {
-		return false, fmt.Errorf("examining %s: %w", dir, err)
-	}
-	if os.SameFile(top, d) {
-		return true, nil
-	}
-	// A core.worktree elsewhere: dir is still the repository if its git dir is
-	// the one under dir.
-	out, err = gitOut(dir, "rev-parse", "--absolute-git-dir")
-	if err != nil {
-		return notARepo(err)
-	}
-	gitDir := strings.TrimSpace(string(out))
-	gi, err := os.Stat(gitDir)
-	if err != nil {
-		return false, fmt.Errorf("examining the git dir %s git reported: %w", gitDir, err)
-	}
-	return resolve.DotIsGitDir(filepath.Join(dir, ".git"), gi), nil
-}
-
-func gitOut(dir string, args ...string) ([]byte, error) {
-	return gitenv.Output(dir, "git", args...)
-}
-
-// notARepo classes a failed git call for isOwnGitRepo: git's "not a git
-// repository" is (false, nil); anything else is the error, wrapping the exit.
-func notARepo(err error) (bool, error) {
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
-		return false, err
+		return false, "", err
 	}
 	stderr := strings.TrimSpace(string(ee.Stderr))
-	if gitenv.IsNotARepo(stderr) {
-		return false, nil
+	if strings.Contains(stderr, "not a gitdir") || strings.Contains(stderr, "not a git repository") {
+		return false, "", nil
 	}
 	if stderr == "" {
-		return false, fmt.Errorf("git rev-parse: %w", err)
+		return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w", err)
 	}
-	return false, fmt.Errorf("git rev-parse: %w: %s", err, stderr)
+	return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w: %s", err, stderr)
 }
 
 // checkGitConfigReadable names every git config file that cannot be read. An
