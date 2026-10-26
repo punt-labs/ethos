@@ -28,7 +28,7 @@ type TraceSummary struct {
 	Verdict         string   `json:"verdict" redact:"keep"`
 	FilesChanged    []string `json:"files_changed" redact:"path"`
 	Pipeline        string   `json:"pipeline,omitempty" redact:"keep"`
-	Session         string   `json:"session,omitempty" redact:"keep"`
+	Session         string   `json:"session,omitempty" redact:"session"`
 	Repo            string   `json:"repo,omitempty" redact:"path"`
 }
 

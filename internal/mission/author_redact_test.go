@@ -253,3 +253,50 @@ func TestHandleFields_CredentialShapedHandleIsRedacted(t *testing.T) {
 	assert.Equal(t, "bwk", got.Worker)
 	assert.Equal(t, ok.Leader, got.Leader)
 }
+
+// TestSessionField_OnlyASessionIDShapeIsKept: Session is caller-controlled, so a
+// value that does not have the shape of a session ID (the file-name-safe token a
+// harness UUID or ETHOS_SESSION is), or that the credential pass changes, gets
+// the content pass in the contract and the trace summary; a real session ID is
+// kept.
+func TestSessionField_OnlyASessionIDShapeIsKept(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := NewStoreWithRoots(t.TempDir(), t.TempDir())
+	c := newContract("m-2026-08-06-210")
+	c.Session = "alice@example.com"
+	require.NoError(t, s.Create(c))
+	path, err := s.ContractPath(c.MissionID)
+	require.NoError(t, err)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "alice@example.com")
+	assert.Contains(t, string(data), "session: '[redacted-email]'")
+
+	line, _, err := s.prepareTraceSummary(c, resultFor(c, VerdictPass))
+	require.NoError(t, err)
+	assert.NotContains(t, string(line), "alice@example.com")
+	assert.Contains(t, string(line), `"session":"[redacted-email]"`)
+
+	ok := newContract("m-2026-08-06-211")
+	ok.WriteSet = []string{"docs/"}
+	const sid = "94901c4f-5d86-41c5-bd06-98cbd86216b8"
+	ok.Session = sid
+	require.NoError(t, s.Create(ok))
+	got, err := s.Load(ok.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, sid, got.Session)
+	line, _, err = s.prepareTraceSummary(ok, resultFor(ok, VerdictPass))
+	require.NoError(t, err)
+	assert.Contains(t, string(line), `"session":"`+sid+`"`)
+
+	// A token has the character class of a session ID but is a credential.
+	tok := newContract("m-2026-08-06-212")
+	tok.WriteSet = []string{"pkg/"}
+	tok.Session = "ghp_" + strings.Repeat("aBcD1234", 4) + "aBcD"
+	require.NoError(t, s.Create(tok))
+	tokPath, err := s.ContractPath(tok.MissionID)
+	require.NoError(t, err)
+	data, err = os.ReadFile(tokPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "ghp_")
+}

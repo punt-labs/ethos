@@ -39,7 +39,7 @@ type Contract struct {
 	CreatedAt string `yaml:"created_at" json:"created_at" redact:"keep"`
 	UpdatedAt string `yaml:"updated_at" json:"updated_at" redact:"keep"`
 	ClosedAt  string `yaml:"closed_at,omitempty" json:"closed_at,omitempty" redact:"keep"`
-	Session   string `yaml:"session,omitempty" json:"session,omitempty" redact:"keep"`
+	Session   string `yaml:"session,omitempty" json:"session,omitempty" redact:"session"`
 	Repo      string `yaml:"repo,omitempty" json:"repo,omitempty" redact:"path"`
 
 	// Ticket ID lives at inputs.ticket — the single source of truth.

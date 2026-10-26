@@ -32,7 +32,11 @@ func missionLineGuard(repoRoot string) lineGuard {
 		// payload before the home-only audit guard, which keeps ts.
 		pre, note := line, ""
 		if isJSONObject(line) {
-			if red, changed := credentialPassLine(line); changed {
+			red, changed, markerRule := credentialPassLine(line)
+			if markerRule != "" {
+				return red, markerRule, true
+			}
+			if changed {
 				pre, note = red, "held a credential or an address"
 			}
 		}

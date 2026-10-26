@@ -1017,3 +1017,94 @@ func TestCredentialPassLine_CaseVariantInputIsALossMarker(t *testing.T) {
 		})
 	}
 }
+
+// TestCredentialPassLine_DuplicateKeyIsALossMarker: a line with a duplicate key
+// and a credential cannot be rewritten from a decoded map, which would merge the
+// duplicates silently: it becomes a loss marker naming the duplicate key, for a
+// session line and for a mission event that takes the fallback. A duplicate-key
+// line with nothing to redact is handled as before.
+func TestCredentialPassLine_DuplicateKeyIsALossMarker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	ts := audit.FormatLineTS(100)
+	session := `{"ts":"` + ts + `","session":"s","tool":"Read","agent_id":"a","agent_id":"b","x_token":"hunter2"}`
+	event := `{"ts":"` + ts + `","event":"update","actor":"a","actor":"b","extra":1,"details":{"password":"hunter2"}}`
+
+	for name, g := range map[string]struct {
+		guard lineGuard
+		line  string
+	}{
+		"session": {sessionLineGuard(repo), session},
+		"mission": {missionLineGuard(repo), event},
+	} {
+		out, rule, marker := g.guard([]byte(g.line))
+		assert.True(t, marker, name)
+		assert.Contains(t, rule, "duplicate key", name)
+		assert.NotContains(t, string(out), "hunter2", name)
+		assert.Contains(t, string(out), "audit_error", name)
+		assert.Contains(t, string(out), ts, "the marker keeps the ts: "+name)
+	}
+
+	clean := `{"ts":"` + ts + `","session":"s","tool":"Read","agent_id":"a","agent_id":"b"}`
+	want, wantRule, wantMarker := guardAuditLineFull([]byte(clean))
+	got, rule, marker := sessionLineGuard(repo)([]byte(clean))
+	assert.Equal(t, string(want), string(got), "nothing to redact: as the guard alone treats it")
+	assert.Contains(t, rule, "duplicate key")
+	assert.Equal(t, wantMarker, marker)
+	assert.Contains(t, wantRule, "duplicate key")
+}
+
+// TestCredentialPassLine_CleanCaseVariantInputIsLeftToTheGuard: a line whose only
+// peculiarity is a case-variant tool_input holds nothing for the credential and
+// address passes to change, so the pass leaves it alone and the result is exactly
+// what the guard alone gives (which marks such a line a loss: it would read back
+// as the field with another hash).
+func TestCredentialPassLine_CleanCaseVariantInputIsLeftToTheGuard(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	b, err := json.Marshal(map[string]any{
+		"ts": audit.FormatLineTS(100), "session": "s", "tool": "Read", "delegation_id": "d-2026-08-06-002",
+		"Tool_Input": map[string]any{"file_path": "a.go"},
+	})
+	require.NoError(t, err)
+	red, changed, markerRule := credentialPassLine(b)
+	assert.False(t, changed)
+	assert.Empty(t, markerRule)
+	assert.Equal(t, string(b), string(red))
+
+	out, rule, marker := sessionLineGuard(repo)(b)
+	want, wantRule, wantMarker := guardAuditLineFull(b)
+	assert.Equal(t, string(want), string(out))
+	assert.Equal(t, wantRule, rule)
+	assert.Equal(t, wantMarker, marker)
+	assert.Contains(t, string(out), "d-2026-08-06-002", "the marker keeps a clean delegation_id")
+}
+
+// TestCredentialPassLine_CaseVariantInputWithACredentialIsALoss: when something
+// must be redacted the line becomes a loss marker, reported as a loss, and the
+// marker keeps a clean delegation_id with ts and session.
+func TestCredentialPassLine_CaseVariantInputWithACredentialIsALoss(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	b, err := json.Marshal(map[string]any{
+		"ts": audit.FormatLineTS(100), "session": "s", "tool": "Bash", "delegation_id": "d-2026-08-06-001",
+		"Tool_Input": map[string]any{"api_key": "hunter2"},
+	})
+	require.NoError(t, err)
+	out, rule, marker := sessionLineGuard(repo)(b)
+	assert.True(t, marker, "reported through the guard's loss path: %s", rule)
+	assert.NotContains(t, string(out), "hunter2")
+	assert.Contains(t, string(out), "audit_error")
+	assert.Contains(t, string(out), "d-2026-08-06-001", "a clean delegation_id survives the marker")
+	assert.Contains(t, string(out), `"session":"s"`)
+
+	// A delegation_id that is not clean is dropped.
+	b, err = json.Marshal(map[string]any{
+		"ts": audit.FormatLineTS(100), "session": "s", "tool": "Bash", "delegation_id": "jane@example.com",
+		"Tool_Input": map[string]any{"api_key": "hunter2"},
+	})
+	require.NoError(t, err)
+	out, _, marker = sessionLineGuard(repo)(b)
+	assert.True(t, marker)
+	assert.NotContains(t, string(out), "jane@example.com")
+}

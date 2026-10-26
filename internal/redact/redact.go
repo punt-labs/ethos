@@ -670,6 +670,30 @@ var handleRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 // so a value the credential pass would change is not one.
 func IsHandle(s string) bool { return handleRE.MatchString(s) && SecretsString(s) == s }
 
+var sessionIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// IsSessionID reports whether s has the shape of a session ID: a file-name-safe
+// token (letters, digits, . _ -), as the UUID a harness reports or an
+// ETHOS_SESSION value is, and not a credential the credential pass would change.
+// ethos generates none itself, so this is the class a session directory name and
+// a chunk name are built from; an address (@) is outside it.
+func IsSessionID(s string) bool { return sessionIDRE.MatchString(s) && SecretsString(s) == s }
+
+// keepsValue reports whether a field with redact tag tag keeps value v as it is:
+// "handle" keeps an identity handle, "session" a session ID shape.
+func keepsValue(tag, v string) bool {
+	switch tag {
+	case "handle":
+		return IsHandle(v)
+	case "session":
+		return IsSessionID(v)
+	}
+	return false
+}
+
+// KeepsValue is keepsValue for the walkers outside this package.
+func KeepsValue(tag, v string) bool { return keepsValue(tag, v) }
+
 // Prose applies every content pass to free text bound for a tracked
 // file: credentials, then addresses, then home paths of any user.
 // Idempotent.
@@ -687,7 +711,9 @@ func Prose(s string) string {
 // `redact:"keep"`, which marks values the rest of the system relies on
 // byte-for-byte: IDs, hashes, enums, timestamps. A field tagged
 // `redact:"handle"` holds an identity handle: it is kept when it is one
-// (IsHandle) and otherwise is redacted like any other field.
+// (IsHandle) and otherwise is redacted like any other field; a field tagged
+// `redact:"session"` is kept when it has a session ID's shape (IsSessionID) and
+// otherwise redacted the same way.
 // Record treats
 // `redact:"path"` like an untagged field; see RecordPaths. A field added later is
 // redacted the day it appears rather than the day someone remembers to
@@ -784,10 +810,10 @@ func scrub(v reflect.Value, f, paths func(string) string, renamed *RenameStatus)
 			if !sf.IsExported() || tag == "keep" {
 				continue
 			}
-			if tag == "handle" {
+			if tag == "handle" || tag == "session" {
 				// An identity handle is kept as it is; anything else in the
 				// field is text like any other and gets the caller's pass.
-				if fv := v.Field(i); fv.Kind() == reflect.String && !IsHandle(fv.String()) {
+				if fv := v.Field(i); fv.Kind() == reflect.String && !keepsValue(tag, fv.String()) {
 					out.Field(i).SetString(f(fv.String()))
 				}
 				continue
@@ -897,7 +923,7 @@ func diffPaths(a, b reflect.Value, inPath bool, name string, out *[]string) {
 		for i := 0; i < t.NumField(); i++ {
 			sf := t.Field(i)
 			tag := sf.Tag.Get("redact")
-			if !sf.IsExported() || tag == "keep" || tag == "handle" {
+			if !sf.IsExported() || tag == "keep" || tag == "handle" || tag == "session" {
 				continue
 			}
 			sub := sf.Name
@@ -953,7 +979,7 @@ func collectStrings(v reflect.Value, name string, path bool, out *[]FieldString)
 			if !sf.IsExported() || sf.Tag.Get("redact") == "keep" {
 				continue
 			}
-			if fv := v.Field(i); sf.Tag.Get("redact") == "handle" && fv.Kind() == reflect.String && IsHandle(fv.String()) {
+			if fv := v.Field(i); fv.Kind() == reflect.String && keepsValue(sf.Tag.Get("redact"), fv.String()) {
 				continue
 			}
 			sub := sf.Name

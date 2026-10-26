@@ -866,7 +866,7 @@ func (w *yamlRedactor) walkMapping(n *yaml.Node, t reflect.Type, mode redactMode
 			case mode == modeKeep:
 			case tag == "keep":
 				km = modeKeep
-			case tag == "handle" && val.Kind == yaml.ScalarNode && redact.IsHandle(val.Value):
+			case (tag == "handle" || tag == "session") && val.Kind == yaml.ScalarNode && redact.KeepsValue(tag, val.Value):
 				km = modeKeep
 			case tag == "path":
 				km = modePath
@@ -1164,8 +1164,8 @@ func redactOrdered(f, p func(string) string, v *ojson, key string, t reflect.Typ
 					switch sf.Tag.Get("redact") {
 					case "keep":
 						cm = modeKeep
-					case "handle":
-						if c.kind == 's' && redact.IsHandle(c.str) {
+					case "handle", "session":
+						if c.kind == 's' && redact.KeepsValue(sf.Tag.Get("redact"), c.str) {
 							cm = modeKeep
 						}
 					case "path":

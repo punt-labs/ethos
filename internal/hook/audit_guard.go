@@ -71,7 +71,7 @@ func guardAuditLineWhy(line []byte) ([]byte, string) {
 func guardAuditLineFull(line []byte) ([]byte, string, bool) {
 	out, rule, marker := guardAuditLineOnce(line)
 	marker2 := func(kind, r string) ([]byte, string, bool) {
-		return lossMarker(lineTS(line), sessionOf(line), kind), r, true
+		return lossMarker(line, kind), r, true
 	}
 	if marker {
 		return out, rule, true
@@ -253,16 +253,30 @@ func sessionOf(line []byte) string {
 // lossMarker is the line that stands for one that cannot be stored: it keeps
 // the ts and session a reader took from the original, and says in kind, a
 // phrase that names no value, why it could not be stored.
-func lossMarker(ts, session, kind string) []byte {
+func lossMarker(line []byte, kind string) []byte {
 	m := map[string]any{"audit_error": kind, "redacted": true}
-	if ts != "" && mission.LeakRule(ts) == "" && !strings.ContainsRune(ts, '\uFFFD') {
+	if ts := lineTS(line); ts != "" && mission.LeakRule(ts) == "" && !strings.ContainsRune(ts, '\uFFFD') {
 		m["ts"] = ts
 	}
-	if session != "" && mission.LeakRule(session) == "" && !strings.ContainsRune(session, '\uFFFD') {
+	if session := sessionOf(line); session != "" && mission.LeakRule(session) == "" && !strings.ContainsRune(session, '\uFFFD') {
 		m["session"] = session
+	}
+	// delegation_id links the marker to the delegation it belonged to; it is kept
+	// when it is clean: no home, no credential, no address.
+	if d := delegationOf(line); d != "" && mission.LeakRule(d) == "" && !strings.ContainsRune(d, '\uFFFD') &&
+		redact.SecretsString(d) == d && !redact.EmailPattern.MatchString(d) {
+		m["delegation_id"] = d
 	}
 	out, _ := json.Marshal(m)
 	return out
+}
+
+func delegationOf(line []byte) string {
+	var h struct {
+		DelegationID string `json:"delegation_id"`
+	}
+	_ = json.Unmarshal(line, &h)
+	return h.DelegationID
 }
 
 // caseCollision reports whether two top-level keys of an audit line fold to
@@ -290,7 +304,7 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 	// unpaired surrogate escape into U+FFFD and the line would be stored with
 	// text it never held.
 	if r := mission.InvalidText(line); r != "" {
-		return lossMarker(lineTS(line), sessionOf(line), "invalid text"), r, true
+		return lossMarker(line, "invalid text"), r, true
 	}
 	rule := lineRule(line)
 	dec := json.NewDecoder(bytes.NewReader(line))
@@ -300,18 +314,18 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 		if rule == "" {
 			rule = "is not a JSON object"
 		}
-		return lossMarker(lineTS(line), sessionOf(line), "not a JSON object"), rule, true
+		return lossMarker(line, "not a JSON object"), rule, true
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		if rule == "" {
 			rule = "is not a single JSON object"
 		}
-		return lossMarker(lineTS(line), sessionOf(line), "not a single JSON object"), rule, true
+		return lossMarker(line, "not a single JSON object"), rule, true
 	}
 	// Keys that differ only in case let re-marshalling change which one a
 	// reader takes; such a line is not stored.
 	if caseCollision(m) {
-		return lossMarker(lineTS(line), sessionOf(line), "keys that differ only in case"), "holds keys that differ only in case", true
+		return lossMarker(line, "keys that differ only in case"), "holds keys that differ only in case", true
 	}
 	if _, k, dup := redact.DuplicateJSONKey(line); dup {
 		// The last value is the one a reader takes, and the one m holds;
@@ -325,7 +339,7 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 		rule = "cannot be re-encoded cleanly"
 	}
 	if caseVariantOfRewritten(m) {
-		return lossMarker(lineTS(line), sessionOf(line), "case-variant of a field ethos writes"), caseVariantRule, true
+		return lossMarker(line, "case-variant of a field ethos writes"), caseVariantRule, true
 	}
 	cleaned, _ := scrubAuditValue(m, true).(map[string]any)
 	cleaned["redacted"] = true
@@ -363,7 +377,7 @@ func guardAuditLineOnce(line []byte) ([]byte, string, bool) {
 	if out := finish(cleaned); out != nil {
 		return out, rule, false
 	}
-	return lossMarker(lineTS(line), sessionOf(line), "path that could not be removed"), rule, true
+	return lossMarker(line, "path that could not be removed"), rule, true
 }
 
 // lineRule names the rule the raw bytes or any decoded string or key of a
@@ -526,25 +540,22 @@ func scrubAuditIn(v any, c leakCtx) any {
 // the line, header or unknown, whatever its key. ts and the derived hash and
 // preview are left alone. A line it cannot decode, or that it leaves unchanged,
 // is returned as it came.
-func credentialPassLine(line []byte) ([]byte, bool) {
+func credentialPassLine(line []byte) (out []byte, changed bool, markerRule string) {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	var m map[string]any
 	if dec.Decode(&m) != nil || m == nil {
-		return line, false
+		return line, false, ""
 	}
+	caseVariant := false
 	for k := range m {
-		// A decoder reads Tool_Input as the tool_input field, so its hash and
-		// preview cannot be rebuilt from here: the line becomes a loss marker, as
-		// the guard treats a case-variant of a field it rewrites.
 		switch strings.ToLower(k) {
 		case "tool_input", "tool_input_hash", "tool_input_preview":
 			if k != strings.ToLower(k) {
-				return lossMarker(lineTS(line), sessionOf(line), "case-variant of a field ethos writes"), true
+				caseVariant = true
 			}
 		}
 	}
-	changed := false
 	if ti, ok := m["tool_input"].(map[string]any); ok {
 		tool, _ := m["tool"].(string)
 		if red, c := redactSensitiveContent(tool, ti); c {
@@ -582,13 +593,26 @@ func credentialPassLine(line []byte) ([]byte, bool) {
 		changed = true
 	}
 	if !changed {
-		return line, false
+		return line, false, ""
+	}
+	if caseVariant {
+		// A decoder reads Tool_Input as the tool_input field, so a change to it
+		// cannot be followed by a rebuilt hash and preview from here: the line is
+		// a loss marker, reported through the guard's marker path. A line that
+		// needed no change was returned above, for the guard to handle as before.
+		return lossMarker(line, "case-variant of a field ethos writes"), true, caseVariantRule
+	}
+	// A decoded map merges duplicate keys silently, so a line that holds one is
+	// not rewritten from it: a loss marker names the key, as the guard does for a
+	// line it cannot rewrite safely.
+	if _, k, dup := redact.DuplicateJSONKey(line); dup {
+		return lossMarker(line, "duplicate key"), true, "holds duplicate key " + quoteUnlessLeak(k)
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		return line, false
+		return line, false, ""
 	}
-	return b, true
+	return b, true, ""
 }
 
 // sessionLineGuard is the sink check for a session audit line that did not come
@@ -604,7 +628,11 @@ func sessionLineGuard(repoRoot string) lineGuard {
 	return func(line []byte) ([]byte, string, bool) {
 		pre, note := line, ""
 		if isJSONObject(line) {
-			if red, changed := credentialPassLine(pre); changed {
+			red, changed, markerRule := credentialPassLine(pre)
+			if markerRule != "" {
+				return red, markerRule, true
+			}
+			if changed {
 				pre, note = red, "held a credential or an address"
 			}
 			if err == nil {
