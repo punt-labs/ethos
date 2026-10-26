@@ -1078,13 +1078,12 @@ func gitLocate(git, start string) located {
 	return located{loc: location{root: root, store: store, storeErr: serr}}
 }
 
-// walkedPast refuses a damaged .git among the directories git examined on its
-// physical walk from start: git passed over each, and the repository around it
-// must not answer in its place. The walk ends at the first directory whose .git
-// is git's own git dir (directly, or through a gitfile; core.worktree puts the
-// work tree elsewhere): git chose that one, and the directories above it were
-// never examined. Otherwise it ends at top, the work tree git chose. Nothing is
-// checked when the walk reaches neither.
+// walkedPast refuses a damaged .git among the physical directories from start
+// up to the first of git's top and the directory whose .git is git's own git dir
+// (directly, or through a gitfile; core.worktree puts the work tree elsewhere):
+// git passed over each, and the repository around it must not answer in its
+// place. Directories beyond that are not examined. Nothing is checked when the
+// walk reaches neither.
 func walkedPast(start, top, gitDir string) error {
 	ti, err := os.Stat(top)
 	if err != nil {
