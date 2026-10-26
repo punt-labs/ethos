@@ -146,6 +146,9 @@ func TestDamagedDotGitSessionStart(t *testing.T) {
 						`{"session_id":"`+sid+`","hook_event_name":"SessionStart"}`,
 						"GIT_CEILING_DIRECTORIES="+filepath.Dir(p.se.repo))
 					assert.Contains(t, stdout+stderr, p.dot)
+					assert.Contains(t, stdout, "git does not accept it as a repository", "the refusal, not a skip warning")
+					assert.Contains(t, stdout, "persona and team were not loaded")
+					assert.NotContains(t, stdout, "Active identity", "no persona is answered")
 					assert.Empty(t, pathsNaming(t, p.se.repo, sid), "no session in the enclosing repository")
 				})
 			}
@@ -179,4 +182,28 @@ func TestDamagedDotGitServe(t *testing.T) {
 			}
 		})
 	}
+}
+
+// From a working directory reached through a symlink, a damaged .git inside the
+// repository is still refused, and nothing is written to the repository around
+// it.
+func TestDamagedDotGitThroughASymlinkedWorkingDirectory(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	se, inner := nestedGitEnv(t, gitDirWith("HEAD=", "objects/", "refs/"))
+	a := filepath.Join(inner, "a")
+	require.NoError(t, os.Mkdir(a, 0o755))
+	lnk := filepath.Join(t.TempDir(), "lnk")
+	if err := os.Symlink(a, lnk); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	out, code := createIdentityFrom(t, se, lnk)
+	assert.Equal(t, 2, code, out)
+	assert.Contains(t, out, filepath.Join(inner, ".git"))
+	assert.NoFileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "nested.yaml"))
+	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nested.yaml"))
 }
