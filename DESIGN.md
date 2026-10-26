@@ -12913,12 +12913,13 @@ shows. Before the clone, ethos refuses what it can see locally. For
 `--global`: a destination that exists and is not an empty directory, or
 a symlink that cannot be followed (a symlink to an empty directory is
 accepted). For a submodule: a path already in the index, a path that is
-a symlink (git would stage the link, not a submodule), and a path that
-exists and is not its own git repository (the top of a work tree, or a
-`.git` that is git's git dir when `core.worktree` points elsewhere, as
-git accepts). A failed or timed-out
-probe of that path is reported as that failure. An existing clone is
-passed to `git submodule add` whatever its `origin`, as git decides;
+a symlink (git would stage the link, not a submodule), a path that
+exists and whose `.git` git does not accept as a git directory (git's
+own test, `git rev-parse --resolve-git-dir`), and a path whose `.git`
+is the superproject's own git directory. A failed or timed-out
+probe of that path is reported as that failure. Any other existing
+clone is passed to `git submodule add` whatever its `origin` or
+`core.worktree`, as git decides;
 git adopts it if it has a commit checked out and otherwise refuses it
 with its own message. After a clone that exits
 with an error (not a timeout or an interrupt), for a URL that is not

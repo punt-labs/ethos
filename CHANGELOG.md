@@ -302,8 +302,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   XDG git configuration before cloning, refuses an unreadable system
   configuration, and before contacting the remote refuses a non-empty
   `--global` destination, a submodule path already in the index, a
-  submodule path that is a symlink, and one that exists and is not a
-  git repository (an existing clone there is left to
+  submodule path that is a symlink, one that exists and is not a git
+  repository by git's own test, and one whose `.git` is the
+  superproject's own (any other existing clone there is left to
   `git submodule add`). On
   Unix, `ethos team add-bundle` no longer overrides your ssh command,
   shows git's clone progress, runs its clone with no terminal so an ssh
