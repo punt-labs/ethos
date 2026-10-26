@@ -12909,12 +12909,15 @@ it switches off ssh's askpass (`SSH_ASKPASS` emptied,
 helper, and ssh's own prompts (an unknown host key, a passphrase) find
 no terminal, so a missing credential fails instead of waiting. git's
 error output goes to the user's terminal unchanged, so clone progress
-shows. Before the clone, ethos refuses what git would refuse and it can
-see locally: a `--global` destination that is a dangling symlink or
-exists and is not an empty directory (a symlink to an empty directory
-is accepted), or a submodule path already in the index or that exists
-and is not itself the top of a git repository. An existing clone at the
-submodule path is passed to `git submodule add`, which adopts it if
+shows. Before the clone, ethos refuses what it can see locally. For
+`--global`: a destination that exists and is not an empty directory, or
+a symlink that cannot be followed (a symlink to an empty directory is
+accepted). For a submodule: a path already in the index, a path that is
+a symlink (git would stage the link, not a submodule), and a path that
+exists and is not the top of a git repository whose `origin` is the URL
+given (a missing or different `origin` is refused, naming both URLs).
+A failed or timed-out probe of that path is reported as that failure.
+A matching clone is passed to `git submodule add`, which adopts it if
 it has a commit checked out and otherwise refuses it with its own
 message. After a clone that exits
 with an error (not a timeout or an interrupt), for a URL that is not
