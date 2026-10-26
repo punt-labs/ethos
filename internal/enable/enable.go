@@ -19,6 +19,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/claudemd"
+	"github.com/punt-labs/ethos/v4/internal/claudesettings"
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
@@ -134,6 +135,12 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 		rep.step("import", "already", CanonicalImport+" already present")
 	}
 
+	granted, err := claudesettings.Register(repoRoot, PermissionRules)
+	if err != nil {
+		return rep, fmt.Errorf("allowing ethos in .claude/settings.json: %w", err)
+	}
+	permissionStep(rep, granted, "allowed ", "all rules already allowed")
+
 	if err := chainHooks(repoRoot, rep); err != nil {
 		return rep, err
 	}
@@ -180,6 +187,12 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 		rep.step("import", "already", "no import line present")
 	}
 
+	revoked, err := claudesettings.Deregister(repoRoot, PermissionRules)
+	if err != nil {
+		return rep, fmt.Errorf("removing ethos from .claude/settings.json: %w", err)
+	}
+	permissionStep(rep, revoked, "removed ", "no ethos rules present")
+
 	markerRemoved, err := removeMarker(repoRoot)
 	if err != nil {
 		return rep, err
@@ -200,6 +213,15 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 
 	rep.step("vendored", "kept", "guide left dormant at "+guideRel)
 	return rep, nil
+}
+
+// permissionStep records the .claude/settings.json outcome, naming each rule.
+func permissionStep(rep *Report, rules []string, verb, none string) {
+	if len(rules) == 0 {
+		rep.step("permissions", "already", none)
+		return
+	}
+	rep.step("permissions", "done", verb+strings.Join(rules, ", ")+" in .claude/settings.json")
 }
 
 func writeMarker(repoRoot string) error {

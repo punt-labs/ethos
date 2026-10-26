@@ -189,6 +189,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ethos enable` allows ethos in the repo's `.claude/settings.json`.** It
+  adds `Bash(ethos:*)`, `mcp__plugin_ethos_self__*` and one
+  `Skill(ethos:<command>)` per shipped command, keeps every other entry, and
+  reports each rule it added; `ethos disable` removes exactly those. The write
+  takes the shared `.claude/.settings.json.punt-import.lock` and is atomic. A
+  malformed, non-UTF-8 or symlinked settings file, a symlinked `.claude/`, and
+  the home directory are refused untouched. No `ethos-dev` rule is granted and
+  `~/.claude/settings.json` is never edited
+  ([punt-kit#396](https://github.com/punt-labs/punt-kit/pull/396)).
+
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
   workflow_dispatch runs, never for runs triggered by pull requests, which
