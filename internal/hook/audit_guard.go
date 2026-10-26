@@ -520,19 +520,85 @@ func scrubAuditIn(v any, c leakCtx) any {
 	return v
 }
 
+// credentialPassLine is the part of the audit content pass that needs no home:
+// credentials and addresses, in tool_input (by the writer's per-tool policy, with
+// the input hash and preview rebuilt when it changes) and in every other field of
+// the line, header or unknown, whatever its key. ts and the derived hash and
+// preview are left alone. A line it cannot decode, or that it leaves unchanged,
+// is returned as it came.
+func credentialPassLine(line []byte) ([]byte, bool) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	var m map[string]any
+	if dec.Decode(&m) != nil || m == nil {
+		return line, false
+	}
+	changed := false
+	if ti, ok := m["tool_input"].(map[string]any); ok {
+		tool, _ := m["tool"].(string)
+		if red, c := redactSensitiveContent(tool, ti); c {
+			m["tool_input"] = red
+			env := map[string]any{"tool_input": red}
+			if _, has := m["tool_input_hash"]; has {
+				m["tool_input_hash"] = hashToolInput(env)
+			}
+			if _, has := m["tool_input_preview"]; has {
+				m["tool_input_preview"] = toolInputPreview(env)
+			}
+			m["redacted"] = true
+			changed = true
+		}
+	}
+	rest := map[string]any{}
+	for k, v := range m {
+		switch k {
+		case "ts", "tool_input", "tool_input_hash", "tool_input_preview":
+		default:
+			rest[k] = v
+		}
+	}
+	swept, c1 := redact.SecretsValue(rest)
+	swept, c2 := sweepPII(swept, sweepPrompt)
+	if c1 || c2 {
+		out, _ := swept.(map[string]any)
+		for k := range rest {
+			delete(m, k)
+		}
+		for k, v := range out {
+			m[k] = v
+		}
+		changed = true
+	}
+	if !changed {
+		return line, false
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return line, false
+	}
+	return b, true
+}
+
 // sessionLineGuard is the sink check for a session audit line that did not come
 // from this binary's writer: a live tail an older ethos appended, or one a
 // quarantine re-seals. The guard itself is home-only, so the line first gets the
-// audit content pass migrate gives a legacy line (credentials and addresses,
-// with the input hash and preview rebuilt when the input changes), and then the
-// guard. A line the pass leaves alone goes to the guard as it is.
+// audit content pass migrate gives a legacy line: credentials and addresses
+// (credentialPassLine, which needs no home and always runs), then the paths
+// (redactLegacyLine, when a path redactor can be built; without a home the guard
+// treats every absolute path as a leak). A line the passes leave alone goes to
+// the guard as it is.
 func sessionLineGuard(repoRoot string) lineGuard {
 	r, err := mission.NewPathRedactor(repoRoot)
 	return func(line []byte) ([]byte, string, bool) {
 		pre, note := line, ""
-		if err == nil && isJSONObject(line) {
-			if red, changed, e := redactLegacyLine(line, repoRoot, r); e == nil && changed {
-				pre, note = red, "held a credential, an address or a path the content pass rewrites"
+		if isJSONObject(line) {
+			if red, changed := credentialPassLine(pre); changed {
+				pre, note = red, "held a credential or an address"
+			}
+			if err == nil {
+				if red, changed, e := redactLegacyLine(pre, repoRoot, r); e == nil && changed {
+					pre, note = red, "held a credential, an address or a path the content pass rewrites"
+				}
 			}
 		}
 		out, rule, marker := guardAuditLineFull(pre)

@@ -833,3 +833,106 @@ func TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine(t *testing.T) {
 	}
 	assert.Equal(t, 1, found, "the recovered line is in a sealed chunk")
 }
+
+// olderLiveLine is a live line an older binary wrote with extra top-level fields.
+func olderLiveLine(ts int64, sid string, extra map[string]any) string {
+	m := map[string]any{"ts": audit.FormatLineTS(ts), "session": sid, "tool": "Read", "tool_input": map[string]any{"file_path": "a.go"}}
+	for k, v := range extra {
+		m[k] = v
+	}
+	b, _ := json.Marshal(m)
+	return string(b) + "\n"
+}
+
+// sealedLines seals the repo and returns every line of every sealed chunk of sid.
+func sealedLines(t *testing.T, repo, sid string) []string {
+	t.Helper()
+	_, err := SealRepo(repo, time.Now().UTC(), SealOptions{})
+	require.NoError(t, err)
+	dir, err := audit.FindSealedSessionDir(repo, sid)
+	require.NoError(t, err)
+	return chunkLines(t, dir)
+}
+
+func chunkLines(t *testing.T, dir string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var out []string
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			require.NoError(t, err)
+			out = append(out, strings.Split(strings.TrimSpace(string(b)), "\n")...)
+		}
+	}
+	return out
+}
+
+// TestSessionLineGuard_NoHomeStillRedactsCredentials: the credential and
+// address passes need no home, so they run when no path redactor can be built.
+func TestSessionLineGuard_NoHomeStillRedactsCredentials(t *testing.T) {
+	t.Setenv("HOME", "")
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-nohome"
+	live := liveAuditPath(repo, sid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	require.NoError(t, os.WriteFile(live, []byte(credentialLiveLine(100, sid)), 0o600))
+	_, err := mission.NewPathRedactor(repo)
+	require.Error(t, err, "no usable home: no path redactor")
+	for _, l := range sealedLines(t, repo, sid) {
+		assert.NotContains(t, l, "hunter2")
+	}
+}
+
+// TestSessionLineGuard_RedactsHeadersAndUnknownFields: an address in a header and
+// a credential under an unknown field of an older live line are redacted when it
+// is sealed and when quarantine re-seals it; a clean line is unchanged.
+func TestSessionLineGuard_RedactsHeadersAndUnknownFields(t *testing.T) {
+	token := "ghp_" + strings.Repeat("aBcD1234", 4) + "aBcD"
+	extra := map[string]any{"agent_id": "jane@example.com", "x_token": token}
+	check := func(t *testing.T, lines []string) {
+		t.Helper()
+		require.NotEmpty(t, lines)
+		for _, l := range lines {
+			assert.NotContains(t, l, "jane@example.com")
+			assert.NotContains(t, l, token)
+		}
+	}
+
+	t.Run("seal", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		repo := t.TempDir()
+		initGitRepo(t, repo)
+		sid := "sess-hdr"
+		cleanLine, err := json.Marshal(map[string]any{"ts": audit.FormatLineTS(200), "session": sid, "tool": "Read", "tool_input": map[string]any{"file_path": "a.go"}})
+		require.NoError(t, err)
+		cleanLine, _, _ = guardAuditLineFull(cleanLine)
+		live := liveAuditPath(repo, sid)
+		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+		require.NoError(t, os.WriteFile(live, []byte(olderLiveLine(100, sid, extra)+string(cleanLine)+"\n"), 0o600))
+		lines := sealedLines(t, repo, sid)
+		require.Len(t, lines, 2)
+		check(t, lines[:1])
+		assert.Equal(t, string(cleanLine), lines[1], "a clean line is unchanged byte for byte")
+	})
+
+	t.Run("quarantine", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		repo := t.TempDir()
+		initGitRepo(t, repo)
+		sid := "sess-hdr-q"
+		sealedDir, err := resolveRepoSessionDir(repo, sid, time.Now().UTC())
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+		chunk := audit.SessionChunkFile(100, 300)
+		require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
+		live := liveAuditPath(repo, sid)
+		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+		require.NoError(t, os.WriteFile(live, []byte(olderLiveLine(150, sid, extra)), 0o600))
+		_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+		require.NoError(t, err)
+		check(t, chunkLines(t, sealedDir))
+	})
+}
