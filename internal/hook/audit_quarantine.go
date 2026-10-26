@@ -49,10 +49,15 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 		missionID := filepath.Base(sealedDir)
 		livePath := liveMissionLogPath(repoRoot, missionID, cn.Session)
 		redactReason := pr.Content
+		guard := missionLineGuard(repoRoot)
+		guardLine := func(l []byte) ([]byte, string) {
+			out, rule, marker := guard(l)
+			return out, auditGuardNotice(rule, marker)
+		}
 		var marker audit.Marker
 		err := WithLiveMissionLock(repoRoot, missionID, cn.Session, func() error {
 			var e error
-			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, guardAuditLineNote, corruptRule)
+			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, guardLine, corruptRule)
 			return e
 		})
 		return marker, err

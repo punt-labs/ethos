@@ -922,6 +922,13 @@ func collectStrings(v reflect.Value, name string, path bool, out *[]FieldString)
 var (
 	leakPath = regexp.MustCompile("/(?:home|users)/[^/\\s\"'`]+")
 	leakSlug = regexp.MustCompile("-(?:home|users)-[^\\s/\"'`-]+-")
+	// leakSlugAudit is the slug rule of the audit log's path fields, matched on
+	// each spelling of the value: a -home-<name> or -users-<name> after any byte
+	// that is not a letter or digit (x.-home-bob-x, C--Users-al-repo), or
+	// anywhere in a component that starts with a dash (-var-home-bob,
+	// -System-Volumes-Data-Users-bob). It needs no closing dash. A false positive
+	// there costs a file name, so it is read broadly.
+	leakSlugAudit = regexp.MustCompile("(?i:(?:^|[^a-z0-9])-(?:home|users)-[^\\s/\"'`-]+|(?:^|/)-[^/]*-(?:home|users)-[^\\s/\"'`-]+)")
 )
 
 // Leaks reports whether s names a home directory. See LeakRule.
@@ -947,12 +954,63 @@ func Leaks(s, home string) bool { return LeakRule(s, home) != "" }
 // percent-decoded. Every spelling is checked in addition to the original,
 // never instead of it. A username alone is not searched for: a directory
 // named like the account (internal/runner/) is not a home.
-func LeakRule(s, home string) string { return leakRule(s, home, true) }
+func LeakRule(s, home string) string { return leakRule(s, home, ruleFull) }
+
+// HoldsOwnDashHome reports whether s holds this machine's dash-encoded home
+// (-home-zed for /home/zed) ending at a path component, in any spelling
+// LeakRule looks at. A contract path entry that is new or changed is refused
+// when it does (mission.refuseOwnDashHome): readers compare those entries
+// literally, so the writer cannot rewrite the slug to -~. Every other
+// path-tagged value is rewritten.
+func HoldsOwnDashHome(s, home string) bool {
+	if home == "" || home == "/" {
+		return false
+	}
+	dash := dashOf(home)
+	if dash == "-" {
+		return false
+	}
+	unesc := strings.ReplaceAll(s, `\/`, "/")
+	for _, c := range []string{s, unesc, pctDecode(s), pctDecode(unesc)} {
+		for _, v := range [][2]string{{c, dash}, {strings.ToLower(c), strings.ToLower(dash)}, {normalizePath(c), normalizePath(dash)}} {
+			if containsEnd(v[0], v[1], true) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // OwnHomeRule is LeakRule without rules 3 to 5: it looks only for this
-// machine's own home. It judges a repo-relative value in a path field, where
-// app/home/page.tsx is a file of the repository, not somebody's home.
-func OwnHomeRule(s, home string) string { return leakRule(s, home, false) }
+// machine's own home and its dash-encoded form anywhere, and has no foreign-slug
+// rule. It judges a repo-relative value (RepoRelative) in a mission path field, where
+// app/home/page.tsx and nav--home-page.scss are files of the repository, not
+// somebody's home. (The audit log's path fields use AuditPathRule.)
+func OwnHomeRule(s, home string) string { return leakRule(s, home, ruleOwn) }
+
+// AuditPathRule is the rule for a value in a path field of the audit log. With
+// plain true (a plain repo-relative value that the writer's own redaction
+// leaves as it is) it skips only the rule that reads a /home/<name> or
+// /Users/<name> in the middle of the path as another user's home, which is what
+// app/home/page.tsx needs; with plain false it applies all of LeakRule. Either
+// way it adds leakSlugAudit, so a foreign slug is found broadly, and this
+// machine's home and its dash-encoded form anywhere are refused. Mission path
+// fields do not use it: for a repo-relative value they use OwnHomeRule alone, so
+// they have no foreign-slug rule and no rule about a flag or glob byte.
+func AuditPathRule(s, home string, plain bool) string {
+	if plain {
+		return leakRule(s, home, ruleAuditPlain)
+	}
+	return leakRule(s, home, ruleAuditFull)
+}
+
+// The sets of rules leakRule applies.
+const (
+	ruleFull       = iota // all of them
+	ruleOwn               // this machine's own home only
+	ruleAuditPlain        // all but a mid-path /home/<name> or /Users/<name> and climbOut, plus leakSlugAudit
+	ruleAuditFull         // all of them, plus leakSlugAudit
+)
 
 // relPath is the only shape a path-field value may have to be judged as a
 // file of the repository: segments of name characters (and the * and @ of a
@@ -976,7 +1034,7 @@ func RepoRelative(v string) bool {
 	return true
 }
 
-func leakRule(s, home string, foreign bool) string {
+func leakRule(s, home string, mode int) string {
 	unesc := strings.ReplaceAll(s, `\/`, "/")
 	for _, c := range []string{s, unesc, pctDecode(s), pctDecode(unesc)} {
 		for _, v := range [][2]string{
@@ -984,7 +1042,7 @@ func leakRule(s, home string, foreign bool) string {
 			{strings.ToLower(c), strings.ToLower(home)},
 			{normalizePath(c), normalizePath(home)},
 		} {
-			if r := leakRuleOf(v[0], v[1], foreign); r != "" {
+			if r := leakRuleOf(v[0], v[1], mode); r != "" {
 				return r
 			}
 		}
@@ -993,7 +1051,7 @@ func leakRule(s, home string, foreign bool) string {
 }
 
 // leakRuleOf applies the rules to one spelling.
-func leakRuleOf(n, home string, foreign bool) string {
+func leakRuleOf(n, home string, mode int) string {
 	if home != "" && home != "/" {
 		if containsEnd(n, home, false) {
 			return "names this machine's home directory"
@@ -1002,16 +1060,16 @@ func leakRuleOf(n, home string, foreign bool) string {
 			return "holds the dash-encoded home directory"
 		}
 	}
-	if !foreign {
+	if mode == ruleOwn {
 		return ""
 	}
-	if leakPath.MatchString(n) {
+	if mode != ruleAuditPlain && leakPath.MatchString(n) {
 		return "contains a /home/ or /Users/ path"
 	}
-	if leakSlug.MatchString(n) {
+	if leakSlug.MatchString(n) || ((mode == ruleAuditPlain || mode == ruleAuditFull) && leakSlugAudit.MatchString(n)) {
 		return "contains a home-directory slug"
 	}
-	if climbOut.MatchString(n) {
+	if mode != ruleAuditPlain && climbOut.MatchString(n) {
 		return "climbs out of a ~ or <repo> placeholder with .."
 	}
 	return ""

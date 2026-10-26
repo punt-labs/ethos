@@ -216,7 +216,11 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 	// checked here. A line keeps its ts, so the chunk name and its
 	// last-ts verification are unchanged. There is no hash chain over the
 	// chunk bytes: the name is the first and last ts only.
-	tail, notes := guardTail(tail, p.label)
+	guard := lineGuard(guardAuditLineFull)
+	if p.ns == audit.MissionNS {
+		guard = missionLineGuard(p.repoRoot)
+	}
+	tail, notes := guardTailWith(tail, p.label, guard)
 	name := p.chunkName(first, last)
 	if err := audit.WriteChunkAtomic(p.sealedDir, p.tempName(first, last), name, tail); err != nil {
 		return sealOutcome{}, err
@@ -338,10 +342,15 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 // line with its number and the rule, never the value. The caller prints the
 // notices once the chunk is written.
 func guardTail(tail [][]byte, label string) ([][]byte, []string) {
+	return guardTailWith(tail, label, guardAuditLineFull)
+}
+
+// guardTailWith is guardTail with the guard for the namespace being sealed.
+func guardTailWith(tail [][]byte, label string, guard lineGuard) ([][]byte, []string) {
 	out := make([][]byte, len(tail))
 	var notes []string
 	for i, l := range tail {
-		g, rule, marker := guardAuditLineFull(l)
+		g, rule, marker := guard(l)
 		switch {
 		case marker:
 			notes = append(notes, fmt.Sprintf("ethos: audit seal: %s: line %d replaced by a loss marker before sealing: it %s", label, i+1, rule))

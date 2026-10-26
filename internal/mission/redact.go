@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -584,6 +585,35 @@ func announceRewritten(what string, st redact.RenameStatus) Announcement {
 	}
 }
 
+// refuseOwnDashHome refuses a repo-relative path entry holding this machine's
+// dash home whose value is not already a path entry of prior (in any path
+// field; prior is nil for a new contract). Such an entry is compared literally by its readers (the
+// write-set walk, the containment check, the conflict scan), so it cannot be
+// rewritten to -~; it must name the file without the home slug. It applies when
+// a contract is created or its entries are changed, not to the records of a
+// mission in flight, whose entries are rewritten to -~ as before. An absolute
+// path keeps the rewrite, which Expand reverses, and so does free text.
+func refuseOwnDashHome(repoRoot string, c, prior *Contract) error {
+	r, err := NewPathRedactor(repoRoot)
+	if err != nil {
+		return nil // the writer refuses with its own error
+	}
+	var had []string
+	if prior != nil {
+		for _, fs := range redact.FieldStrings(*prior) {
+			if fs.Path {
+				had = append(had, fs.Value)
+			}
+		}
+	}
+	for _, fs := range redact.FieldStrings(*c) {
+		if fs.Path && !slices.Contains(had, fs.Value) && redact.RepoRelative(fs.Value) && redact.HoldsOwnDashHome(fs.Value, r.Home) {
+			return fmt.Errorf("redacting record: field %s holds this machine's dash-encoded home; the entry must name the file without the home slug", safeFieldName(fs.Name))
+		}
+	}
+	return nil
+}
+
 // RedactRecord is RedactRecordNotify without the announcement: for a caller
 // that inspects the redacted record and writes nothing. A writer uses
 // RedactRecordNotify and says the announcement after its write.
@@ -681,8 +711,58 @@ func (r PathRedactor) Leaks(s string) bool { return r.LeakRule(s) != "" }
 // LeakRule is Leaks naming the rule that matched, without quoting s.
 func (r PathRedactor) LeakRule(s string) string { return redact.LeakRule(s, r.Home) }
 
+// plainPathField is the predicate of the audit log's sinks for "a plain
+// repo-relative path field value": it is a repo-relative path with no flag or
+// glob byte before a path, and the writer's own redaction leaves it as it is
+// (neither its path pass nor redact.HomePaths changes it). A value the writer
+// would rewrite is never exempt, so the guard never accepts what the writer
+// would change. Mission path fields do not use it: they use RepoRelative alone.
+// AuditLeakRule, for the writer and the guard, does.
+func (r PathRedactor) plainPathField(s string) bool {
+	return redact.RepoRelative(s) && !flagOrGlobGlued(s) && r.Path(s) == s && redact.HomePaths(s) == s
+}
+
+// flagOrGlobGlued reports whether s begins with, or holds a /home/ or /Users/
+// right after, a byte that a flag or a glob puts before a path (-, +, @, *):
+// -I/home/bob/inc, x-/home/bob, @-home-zed/pkg. A path may begin there, so such
+// a value is judged in full.
+func flagOrGlobGlued(s string) bool {
+	if s != "" && strings.ContainsRune("-+@*", rune(s[0])) {
+		return true
+	}
+	low := strings.ToLower(s)
+	for _, h := range []string{"/home/", "/users/"} {
+		for i := 0; ; {
+			j := strings.Index(low[i:], h)
+			if j < 0 {
+				break
+			}
+			at := i + j
+			if at > 0 && strings.ContainsRune("-+@*", rune(low[at-1])) {
+				return true
+			}
+			i = at + 1
+		}
+	}
+	return false
+}
+
+// AuditLeakRule is the check of the audit log's sinks (the writer and the seal
+// guard): for a value in a tool_input path field it is redact.AuditPathRule,
+// which reads a foreign slug broadly, since a false positive there costs only a
+// file name; elsewhere it is LeakRule.
+func (r PathRedactor) AuditLeakRule(s string, path bool) string {
+	if !path {
+		return redact.LeakRule(s, r.Home)
+	}
+	return redact.AuditPathRule(s, r.Home, r.plainPathField(s))
+}
+
 // LeakRuleFor is LeakRule for a value in a path-tagged field when path is
-// true: a repo-relative value there is judged by this machine's own home only.
+// true: a repo-relative value there (redact.RepoRelative) is judged by
+// redact.OwnHomeRule, this machine's home and its dash-encoded slug and nothing
+// else: no foreign-slug rule and no flag-or-glob rule (bead ethos-ka73). The
+// audit log uses AuditLeakRule.
 func (r PathRedactor) LeakRuleFor(s string, path bool) string {
 	if path && redact.RepoRelative(s) {
 		return redact.OwnHomeRule(s, r.Home)

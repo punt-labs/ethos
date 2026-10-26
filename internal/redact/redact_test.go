@@ -519,7 +519,7 @@ var leakHomes = []string{"", "/home/alice", "/home/zed", "/var/lib/jenkins", "/r
 func TestLeakRule_NormalizationNeverErasesEvidence(t *testing.T) {
 	for _, h := range leakHomes {
 		for _, s := range leakSeeds {
-			if leakRuleOf(s, h, true) != "" || leakRuleOf(strings.ToLower(s), strings.ToLower(h), true) != "" {
+			if leakRuleOf(s, h, ruleFull) != "" || leakRuleOf(strings.ToLower(s), strings.ToLower(h), ruleFull) != "" {
 				assert.NotEmpty(t, LeakRule(s, h), "home %q input %q", h, s)
 			}
 		}

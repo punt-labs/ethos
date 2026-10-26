@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -116,19 +117,62 @@ func auditHoldsHome(v, home string, ownOnly bool) bool {
 	return false
 }
 
-// auditStrings collects every string in v, map keys included.
-func auditStrings(v any, out *[]string) {
+// Where a string sits in an audit line, for the one place the oracle judges
+// differently: the path fields of tool_input, where a plain repo-relative value
+// (app/home/page.tsx) is a file of the repository and only this machine's own
+// home counts. A value that begins with a flag or glob byte is judged in full.
+const (
+	auditCtxLine = iota
+	auditCtxInput
+	auditCtxOther
+	auditCtxPath
+)
+
+type auditStr struct {
+	v   string
+	own bool
+}
+
+// auditRelPath is written apart from redact.RepoRelative.
+var auditRelPath = regexp.MustCompile(`^[A-Za-z0-9_.@+*-]+(?:/[A-Za-z0-9_.@+*-]+)*/?$`)
+
+func auditRepoRelative(s string) bool {
+	if !auditRelPath.MatchString(s) || strings.ContainsRune("-+@*", rune(s[0])) {
+		return false
+	}
+	for _, seg := range strings.Split(strings.TrimSuffix(s, "/"), "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// auditStringsIn collects every string in v with its context, map keys
+// included (a key is never a path value).
+func auditStringsIn(v any, ctx int, out *[]auditStr) {
 	switch x := v.(type) {
 	case string:
-		*out = append(*out, x)
+		*out = append(*out, auditStr{x, ctx == auditCtxPath && auditRepoRelative(x)})
 	case []any:
+		ec := auditCtxOther
+		if ctx == auditCtxPath {
+			ec = auditCtxPath
+		}
 		for _, e := range x {
-			auditStrings(e, out)
+			auditStringsIn(e, ec, out)
 		}
 	case map[string]any:
 		for k, e := range x {
-			*out = append(*out, k)
-			auditStrings(e, out)
+			*out = append(*out, auditStr{v: k})
+			child := auditCtxOther
+			switch {
+			case ctx == auditCtxLine && k == "tool_input":
+				child = auditCtxInput
+			case ctx == auditCtxInput && (k == "file_path" || k == "notebook_path" || k == "path" || k == "files" || k == "paths"):
+				child = auditCtxPath
+			}
+			auditStringsIn(e, child, out)
 		}
 	}
 }
@@ -170,13 +214,13 @@ func FuzzAuditNoLeak(f *testing.F) {
 		home := auditHomes[int(h)%len(auditHomes)]
 		t.Setenv("HOME", home)
 
-		check := func(what string, v any) {
+		check := func(what string, v any, ctx int) {
 			t.Helper()
-			var got []string
-			auditStrings(v, &got)
+			var got []auditStr
+			auditStringsIn(v, ctx, &got)
 			for _, g := range got {
-				if auditHoldsHome(g, home, false) {
-					t.Fatalf("%s wrote %q (home %s) for input %q", what, g, home, s)
+				if auditHoldsHome(g.v, home, g.own) {
+					t.Fatalf("%s wrote %q (home %s) for input %q", what, g.v, home, s)
 				}
 			}
 		}
@@ -187,7 +231,7 @@ func FuzzAuditNoLeak(f *testing.F) {
 			"env": map[string]any{s: "v", "~/a": "w"},
 		}}
 		out, _ := redactToolInput(in, "Bash", "/work/repo")
-		check("redactToolInput", out)
+		check("redactToolInput", out, auditCtxInput)
 
 		// A line with every shape of field an appender can be handed: a string
 		// tool_input, an unknown cwd, enrichment fields, a key that is the
@@ -209,7 +253,7 @@ func FuzzAuditNoLeak(f *testing.F) {
 		if err := json.Unmarshal(g, &back); err != nil {
 			t.Fatalf("guardAuditLine returned invalid JSON %q for input %q", g, s)
 		}
-		check("guardAuditLine", back)
+		check("guardAuditLine", back, auditCtxLine)
 
 		// No value is lost: every leaf of the input that is not a leak
 		// appears in the output at least as often, unless the whole line

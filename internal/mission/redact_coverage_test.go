@@ -172,7 +172,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.redactReason":            checkpoint("NewPathRedactor"),
 	"internal/hook.redactLegacyLines":       checkpoint("NewPathRedactor", "redactLegacyLine"),
 	"internal/hook.redactLegacyLine":        checkpoint("redactToolInputQuiet"),
-	"internal/hook.sealDirLocked":           exempt("seals live-file lines; guardTail rewrites any that name a home first (see guardedSinks)"),
+	"internal/hook.sealDirLocked":           exempt("seals live-file lines; guardTailWith rewrites any that name a home first (see guardedSinks)"),
 	"internal/hook.GenerateAgentFilesTo":    exempt("out of scope (identity graph): generated .claude/agents definitions from identity content"),
 	"internal/hook.InstallAgentDefinitions": exempt("out of scope (identity graph): generated .claude/agents definitions from identity content"),
 

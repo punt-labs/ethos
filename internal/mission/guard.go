@@ -43,9 +43,13 @@ func newLeakChecker() leakChecker {
 func (c leakChecker) rule(s string) string { return c.ruleFor(s, false) }
 
 // ruleFor is rule for a value that sits in a path-tagged field when path is
-// true. A repo-relative value there (no leading /, ~ or <, no .. component) is
-// judged by this machine's own home only, so a write set naming
-// app/home/page.tsx works; every other value meets all the rules.
+// true. A repo-relative value there (redact.RepoRelative, as at ddefb51) is
+// judged by redact.OwnHomeRule: this machine's home and its dash-encoded slug
+// anywhere, and nothing else, so a write set may name app/home/page.tsx,
+// nav--home-page.scss, @types/users/index.d.ts or -/home/page.tsx. There is no
+// foreign-slug rule, and no rule about a flag or glob byte beside /home/ (bead
+// ethos-ka73). Every other value meets all the rules. The audit log's sinks
+// split off here: they use AuditLeakRule and plainPathField.
 func (c leakChecker) ruleFor(s string, path bool) string {
 	var r string
 	if path && redact.RepoRelative(s) {
@@ -62,14 +66,36 @@ func (c leakChecker) ruleFor(s string, path bool) string {
 	return ""
 }
 
+func (c leakChecker) plainPathField(s string) bool {
+	return PathRedactor{Home: c.home}.plainPathField(s)
+}
+
 // LeakRule names the rule s breaks against this process's home directory, or
 // returns "" when s names no home. Without a resolvable home directory every
 // absolute path breaks a rule.
 func LeakRule(s string) string { return newLeakChecker().rule(s) }
 
 // LeakRuleFor is LeakRule for a value in a path-tagged field when path is
-// true: a repo-relative value is judged by this machine's own home only.
+// true: a repo-relative value there (redact.RepoRelative) is judged by redact.OwnHomeRule, this
+// machine's home and its dash-encoded slug and no foreign-slug rule (bead
+// ethos-ka73); the audit log uses AuditLeakRule instead.
 func LeakRuleFor(s string, path bool) string { return newLeakChecker().ruleFor(s, path) }
+
+// AuditLeakRule is PathRedactor.AuditLeakRule against this process's home
+// directory, for the audit guard.
+func AuditLeakRule(s string, path bool) string {
+	c := newLeakChecker()
+	if !path {
+		return c.rule(s)
+	}
+	if r := redact.AuditPathRule(s, c.home, c.plainPathField(s)); r != "" {
+		return r
+	}
+	if !c.known && redact.AbsolutePath(s) {
+		return "holds an absolute path while the home directory is unknown"
+	}
+	return ""
+}
 
 // guardWrite is the check at the sink of every mission-tree writer. It takes
 // the bytes bound for dest and returns the bytes to write in their place, or
@@ -953,9 +979,11 @@ func derefType(t reflect.Type) reflect.Type {
 	return t
 }
 
-// exemptPathValue reports whether s, a value in a path field when path is true, is a
-// plain repo-relative path: judged by this machine's own home only, and
-// blanked before the full-rule check of the whole encoding.
+// exemptPathValue reports whether s, a value in a path field when path is true,
+// is a repo-relative path. ruleFor has already judged it: every repo-relative
+// value was judged by OwnHomeRule alone, with no foreign-slug rule, so it is
+// blanked before the full-rule check of the whole encoding, which would
+// otherwise read a mid-path /home/ and a slug inside an ordinary name again.
 func exemptPathValue(s string, path bool) bool { return path && redact.RepoRelative(s) }
 
 // guardNode checks n and everything under it by the typed rules, and blanks

@@ -382,13 +382,72 @@ func lineRule(line []byte) string {
 	return valueRule(v)
 }
 
-func valueRule(v any) string {
+// leakCtx says where a value sits in an audit line, for the one place the leak
+// check differs: the path fields of tool_input.
+type leakCtx int
+
+const (
+	ctxLine  leakCtx = iota // the line's own fields
+	ctxInput                // tool_input, whose path keys are path fields
+	ctxOther                // anywhere else
+	ctxPath                 // a path field's value, or a list of them
+)
+
+// childCtx is the context of the value under key k of a map in context c. The
+// path fields are the ones the audit writer applies the path pass to
+// (redactPathKeys); like a contract's path-tagged fields they hold files, so a
+// plain repo-relative value in one (app/home/page.tsx) skips only the mid-path
+// /home/<name> and /Users/<name> rule (redact.AuditPathRule). The audit log
+// reads a foreign slug broadly there, after any non-alphanumeric byte or
+// anywhere in a component that starts with a dash, because a false positive
+// costs only a file name; mission path fields have no such rule.
+func childCtx(c leakCtx, k string) leakCtx {
+	switch c {
+	case ctxLine:
+		if k == "tool_input" {
+			return ctxInput
+		}
+	case ctxInput:
+		switch k {
+		case "file_path", "notebook_path", "path", "files", "paths":
+			return ctxPath
+		}
+	case ctxOther, ctxPath:
+	}
+	return ctxOther
+}
+
+// previewExempt reports whether the entry k=e of the line map x is the
+// tool_input_preview the writer derives from the line's own tool_input, and
+// that tool_input passes the check: the preview is a copy of text already
+// judged, and quotes the same path-field values, so it is not judged again as
+// free text.
+func previewExempt(x map[string]any, k string, e any) bool {
+	s, ok := e.(string)
+	if !ok || k != "tool_input_preview" {
+		return false
+	}
+	env := map[string]any{}
+	ti, hasInput := x["tool_input"]
+	if hasInput {
+		env["tool_input"] = ti
+	}
+	return s == toolInputPreview(env) && valueRuleIn(ti, ctxInput) == ""
+}
+
+func valueRule(v any) string { return valueRuleIn(v, ctxLine) }
+
+func valueRuleIn(v any, c leakCtx) string {
 	switch x := v.(type) {
 	case string:
-		return mission.LeakRule(x)
+		return mission.AuditLeakRule(x, c == ctxPath)
 	case []any:
 		for _, e := range x {
-			if r := valueRule(e); r != "" {
+			ec := ctxOther
+			if c == ctxPath {
+				ec = ctxPath
+			}
+			if r := valueRuleIn(e, ec); r != "" {
 				return r
 			}
 		}
@@ -403,7 +462,10 @@ func valueRule(v any) string {
 			if r := mission.LeakRule(k); r != "" {
 				return r
 			}
-			if r := valueRule(x[k]); r != "" {
+			if c == ctxLine && previewExempt(x, k, x[k]) {
+				continue
+			}
+			if r := valueRuleIn(x[k], childCtx(c, k)); r != "" {
 				return r
 			}
 		}
@@ -414,16 +476,28 @@ func valueRule(v any) string {
 // scrubAuditValue replaces every string that leaks by redactedPath and every
 // key that leaks by redactedKey, numbering collisions in sorted order.
 func scrubAuditValue(v any, top bool) any {
+	ctx := ctxOther
+	if top {
+		ctx = ctxLine
+	}
+	return scrubAuditIn(v, ctx)
+}
+
+func scrubAuditIn(v any, c leakCtx) any {
 	switch x := v.(type) {
 	case string:
-		if mission.LeakRule(x) != "" {
+		if mission.AuditLeakRule(x, c == ctxPath) != "" {
 			return redactedPath
 		}
 		return x
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {
-			out[i] = scrubAuditValue(e, false)
+			ec := ctxOther
+			if c == ctxPath {
+				ec = ctxPath
+			}
+			out[i] = scrubAuditIn(e, ec)
 		}
 		return out
 	case map[string]any:
@@ -436,7 +510,12 @@ func scrubAuditValue(v any, top bool) any {
 				return redactedKey
 			}
 			return k
-		}, top, func(_ string, e any) any { return scrubAuditValue(e, false) })
+		}, c == ctxLine, func(k string, e any) any {
+			if c == ctxLine && previewExempt(x, k, e) {
+				return e
+			}
+			return scrubAuditIn(e, childCtx(c, k))
+		})
 		return out
 	}
 	return v

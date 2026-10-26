@@ -223,11 +223,11 @@ func decodedLeak(line []byte, home string) string {
 		}
 		return ""
 	}
-	var strs []string
-	auditStrings(v, &strs)
+	var strs []auditStr
+	auditStringsIn(v, auditCtxLine, &strs)
 	for _, s := range strs {
-		if auditHoldsHome(s, home, false) {
-			return s
+		if auditHoldsHome(s.v, home, s.own) {
+			return s.v
 		}
 	}
 	return ""

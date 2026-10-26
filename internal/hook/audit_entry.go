@@ -239,15 +239,15 @@ func dropLeaks(r mission.PathRedactor, v map[string]any) (map[string]any, bool) 
 	if v == nil {
 		return v, false
 	}
-	any1, dropped := dropLeaksValue(r, v)
+	any1, dropped := dropLeaksValue(r, v, ctxInput)
 	out, _ := any1.(map[string]any)
 	return out, dropped
 }
 
-func dropLeaksValue(r mission.PathRedactor, v any) (any, bool) {
+func dropLeaksValue(r mission.PathRedactor, v any, c leakCtx) (any, bool) {
 	switch x := v.(type) {
 	case string:
-		if r.Leaks(x) {
+		if r.AuditLeakRule(x, c == ctxPath) != "" {
 			return redactedPath, true
 		}
 		return x, false
@@ -262,8 +262,8 @@ func dropLeaksValue(r mission.PathRedactor, v any) (any, bool) {
 				return redactedKey
 			}
 			return nk
-		}, false, func(_ string, e any) any {
-			re, d := dropLeaksValue(r, e)
+		}, false, func(k string, e any) any {
+			re, d := dropLeaksValue(r, e, childCtx(c, k))
 			dropped = dropped || d
 			return re
 		})
@@ -272,7 +272,11 @@ func dropLeaksValue(r mission.PathRedactor, v any) (any, bool) {
 		out := make([]any, len(x))
 		dropped := false
 		for i, e := range x {
-			re, d := dropLeaksValue(r, e)
+			ec := ctxOther
+			if c == ctxPath {
+				ec = ctxPath
+			}
+			re, d := dropLeaksValue(r, e, ec)
 			out[i], dropped = re, dropped || d
 		}
 		return out, dropped

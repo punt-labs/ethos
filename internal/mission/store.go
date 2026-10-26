@@ -709,6 +709,9 @@ func (s *Store) Create(c *Contract) error {
 					return err
 				}
 			}
+			if err := refuseOwnDashHome(s.repoRoot, &staged, nil); err != nil {
+				return fmt.Errorf("writing contract %s: %w", staged.MissionID, err)
+			}
 			sayContract, wErr := s.writeContractNote(&staged)
 			if wErr != nil {
 				return wErr
@@ -921,6 +924,9 @@ func (s *Store) Update(c *Contract) error {
 		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := s.validateContract(&updated); err != nil {
 			return fmt.Errorf("invalid contract: %w", err)
+		}
+		if err := refuseOwnDashHome(s.repoRoot, &updated, onDisk); err != nil {
+			return fmt.Errorf("writing contract %s: %w", updated.MissionID, err)
 		}
 		sayContract, wErr := s.writeContractNote(&updated)
 		if wErr != nil {

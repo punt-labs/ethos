@@ -25,7 +25,7 @@ var guardedSinks = map[string]string{
 	"internal/mission.Store.appendLiveEventLocked":      "guardWrite",
 	"internal/mission.Store.appendTraceLine":            "guardWrite",
 	"internal/mission.Store.prepareTraceSummary":        "guardWrite",
-	"internal/hook.sealDirLocked":                       "guardTail",
+	"internal/hook.sealDirLocked":                       "guardTailWith",
 	"internal/audit.Quarantine":                         "guardLine",
 	"internal/hook.appendLiveAuditReport":               "guardAuditLineFull",
 	"internal/hook.writeAuditEntryReport":               "guardAuditLineFull",
@@ -40,7 +40,7 @@ var guardedSinks = map[string]string{
 // only if all its callers are in guardedSinks.
 var guardAllowed = map[string]string{
 	"internal/audit.AppendMonotonic":   "appends the line its callback returns; every caller's callback returns guardAuditLine output (hook) or is guardWrite-checked (mission live log)",
-	"internal/audit.WriteChunkAtomic":  "its two callers, hook.sealDirLocked (guardTail) and audit.Quarantine (guardLine), pass every line through the audit guard first",
+	"internal/audit.WriteChunkAtomic":  "its two callers, hook.sealDirLocked (guardTailWith) and audit.Quarantine (guardLine), pass every line through the audit guard first (missionLineGuard for the mission namespace, guardAuditLineFull for sessions)",
 	"internal/audit.writeMarkerAtomic": "quarantine marker whose reason went through redactReason, which replaces a reason that still leaks",
 }
 
