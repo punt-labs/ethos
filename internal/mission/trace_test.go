@@ -304,13 +304,3 @@ func TestAppendTraceSummary_CreatesDir(t *testing.T) {
 		t.Errorf("ID = %q, want m-2026-01-01-001", ts.ID)
 	}
 }
-
-// appendTraceSummary prepares and appends one summary line the way Close and
-// Abandon do: the test-side stand-in for the two steps.
-func appendTraceSummary(s *Store, c *Contract, r *Result) error {
-	data, _, err := s.prepareTraceSummary(c, r)
-	if err != nil || data == nil {
-		return err
-	}
-	return s.appendTraceLine(data)
-}

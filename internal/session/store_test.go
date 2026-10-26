@@ -18,11 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testStore(t *testing.T) *Store {
-	t.Helper()
-	return NewStore(t.TempDir())
-}
-
 // TestStore_IDPathSanitization pins the ID→path defense at the exact line
 // it lives: rosterPath and lockPath run the session ID through
 // filepath.Base, so a traversal-shaped ID (from an attacker-controlled
@@ -900,21 +895,6 @@ func TestPurgeTombstoned_SealedMissionInNonWriterCheckoutDoesNotFlagTombstone(t 
 
 	_, err = audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-sealed.purged"))
 	assert.Error(t, err, "a session whose mission lines are all sealed must leave no loss tombstone")
-}
-
-// writeSealedLive writes a live audit line for sessionID under repoRoot and
-// seals it into a tracked chunk, so the session-namespace probe reports the
-// file present with nothing unsealed.
-func writeSealedLive(t *testing.T, repoRoot, sessionID string) {
-	t.Helper()
-	live := audit.LiveAuditPath(repoRoot, sessionID)
-	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
-	body := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + sessionID + `","tool":"Read"}` + "\n"
-	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
-
-	dir := filepath.Join(audit.SealedSessionsBase(repoRoot), "2026-07-21-"+sessionID)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, audit.SessionChunkFile(100, 100)), []byte(body), 0o600))
 }
 
 // TestPurgeTombstoned_OutOfRepoUsesRecordedCheckout covers a purge run with no

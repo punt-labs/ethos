@@ -26,23 +26,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func testStore(t *testing.T) *Store {
-	t.Helper()
-	return NewStore(t.TempDir())
-}
-
-// mustContractPath returns the contract path for missionID or fails
-// the test. Mirrors the old string-returning helper that tests used
-// before mission m-2026-05-22-027 fix 3 changed the signature to
-// (string, error); keeps test churn confined to one helper per
-// per-artifact path. The unwrapped path is what every test wants.
-func mustContractPath(t *testing.T, s *Store, missionID string) string {
-	t.Helper()
-	p, err := s.contractPath(missionID)
-	require.NoError(t, err)
-	return p
-}
-
 // mustLogPath, mustReflectionsPath, mustResultsPath are the siblings
 // of mustContractPath for the three per-artifact path helpers.
 func mustLogPath(t *testing.T, s *Store, missionID string) string {
@@ -50,28 +33,6 @@ func mustLogPath(t *testing.T, s *Store, missionID string) string {
 	p, err := s.logPath(missionID)
 	require.NoError(t, err)
 	return p
-}
-
-func mustReflectionsPath(t *testing.T, s *Store, missionID string) string {
-	t.Helper()
-	p, err := s.reflectionsPath(missionID)
-	require.NoError(t, err)
-	return p
-}
-
-func mustResultsPath(t *testing.T, s *Store, missionID string) string {
-	t.Helper()
-	p, err := s.resultsPath(missionID)
-	require.NoError(t, err)
-	return p
-}
-
-// newContract returns a fresh, valid contract with the given mission ID
-// for use in store tests.
-func newContract(missionID string) *Contract {
-	c := validContract()
-	c.MissionID = missionID
-	return &c
 }
 
 // disjointContract returns a fresh, valid contract whose write_set is
@@ -87,27 +48,6 @@ func disjointContract(missionID string) *Contract {
 	c.MissionID = missionID
 	c.WriteSet = []string{"tests/" + missionID + "/"}
 	return &c
-}
-
-// submitRoundResult persists a minimal valid result for a mission's
-// current round so the test can drive Store.Close through the
-// Phase 3.6 gate. The helper is a one-liner for every pre-3.6 test
-// whose only interest in the result artifact is "close is allowed".
-// A round-aware variant (submitResultForRound) covers the rarer case
-// of exercising the gate at a non-current round.
-func submitRoundResult(t *testing.T, s *Store, c *Contract, verdict string) {
-	t.Helper()
-	r := &Result{
-		Mission:    c.MissionID,
-		Round:      c.CurrentRound,
-		Author:     c.Worker,
-		Verdict:    verdict,
-		Confidence: 0.8,
-		Evidence: []EvidenceCheck{
-			{Name: "go test ./...", Status: EvidenceStatusPass},
-		},
-	}
-	require.NoError(t, s.AppendResult(c.MissionID, r))
 }
 
 // TestStore_Create_NoBeadWarningFromConflictScan proves ethos-c0yp: a
@@ -2518,22 +2458,6 @@ func TestApplyServerFields_HashRoundTripsThroughCreate(t *testing.T) {
 
 // --- 3.4: round-advance gate and reflection store ---
 
-// reflectionFor returns a fresh, valid reflection for the given round
-// with the given recommendation. Tests use this to keep the table
-// rows compact and the assertions focused on the gate behavior, not
-// on building the input.
-func reflectionFor(missionID string, round int, rec string) *Reflection {
-	return &Reflection{
-		Mission:        missionID,
-		Round:          round,
-		Author:         "claude",
-		Converging:     true,
-		Signals:        []string{"all green"},
-		Recommendation: rec,
-		Reason:         "round " + fmt.Sprint(round) + " " + rec,
-	}
-}
-
 // TestStore_FreshContractStartsAtRoundOne asserts the round-tracking
 // default: a mission created via the store starts at round 1, and
 // CurrentRound is reflected back to the caller. The default-fill is
@@ -3463,23 +3387,6 @@ func TestCanonicalRoleSlug(t *testing.T) {
 }
 
 // --- Phase 3.6: result artifact and close gate ---
-
-// resultFor returns a minimal valid result for the given mission's
-// current round with the given verdict. Tests that only care about
-// the gate's presence/absence behavior use this; the more detailed
-// tests build results inline.
-func resultFor(c *Contract, verdict string) *Result {
-	return &Result{
-		Mission:    c.MissionID,
-		Round:      c.CurrentRound,
-		Author:     c.Worker,
-		Verdict:    verdict,
-		Confidence: 0.8,
-		Evidence: []EvidenceCheck{
-			{Name: "make check", Status: EvidenceStatusPass},
-		},
-	}
-}
 
 // TestStore_AppendResult_RoundTrip asserts success criterion 1 and 6:
 // a well-formed result is persisted and retrievable via LoadResult

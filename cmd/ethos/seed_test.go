@@ -1,9 +1,10 @@
+//go:build linux || darwin
+
 package main
 
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -160,9 +161,6 @@ func TestSeed_SkipReasonOnStdout(t *testing.T) {
 // behavior threw away every Deployed/Repaired/Updated line the moment any
 // single file failed.
 func TestSeed_PrintsBucketsOnPartialFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod-based permission denial is Unix-specific")
-	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores permission bits — cannot reproduce EACCES as root")
 	}
