@@ -395,27 +395,63 @@ func TestDanglingGitOutsideARepositoryIsAnError(t *testing.T) {
 }
 
 // A .git that is git's own git dir, with core.worktree putting the work tree
-// above it, is the one git chose, not one it walked past.
+// above it, is the one git chose, not one it walked past; the directories above
+// it were never examined.
 func TestCoreWorktreeGitDirIsNotWalkedPast(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	cw := filepath.Join(t.TempDir(), "cw")
-	inner := filepath.Join(cw, "inner")
-	deeper := filepath.Join(inner, "deeper")
-	require.NoError(t, os.MkdirAll(deeper, 0o755))
-	for _, args := range [][]string{{"init", "-q", inner}, {"-C", inner, "config", "core.worktree", "../.."}} {
+	git := func(args ...string) {
+		t.Helper()
 		out, err := exec.Command("git", args...).CombinedOutput()
 		require.NoError(t, err, string(out))
 	}
-	for _, dir := range []string{inner, deeper} {
-		t.Run(filepath.Base(dir), func(t *testing.T) {
-			t.Chdir(dir)
-			got, err := locateRepoRoot()
-			require.NoError(t, err)
-			assert.Equal(t, realpath(t, cw), realpath(t, got))
-		})
+	resolvesFrom := func(t *testing.T, want string, dirs ...string) {
+		t.Helper()
+		for _, dir := range dirs {
+			t.Run(filepath.Base(dir), func(t *testing.T) {
+				t.Chdir(dir)
+				got, err := locateRepoRoot()
+				require.NoError(t, err)
+				assert.Equal(t, realpath(t, want), realpath(t, got))
+			})
+		}
 	}
+
+	t.Run("a git dir", func(t *testing.T) {
+		cw := filepath.Join(t.TempDir(), "cw")
+		inner := filepath.Join(cw, "inner")
+		deeper := filepath.Join(inner, "deeper")
+		require.NoError(t, os.MkdirAll(deeper, 0o755))
+		git("init", "-q", inner)
+		git("-C", inner, "config", "core.worktree", "../..")
+		resolvesFrom(t, cw, inner, deeper)
+	})
+
+	t.Run("a gitfile", func(t *testing.T) {
+		w := t.TempDir()
+		gf := filepath.Join(w, "gf")
+		inner := filepath.Join(gf, "inner")
+		deeper := filepath.Join(inner, "deeper")
+		require.NoError(t, os.MkdirAll(deeper, 0o755))
+		store := filepath.Join(w, "store", "x.git")
+		git("init", "-q", "--bare", store)
+		git("-C", store, "config", "core.bare", "false")
+		git("-C", store, "config", "core.worktree", gf)
+		require.NoError(t, os.WriteFile(filepath.Join(inner, ".git"), []byte("gitdir: "+store+"\n"), 0o644))
+		resolvesFrom(t, gf, inner, deeper)
+	})
+
+	t.Run("an unexamined damaged .git above", func(t *testing.T) {
+		cw := filepath.Join(t.TempDir(), "cw")
+		mid := filepath.Join(cw, "mid")
+		inner := filepath.Join(mid, "inner")
+		require.NoError(t, os.MkdirAll(inner, 0o755))
+		git("init", "-q", inner)
+		git("-C", inner, "config", "core.worktree", "../../..")
+		require.NoError(t, os.Mkdir(filepath.Join(mid, ".git"), 0o755))
+		resolvesFrom(t, cw, inner)
+	})
 }
 
 // A working directory reached through a symlink: the .git files git passed are

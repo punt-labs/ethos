@@ -1078,11 +1078,13 @@ func gitLocate(git, start string) located {
 	return located{loc: location{root: root, store: store, storeErr: serr}}
 }
 
-// walkedPast refuses a damaged .git among the physical directories git walked
-// from start to the work tree top it chose: git passed over it, and the
-// repository around it must not answer in its place. The .git that is git's own
-// git dir (core.worktree puts the work tree above it) is the one git chose, not
-// one it passed over. Nothing is checked when top is not on the walk.
+// walkedPast refuses a damaged .git among the directories git examined on its
+// physical walk from start: git passed over each, and the repository around it
+// must not answer in its place. The walk ends at the first directory whose .git
+// is git's own git dir (directly, or through a gitfile; core.worktree puts the
+// work tree elsewhere): git chose that one, and the directories above it were
+// never examined. Otherwise it ends at top, the work tree git chose. Nothing is
+// checked when the walk reaches neither.
 func walkedPast(start, top, gitDir string) error {
 	ti, err := os.Stat(top)
 	if err != nil {
@@ -1091,13 +1093,12 @@ func walkedPast(start, top, gitDir string) error {
 	gi, gerr := os.Stat(gitDir)
 	var passed []string
 	for _, d := range gitWalk(start) {
-		if di, err := os.Stat(d); err == nil && os.SameFile(di, ti) {
+		di, err := os.Stat(d)
+		atTop := err == nil && os.SameFile(di, ti)
+		if atTop || gerr == nil && dotIsGitDir(filepath.Join(d, ".git"), gi) {
 			for _, p := range passed {
 				if derr := gitenv.DanglingDotGit(p); derr != nil {
 					return derr
-				}
-				if di, err := os.Stat(filepath.Join(p, ".git")); gerr == nil && err == nil && os.SameFile(di, gi) {
-					continue
 				}
 				if derr := unacceptedDotGit([]string{p}); derr != nil {
 					return derr
@@ -1108,6 +1109,30 @@ func walkedPast(start, top, gitDir string) error {
 		passed = append(passed, d)
 	}
 	return nil
+}
+
+// dotIsGitDir reports whether dot is the git directory gi, or a gitfile naming it.
+func dotIsGitDir(dot string, gi os.FileInfo) bool {
+	info, err := os.Stat(dot)
+	if err != nil {
+		return false
+	}
+	if os.SameFile(info, gi) {
+		return true
+	}
+	data, err := readRegular(dot)
+	if err != nil {
+		return false
+	}
+	target, ok := strings.CutPrefix(strings.TrimRight(string(data), "\r\n"), "gitdir: ")
+	if !ok || target == "" {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(dot), target)
+	}
+	ti, err := os.Stat(target)
+	return err == nil && os.SameFile(ti, gi)
 }
 
 // unacceptedDotGit is the refusal for a .git that exists in one of dirs and that
