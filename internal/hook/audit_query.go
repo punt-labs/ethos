@@ -33,7 +33,8 @@ type AuditView struct {
 	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
 	Redacted         bool           `json:"redacted,omitempty"`
 
-	PathFormat int `json:"path_format,omitempty"`
+	PathFormat     int  `json:"path_format,omitempty"`
+	RawPlaceholder bool `json:"raw_placeholder,omitempty"`
 }
 
 // Summary returns a single-line human description of the entry. Prefers

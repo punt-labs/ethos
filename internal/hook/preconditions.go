@@ -56,7 +56,7 @@ func EvaluatePreconditions(
 	if contract == nil || len(contract.Preconditions) == 0 {
 		return "", false, nil
 	}
-	reads, ignored, readErr := loadSessionReadsCounted(repoRoot, sessionID)
+	reads, ignored, ambiguous, readErr := loadSessionReadsCounted(repoRoot, sessionID)
 	for i, p := range contract.Preconditions {
 		paths, subErr := preconditionTargets(p, toolName, toolInput, contract, storeRoot)
 		if subErr != nil {
@@ -93,8 +93,24 @@ func EvaluatePreconditions(
 						" (reads under another user's home cannot be verified: the path is not kept in a form that can be compared)",
 					true, nil
 			}
+			if p.Form == mission.PreconditionFormImplicit {
+				// A file name the audit log cannot tell from another (a
+				// placeholder at a path boundary) cannot be matched with a Read.
+				amb, ambErr := ambiguousPath(path, repoRoot)
+				if ambErr != nil {
+					return preconditionMessage(p, i), true, fmt.Errorf("preconditions[%d]: %w", i, ambErr)
+				}
+				if amb {
+					return preconditionMessage(p, i) +
+							" (the name contains a redaction placeholder, so a Read of it cannot be verified)",
+						true, nil
+				}
+			}
 			if !readsContain(reads, path, repoRoot) {
 				msg := preconditionMessage(p, i)
+				if ambiguous > 0 {
+					msg += fmt.Sprintf(" (%d Read(s) were ignored: the file name contains a redaction placeholder)", ambiguous)
+				}
 				if ignored > 0 {
 					msg += fmt.Sprintf(" (%d Read(s) were ignored: their audit lines predate the path format, so a ~ in them may name another user's home; Read the file again)", ignored)
 				}
@@ -310,15 +326,15 @@ func lookupIndexed(field, idx string, arr []string) (string, error) {
 // empty set with a wrapped error on any other read failure — the
 // caller treats this as an unevaluable predicate.
 func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
-	reads, _, err := loadSessionReadsCounted(repoRoot, sessionID)
+	reads, _, _, err := loadSessionReadsCounted(repoRoot, sessionID)
 	return reads, err
 }
 
 // loadSessionReadsCounted is loadSessionReads that also reports how many Reads
 // it ignored because their line predates the path format and holds a ~.
-func loadSessionReadsCounted(repoRoot, sessionID string) (map[string]struct{}, int, error) {
+func loadSessionReadsCounted(repoRoot, sessionID string) (reads map[string]struct{}, ignored, ambiguous int, err error) {
 	if sessionID == "" {
-		return map[string]struct{}{}, 0, nil
+		return map[string]struct{}{}, 0, 0, nil
 	}
 	// DES-058: the precondition evaluator reads the union of sealed
 	// chunks and the live tail, not a single tracked file — a Read
@@ -326,10 +342,9 @@ func loadSessionReadsCounted(repoRoot, sessionID string) (map[string]struct{}, i
 	// into a chunk.
 	entries, err := readSessionAudit(repoRoot, sessionID, time.Now())
 	if err != nil {
-		return map[string]struct{}{}, 0, fmt.Errorf("reading session audit: %w", err)
+		return map[string]struct{}{}, 0, 0, fmt.Errorf("reading session audit: %w", err)
 	}
-	reads := make(map[string]struct{}, len(entries))
-	ignored := 0
+	reads = make(map[string]struct{}, len(entries))
 	for _, e := range entries {
 		if e.Tool != "Read" {
 			continue
@@ -338,6 +353,11 @@ func loadSessionReadsCounted(repoRoot, sessionID string) (map[string]struct{}, i
 		// The placeholder stands for a path the writer withheld; it names no
 		// file, and a Write of a file called [redacted-path] must not match it.
 		if fp == "" || fp == redactedPath {
+			continue
+		}
+		if e.RawPlaceholder {
+			// The name reads back as another file: counted, for the deny reason.
+			ambiguous++
 			continue
 		}
 		// Audit lines carry the same placeholders a stored contract entry
@@ -350,11 +370,11 @@ func loadSessionReadsCounted(repoRoot, sessionID string) (map[string]struct{}, i
 		}
 		fp, err := mission.ExpandPath(fp, repoRoot)
 		if err != nil {
-			return map[string]struct{}{}, 0, fmt.Errorf("reading session audit: %w", err)
+			return map[string]struct{}{}, 0, 0, fmt.Errorf("reading session audit: %w", err)
 		}
 		reads[filepath.Clean(fp)] = struct{}{}
 	}
-	return reads, ignored, nil
+	return reads, ignored, ambiguous, nil
 }
 
 // readsContain reports whether the audit-log set carries a Read for

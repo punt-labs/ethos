@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +121,74 @@ func TestPreconditions_RedactedPlaceholderIsNotARead(t *testing.T) {
 		_, deny, err := EvaluatePreconditions(implicitContract(), "Write", map[string]any{"file_path": target}, "sess-ph", repo, repo)
 		require.NoError(t, err)
 		assert.True(t, deny, "a Write of %q is denied", target)
+	}
+}
+
+// TestPreconditions_LiteralPlaceholderNameIsNotTheExpandedOne: a file whose
+// name holds a placeholder token (cache/-~-project/config.json) is stored
+// unchanged and expands, when read back, to this machine's slug. A Read of it
+// must not allow a Write of the file that name expands to, and a Write of a
+// name holding a placeholder is denied, since a Read of it cannot be verified.
+func TestPreconditions_LiteralPlaceholderNameIsNotTheExpandedOne(t *testing.T) {
+	home, repo, global := checkoutUnderHome(t)
+	slug := strings.ReplaceAll(home, string(filepath.Separator), "-")
+	literal := "cache/-~-project/config.json"
+	expanded := "cache/" + slug + "-project/config.json"
+	write := func(sess, p string) (string, bool) {
+		reason, deny, err := EvaluatePreconditions(implicitContract(), "Write", map[string]any{"file_path": p}, sess, repo, repo)
+		require.NoError(t, err)
+		return reason, deny
+	}
+
+	auditRead(t, repo, global, "sess-lit", literal)
+	_, deny := write("sess-lit", expanded)
+	assert.True(t, deny, "a Read of the literal placeholder name does not allow the expanded file")
+	reason, deny := write("sess-lit", literal)
+	assert.True(t, deny, "a Write of a name holding a placeholder is denied")
+	assert.Contains(t, reason, "redaction placeholder")
+
+	auditRead(t, repo, global, "sess-exp", expanded)
+	reason, deny = write("sess-exp", expanded)
+	assert.False(t, deny, "a Read of the file allows a Write of it: %s", reason)
+}
+
+// TestPreconditions_PlaceholderInTheMiddleOfAName: a token inside a name, not at
+// a path boundary, round-trips through the path pass and Expand exactly, so a
+// Read of the file allows a Write of it, for the implicit form and for an
+// explicit require_read.
+func TestPreconditions_PlaceholderInTheMiddleOfAName(t *testing.T) {
+	_, repo, global := checkoutUnderHome(t)
+	n := 0
+	for _, name := range []string{"src/a-~b", "src/foo-~", "src/n-~1.c", "src/[redacted-x]/y"} {
+		n++
+		sess := "sess-mid-" + strconv.Itoa(n)
+		auditRead(t, repo, global, sess, name)
+		reason, deny, err := EvaluatePreconditions(implicitContract(), "Write", map[string]any{"file_path": name}, sess, repo, repo)
+		require.NoError(t, err)
+		assert.False(t, deny, "implicit %q: %s", name, reason)
+		reason, deny, err = EvaluatePreconditions(redactedRequireRead(t, repo, name), "Write", map[string]any{"file_path": "x.go"}, sess, repo, repo)
+		require.NoError(t, err)
+		assert.False(t, deny, "explicit %q: %s", name, reason)
+	}
+}
+
+// TestPreconditions_AmbiguousNameIsExplained: a name whose placeholder is at a
+// path boundary (src/-~-proj/x, ~/x/-~-y) reads back as another file. A Write of
+// it is denied, and when an explicit require_read names it, the deny reason
+// counts the Reads that were ignored for that.
+func TestPreconditions_AmbiguousNameIsExplained(t *testing.T) {
+	_, repo, global := checkoutUnderHome(t)
+	for i, name := range []string{"src/-~-proj/x", "~/x/-~-y"} {
+		sess := "sess-amb-" + strconv.Itoa(i)
+		auditRead(t, repo, global, sess, name)
+		reason, deny, err := EvaluatePreconditions(implicitContract(), "Write", map[string]any{"file_path": name}, sess, repo, repo)
+		require.NoError(t, err)
+		assert.True(t, deny, "implicit %q", name)
+		assert.Contains(t, reason, "redaction placeholder")
+
+		reason, deny, err = EvaluatePreconditions(redactedRequireRead(t, repo, name), "Write", map[string]any{"file_path": "x.go"}, sess, repo, repo)
+		require.NoError(t, err)
+		assert.True(t, deny, "explicit %q", name)
+		assert.Contains(t, reason, "(1 Read(s) were ignored: the file name contains a redaction placeholder)")
 	}
 }

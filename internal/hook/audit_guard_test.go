@@ -115,7 +115,7 @@ func TestEvaluatePreconditions_CountsReadsIgnoredForTheirFormat(t *testing.T) {
 		Ts: now.Format(time.RFC3339), Session: "s", Tool: "Read",
 		ToolInput: map[string]any{"file_path": "~/notes.md"},
 	}))
-	_, ignored, err := loadSessionReadsCounted(repo, "s")
+	_, ignored, _, err := loadSessionReadsCounted(repo, "s")
 	require.NoError(t, err)
 	assert.Equal(t, 1, ignored)
 }

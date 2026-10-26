@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/redact"
@@ -62,12 +63,33 @@ type auditEntry struct {
 	// is a token that cannot expand. Lines without it come from before, when
 	// both were written as ~, so a ~ in them is not trusted.
 	PathFormat int `json:"path_format,omitempty"`
+
+	// RawPlaceholder marks a line whose tool_input path field is ambiguous: the
+	// stored value would read back as a different file (a file really named
+	// cache/-~-project/x), so a precondition does not count the line as a Read.
+	RawPlaceholder bool `json:"raw_placeholder,omitempty"`
 }
 
 // guardReport is the sink guard's account of one written line.
 type guardReport struct {
 	rule   string
 	marker bool
+}
+
+// ambiguousPath reports whether the audit log cannot tell the file name raw from
+// another: the stored form (the path pass) read back by Expand is not raw. A
+// token inside a name (src/a-~b) round-trips exactly; one at a path boundary
+// (src/-~-proj/x, ~/x/-~-y) comes back as a different file.
+func ambiguousPath(raw, repoRoot string) (bool, error) {
+	r, err := mission.NewPathRedactor(repoRoot)
+	if err != nil {
+		return true, fmt.Errorf("judging a path for placeholders: %w", err)
+	}
+	back, err := mission.ExpandPath(r.Path(raw), repoRoot)
+	if err != nil {
+		return true, fmt.Errorf("judging a path for placeholders: %w", err)
+	}
+	return filepath.Clean(back) != filepath.Clean(raw), nil
 }
 
 // auditPathFormat is the PathFormat of a line this version writes.

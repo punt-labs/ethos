@@ -280,6 +280,35 @@ func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
 		{"env assignment", "\x00garbage GITHUB_TOKEN=abcdefghij1234567890\n", true},
 		{"address", "\x00garbage jane@example.com\n", true},
 		{"escaped address", `{"v":"jane\u0040example.com"}` + "\n", true},
+		{"credential-named key", `{"GITHUB_TOKEN":"my-private-value"}` + "\n", true},
+		{"escaped credential-named key", `{"GITHUB\u005fTOKEN":"my-private-value"}` + "\n", true},
+		{"credential-named key, plain value", `{"API_KEY":"supersecretvalue"}` + "\n", true},
+		{"escaped credential-named key, plain value", `{"API\u005fKEY":"supersecretvalue"}` + "\n", true},
+		{"escaped address in a second value", `null {"v":"jane\u0040example.com"}` + "\n", true},
+		{"credential in a second value", `null {"GITHUB\u005fTOKEN":"my-private-value"}` + "\n", true},
+		{"truncated line, address", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"git config user.email jane@example.com"},"tool_inp` + "\n", true},
+		{"truncated line, escaped address", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"git config user.email jane\u0040example.com"},"tool_inp` + "\n", true},
+		{"truncated line, credential", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"env":{"GITHUB_TOKEN":"my-private-value"},"tr` + "\n", true},
+		{"truncated line, escaped credential", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"env":{"GITHUB\u005fTOKEN":"my-private-value"},"tr` + "\n", true},
+		{"garbage then a value", `garbage {"v":"jane@example.com"}` + "\n", true},
+		{"garbage then an escaped value", `garbage {"v":"jane\u0040example.com"}` + "\n", true},
+		{"stray brace then an escaped value", `{"ok":1}}{"v":"jane\u0040example.com"}` + "\n", true},
+		{"surrogate pair is not a secret", `{"v":"\ud83d\ude00"}` + "\n", false},
+		{"credential key, list", `{"GITHUB_TOKEN":["my-private-value"]}` + "\n", true},
+		{"credential key, object", `{"GITHUB_TOKEN":{"v":"my-private-value"}}` + "\n", true},
+		{"escaped credential key, list", `{"GITHUB\u005fTOKEN":["my-private-value"]}` + "\n", true},
+		{"escaped credential key, object", `{"GITHUB\u005fTOKEN":{"v":"my-private-value"}}` + "\n", true},
+		{"credential value cut off", `{"tool_input":{"env":{"GITHUB_TOKEN": "my-private-va` + "\n", true},
+		{"credential value cut off after one byte", `{"GITHUB_TOKEN":"m` + "\n", true},
+		{"escaped credential key, value cut off", `{"GITHUB\u005fTOKEN":"my-private-va` + "\n", true},
+		{"empty credential value stays withheld", `{"password": ""}` + "\n", true},
+		{"counter named like a credential", `{"input_tokens":123456789012}` + "\n", false},
+		{"count named like a credential", `{"secret_count":12345678}` + "\n", false},
+		{"value, then an address after other text", `{"a":1}xx{"b":"jim@x.com"}` + "\n", true},
+		{"value, then an escaped address after other text", `{"a":1}xx{"b":"jim\u0040x.com"}` + "\n", true},
+		{"value, then a foreign home", `{"a":1}{"x":"/home/bob/a"}` + "\n", true},
+		{"value, then an escaped foreign home", `{"a":1}{"x":"\u002fhome\u002fbob\u002fa"}` + "\n", true},
+		{"truncated line, nothing secret", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"ls"},"tr` + "\n", false},
 		{"plain", "\x00garbage\n", false},
 	}
 	for _, c := range cases {
@@ -302,7 +331,7 @@ func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
 				return
 			}
 			assert.Contains(t, string(got), "sha256")
-			for _, s := range []string{home, `\/var\/home`, secret, "jane@example.com", "abcdefghij1234567890"} {
+			for _, s := range []string{home, `\/var\/home`, secret, "jane@example.com", "abcdefghij1234567890", "my-private-value", "supersecretvalue", "jim@x.com", "/home/bob", "my-private"} {
 				assert.NotContains(t, string(got), s)
 			}
 		})
@@ -452,4 +481,19 @@ func TestCorruptRule_EveryRuleGetsAGrammaticalNotice(t *testing.T) {
 		assert.True(t, plural[verb], "%s: %q", name, notice)
 	}
 	assert.GreaterOrEqual(t, seen, 6, "most inputs hit a rule")
+}
+
+// TestUnescapeJSON: the byte-level unescape resolves what a JSON string can
+// hold, surrogate pairs included, and leaves a malformed escape as it is.
+func TestUnescapeJSON(t *testing.T) {
+	for in, want := range map[string]string{
+		`jane\u0040example.com`: "jane@example.com",
+		`a\/b\"c\\d\n\t`:        "a/b\"c\\d\n\t",
+		`\ud83d\ude00`:          "\U0001F600",
+		`x\ud83dy`:              "x\ufffdy",
+		`bad \u12 end`:          `bad \u12 end`,
+		`trail\`:                `trail\`,
+	} {
+		assert.Equal(t, want, unescapeJSON([]byte(in)), in)
+	}
 }

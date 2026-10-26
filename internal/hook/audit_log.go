@@ -189,6 +189,15 @@ func buildAuditEntryNote(input map[string]any, sessionID, repoRoot string, now t
 		Redacted:         contentRedacted,
 		PathFormat:       auditPathFormat,
 	}
+	if fp, ok := extractToolInput(input)["file_path"].(string); ok {
+		// An error counts as ambiguous: the line is not taken for a Read.
+		if amb, err := ambiguousPath(fp, repoRoot); amb {
+			entry.RawPlaceholder = true
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
+			}
+		}
+	}
 	// Optional enrichment fields. Each is `omitempty` on the struct
 	// so the absent value drops out of the JSONL line, preserving
 	// wire shape compatibility with v3.11.0 readers.
