@@ -276,6 +276,15 @@ ethos session purge                   # Clean up stale rosters
 | `session` | join | `agent_id`, optional `persona`, `parent`, `agent_type` | Add participant |
 | `session` | leave | `agent_id` | Remove participant |
 
+Default `ethos serve` ignores OpenCode session metadata, preserving existing
+identity/session resolution even if the metadata key is malformed. The native
+OpenCode pilot requires `ethos serve --opencode-session-metadata` to opt in.
+Then `identity whoami`, implicit `session roster`, and `session iam` use the
+exact registered session participant from `_meta["ai.opencode/sessionID"]`.
+Missing callers fail visibly; join an existing roster rather than recreating
+it (`session create` overwrites). Metadata is routing context, not authentication.
+See [Native OpenCode MCP identity pilot](docs/opencode-mcp-identity.md).
+
 ### Slash Commands
 
 | Command | Description |

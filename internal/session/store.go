@@ -118,6 +118,36 @@ func (s *Store) Join(sessionID string, p Participant) error {
 	})
 }
 
+// SetExistingPersona declares a persona only for an existing exact participant.
+// The check and update share a lock so a concurrent Leave cannot cause an iam
+// declaration to resurrect the caller. Unlike Join, it never adds participants.
+func (s *Store) SetExistingPersona(sessionID, agentID, persona string) error {
+	return s.withLock(sessionID, func() error {
+		roster, err := s.Load(sessionID)
+		if err != nil {
+			return err
+		}
+		if roster.Session != sessionID {
+			return fmt.Errorf("roster session %q does not match %q", roster.Session, sessionID)
+		}
+		var caller *Participant
+		for i := range roster.Participants {
+			p := &roster.Participants[i]
+			if p.AgentID == agentID {
+				if caller != nil {
+					return fmt.Errorf("participant %q is duplicated", agentID)
+				}
+				caller = p
+			}
+		}
+		if caller == nil {
+			return fmt.Errorf("participant %q not found", agentID)
+		}
+		caller.Persona = persona
+		return s.writeRoster(sessionID, roster)
+	})
+}
+
 // JoinSelf is Join for a caller declaring information about its OWN
 // participant record, keyed preferentially on preferredID (the
 // corroborated CLAUDE_PID, DES-074) but tolerating legacyID (the
