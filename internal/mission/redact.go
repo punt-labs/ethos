@@ -598,6 +598,78 @@ func announceRewritten(what string, st redact.RenameStatus) Announcement {
 	}
 }
 
+// AmbiguousPath reports whether the stored form of the file name raw reads back
+// as a different file: Clean(Expand(Path(raw))) is not the same path as
+// Clean(raw) under SamePath. A placeholder token inside a name (src/a-~b)
+// round-trips; one at a path boundary (cache/-~-project/x) is expanded to this
+// machine's home or repo when read back.
+func AmbiguousPath(raw, repoRoot string) (bool, error) {
+	r, err := NewPathRedactor(repoRoot)
+	if err != nil {
+		return true, fmt.Errorf("judging a path for placeholders: %w", err)
+	}
+	back, err := ExpandPath(r.Path(raw), repoRoot)
+	if err != nil {
+		return true, fmt.Errorf("judging a path for placeholders: %w", err)
+	}
+	return !SamePath(filepath.Clean(back), filepath.Clean(raw)), nil
+}
+
+// homePlaceholderExpanded turns a leading ~ or ~/ in a require_read entry into
+// this machine's home directory, which is what the evaluator does with it, so
+// the entry is judged as the absolute path it stands for: ~/.claude/CLAUDE.md is
+// as unambiguous as $HOME/.claude/CLAUDE.md, while ~/x/-~-y still holds a token
+// at a boundary. Any other entry is returned as it is.
+func homePlaceholderExpanded(v string) (string, error) {
+	if v != "~" && !strings.HasPrefix(v, "~/") {
+		return v, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("expanding %q: resolving home directory: %w", v, err)
+	}
+	return filepath.Join(home, v[1:]), nil
+}
+
+// refuseAmbiguousRequireRead refuses a require_read entry, new or changed from
+// prior, whose file name is ambiguous (AmbiguousPath), after ${inputs.X}
+// substitution: it would be stored unchanged and expanded at evaluation to a
+// different file. The error names the entry by position, not by value.
+func refuseAmbiguousRequireRead(repoRoot string, c, prior *Contract) error {
+	var had []string
+	if prior != nil {
+		for _, p := range prior.Preconditions {
+			had = append(had, p.RequireRead...)
+		}
+	}
+	for i, p := range c.Preconditions {
+		if p.Form != PreconditionFormExplicit {
+			continue
+		}
+		for j, entry := range p.RequireRead {
+			if slices.Contains(had, entry) {
+				continue
+			}
+			v, err := SubstituteInputs(entry, c)
+			if err != nil {
+				continue // evaluation reports an entry it cannot resolve
+			}
+			v, err = homePlaceholderExpanded(v)
+			if err != nil {
+				return fmt.Errorf("preconditions[%d].require_read[%d]: %w", i, j, err)
+			}
+			amb, err := AmbiguousPath(v, repoRoot)
+			if err != nil {
+				return fmt.Errorf("preconditions[%d].require_read[%d]: %w", i, j, err)
+			}
+			if amb {
+				return fmt.Errorf("preconditions[%d].require_read[%d] contains a redaction placeholder (-~, ~ or <repo> at a path boundary): it would be read back as a different file; name the file without it", i, j)
+			}
+		}
+	}
+	return nil
+}
+
 // refuseOwnDashHome refuses a repo-relative path entry holding this machine's
 // dash home whose value is not already a path entry of prior (in any path
 // field; prior is nil for a new contract). Such an entry is compared literally by its readers (the

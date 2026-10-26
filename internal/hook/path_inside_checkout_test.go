@@ -227,7 +227,10 @@ func TestPreconditions_ReadsMatchWithThePathPassCaseRule(t *testing.T) {
 	require.NoError(t, os.MkdirAll(repo, 0o700))
 	initGitRepo(t, repo)
 	canonical := filepath.Join(repo, "a.go")
-	variant := strings.Replace(canonical, "RepoDir", "repodir", 1)
+	require.NoError(t, os.WriteFile(canonical, []byte("x"), 0o600))
+	// repodir is the same directory as RepoDir, as on a case-insensitive volume.
+	require.NoError(t, os.Symlink(repo, filepath.Join(home, "repodir")))
+	variant := filepath.Join(home, "repodir", "a.go")
 	require.NotEqual(t, canonical, variant)
 
 	write := func(sess, p string) bool {
@@ -245,4 +248,92 @@ func TestPreconditions_ReadsMatchWithThePathPassCaseRule(t *testing.T) {
 	auditRead(t, repo, global, "sess-strict", canonical)
 	assert.False(t, write("sess-strict", canonical))
 	assert.True(t, write("sess-strict", variant), "exact where the path pass is strict")
+}
+
+// TestPreconditions_StoredAmbiguousRequireReadIsNotMetByTheExpandedFile: a
+// contract stored before admission refused such entries holds
+// cache/-~-project/config.json. When that literal file exists in the checkout,
+// a Read of cache/<slug>-project/config.json (what the entry expands to) does
+// not satisfy it: the requirement is ambiguous and is denied with a reason. When
+// no such literal file exists the entry can only mean the expanded file, and the
+// Read satisfies it. An ordinary <repo>/docs/spec.md is satisfied by a Read of
+// the real file.
+func TestPreconditions_StoredAmbiguousRequireReadIsNotMetByTheExpandedFile(t *testing.T) {
+	home, repo, global := checkoutUnderHome(t)
+	slug := strings.ReplaceAll(home, string(filepath.Separator), "-")
+	expanded := "cache/" + slug + "-project/config.json"
+	write := map[string]any{"file_path": "x.go"}
+	eval := func(c *mission.Contract, sess string) (string, bool) {
+		reason, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo, repo)
+		require.NoError(t, err)
+		return reason, deny
+	}
+
+	c := redactedRequireRead(t, repo, "cache/-~-project/config.json")
+	auditRead(t, repo, global, "sess-a", expanded)
+	_, deny := eval(c, "sess-a")
+	assert.False(t, deny, "no literal file: the entry means the expanded file, which was read")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "cache", "-~-project"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "cache", "-~-project", "config.json"), []byte("{}"), 0o600))
+	reason, deny := eval(c, "sess-a")
+	assert.True(t, deny, "the literal file exists: the Read of the expanded file is not the file required")
+	assert.Contains(t, reason, "redaction placeholder")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs"), 0o700))
+	spec := filepath.Join(repo, "docs", "spec.md")
+	require.NoError(t, os.WriteFile(spec, []byte("x"), 0o600))
+	auditRead(t, repo, global, "sess-b", spec)
+	ordinary := redactedRequireRead(t, repo, spec)
+	require.Equal(t, "<repo>/docs/spec.md", ordinary.Preconditions[0].RequireRead[0])
+	reason, deny = eval(ordinary, "sess-b")
+	assert.False(t, deny, "an ordinary placeholder is met by a Read of the real file: %s", reason)
+}
+
+// TestReadsContain_FoldedMatchNeedsTheSameFile: PathCaseFold says the path pass
+// folds case, but a volume can still be case-sensitive. A spelling that matches
+// only by folding counts only when both paths are the same file on disk: a Read
+// of Foo does not satisfy a Write of the distinct file foo.
+func TestReadsContain_FoldedMatchNeedsTheSameFile(t *testing.T) {
+	old := mission.PathCaseFold
+	t.Cleanup(func() { mission.PathCaseFold = old })
+	mission.PathCaseFold = true
+	dir := t.TempDir()
+	foo, Foo := filepath.Join(dir, "foo"), filepath.Join(dir, "Foo")
+	require.NoError(t, os.WriteFile(Foo, []byte("upper"), 0o600))
+	require.NoError(t, os.WriteFile(foo, []byte("lower"), 0o600))
+	if os.SameFile(mustStat(t, foo), mustStat(t, Foo)) {
+		t.Skip("this file system folds case: Foo and foo are one file")
+	}
+	reads := map[string]struct{}{Foo: {}}
+	assert.True(t, readsContain(reads, Foo, dir), "exact")
+	assert.False(t, readsContain(reads, foo, dir), "a different file that folds to the same name")
+}
+
+func mustStat(t *testing.T, p string) os.FileInfo {
+	t.Helper()
+	fi, err := os.Stat(p)
+	require.NoError(t, err)
+	return fi
+}
+
+// TestRelUnder: the path of p under root, by the prefix rule, for a root that is
+// a directory and for the file system root, whose cleaned form ends in a
+// separator.
+func TestRelUnder(t *testing.T) {
+	for _, tt := range []struct {
+		root, p, want string
+		ok            bool
+	}{
+		{"/repo", "/repo/a.go", "a.go", true},
+		{"/repo", "/repo", "", true},
+		{"/repo", "/repox/a.go", "", false},
+		{"/repo", "/other/a.go", "", false},
+		{"/", "/a/b.go", "a/b.go", true},
+		{"/", "/", "", true},
+	} {
+		got, ok := relUnder(tt.root, tt.p)
+		assert.Equal(t, tt.ok, ok, "%s %s", tt.root, tt.p)
+		assert.Equal(t, tt.want, got, "%s %s", tt.root, tt.p)
+	}
 }

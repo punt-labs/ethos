@@ -1031,13 +1031,26 @@ func createRepoRelativeContract(t *testing.T, storeRoot, global, id string) {
 		SuccessCriteria: []string{"make check passes"},
 		Budget:          mission.Budget{Rounds: 3, ReflectionAfterEach: true},
 		CurrentRound:    1,
-		Preconditions: []mission.Precondition{{
-			Form:        mission.PreconditionFormExplicit,
-			RequireRead: []string{"<repo>/cfg/config.yaml"},
-			Message:     "read it first",
-		}},
 	}
-	require.NoError(t, mission.NewStoreWithRoots(storeRoot, global).Create(c))
+	st := mission.NewStoreWithRoots(storeRoot, global)
+	require.NoError(t, st.Create(c))
+	// The entry is the stored form of an absolute path under the repo. Create
+	// refuses a literal <repo>/ (it would read back as a different file), so the
+	// precondition is written into the stored contract, as an older ethos wrote it.
+	path, err := st.ContractPath(id)
+	require.NoError(t, err)
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var stored mission.Contract
+	require.NoError(t, yaml.Unmarshal(raw, &stored))
+	stored.Preconditions = []mission.Precondition{{
+		Form:        mission.PreconditionFormExplicit,
+		RequireRead: []string{"<repo>/cfg/config.yaml"},
+		Message:     "read it first",
+	}}
+	raw, err = yaml.Marshal(&stored)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
 }
 
 // TestEvalContractPreconditions_OverrideToALinkedWorktree: with

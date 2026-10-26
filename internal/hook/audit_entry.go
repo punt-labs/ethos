@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/redact"
@@ -77,21 +76,9 @@ type guardReport struct {
 }
 
 // ambiguousPath reports whether the audit log cannot tell the file name raw from
-// another: the stored form (the path pass) read back by Expand is not raw. A
-// token inside a name (src/a-~b) round-trips exactly; one at a path boundary
-// (src/-~-proj/x, ~/x/-~-y) comes back as a different file.
+// another; see mission.AmbiguousPath.
 func ambiguousPath(raw, repoRoot string) (bool, error) {
-	r, err := mission.NewPathRedactor(repoRoot)
-	if err != nil {
-		return true, fmt.Errorf("judging a path for placeholders: %w", err)
-	}
-	back, err := mission.ExpandPath(r.Path(raw), repoRoot)
-	if err != nil {
-		return true, fmt.Errorf("judging a path for placeholders: %w", err)
-	}
-	// The same case rule as the path pass: on macOS /users/alice and
-	// /Users/Alice are one directory.
-	return !mission.SamePath(filepath.Clean(back), filepath.Clean(raw)), nil
+	return mission.AmbiguousPath(raw, repoRoot)
 }
 
 // auditPathFormat is the PathFormat of a line this version writes.

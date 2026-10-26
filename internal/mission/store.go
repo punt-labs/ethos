@@ -712,6 +712,9 @@ func (s *Store) Create(c *Contract) error {
 			if err := refuseOwnDashHome(s.repoRoot, &staged, nil); err != nil {
 				return fmt.Errorf("writing contract %s: %w", staged.MissionID, err)
 			}
+			if err := refuseAmbiguousRequireRead(s.repoRoot, &staged, nil); err != nil {
+				return fmt.Errorf("writing contract %s: %w", staged.MissionID, err)
+			}
 			sayContract, wErr := s.writeContractNote(&staged)
 			if wErr != nil {
 				return wErr
@@ -926,6 +929,9 @@ func (s *Store) Update(c *Contract) error {
 			return fmt.Errorf("invalid contract: %w", err)
 		}
 		if err := refuseOwnDashHome(s.repoRoot, &updated, onDisk); err != nil {
+			return fmt.Errorf("writing contract %s: %w", updated.MissionID, err)
+		}
+		if err := refuseAmbiguousRequireRead(s.repoRoot, &updated, onDisk); err != nil {
 			return fmt.Errorf("writing contract %s: %w", updated.MissionID, err)
 		}
 		sayContract, wErr := s.writeContractNote(&updated)
