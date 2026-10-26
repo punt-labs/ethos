@@ -216,13 +216,17 @@ func redactToolInputQuiet(input map[string]any, toolName, repoRoot string) (out 
 	// r.Map knows this machine's home and repo; HomePathsValue adds any
 	// other user's home, as every mission record gets (redact.Prose).
 	raw := extractToolInput(input)
-	mapped, renamedHere := r.MapFlag(raw)
+	// The credential sweep runs on the original input, before any key is
+	// rewritten: a key the path pass renames (/home/password) is a credential
+	// name, and the rename would hide it.
+	swept, sweptChanged := sweepSecrets(raw)
+	mapped, renamedHere := r.MapFlag(swept)
 	hp, renamedOther := redact.HomePathsValueFlag(mapped)
 	in, _ := hp.(map[string]any)
 	redactPathKeys(r, raw, in)
 	out, removed := redactSensitiveContent(toolName, in)
 	out, dropped := dropLeaks(r, out)
-	changed = removed || dropped || renamedHere || renamedOther
+	changed = removed || dropped || renamedHere || renamedOther || sweptChanged
 	return out, changed, changed || !sameJSON(raw, out)
 }
 

@@ -259,3 +259,17 @@ func TestRedactToolInput_MapKeys(t *testing.T) {
 	assert.Contains(t, env, redactedKey)
 	assert.Contains(t, env, redactedKey+"#2")
 }
+
+// TestRedactToolInput_CredentialKeyIsJudgedBeforeTheKeyIsRenamed: a key the path
+// pass would rewrite (/home/password) is a credential name, and its value is
+// replaced before the rename hides the name.
+func TestRedactToolInput_CredentialKeyIsJudgedBeforeTheKeyIsRenamed(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	e := buildAuditEntry(map[string]any{"tool_name": "Bash", "tool_input": map[string]any{
+		"command": "env", "env": map[string]any{"/home/password": "hunter2"},
+	}}, "s", t.TempDir(), time.Now())
+	b, err := json.Marshal(e)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "hunter2")
+	assert.True(t, e.Redacted, "the line says it was redacted")
+}

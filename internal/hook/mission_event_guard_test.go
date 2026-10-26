@@ -257,3 +257,30 @@ func TestMissionLine_UnknownFieldEventIsRedactedWhenSealedAndRecovered(t *testin
 		assertClean(t, chunkLines(t, sealedDir))
 	})
 }
+
+// TestMissionEvent_NameThatIsNotAnEventNameIsRedacted: the event name is kept
+// when it has the shape of the names ethos writes (lower-case words joined by
+// underscores) and the credential pass leaves it alone; a credential in it, on
+// the typed path, is replaced; a real name is unchanged.
+func TestMissionEvent_NameThatIsNotAnEventNameIsRedacted(t *testing.T) {
+	ts := audit.FormatLineTS(100)
+	for _, name := range []string{"create", "update", "round_advanced", "write_set_released", "disclaim_delegation"} {
+		m, _ := missionGuardLine(t, `{"ts":"`+ts+`","event":"`+name+`","actor":"a"}`)
+		assert.Equal(t, name, m["event"])
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	const mid, sid = "m-2026-07-21-060", "sessM"
+	live := liveMissionLogPath(repo, mid, sid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	require.NoError(t, os.WriteFile(live, []byte(`{"ts":"`+ts+`","event":"GITHUB_TOKEN=abc123","actor":"a"}`+"\n"), 0o600))
+	_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+	require.NoError(t, err)
+	lines := chunkLines(t, sealedMissionDir(repo, mid))
+	require.NotEmpty(t, lines)
+	for _, l := range lines {
+		assert.NotContains(t, l, "abc123")
+	}
+}

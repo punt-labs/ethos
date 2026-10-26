@@ -679,14 +679,28 @@ var sessionIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // a chunk name are built from; an address (@) is outside it.
 func IsSessionID(s string) bool { return sessionIDRE.MatchString(s) && SecretsString(s) == s }
 
+var eventNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// IsEventName reports whether s has the shape of a mission event name as ethos
+// writes them (create, round_advanced, write_set_released, disclaim_delegation):
+// lower-case words joined by underscores, not a credential the pass would change.
+func IsEventName(s string) bool { return eventNameRE.MatchString(s) && SecretsString(s) == s }
+
+// ValueTag reports whether tag names a field kept only when its value has the
+// tag's shape: "handle", "session" or "event".
+func ValueTag(tag string) bool { return tag == "handle" || tag == "session" || tag == "event" }
+
 // keepsValue reports whether a field with redact tag tag keeps value v as it is:
-// "handle" keeps an identity handle, "session" a session ID shape.
+// "handle" keeps an identity handle, "session" a session ID shape, "event" an
+// event name shape.
 func keepsValue(tag, v string) bool {
 	switch tag {
 	case "handle":
 		return IsHandle(v)
 	case "session":
 		return IsSessionID(v)
+	case "event":
+		return IsEventName(v)
 	}
 	return false
 }
@@ -810,7 +824,7 @@ func scrub(v reflect.Value, f, paths func(string) string, renamed *RenameStatus)
 			if !sf.IsExported() || tag == "keep" {
 				continue
 			}
-			if tag == "handle" || tag == "session" {
+			if ValueTag(tag) {
 				// An identity handle is kept as it is; anything else in the
 				// field is text like any other and gets the caller's pass.
 				if fv := v.Field(i); fv.Kind() == reflect.String && !keepsValue(tag, fv.String()) {
@@ -923,7 +937,7 @@ func diffPaths(a, b reflect.Value, inPath bool, name string, out *[]string) {
 		for i := 0; i < t.NumField(); i++ {
 			sf := t.Field(i)
 			tag := sf.Tag.Get("redact")
-			if !sf.IsExported() || tag == "keep" || tag == "handle" || tag == "session" {
+			if !sf.IsExported() || tag == "keep" || ValueTag(tag) {
 				continue
 			}
 			sub := sf.Name

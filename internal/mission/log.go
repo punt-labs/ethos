@@ -32,7 +32,7 @@ const maxLogSize = 16 * 1024 * 1024
 // a schema migration.
 type Event struct {
 	TS      string         `json:"ts" redact:"keep"`      // RFC3339
-	Event   string         `json:"event" redact:"keep"`   // create|update|close|...
+	Event   string         `json:"event" redact:"event"`  // create|update|close|...
 	Actor   string         `json:"actor" redact:"handle"` // identity handle
 	Details map[string]any `json:"details,omitempty"`
 }
