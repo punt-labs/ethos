@@ -400,10 +400,23 @@ func prefixLen(s string, i int, prefix string) int {
 	return len(prefix)
 }
 
-// hasPathPrefix is strings.HasPrefix, folding case on macOS, whose default
-// filesystem treats /Users/Zed and /Users/zed as one directory.
+// PathCaseFold says whether path prefixes compare without regard to case: on
+// macOS, whose default filesystem treats /Users/Zed and /Users/zed as one
+// directory. A variable so a test can set it on any system.
+var PathCaseFold = runtime.GOOS == "darwin"
+
+// SamePath reports whether a and b are the same path under the prefix rule:
+// equal, or equal ignoring case where PathCaseFold is set.
+func SamePath(a, b string) bool {
+	if PathCaseFold {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// hasPathPrefix is strings.HasPrefix, folding case where PathCaseFold is set.
 func hasPathPrefix(s, prefix string) bool {
-	if runtime.GOOS == "darwin" {
+	if PathCaseFold {
 		return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 	}
 	return strings.HasPrefix(s, prefix)

@@ -124,14 +124,18 @@ func guardMissionEvent(repoRoot string, line []byte) ([]byte, string, bool) {
 }
 
 // scrubLeaves returns a copy of v in which every string and key has been through
-// the content pass, and a string or key that still names a home afterwards is
-// replaced by a placeholder. A leaf that does not leak keeps its content-pass
-// form (a path rewritten to ~, say), never a placeholder.
+// the credential pass and then the content pass, and a string or key that still
+// names a home afterwards is replaced by a placeholder. A leaf that does not
+// leak keeps its content-pass form (a path rewritten to ~, say), never a
+// placeholder.
 func scrubLeaves(r mission.PathRedactor, v map[string]any) map[string]any {
 	if v == nil {
 		return nil
 	}
-	out, _ := scrubLeaf(r, v).(map[string]any)
+	// Credentials first: a key the content pass renames (password@example.com)
+	// would otherwise lose the name that says its value is one.
+	judged, _ := redact.SecretsValue(v)
+	out, _ := scrubLeaf(r, judged).(map[string]any)
 	return out
 }
 

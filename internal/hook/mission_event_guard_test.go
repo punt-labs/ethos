@@ -197,3 +197,16 @@ func TestMissionLineGuard_KeepsACallersRedactedKey(t *testing.T) {
 		assert.NotContains(t, rule, "renamed key", name)
 	}
 }
+
+// TestMissionLineGuard_FallbackRedactsCredentialsBeforeRenamingKeys: when the
+// record pass fails on one leaf (an encoded home) and the guard scrubs the
+// details leaf by leaf, a credential-named key that the content pass would
+// rename (password@example.com) still has its value replaced: credentials are
+// judged before any key is renamed.
+func TestMissionLineGuard_FallbackRedactsCredentialsBeforeRenamingKeys(t *testing.T) {
+	ts := audit.FormatLineTS(100)
+	m, rule := missionGuardLine(t, `{"ts":"`+ts+`","event":"update","actor":"a","details":{"password@example.com":"hunter2","bad":"a %2Fhome%2Fbob%2Fx"}}`)
+	assert.NotEmpty(t, rule)
+	assert.NotContains(t, m["_raw"], "hunter2")
+	assert.NotContains(t, m["_raw"], "bob")
+}

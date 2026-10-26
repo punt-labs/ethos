@@ -49,9 +49,9 @@ type Contract struct {
 	// Bead → Ticket for tracker-agnostic language; inputs.bead is
 	// accepted as a deprecated alias during YAML/JSON decode.
 
-	Leader    string    `yaml:"leader" json:"leader" redact:"keep"`
-	Worker    string    `yaml:"worker" json:"worker" redact:"keep"`
-	Evaluator Evaluator `yaml:"evaluator" json:"evaluator" redact:"keep"`
+	Leader    string    `yaml:"leader" json:"leader" redact:"handle"`
+	Worker    string    `yaml:"worker" json:"worker" redact:"handle"`
+	Evaluator Evaluator `yaml:"evaluator" json:"evaluator"`
 
 	Inputs   Inputs   `yaml:"inputs" json:"inputs"`
 	WriteSet []string `yaml:"write_set" json:"write_set" redact:"path"`
@@ -218,7 +218,7 @@ func (c *Contract) EffectiveStrictPreconditions() bool {
 // "" line on save), but the JSON tag always emits the field so
 // consumers that key on presence see a consistent shape.
 type Evaluator struct {
-	Handle   string `yaml:"handle" json:"handle" redact:"keep"`
+	Handle   string `yaml:"handle" json:"handle" redact:"handle"`
 	PinnedAt string `yaml:"pinned_at" json:"pinned_at" redact:"keep"`
 	Hash     string `yaml:"hash,omitempty" json:"hash" redact:"keep"`
 }

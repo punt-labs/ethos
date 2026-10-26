@@ -263,56 +263,28 @@ func TestRedactLegacyLine_AuditErrorIsSweptBesideAChangedInput(t *testing.T) {
 	assert.NotContains(t, string(out), "bob@example.com")
 }
 
-// TestQuarantineChunk_WithholdsRetiredBytesThatLeak: the .corrupt is staged in
-// a tracked tree, so a chunk that holds this machine's home, a credential or an
-// email address, raw or decoded, is replaced by a record of its hash, size and
-// rule. Plain garbage is kept as evidence.
-func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
+// TestQuarantineChunk_EveryRetiredChunkIsWithheld: the .corrupt is staged in a
+// tracked tree, so no retired chunk's bytes are staged, whatever they hold and
+// however they are spelled: the tracked file is a record of the hash, size and
+// rule, and the original is kept, byte for byte, in the local quarantine zone.
+// The decision does not depend on reading the bytes.
+func TestQuarantineChunk_EveryRetiredChunkIsWithheld(t *testing.T) {
 	home := "/var/home/zed"
-	secret := "ghp_" + strings.Repeat("c3D4", 9)
-	cases := []struct {
-		name, body string
-		withheld   bool
-	}{
-		{"home", "\x00garbage " + home + "/x\n", true},
-		{"escaped home", `{"cwd":"\/var\/home\/zed\/x"` + "\n", true},
-		{"credential", "\x00garbage " + secret + "\n", true},
-		{"env assignment", "\x00garbage GITHUB_TOKEN=abcdefghij1234567890\n", true},
-		{"address", "\x00garbage jane@example.com\n", true},
-		{"escaped address", `{"v":"jane\u0040example.com"}` + "\n", true},
-		{"credential-named key", `{"GITHUB_TOKEN":"my-private-value"}` + "\n", true},
-		{"escaped credential-named key", `{"GITHUB\u005fTOKEN":"my-private-value"}` + "\n", true},
-		{"credential-named key, plain value", `{"API_KEY":"supersecretvalue"}` + "\n", true},
-		{"escaped credential-named key, plain value", `{"API\u005fKEY":"supersecretvalue"}` + "\n", true},
-		{"escaped address in a second value", `null {"v":"jane\u0040example.com"}` + "\n", true},
-		{"credential in a second value", `null {"GITHUB\u005fTOKEN":"my-private-value"}` + "\n", true},
-		{"truncated line, address", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"git config user.email jane@example.com"},"tool_inp` + "\n", true},
-		{"truncated line, escaped address", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"git config user.email jane\u0040example.com"},"tool_inp` + "\n", true},
-		{"truncated line, credential", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"env":{"GITHUB_TOKEN":"my-private-value"},"tr` + "\n", true},
-		{"truncated line, escaped credential", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"env":{"GITHUB\u005fTOKEN":"my-private-value"},"tr` + "\n", true},
-		{"garbage then a value", `garbage {"v":"jane@example.com"}` + "\n", true},
-		{"garbage then an escaped value", `garbage {"v":"jane\u0040example.com"}` + "\n", true},
-		{"stray brace then an escaped value", `{"ok":1}}{"v":"jane\u0040example.com"}` + "\n", true},
-		{"surrogate pair is not a secret", `{"v":"\ud83d\ude00"}` + "\n", false},
-		{"credential key, list", `{"GITHUB_TOKEN":["my-private-value"]}` + "\n", true},
-		{"credential key, object", `{"GITHUB_TOKEN":{"v":"my-private-value"}}` + "\n", true},
-		{"escaped credential key, list", `{"GITHUB\u005fTOKEN":["my-private-value"]}` + "\n", true},
-		{"escaped credential key, object", `{"GITHUB\u005fTOKEN":{"v":"my-private-value"}}` + "\n", true},
-		{"credential value cut off", `{"tool_input":{"env":{"GITHUB_TOKEN": "my-private-va` + "\n", true},
-		{"credential value cut off after one byte", `{"GITHUB_TOKEN":"m` + "\n", true},
-		{"escaped credential key, value cut off", `{"GITHUB\u005fTOKEN":"my-private-va` + "\n", true},
-		{"empty credential value stays withheld", `{"password": ""}` + "\n", true},
-		{"counter named like a credential", `{"input_tokens":123456789012}` + "\n", false},
-		{"count named like a credential", `{"secret_count":12345678}` + "\n", false},
-		{"value, then an address after other text", `{"a":1}xx{"b":"jim@x.com"}` + "\n", true},
-		{"value, then an escaped address after other text", `{"a":1}xx{"b":"jim\u0040x.com"}` + "\n", true},
-		{"value, then a foreign home", `{"a":1}{"x":"/home/bob/a"}` + "\n", true},
-		{"value, then an escaped foreign home", `{"a":1}{"x":"\u002fhome\u002fbob\u002fa"}` + "\n", true},
-		{"truncated line, nothing secret", `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"ls"},"tr` + "\n", false},
-		{"plain", "\x00garbage\n", false},
+	bodies := map[string]string{
+		"home":                     "\x00garbage " + home + "/x\n",
+		"escaped home":             `{"cwd":"\/var\/home\/zed\/x"` + "\n",
+		"credential":               "\x00garbage ghp_" + strings.Repeat("c3D4", 9) + "\n",
+		"address":                  "\x00garbage jane@example.com\n",
+		"escaped credential key":   `{"GITHUB\u005fTOKEN":"my-private-value"}` + "\n",
+		"duplicate key":            `{"v":"alice@example.com","v":"clean"}` + "\n",
+		"escaped key, number":      `{"password":123456}` + "\n",
+		"escaped quote in a key":   `{"password\"x":"hunter2` + "\n",
+		"credential value cut off": `{"GITHUB_TOKEN":"m` + "\n",
+		"clean truncated line":     `{"ts":"2026-01-01T00:00:00Z","tool":"Bash","tool_input":{"command":"ls"},"tr` + "\n",
+		"plain":                    "\x00garbage\n",
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", home)
 			repo := t.TempDir()
 			initGitRepo(t, repo)
@@ -320,20 +292,24 @@ func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 			chunk := audit.SessionChunkFile(100, 300)
-			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte(c.body), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte(body), 0o600))
 
 			_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 			require.NoError(t, err)
 			got, err := os.ReadFile(filepath.Join(sealedDir, chunk+".corrupt"))
 			require.NoError(t, err)
-			if !c.withheld {
-				assert.Equal(t, c.body, string(got))
-				return
-			}
 			assert.Contains(t, string(got), "sha256")
-			for _, s := range []string{home, `\/var\/home`, secret, "jane@example.com", "abcdefghij1234567890", "my-private-value", "supersecretvalue", "jim@x.com", "/home/bob", "my-private"} {
-				assert.NotContains(t, string(got), s)
-			}
+			assert.NotContains(t, string(got), strings.TrimSpace(body), "the tracked file never holds the original")
+			assert.NotContains(t, string(got), "my-private")
+			assert.NotContains(t, string(got), "alice@example.com")
+			assert.NotContains(t, string(got), "hunter2")
+
+			local, err := os.ReadDir(audit.QuarantineDir(repo))
+			require.NoError(t, err)
+			require.Len(t, local, 1)
+			orig, err := os.ReadFile(filepath.Join(audit.QuarantineDir(repo), local[0].Name()))
+			require.NoError(t, err)
+			assert.Equal(t, body, string(orig), "the local copy holds the bytes exactly")
 		})
 	}
 }
@@ -436,64 +412,46 @@ func TestQuarantineChunk_LeakingTokenOfTheReasonIsReplacedAlone(t *testing.T) {
 	assert.NotContains(t, stderr, "alice")
 }
 
-// TestCorruptRule_NamesTheSameRuleEveryRun: a line whose decoded keys break two
-// rules is judged in key order, so the rule the notice names does not change
-// from run to run.
-func TestCorruptRule_NamesTheSameRuleEveryRun(t *testing.T) {
-	// JSON escapes keep both out of the raw bytes: only the decoded keys hold them.
-	line := []byte(`{"jane\u0040example.com":"x","GITHUB_TOKEN\u003dabcdefghij1234567890":"y"}` + "\n")
-	first := corruptRule(line)
-	require.NotEmpty(t, first)
-	for i := 0; i < 50; i++ {
-		require.Equal(t, first, corruptRule(line))
+// TestQuarantineChunk_RecordLookingChunkIsWithheld: a retired chunk that is
+// shaped like a withheld record but spells it differently (text in ts, a
+// duplicate or case-variant key) is not taken for one: it is withheld like any
+// chunk, the index holds a new, exact record, and the local zone holds the
+// original.
+func TestQuarantineChunk_RecordLookingChunkIsWithheld(t *testing.T) {
+	sum := strings.Repeat("ab", 32)
+	base := `"withheld":"retired chunk bytes withheld from the tracked tree","sha256":"` + sum + `","size":3,"rule":"retired chunk withheld"`
+	bodies := map[string]string{
+		"ts holding text":    `{` + base + `,"ts":"GITHUB_TOKEN=ghp_abcdefghij1234567890 alice@example.com /home/alice/x"}` + "\n",
+		"duplicate rule key": `{"rule":"password=hunter2",` + base + `}` + "\n",
+		"case-variant key":   `{` + base + `,"RULE":"password=hunter2"}` + "\n",
 	}
-}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", "/var/home/zed")
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			sealedDir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
+			require.NoError(t, err)
+			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+			chunk := audit.SessionChunkFile(100, 300)
+			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte(body), 0o600))
 
-// TestCorruptRule_EveryRuleGetsAGrammaticalNotice: each rule corruptRule can
-// return, in the withheld-chunk notice, follows "its bytes" with a plural verb.
-func TestCorruptRule_EveryRuleGetsAGrammaticalNotice(t *testing.T) {
-	t.Setenv("HOME", "/home/zed")
-	inputs := map[string]string{
-		"own home":           "x /home/zed/y\n",
-		"foreign home":       "x /home/bob/y\n",
-		"own slug":           "x -home-zed-y\n",
-		"foreign slug":       "x -home-bob-y\n",
-		"slug end":           "x/-var-home-bob\n",
-		"climb":              "~/../x\n",
-		"credential":         "x GITHUB_TOKEN=abcdefghij1234567890\n",
-		"email":              "x jane@example.com\n",
-		"invalid utf-8":      "x \xff\xfe\n",
-		"unpaired surrogate": `{"a":"\ud800"}` + "\n",
-		"duplicate key":      `{"a":"1","a":"2"}` + "\n",
-	}
-	plural := map[string]bool{"hold": true, "contain": true, "name": true, "climb": true, "are": true}
-	seen := 0
-	for name, in := range inputs {
-		rule := corruptRule([]byte(in))
-		if rule == "" {
-			continue
-		}
-		seen++
-		notice := audit.WithheldNotice("c.jsonl", rule)
-		_, after, ok := strings.Cut(notice, "its bytes ")
-		require.True(t, ok, name)
-		verb, _, _ := strings.Cut(after, " ")
-		assert.True(t, plural[verb], "%s: %q", name, notice)
-	}
-	assert.GreaterOrEqual(t, seen, 6, "most inputs hit a rule")
-}
+			_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+			require.NoError(t, err)
+			corrupt := filepath.Join(sealedDir, chunk+".corrupt")
+			blob, tracked, err := audit.IndexBlob(repo, corrupt)
+			require.NoError(t, err)
+			require.True(t, tracked, "the record is staged")
+			assert.True(t, audit.IsWithheldRecord(blob), "the index holds an exact record: %s", blob)
+			assert.NotContains(t, string(blob), "hunter2")
+			assert.NotContains(t, string(blob), "alice@example.com")
 
-// TestUnescapeJSON: the byte-level unescape resolves what a JSON string can
-// hold, surrogate pairs included, and leaves a malformed escape as it is.
-func TestUnescapeJSON(t *testing.T) {
-	for in, want := range map[string]string{
-		`jane\u0040example.com`: "jane@example.com",
-		`a\/b\"c\\d\n\t`:        "a/b\"c\\d\n\t",
-		`\ud83d\ude00`:          "\U0001F600",
-		`x\ud83dy`:              "x\ufffdy",
-		`bad \u12 end`:          `bad \u12 end`,
-		`trail\`:                `trail\`,
-	} {
-		assert.Equal(t, want, unescapeJSON([]byte(in)), in)
+			local, err := os.ReadDir(audit.QuarantineDir(repo))
+			require.NoError(t, err)
+			require.Len(t, local, 1)
+			orig, err := os.ReadFile(filepath.Join(audit.QuarantineDir(repo), local[0].Name()))
+			require.NoError(t, err)
+			assert.Equal(t, body, string(orig))
+		})
 	}
 }

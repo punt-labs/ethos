@@ -465,26 +465,85 @@ func saveOriginal(repoRoot, stem string, b []byte) error {
 	return writeFileAtomic(filepath.Join(dir, stem+"."+hex.EncodeToString(sum[:])[:12]+".corrupt"), b)
 }
 
+// WithheldRule is the rule a retired chunk's record names: every retired chunk
+// is withheld, so the rule is a label, not a finding.
+const WithheldRule = "retired chunk withheld"
+
+// withheldText is the "withheld" field of a record.
+const withheldText = "retired chunk bytes withheld from the tracked tree"
+
+// IsWithheldRecord reports whether b is exactly a record writeRecord wrote with
+// WithheldRule. Only such bytes may be staged as a retired chunk's .corrupt; they
+// hold no byte of the chunk. The record is decoded, rebuilt the way writeRecord
+// builds it, and the two must be byte for byte equal, so a duplicate key, a
+// case-variant key, another key order, stray white space or a second line makes
+// it something else. A ts, when present, must be a timestamp as FormatLineTS
+// writes it.
+func IsWithheldRecord(b []byte) bool {
+	var rec struct {
+		Withheld string `json:"withheld"`
+		SHA256   string `json:"sha256"`
+		Size     int    `json:"size"`
+		Rule     string `json:"rule"`
+		TS       string `json:"ts"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&rec) != nil {
+		return false
+	}
+	if rec.Withheld != withheldText || rec.Rule != WithheldRule {
+		return false
+	}
+	if raw, err := hex.DecodeString(rec.SHA256); err != nil || len(raw) != sha256.Size {
+		return false
+	}
+	ts := int64(-1)
+	if rec.TS != "" {
+		n, err := ParseLineTS(rec.TS)
+		if err != nil || FormatLineTS(n) != rec.TS {
+			return false
+		}
+		ts = n
+	}
+	rebuilt, err := recordBytes(rec.SHA256, rec.Size, rec.Rule, ts)
+	return err == nil && bytes.Equal(b, rebuilt)
+}
+
+// recordBytes is the one encoding of a record: the fields, ts only when it is
+// not negative, as one line.
+func recordBytes(sumHex string, size int, rule string, ts int64) ([]byte, error) {
+	rec := map[string]any{
+		"withheld": withheldText,
+		"sha256":   sumHex,
+		"size":     size,
+		"rule":     rule,
+	}
+	if ts >= 0 {
+		rec["ts"] = FormatLineTS(ts)
+	}
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return nil, err
+	}
+	return append(line, '\n'), nil
+}
+
 // writeRecord replaces the file at path with a one-line record of b's hash,
 // size and the rule it broke. The record carries no byte of b, but keeps the
 // newest ts b held so the quarantine can still tell how far the corruption
 // reached.
 func writeRecord(path string, b []byte, rule string) error {
 	sum := sha256.Sum256(b)
-	rec := map[string]any{
-		"withheld": "retired chunk bytes failed the redaction check",
-		"sha256":   hex.EncodeToString(sum[:]),
-		"size":     len(b),
-		"rule":     rule,
-	}
+	ts := int64(-1)
 	if mx, ok := maxParseableTSOK(b); ok {
-		rec["ts"] = FormatLineTS(mx)
+		ts = mx
 	}
-	line, err := json.Marshal(rec)
+	line, err := recordBytes(hex.EncodeToString(sum[:]), len(b), rule, ts)
 	if err != nil {
 		return fmt.Errorf("encoding record for %s: %w", path, err)
 	}
-	return writeFileAtomic(path, append(line, '\n'))
+	return writeFileAtomic(path, line)
 }
 
 // notePad keeps the withheld notices of one Quarantine run, one per path. say
@@ -494,6 +553,7 @@ func writeRecord(path string, b []byte, rule string) error {
 // says the queued ones once the run's final staging has succeeded.
 type notePad struct {
 	rules   map[string]string
+	local   map[string]bool // add: whether a local copy of the original exists
 	order   []string
 	printed map[string]bool
 }
@@ -507,13 +567,15 @@ func (n *notePad) say(path, rule string) {
 		return
 	}
 	n.printed[path] = true
-	noticeWithheld(path, rule)
+	noticeWithheld(path, rule, true)
 }
 
-func (n *notePad) add(path, rule string) {
+func (n *notePad) add(path, rule string, local bool) {
 	if n.rules == nil {
 		n.rules = map[string]string{}
+		n.local = map[string]bool{}
 	}
+	n.local[path] = local
 	if _, seen := n.rules[path]; !seen {
 		n.order = append(n.order, path)
 	}
@@ -547,7 +609,7 @@ func (n *notePad) addUnstagedRecords(repoRoot, sealedDir string, cn ChunkName) e
 			return err
 		}
 		if !tracked || !bytes.Equal(blob, raw) {
-			n.add(path, rec.Rule)
+			n.add(path, rec.Rule, hasLocalCopy(repoRoot, cf.stem))
 		}
 	}
 	return nil
@@ -556,42 +618,33 @@ func (n *notePad) addUnstagedRecords(repoRoot, sealedDir string, cn ChunkName) e
 // print writes one notice per collected path to stderr.
 func (n *notePad) print() {
 	for _, path := range n.order {
-		n.say(path, n.rules[path])
+		if n.printed == nil {
+			n.printed = map[string]bool{}
+		}
+		if n.printed[path] {
+			continue
+		}
+		n.printed[path] = true
+		noticeWithheld(path, n.rules[path], n.local[path])
 	}
-}
-
-// pluralVerbs maps the verb a rule starts with, phrased for a singular subject,
-// to the form for "its bytes". It is closed: the rules are fixed phrases
-// (redact.LeakRule, the mission guard, the quarantine's credential and address
-// checks), and a rule that starts with another verb is returned unchanged
-// rather than cut by a guess about suffixes ("has" is not "ha").
-var pluralVerbs = map[string]string{
-	"holds": "hold", "contains": "contain", "names": "name", "climbs": "climb", "is": "are",
-}
-
-// pluralVerb turns a rule phrased for a singular subject ("holds a credential",
-// "is not a JSON object") into one for "its bytes" ("hold ...", "are not ...").
-func pluralVerb(rule string) string {
-	verb, rest, _ := strings.Cut(rule, " ")
-	plural, ok := pluralVerbs[verb]
-	if !ok {
-		return rule
-	}
-	if rest == "" {
-		return plural
-	}
-	return plural + " " + rest
-}
-
-// WithheldNotice is the line noticeWithheld prints for a retired chunk.
-func WithheldNotice(path, rule string) string {
-	return fmt.Sprintf("ethos: audit: retired chunk %s was withheld from the tracked tree: its bytes %s; the original is in %s",
-		filepath.Base(path), pluralVerb(rule), filepath.Join(".punt-labs", "local", "ethos", "quarantine"))
 }
 
 // noticeWithheld says that a retired chunk's bytes were replaced by a record.
-func noticeWithheld(path, rule string) {
-	fmt.Fprintln(os.Stderr, WithheldNotice(path, rule))
+func noticeWithheld(path, rule string, local bool) {
+	where := filepath.Join(".punt-labs", "local", "ethos", "quarantine")
+	if local {
+		fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s was withheld from the tracked tree (%s); the original is in %s\n",
+			filepath.Base(path), rule, where)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s was withheld from the tracked tree (%s); no local copy of the original was found in %s\n",
+		filepath.Base(path), rule, where)
+}
+
+// hasLocalCopy reports whether the local zone holds a saved original for stem.
+func hasLocalCopy(repoRoot, stem string) bool {
+	m, err := filepath.Glob(filepath.Join(QuarantineDir(repoRoot), stem+".*.corrupt"))
+	return err == nil && len(m) > 0
 }
 
 // reconcileUnderMarker is the "not blind to fresh damage" half of the

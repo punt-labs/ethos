@@ -17,9 +17,9 @@ type TraceSummary struct {
 	ClosedAt        string   `json:"closed_at" redact:"keep"`
 	Status          string   `json:"status" redact:"keep"`
 	Type            string   `json:"type,omitempty" redact:"keep"`
-	Leader          string   `json:"leader" redact:"keep"`
-	Worker          string   `json:"worker" redact:"keep"`
-	Evaluator       string   `json:"evaluator" redact:"keep"`
+	Leader          string   `json:"leader" redact:"handle"`
+	Worker          string   `json:"worker" redact:"handle"`
+	Evaluator       string   `json:"evaluator" redact:"handle"`
 	Ticket          string   `json:"ticket,omitempty" redact:"path"`
 	WriteSet        []string `json:"write_set" redact:"path"`
 	SuccessCriteria []string `json:"success_criteria"`

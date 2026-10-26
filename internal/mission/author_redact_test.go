@@ -154,3 +154,42 @@ func TestAuthor_NonHandleGetsTheFullContentPass(t *testing.T) {
 	}
 	assert.Contains(t, actors, "x/-~-[redacted-slug]", "the event of the slug-like actor loads, rewritten")
 }
+
+// TestContractRoutingNames_NotAHandleIsRedacted: the leader, worker and
+// evaluator handle of a contract, and the same fields of its trace summary,
+// are kept when they are handles and otherwise get the content pass.
+func TestContractRoutingNames_NotAHandleIsRedacted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	s := NewStoreWithRoots(repo, t.TempDir())
+	c := newContract("m-2026-08-06-160")
+	c.Leader = "jane@example.com"
+	c.Worker = "bob@example.com"
+	c.Evaluator.Handle = "carol@example.com"
+	require.NoError(t, s.Create(c))
+
+	path, err := s.ContractPath(c.MissionID)
+	require.NoError(t, err)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	for _, a := range []string{"jane@example.com", "bob@example.com", "carol@example.com"} {
+		assert.NotContains(t, string(data), a, "contract.yaml")
+	}
+	assert.Contains(t, string(data), "[redacted-email]")
+
+	line, _, err := s.prepareTraceSummary(c, resultFor(c, VerdictPass))
+	require.NoError(t, err)
+	for _, a := range []string{"jane@example.com", "bob@example.com", "carol@example.com"} {
+		assert.NotContains(t, string(line), a, "trace summary")
+	}
+	assert.Contains(t, string(line), "[redacted-email]")
+
+	// A real handle is kept.
+	ok := newContract("m-2026-08-06-161")
+	ok.WriteSet = []string{"docs/"}
+	require.NoError(t, s.Create(ok))
+	got, err := s.Load(ok.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, ok.Leader, got.Leader)
+	assert.Equal(t, ok.Worker, got.Worker)
+}

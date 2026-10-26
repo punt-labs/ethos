@@ -89,7 +89,9 @@ func ambiguousPath(raw, repoRoot string) (bool, error) {
 	if err != nil {
 		return true, fmt.Errorf("judging a path for placeholders: %w", err)
 	}
-	return filepath.Clean(back) != filepath.Clean(raw), nil
+	// The same case rule as the path pass: on macOS /users/alice and
+	// /Users/Alice are one directory.
+	return !mission.SamePath(filepath.Clean(back), filepath.Clean(raw)), nil
 }
 
 // auditPathFormat is the PathFormat of a line this version writes.

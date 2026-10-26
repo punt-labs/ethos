@@ -192,3 +192,24 @@ func TestPreconditions_AmbiguousNameIsExplained(t *testing.T) {
 		assert.Contains(t, reason, "(1 Read(s) were ignored: the file name contains a redaction placeholder)")
 	}
 }
+
+// TestAmbiguousPath_FoldsCaseWhereThePathPassDoes: on a case-insensitive file
+// system the path pass folds the case of a repo prefix, so a Read of
+// /users/alice/work/a.go is stored as <repo>/a.go and read back as
+// /Users/Alice/work/a.go: the same file, not an ambiguous name. Where the path
+// pass is strict the lower-case spelling is another user's home.
+func TestAmbiguousPath_FoldsCaseWhereThePathPassDoes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	old := mission.PathCaseFold
+	t.Cleanup(func() { mission.PathCaseFold = old })
+
+	mission.PathCaseFold = true
+	amb, err := ambiguousPath("/users/alice/work/a.go", "/Users/Alice/work")
+	require.NoError(t, err)
+	assert.False(t, amb, "case folded: the same file")
+
+	mission.PathCaseFold = false
+	amb, err = ambiguousPath("/users/alice/work/a.go", "/Users/Alice/work")
+	require.NoError(t, err)
+	assert.True(t, amb, "strict: another user's home reads back as a different path")
+}
