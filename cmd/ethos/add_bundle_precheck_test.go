@@ -642,7 +642,8 @@ func TestAddBundleRefusesTheSuperprojectsCommonDir(t *testing.T) {
 		logFile := loggedGit(t)
 		_, err := runAddBundle(t, "https://example.invalid/o/b.git")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "this repository's own git dir")
+		assert.Contains(t, err.Error(), "shares this repository's common git dir")
+		assert.Contains(t, err.Error(), "it is one of its worktrees: git worktree remove")
 		assertNoNetwork(t, logFile)
 	}
 
@@ -685,11 +686,12 @@ func TestRefuseOwnGitDirComparesCommonDirs(t *testing.T) {
 		require.NoError(t, err, string(out))
 	}
 
-	err = refuseOwnGitDir(w1, filepath.Join(bare, "worktrees", "w2"))
+	err = refuseOwnGitDir(w1, filepath.Join(bare, "worktrees", "w2"), w2)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "this repository's own git dir")
+	assert.Contains(t, err.Error(), "shares this repository's common git dir")
+	assert.Contains(t, err.Error(), "git worktree remove "+w2)
 
 	other := t.TempDir()
 	gitInitDir(t, other, t.TempDir())
-	require.NoError(t, refuseOwnGitDir(w1, filepath.Join(other, ".git")), "an unrelated repository is accepted")
+	require.NoError(t, refuseOwnGitDir(w1, filepath.Join(other, ".git"), other), "an unrelated repository is accepted")
 }

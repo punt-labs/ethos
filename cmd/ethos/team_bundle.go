@@ -661,7 +661,7 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 	if !own {
 		return fmt.Errorf("the bundle path %s already exists and is not a git repository: remove it, or choose another --name", targetDir)
 	}
-	return refuseOwnGitDir(gitDir, resolved)
+	return refuseOwnGitDir(gitDir, resolved, targetDir)
 }
 
 // refuseOwnGitDir refuses a bundle path whose .git resolves to the
@@ -669,7 +669,7 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 // superproject's (a symlink or a gitfile to it, or a linked worktree of the
 // superproject): git submodule add would report success with no gitlink, or a
 // gitlink to the superproject's own HEAD.
-func refuseOwnGitDir(gitDir, resolved string) error {
+func refuseOwnGitDir(gitDir, resolved, bundlePath string) error {
 	ri, err := os.Stat(resolved)
 	if err != nil {
 		return fmt.Errorf("examining the git dir %s of the bundle path: %w", resolved, err)
@@ -700,8 +700,11 @@ func refuseOwnGitDir(gitDir, resolved string) error {
 		if err != nil {
 			return fmt.Errorf("examining the superproject git dir %s: %w", p, err)
 		}
-		if os.SameFile(ri, pi) || flag == "--git-common-dir" && os.SameFile(ci, pi) {
+		if os.SameFile(ri, pi) {
 			return fmt.Errorf("the bundle path's .git is this repository's own git dir (%s): remove it, or choose another --name", p)
+		}
+		if flag == "--git-common-dir" && os.SameFile(ci, pi) {
+			return fmt.Errorf("the bundle path's .git shares this repository's common git dir (%s) — it is one of its worktrees: git worktree remove %s, or choose another --name", p, bundlePath)
 		}
 	}
 	return nil
@@ -719,10 +722,10 @@ func (e *dotRefusedError) Error() string {
 // isOwnGitRepo reports whether dir is a git repository of its own by git's own
 // adoption test, `git rev-parse --resolve-git-dir dir/.git`, run from dir's
 // parent so no repository around it is consulted. It returns the resolved git
-// dir. It is (false, nil) only when dir/.git is absent. A .git that git does
-// not accept ("not a gitdir", "not a git repository") is a *dotRefusedError
-// carrying git's message; a .git that cannot be examined, or any other failure
-// including a timeout, is the error.
+// dir. It is (false, nil) only when dir/.git is absent. A .git that cannot be
+// stat'ed (its directory is not searchable) is returned as an error; a .git git
+// cannot read ("not a gitdir", "not a git repository") is a *dotRefusedError
+// carrying git's message; any other failure, including a timeout, is the error.
 func isOwnGitRepo(dir string) (bool, string, error) {
 	dot := filepath.Join(dir, ".git")
 	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
