@@ -258,17 +258,23 @@ func lossMarker(line []byte, kind string) []byte {
 	if ts := lineTS(line); ts != "" && mission.LeakRule(ts) == "" && !strings.ContainsRune(ts, '\uFFFD') {
 		m["ts"] = ts
 	}
-	if session := sessionOf(line); session != "" && mission.LeakRule(session) == "" && !strings.ContainsRune(session, '\uFFFD') {
+	// session and delegation_id tie the marker to what the line belonged to; each
+	// is kept only when it is clean: no home, no credential, no address.
+	if session := sessionOf(line); cleanIdentity(session) {
 		m["session"] = session
 	}
-	// delegation_id links the marker to the delegation it belonged to; it is kept
-	// when it is clean: no home, no credential, no address.
-	if d := delegationOf(line); d != "" && mission.LeakRule(d) == "" && !strings.ContainsRune(d, '\uFFFD') &&
-		redact.SecretsString(d) == d && !redact.EmailPattern.MatchString(d) {
+	if d := delegationOf(line); cleanIdentity(d) {
 		m["delegation_id"] = d
 	}
 	out, _ := json.Marshal(m)
 	return out
+}
+
+// cleanIdentity reports whether a header value may go into a loss marker as it
+// is: non-empty, and naming no home, no credential and no address.
+func cleanIdentity(v string) bool {
+	return v != "" && mission.LeakRule(v) == "" && !strings.ContainsRune(v, '\uFFFD') &&
+		redact.SecretsString(v) == v && !redact.EmailPattern.MatchString(v)
 }
 
 func delegationOf(line []byte) string {

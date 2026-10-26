@@ -1108,3 +1108,35 @@ func TestCredentialPassLine_CaseVariantInputWithACredentialIsALoss(t *testing.T)
 	assert.True(t, marker)
 	assert.NotContains(t, string(out), "jane@example.com")
 }
+
+// TestLossMarker_KeepsOnlyACleanSession: a marker keeps the line's session as it
+// keeps ts and delegation_id, only when it is clean: no home, no credential, no
+// address. A duplicate-key line and a case-variant line, each made a marker by a
+// credential, hold neither an address nor a token in the session.
+func TestLossMarker_KeepsOnlyACleanSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	token := "ghp_" + strings.Repeat("aBcD1234", 4) + "aBcD"
+	ts := audit.FormatLineTS(100)
+	lines := func(session string) map[string]string {
+		sj, _ := json.Marshal(session)
+		return map[string]string{
+			"duplicate key": `{"ts":"` + ts + `","session":` + string(sj) + `,"tool":"Read","agent_id":"a","agent_id":"b","x_token":"hunter2"}`,
+			"case variant":  `{"ts":"` + ts + `","session":` + string(sj) + `,"tool":"Bash","Tool_Input":{"api_key":"hunter2"}}`,
+		}
+	}
+	for _, bad := range []string{"alice@example.com", token} {
+		for name, line := range lines(bad) {
+			out, _, marker := sessionLineGuard(repo)([]byte(line))
+			assert.True(t, marker, name)
+			assert.NotContains(t, string(out), bad, name)
+			assert.NotContains(t, string(out), "hunter2", name)
+			assert.Contains(t, string(out), "audit_error", name)
+		}
+	}
+	for name, line := range lines("94901c4f-5d86-41c5-bd06-98cbd86216b8") {
+		out, _, marker := sessionLineGuard(repo)([]byte(line))
+		assert.True(t, marker, name)
+		assert.Contains(t, string(out), "94901c4f-5d86-41c5-bd06-98cbd86216b8", "a clean session is kept: "+name)
+	}
+}
