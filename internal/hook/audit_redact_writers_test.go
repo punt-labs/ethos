@@ -15,6 +15,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // leakyReason is an error string as an I/O failure produces it: an
@@ -144,8 +145,9 @@ func TestMigrateAudit_RefusesWithoutRedactor(t *testing.T) {
 	require.Error(t, MigrateAudit(globalDir, repoRoot, false, &out), "migration is an operator command and refuses")
 	_, err := os.Stat(filepath.Join(sessionDir, "audit.jsonl"))
 	assert.True(t, os.IsNotExist(err))
-	_, err = os.Stat(legacy)
-	assert.NoError(t, err, "legacy file stays")
+	// The legacy file stays, under its staging name; the next run resumes from it.
+	_, err = os.Stat(legacy + stagedSuffix)
+	assert.NoError(t, err, "legacy file stays, staged")
 }
 
 // TestMigrateAudit_PathOnlyLegacyLineIsRedacted: a legacy line whose only
@@ -259,4 +261,84 @@ func TestRedactLegacyLine_AuditErrorIsSweptBesideAChangedInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.NotContains(t, string(out), "bob@example.com")
+}
+
+// TestQuarantineChunk_WithholdsRetiredBytesThatLeak: the .corrupt is staged in
+// a tracked tree, so a chunk that holds this machine's home or a credential is
+// replaced by a record of its hash, size and rule. Plain garbage is kept as
+// evidence.
+func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
+	home := "/var/home/zed"
+	secret := "ghp_" + strings.Repeat("c3D4", 9)
+	cases := []struct {
+		name, body string
+		withheld   bool
+	}{
+		{"home", "\x00garbage " + home + "/x\n", true},
+		{"escaped home", `{"cwd":"\/var\/home\/zed\/x"` + "\n", true},
+		{"credential is kept", "\x00garbage " + secret + "\n", false},
+		{"address is kept", "\x00garbage jane@example.com\n", false},
+		{"plain", "\x00garbage\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			sealedDir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
+			require.NoError(t, err)
+			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+			chunk := audit.SessionChunkFile(100, 300)
+			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte(c.body), 0o600))
+
+			_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+			require.NoError(t, err)
+			got, err := os.ReadFile(filepath.Join(sealedDir, chunk+".corrupt"))
+			require.NoError(t, err)
+			if !c.withheld {
+				assert.Equal(t, c.body, string(got))
+				return
+			}
+			assert.Contains(t, string(got), "sha256")
+			for _, s := range []string{home, `\/var\/home`, secret, "jane@example.com"} {
+				assert.NotContains(t, string(got), s)
+			}
+		})
+	}
+}
+
+// TestQuarantineChunk_TwiceIsANoOp: a chunk withheld for a slug leaves a record
+// whose rule text names no leak, so a second quarantine of the same chunk
+// finds nothing to withhold: the tracked bytes are the same and the local zone
+// gets no new file.
+func TestQuarantineChunk_TwiceIsANoOp(t *testing.T) {
+	t.Setenv("HOME", "/var/home/zed")
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealedDir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+	chunk := audit.SessionChunkFile(100, 300)
+	require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage -home-bob-proj\n"), 0o600))
+
+	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+	require.NoError(t, err)
+	corrupt := filepath.Join(sealedDir, chunk+".corrupt")
+	first, err := os.ReadFile(corrupt)
+	require.NoError(t, err)
+	require.Contains(t, string(first), "withheld")
+	local1, err := os.ReadDir(audit.QuarantineDir(repo))
+	require.NoError(t, err)
+
+	second := testhelpers.CaptureStderr(t, func() {
+		_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+	})
+	require.NoError(t, err)
+	again, err := os.ReadFile(corrupt)
+	require.NoError(t, err)
+	assert.Equal(t, string(first), string(again), "the tracked record is unchanged")
+	local2, err := os.ReadDir(audit.QuarantineDir(repo))
+	require.NoError(t, err)
+	assert.Len(t, local2, len(local1), "no new local file")
+	assert.NotContains(t, second, "withheld")
 }

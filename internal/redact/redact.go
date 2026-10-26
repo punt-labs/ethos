@@ -9,16 +9,26 @@
 // such a tree uses this package, so there is one definition of what
 // counts as an address or a credential.
 //
+// Limitation: a path component made only of whitespace followed by .. (for
+// example "/home/ /../bob") is not normalised, so a home hidden behind it is
+// not seen. Collapsing across whitespace would redact shell text such as
+// "cd <repo>/docs && make; cd ../../..", where "docs && make; cd .." would be
+// taken for one component.
+//
 // The package depends on the standard library only. The audit path
 // (internal/hook) and the mission writers (internal/mission) both import
 // it; neither imports the other's policy.
 package redact
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
+	"unicode"
 )
 
 // Replacement tokens. EmailToken and the audit package's
@@ -148,16 +158,21 @@ var (
 
 	// homePath matches /home/<name> and /Users/<name> for any name, not
 	// only the current user: a path pasted from another machine names a
-	// person as surely as this one does. The leading class stops a match
-	// inside another path component (/etc/home/x).
-	homePath = regexp.MustCompile(`(^|[^A-Za-z0-9_.\-])(?:/home|/Users)/[A-Za-z0-9_.\-]+`)
+	// person as surely as this one does. HomePaths keeps a match only where
+	// pathStart says a path begins, the rule Leaks applies, so a match inside
+	// another path component (/etc/home/x) is left alone.
+	//
+	// <name> is any run of characters but a slash, whitespace or a quote.
+	// Case is folded, and a doubled slash or /./ between the parts is
+	// skipped, as the filesystem would.
+	homePath = regexp.MustCompile("(?i:/home|/Users)/+(?:\\./+)*[^/\\s\"'`]+")
 
 	// homeSlug matches the dash-encoded form Claude Code uses for project
 	// directories: /home/alice/work becomes -home-alice-work. A leading
 	// '-' before the boundary excludes flags like --home-dir. The username
 	// may itself contain dashes, so the match takes the whole component, up
 	// to a slash, whitespace or a quote.
-	homeSlug = regexp.MustCompile("(^|[^A-Za-z0-9_.\\-])-(?:home|Users)-[^\\s/\"'`]+")
+	homeSlug = regexp.MustCompile("(^|[/\\s\"'=:(])-(?i:home|Users)-[^\\s/\"'`]+")
 )
 
 // SecretsString replaces credentials in s with SecretToken: the token
@@ -217,7 +232,14 @@ func replaceValue(re *regexp.Regexp, s string) string {
 // IsSecretKey reports whether name is credential-bearing: it contains
 // token, secret, password, passwd, api_key, apikey, private_key or
 // access_key, case-insensitively.
-func IsSecretKey(name string) bool { return secretKey.MatchString(name) }
+func IsSecretKey(name string) bool {
+	return secretKey.MatchString(name) && !placeholderKey.MatchString(name)
+}
+
+// placeholderKey matches the names a pass gives a renamed key, with a #N
+// suffix when the name was taken. They hold the word secret and are not
+// credential names, or a second pass would replace their values.
+var placeholderKey = regexp.MustCompile(`^\[redacted-(?:secret|key)\](?:#[0-9]+)?$`)
 
 // HomePaths rewrites /home/<name> and /Users/<name> to ~ for any name,
 // and a foreign dash-encoded -home-<name>... / -Users-<name>... Claude
@@ -226,34 +248,326 @@ func IsSecretKey(name string) bool { return secretKey.MatchString(name) }
 // is handled exactly by PathRedactor, which knows the prefix.
 // It is the one pass that is safe over sealed history, where addresses
 // are left alone.
+//
+// A match is rewritten only where pathStartFrom says a path begins, the rule
+// Leaks uses, so the pass never leaves what its checker would refuse. Every
+// match is another user's home: this machine's own is rewritten to ~ by the
+// PathRedactor before this pass runs, so what is left becomes
+// ~[redacted-user], never a ~ that would read as the current user's. Where the
+// match follows a glued flag, a .. prefix or a placeholder, the whole prefix
+// and the match become [redacted-path], never a ~ glued onto them. A path
+// directly after a <repo> that begins a path is a top-level directory of the
+// repository and is left as it is.
 func HomePaths(s string) string {
-	s = homePath.ReplaceAllString(s, "${1}~")
-	return homeSlug.ReplaceAllString(s, "${1}-~-"+SlugToken)
+	// A rewrite can make the next match a path start (/home/0/home/0 becomes
+	// ~[redacted-user]/home/0 and then something shorter), so the pass runs
+	// to a fixed point: a second call changes nothing.
+	for {
+		t := homePathsOnce(s)
+		if t == s {
+			return s
+		}
+		s = t
+	}
+}
+
+// climbOut matches a ~, <repo> or redacted-user placeholder followed by .. steps and
+// the next component: a path under the parent of the home or repo.
+var climbOut = regexp.MustCompile("(^|[^A-Za-z0-9_.\\-/])(~\\[redacted-user\\]|~|<repo>)((?:/+(?:\\./+)*\\.\\.)+)(?:(/+(?:\\./+)*[^/\\s\"'`]+)|($|[^A-Za-z0-9_.\\-]))")
+
+func homePathsOnce(s string) string {
+	s = climbOut.ReplaceAllString(s, "${1}[redacted-path]${5}")
+	spans := homeSpans(s)
+	// A JSON-escaped path (\/home\/bob) is found in its plain spelling, which
+	// Leaks checks as well, and only the spans it finds are rewritten: other
+	// \/ in the value stay as written.
+	if strings.Contains(s, `\/`) {
+		u, back := unescapeSlashes(s)
+		if us := homeSpans(u); len(us) > len(spans) {
+			spans = spans[:0]
+			for _, sp := range us {
+				spans = append(spans, span{back[sp.from], back[sp.end], sp.tok})
+			}
+		}
+	}
+	var b strings.Builder
+	last := 0
+	for _, sp := range spans {
+		b.WriteString(s[last:sp.from])
+		b.WriteString(sp.tok)
+		last = sp.end
+	}
+	b.WriteString(s[last:])
+	return homeSlug.ReplaceAllString(b.String(), "${1}-~-"+SlugToken)
+}
+
+// span is a stretch of a string, s[from:end], to replace with tok.
+type span struct {
+	from, end int
+	tok       string
+}
+
+// homeSpans returns the home paths of s to rewrite, in order and without
+// overlap.
+func homeSpans(s string) []span {
+	var out []span
+	last := 0
+	for _, m := range homePath.FindAllStringIndex(s, -1) {
+		i := m[0]
+		from, ok := pathStartFrom(s, i)
+		if !ok || afterRepo(s, i) || from < last {
+			continue
+		}
+		tok := "~[redacted-user]"
+		switch {
+		case from < i:
+			tok = "[redacted-path]"
+		case strings.HasSuffix(s[:i], "~[redacted-user]"):
+			from, tok = i-len("~[redacted-user]"), "[redacted-path]"
+		case strings.HasSuffix(s[:i], "~"):
+			from, tok = i-1, "[redacted-path]"
+		}
+		if from < last {
+			continue
+		}
+		out = append(out, span{from, m[1], tok})
+		last = m[1]
+	}
+	return out
+}
+
+// unescapeSlashes replaces each \/ in s with /. back maps a byte offset of
+// the result (len+1 entries) to the offset in s it came from.
+func unescapeSlashes(s string) (string, []int) {
+	var b strings.Builder
+	back := make([]int, 0, len(s)+1)
+	for i := 0; i < len(s); i++ {
+		back = append(back, i)
+		if s[i] == '\\' && i+1 < len(s) && s[i+1] == '/' {
+			i++
+			b.WriteByte('/')
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	back = append(back, len(s))
+	return b.String(), back
+}
+
+// RenameKeys returns a copy of m whose keys are renamed by rename, with value
+// applied to each value (given the original key), and whether any key was
+// renamed. It is the one way a pass renames map keys, so that no two keys
+// ever merge and nothing is lost or overwritten:
+//
+//   - keys rename leaves alone go first, sorted, under their own names;
+//   - the others follow in sorted order of their original names, each under
+//     its new name, or the first free name+"#N" (N from 2) if that is taken;
+//   - a name is taken exactly, or, with foldCase, under strings.EqualFold, as
+//     encoding/json folds the keys of a struct-decoded object.
+func RenameKeys(m map[string]any, rename func(string) string, foldCase bool, value func(key string, v any) any) (map[string]any, bool) {
+	names, renamed := PlanKeys(sortedKeys(m), rename, foldCase)
+	out := make(map[string]any, len(m))
+	for k, n := range names {
+		out[n] = value(k, m[k])
+	}
+	return out, renamed
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// PlanKeys decides the output name of each key by the rules of RenameKeys and
+// returns a map from each original key to its output name, and whether any key
+// was renamed.
+func PlanKeys(keys []string, rename func(string) string, foldCase bool) (map[string]string, bool) {
+	names, st := planKeys(keys, rename, foldCase)
+	return names, st.Renamed
+}
+
+// RenameStatus says whether any key was renamed and whether any renamed key
+// took a name#N suffix because its new name was taken.
+type RenameStatus struct{ Renamed, Suffixed bool }
+
+func (a RenameStatus) or(b RenameStatus) RenameStatus {
+	return RenameStatus{a.Renamed || b.Renamed, a.Suffixed || b.Suffixed}
+}
+
+func planKeys(keys []string, rename func(string) string, foldCase bool) (map[string]string, RenameStatus) {
+	sorted := append([]string(nil), keys...)
+	sort.Strings(sorted)
+	canon := func(s string) string { return s }
+	if foldCase {
+		canon = foldKey
+	}
+	names := make(map[string]string, len(sorted))
+	taken := make(map[string]bool, len(sorted))
+	renamedTo := make(map[string]string, len(sorted)) // original -> rename(original)
+	for _, k := range sorted {
+		nk := rename(k)
+		renamedTo[k] = nk
+		if nk == k {
+			names[k] = k
+			taken[canon(k)] = true
+		}
+	}
+	var st RenameStatus
+	next := map[string]int{} // base name -> next suffix to try
+	for _, k := range sorted {
+		nk := renamedTo[k]
+		if nk == k {
+			continue
+		}
+		st.Renamed = true
+		name := nk
+		if taken[canon(name)] {
+			st.Suffixed = true
+			n := next[nk]
+			if n < 2 {
+				n = 2
+			}
+			for ; taken[canon(fmt.Sprintf("%s#%d", nk, n))]; n++ {
+			}
+			name = fmt.Sprintf("%s#%d", nk, n)
+			next[nk] = n + 1
+		}
+		names[k] = name
+		taken[canon(name)] = true
+	}
+	return names, st
+}
+
+// foldKey is a canonical form of s under Unicode simple folding: two strings
+// are strings.EqualFold exactly when their foldKeys are equal.
+func foldKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		min := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < min {
+				min = f
+			}
+		}
+		b.WriteRune(min)
+	}
+	return b.String()
+}
+
+// DuplicateJSONKey scans the tokens of one JSON value for an object that holds
+// the same key twice, exactly, at any depth, and returns the path of the first
+// such key (name, items[0].name) and the key. A reader keeps the last of two,
+// so a record holding a duplicate is not the record it looks like.
+func DuplicateJSONKey(data []byte) (path, key string, found bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	type frame struct {
+		isObj     bool
+		seen      map[string]bool
+		expectKey bool
+		key       string // the key whose value is being read (objects)
+		idx       int    // the index of the element being read (arrays)
+		path      string // the path of this container
+	}
+	join := func(base, seg string) string {
+		if base == "" {
+			return seg
+		}
+		return base + "." + seg
+	}
+	var stack []frame
+	// valueDone records that the value in the top frame has been read.
+	valueDone := func() {
+		if n := len(stack); n > 0 {
+			if stack[n-1].isObj {
+				stack[n-1].expectKey = true
+			} else {
+				stack[n-1].idx++
+			}
+		}
+	}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", "", false
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if d == '{' || d == '[' {
+				childPath := ""
+				if n := len(stack); n > 0 {
+					f := stack[n-1]
+					if f.isObj {
+						childPath = join(f.path, f.key)
+					} else {
+						childPath = fmt.Sprintf("%s[%d]", f.path, f.idx)
+					}
+				}
+				stack = append(stack, frame{isObj: d == '{', seen: map[string]bool{}, expectKey: d == '{', path: childPath})
+				continue
+			}
+			stack = stack[:len(stack)-1]
+			valueDone()
+			continue
+		}
+		n := len(stack)
+		if n == 0 {
+			continue
+		}
+		f := &stack[n-1]
+		if f.isObj && f.expectKey {
+			k, _ := tok.(string)
+			if f.seen[k] {
+				return join(f.path, k), k, true
+			}
+			f.seen[k] = true
+			f.key = k
+			f.expectKey = false
+			continue
+		}
+		valueDone()
+	}
 }
 
 // HomePathsValue applies HomePaths to every string reachable from v (a
-// JSON-shaped value: strings, []any, map[string]any). It never mutates v.
+// JSON-shaped value: strings, []any, map[string]any), keys included. It never
+// mutates v.
 func HomePathsValue(v any) any {
+	out, _ := HomePathsValueFlag(v)
+	return out
+}
+
+// HomePathsValueFlag is HomePathsValue also reporting whether any map key was
+// renamed.
+func HomePathsValueFlag(v any) (any, bool) {
 	switch x := v.(type) {
 	case string:
-		return HomePaths(x)
+		return HomePaths(x), false
 	case map[string]any:
 		if x == nil {
-			return x
+			return x, false
 		}
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			out[k] = HomePathsValue(vv)
-		}
-		return out
+		any1 := false
+		out, renamed := RenameKeys(x, HomePaths, false, func(_ string, vv any) any {
+			r, f := HomePathsValueFlag(vv)
+			any1 = any1 || f
+			return r
+		})
+		return out, renamed || any1
 	case []any:
 		out := make([]any, len(x))
+		changed := false
 		for i, vv := range x {
-			out[i] = HomePathsValue(vv)
+			var f bool
+			out[i], f = HomePathsValueFlag(vv)
+			changed = changed || f
 		}
-		return out
+		return out, changed
 	default:
-		return v
+		return v, false
 	}
 }
 
@@ -336,8 +650,8 @@ func Prose(s string) string {
 // extend a list.
 //
 // A map value under a credential-named key (see SecretsString for the
-// names) is replaced with SecretToken whole. Other map keys and
-// unexported fields are copied unchanged.
+// names) is replaced with SecretToken whole. String map keys go through f
+// as values do; unexported fields are copied unchanged.
 func Record[T any](v T, f func(string) string) T {
 	return RecordPaths(v, f, f)
 }
@@ -348,9 +662,24 @@ func Record[T any](v T, f func(string) string) T {
 // credential and email passes would rewrite them and silently change what
 // they enforce, so they get paths only.
 func RecordPaths[T any](v T, f, paths func(string) string) T {
-	rv := reflect.ValueOf(&v).Elem()
-	out, _ := scrub(rv, f, paths).Interface().(T)
+	out, _ := RecordPathsFlag(v, f, paths)
 	return out
+}
+
+// RecordPathsFlag is RecordPaths also reporting whether any map key, at any
+// depth, was renamed.
+func RecordPathsFlag[T any](v T, f, paths func(string) string) (T, bool) {
+	out, st := RecordPathsStatus(v, f, paths)
+	return out, st.Renamed
+}
+
+// RecordPathsStatus is RecordPaths also reporting the status of any key
+// renames at any depth.
+func RecordPathsStatus[T any](v T, f, paths func(string) string) (T, RenameStatus) {
+	rv := reflect.ValueOf(&v).Elem()
+	var st RenameStatus
+	out, _ := scrub(rv, f, paths, &st).Interface().(T)
+	return out, st
 }
 
 // secretValue is isSecretEntry for reflected map entries. Such a value
@@ -375,7 +704,7 @@ func secretValue(key, val reflect.Value) bool {
 // non-empty list. Booleans, maps and empty values are not replaced; a
 // map under such a key is walked and its own keys judged.
 func isSecretEntry(key string, v any) bool {
-	if !secretKey.MatchString(key) || v == nil {
+	if !IsSecretKey(key) || v == nil {
 		return false
 	}
 	rv := reflect.ValueOf(v)
@@ -394,7 +723,7 @@ func isSecretEntry(key string, v any) bool {
 
 // scrub returns a rewritten copy of v. The result never shares a slice,
 // map, or pointee with v when v held a string anywhere beneath it.
-func scrub(v reflect.Value, f, paths func(string) string) reflect.Value {
+func scrub(v reflect.Value, f, paths func(string) string, renamed *RenameStatus) reflect.Value {
 	switch v.Kind() {
 	case reflect.String:
 		out := reflect.New(v.Type()).Elem()
@@ -417,7 +746,7 @@ func scrub(v reflect.Value, f, paths func(string) string) reflect.Value {
 			if tag == "path" {
 				ff = paths
 			}
-			out.Field(i).Set(scrub(v.Field(i), ff, paths))
+			out.Field(i).Set(scrub(v.Field(i), ff, paths, renamed))
 		}
 		return out
 	case reflect.Pointer:
@@ -425,7 +754,7 @@ func scrub(v reflect.Value, f, paths func(string) string) reflect.Value {
 			return v
 		}
 		out := reflect.New(v.Type().Elem())
-		out.Elem().Set(scrub(v.Elem(), f, paths))
+		out.Elem().Set(scrub(v.Elem(), f, paths, renamed))
 		return out
 	case reflect.Slice:
 		if v.IsNil() {
@@ -433,13 +762,13 @@ func scrub(v reflect.Value, f, paths func(string) string) reflect.Value {
 		}
 		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
 		for i := 0; i < v.Len(); i++ {
-			out.Index(i).Set(scrub(v.Index(i), f, paths))
+			out.Index(i).Set(scrub(v.Index(i), f, paths, renamed))
 		}
 		return out
 	case reflect.Array:
 		out := reflect.New(v.Type()).Elem()
 		for i := 0; i < v.Len(); i++ {
-			out.Index(i).Set(scrub(v.Index(i), f, paths))
+			out.Index(i).Set(scrub(v.Index(i), f, paths, renamed))
 		}
 		return out
 	case reflect.Map:
@@ -447,12 +776,32 @@ func scrub(v reflect.Value, f, paths func(string) string) reflect.Value {
 			return v
 		}
 		out := reflect.MakeMapWithSize(v.Type(), v.Len())
+		if v.Type().Key().Kind() != reflect.String {
+			for it := v.MapRange(); it.Next(); {
+				out.SetMapIndex(it.Key(), scrub(it.Value(), f, paths, renamed))
+			}
+			return out
+		}
+		// String keys pass through f by the one rule that never merges two:
+		// see PlanKeys.
+		byName := make(map[string]reflect.Value, v.Len())
+		keys := make([]string, 0, v.Len())
 		for it := v.MapRange(); it.Next(); {
-			if secretValue(it.Key(), it.Value()) {
-				out.SetMapIndex(it.Key(), reflect.ValueOf(SecretToken).Convert(it.Value().Type()))
+			byName[it.Key().String()] = it.Key()
+			keys = append(keys, it.Key().String())
+		}
+		names, r := planKeys(keys, f, false)
+		*renamed = renamed.or(r)
+		for _, k := range keys {
+			key := byName[k]
+			nk := reflect.New(key.Type()).Elem()
+			nk.SetString(names[k])
+			val := v.MapIndex(key)
+			if secretValue(key, val) {
+				out.SetMapIndex(nk, reflect.ValueOf(SecretToken).Convert(val.Type()))
 				continue
 			}
-			out.SetMapIndex(it.Key(), scrub(it.Value(), f, paths))
+			out.SetMapIndex(nk, scrub(val, f, paths, renamed))
 		}
 		return out
 	case reflect.Interface:
@@ -460,7 +809,7 @@ func scrub(v reflect.Value, f, paths func(string) string) reflect.Value {
 			return v
 		}
 		out := reflect.New(v.Type()).Elem()
-		out.Set(scrub(v.Elem(), f, paths))
+		out.Set(scrub(v.Elem(), f, paths, renamed))
 		return out
 	default:
 		return v
@@ -513,3 +862,373 @@ func diffPaths(a, b reflect.Value, inPath bool, name string, out *[]string) {
 		}
 	}
 }
+
+// FieldString is a string held in a record field that is not tagged
+// `redact:"keep"`, with the field path that names it, such as "Tools[0]".
+type FieldString struct {
+	Name  string
+	Value string
+	// Path is true for a value inside a `redact:"path"` field.
+	Path bool
+}
+
+// FieldStrings returns every string of v outside a `redact:"keep"` field, in
+// field order. It lets a writer check what the passes left behind, which
+// RecordPaths applies but cannot judge.
+func FieldStrings[T any](v T) []FieldString {
+	var out []FieldString
+	collectStrings(reflect.ValueOf(&v).Elem(), "", false, &out)
+	return out
+}
+
+func collectStrings(v reflect.Value, name string, path bool, out *[]FieldString) {
+	switch v.Kind() {
+	case reflect.String:
+		*out = append(*out, FieldString{Name: name, Value: v.String(), Path: path})
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < t.NumField(); i++ {
+			sf := t.Field(i)
+			if !sf.IsExported() || sf.Tag.Get("redact") == "keep" {
+				continue
+			}
+			sub := sf.Name
+			if name != "" {
+				sub = name + "." + sf.Name
+			}
+			collectStrings(v.Field(i), sub, path || sf.Tag.Get("redact") == "path", out)
+		}
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			collectStrings(v.Elem(), name, path, out)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			collectStrings(v.Index(i), fmt.Sprintf("%s[%d]", name, i), path, out)
+		}
+	case reflect.Map:
+		keys := v.MapKeys()
+		sort.Slice(keys, func(a, b int) bool { return fmt.Sprint(keys[a]) < fmt.Sprint(keys[b]) })
+		// Elements are named by position: a key can itself be the leak.
+		for i, k := range keys {
+			if k.Kind() == reflect.String {
+				*out = append(*out, FieldString{Name: fmt.Sprintf("%s{key %d}", name, i), Value: k.String(), Path: path})
+			}
+			collectStrings(v.MapIndex(k), fmt.Sprintf("%s{%d}", name, i), path, out)
+		}
+	}
+}
+
+var (
+	leakPath = regexp.MustCompile("/(?:home|users)/[^/\\s\"'`]+")
+	leakSlug = regexp.MustCompile("-(?:home|users)-[^\\s/\"'`-]+-")
+)
+
+// Leaks reports whether s names a home directory. See LeakRule.
+func Leaks(s, home string) bool { return LeakRule(s, home) != "" }
+
+// LeakRule names the rule s breaks, in words fit for a refusal message: it
+// never quotes the value, which is the leak. It returns "" when s names no
+// home. The rules are plain substring tests, with no notion of where a path
+// begins; over-refusing a harmless value costs less than storing a leak:
+//
+//  1. this machine's home path, ending at the end of a path component (so
+//     HOME=/root does not match /rootfs);
+//  2. this machine's dash-encoded home (-home-<me>), ending at the end of a
+//     component or before a -;
+//  3. /home/<x> or /Users/<x> for any non-empty <x> (anything but a slash,
+//     whitespace or a quote), anywhere in the string;
+//  4. -home-<x>- or -Users-<x>-, a foreign dash-encoded home, anywhere;
+//  5. a ~ or <repo> placeholder that climbs out of itself with ..
+//
+// Matching is case-insensitive and runs on every spelling a reader or a
+// filesystem would resolve: the string as written, lower-cased, with slash
+// runs collapsed, /./ removed and /x/../ resolved, JSON-unescaped (\/) and
+// percent-decoded. Every spelling is checked in addition to the original,
+// never instead of it. A username alone is not searched for: a directory
+// named like the account (internal/runner/) is not a home.
+func LeakRule(s, home string) string { return leakRule(s, home, true) }
+
+// OwnHomeRule is LeakRule without rules 3 to 5: it looks only for this
+// machine's own home. It judges a repo-relative value in a path field, where
+// app/home/page.tsx is a file of the repository, not somebody's home.
+func OwnHomeRule(s, home string) string { return leakRule(s, home, false) }
+
+// relPath is the only shape a path-field value may have to be judged as a
+// file of the repository: segments of name characters (and the * and @ of a
+// glob or a scoped package) joined by single slashes, with an optional trailing
+// slash. Anything else, a tool grant like Read(app/x) included, is judged in
+// full.
+var relPath = regexp.MustCompile(`^[A-Za-z0-9_.@+*-]+(?:/[A-Za-z0-9_.@+*-]+)*/?$`)
+
+// RepoRelative reports whether v is a plain repo-relative path: it matches
+// relPath and has no .. segment. No escape, scheme, separator, whitespace or
+// placeholder can appear in such a value, so no other spelling of it exists.
+func RepoRelative(v string) bool {
+	if !relPath.MatchString(v) {
+		return false
+	}
+	for _, seg := range strings.Split(strings.TrimSuffix(v, "/"), "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func leakRule(s, home string, foreign bool) string {
+	unesc := strings.ReplaceAll(s, `\/`, "/")
+	for _, c := range []string{s, unesc, pctDecode(s), pctDecode(unesc)} {
+		for _, v := range [][2]string{
+			{c, home},
+			{strings.ToLower(c), strings.ToLower(home)},
+			{normalizePath(c), normalizePath(home)},
+		} {
+			if r := leakRuleOf(v[0], v[1], foreign); r != "" {
+				return r
+			}
+		}
+	}
+	return ""
+}
+
+// leakRuleOf applies the rules to one spelling.
+func leakRuleOf(n, home string, foreign bool) string {
+	if home != "" && home != "/" {
+		if containsEnd(n, home, false) {
+			return "names this machine's home directory"
+		}
+		if dash := dashOf(home); dash != "-" && containsEnd(n, dash, true) {
+			return "holds the dash-encoded home directory"
+		}
+	}
+	if !foreign {
+		return ""
+	}
+	if leakPath.MatchString(n) {
+		return "contains a /home/ or /Users/ path"
+	}
+	if leakSlug.MatchString(n) {
+		return "contains a home-directory slug"
+	}
+	if climbOut.MatchString(n) {
+		return "climbs out of a ~ or <repo> placeholder with .."
+	}
+	return ""
+}
+
+// normalizePath folds case, collapses runs of slashes, removes /./ and
+// resolves /x/../, until nothing changes.
+func normalizePath(s string) string {
+	s = strings.ToLower(s)
+	for {
+		t := strings.ReplaceAll(s, "//", "/")
+		t = strings.ReplaceAll(t, "/./", "/")
+		t = upDir.ReplaceAllStringFunc(t, func(m string) string {
+			if seg := m[1 : len(m)-4]; seg == ".." || seg == "." {
+				return m
+			}
+			return "/"
+		})
+		if t == s {
+			return s
+		}
+		s = t
+	}
+}
+
+// upDir matches /x/../, a component and the step back out of it. A component
+// holding whitespace is a run of shell words, not a path component, so
+// `cd <repo>/docs && make; cd ../../..` is not collapsed across the spaces
+// (TestLeaks_ShellTextIsNotCollapsed).
+var upDir = regexp.MustCompile(`/[^/\s]+/\.\./`)
+
+// containsEnd reports whether sub occurs in n ending at the end of a path
+// component: at the end of n or before a byte that is no part of a name. With
+// dash, a following - also ends it, as in the dash-encoded home -root-proj.
+func containsEnd(n, sub string, dash bool) bool {
+	for i := 0; ; {
+		j := strings.Index(n[i:], sub)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		end := at + len(sub)
+		if end == len(n) || !isNameByte(n[end]) || (dash && n[end] == '-') {
+			return true
+		}
+		i = at + 1
+	}
+}
+
+// pctDecode decodes every well-formed %XX in s and leaves the rest.
+func pctDecode(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s)+0 && isHex(s[i+1]) && isHex(s[i+2]) {
+			b.WriteByte(unhex(s[i+1])<<4 | unhex(s[i+2]))
+			i += 2
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+func unhex(c byte) byte {
+	switch {
+	case c >= 'a':
+		return c - 'a' + 10
+	case c >= 'A':
+		return c - 'A' + 10
+	}
+	return c - '0'
+}
+
+// isNameByte reports whether c can be part of a path component's name.
+func isNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '_' || c == '.' || c == '-'
+}
+
+// pathStartFrom reports whether a path begins at s[i], a slash, and where the
+// text that belongs to it begins: i itself, or earlier when a flag or a
+// relative prefix is glued on.
+//
+// A path begins at the start of s, after a byte that is no part of a name,
+// and after a run of slashes that itself begins one (file:///home). It
+// begins after a chain of .. components that itself begins a path (cd
+// ../../home/bob), and after components that .. steps cancel when what is
+// left begins one (/tmp/../home/bob), and after /. components of an absolute
+// path. It begins right after a short flag, as in gcc -I/home/bob/inc: the
+// flag letter is not part of a name. A relative ./home/x, home/x or
+// testdata/../home/x is not a path start.
+func pathStartFrom(s string, i int) (int, bool) {
+	j := i
+	for j > 0 && s[j-1] == '/' {
+		j--
+	}
+	if j == 0 || !isNameByte(s[j-1]) {
+		return i, true
+	}
+	k := j
+	for k > 0 && isNameByte(s[k-1]) {
+		k--
+	}
+	comp := s[k:j]
+	switch {
+	case len(comp) == 2 && comp[0] == '-' && isLetter(comp[1]):
+		return k, true
+	case comp == ".":
+		if k > 0 && s[k-1] == '/' {
+			return pathStartFrom(s, k-1)
+		}
+		return 0, false
+	case comp == "..":
+		return climbStart(s, k)
+	}
+	return 0, false
+}
+
+func isLetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+
+// climbStart handles a chain of .. components whose rightmost one starts at
+// s[k]. If the chain begins a path the match is a path start; otherwise each
+// .. cancels the component to its left, and the path is a start if what is
+// left of those begins one.
+func climbStart(s string, k int) (int, bool) {
+	pos, n := k, 0
+	for {
+		n++
+		q := pos
+		for q > 0 && s[q-1] == '/' {
+			q--
+		}
+		if q == pos || q == 0 {
+			break
+		}
+		kk := q
+		for kk > 0 && isNameByte(s[kk-1]) {
+			kk--
+		}
+		if s[kk:q] != ".." {
+			break
+		}
+		pos = kk
+	}
+	if pos == 0 || (!isNameByte(s[pos-1]) && s[pos-1] != '/') {
+		return pos, true
+	}
+	if q := pos; true {
+		for q > 0 && s[q-1] == '/' {
+			q--
+		}
+		if q == 0 {
+			// /../home: the steps climb out of the root.
+			return 0, true
+		}
+	}
+	p := pos
+	for t := 0; t < n; t++ {
+		q := p
+		for q > 0 && s[q-1] == '/' {
+			q--
+		}
+		if q == p {
+			return 0, false
+		}
+		kk := q
+		for kk > 0 && isCompByte(s[kk-1]) {
+			kk--
+		}
+		if kk == q {
+			return 0, false
+		}
+		p = kk
+	}
+	q := p
+	for q > 0 && s[q-1] == '/' {
+		q--
+	}
+	if q == p {
+		return 0, false
+	}
+	return pathStartFrom(s, q)
+}
+
+// isCompByte reports whether c can be part of a path component for the
+// purpose of resolving .. steps: anything but a slash or whitespace, as
+// normalizePath's /x/../ pattern reads it.
+func isCompByte(c byte) bool {
+	return c != '/' && c != ' ' && c != '\t' && c != '\n' && c != '\r'
+}
+
+// dashOf is the dash-encoded form of a directory: /home/alice is
+// -home-alice.
+func dashOf(dir string) string {
+	return strings.ReplaceAll(dir, "/", "-")
+}
+
+// afterRepo reports whether a <repo> that begins a path ends at s[i].
+func afterRepo(s string, i int) bool {
+	const repo = "<repo>"
+	if !strings.HasSuffix(s[:i], repo) {
+		return false
+	}
+	k := i - len(repo)
+	return k == 0 || !(isNameByte(s[k-1]) || s[k-1] == '/')
+}
+
+var absPath = regexp.MustCompile(`(?:^|[^A-Za-z0-9_.\-/])/[A-Za-z0-9_.\-~]`)
+
+// AbsolutePath reports whether s holds something that reads as an absolute
+// path. A writer that cannot resolve the home directory has no way to tell a
+// home from any other path, so it treats every one as a leak.
+func AbsolutePath(s string) bool { return absPath.MatchString(s) }

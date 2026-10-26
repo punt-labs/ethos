@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 
@@ -38,7 +39,7 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 		var marker audit.Marker
 		err := WithLiveAuditLock(repoRoot, sessionID, func() error {
 			var e error
-			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason)
+			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, guardAuditLineNote, corruptRule)
 			return e
 		})
 		return marker, err
@@ -51,7 +52,7 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 		var marker audit.Marker
 		err := WithLiveMissionLock(repoRoot, missionID, cn.Session, func() error {
 			var e error
-			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason)
+			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, guardAuditLineNote, corruptRule)
 			return e
 		})
 		return marker, err
@@ -59,4 +60,19 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 
 	return audit.Marker{}, fmt.Errorf(
 		"quarantine: %q is not a recognizable audit or mission chunk name", name)
+}
+
+// corruptRule names the rule the bytes of a retired chunk break, or returns "".
+// The bytes are corrupt, so they are judged raw and, line by line, decoded:
+// this machine's home, another user's, a credential or an address.
+func corruptRule(b []byte) string {
+	if r := mission.LeakRule(string(b)); r != "" {
+		return r
+	}
+	for _, l := range bytes.Split(b, []byte("\n")) {
+		if r := lineRule(l); r != "" {
+			return r
+		}
+	}
+	return ""
 }

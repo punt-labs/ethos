@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -55,7 +56,22 @@ type auditEntry struct {
 	ToolInputHash    string         `json:"tool_input_hash,omitempty"`
 	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
 	Redacted         bool           `json:"redacted,omitempty"`
+
+	// PathFormat marks a line whose path values were written by the
+	// placeholder format: ~ is this machine's home, and another user's home
+	// is a token that cannot expand. Lines without it come from before, when
+	// both were written as ~, so a ~ in them is not trusted.
+	PathFormat int `json:"path_format,omitempty"`
 }
+
+// guardReport is the sink guard's account of one written line.
+type guardReport struct {
+	rule   string
+	marker bool
+}
+
+// auditPathFormat is the PathFormat of a line this version writes.
+const auditPathFormat = 2
 
 // previewLimit bounds the size of tool_input_preview. 200 chars is
 // enough for grep-on-the-jsonl to pick out a Bash command or a Read
@@ -168,14 +184,125 @@ func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[str
 // nil on every failure path), so failing closed here means dropping
 // content, not refusing the call.
 func redactToolInput(input map[string]any, toolName, repoRoot string) (map[string]any, bool) {
+	out, changed, say := redactToolInputQuiet(input, toolName, repoRoot)
+	if say {
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: the %q input was rewritten before it was stored (content removed, a key renamed or a value replaced)\n", redact.Prose(toolName))
+	}
+	return out, changed
+}
+
+// redactToolInputQuiet is redactToolInput without its notice. changed is what
+// the redacted marker records: content removed, a leak replaced or a key
+// renamed. say also counts a value the path pass rewrote in place (a home or
+// repo path became ~ or <repo>), which is what the writer reports.
+func redactToolInputQuiet(input map[string]any, toolName, repoRoot string) (out map[string]any, changed, say bool) {
 	r, err := mission.NewPathRedactor(repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: audit-log: %v; storing tool=%s without its input\n", err, toolName)
-		return nil, true
+		return nil, true, false
 	}
 	// r.Map knows this machine's home and repo; HomePathsValue adds any
 	// other user's home, as every mission record gets (redact.Prose).
-	in, _ := redact.HomePathsValue(r.Map(extractToolInput(input))).(map[string]any)
-	return redactSensitiveContent(toolName, in)
+	raw := extractToolInput(input)
+	mapped, renamedHere := r.MapFlag(raw)
+	hp, renamedOther := redact.HomePathsValueFlag(mapped)
+	in, _ := hp.(map[string]any)
+	redactPathKeys(r, raw, in)
+	out, removed := redactSensitiveContent(toolName, in)
+	out, dropped := dropLeaks(r, out)
+	changed = removed || dropped || renamedHere || renamedOther
+	return out, changed, changed || !sameJSON(raw, out)
+}
+
+// sameJSON reports whether a and b encode to the same JSON.
+func sameJSON(a, b map[string]any) bool {
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(ja, jb)
+}
+
+// redactedPath replaces a scalar that still names a home directory after
+// every pass. The audit writer cannot block a tool call, so it removes the
+// value instead of refusing the line, as redactToolInput does when it has no
+// usable redactor.
+const (
+	redactedPath = "[redacted-path]"
+	redactedKey  = "[redacted-key]"
+)
+
+// dropLeaks returns v with every string that still names a home replaced by
+// redactedPath, and whether any was. The same check the record writers
+// apply to their output, so a path the boundary rewrite could not place never
+// reaches disk.
+func dropLeaks(r mission.PathRedactor, v map[string]any) (map[string]any, bool) {
+	if v == nil {
+		return v, false
+	}
+	any1, dropped := dropLeaksValue(r, v)
+	out, _ := any1.(map[string]any)
+	return out, dropped
+}
+
+func dropLeaksValue(r mission.PathRedactor, v any) (any, bool) {
+	switch x := v.(type) {
+	case string:
+		if r.Leaks(x) {
+			return redactedPath, true
+		}
+		return x, false
+	case map[string]any:
+		dropped := false
+		// Renamed keys never merge with another: see redact.RenameKeys.
+		out, renamed := redact.RenameKeys(x, func(k string) string {
+			// A key can name a home as well as a value; the path pass runs
+			// on it, and a key that still leaks is renamed.
+			nk := r.Path(k)
+			if r.Leaks(nk) {
+				return redactedKey
+			}
+			return nk
+		}, false, func(_ string, e any) any {
+			re, d := dropLeaksValue(r, e)
+			dropped = dropped || d
+			return re
+		})
+		return out, dropped || renamed
+	case []any:
+		out := make([]any, len(x))
+		dropped := false
+		for i, e := range x {
+			re, d := dropLeaksValue(r, e)
+			out[i], dropped = re, dropped || d
+		}
+		return out, dropped
+	}
+	return v, false
+}
+
+// redactPathKeys overwrites the path-valued keys of out with the path pass
+// applied to the original value in raw. These are the values a precondition
+// compares against a stored require_read entry, which went through the same
+// pass, so the two forms are equal after Expand. The prose pass would turn
+// another user's home into ~ and make it expandable to this one.
+func redactPathKeys(r mission.PathRedactor, raw, out map[string]any) {
+	for _, key := range []string{"file_path", "notebook_path", "path"} {
+		if s, ok := raw[key].(string); ok {
+			out[key] = r.Path(s)
+		}
+	}
+	for _, key := range []string{"files", "paths"} {
+		list, ok := raw[key].([]any)
+		if !ok {
+			continue
+		}
+		red := make([]any, len(list))
+		for i, e := range list {
+			red[i] = e
+			if s, ok := e.(string); ok {
+				red[i] = r.Path(s)
+			}
+		}
+		out[key] = red
+	}
 }

@@ -211,10 +211,17 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 	if err := os.MkdirAll(p.sealedDir, 0o700); err != nil {
 		return sealOutcome{}, fmt.Errorf("creating sealed dir %s: %w", p.sealedDir, err)
 	}
+	// The live file can hold lines an older binary or another process
+	// appended without the guard; a sealed chunk is tracked, so each line is
+	// checked here. A line keeps its ts, so the chunk name and its
+	// last-ts verification are unchanged. There is no hash chain over the
+	// chunk bytes: the name is the first and last ts only.
+	tail, notes := guardTail(tail, p.label)
 	name := p.chunkName(first, last)
 	if err := audit.WriteChunkAtomic(p.sealedDir, p.tempName(first, last), name, tail); err != nil {
 		return sealOutcome{}, err
 	}
+	printNotices(notes)
 	reportf(opts, "sealed %d line(s) for %s into %s\n", len(tail), p.label, name)
 	return sealOutcome{wroteChunk: true, lineCount: len(tail)}, nil
 }
@@ -324,4 +331,24 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+// guardTail returns the lines about to be sealed with every line that names a
+// home rewritten, as the live appender would have, and one notice per rewritten
+// line with its number and the rule, never the value. The caller prints the
+// notices once the chunk is written.
+func guardTail(tail [][]byte, label string) ([][]byte, []string) {
+	out := make([][]byte, len(tail))
+	var notes []string
+	for i, l := range tail {
+		g, rule, marker := guardAuditLineFull(l)
+		switch {
+		case marker:
+			notes = append(notes, fmt.Sprintf("ethos: audit seal: %s: line %d replaced by a loss marker before sealing: it %s", label, i+1, rule))
+		case rule != "":
+			notes = append(notes, fmt.Sprintf("ethos: audit seal: %s: line %d rewritten before sealing: it %s", label, i+1, rule))
+		}
+		out[i] = g
+	}
+	return out, notes
 }

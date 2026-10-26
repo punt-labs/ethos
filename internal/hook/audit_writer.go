@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-// writeAuditEntry appends one JSONL line to path, fsyncs the file,
+// writeAuditEntryReport appends one JSONL line to path, fsyncs the file,
 // and closes the fd. Every line is a complete JSON value followed by
 // a single newline; readers tolerate a partial trailing line (no
 // terminator) when a writer crashed mid-write.
@@ -23,33 +23,36 @@ import (
 // only marshals, appends, fsyncs, and returns. The advisory policy
 // (log a warning to stderr, emit the sentinel, return nil so the
 // tool call is not blocked) lives in HandleAuditLog — the helper is
-// pure error-bubbling.
-func writeAuditEntry(path string, entry auditEntry) error {
+// pure error-bubbling. It returns what the sink guard did to the line, for the
+// writer's one notice; the guard does not print here.
+func writeAuditEntryReport(path string, entry auditEntry) (guardReport, error) {
 	data, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("marshaling entry: %w", err)
+		return guardReport{}, fmt.Errorf("marshaling entry: %w", err)
 	}
-	line := append(data, '\n')
+	guarded, rule, marker := guardAuditLineFull(data)
+	report := guardReport{rule: rule, marker: marker}
+	line := append(guarded, '\n')
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return fmt.Errorf("opening %s: %w", path, err)
+		return report, fmt.Errorf("opening %s: %w", path, err)
 	}
 	defer f.Close()
 
 	if err := ensureNewlineBoundary(f); err != nil {
-		return fmt.Errorf("checking tail of %s: %w", path, err)
+		return report, fmt.Errorf("checking tail of %s: %w", path, err)
 	}
 	if _, err := f.Write(line); err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
+		return report, fmt.Errorf("writing %s: %w", path, err)
 	}
 	// Per-line fsync — see the function comment for why. Sync failure
 	// is propagated because the entry is not durable on disk; the
 	// caller decides whether to retry or surface to the operator.
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("syncing %s: %w", path, err)
+		return report, fmt.Errorf("syncing %s: %w", path, err)
 	}
-	return nil
+	return report, nil
 }
 
 // ensureNewlineBoundary writes a '\n' to f when its current tail byte is not a

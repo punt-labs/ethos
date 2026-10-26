@@ -2064,39 +2064,75 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 
 	// The export directory is tracked, so records are redacted on the way
 	// out as well: a record an older ethos wrote unredacted must not be
-	// republished verbatim.
+	// republished verbatim. Both payloads are built first and written
+	// together (guarded, temp files, then atomic renames, with the old files
+	// held in memory and put back if a later rename fails), so a refusal or a
+	// failure leaves the previous pair, or no file, in place: never a
+	// mismatched pair or a truncated file. A failed directory fsync after the
+	// renames is reported after the exported lines: the files are in place but
+	// may not be durable, and the export can be re-run.
 	repoRoot := resolve.StoreRepoRoot()
-	contractData, err := mission.RedactedYAML(repoRoot, *c)
+	contractData, sayContract, err := mission.RedactedYAMLNotify(repoRoot, *c)
 	if err != nil {
 		return fmt.Errorf("exporting contract %s: %w", id, err)
 	}
 	contractPath := filepath.Join(dir, id+".contract.yaml")
-	if err := os.WriteFile(contractPath, contractData, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", contractPath, err)
-	}
-	fmt.Printf("exported: %s\n", contractPath)
+	files := []mission.TrackedFile{{Path: contractPath, Data: contractData, Perm: 0o644}}
+	says := []mission.Announcement{sayContract}
 
 	results, err := ms.LoadResults(id)
 	if err != nil {
 		return fmt.Errorf("loading results for %q: %w", id, err)
 	}
+	if len(results) > 0 {
+		resultPath := filepath.Join(dir, id+".result.yaml")
+		resultData, sayResult, err := mission.RedactedYAMLNotify(repoRoot, results[len(results)-1])
+		if err != nil {
+			return fmt.Errorf("exporting result for %s: %w", id, err)
+		}
+		says = append(says, sayResult)
+		files = append(files, mission.TrackedFile{Path: resultPath, Data: resultData, Perm: 0o644})
+	}
 	if len(results) == 0 {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s has no result yet — exporting contract only\n", id)
-		return nil
 	}
+	err = writeExport(os.Stdout, id, files, func(fs ...mission.TrackedFile) error {
+		return mission.WriteTrackedFiles(fs...)
+	})
+	// The files are in place unless the write itself failed; a failed
+	// directory sync is reported by err, and the notices still apply.
+	var nd *mission.NotDurableError
+	if err == nil || errors.As(err, &nd) {
+		for _, say := range says {
+			say.Say()
+		}
+	}
+	return err
+}
 
-	last := results[len(results)-1]
-	resultData, err := mission.RedactedYAML(repoRoot, last)
+// writeExport writes the export files with write and reports each on out. When
+// only the directory sync failed the files are in place, so they are reported
+// before the error that says durability is not guaranteed.
+func writeExport(out io.Writer, id string, files []mission.TrackedFile, write func(...mission.TrackedFile) error) error {
+	err := write(files...)
+	var nd *mission.NotDurableError
+	if err != nil && !errors.As(err, &nd) {
+		return fmt.Errorf("exporting mission %s: %w", id, err)
+	}
+	for _, f := range files {
+		fmt.Fprintf(out, "exported: %s\n", f.Path)
+	}
 	if err != nil {
-		return fmt.Errorf("exporting result for %s: %w", id, err)
+		return fmt.Errorf("exporting mission %s: %w; re-run `ethos mission export %s` to retry", id, err, id)
 	}
-	resultPath := filepath.Join(dir, id+".result.yaml")
-	if err := os.WriteFile(resultPath, resultData, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", resultPath, err)
-	}
-	fmt.Printf("exported: %s\n", resultPath)
 	return nil
 }
+
+// beforeDispatchPendingLock is called just before a claim or a dispatch
+// binding enters mission.WithDispatchPendingLock, after the session has been
+// resolved. It is a no-op; tests replace it to learn that the caller has
+// reached the lock, instead of sleeping.
+var beforeDispatchPendingLock = func() {}
 
 // runMissionDispatch handles `ethos mission dispatch`. Builds a
 // Contract from flag values and runs through the same creation path
@@ -2197,6 +2233,7 @@ func runMissionClaim(idOrPrefix string) error {
 	// proceeding the instant AFTER deleteFiles has already removed the
 	// roster — see that function's own doc comment for the reorder this
 	// closes.
+	beforeDispatchPendingLock()
 	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
 		if err := hook.RefuseIfSessionGone(sessionStore(), sessionID); err != nil {
 			return err
@@ -2327,6 +2364,7 @@ func bindDispatchedMission(op, missionID, worker string) {
 	// section, so a writer that was waiting on this lock cannot proceed
 	// into a session Store.Delete has already torn down — see that
 	// function's own doc comment for the reorder this closes.
+	beforeDispatchPendingLock()
 	if err := mission.WithDispatchPendingLock(globalRoot, sessionID, func() error {
 		if err := hook.RefuseIfSessionGone(sessionStore(), sessionID); err != nil {
 			return err

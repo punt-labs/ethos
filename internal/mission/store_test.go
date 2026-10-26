@@ -6358,7 +6358,7 @@ func TestCountBlockingDelegations_ExcludesOnlyDisclaimed(t *testing.T) {
 
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
-	_, err = DisclaimDelegationRecord(repoRoot, missionID, "d-2026-09-08-020", redact,
+	_, _, err = DisclaimDelegationRecord(repoRoot, missionID, "d-2026-09-08-020", redact,
 		"capture", time.Now().UTC().Format(time.RFC3339))
 	require.NoError(t, err)
 

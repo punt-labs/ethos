@@ -12,6 +12,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // makeContractWithPreconditions builds a Contract whose only
@@ -36,11 +37,13 @@ func writeSessionReadAudit(t *testing.T, repoRoot, sessionID, readPath string) s
 	dir, err := resolveRepoSessionDir(repoRoot, sessionID, now)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
+	// A Read reaches the log redacted, as HandleAuditLog stores it.
+	stored, _ := redactToolInput(map[string]any{"tool_input": map[string]any{"file_path": readPath}}, "Read", repoRoot)
 	entry := auditEntry{
 		Ts:        now.Format(time.RFC3339),
 		Session:   sessionID,
 		Tool:      "Read",
-		ToolInput: map[string]any{"file_path": readPath},
+		ToolInput: stored,
 	}
 	path := filepath.Join(dir, "audit.jsonl")
 	require.NoError(t, writeAuditEntry(path, entry))
@@ -661,4 +664,293 @@ func TestEvaluatePreconditions_ReadOfCredentialShapedPathClears(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, deny, "the recorded Read must clear the precondition")
 	assert.Empty(t, reason)
+}
+
+// TestEvaluatePreconditions_StoredRepoPlaceholderMatchesRelativeRead: the
+// store writes an absolute input reference under the repo as <repo>/X. A
+// relative Read of X must still satisfy ${inputs.references.0} after the
+// contract is created and loaded back.
+func TestEvaluatePreconditions_StoredRepoPlaceholderMatchesRelativeRead(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	store := mission.NewStoreWithRoots(repo, filepath.Join(home, ".punt-labs", "ethos"))
+	const id = "m-2026-05-22-001"
+	c := &mission.Contract{
+		MissionID: id,
+		Status:    mission.StatusOpen,
+		CreatedAt: "2026-05-22T21:30:00Z",
+		UpdatedAt: "2026-05-22T21:30:00Z",
+		Leader:    "claude",
+		Worker:    "bwk",
+		Evaluator: mission.Evaluator{Handle: "djb", PinnedAt: "2026-05-22T21:30:00Z"},
+		Inputs: mission.Inputs{
+			Ticket:     "ethos-7i29",
+			References: []string{filepath.Join(repo, "cfg", "config.yaml")},
+		},
+		WriteSet:        []string{"internal/hook/"},
+		Tools:           []string{"Read", "Write", "Edit"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget:          mission.Budget{Rounds: 3, ReflectionAfterEach: true},
+		CurrentRound:    1,
+		Preconditions: []mission.Precondition{{
+			Form:        mission.PreconditionFormExplicit,
+			RequireRead: []string{"${inputs.references.0}"},
+			Message:     "read the config first",
+		}},
+	}
+	require.NoError(t, store.Create(c))
+	loaded, err := store.Load(id)
+	require.NoError(t, err)
+	require.Equal(t, "<repo>/cfg/config.yaml", loaded.Inputs.References[0])
+
+	for _, read := range []string{"cfg/config.yaml", filepath.Join(repo, "cfg", "config.yaml")} {
+		sess := "sess-" + strings.NewReplacer("/", "-", ".", "-").Replace(read)
+		writeSessionReadAudit(t, repo, sess, read)
+		reason, deny, err := EvaluatePreconditions(loaded, "Write",
+			map[string]any{"file_path": "x.go"}, sess, repo)
+		require.NoError(t, err)
+		assert.False(t, deny, "a Read of %q satisfies the stored reference: %s", read, reason)
+	}
+
+	writeSessionReadAudit(t, repo, "sess-other", "cfg/other.yaml")
+	_, deny, err := EvaluatePreconditions(loaded, "Write",
+		map[string]any{"file_path": "x.go"}, "sess-other", repo)
+	require.NoError(t, err)
+	assert.True(t, deny, "a Read of another file does not")
+}
+
+// auditRead records a Read of path through the real audit writer.
+func auditRead(t *testing.T, repo, global, sess, path string) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sess,
+		"tool_name":  "Read",
+		"tool_input": map[string]any{"file_path": path},
+	})
+	require.NoError(t, err)
+	require.NoError(t, HandleAuditLog(bytes.NewReader(payload), repo, global))
+}
+
+// redactedRequireRead builds the contract the store would write for a
+// require_read entry: the entry goes through the record redactor.
+func redactedRequireRead(t *testing.T, repo, entry string) *mission.Contract {
+	t.Helper()
+	c := mission.Contract{Preconditions: []mission.Precondition{{
+		Form:        mission.PreconditionFormExplicit,
+		RequireRead: []string{entry},
+		Message:     "read it first",
+	}}}
+	red, err := mission.RedactRecord(repo, c)
+	require.NoError(t, err)
+	return &red
+}
+
+// TestEvaluatePreconditions_RedactedEntryMatchesRecordedRead: a Read recorded
+// by the audit writer satisfies the redacted entry that names the same file,
+// for a repo path, a home path and a project-slug path under the home.
+func TestEvaluatePreconditions_RedactedEntryMatchesRecordedRead(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo, global := t.TempDir(), t.TempDir()
+	slug := strings.ReplaceAll(home, string(filepath.Separator), "-")
+	paths := map[string]string{
+		"repo": filepath.Join(repo, "cfg", "config.yaml"),
+		"home": filepath.Join(home, "notes", "n.md"),
+		"slug": filepath.Join(home, ".claude", "projects", slug+"-Coding-x", "memory", "MEMORY.md"),
+	}
+	for name, abs := range paths {
+		t.Run(name, func(t *testing.T) {
+			c := redactedRequireRead(t, repo, abs)
+			require.NotEqual(t, abs, c.Preconditions[0].RequireRead[0], "the stored entry is redacted")
+			write := map[string]any{"file_path": "x.go"}
+			sess := "sess-" + name
+
+			_, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+			require.NoError(t, err)
+			require.True(t, deny, "no Read yet")
+
+			auditRead(t, repo, global, sess, abs)
+			reason, deny, err := EvaluatePreconditions(c, "Write", write, sess, repo)
+			require.NoError(t, err)
+			assert.False(t, deny, "the recorded Read satisfies the entry: %s", reason)
+		})
+	}
+}
+
+// TestEvaluatePreconditions_ForeignHomeNeverMatches: an entry redacted from
+// another user's home names a file this machine cannot identify. It never
+// matches, not even a recorded Read that was redacted to the same token, and
+// the block says why.
+func TestEvaluatePreconditions_ForeignHomeNeverMatches(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo, global := t.TempDir(), t.TempDir()
+	c := redactedRequireRead(t, repo, "/home/bob/notes.md")
+	require.True(t, mission.HasRedactedUser(c.Preconditions[0].RequireRead[0]))
+	auditRead(t, repo, global, "sess-f", "/home/bob/notes.md")
+
+	reason, deny, err := EvaluatePreconditions(c, "Write",
+		map[string]any{"file_path": "x.go"}, "sess-f", repo)
+	require.NoError(t, err)
+	assert.True(t, deny)
+	assert.Contains(t, reason, "read it first")
+	assert.Contains(t, reason, "another user's home")
+}
+
+// TestEvaluatePreconditions_UnknownHomeIsUnevaluable: a ~ entry cannot be
+// compared when the home directory cannot be resolved, and the error says so.
+func TestEvaluatePreconditions_UnknownHomeIsUnevaluable(t *testing.T) {
+	repo := t.TempDir()
+	writeSessionReadAudit(t, repo, "sess-h", "notes/n.md")
+	c := makeContractWithPreconditions(
+		[]mission.Precondition{{
+			Form:        mission.PreconditionFormExplicit,
+			RequireRead: []string{"~/notes/n.md"},
+			Message:     "read it first",
+		}},
+		mission.Inputs{}, nil,
+	)
+	t.Setenv("HOME", "")
+	reason, deny, err := EvaluatePreconditions(c, "Write",
+		map[string]any{"file_path": "x.go"}, "sess-h", repo)
+	require.Error(t, err)
+	assert.True(t, deny)
+	assert.Equal(t, "read it first", reason)
+	assert.Contains(t, err.Error(), "home directory")
+}
+
+// TestLoadSessionReads_HomePlaceholderNeedsTheFormatMarker: before the path
+// format existed, another user's home was written as ~ too, so a ~ in an
+// unmarked line cannot be trusted to be this machine's home.
+func TestLoadSessionReads_HomePlaceholderNeedsTheFormatMarker(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	for _, tt := range []struct {
+		name   string
+		format int
+		want   bool
+	}{{"unmarked", 0, false}, {"marked", auditPathFormat, true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := "sess-" + tt.name
+			now := time.Now().UTC()
+			dir, err := resolveRepoSessionDir(repo, sess, now)
+			require.NoError(t, err)
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(t, writeAuditEntry(filepath.Join(dir, "audit.jsonl"), auditEntry{
+				Ts: now.Format(time.RFC3339), Session: sess, Tool: "Read", PathFormat: tt.format,
+				ToolInput: map[string]any{"file_path": "~/notes/n.md"},
+			}))
+			reads, err := loadSessionReads(repo, sess)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, readsContain(reads, filepath.Join(home, "notes", "n.md"), repo))
+		})
+	}
+}
+
+// TestEvaluatePreconditions_ImplicitForeignHomeSaysWhy: a Write under another
+// user's home needs a Read that cannot be recorded in a form that can be
+// verified, and the block says so rather than just "read it first".
+func TestEvaluatePreconditions_ImplicitForeignHomeSaysWhy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo, global := t.TempDir(), t.TempDir()
+	auditRead(t, repo, global, "sess-i", "/home/bob/x.go")
+	c := makeContractWithPreconditions(
+		[]mission.Precondition{{Form: mission.PreconditionFormImplicit, Message: "read first"}},
+		mission.Inputs{}, nil,
+	)
+	reason, deny, err := EvaluatePreconditions(c, "Write",
+		map[string]any{"file_path": "/home/bob/x.go"}, "sess-i", repo)
+	require.NoError(t, err)
+	assert.True(t, deny)
+	assert.Contains(t, reason, "read first")
+	assert.Contains(t, reason, "another user's home")
+}
+
+// TestPreconditionEntryUnderRepoHomeDirIsRefused: the leak check knows nothing
+// of where a path begins, so an input reference under a top-level home/<x>/
+// directory of the repo is refused, an accepted false refusal. (A write_set
+// entry such as app/home/page.tsx is a repo-relative path-field value and is
+// stored; see TestRedactRecord_RepoRelativePathFieldsMayNameAHomeDir.)
+func TestPreconditionEntryUnderRepoHomeDirIsRefused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo, global := t.TempDir(), filepath.Join(home, ".punt-labs", "ethos")
+	target := filepath.Join(repo, "home", "alice", "x.go")
+	const id = "m-2026-05-22-009"
+
+	legacy := mission.Contract{
+		MissionID: id, Status: mission.StatusOpen,
+		CreatedAt: "2026-05-22T21:30:00Z", UpdatedAt: "2026-05-22T21:30:00Z",
+		Leader: "claude", Worker: "bwk",
+		Evaluator:       mission.Evaluator{Handle: "djb", PinnedAt: "2026-05-22T21:30:00Z"},
+		WriteSet:        []string{"internal/hook/"},
+		Tools:           []string{"Read"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget:          mission.Budget{Rounds: 3, ReflectionAfterEach: true},
+		CurrentRound:    1,
+		Inputs:          mission.Inputs{References: []string{target}},
+		Preconditions: []mission.Precondition{{
+			Form: mission.PreconditionFormExplicit, RequireRead: []string{"${inputs.references.0}"}, Message: "read it first",
+		}},
+	}
+	raw, err := yaml.Marshal(&legacy)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(global, "missions"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(global, "missions", id+".yaml"), raw, 0o600))
+	auditDir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-05-22-sess-m")
+	require.NoError(t, os.MkdirAll(auditDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(auditDir, "audit.jsonl"),
+		[]byte(`{"ts":"2026-05-22T10:00:00Z","session":"sess-m","tool":"Agent","contract_id":"`+id+`"}`+"\n"), 0o600))
+
+	var out bytes.Buffer
+	err = mission.MigrateMission(global, repo, repo, "", false, &out)
+	require.Error(t, err, "the reference holds /home/<x>, which the leak check refuses")
+	assert.NotContains(t, err.Error(), "alice")
+	assert.NotContains(t, out.String(), "alice")
+	_, statErr := os.Stat(filepath.Join(repo, ".punt-labs", "ethos", "missions", id, "contract.yaml"))
+	assert.True(t, os.IsNotExist(statErr), "nothing was written")
+}
+
+// TestRedactLegacyLine_NeverStampsThePathFormat: the marker vouches that a ~
+// is this machine's home. A migrated line may hold a ~ an older version wrote
+// for another user's home, so migration rewrites paths but never stamps.
+func TestRedactLegacyLine_NeverStampsThePathFormat(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	repo := t.TempDir()
+	r, err := mission.NewPathRedactor(repo)
+	require.NoError(t, err)
+	raw := []byte(`{"ts":"2026-05-22T10:00:00Z","session":"s","tool":"Read","tool_input":{"file_path":"/home/zed/x"}}`)
+	out, changed, err := redactLegacyLine(raw, repo, r)
+	require.NoError(t, err)
+	require.True(t, changed)
+	assert.NotContains(t, string(out), "path_format")
+	assert.Contains(t, string(out), `"file_path":"~/x"`)
+}
+
+// TestMigratedLegacyLine_HomePlaceholderStaysUntrusted: a legacy ~/notes.md
+// next to an address that migration rewrites is still unmarked afterwards, so
+// a require_read of ~/notes.md stays unsatisfied.
+func TestMigratedLegacyLine_HomePlaceholderStaysUntrusted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	r, err := mission.NewPathRedactor(repo)
+	require.NoError(t, err)
+	raw := []byte(`{"ts":"2026-05-22T10:00:00Z","session":"s","tool":"Read","tool_input":{"file_path":"~/notes.md","description":"mail bob@example.com"}}`)
+	out, changed, err := redactLegacyLine(raw, repo, r)
+	require.NoError(t, err)
+	require.True(t, changed)
+	e, err := decodeAuditLine(out)
+	require.NoError(t, err)
+	assert.Zero(t, e.PathFormat)
+
+	now := time.Now().UTC()
+	dir, err := resolveRepoSessionDir(repo, "s", now)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "audit.jsonl"), append(out, '\n'), 0o600))
+	reads, err := loadSessionReads(repo, "s")
+	require.NoError(t, err)
+	assert.False(t, readsContain(reads, filepath.Join(home, "notes.md"), repo))
 }

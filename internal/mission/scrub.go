@@ -86,10 +86,12 @@ type ScrubResult struct {
 // is reported in the returned error ("N rewritten, M failed: ..."), after
 // the remaining files have been scrubbed: a record that cannot be parsed
 // cannot be redacted, and one bad file must not hide the others. A file
-// deleted from the worktree is skipped. A file the redactor leaves
-// unchanged keeps its bytes, and so does every unaffected line of a JSONL
-// file. Like every record writer it fails closed when no redactor can be
-// built.
+// deleted from the worktree is skipped. A file is written in its canonical
+// re-encoded form (see guardWrite) whenever its bytes differ from that form,
+// whether or not the redactor changed a value; a file already canonical is not
+// touched. A record holding a field this ethos does not know is refused and
+// left as it was. Like every record writer it fails closed when no redactor
+// can be built.
 //
 // Each file is read, redacted and renamed under the lock its writers hold
 // (the trace lock, the per-mission lock, the delegation lock), so a
@@ -223,28 +225,36 @@ func scrubFile(r PathRedactor, repoRoot, rel string, dryRun bool) (bool, error) 
 	}
 	f := r.Content
 	var out []byte
-	var changed bool
 	switch path.Ext(rel) {
 	case ".jsonl":
-		out, changed, err = redactJSONLines(f, data)
+		out, _, err = redactJSONLines(f, r.Path, reflect.TypeOf(TraceSummary{}), data)
 	case ".yaml":
 		// The record's type supplies the modes, as in the writer: path
 		// fields get the path pass only and IDs and enums are kept.
-		out, changed, err = redactYAMLDoc(f, r.Path, artifactType(path.Base(rel)), data)
-		if err == nil && changed && strings.HasSuffix(rel, "contract.yaml") {
+		var redacted bool
+		out, redacted, err = redactYAMLDoc(f, r.Path, artifactType(path.Base(rel)), data)
+		if err == nil && redacted && strings.HasSuffix(rel, "contract.yaml") {
 			err = checkScrubbedContract(data, out)
 		}
 	default:
-		s := f(string(data))
-		out, changed = []byte(s), s != string(data)
+		out = []byte(f(string(data)))
 	}
 	if err != nil {
 		return false, err
 	}
+	// The file is judged by what the sink would write: its canonical form. A
+	// file the passes left alone is still rewritten when its bytes differ
+	// from that form, so no comment, tag, directive or other syntax that the
+	// checked value does not carry stays on disk.
+	canon, err := guardWrite(dest, out)
+	if err != nil {
+		return false, err
+	}
+	changed := !bytes.Equal(canon, data)
 	if !changed || dryRun {
 		return changed, nil
 	}
-	if err := scrubWrite(filepath.Dir(dest), ".scrub-*.tmp", dest, out); err != nil {
+	if err := scrubWrite(filepath.Dir(dest), ".scrub-*.tmp", dest, canon); err != nil {
 		return false, err
 	}
 	return true, nil

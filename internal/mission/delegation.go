@@ -1,6 +1,7 @@
 package mission
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -357,19 +359,10 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	if err != nil {
 		return "", fmt.Errorf("delegation skeleton: %w", err)
 	}
-	dir := DelegationDir(repoRoot, missionID, delegationID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("creating delegation directory %s: %w", dir, err)
-	}
-	// Order: prompt.md FIRST, then record.yaml. A half-built skeleton
-	// (writer crash between the two writes) must have no record.yaml on
-	// disk — readers branch on record.yaml's presence, so its absence
-	// signals "skeleton not yet committed" and avoids a torn read.
-	if len(payload.Prompt) > 0 {
-		if err := writeAtomicFile(dir, "prompt-*.md.tmp",
-			filepath.Join(dir, "prompt.md"), redact.Body(payload.Prompt)); err != nil {
-			return "", fmt.Errorf("writing delegation prompt: %w", err)
-		}
+	// A prompt that is not valid UTF-8 would be stored as U+FFFD by the
+	// encoder: refused, as a record is.
+	if !utf8.Valid(payload.Prompt) {
+		return "", fmt.Errorf("delegation skeleton: the prompt is not valid UTF-8; remove or rephrase it")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	// Every string field is redacted except the generated IDs, hashes,
@@ -390,14 +383,34 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 		Verdict:          DelegationVerdictOpen,
 		BoundVia:         payload.BoundVia,
 	}
-	data, err := RedactedYAML(repoRoot, d)
+	// Both files are built, and either may refuse, before anything is written.
+	data, sayRecord, err := RedactedYAMLNotify(repoRoot, d)
 	if err != nil {
 		return "", fmt.Errorf("delegation skeleton: %w", err)
+	}
+	body := redact.Body(payload.Prompt)
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", ioErr("creating delegation directory", dir, err)
+	}
+	// Order: prompt.md FIRST, then record.yaml. A half-built skeleton
+	// (writer crash between the two writes) must have no record.yaml on
+	// disk — readers branch on record.yaml's presence, so its absence
+	// signals "skeleton not yet committed" and avoids a torn read.
+	if len(payload.Prompt) > 0 {
+		if err := writeAtomicFile(dir, "prompt-*.md.tmp",
+			filepath.Join(dir, "prompt.md"), body); err != nil {
+			return "", fmt.Errorf("writing delegation prompt: %w", err)
+		}
+		if !bytes.Equal(body, payload.Prompt) {
+			announceRewritten("a delegation prompt.md", redactNoRename).Say()
+		}
 	}
 	recordPath := filepath.Join(dir, "record.yaml")
 	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
 		return "", fmt.Errorf("writing delegation record: %w", err)
 	}
+	sayRecord.Say()
 	return recordPath, nil
 }
 
@@ -410,37 +423,49 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 // random component avoids the predictable ".tmp" suffix that a second
 // writer could trample.
 func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
+	var gErr error
+	if data, gErr = guardWrite(destPath, data); gErr != nil {
+		return gErr
+	}
+	return restoreAtomicFile(dir, pattern, destPath, data)
+}
+
+// restoreAtomicFile writes data to destPath atomically, as writeAtomicFile
+// does, without the sink guard. It puts back bytes that were already on disk:
+// a rollback is not a new tracked write, and must not be refused because the
+// old bytes name a home.
+func restoreAtomicFile(dir, pattern, destPath string, data []byte) error {
 	tmp, err := os.CreateTemp(dir, pattern)
 	if err != nil {
-		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+		return ioErr("creating temp file in", dir, err)
 	}
 	tmpPath := tmp.Name()
 	if n, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("writing %s: %w", tmpPath, err)
+		return ioErr("writing", tmpPath, err)
 	} else if n < len(data) {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("short write to %s: %d of %d bytes", tmpPath, n, len(data))
+		return fmt.Errorf("short write to %s: %d of %d bytes", filepath.Base(tmpPath), n, len(data))
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+		return ioErr("chmod", tmpPath, err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("syncing %s: %w", tmpPath, err)
+		return ioErr("syncing", tmpPath, err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("closing %s: %w", tmpPath, err)
+		return ioErr("closing", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("renaming %s -> %s: %w", tmpPath, destPath, err)
+		return ioErr("renaming the temp file to", destPath, err)
 	}
 	return nil
 }
@@ -601,13 +626,14 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	if reason != "" {
 		d.Reason = reason
 	}
-	data, err := RedactedYAML(repoRootOfRecord(recordPath), *d)
+	data, say, err := RedactedYAMLNotify(repoRootOfRecord(recordPath), *d)
 	if err != nil {
 		return fmt.Errorf("close delegation: %w", err)
 	}
 	if err := writeAtomicFile(filepath.Dir(recordPath), "record-*.yaml.tmp", recordPath, data); err != nil {
 		return fmt.Errorf("close delegation: %w", err)
 	}
+	say.Say()
 	return nil
 }
 
@@ -691,13 +717,14 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	}
 	d.Verdict = verdict
 	d.ClosedAt = closedAt
-	data, err := RedactedYAML(repoRoot, *d)
+	data, say, err := RedactedYAMLNotify(repoRoot, *d)
 	if err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
 	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
+	say.Say()
 	return nil
 }
 
@@ -733,70 +760,73 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 // disk, matching every other operator-supplied free-text field this
 // package persists (WriteDelegationSkeleton's prompt body, Abandon's
 // reason).
-func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact PathRedactor, reason, disclaimedAt string) (*Delegation, error) {
+func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact PathRedactor, reason, disclaimedAt string) (*Delegation, Announcement, error) {
 	if strings.TrimSpace(repoRoot) == "" {
-		return nil, fmt.Errorf("disclaim: repoRoot is required")
+		return nil, nil, fmt.Errorf("disclaim: repoRoot is required")
 	}
 	if strings.TrimSpace(missionID) == "" {
-		return nil, fmt.Errorf("disclaim: missionID is required")
+		return nil, nil, fmt.Errorf("disclaim: missionID is required")
 	}
 	if strings.TrimSpace(delegationID) == "" {
-		return nil, fmt.Errorf("disclaim: delegationID is required")
+		return nil, nil, fmt.Errorf("disclaim: delegationID is required")
 	}
 	if strings.TrimSpace(reason) == "" {
-		return nil, fmt.Errorf("disclaim: reason is required")
+		return nil, nil, fmt.Errorf("disclaim: reason is required")
 	}
 	if containsControlChar(reason) {
-		return nil, fmt.Errorf("disclaim: reason contains control character")
+		return nil, nil, fmt.Errorf("disclaim: reason contains control character")
 	}
 	if strings.TrimSpace(disclaimedAt) == "" {
-		return nil, fmt.Errorf("disclaim: disclaimedAt is required")
+		return nil, nil, fmt.Errorf("disclaim: disclaimedAt is required")
 	}
 	dir := DelegationDir(repoRoot, missionID, delegationID)
 	recordPath := filepath.Join(dir, "record.yaml")
 	d, err := LoadDelegation(recordPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"disclaim: delegation %q not found under mission %q", delegationID, missionID,
 			)
 		}
-		return nil, fmt.Errorf("disclaim: loading %s: %w", recordPath, err)
+		return nil, nil, fmt.Errorf("disclaim: loading %s: %w", recordPath, err)
 	}
 	if d.BoundVia != BoundViaSidecarDispatch {
 		reported := d.BoundVia
 		if reported == "" {
 			reported = "unknown (a pre-existing record, or written before provenance tracking)"
 		}
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"disclaim: delegation %q was bound via %s, not an active-mission-sidecar dispatch "+
 				"capture; only that provenance is disclaimable",
 			delegationID, reported,
 		)
 	}
 	if d.Verdict == DelegationVerdictOpen {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"disclaim: delegation %q is still open (no verdict recorded yet); wait for its spawn "+
 				"to finish before disclaiming it, in case it is doing real work",
 			delegationID,
 		)
 	}
 	if d.DisclaimedAt != "" {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"disclaim: delegation %q was already disclaimed at %s: %q",
 			delegationID, d.DisclaimedAt, d.DisclaimedReason,
 		)
 	}
 	d.DisclaimedAt = disclaimedAt
-	d.DisclaimedReason = redact.Content(reason)
-	data, err := RedactedYAML(repoRoot, *d)
+	// The record pass redacts the reason and announces the rewrite; the
+	// returned record carries the redacted text, as it always has.
+	d.DisclaimedReason = reason
+	data, say, err := RedactedYAMLNotify(repoRoot, *d)
 	if err != nil {
-		return nil, fmt.Errorf("disclaim: %w", err)
+		return nil, nil, fmt.Errorf("disclaim: %w", err)
 	}
 	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
-		return nil, fmt.Errorf("disclaim: %w", err)
+		return nil, nil, fmt.Errorf("disclaim: %w", err)
 	}
-	return d, nil
+	d.DisclaimedReason = redact.Content(reason)
+	return d, say, nil
 }
 
 // DelegationDepth walks the parent_delegation chain starting from

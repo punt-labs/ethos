@@ -71,6 +71,13 @@ checkout**, distinguished by whether git tracks them:
 |------|------|-----|
 | Live write path | `<repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl` | gitignored |
 | Sealed record | `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit-<first>-<last>.jsonl` | tracked |
+| Withheld originals | `<repo>/.punt-labs/local/ethos/quarantine/<stem>.<hash>.corrupt` | gitignored, never staged |
+
+A retired chunk whose bytes name a home or user path (`LeakRule`, over the raw
+bytes and every decoded line) is never staged: quarantine writes a one-line
+record of its sha256, size and rule at the `.corrupt` name, keeps the original
+in the withheld-originals zone, and applies the same check to every `.corrupt`
+of the stem on each run.
 
 The live writer appends to the `local` file. The seal step writes the
 not-yet-sealed lines into a new tracked chunk under the session's sealed

@@ -1,9 +1,12 @@
 package hook
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestRedactAbsolutePaths covers the six cases the privacy defect
@@ -191,7 +194,66 @@ func TestRedactToolInput_ForeignHomePaths(t *testing.T) {
 	}}
 	got, _ := redactToolInput(in, "Bash", t.TempDir())
 	assert.Equal(t, map[string]any{
-		"command": "cat ~/notes.txt",
-		"paths":   []any{"~/x", "ok"},
+		"command": "cat ~[redacted-user]/notes.txt",
+		"paths":   []any{"~[redacted-user]/x", "ok"},
 	}, got)
+}
+
+// TestRedactToolInput_PathKeysAndLeaks: path-valued keys get the path pass,
+// including after a run of slashes or a scheme, and any scalar that still
+// names a home afterwards is replaced, never written. The audit writer
+// cannot block a tool call, so it replaces rather than refuses.
+func TestRedactToolInput_PathKeysAndLeaks(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	tests := []struct {
+		name string
+		in   map[string]any
+		want map[string]any
+	}{
+		{"scheme", map[string]any{"file_path": "file:///home/zed/x"}, map[string]any{"file_path": "file://~/x"}},
+		{"run of slashes, foreign", map[string]any{"file_path": "///home/bob/.ssh/id_ed25519"}, map[string]any{"file_path": "//~[redacted-user]/.ssh/id_ed25519"}},
+		{"own home before a comma", map[string]any{"file_path": "/home/zed,bak"}, map[string]any{"file_path": "~,bak"}},
+		{"glued to a flag", map[string]any{"file_path": "-I/home/bob/inc"}, map[string]any{"file_path": "[redacted-path]"}},
+		{"slug inside a name, in prose", map[string]any{"command": "ls %2Fhome%2Fbob%2Fx"}, map[string]any{"command": "[redacted-path]"}},
+		{"list", map[string]any{"paths": []any{"/home/zed/a", "-I/home/bob/b"}}, map[string]any{"paths": []any{"~/a", "[redacted-path]"}}},
+		{"nested", map[string]any{"edits": []any{map[string]any{"old": "%2Fhome%2Fbob%2Fy"}}}, map[string]any{"edits": []any{map[string]any{"old": "[redacted-path]"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, removed := redactToolInput(map[string]any{"tool_input": tt.in}, "Read", t.TempDir())
+			assert.Equal(t, tt.want, got)
+			if tt.name == "glued to a flag" || tt.name == "slug inside a name, in prose" || tt.name == "list" || tt.name == "nested" {
+				assert.True(t, removed, "a replaced scalar is content removed")
+			}
+		})
+	}
+}
+
+// TestBuildAuditEntry_CarriesThePathFormat: a line written by this format
+// says so, so a reader knows ~ in it is this machine's home.
+func TestBuildAuditEntry_CarriesThePathFormat(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	e := buildAuditEntry(map[string]any{"tool_name": "Read", "tool_input": map[string]any{"file_path": "x"}}, "s", t.TempDir(), time.Now())
+	assert.Equal(t, auditPathFormat, e.PathFormat)
+	data, err := json.Marshal(e)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"path_format":`)
+}
+
+// TestRedactToolInput_MapKeys: a key names a home as a value does. The path
+// pass runs on it, and one that still leaks is renamed, never written.
+func TestRedactToolInput_MapKeys(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	in := map[string]any{"env": map[string]any{
+		"/home/zed/a": "1", "%2Fhome%2Fbob%2Finc": "2", "%2Fhome%2Fbob%2Flib": "3", "ok": "4",
+	}}
+	got, removed := redactToolInput(map[string]any{"tool_input": in}, "Bash", t.TempDir())
+	assert.True(t, removed)
+	env, ok := got["env"].(map[string]any)
+	require.True(t, ok)
+	assert.Len(t, env, 4)
+	assert.Equal(t, "1", env["~/a"])
+	assert.Equal(t, "4", env["ok"])
+	assert.Contains(t, env, redactedKey)
+	assert.Contains(t, env, redactedKey+"#2")
 }

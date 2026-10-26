@@ -1,6 +1,7 @@
 package mission
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -38,7 +39,7 @@ func TestScrubFiles(t *testing.T) {
 	const mid = "m-2026-01-01-001"
 	m := ".punt-labs/ethos/missions/" + mid + "/"
 	clean := `{"id":"m-2026-01-01-001","ticket":"t"}`
-	leaky := `{"id":"m-2026-01-02-001","repo":"at /home/alice/work a@b.org"}`
+	leaky := `{"id":"m-2026-01-02-001","success_criteria":["at /home/alice/work a@b.org"]}`
 	files := map[string]string{
 		m + "contract.yaml":                       "mission_id: " + mid + "\ncontext: \"see /Users/bob/x and a@b.org\"\nsuccess_criteria:\n    - make check passes\n",
 		m + "results.yaml":                        "results:\n    - prose: untouched\n",
@@ -59,8 +60,10 @@ func TestScrubFiles(t *testing.T) {
 	for rel := range files {
 		rels = append(rels, rel)
 	}
+	// results.yaml holds nothing to redact but is not in its canonical
+	// encoding, so it is rewritten too.
 	want := []string{
-		m + "contract.yaml", m + "reflections.yaml", m + "delegations/d-1/record.yaml",
+		m + "contract.yaml", m + "results.yaml", m + "reflections.yaml", m + "delegations/d-1/record.yaml",
 		m + "delegations/d-1/prompt.md", ".punt-labs/ethos/missions.jsonl",
 	}
 
@@ -76,15 +79,19 @@ func TestScrubFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, want, res.Changed)
 
-	assert.Contains(t, readFileRel(t, root, m+"contract.yaml"), "see ~/x and [redacted-email]")
-	assert.Contains(t, readFileRel(t, root, m+"reflections.yaml"), "at ~/y")
-	assert.Contains(t, readFileRel(t, root, m+"delegations/d-1/record.yaml"), "session: ~/s")
-	assert.Equal(t, "read ~/notes.md\n", readFileRel(t, root, m+"delegations/d-1/prompt.md"))
-	assert.Equal(t, files[m+"results.yaml"], readFileRel(t, root, m+"results.yaml"), "an unaffected file keeps its bytes")
+	assert.Contains(t, readFileRel(t, root, m+"contract.yaml"), "see ~[redacted-user]/x and [redacted-email]")
+	assert.Contains(t, readFileRel(t, root, m+"reflections.yaml"), "at ~[redacted-user]/y")
+	assert.Contains(t, readFileRel(t, root, m+"delegations/d-1/record.yaml"), "session: ~[redacted-user]/s")
+	assert.Equal(t, "read ~[redacted-user]/notes.md\n", readFileRel(t, root, m+"delegations/d-1/prompt.md"))
+	assert.Contains(t, readFileRel(t, root, m+"results.yaml"), "prose: untouched")
 
 	trace := strings.Split(readFileRel(t, root, ".punt-labs/ethos/missions.jsonl"), "\n")
-	assert.Equal(t, clean, trace[0], "a clean line keeps its original bytes")
-	assert.Equal(t, `{"id":"m-2026-01-02-001","repo":"at ~/work [redacted-email]"}`, trace[1])
+	var t0, t1 TraceSummary
+	require.NoError(t, json.Unmarshal([]byte(trace[0]), &t0))
+	require.NoError(t, json.Unmarshal([]byte(trace[1]), &t1))
+	assert.Equal(t, "m-2026-01-01-001", t0.ID)
+	assert.Equal(t, "t", t0.Ticket)
+	assert.Equal(t, []string{"at ~[redacted-user]/work [redacted-email]"}, t1.SuccessCriteria)
 
 	for _, rel := range []string{m + "log.jsonl", m + "log-s-1-2.jsonl", m + "artifacts/review.md", m + "local/live.jsonl",
 		m + "contract.yaml.tmp", ".punt-labs/ethos/sessions/s/audit.jsonl", ".punt-labs/ethos/identities/jane.yaml"} {
@@ -118,19 +125,19 @@ func TestScrubFiles_FailsClosedWithoutUsableHome(t *testing.T) {
 func TestRedactJSONLines_KeepsOrderAndLiterals(t *testing.T) {
 	in := `{"z":1,"a":"mail a@b.org","big":12345678901234567890,"n":null,"t":true,"f":1.50,"list":["x","/home/al/y"],"password":"p","sub":{"b":2,"a":"ok"}}` + "\n\n" +
 		`{"clean":"line"}`
-	out, changed, err := redactJSONLines(redact.Prose, []byte(in))
+	out, changed, err := redactJSONLines(redact.Prose, redact.Prose, nil, []byte(in))
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t,
-		`{"z":1,"a":"mail [redacted-email]","big":12345678901234567890,"n":null,"t":true,"f":1.50,"list":["x","~/y"],"password":"[redacted-secret]","sub":{"b":2,"a":"ok"}}`+"\n\n"+`{"clean":"line"}`,
+		`{"z":1,"a":"mail [redacted-email]","big":12345678901234567890,"n":null,"t":true,"f":1.50,"list":["x","~[redacted-user]/y"],"password":"[redacted-secret]","sub":{"b":2,"a":"ok"}}`+"\n\n"+`{"clean":"line"}`,
 		string(out))
 
-	out, changed, err = redactJSONLines(redact.Prose, out)
+	out, changed, err = redactJSONLines(redact.Prose, redact.Prose, nil, out)
 	require.NoError(t, err)
 	assert.False(t, changed, "second pass changes nothing")
 	_ = out
 
-	_, _, err = redactJSONLines(redact.Prose, []byte(`{"a":1} {"b":2}`))
+	_, _, err = redactJSONLines(redact.Prose, redact.Prose, nil, []byte(`{"a":1} {"b":2}`))
 	assert.Error(t, err, "two values on one line is not JSONL")
 }
 
@@ -186,7 +193,7 @@ func TestRedactYAMLDoc_KeyNamePass(t *testing.T) {
 
 func TestRedactJSONLines_NumbersAndArraysUnderSecretKeys(t *testing.T) {
 	in := `{"pin_token":42,"api_key":["a","b"],"password":null,"flag":true,"n":7,"empty_secret":[]}`
-	out, changed, err := redactJSONLines(redact.Prose, []byte(in))
+	out, changed, err := redactJSONLines(redact.Prose, redact.Prose, nil, []byte(in))
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Equal(t, `{"pin_token":"[redacted-secret]","api_key":"[redacted-secret]","password":null,"flag":true,"n":7,"empty_secret":[]}`, string(out))
@@ -220,7 +227,7 @@ func TestScrubFiles_ProcessesEveryFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "missions.jsonl")
 	assert.ElementsMatch(t, []string{m + "reflections.yaml", m + "delegations/d-1/prompt.md"}, res.Changed)
 	assert.Equal(t, []string{".punt-labs/ethos/missions/gone.result.yaml"}, res.Skipped)
-	assert.Equal(t, "read ~/notes.md\n", readFileRel(t, root, m+"delegations/d-1/prompt.md"))
+	assert.Equal(t, "read ~[redacted-user]/notes.md\n", readFileRel(t, root, m+"delegations/d-1/prompt.md"))
 }
 
 func TestScrubFiles_CoversPlainExportOutput(t *testing.T) {
@@ -321,10 +328,10 @@ func TestRedactYAMLDoc_Comments(t *testing.T) {
 	assert.True(t, changed, "a comment-only leak is a change")
 	got := string(out)
 	assert.Contains(t, got, "GITHUB_TOKEN="+redact.SecretToken)
-	assert.Contains(t, got, "from ~/x")
+	assert.Contains(t, got, "from ~[redacted-user]/x")
 	assert.Contains(t, got, redact.EmailToken)
 	assert.Contains(t, got, "password: "+redact.SecretToken)
-	assert.Contains(t, got, "grant cfg/token="+redact.SecretToken+" and ~/w", "a comment beside a path key is still prose")
+	assert.Contains(t, got, "grant cfg/token="+redact.SecretToken+" and ~[redacted-user]/w", "a comment beside a path key is still prose")
 	for _, leak := range []string{"abc12345", "a@b.org", "hunter2", "/home/alice"} {
 		assert.NotContains(t, got, leak)
 	}
@@ -385,7 +392,7 @@ func TestScrubFiles_KeepFieldsInResultsAndRecords(t *testing.T) {
 	assert.Contains(t, res, redact.EmailToken)
 	rec := readFileRel(t, root, m+"delegations/d-1/record.yaml")
 	assert.Contains(t, rec, "id: sk-project-implementation-workflow")
-	assert.Contains(t, rec, "session: ~/s")
+	assert.Contains(t, rec, "session: ~[redacted-user]/s")
 }
 
 // TestCheckScrubbedContract: a redacted contract that no longer validates
@@ -406,7 +413,9 @@ func TestCheckScrubbedContract(t *testing.T) {
 	assert.Contains(t, err.Error(), "write_set[0]")
 
 	assert.NoError(t, checkScrubbedContract(red, red), "an already-invalid contract is not judged")
-	assert.NoError(t, checkScrubbedContract([]byte("a: ["), red), "an unparseable original is not judged")
+	err = checkScrubbedContract([]byte("a: ["), red)
+	require.Error(t, err, "an original that does not decode cannot be judged, so the write is refused")
+	assert.Contains(t, err.Error(), "decod")
 	assert.Error(t, checkScrubbedContract(orig, []byte("a: [")))
 }
 
@@ -435,12 +444,12 @@ func TestScrubFiles_HoldsTheWritersLock(t *testing.T) {
 		}},
 	}
 	leak := map[string]string{
-		".punt-labs/ethos/missions.jsonl": `{"repo":"/home/alice/a"}` + "\n",
+		".punt-labs/ethos/missions.jsonl": `{"success_criteria":["/home/alice/a"]}` + "\n",
 		m + "reflections.yaml":            "reflections:\n    - reason: /home/alice/a\n",
 		m + "delegations/d-1/prompt.md":   "/home/alice/a\n",
 	}
 	appended := map[string]string{
-		".punt-labs/ethos/missions.jsonl": `{"repo":"/home/alice/b"}` + "\n",
+		".punt-labs/ethos/missions.jsonl": `{"success_criteria":["/home/alice/b"]}` + "\n",
 		m + "reflections.yaml":            "    - reason: /home/alice/b\n",
 		m + "delegations/d-1/prompt.md":   "/home/alice/b\n",
 	}
@@ -473,8 +482,8 @@ func TestScrubFiles_HoldsTheWritersLock(t *testing.T) {
 			require.NoError(t, <-done)
 
 			got := readFileRel(t, repo, tt.rel)
-			assert.Contains(t, got, "~/a")
-			assert.Contains(t, got, "~/b", "the append made under the lock must survive the scrub")
+			assert.Contains(t, got, "~[redacted-user]/a")
+			assert.Contains(t, got, "~[redacted-user]/b", "the append made under the lock must survive the scrub")
 			assert.NotContains(t, got, "/home/alice")
 		})
 	}
@@ -549,4 +558,222 @@ func TestScrubFiles_RefusesSymlinks(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, body, string(got))
 	})
+}
+
+// TestRedactYAMLDoc_SecretKeyComments: a comment on a credential-named key is
+// swept although the key's value is replaced whole.
+func TestRedactYAMLDoc_SecretKeyComments(t *testing.T) {
+	in := "# set GITHUB_TOKEN=abc12345 first\npassword: hunter2 # was a@b.org\nnote: ok\n"
+	out, changed, err := redactYAMLDoc(redact.Prose, redact.Prose, nil, []byte(in))
+	require.NoError(t, err)
+	assert.True(t, changed)
+	got := string(out)
+	assert.Contains(t, got, redact.SecretToken)
+	for _, leak := range []string{"abc12345", "hunter2", "a@b.org"} {
+		assert.NotContains(t, got, leak)
+	}
+}
+
+func hasKeys(t *testing.T, doc []byte) (ws, sc []string) {
+	t.Helper()
+	var c Contract
+	require.NoError(t, yaml.Unmarshal(doc, &c))
+	return c.WriteSet, c.SuccessCriteria
+}
+
+// TestRedactYAMLDoc_AliasesKeepTheirFieldMode: success_criteria is prose and
+// write_set is a path field; an alias between them must not carry the
+// content pass into the write set.
+func TestRedactYAMLDoc_AliasesKeepTheirFieldMode(t *testing.T) {
+	in := "success_criteria: &shared [cfg/token=abc]\nwrite_set: *shared\n"
+	out, changed, err := redactYAMLDoc(redact.Prose, redact.HomePaths, reflect.TypeOf(Contract{}), []byte(in))
+	require.NoError(t, err)
+	assert.True(t, changed)
+	ws, sc := hasKeys(t, out)
+	assert.Equal(t, []string{"cfg/token=abc"}, ws, "the write set is what the original decoded to")
+	assert.Equal(t, []string{"cfg/token=" + redact.SecretToken}, sc)
+}
+
+func TestRedactYAMLDoc_RefusesAliasBomb(t *testing.T) {
+	in := "a: &a [x, x, x, x, x, x, x, x, x, x]\n" +
+		"b: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a, *a]\n" +
+		"c: &c [*b, *b, *b, *b, *b, *b, *b, *b, *b, *b]\n" +
+		"d: &d [*c, *c, *c, *c, *c, *c, *c, *c, *c, *c]\n" +
+		"e: &e [*d, *d, *d, *d, *d, *d, *d, *d, *d, *d]\n" +
+		"f: [*e, *e, *e, *e, *e, *e, *e, *e, *e, *e]\n"
+	_, _, err := redactYAMLDoc(redact.Prose, redact.Prose, nil, []byte(in))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aliases expand")
+}
+
+// TestRedactYAMLDoc_RefusesMergedPathField: a path field reached through a
+// merge key sits under a key the schema does not know, so the walk treats it
+// as prose. The decoded result is checked, and the document refused.
+func TestRedactYAMLDoc_RefusesMergedPathField(t *testing.T) {
+	in := "base: &b\n    write_set: [cfg/token=abc]\n<<: *b\n"
+	_, _, err := redactYAMLDoc(redact.Prose, redact.HomePaths, reflect.TypeOf(Contract{}), []byte(in))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "enforcement fields")
+	assert.Contains(t, err.Error(), "WriteSet")
+}
+
+// TestScrubFiles_LegacyInputsBead: inputs.bead is the legacy name of
+// inputs.ticket and gets the path pass alone.
+func TestScrubFiles_LegacyInputsBead(t *testing.T) {
+	newLeakFixture(t)
+	root := t.TempDir()
+	rel := ".punt-labs/ethos/missions/m-2026-04-07-001/contract.yaml"
+	writeTree(t, root, map[string]string{rel: "mission_id: m-2026-04-07-001\ncontext: GITHUB_TOKEN=abc12345\ninputs:\n    bead: cfg/token=abc\n"})
+
+	res, err := ScrubFiles(root, t.TempDir(), []string{rel}, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{rel}, res.Changed)
+	got := readFileRel(t, root, rel)
+	assert.Contains(t, got, "ticket: cfg/token=abc", "the canonical encoding writes the legacy bead as the ticket, unredacted")
+	assert.Contains(t, got, "GITHUB_TOKEN="+redact.SecretToken)
+}
+
+// TestScrubFiles_TraceFieldModes: missions.jsonl lines carry the
+// TraceSummary tags: keep fields stay, path fields get the path pass only,
+// the rest is prose. A field TraceSummary does not have is refused, and the
+// file is left as it was.
+func TestScrubFiles_TraceFieldModes(t *testing.T) {
+	newLeakFixture(t)
+	root := t.TempDir()
+	rel := ".punt-labs/ethos/missions.jsonl"
+	line := `{"id":"m-2026-04-07-001","pipeline":"sk-project-implementation-workflow","ticket":"cfg/token=abc",` +
+		`"write_set":["cfg/token=abc","/home/alice/x"],"success_criteria":["GITHUB_TOKEN=abc12345"]}`
+	writeTree(t, root, map[string]string{rel: line + "\n"})
+
+	res, err := ScrubFiles(root, t.TempDir(), []string{rel}, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{rel}, res.Changed)
+	got := readFileRel(t, root, rel)
+	var ts TraceSummary
+	require.NoError(t, json.Unmarshal([]byte(got), &ts))
+	assert.Equal(t, "sk-project-implementation-workflow", ts.Pipeline)
+	assert.Equal(t, "cfg/token=abc", ts.Ticket)
+	assert.Equal(t, []string{"cfg/token=abc", "~[redacted-user]/x"}, ts.WriteSet)
+	assert.Equal(t, []string{"GITHUB_TOKEN=" + redact.SecretToken}, ts.SuccessCriteria)
+	assert.NotContains(t, got, "abc12345")
+
+	withExtra := `{"id":"m-2026-04-07-002","extra":"GITHUB_TOKEN=abc12345"}` + "\n"
+	writeTree(t, root, map[string]string{rel: withExtra})
+	_, err = ScrubFiles(root, t.TempDir(), []string{rel}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `holds a field this ethos does not know: "extra"`)
+	assert.Equal(t, withExtra, readFileRel(t, root, rel), "a refused file is left as it was")
+}
+
+// TestScrubFiles_TraceWriterOutputIsUnchanged: what the trace writer wrote
+// is already redacted by the same schema, so scrubbing it changes nothing.
+func TestScrubFiles_TraceWriterOutputIsUnchanged(t *testing.T) {
+	newLeakFixture(t)
+	repo := t.TempDir()
+	s := NewStoreWithRoots(repo, t.TempDir())
+	c := validContract()
+	c.Status = StatusClosed
+	c.ClosedAt = "2026-04-08T00:00:00Z"
+	c.Pipeline = "sk-project-implementation-workflow"
+	c.Inputs.Ticket = "cfg/token=abc"
+	c.WriteSet = []string{"cfg/token=abc", "docs/x.md"}
+	r := &Result{Verdict: VerdictPass, FilesChanged: []FileChange{{Path: "cfg/token=abc"}}}
+	require.NoError(t, appendTraceSummary(s, &c, r))
+
+	rel := ".punt-labs/ethos/missions.jsonl"
+	before := readFileRel(t, repo, rel)
+	require.Contains(t, before, "sk-project-implementation-workflow")
+	require.Contains(t, before, "cfg/token=abc")
+
+	res, err := ScrubFiles(repo, t.TempDir(), []string{rel}, false)
+	require.NoError(t, err)
+	assert.Empty(t, res.Changed)
+	assert.Equal(t, before, readFileRel(t, repo, rel))
+}
+
+// TestRedactYAMLDoc_UndecodableOriginalIsRefused: whether redaction left the
+// path fields alone is judged by decoding the original. A document that does
+// not decode into its type cannot be judged, so it is not rewritten.
+func TestRedactYAMLDoc_UndecodableOriginalIsRefused(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  reflect.Type
+		in   string
+	}{
+		{"contract", reflect.TypeOf(Contract{}), "inputs:\n    nope: 1\ncontext: GITHUB_TOKEN=abc12345\n"},
+		{"results", reflect.TypeOf(resultsFile{}), "results: 5\nnote: GITHUB_TOKEN=abc12345\n"},
+		{"reflections", reflect.TypeOf(reflectionsFile{}), "reflections: 5\nnote: GITHUB_TOKEN=abc12345\n"},
+		{"record", reflect.TypeOf(Delegation{}), "session: [a, b]\nnote: GITHUB_TOKEN=abc12345\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := redactYAMLDoc(redact.Prose, redact.HomePaths, tt.typ, []byte(tt.in))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "decod")
+			assert.NotContains(t, err.Error(), "abc12345")
+		})
+	}
+}
+
+// TestRedactYAMLDoc_LegacyListDecodesAsItsRecords: a legacy results or
+// reflections file is a bare list; it is judged as a list of records.
+func TestRedactYAMLDoc_LegacyListDecodesAsItsRecords(t *testing.T) {
+	in := "- round: 1\n  prose: GITHUB_TOKEN=abc12345\n  files_changed:\n    - path: cfg/token=abc\n"
+	out, changed, err := redactYAMLDoc(redact.Prose, redact.HomePaths, reflect.TypeOf(resultsFile{}), []byte(in))
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Contains(t, string(out), "path: cfg/token=abc", "a path field in a legacy list gets the path pass alone")
+	assert.NotContains(t, string(out), "abc12345")
+}
+
+// TestRedactYAMLDoc_RefusesWhatItCannotRedact: after the passes, every
+// scalar and comment outside a keep field is checked for a home path. One
+// that remains, changed or not, is refused with the field named and the
+// value left out.
+func TestRedactYAMLDoc_RefusesWhatItCannotRedact(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	typ := reflect.TypeOf(Contract{})
+	tests := []struct{ name, in, field string }{
+		{"prose", "context: '%2Fhome%2Fzed%2Fproj'\n", "context"},
+		{"path field", "write_set:\n    - '%2Fhome%2Fbob%2Fproj'\n", "write_set[0]"},
+		{"untouched document", "write_set: ['%2Fhome%2Fzed%2Fproj']\n", "write_set[0]"},
+		{"comment", "# see %2Fhome%2Fzed%2Fproj\ncontext: ok\n", "comment"},
+		{"nested", "inputs:\n    files: ['%2Fhome%2Fbob%2Fproj']\n", "inputs.files[0]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := redactYAMLDoc(redact.Prose, redact.HomePaths, typ, []byte(tt.in))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.field)
+			assert.NotContains(t, err.Error(), "zed")
+			assert.NotContains(t, err.Error(), "bob")
+		})
+	}
+	_, _, err := redactYAMLDoc(redact.Prose, redact.HomePaths, typ, []byte("pipeline: '%2Fhome%2Fzed%2Fproj'\n"))
+	require.Error(t, err, "a keep field is judged too, though never rewritten")
+	assert.Contains(t, err.Error(), "pipeline")
+	assert.NotContains(t, err.Error(), "zed")
+}
+
+// TestRedactYAMLDoc_ParseErrorDoesNotQuoteTheDocument: yaml.v3 quotes the
+// text it choked on.
+func TestRedactYAMLDoc_ParseErrorDoesNotQuoteTheDocument(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	_, _, err := redactYAMLDoc(redact.Prose, redact.Prose, nil, []byte("a: \"/home/zed/x\nb: [\n"))
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "zed")
+}
+
+func TestRedactJSONLines_RefusesWhatItCannotRedact(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	typ := reflect.TypeOf(TraceSummary{})
+	in := `{"id":"a"}` + "\n" + `{"success_criteria":["%2Fhome%2Fzed%2Fy"]}` + "\n"
+	_, _, err := redactJSONLines(redact.Prose, redact.HomePaths, typ, []byte(in))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "line 2")
+	assert.Contains(t, err.Error(), "success_criteria")
+	assert.NotContains(t, err.Error(), "zed")
+
+	_, _, err = redactJSONLines(redact.Prose, redact.HomePaths, typ, []byte(`{"pipeline":"%2Fhome%2Fzed%2Fy"}`))
+	assert.NoError(t, err, "a keep field is not checked")
 }

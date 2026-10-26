@@ -116,13 +116,13 @@ func TestAppendTraceSummary(t *testing.T) {
 	r := &Result{Verdict: VerdictPass}
 
 	// First append.
-	if err := s.appendTraceSummary(c, r); err != nil {
+	if err := appendTraceSummary(s, c, r); err != nil {
 		t.Fatalf("first append: %v", err)
 	}
 	// Second append (different mission).
 	c2 := *c
 	c2.MissionID = "m-2026-01-01-002"
-	if err := s.appendTraceSummary(&c2, r); err != nil {
+	if err := appendTraceSummary(s, &c2, r); err != nil {
 		t.Fatalf("second append: %v", err)
 	}
 
@@ -158,7 +158,7 @@ func TestAppendTraceSummary(t *testing.T) {
 }
 
 // TestAppendTraceSummary_LocksSiblingFileNotDataFile pins the Bugbot
-// finding on the Windows locking work: appendTraceSummary must lock a
+// finding on the Windows locking work: appendTraceLine must lock a
 // dedicated missions.jsonl.lock file, not the append-only missions.jsonl
 // handle itself. On Windows, O_APPEND|O_WRONLY produces a handle with only
 // FILE_APPEND_DATA access (Go's syscall.Open clears GENERIC_WRITE for
@@ -176,7 +176,7 @@ func TestAppendTraceSummary_LocksSiblingFileNotDataFile(t *testing.T) {
 	c := &Contract{MissionID: "m-2026-01-01-001", Leader: "alice", Worker: "bob", Evaluator: Evaluator{Handle: "carol"}}
 	r := &Result{Verdict: VerdictPass}
 
-	if err := s.appendTraceSummary(c, r); err != nil {
+	if err := appendTraceSummary(s, c, r); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestAppendTraceSummary_ConcurrentWritesSerialize(t *testing.T) {
 				MissionID: "m-2026-01-01-" + string(rune('a'+i)),
 				Leader:    "alice", Worker: "bob", Evaluator: Evaluator{Handle: "carol"},
 			}
-			errCh <- s.appendTraceSummary(c, r)
+			errCh <- appendTraceSummary(s, c, r)
 		}(i)
 	}
 	for i := 0; i < n; i++ {
@@ -250,7 +250,7 @@ func TestAppendTraceSummary_NoRepoRoot(t *testing.T) {
 	c := &Contract{MissionID: "m-2026-01-01-001"}
 	r := &Result{Verdict: VerdictPass}
 
-	if err := s.appendTraceSummary(c, r); err != nil {
+	if err := appendTraceSummary(s, c, r); err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
 }
@@ -278,7 +278,7 @@ func TestAppendTraceSummary_CreatesDir(t *testing.T) {
 	}
 	r := &Result{Verdict: VerdictPass}
 
-	if err := s.appendTraceSummary(c, r); err != nil {
+	if err := appendTraceSummary(s, c, r); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 
@@ -303,4 +303,14 @@ func TestAppendTraceSummary_CreatesDir(t *testing.T) {
 	if ts.ID != "m-2026-01-01-001" {
 		t.Errorf("ID = %q, want m-2026-01-01-001", ts.ID)
 	}
+}
+
+// appendTraceSummary prepares and appends one summary line the way Close and
+// Abandon do: the test-side stand-in for the two steps.
+func appendTraceSummary(s *Store, c *Contract, r *Result) error {
+	data, _, err := s.prepareTraceSummary(c, r)
+	if err != nil || data == nil {
+		return err
+	}
+	return s.appendTraceLine(data)
 }

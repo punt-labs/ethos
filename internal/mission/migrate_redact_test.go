@@ -59,7 +59,8 @@ func TestMigrateMission_RedactsLegacyRecords(t *testing.T) {
 
 	log, err := os.ReadFile(filepath.Join(dir, "log.jsonl"))
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"event":"abandon","details":{"reason":"TOKEN=[redacted-secret]"}}`, string(log))
+	assert.JSONEq(t, `{"ts":"","event":"abandon","actor":"","details":{"reason":"TOKEN=[redacted-secret]"}}`, string(log),
+		"the copy is the canonical encoding of the Event it decodes to")
 }
 
 func TestMigrateMission_RefusesMalformedLegacyRecord(t *testing.T) {
@@ -102,7 +103,7 @@ func TestRedactYAMLDoc_EnforcementKeysGetOnlyPaths(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, changed)
 	assert.Contains(t, string(out), "Bash(gh auth token:*)")
-	assert.Contains(t, string(out), "Read(~/x)")
+	assert.Contains(t, string(out), "Read(~[redacted-user]/x)")
 	assert.Contains(t, string(out), "GITHUB_TOKEN="+redact.SecretToken)
 	assert.Contains(t, string(out), redact.EmailToken)
 }
@@ -119,7 +120,8 @@ func TestCopyIfExists_TornLogLineErrorIsActionable(t *testing.T) {
 	err := copyIfExists(r, src, filepath.Join(dir, "log.jsonl"))
 	require.Error(t, err)
 	msg := err.Error()
-	assert.Contains(t, msg, src)
+	assert.Contains(t, msg, filepath.Base(src))
+	assert.NotContains(t, msg, dir, "a refusal names the file, not the absolute path")
 	assert.Contains(t, msg, "line 2")
 	assert.Contains(t, msg, "fix or remove the line and re-run `ethos mission migrate`")
 }
@@ -169,4 +171,44 @@ func TestCopyIfExists_SchemaDrivenYAML(t *testing.T) {
 	got, err = os.ReadFile(dst)
 	require.NoError(t, err)
 	assert.Contains(t, string(got), "path: src/user@example.com")
+}
+
+// TestMigrateMission_LegacyInputsBeadKeepsItsValue: the legacy inputs.bead
+// key is the ticket, a path field, so the copy applies the path pass alone.
+func TestMigrateMission_LegacyInputsBeadKeepsItsValue(t *testing.T) {
+	newLeakFixture(t)
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+	id := "m-2026-05-22-004"
+	legacyMissionFiles(t, globalRoot, id, map[string][]byte{
+		".yaml": []byte("mission_id: " + id + "\nstatus: open\ncontext: GITHUB_TOKEN=abc12345\ninputs:\n  bead: cfg/token=abc\n"),
+	})
+	repoAuditWithMission(t, repoRoot, "sess-4", id)
+
+	var out bytes.Buffer
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out))
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "contract.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "ticket: cfg/token=abc", "the canonical encoding writes the legacy bead as the ticket, unredacted")
+	assert.Contains(t, string(data), "GITHUB_TOKEN="+redact.SecretToken)
+}
+
+// TestMigrateMission_LegacyLogKeepsEventFields: the legacy event log is read
+// as Event records, so the actor, a keep field, is copied as it is.
+func TestMigrateMission_LegacyLogKeepsEventFields(t *testing.T) {
+	newLeakFixture(t)
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+	id := "m-2026-05-22-005"
+	legacyMissionFiles(t, globalRoot, id, map[string][]byte{
+		".yaml":  []byte("mission_id: " + id + "\nstatus: open\n"),
+		".jsonl": []byte(`{"ts":"2026-05-22T10:00:00Z","event":"create","actor":"sk-project-implementation-workflow","details":{"reason":"TOKEN=abc"}}` + "\n"),
+	})
+	repoAuditWithMission(t, repoRoot, "sess-5", id)
+
+	var out bytes.Buffer
+	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out))
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "log.jsonl"))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ts":"2026-05-22T10:00:00Z","event":"create","actor":"sk-project-implementation-workflow","details":{"reason":"TOKEN=[redacted-secret]"}}`, string(data))
 }

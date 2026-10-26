@@ -55,9 +55,9 @@ func EvaluatePreconditions(
 	if contract == nil || len(contract.Preconditions) == 0 {
 		return "", false, nil
 	}
-	reads, readErr := loadSessionReads(repoRoot, sessionID)
+	reads, ignored, readErr := loadSessionReadsCounted(repoRoot, sessionID)
 	for i, p := range contract.Preconditions {
-		paths, subErr := preconditionTargets(p, toolName, toolInput, contract)
+		paths, subErr := preconditionTargets(p, toolName, toolInput, contract, repoRoot)
 		if subErr != nil {
 			return preconditionMessage(p, i),
 				true,
@@ -81,8 +81,23 @@ func EvaluatePreconditions(
 				fmt.Errorf("preconditions[%d]: reading session audit: %w", i, readErr)
 		}
 		for _, path := range paths {
+			other, otherErr := namesOtherUserHome(path, repoRoot)
+			if otherErr != nil {
+				return preconditionMessage(p, i), true, fmt.Errorf("preconditions[%d]: %w", i, otherErr)
+			}
+			if other {
+				// The entry was redacted from another user's home, so no
+				// Read on this machine can be the file it names.
+				return preconditionMessage(p, i) +
+						" (reads under another user's home cannot be verified: the path is not kept in a form that can be compared)",
+					true, nil
+			}
 			if !readsContain(reads, path, repoRoot) {
-				return preconditionMessage(p, i), true, nil
+				msg := preconditionMessage(p, i)
+				if ignored > 0 {
+					msg += fmt.Sprintf(" (%d Read(s) were ignored: their audit lines predate the path format, so a ~ in them may name another user's home; Read the file again)", ignored)
+				}
+				return msg, true, nil
 			}
 		}
 	}
@@ -119,6 +134,7 @@ func preconditionTargets(
 	toolName string,
 	toolInput map[string]any,
 	contract *mission.Contract,
+	repoRoot string,
 ) ([]string, error) {
 	switch p.Form {
 	case mission.PreconditionFormImplicit:
@@ -127,6 +143,12 @@ func preconditionTargets(
 		out := make([]string, 0, len(p.RequireRead))
 		for _, entry := range p.RequireRead {
 			resolved, err := substituteInputs(entry, contract)
+			if err != nil {
+				return nil, err
+			}
+			// A stored entry carries <repo>, ~ and -~ in place of this
+			// machine's paths; compare it as the paths it stands for.
+			resolved, err = mission.ExpandPath(resolved, repoRoot)
 			if err != nil {
 				return nil, err
 			}
@@ -285,8 +307,15 @@ func lookupIndexed(field, idx string, arr []string) (string, error) {
 // empty set with a wrapped error on any other read failure — the
 // caller treats this as an unevaluable predicate.
 func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
+	reads, _, err := loadSessionReadsCounted(repoRoot, sessionID)
+	return reads, err
+}
+
+// loadSessionReadsCounted is loadSessionReads that also reports how many Reads
+// it ignored because their line predates the path format and holds a ~.
+func loadSessionReadsCounted(repoRoot, sessionID string) (map[string]struct{}, int, error) {
 	if sessionID == "" {
-		return map[string]struct{}{}, nil
+		return map[string]struct{}{}, 0, nil
 	}
 	// DES-058: the precondition evaluator reads the union of sealed
 	// chunks and the live tail, not a single tracked file — a Read
@@ -294,9 +323,10 @@ func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
 	// into a chunk.
 	entries, err := readSessionAudit(repoRoot, sessionID, time.Now())
 	if err != nil {
-		return map[string]struct{}{}, fmt.Errorf("reading session audit: %w", err)
+		return map[string]struct{}{}, 0, fmt.Errorf("reading session audit: %w", err)
 	}
 	reads := make(map[string]struct{}, len(entries))
+	ignored := 0
 	for _, e := range entries {
 		if e.Tool != "Read" {
 			continue
@@ -305,9 +335,21 @@ func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
 		if fp == "" {
 			continue
 		}
+		// Audit lines carry the same placeholders a stored contract entry
+		// does; both sides are expanded to this machine's paths.
+		if e.PathFormat < auditPathFormat && mission.HasHomePlaceholder(fp) {
+			// Written before the format existed, when another user's home
+			// was also a ~: it cannot be shown to be this machine's file.
+			ignored++
+			continue
+		}
+		fp, err := mission.ExpandPath(fp, repoRoot)
+		if err != nil {
+			return map[string]struct{}{}, 0, fmt.Errorf("reading session audit: %w", err)
+		}
 		reads[filepath.Clean(fp)] = struct{}{}
 	}
-	return reads, nil
+	return reads, ignored, nil
 }
 
 // readsContain reports whether the audit-log set carries a Read for
@@ -368,4 +410,19 @@ func envRepoRoot() string {
 		return root
 	}
 	return tierBRepoRoot()
+}
+
+// namesOtherUserHome reports whether path, stored or live, is under another
+// user's home directory. Audit lines and stored entries hold such a path as
+// a token that cannot be compared with anything; a live path is judged by
+// the same pass that wrote them.
+func namesOtherUserHome(path, repoRoot string) (bool, error) {
+	if mission.HasRedactedUser(path) {
+		return true, nil
+	}
+	r, err := mission.NewPathRedactor(repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("judging a precondition path against other users' homes: %w", err)
+	}
+	return mission.HasRedactedUser(r.Path(path)), nil
 }

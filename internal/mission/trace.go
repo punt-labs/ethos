@@ -71,41 +71,66 @@ func buildTraceSummary(c *Contract, result *Result) TraceSummary {
 	return ts
 }
 
-// appendTraceSummary writes a single JSONL line to
-// <repoRoot>/.punt-labs/ethos/missions.jsonl. Returns nil when
-// repoRoot is empty (not in a repo context). Errors are non-fatal:
-// the caller logs them to stderr but does not fail the Close.
-func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
+// prepareTraceSummary builds the missions.jsonl line for c and result:
+// redacted, marshaled and checked by the sink guard. It returns nil with no
+// error when repoRoot is empty (not in a repo context). Close and Abandon
+// call it before they commit, so a record that cannot be written refuses the
+// operation instead of being dropped after it.
+func (s *Store) prepareTraceSummary(c *Contract, result *Result) ([]byte, Announcement, error) {
+	if s.repoRoot == "" {
+		return nil, nil, nil
+	}
+	summary, say, err := RedactRecordNotify(s.repoRoot, buildTraceSummary(c, result))
+	if err != nil {
+		return nil, nil, fmt.Errorf("trace summary for %s: %w", c.MissionID, err)
+	}
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshaling trace summary for %s: %w", c.MissionID, err)
+	}
+	data = append(data, '\n')
+	var gErr error
+	if data, gErr = guardWrite("missions.jsonl", data); gErr != nil {
+		return nil, nil, fmt.Errorf("trace summary for %s: %w", c.MissionID, gErr)
+	}
+	return data, say, nil
+}
+
+// appendTraceLine appends one prepared line to missions.jsonl and fsyncs it.
+// It guards the bytes again: this is the sink.
+func (s *Store) appendTraceLine(data []byte) error {
 	if s.repoRoot == "" {
 		return nil
 	}
 	dir := RepoStatePath(s.repoRoot)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return ioErr("creating", dir, err)
 	}
-	summary, err := RedactRecord(s.repoRoot, buildTraceSummary(c, result))
-	if err != nil {
-		return fmt.Errorf("writing trace summary for %s: %w", c.MissionID, err)
-	}
-	data, err := json.Marshal(summary)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-
 	return withTraceLock(dir, func() error {
+		var gErr error
+		if data, gErr = guardWrite("missions.jsonl", data); gErr != nil {
+			return gErr
+		}
 		f, err := os.OpenFile(
 			filepath.Join(dir, "missions.jsonl"),
 			os.O_APPEND|os.O_CREATE|os.O_WRONLY,
 			0o644,
 		)
 		if err != nil {
-			return err
+			return ioErr("opening", filepath.Join(dir, "missions.jsonl"), err)
 		}
-		defer f.Close()
-
-		_, writeErr := f.Write(data)
-		return writeErr
+		if _, err := f.Write(data); err != nil {
+			_ = f.Close()
+			return ioErr("writing", filepath.Join(dir, "missions.jsonl"), err)
+		}
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return ioErr("syncing", filepath.Join(dir, "missions.jsonl"), err)
+		}
+		if err := f.Close(); err != nil {
+			return ioErr("closing", filepath.Join(dir, "missions.jsonl"), err)
+		}
+		return nil
 	})
 }
 

@@ -26,7 +26,12 @@ func redactReason(reason string) string {
 		fmt.Fprintf(os.Stderr, "ethos: audit: reason replaced: %v\n", err)
 		return redactedValueToken
 	}
-	return r.Content(reason)
+	out := r.Content(reason)
+	if rule := mission.LeakRule(out); rule != "" {
+		fmt.Fprintf(os.Stderr, "ethos: audit: reason replaced: it %s\n", rule)
+		return redactedValueToken
+	}
+	return out
 }
 
 // auditSentinel is the minimal JSONL line emitted when the audit
@@ -77,6 +82,7 @@ func emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID string, now ti
 	if fErr != nil {
 		floor = 0
 	}
+	var note string
 	_, err := audit.AppendMonotonic(livePath, floor, now, func(ts int64) ([]byte, error) {
 		data, mErr := json.Marshal(auditSentinel{
 			Ts:         audit.FormatLineTS(ts),
@@ -86,11 +92,14 @@ func emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID string, now ti
 		if mErr != nil {
 			return nil, fmt.Errorf("marshaling sentinel: %w", mErr)
 		}
-		return data, nil
+		out, n := guardAuditLineNote(data)
+		note = n
+		return out, nil
 	})
 	if err != nil {
 		return fmt.Errorf("appending sentinel to %s: %w", livePath, err)
 	}
+	printNotices([]string{note})
 	return nil
 }
 
@@ -109,6 +118,7 @@ func emitLegacySentinel(path, sessionID, ts, reason string) error {
 	if err != nil {
 		return fmt.Errorf("marshaling sentinel: %w", err)
 	}
+	data, note := guardAuditLineNote(data)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
@@ -120,5 +130,6 @@ func emitLegacySentinel(path, sessionID, ts, reason string) error {
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("syncing sentinel %s: %w", path, err)
 	}
+	printNotices([]string{note})
 	return nil
 }

@@ -154,7 +154,7 @@ func TestAppendTraceSummary_Redacts(t *testing.T) {
 		Repo: filepath.Join(f.home, "work", "x.go"),
 	}
 	r := &Result{Verdict: VerdictPass, FilesChanged: []FileChange{{Path: filepath.Join(f.home, "work", "x.go")}}}
-	require.NoError(t, s.appendTraceSummary(c, r))
+	require.NoError(t, appendTraceSummary(s, c, r))
 
 	f.assertClean(t, filepath.Join(dir, ".punt-labs", "ethos", "missions.jsonl"))
 }
@@ -180,7 +180,7 @@ func TestWriters_FailClosedWithoutUsableHome(t *testing.T) {
 		"reflection writer must refuse")
 
 	ts := &Store{repoRoot: dir}
-	require.Error(t, ts.appendTraceSummary(c, &Result{Verdict: VerdictPass}), "trace writer must refuse")
+	require.Error(t, appendTraceSummary(ts, c, &Result{Verdict: VerdictPass}), "trace writer must refuse")
 	_, statErr = os.Stat(filepath.Join(dir, ".punt-labs", "ethos", "missions.jsonl"))
 	assert.True(t, os.IsNotExist(statErr), "refused trace append must leave no file")
 }
@@ -398,7 +398,7 @@ func TestAppendTraceSummary_PathFieldsKeepTheirValue(t *testing.T) {
 		Budget:   Budget{Rounds: 1}, CurrentRound: 1,
 	}
 	r := &Result{Verdict: VerdictPass, FilesChanged: []FileChange{{Path: "src/user@example.com"}}}
-	require.NoError(t, s.appendTraceSummary(c, r))
+	require.NoError(t, appendTraceSummary(s, c, r))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".punt-labs", "ethos", "missions.jsonl"))
 	require.NoError(t, err)

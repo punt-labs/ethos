@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 // HandleAuditLog appends one JSONL line to the session audit log.
@@ -76,7 +77,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	}
 
 	now := time.Now().UTC()
-	entry := buildAuditEntry(input, sessionID, repoRoot, now)
+	entry, rewritten := buildAuditEntryNote(input, sessionID, repoRoot, now)
 
 	// DES-058: inside a repo, appends target the machine-local live file
 	// and carry a strictly-monotonic per-session ts allocated under the
@@ -92,7 +93,10 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 			return nil
 		}
 		legacyPath := filepath.Join(sealedDir, "audit.jsonl")
-		if _, writeErr := appendLiveAudit(livePath, sealedDir, legacyPath, entry, now); writeErr != nil {
+		stored, report, writeErr := appendLiveAuditReport(livePath, sealedDir, legacyPath, entry, now)
+		if writeErr == nil {
+			noticeStoredLine(stored.Tool, rewritten, report)
+		} else {
 			fmt.Fprintf(os.Stderr,
 				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
 				writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
@@ -115,7 +119,10 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 			err, sessionID, entry.Tool, entry.ToolInputPreview)
 		return nil
 	}
-	if writeErr := writeAuditEntry(path, entry); writeErr != nil {
+	report, writeErr := writeAuditEntryReport(path, entry)
+	if writeErr == nil {
+		noticeStoredLine(entry.Tool, rewritten, report)
+	} else {
 		// The full entry did not persist. Always emit the entry's
 		// reason and preview to stderr so the lost tool input is
 		// recoverable even when the sentinel itself cannot land.
@@ -154,8 +161,15 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 // anything. Redaction applies to new writes only; existing
 // audit.jsonl lines on disk are unchanged.
 func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.Time) auditEntry {
+	e, _ := buildAuditEntryNote(input, sessionID, repoRoot, now)
+	return e
+}
+
+// buildAuditEntryNote is buildAuditEntry also reporting whether the redaction
+// passes changed tool_input, for the writer's one notice. It prints nothing.
+func buildAuditEntryNote(input map[string]any, sessionID, repoRoot string, now time.Time) (auditEntry, bool) {
 	toolName, _ := input["tool_name"].(string)
-	redacted, contentRedacted := redactToolInput(input, toolName, repoRoot)
+	redacted, contentRedacted, say := redactToolInputQuiet(input, toolName, repoRoot)
 	// Feed the redacted map through the existing hash and preview
 	// helpers under the same "tool_input" envelope they expect. When
 	// the tool call carried no tool_input (a rare scalar-input hook),
@@ -173,6 +187,7 @@ func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.
 		ToolInputHash:    hashToolInput(redactedEnv),
 		ToolInputPreview: toolInputPreview(redactedEnv),
 		Redacted:         contentRedacted,
+		PathFormat:       auditPathFormat,
 	}
 	// Optional enrichment fields. Each is `omitempty` on the struct
 	// so the absent value drops out of the JSONL line, preserving
@@ -258,5 +273,27 @@ func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.
 		}
 	}
 
-	return entry
+	return entry, say
+}
+
+// noticeStoredLine says once, after a line is stored, what was done to it
+// before: its tool_input rewritten by the redaction passes, and what the sink
+// guard did. It names the tool and the rules, never a value. A line left as it
+// came prints nothing.
+func noticeStoredLine(toolName string, rewritten bool, g guardReport) {
+	tool := redact.Prose(toolName)
+	switch {
+	case g.marker:
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: the line for tool %q was replaced by a loss marker (it %s)\n", tool, g.rule)
+	case rewritten || g.rule != "":
+		what := "its input was rewritten (a path, content or a key)"
+		if g.rule != "" {
+			if rewritten {
+				what += "; it " + g.rule
+			} else {
+				what = "it " + g.rule
+			}
+		}
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: the line for tool %q was rewritten before it was stored: %s\n", tool, what)
+	}
 }

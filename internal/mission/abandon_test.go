@@ -5,6 +5,7 @@ package mission
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -365,4 +366,88 @@ func TestStore_Close_RejectsAbandonedAsTargetStatus(t *testing.T) {
 	_, err := s.Close("m-2026-08-06-030", StatusAbandoned)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid close status")
+}
+
+// TestStore_Abandon_AnnouncesTheReasonRewriteOnce: the reason reaches the
+// record pass as written, so the pass that rewrites it is the one that says
+// so, once, after the event is stored.
+func TestStore_Abandon_AnnouncesTheReasonRewriteOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	s := NewStoreWithRoots(t.TempDir(), t.TempDir())
+	require.NoError(t, s.Create(newContract("m-2026-08-06-096")))
+
+	var err error
+	notice := captureStderr(t, func() {
+		_, err = s.Abandon("m-2026-08-06-096", "superseded by "+filepath.Join(home, "x.yaml"))
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(notice, "mission.Event"), notice)
+	assert.NotContains(t, notice, home)
+}
+
+// TestDisclaimDelegationRecord_AnnouncesTheReasonRewriteOnce: as for abandon,
+// for the delegation record.
+func TestDisclaimDelegationRecord_AnnouncesTheReasonRewriteOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repoRoot := t.TempDir()
+	missionID, delegationID := "m-2026-09-08-802", "d-2026-09-08-003"
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier: TierB, AgentType: "bwk", BoundVia: BoundViaSidecarDispatch,
+	})
+	require.NoError(t, err)
+	require.NoError(t, CloseDelegationSkeleton(repoRoot, missionID, delegationID, DelegationVerdictAborted, "2026-09-08T12:00:00Z"))
+	redact, err := NewPathRedactor(repoRoot)
+	require.NoError(t, err)
+
+	notice := captureStderr(t, func() {
+		d, say, dErr := DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
+			"unrelated spawn from "+filepath.Join(home, "w"), "2026-09-08T12:05:00Z")
+		require.NoError(t, dErr)
+		assert.NotContains(t, d.DisclaimedReason, home, "the returned record carries the redacted reason")
+		say.Say()
+	})
+	assert.Equal(t, 1, strings.Count(notice, "mission.Delegation"), notice)
+	assert.NotContains(t, notice, home)
+}
+
+// TestStore_DisclaimDelegation_AnnouncesOnlyAfterTheEventIsStored: the
+// record rewrite is announced once the disclaim event is appended; when the
+// append fails and the record is rolled back, nothing is printed.
+func TestStore_DisclaimDelegation_AnnouncesOnlyAfterTheEventIsStored(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	reason := "unrelated spawn from " + filepath.Join(home, "w")
+	setup := func(t *testing.T, id, did string) (*Store, string) {
+		repoRoot := t.TempDir()
+		s := NewStoreWithRoots(repoRoot, t.TempDir())
+		c := newContract(id)
+		require.NoError(t, s.Create(c))
+		_, err := WriteDelegationSkeleton(repoRoot, id, did, DelegationSkeleton{
+			Tier: TierB, AgentType: c.Worker, BoundVia: BoundViaSidecarDispatch,
+		})
+		require.NoError(t, err)
+		require.NoError(t, CloseDelegationSkeleton(repoRoot, id, did, DelegationVerdictPass, "2026-09-08T12:00:00Z"))
+		return s, repoRoot
+	}
+
+	s, repoRoot := setup(t, "m-2026-09-08-816", "d-2026-09-08-014")
+	logPath := audit.LiveMissionLogPath(repoRoot, "m-2026-09-08-816", sessionlessID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+	var err error
+	failed := captureStderr(t, func() {
+		_, err = s.DisclaimDelegation("m-2026-09-08-816", "d-2026-09-08-014", reason)
+	})
+	require.Error(t, err)
+	assert.NotContains(t, failed, "was rewritten", failed)
+
+	s, _ = setup(t, "m-2026-09-08-817", "d-2026-09-08-015")
+	ok := captureStderr(t, func() {
+		_, err = s.DisclaimDelegation("m-2026-09-08-817", "d-2026-09-08-015", reason)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(ok, "mission.Delegation"), ok)
+	assert.Equal(t, 1, strings.Count(ok, "mission.Event"), ok)
 }
