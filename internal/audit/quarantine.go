@@ -600,6 +600,7 @@ func (n *notePad) addUnstagedRecords(repoRoot, sealedDir string, cn ChunkName) e
 		var rec struct {
 			Withheld string `json:"withheld"`
 			Rule     string `json:"rule"`
+			SHA256   string `json:"sha256"`
 		}
 		if json.Unmarshal(bytes.TrimSpace(raw), &rec) != nil || rec.Withheld == "" {
 			continue
@@ -609,7 +610,7 @@ func (n *notePad) addUnstagedRecords(repoRoot, sealedDir string, cn ChunkName) e
 			return err
 		}
 		if !tracked || !bytes.Equal(blob, raw) {
-			n.add(path, rec.Rule, hasLocalCopy(repoRoot, cf.stem))
+			n.add(path, rec.Rule, hasLocalCopy(repoRoot, cf.stem, rec.SHA256))
 		}
 	}
 	return nil
@@ -641,10 +642,19 @@ func noticeWithheld(path, rule string, local bool) {
 		filepath.Base(path), rule, where)
 }
 
-// hasLocalCopy reports whether the local zone holds a saved original for stem.
-func hasLocalCopy(repoRoot, stem string) bool {
-	m, err := filepath.Glob(filepath.Join(QuarantineDir(repoRoot), stem+".*.corrupt"))
-	return err == nil && len(m) > 0
+// hasLocalCopy reports whether the local zone holds the original a record names:
+// <stem>.<first 12 of sumHex>.corrupt, whose bytes hash to sumHex. A copy of
+// another retirement of the same stem does not count.
+func hasLocalCopy(repoRoot, stem, sumHex string) bool {
+	if len(sumHex) < 12 {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(QuarantineDir(repoRoot), stem+"."+sumHex[:12]+".corrupt"))
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]) == sumHex
 }
 
 // reconcileUnderMarker is the "not blind to fresh damage" half of the

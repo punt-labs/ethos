@@ -388,36 +388,58 @@ func readsContain(reads map[string]struct{}, path, repoRoot string) bool {
 	if len(reads) == 0 {
 		return false
 	}
-	clean := filepath.Clean(path)
-	if _, ok := reads[clean]; ok {
-		return true
-	}
-	// Relative candidate → look for an absolute match.
-	if !filepath.IsAbs(clean) {
-		if abs, err := filepath.Abs(clean); err == nil {
-			if _, ok := reads[filepath.Clean(abs)]; ok {
-				return true
-			}
+	// has is the membership test: exact, and where the path pass folds case
+	// (mission.PathCaseFold) by the same rule, so a read recorded with one
+	// spelling of the checkout matches a candidate with another.
+	has := func(p string) bool {
+		if _, ok := reads[p]; ok {
+			return true
 		}
-		// Also try the repo-root-anchored absolute form so a
-		// candidate evaluated outside the repo's cwd still matches
-		// a read recorded by a tool that resolved against repoRoot.
-		if repoRoot != "" {
-			if _, ok := reads[filepath.Clean(filepath.Join(repoRoot, clean))]; ok {
-				return true
-			}
-		}
-	} else {
-		// Absolute candidate → look for a repo-relative match.
-		if repoRoot != "" {
-			if rel, err := filepath.Rel(repoRoot, clean); err == nil && !strings.HasPrefix(rel, "..") {
-				if _, ok := reads[filepath.Clean(rel)]; ok {
+		if mission.PathCaseFold {
+			for r := range reads {
+				if mission.SamePath(r, p) {
 					return true
 				}
 			}
 		}
+		return false
+	}
+	clean := filepath.Clean(path)
+	if has(clean) {
+		return true
+	}
+	// Relative candidate → look for an absolute match.
+	if !filepath.IsAbs(clean) {
+		if abs, err := filepath.Abs(clean); err == nil && has(filepath.Clean(abs)) {
+			return true
+		}
+		// Also try the repo-root-anchored absolute form so a
+		// candidate evaluated outside the repo's cwd still matches
+		// a read recorded by a tool that resolved against repoRoot.
+		if repoRoot != "" && has(filepath.Clean(filepath.Join(repoRoot, clean))) {
+			return true
+		}
+	} else if repoRoot != "" {
+		// Absolute candidate → look for a repo-relative match.
+		if rel, ok := relUnder(repoRoot, clean); ok && has(filepath.Clean(rel)) {
+			return true
+		}
 	}
 	return false
+}
+
+// relUnder is the path of p relative to root when p is under root, comparing
+// the prefix by mission.SamePath's case rule.
+func relUnder(root, p string) (string, bool) {
+	root = filepath.Clean(root)
+	if len(p) < len(root) || !mission.SamePath(p[:len(root)], root) {
+		return "", false
+	}
+	rest := p[len(root):]
+	if rest != "" && rest[0] != filepath.Separator {
+		return "", false
+	}
+	return strings.TrimPrefix(rest, string(filepath.Separator)), true
 }
 
 // envRepoRoot returns the repo root the precondition evaluator

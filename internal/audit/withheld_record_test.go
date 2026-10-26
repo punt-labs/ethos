@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -61,8 +63,72 @@ func TestNoticeWithheld_SaysWhereTheOriginalIs(t *testing.T) {
 	assert.Contains(t, say(false), "no local copy of the original was found")
 	assert.NotContains(t, say(false), "the original is in")
 
+}
+
+// TestHasLocalCopy_IsTheCopyOfThisRecord: a local file with the same stem is
+// another retirement's copy unless its name carries the record's hash and its
+// bytes hash to it. Two retirements of one stem leave two records over time; only
+// the copy of the version the record names counts.
+func TestHasLocalCopy_IsTheCopyOfThisRecord(t *testing.T) {
 	repo := t.TempDir()
-	assert.False(t, hasLocalCopy(repo, "stem"))
-	require.NoError(t, saveOriginal(repo, "stem", []byte("x")))
-	assert.True(t, hasLocalCopy(repo, "stem"))
+	hashOf := func(b []byte) string {
+		sum := sha256.Sum256(b)
+		return hex.EncodeToString(sum[:])
+	}
+	a, b := []byte("version a\n"), []byte("version b\n")
+	assert.False(t, hasLocalCopy(repo, "stem", hashOf(a)), "nothing saved")
+
+	require.NoError(t, saveOriginal(repo, "stem", b))
+	assert.False(t, hasLocalCopy(repo, "stem", hashOf(a)), "only the other version is local")
+	assert.True(t, hasLocalCopy(repo, "stem", hashOf(b)))
+
+	require.NoError(t, saveOriginal(repo, "stem", a))
+	assert.True(t, hasLocalCopy(repo, "stem", hashOf(a)))
+
+	// A file under the right name whose bytes are not the version does not count.
+	name := filepath.Join(QuarantineDir(repo), "stem2."+hashOf(a)[:12]+".corrupt")
+	require.NoError(t, os.WriteFile(name, []byte("something else"), 0o600))
+	assert.False(t, hasLocalCopy(repo, "stem2", hashOf(a)))
+}
+
+// TestUnstagedRecordNotice_NamesOnlyItsOwnCopy: a record found unstaged is
+// reported with "the original is in the local zone" only when its own version is
+// there; another retirement's copy of the same stem does not make it so.
+func TestUnstagedRecordNotice_NamesOnlyItsOwnCopy(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealedDir := filepath.Join(repo, "sealed")
+	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+	chunk := SessionChunkFile(100, 300)
+	cn, kind := Classify(chunk, SessionNS)
+	require.Equal(t, KindValid, kind)
+	a, b := []byte("version a\n"), []byte("version b\n")
+	require.NoError(t, writeRecord(filepath.Join(sealedDir, chunk+".corrupt"), a, WithheldRule))
+	require.NoError(t, saveOriginal(repo, cn.Stem(), b)) // only the other version is local
+
+	np := &notePad{}
+	require.NoError(t, np.addUnstagedRecords(repo, sealedDir, cn))
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	old := os.Stderr
+	os.Stderr = w
+	np.print()
+	os.Stderr = old
+	require.NoError(t, w.Close())
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "no local copy of the original was found")
+
+	require.NoError(t, saveOriginal(repo, cn.Stem(), a))
+	np = &notePad{}
+	require.NoError(t, np.addUnstagedRecords(repo, sealedDir, cn))
+	r, w, err = os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	np.print()
+	os.Stderr = old
+	require.NoError(t, w.Close())
+	out, err = io.ReadAll(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "the original is in")
 }

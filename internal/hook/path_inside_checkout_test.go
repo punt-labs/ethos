@@ -213,3 +213,36 @@ func TestAmbiguousPath_FoldsCaseWhereThePathPassDoes(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, amb, "strict: another user's home reads back as a different path")
 }
+
+// TestPreconditions_ReadsMatchWithThePathPassCaseRule: where the path pass folds
+// case (macOS), a Read of a case-variant spelling of the checkout allows a Write
+// of any spelling of the same file; where it does not, the comparison is exact.
+func TestPreconditions_ReadsMatchWithThePathPassCaseRule(t *testing.T) {
+	old := mission.PathCaseFold
+	t.Cleanup(func() { mission.PathCaseFold = old })
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	global := filepath.Join(home, ".punt-labs", "ethos")
+	repo := filepath.Join(home, "RepoDir")
+	require.NoError(t, os.MkdirAll(repo, 0o700))
+	initGitRepo(t, repo)
+	canonical := filepath.Join(repo, "a.go")
+	variant := strings.Replace(canonical, "RepoDir", "repodir", 1)
+	require.NotEqual(t, canonical, variant)
+
+	write := func(sess, p string) bool {
+		_, deny, err := EvaluatePreconditions(implicitContract(), "Write", map[string]any{"file_path": p}, sess, repo, repo)
+		require.NoError(t, err)
+		return deny
+	}
+
+	mission.PathCaseFold = true
+	auditRead(t, repo, global, "sess-fold", variant)
+	assert.False(t, write("sess-fold", canonical), "the canonical spelling is the file that was read")
+	assert.False(t, write("sess-fold", variant), "so is the spelling it was read by")
+
+	mission.PathCaseFold = false
+	auditRead(t, repo, global, "sess-strict", canonical)
+	assert.False(t, write("sess-strict", canonical))
+	assert.True(t, write("sess-strict", variant), "exact where the path pass is strict")
+}
