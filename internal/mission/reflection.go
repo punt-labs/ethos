@@ -44,7 +44,7 @@ type Reflection struct {
 	CreatedAt string `yaml:"created_at" json:"created_at" redact:"keep"`
 
 	// Author is the handle of the leader recording the reflection.
-	Author string `yaml:"author" json:"author" redact:"keep"`
+	Author string `yaml:"author" json:"author" redact:"handle"`
 
 	// Converging reports whether the work in round N appears to be
 	// approaching success. A reflection that says converging=false

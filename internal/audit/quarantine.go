@@ -40,7 +40,8 @@ import (
 // beside the sealed chunks and the reason is free text, often an error
 // string carrying a path. The caller supplies it because only the caller
 // knows the home and repo prefixes. checkRetired names the rule a retired
-// chunk's bytes break (a home or user path), or returns "". The .corrupt is
+// chunk's bytes break (a home or user path, a credential, an email address), or
+// returns "". The .corrupt is
 // staged in a tracked tree, so bytes that fail the check are never staged: the
 // original is kept in the untracked local zone (QuarantineDir) and a record of
 // its hash, size and rule is written and staged in its place, before the chunk
@@ -559,10 +560,38 @@ func (n *notePad) print() {
 	}
 }
 
+// pluralVerbs maps the verb a rule starts with, phrased for a singular subject,
+// to the form for "its bytes". It is closed: the rules are fixed phrases
+// (redact.LeakRule, the mission guard, the quarantine's credential and address
+// checks), and a rule that starts with another verb is returned unchanged
+// rather than cut by a guess about suffixes ("has" is not "ha").
+var pluralVerbs = map[string]string{
+	"holds": "hold", "contains": "contain", "names": "name", "climbs": "climb", "is": "are",
+}
+
+// pluralVerb turns a rule phrased for a singular subject ("holds a credential",
+// "is not a JSON object") into one for "its bytes" ("hold ...", "are not ...").
+func pluralVerb(rule string) string {
+	verb, rest, _ := strings.Cut(rule, " ")
+	plural, ok := pluralVerbs[verb]
+	if !ok {
+		return rule
+	}
+	if rest == "" {
+		return plural
+	}
+	return plural + " " + rest
+}
+
+// WithheldNotice is the line noticeWithheld prints for a retired chunk.
+func WithheldNotice(path, rule string) string {
+	return fmt.Sprintf("ethos: audit: retired chunk %s was withheld from the tracked tree: its bytes %s; the original is in %s",
+		filepath.Base(path), pluralVerb(rule), filepath.Join(".punt-labs", "local", "ethos", "quarantine"))
+}
+
 // noticeWithheld says that a retired chunk's bytes were replaced by a record.
 func noticeWithheld(path, rule string) {
-	fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s was withheld from the tracked tree: its bytes %s; the original is in %s\n",
-		filepath.Base(path), rule, filepath.Join(".punt-labs", "local", "ethos", "quarantine"))
+	fmt.Fprintln(os.Stderr, WithheldNotice(path, rule))
 }
 
 // reconcileUnderMarker is the "not blind to fresh damage" half of the

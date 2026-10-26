@@ -128,9 +128,22 @@ func TestAudit_PathFieldsFollowTheFullRule(t *testing.T) {
 		{"x-/home/bob/y", true},
 		{"/srv/home/bob/f", true},
 		{"<repo>/~/x/home/bob", true},
+		{"~/.claude/projects/-var-home-bob/log.jsonl", true},
+		{"~/.claude/projects/C--Users-al", true},
+		{"-var-home-bob/f.jsonl", true},
+		{"x/-home-bob", true},
+		{"src/C--Users-al", true},
+		{"x/C--Users-al", true},
+		{"C--Users-al", true},
+		{"<repo>/x/C--Users-al", true},
+		{"<repo>/.claude/projects/C--Users-al/f.jsonl", true},
+		{"<repo>/c--users-bob/f", true},
+		{"src/a--home-bob", true},
+		// Known cost: a dotless one-letter block (a/b--home-page) has the shape
+		// of a drive-letter slug and is redacted; with a file extension it is a file.
+		{"a/b--home-page.scss", false},
 		{"nav--home-page.scss", false},
 		{"src/styles/btn--users-list.css", false},
-		{"a/b--home-page.scss", false},
 		{"_-home-hero.scss", false},
 		{"@types/home/page.tsx", false},
 		{"app/home/page.tsx", false},
@@ -202,4 +215,29 @@ func TestAudit_PlainPathFieldKeepsAMidPathHome(t *testing.T) {
 	require.NoError(t, err)
 	_, rule := guardAuditLineWhy(line)
 	assert.Empty(t, rule)
+}
+
+// TestAudit_ProseWithADashIsNotASlug: text in an Edit's new_string or a Bash
+// command that looks a little like a slug (get-users-list, -- see list-users-api)
+// is stored as written by the audit writer.
+func TestAudit_ProseWithADashIsNotASlug(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	for _, text := range []string{
+		"- add the get-users-list endpoint",
+		"- fix the user-home-page view",
+		"-v --home-dir x",
+		"-- see list-users-api for details",
+	} {
+		for _, in := range []map[string]any{
+			{"tool_name": "Edit", "tool_input": map[string]any{"file_path": "a.go", "new_string": text}},
+			{"tool_name": "Bash", "tool_input": map[string]any{"command": text}},
+		} {
+			e := buildAuditEntry(in, "s", t.TempDir(), time.Now())
+			for _, v := range e.ToolInput {
+				if v != "a.go" {
+					assert.Equal(t, text, v, "%q", text)
+				}
+			}
+		}
+	}
 }

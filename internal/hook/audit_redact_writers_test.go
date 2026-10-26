@@ -264,9 +264,9 @@ func TestRedactLegacyLine_AuditErrorIsSweptBesideAChangedInput(t *testing.T) {
 }
 
 // TestQuarantineChunk_WithholdsRetiredBytesThatLeak: the .corrupt is staged in
-// a tracked tree, so a chunk that holds this machine's home or a credential is
-// replaced by a record of its hash, size and rule. Plain garbage is kept as
-// evidence.
+// a tracked tree, so a chunk that holds this machine's home, a credential or an
+// email address, raw or decoded, is replaced by a record of its hash, size and
+// rule. Plain garbage is kept as evidence.
 func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
 	home := "/var/home/zed"
 	secret := "ghp_" + strings.Repeat("c3D4", 9)
@@ -276,8 +276,10 @@ func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
 	}{
 		{"home", "\x00garbage " + home + "/x\n", true},
 		{"escaped home", `{"cwd":"\/var\/home\/zed\/x"` + "\n", true},
-		{"credential is kept", "\x00garbage " + secret + "\n", false},
-		{"address is kept", "\x00garbage jane@example.com\n", false},
+		{"credential", "\x00garbage " + secret + "\n", true},
+		{"env assignment", "\x00garbage GITHUB_TOKEN=abcdefghij1234567890\n", true},
+		{"address", "\x00garbage jane@example.com\n", true},
+		{"escaped address", `{"v":"jane\u0040example.com"}` + "\n", true},
 		{"plain", "\x00garbage\n", false},
 	}
 	for _, c := range cases {
@@ -300,7 +302,7 @@ func TestQuarantineChunk_WithholdsRetiredBytesThatLeak(t *testing.T) {
 				return
 			}
 			assert.Contains(t, string(got), "sha256")
-			for _, s := range []string{home, `\/var\/home`, secret, "jane@example.com"} {
+			for _, s := range []string{home, `\/var\/home`, secret, "jane@example.com", "abcdefghij1234567890"} {
 				assert.NotContains(t, string(got), s)
 			}
 		})
@@ -403,4 +405,51 @@ func TestQuarantineChunk_LeakingTokenOfTheReasonIsReplacedAlone(t *testing.T) {
 	assert.Contains(t, stderr, "reason")
 	assert.Contains(t, stderr, "edited")
 	assert.NotContains(t, stderr, "alice")
+}
+
+// TestCorruptRule_NamesTheSameRuleEveryRun: a line whose decoded keys break two
+// rules is judged in key order, so the rule the notice names does not change
+// from run to run.
+func TestCorruptRule_NamesTheSameRuleEveryRun(t *testing.T) {
+	// JSON escapes keep both out of the raw bytes: only the decoded keys hold them.
+	line := []byte(`{"jane\u0040example.com":"x","GITHUB_TOKEN\u003dabcdefghij1234567890":"y"}` + "\n")
+	first := corruptRule(line)
+	require.NotEmpty(t, first)
+	for i := 0; i < 50; i++ {
+		require.Equal(t, first, corruptRule(line))
+	}
+}
+
+// TestCorruptRule_EveryRuleGetsAGrammaticalNotice: each rule corruptRule can
+// return, in the withheld-chunk notice, follows "its bytes" with a plural verb.
+func TestCorruptRule_EveryRuleGetsAGrammaticalNotice(t *testing.T) {
+	t.Setenv("HOME", "/home/zed")
+	inputs := map[string]string{
+		"own home":           "x /home/zed/y\n",
+		"foreign home":       "x /home/bob/y\n",
+		"own slug":           "x -home-zed-y\n",
+		"foreign slug":       "x -home-bob-y\n",
+		"slug end":           "x/-var-home-bob\n",
+		"climb":              "~/../x\n",
+		"credential":         "x GITHUB_TOKEN=abcdefghij1234567890\n",
+		"email":              "x jane@example.com\n",
+		"invalid utf-8":      "x \xff\xfe\n",
+		"unpaired surrogate": `{"a":"\ud800"}` + "\n",
+		"duplicate key":      `{"a":"1","a":"2"}` + "\n",
+	}
+	plural := map[string]bool{"hold": true, "contain": true, "name": true, "climb": true, "are": true}
+	seen := 0
+	for name, in := range inputs {
+		rule := corruptRule([]byte(in))
+		if rule == "" {
+			continue
+		}
+		seen++
+		notice := audit.WithheldNotice("c.jsonl", rule)
+		_, after, ok := strings.Cut(notice, "its bytes ")
+		require.True(t, ok, name)
+		verb, _, _ := strings.Cut(after, " ")
+		assert.True(t, plural[verb], "%s: %q", name, notice)
+	}
+	assert.GreaterOrEqual(t, seen, 6, "most inputs hit a rule")
 }

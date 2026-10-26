@@ -655,6 +655,13 @@ func cloneMap(m map[string]any) map[string]any {
 	return out
 }
 
+var handleRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// IsHandle reports whether s is an identity handle: lowercase letters, digits
+// and hyphens, starting and ending with a letter or digit. The rule of
+// internal/identity, which this package cannot import.
+func IsHandle(s string) bool { return handleRE.MatchString(s) }
+
 // Prose applies every content pass to free text bound for a tracked
 // file: credentials, then addresses, then home paths of any user.
 // Idempotent.
@@ -670,7 +677,10 @@ func Prose(s string) string {
 //
 // Redaction is the default. A field is exempt only if it carries the tag
 // `redact:"keep"`, which marks values the rest of the system relies on
-// byte-for-byte: IDs, hashes, enums, timestamps. Record treats
+// byte-for-byte: IDs, hashes, enums, timestamps. A field tagged
+// `redact:"handle"` holds an identity handle: it is kept when it is one
+// (IsHandle) and otherwise is redacted like any other field.
+// Record treats
 // `redact:"path"` like an untagged field; see RecordPaths. A field added later is
 // redacted the day it appears rather than the day someone remembers to
 // extend a list.
@@ -764,6 +774,14 @@ func scrub(v reflect.Value, f, paths func(string) string, renamed *RenameStatus)
 			sf := t.Field(i)
 			tag := sf.Tag.Get("redact")
 			if !sf.IsExported() || tag == "keep" {
+				continue
+			}
+			if tag == "handle" {
+				// An identity handle is kept as it is; anything else in the
+				// field is text like any other and gets the caller's pass.
+				if fv := v.Field(i); fv.Kind() == reflect.String && !IsHandle(fv.String()) {
+					out.Field(i).SetString(f(fv.String()))
+				}
 				continue
 			}
 			// An untagged field keeps the caller's pair so a path tag
@@ -871,7 +889,7 @@ func diffPaths(a, b reflect.Value, inPath bool, name string, out *[]string) {
 		for i := 0; i < t.NumField(); i++ {
 			sf := t.Field(i)
 			tag := sf.Tag.Get("redact")
-			if !sf.IsExported() || tag == "keep" {
+			if !sf.IsExported() || tag == "keep" || tag == "handle" {
 				continue
 			}
 			sub := sf.Name
@@ -898,7 +916,8 @@ func diffPaths(a, b reflect.Value, inPath bool, name string, out *[]string) {
 }
 
 // FieldString is a string held in a record field that is not tagged
-// `redact:"keep"`, with the field path that names it, such as "Tools[0]".
+// `redact:"keep"` (nor `redact:"handle"` while it holds a handle), with the field
+// path that names it, such as "Tools[0]".
 type FieldString struct {
 	Name  string
 	Value string
@@ -906,8 +925,8 @@ type FieldString struct {
 	Path bool
 }
 
-// FieldStrings returns every string of v outside a `redact:"keep"` field, in
-// field order. It lets a writer check what the passes left behind, which
+// FieldStrings returns every string of v outside a `redact:"keep"` field, and
+// outside a `redact:"handle"` field that holds a handle, in field order. It lets a writer check what the passes left behind, which
 // RecordPaths applies but cannot judge.
 func FieldStrings[T any](v T) []FieldString {
 	var out []FieldString
@@ -924,6 +943,9 @@ func collectStrings(v reflect.Value, name string, path bool, out *[]FieldString)
 		for i := 0; i < t.NumField(); i++ {
 			sf := t.Field(i)
 			if !sf.IsExported() || sf.Tag.Get("redact") == "keep" {
+				continue
+			}
+			if fv := v.Field(i); sf.Tag.Get("redact") == "handle" && fv.Kind() == reflect.String && IsHandle(fv.String()) {
 				continue
 			}
 			sub := sf.Name
@@ -956,6 +978,23 @@ func collectStrings(v reflect.Value, name string, path bool, out *[]FieldString)
 var (
 	leakPath = regexp.MustCompile("/(?:home|users)/[^/\\s\"'`]+")
 	leakSlug = regexp.MustCompile("-(?:home|users)-[^\\s/\"'`-]+-")
+	// leakSlugEnd is a slug that ends its component with the name, no dash
+	// after it (-var-home-bob/f, C--Users-al, x/-home-bob), and only inside a
+	// component that is dash-encoded: it starts with a dash, or a letter and two
+	// dashes. The text between the leading dash and the slug holds no white
+	// space, quote or slash, so prose ("- add the get-users-list endpoint") is
+	// not read as a slug. Matched lowercased. Known costs: a one-letter BEM block
+	// (a/b--home-page.scss) and a component that is only two dashes and a word
+	// (--home-x) have that shape and match; nav--home-page.scss and
+	// btn--users-list.css do not start that way.
+	leakSlugEnd = regexp.MustCompile("(?:^|/)(?:[a-z]-)?-(?:[^/\\s\"'\\x60]*-)?(?:home|users)-[^\\s/\"'\\x60-]+(?:[/\\s\"'\\x60]|$)")
+	// leakSlugEndTilde is the slug-end rule for a value that names a file of the
+	// checkout or of this machine's home (InsideRule, HomeRelativeRule), where a
+	// file such as a/b--home-page.scss is likely: a component that starts with a
+	// dash, or a letter and two dashes with a name that has no dot (C--Users-al,
+	// a--home-bob; a file's name has a dot). Known cost: a dotless one-letter
+	// block (a/b--home-page) has the shape of a slug and matches.
+	leakSlugEndTilde = regexp.MustCompile("(?:^|/)(?:-(?:[^/\\s\"'\\x60]*-)?(?:home|users)-[^\\s/\"'\\x60-]+|[a-z]--(?:[^/\\s\"'\\x60]*-)?(?:home|users)-[^\\s/\"'\\x60.-]+)(?:[/\\s\"'\\x60]|$)")
 )
 
 // Leaks reports whether s names a home directory. See LeakRule.
@@ -1012,22 +1051,32 @@ func HoldsOwnDashHome(s, home string) bool {
 // machine's own home and its dash-encoded form anywhere, and has no foreign-slug
 // rule. It judges a repo-relative value (RepoRelative) in a mission path field, where
 // app/home/page.tsx and nav--home-page.scss are files of the repository, not
-// somebody's home. (The audit log's path fields use InsideRule inside the checkout and LeakRule elsewhere.)
+// somebody's home. (The audit log's path fields use InsideRule inside the
+// checkout, HomeRelativeRule under ~/, and LeakRule elsewhere.)
 func OwnHomeRule(s, home string) string { return leakRule(s, home, ruleOwn) }
 
 // InsideRule is LeakRule without the rule that reads /home/<name> or
-// /Users/<name> in the middle of a path as another user's home. It judges a
-// path field value of the audit log that names a file of the checkout (see
-// mission.PathRedactor.AuditLeakRule), where app/home/page.tsx is a file. This
-// machine's home and slug, a foreign dash slug and a climb out of a placeholder
-// are still refused.
+// /Users/<name> in the middle of a path as another user's home, and with
+// leakSlugEndTilde as its slug-end rule. It judges a path field value of the
+// audit log that names a file of the checkout (see
+// mission.PathRedactor.AuditLeakRule), where app/home/page.tsx is a file. Still
+// refused: this machine's home and slug, a foreign dash slug with a trailing
+// dash (leakSlug), a slug that ends at its name in a dash-encoded component
+// (-var-home-bob, C--Users-al, src/a--home-bob; a dotless a/b--home-page too)
+// and a climb out of a placeholder.
 func InsideRule(s, home string) string { return leakRule(s, home, ruleInside) }
+
+// HomeRelativeRule is InsideRule for a value under ~/ (this machine's own
+// home); the rules are the same, so ~/.claude/projects/C--Users-al is caught and
+// ~/x-wt/a/b--home-page.scss is a file.
+func HomeRelativeRule(s, home string) string { return leakRule(s, home, ruleHomeRel) }
 
 // The sets of rules leakRule applies.
 const (
-	ruleFull   = iota // all of them
-	ruleOwn           // this machine's own home only
-	ruleInside        // all but the mid-path /home/<name> and /Users/<name> rule
+	ruleFull    = iota // all of them
+	ruleOwn            // this machine's own home only
+	ruleInside         // all but the mid-path /home/<name> and /Users/<name> rule; slug-end by leakSlugEndTilde
+	ruleHomeRel        // as ruleInside, for a ~/ value: same rules, leakSlugEndTilde
 )
 
 // relPath is the only shape a path-field value may have to be judged as a
@@ -1081,10 +1130,10 @@ func leakRuleOf(n, home string, mode int) string {
 	if mode == ruleOwn {
 		return ""
 	}
-	if mode != ruleInside && leakPath.MatchString(n) {
+	if mode != ruleInside && mode != ruleHomeRel && leakPath.MatchString(n) {
 		return "contains a /home/ or /Users/ path"
 	}
-	if leakSlug.MatchString(n) {
+	if leakSlug.MatchString(n) || ((mode == ruleInside || mode == ruleHomeRel) && leakSlugEndTilde.MatchString(n)) || (mode != ruleInside && mode != ruleHomeRel && leakSlugEnd.MatchString(n)) {
 		return "contains a home-directory slug"
 	}
 	if climbOut.MatchString(n) {

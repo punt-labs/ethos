@@ -53,7 +53,7 @@ type Result struct {
 	// Typically equals the contract's Worker; the gate does not
 	// require equality so a delegated sub-worker can still claim
 	// authorship of its own output.
-	Author string `yaml:"author" json:"author" redact:"keep"`
+	Author string `yaml:"author" json:"author" redact:"handle"`
 
 	// Verdict is the worker's own assessment of the round. It is a
 	// closed enum: pass (all success criteria met), fail (at least one

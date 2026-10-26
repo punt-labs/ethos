@@ -396,8 +396,9 @@ const (
 // childCtx is the context of the value under key k of a map in context c. The
 // path fields are the ones the audit writer applies the path pass to
 // (redactPathKeys). Like every string they meet redact.LeakRule, except that a
-// value naming a file of the checkout skips the mid-path /home/<name> and
-// /Users/<name> rule (app/home/page.tsx is a file): see
+// value naming a file of the checkout (redact.InsideRule) or of this machine's
+// home, a ~/ value (redact.HomeRelativeRule), skips the mid-path /home/<name>
+// and /Users/<name> rule (app/home/page.tsx is a file): see
 // mission.PathRedactor.AuditLeakRule.
 func childCtx(c leakCtx, k string) leakCtx {
 	switch c {

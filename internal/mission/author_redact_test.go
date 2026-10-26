@@ -1,0 +1,156 @@
+package mission
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
+)
+
+// TestAuthor_NotAHandleGoesThroughTheEmailAndCredentialPasses: Author and
+// Actor hold identity handles. A value that is not a handle is not exempt from
+// redaction: an email address or a credential in it is replaced, in the
+// result, the reflection and the events they append.
+func TestAuthor_NotAHandleGoesThroughTheEmailAndCredentialPasses(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := NewStoreWithRoots(t.TempDir(), t.TempDir())
+	c := newContract("m-2026-08-06-140")
+	require.NoError(t, s.Create(c))
+
+	res := resultFor(c, VerdictFail)
+	res.Author = "jane@example.com"
+	require.NoError(t, s.AppendResult(c.MissionID, res))
+	ref := reflectionFor(c.MissionID, 1, RecommendationContinue)
+	ref.Author = "jane@example.com"
+	require.NoError(t, s.AppendReflection(c.MissionID, ref))
+
+	rs, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, "[redacted-email]", rs[0].Author)
+	fs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, fs, 1)
+	assert.Equal(t, "[redacted-email]", fs[0].Author)
+
+	events, _, err := s.LoadEvents(c.MissionID)
+	require.NoError(t, err)
+	for _, e := range events {
+		assert.NotContains(t, e.Actor, "@", "event %s", e.Event)
+	}
+	var got []string
+	for _, e := range events {
+		got = append(got, e.Actor)
+	}
+	assert.Contains(t, got, "[redacted-email]", "the events carry the redacted author")
+}
+
+// TestAuthor_ScrubRedactsAnEmailAuthor: a results file an older ethos wrote
+// with an address in author is scrubbed the way a new record is, and a handle
+// is left alone.
+func TestAuthor_ScrubRedactsAnEmailAuthor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo, global := t.TempDir(), t.TempDir()
+	s := NewStoreWithRoots(repo, global)
+	c := newContract("m-2026-08-06-141")
+	require.NoError(t, s.Create(c))
+	require.NoError(t, s.AppendResult(c.MissionID, resultFor(c, VerdictFail)))
+	rs, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	rs[0].Author = "jane@example.com"
+	raw, err := yaml.Marshal(resultsFile{Results: rs})
+	require.NoError(t, err)
+	path := mustResultsPath(t, s, c.MissionID)
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+
+	rel, err := filepath.Rel(repo, path)
+	require.NoError(t, err)
+	res, err := ScrubFiles(repo, global, []string{filepath.ToSlash(rel)}, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.ToSlash(rel)}, res.Changed)
+	got, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "[redacted-email]", got[0].Author)
+}
+
+// TestAuthor_CredentialIsRedacted: a token typed where a handle belongs is
+// replaced in the stored records and in the events; a result and a reflection
+// are each submitted with it.
+func TestAuthor_CredentialIsRedacted(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	token := "ghp_" + strings.Repeat("aBcD1234", 4) + "aBcD"
+	s := NewStoreWithRoots(t.TempDir(), t.TempDir())
+	c := newContract("m-2026-08-06-142")
+	require.NoError(t, s.Create(c))
+	res := resultFor(c, VerdictFail)
+	res.Author = token
+	require.NoError(t, s.AppendResult(c.MissionID, res))
+	ref := reflectionFor(c.MissionID, 1, RecommendationContinue)
+	ref.Author = token
+	require.NoError(t, s.AppendReflection(c.MissionID, ref))
+
+	rs, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "[redacted-secret]", rs[0].Author)
+	fs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "[redacted-secret]", fs[0].Author)
+	events, _, err := s.LoadEvents(c.MissionID)
+	require.NoError(t, err)
+	var actors []string
+	for _, e := range events {
+		assert.NotContains(t, e.Actor, "ghp_")
+		actors = append(actors, e.Actor)
+	}
+	assert.Contains(t, actors, "[redacted-secret]")
+}
+
+// TestAuthor_NonHandleGetsTheFullContentPass: an Author that is not a handle
+// gets the same passes as any record text, in the writers as in scrub and
+// migrate. A home path is rewritten, not refused. A results file an older ethos
+// wrote with a home path in author accepts the next round's result (appending
+// rewrites the whole file). The event of a reflection whose author looks like a
+// slug is stored with the rewritten actor and loads.
+func TestAuthor_NonHandleGetsTheFullContentPass(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo, global := t.TempDir(), t.TempDir()
+	s := NewStoreWithRoots(repo, global)
+	c := newContract("m-2026-08-06-143")
+	require.NoError(t, s.Create(c))
+
+	res := resultFor(c, VerdictFail)
+	res.Author = "/home/bob/x"
+	require.NoError(t, s.AppendResult(c.MissionID, res))
+	rs, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "~[redacted-user]/x", rs[0].Author)
+
+	// A results file an older ethos wrote with the path in author.
+	rs[0].Author = "/home/bob/x"
+	raw, err := yaml.Marshal(resultsFile{Results: rs})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(mustResultsPath(t, s, c.MissionID), raw, 0o600))
+	next := reflectionFor(c.MissionID, 1, RecommendationContinue)
+	require.NoError(t, s.AppendReflection(c.MissionID, next), "a later append is accepted")
+	_, err = s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	round2 := resultFor(c, VerdictFail)
+	round2.Round = 2
+	require.NoError(t, s.AppendResult(c.MissionID, round2), "the next round's result is accepted")
+
+	slug := reflectionFor(c.MissionID, 2, RecommendationContinue)
+	slug.Author = "x/-home-bob"
+	require.NoError(t, s.AppendReflection(c.MissionID, slug))
+	events, _, err := s.LoadEvents(c.MissionID)
+	require.NoError(t, err)
+	var actors []string
+	for _, e := range events {
+		assert.NotContains(t, e.Actor, "bob")
+		actors = append(actors, e.Actor)
+	}
+	assert.Contains(t, actors, "x/-~-[redacted-slug]", "the event of the slug-like actor loads, rewritten")
+}

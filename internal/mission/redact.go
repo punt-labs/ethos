@@ -624,8 +624,10 @@ func RedactRecord[T any](repoRoot string, v T) (T, error) {
 
 // RedactRecordNotify returns a copy of v with every string field passed
 // through Content, except fields tagged `redact:"keep"` (IDs, hashes,
-// enums, timestamps), and the Announcement to say once the write succeeded.
-// It is the one entry point the record writers use.
+// enums, timestamps) and fields tagged `redact:"handle"` that hold an identity
+// handle (a value that is not one is passed through Content), and the
+// Announcement to say once the write succeeded. It is the one entry point the
+// record writers use.
 //
 // It fails closed: when no usable redactor can be built the error is
 // returned and the caller must refuse the write.
@@ -711,20 +713,35 @@ func (r PathRedactor) Leaks(s string) bool { return r.LeakRule(s) != "" }
 // LeakRule is Leaks naming the rule that matched, without quoting s.
 func (r PathRedactor) LeakRule(s string) string { return redact.LeakRule(s, r.Home) }
 
-// insideCheckout reports whether a path field value names a file of the
-// checkout or of this machine's home: a repo-relative path
-// (redact.RepoRelative), or <repo>/ or ~/ and a repo-relative path, that
-// neither the writer's path pass nor redact.HomePaths would change (so a value
-// the writer rewrites always meets the full rule) and that has no absolute home
-// glued into it (see gluedHome). app/home/page.tsx, @types/home/page.tsx and
-// ~/x-wt/app/home/page.tsx qualify: under this machine's own home, a
-// directory called home is not another user's home.
-func (r PathRedactor) insideCheckout(s string) bool {
+// pathKind is how a path field value relates to the checkout.
+type pathKind int
+
+const (
+	pathElsewhere  pathKind = iota // not a plain file of the checkout or of this home
+	pathInCheckout                 // repo-relative, or <repo>/ and a repo-relative path
+	pathUnderHome                  // ~/ and a repo-relative path
+)
+
+// kindOf classifies a path field value. A value of kind pathInCheckout or
+// pathUnderHome is one that neither the writer's path pass nor redact.HomePaths
+// would change (so a value the writer rewrites always meets the full rule) and
+// that has no absolute home glued into it (see gluedHome). app/home/page.tsx,
+// @types/home/page.tsx and ~/x-wt/app/home/page.tsx qualify: under this
+// machine's own home, a directory called home is not another user's home.
+func (r PathRedactor) kindOf(s string) pathKind {
+	kind := pathInCheckout
 	rel, ok := strings.CutPrefix(s, "<repo>/")
 	if !ok {
-		rel = strings.TrimPrefix(s, "~/")
+		if rest, tilde := strings.CutPrefix(s, "~/"); tilde {
+			rel, kind = rest, pathUnderHome
+		} else {
+			rel = s
+		}
 	}
-	return redact.RepoRelative(rel) && r.Path(s) == s && redact.HomePaths(s) == s && !gluedHome(rel)
+	if redact.RepoRelative(rel) && r.Path(s) == s && redact.HomePaths(s) == s && !gluedHome(rel) {
+		return kind
+	}
+	return pathElsewhere
 }
 
 // gluedHome reports whether s holds a /home/ or /Users/ with a flag or glob
@@ -754,16 +771,21 @@ func gluedHome(s string) bool {
 }
 
 // AuditLeakRule is the check of the audit log's sinks (the writer and the seal
-// guard): redact.LeakRule, as for every string, except that a path field value
-// that names a file of the checkout (insideCheckout) skips the mid-path
-// /home/<name> and /Users/<name> rule (redact.InsideRule). This machine's own
-// home and slug are still refused there.
+// guard): redact.LeakRule, as for every string, except for a path field value
+// that names a file. A repo-relative or <repo>/ value (pathInCheckout) meets
+// redact.InsideRule; a ~/ value (pathUnderHome) meets redact.HomeRelativeRule.
+// Both skip the mid-path /home/<name> and /Users/<name> rule and use the
+// dotless-drive-letter slug-end rule; this machine's own home and slug are
+// still refused.
 func (r PathRedactor) AuditLeakRule(s string, path bool) string {
-	switch {
-	case !path:
+	if !path {
 		return redact.LeakRule(s, r.Home)
-	case r.insideCheckout(s):
+	}
+	switch r.kindOf(s) {
+	case pathInCheckout:
 		return redact.InsideRule(s, r.Home)
+	case pathUnderHome:
+		return redact.HomeRelativeRule(s, r.Home)
 	}
 	return redact.LeakRule(s, r.Home)
 }

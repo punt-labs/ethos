@@ -2,13 +2,16 @@ package hook
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 // QuarantineChunk retires a corrupt sealed chunk named by its path and
@@ -105,9 +108,67 @@ func corruptRule(b []byte) string {
 	if r := mission.LeakRule(string(b)); r != "" {
 		return r
 	}
+	if r := secretRule(string(b)); r != "" {
+		return r
+	}
 	for _, l := range bytes.Split(b, []byte("\n")) {
 		if r := lineRule(l); r != "" {
 			return r
+		}
+		if r := decodedSecretRule(l); r != "" {
+			return r
+		}
+	}
+	return ""
+}
+
+// secretRule names the credential or address s holds, without quoting it.
+func secretRule(s string) string {
+	if redact.SecretsString(s) != s {
+		return "holds a credential"
+	}
+	if redact.EmailPattern.MatchString(s) {
+		return "holds an email address"
+	}
+	return ""
+}
+
+// decodedSecretRule is secretRule over every decoded string and key of a JSON
+// line; it names nothing for a line that is not JSON.
+func decodedSecretRule(line []byte) string {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	var v any
+	if dec.Decode(&v) != nil {
+		return ""
+	}
+	return valueSecretRule(v)
+}
+
+func valueSecretRule(v any) string {
+	switch x := v.(type) {
+	case string:
+		return secretRule(x)
+	case []any:
+		for _, e := range x {
+			if r := valueSecretRule(e); r != "" {
+				return r
+			}
+		}
+	case map[string]any:
+		// In key order, so the rule a notice names is the same every run.
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if r := secretRule(k); r != "" {
+				return r
+			}
+			if r := valueSecretRule(x[k]); r != "" {
+				return r
+			}
 		}
 	}
 	return ""
