@@ -732,3 +732,104 @@ func TestAudit_KeepsABashCommandHoldingTheOwnHomeSlug(t *testing.T) {
 	_, rule := guardAuditLineWhy(line)
 	assert.Empty(t, rule)
 }
+
+// credentialLiveLine is a live audit line an older binary wrote: a credential in
+// tool_input, with the hash and preview of that input.
+func credentialLiveLine(ts int64, sid string) string {
+	in := map[string]any{"api_key": "hunter2"}
+	env := map[string]any{"tool_input": in}
+	b, _ := json.Marshal(map[string]any{
+		"ts": audit.FormatLineTS(ts), "session": sid, "tool": "Bash", "tool_input": in,
+		"tool_input_hash": hashToolInput(env), "tool_input_preview": toolInputPreview(env),
+	})
+	return string(b) + "\n"
+}
+
+// assertRedactedWithMatchingHash checks a chunk line: no credential, and the
+// hash and preview are those of the stored tool_input.
+func assertRedactedWithMatchingHash(t *testing.T, line []byte) {
+	t.Helper()
+	assert.NotContains(t, string(line), "hunter2")
+	var e struct {
+		ToolInput map[string]any `json:"tool_input"`
+		Hash      string         `json:"tool_input_hash"`
+		Preview   string         `json:"tool_input_preview"`
+	}
+	require.NoError(t, json.Unmarshal(line, &e))
+	env := map[string]any{"tool_input": e.ToolInput}
+	assert.Equal(t, hashToolInput(env), e.Hash, "the hash is over the stored input")
+	assert.Equal(t, toolInputPreview(env), e.Preview, "the preview is of the stored input")
+}
+
+// TestSealRepo_RedactsACredentialInAnOlderLiveLine: the guard is home-only, so a
+// live tail written before the credential pass existed gets the audit content
+// pass first, as migrate gives a legacy line; a clean line is unchanged byte for
+// byte.
+func TestSealRepo_RedactsACredentialInAnOlderLiveLine(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-cred"
+	cleanLine, err := json.Marshal(map[string]any{
+		"ts": audit.FormatLineTS(200), "session": sid, "tool": "Read",
+		"tool_input": map[string]any{"file_path": "a.go"},
+	})
+	require.NoError(t, err)
+	cleanLine, _, _ = guardAuditLineFull(cleanLine) // the form the writer stores
+	live := liveAuditPath(repo, sid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	body := credentialLiveLine(100, sid) + string(cleanLine) + "\n"
+	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
+
+	_, err = SealRepo(repo, time.Now().UTC(), SealOptions{})
+	require.NoError(t, err)
+	dir, err := audit.FindSealedSessionDir(repo, sid)
+	require.NoError(t, err)
+	ents, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var chunk []byte
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			chunk, err = os.ReadFile(filepath.Join(dir, e.Name()))
+			require.NoError(t, err)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(string(chunk)), "\n")
+	require.Len(t, lines, 2)
+	assertRedactedWithMatchingHash(t, []byte(lines[0]))
+	assert.Equal(t, string(cleanLine), lines[1], "a clean line is unchanged byte for byte")
+}
+
+// TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine: the live lines
+// quarantine re-seals get the same pass.
+func TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-cred-q"
+	sealedDir, err := resolveRepoSessionDir(repo, sid, time.Now().UTC())
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+	chunk := audit.SessionChunkFile(100, 300)
+	require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
+	live := liveAuditPath(repo, sid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	require.NoError(t, os.WriteFile(live, []byte(credentialLiveLine(150, sid)), 0o600))
+
+	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+	require.NoError(t, err)
+	ents, err := os.ReadDir(sealedDir)
+	require.NoError(t, err)
+	found := 0
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			b, err := os.ReadFile(filepath.Join(sealedDir, e.Name()))
+			require.NoError(t, err)
+			for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+				assertRedactedWithMatchingHash(t, []byte(l))
+				found++
+			}
+		}
+	}
+	assert.Equal(t, 1, found, "the recovered line is in a sealed chunk")
+}

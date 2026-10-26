@@ -216,7 +216,7 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 	// checked here. A line keeps its ts, so the chunk name and its
 	// last-ts verification are unchanged. There is no hash chain over the
 	// chunk bytes: the name is the first and last ts only.
-	guard := lineGuard(guardAuditLineFull)
+	guard := sessionLineGuard(p.repoRoot)
 	if p.ns == audit.MissionNS {
 		guard = missionLineGuard(p.repoRoot)
 	}

@@ -194,7 +194,8 @@ func TestMigrateMission_LegacyInputsBeadKeepsItsValue(t *testing.T) {
 }
 
 // TestMigrateMission_LegacyLogKeepsEventFields: the legacy event log is read
-// as Event records, so the actor, a keep field, is copied as it is.
+// as Event records, so the actor, a handle, is copied as it is (a handle-shaped
+// credential such as sk-project-implementation-workflow is not a handle).
 func TestMigrateMission_LegacyLogKeepsEventFields(t *testing.T) {
 	newLeakFixture(t)
 	globalRoot := t.TempDir()
@@ -202,7 +203,7 @@ func TestMigrateMission_LegacyLogKeepsEventFields(t *testing.T) {
 	id := "m-2026-05-22-005"
 	legacyMissionFiles(t, globalRoot, id, map[string][]byte{
 		".yaml":  []byte("mission_id: " + id + "\nstatus: open\n"),
-		".jsonl": []byte(`{"ts":"2026-05-22T10:00:00Z","event":"create","actor":"sk-project-implementation-workflow","details":{"reason":"TOKEN=abc"}}` + "\n"),
+		".jsonl": []byte(`{"ts":"2026-05-22T10:00:00Z","event":"create","actor":"bwk","details":{"reason":"TOKEN=abc"}}` + "\n"),
 	})
 	repoAuditWithMission(t, repoRoot, "sess-5", id)
 
@@ -210,5 +211,5 @@ func TestMigrateMission_LegacyLogKeepsEventFields(t *testing.T) {
 	require.NoError(t, MigrateMission(globalRoot, repoRoot, repoRoot, "", false, &out))
 	data, err := os.ReadFile(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "log.jsonl"))
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"ts":"2026-05-22T10:00:00Z","event":"create","actor":"sk-project-implementation-workflow","details":{"reason":"TOKEN=[redacted-secret]"}}`, string(data))
+	assert.JSONEq(t, `{"ts":"2026-05-22T10:00:00Z","event":"create","actor":"bwk","details":{"reason":"TOKEN=[redacted-secret]"}}`, string(data))
 }

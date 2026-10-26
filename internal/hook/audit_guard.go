@@ -519,3 +519,26 @@ func scrubAuditIn(v any, c leakCtx) any {
 	}
 	return v
 }
+
+// sessionLineGuard is the sink check for a session audit line that did not come
+// from this binary's writer: a live tail an older ethos appended, or one a
+// quarantine re-seals. The guard itself is home-only, so the line first gets the
+// audit content pass migrate gives a legacy line (credentials and addresses,
+// with the input hash and preview rebuilt when the input changes), and then the
+// guard. A line the pass leaves alone goes to the guard as it is.
+func sessionLineGuard(repoRoot string) lineGuard {
+	r, err := mission.NewPathRedactor(repoRoot)
+	return func(line []byte) ([]byte, string, bool) {
+		pre, note := line, ""
+		if err == nil && isJSONObject(line) {
+			if red, changed, e := redactLegacyLine(line, repoRoot, r); e == nil && changed {
+				pre, note = red, "held a credential, an address or a path the content pass rewrites"
+			}
+		}
+		out, rule, marker := guardAuditLineFull(pre)
+		if marker {
+			return out, rule, marker
+		}
+		return out, joinRules(note, rule), false
+	}
+}

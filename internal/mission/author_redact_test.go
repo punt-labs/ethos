@@ -193,3 +193,63 @@ func TestContractRoutingNames_NotAHandleIsRedacted(t *testing.T) {
 	assert.Equal(t, ok.Leader, got.Leader)
 	assert.Equal(t, ok.Worker, got.Worker)
 }
+
+// TestHandleFields_CredentialShapedHandleIsRedacted: a value that looks like an
+// identity handle but is a credential (sk- or glpat- and 24 lowercase letters)
+// is not exempt: it is replaced in the result, reflection, event, contract and
+// trace summary, while real handles are kept.
+func TestHandleFields_CredentialShapedHandleIsRedacted(t *testing.T) {
+	sk := "sk-" + strings.Repeat("abcdefgh", 3)
+	gl := "glpat-" + strings.Repeat("abcdefgh", 3)
+	sk2 := "sk-" + strings.Repeat("ijklmnop", 3)
+	secrets := []string{sk, gl, sk2}
+	t.Setenv("HOME", t.TempDir())
+	s := NewStoreWithRoots(t.TempDir(), t.TempDir())
+	c := newContract("m-2026-08-06-200")
+	c.Leader, c.Worker, c.Evaluator.Handle = sk, gl, sk2
+	require.NoError(t, s.Create(c))
+	path, err := s.ContractPath(c.MissionID)
+	require.NoError(t, err)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	for _, secret := range secrets {
+		assert.NotContains(t, string(data), secret, "contract.yaml")
+	}
+	assert.Contains(t, string(data), "[redacted-secret]")
+
+	line, _, err := s.prepareTraceSummary(c, resultFor(c, VerdictPass))
+	require.NoError(t, err)
+	for _, secret := range secrets {
+		assert.NotContains(t, string(line), secret, "trace summary")
+	}
+
+	res := resultFor(c, VerdictFail)
+	res.Author = gl
+	require.NoError(t, s.AppendResult(c.MissionID, res))
+	ref := reflectionFor(c.MissionID, 1, RecommendationContinue)
+	ref.Author = sk
+	require.NoError(t, s.AppendReflection(c.MissionID, ref))
+	rs, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "[redacted-secret]", rs[0].Author)
+	fs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "[redacted-secret]", fs[0].Author)
+	events, _, err := s.LoadEvents(c.MissionID)
+	require.NoError(t, err)
+	for _, e := range events {
+		for _, secret := range secrets {
+			assert.NotContains(t, e.Actor, secret, e.Event)
+		}
+	}
+
+	// Real handles are untouched.
+	ok := newContract("m-2026-08-06-201")
+	ok.WriteSet = []string{"docs/"}
+	ok.Worker = "bwk"
+	require.NoError(t, s.Create(ok))
+	got, err := s.Load(ok.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "bwk", got.Worker)
+	assert.Equal(t, ok.Leader, got.Leader)
+}

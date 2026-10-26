@@ -658,9 +658,11 @@ func cloneMap(m map[string]any) map[string]any {
 var handleRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // IsHandle reports whether s is an identity handle: lowercase letters, digits
-// and hyphens, starting and ending with a letter or digit. The rule of
-// internal/identity, which this package cannot import.
-func IsHandle(s string) bool { return handleRE.MatchString(s) }
+// and hyphens, starting and ending with a letter or digit (the rule of
+// internal/identity, which this package cannot import), and not a credential:
+// sk- and glpat- followed by letters have the shape of a handle and are secrets,
+// so a value the credential pass would change is not one.
+func IsHandle(s string) bool { return handleRE.MatchString(s) && SecretsString(s) == s }
 
 // Prose applies every content pass to free text bound for a tracked
 // file: credentials, then addresses, then home paths of any user.
