@@ -546,7 +546,7 @@ func scrubAuditIn(v any, c leakCtx) any {
 // the line, header or unknown, whatever its key. ts and the derived hash and
 // preview are left alone. A line it cannot decode, or that it leaves unchanged,
 // is returned as it came.
-func credentialPassLine(line []byte) (out []byte, changed bool, markerRule string) {
+func credentialPassLine(line []byte, missionLine bool) (out []byte, changed bool, markerRule string) {
 	dec := json.NewDecoder(bytes.NewReader(line))
 	dec.UseNumber()
 	var m map[string]any
@@ -555,6 +555,9 @@ func credentialPassLine(line []byte) (out []byte, changed bool, markerRule strin
 	}
 	caseVariant := false
 	for k := range m {
+		if missionLine {
+			break // a mission event has no tool_input, hash or preview
+		}
 		switch strings.ToLower(k) {
 		case "tool_input", "tool_input_hash", "tool_input_preview":
 			if k != strings.ToLower(k) {
@@ -562,7 +565,7 @@ func credentialPassLine(line []byte) (out []byte, changed bool, markerRule strin
 			}
 		}
 	}
-	if ti, ok := m["tool_input"].(map[string]any); ok {
+	if ti, ok := m["tool_input"].(map[string]any); ok && !missionLine {
 		tool, _ := m["tool"].(string)
 		if red, c := redactSensitiveContent(tool, ti); c {
 			m["tool_input"] = red
@@ -579,8 +582,9 @@ func credentialPassLine(line []byte) (out []byte, changed bool, markerRule strin
 	}
 	rest := map[string]any{}
 	for k, v := range m {
-		switch k {
-		case "ts", "tool_input", "tool_input_hash", "tool_input_preview":
+		switch {
+		case k == "ts":
+		case !missionLine && (k == "tool_input" || k == "tool_input_hash" || k == "tool_input_preview"):
 		default:
 			rest[k] = v
 		}
@@ -634,7 +638,7 @@ func sessionLineGuard(repoRoot string) lineGuard {
 	return func(line []byte) ([]byte, string, bool) {
 		pre, note := line, ""
 		if isJSONObject(line) {
-			red, changed, markerRule := credentialPassLine(pre)
+			red, changed, markerRule := credentialPassLine(pre, false)
 			if markerRule != "" {
 				return red, markerRule, true
 			}

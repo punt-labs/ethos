@@ -1067,7 +1067,7 @@ func TestCredentialPassLine_CleanCaseVariantInputIsLeftToTheGuard(t *testing.T) 
 		"Tool_Input": map[string]any{"file_path": "a.go"},
 	})
 	require.NoError(t, err)
-	red, changed, markerRule := credentialPassLine(b)
+	red, changed, markerRule := credentialPassLine(b, false)
 	assert.False(t, changed)
 	assert.Empty(t, markerRule)
 	assert.Equal(t, string(b), string(red))

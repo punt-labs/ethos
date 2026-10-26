@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -282,5 +283,55 @@ func TestMissionEvent_NameThatIsNotAnEventNameIsRedacted(t *testing.T) {
 	require.NotEmpty(t, lines)
 	for _, l := range lines {
 		assert.NotContains(t, l, "abc123")
+	}
+}
+
+// TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent: tool_input_preview and
+// tool_input_hash are audit-line fields; in a mission event they are unknown
+// fields like any other and are swept, sealed and recovered.
+func TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent(t *testing.T) {
+	ts := audit.FormatLineTS(100)
+	token := "ghp_" + strings.Repeat("aBcD1234", 4) + "aBcD"
+	for name, extra := range map[string]string{
+		"preview": `"tool_input_preview":"password=hunter2"`,
+		"hash":    `"tool_input_hash":"` + token + `"`,
+	} {
+		line := `{"ts":"` + ts + `","event":"update","actor":"a","extra":1,` + extra + `}` + "\n"
+		check := func(t *testing.T, lines []string) {
+			t.Helper()
+			require.NotEmpty(t, lines)
+			for _, l := range lines {
+				assert.NotContains(t, l, "hunter2")
+				assert.NotContains(t, l, token)
+			}
+		}
+		t.Run(name+"/seal", func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			const mid = "m-2026-07-21-070"
+			live := liveMissionLogPath(repo, mid, "sessM")
+			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+			require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+			_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+			require.NoError(t, err)
+			check(t, chunkLines(t, sealedMissionDir(repo, mid)))
+		})
+		t.Run(name+"/quarantine", func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			const mid = "m-2026-07-21-071"
+			sealedDir := sealedMissionDir(repo, mid)
+			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+			chunk := audit.MissionChunkFile("sessM", 100, 300)
+			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
+			live := liveMissionLogPath(repo, mid, "sessM")
+			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+			require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+			_, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+			require.NoError(t, err)
+			check(t, chunkLines(t, sealedDir))
+		})
 	}
 }
