@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -201,7 +202,10 @@ func TestDamagedDotGitThroughASymlinkedWorkingDirectory(t *testing.T) {
 	if err := os.Symlink(a, lnk); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	out, code := createIdentityFrom(t, se, lnk)
+	// PWD names the link, as a shell that cd'd through it would leave it.
+	cp := *se
+	cp.env = append(slices.Clone(se.env), "PWD="+lnk)
+	out, code := createIdentityFrom(t, &cp, lnk)
 	assert.Equal(t, 2, code, out)
 	assert.Contains(t, out, filepath.Join(inner, ".git"))
 	assert.NoFileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "nested.yaml"))
