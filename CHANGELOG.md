@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Clear 3 open Dependabot alerts (1 high, 2 low) by bumping
+  `tests/e2e/uv.lock`: filelock 3.32.3 → 4.2.4 (E2E harness only; the Go
+  binary is unaffected).
+
 ### Fixed
 
 - With the opt-in `ethos serve --opencode-session-metadata`, native OpenCode
