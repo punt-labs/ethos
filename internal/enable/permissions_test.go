@@ -79,6 +79,24 @@ func TestEnableRefusesMalformedSettingsUntouched(t *testing.T) {
 	}
 }
 
+func TestRefusedDisableLeavesTheRepoEnabled(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	claudeMD := readFile(t, filepath.Join(dir, "CLAUDE.md"))
+	settings := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.WriteFile(settings, []byte("{nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Disable(dir, false); err == nil {
+		t.Fatal("Disable succeeded on a malformed settings.json")
+	}
+	if got := readFile(t, filepath.Join(dir, "CLAUDE.md")); got != claudeMD {
+		t.Errorf("CLAUDE.md changed by a refused disable: %q", got)
+	}
+}
+
 func allowList(t *testing.T, path string) []string {
 	t.Helper()
 	var doc struct {

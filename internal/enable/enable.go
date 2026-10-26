@@ -288,6 +288,13 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 		}
 	}
 
+	// Settings first: a refusal aborts before anything else changes.
+	revoked, err := claudesettings.Deregister(repoRoot, PermissionRules)
+	if err != nil {
+		return rep, fmt.Errorf("removing ethos permission rules from .claude/settings.json: %w", err)
+	}
+	permissionStep(rep, revoked, "removed ", "no ethos rules present")
+
 	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
 		return rep, fmt.Errorf("removing import line: %w", err)
@@ -297,12 +304,6 @@ func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 	} else {
 		rep.step("import", "already", "no import line present")
 	}
-
-	revoked, err := claudesettings.Deregister(repoRoot, PermissionRules)
-	if err != nil {
-		return rep, fmt.Errorf("removing ethos from .claude/settings.json: %w", err)
-	}
-	permissionStep(rep, revoked, "removed ", "no ethos rules present")
 
 	markerRemoved, err := removeMarker(repoRoot)
 	if err != nil {
