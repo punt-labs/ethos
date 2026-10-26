@@ -125,7 +125,7 @@ func apply(data []byte, rules []string, grant bool) ([]byte, []string, error) {
 	}
 	var allow []string
 	if raw := perms.get("allow"); raw != nil {
-		if err := json.Unmarshal(raw, &allow); err != nil {
+		if err := json.Unmarshal(raw, &allow); err != nil || allow == nil {
 			return nil, nil, errors.New("permissions.allow is not a list of strings")
 		}
 	}

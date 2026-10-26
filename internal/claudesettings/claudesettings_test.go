@@ -92,6 +92,8 @@ func TestUnparseableFilesAreRefusedUntouched(t *testing.T) {
 		"not object":  "[]",
 		"allow type":  `{"permissions":{"allow":"Read"}}`,
 		"allow items": `{"permissions":{"allow":[1]}}`,
+		"allow null":  `{"permissions":{"allow":null}}`,
+		"perms null":  `{"permissions":null}`,
 		"invalid utf": "{\"a\":\"\xff\"}",
 		"trailing":    "{} {}",
 	} {
