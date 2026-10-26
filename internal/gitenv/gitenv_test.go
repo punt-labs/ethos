@@ -459,11 +459,13 @@ func TestUsableGitDirSymlinkedHEAD(t *testing.T) {
 	}{
 		"to refs, dangling": {"refs/heads/main", true},
 		"elsewhere":         {"nowhere", false},
+		"elsewhere, valid":  {"real", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dot := filepath.Join(t.TempDir(), ".git")
 			require.NoError(t, os.MkdirAll(filepath.Join(dot, "objects"), 0o755))
 			require.NoError(t, os.MkdirAll(filepath.Join(dot, "refs"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(dot, "real"), []byte("ref: refs/heads/main\n"), 0o644))
 			if err := os.Symlink(tc.target, filepath.Join(dot, "HEAD")); err != nil {
 				t.Skipf("symlinks unavailable: %v", err)
 			}

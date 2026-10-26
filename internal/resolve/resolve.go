@@ -1070,22 +1070,44 @@ func gitLocate(git, start string) located {
 			git, probeGit(git).version, out)
 		return handLocate(start)
 	}
-	root, under := ancestorAt(start, top)
-	if under {
-		// Every .git between start and the root git chose was walked past by git:
-		// a damaged one inside the repository is refused, not answered for the
-		// repository around it.
-		for dir := start; dir != root; dir = filepath.Dir(dir) {
-			if derr := gitenv.DanglingDotGit(dir); derr != nil {
-				return located{err: derr}
-			}
-			if derr := unacceptedDotGit([]string{dir}); derr != nil {
-				return located{err: derr}
-			}
-		}
+	root, _ := ancestorAt(start, top)
+	if derr := walkedPast(start, top, gitDir); derr != nil {
+		return located{err: derr}
 	}
 	store, serr := storeRoot(root, gitDir, common, git)
 	return located{loc: location{root: root, store: store, storeErr: serr}}
+}
+
+// walkedPast refuses a damaged .git among the physical directories git walked
+// from start to the work tree top it chose: git passed over it, and the
+// repository around it must not answer in its place. The .git that is git's own
+// git dir (core.worktree puts the work tree above it) is the one git chose, not
+// one it passed over. Nothing is checked when top is not on the walk.
+func walkedPast(start, top, gitDir string) error {
+	ti, err := os.Stat(top)
+	if err != nil {
+		return nil
+	}
+	gi, gerr := os.Stat(gitDir)
+	var passed []string
+	for _, d := range gitWalk(start) {
+		if di, err := os.Stat(d); err == nil && os.SameFile(di, ti) {
+			for _, p := range passed {
+				if derr := gitenv.DanglingDotGit(p); derr != nil {
+					return derr
+				}
+				if di, err := os.Stat(filepath.Join(p, ".git")); gerr == nil && err == nil && os.SameFile(di, gi) {
+					continue
+				}
+				if derr := unacceptedDotGit([]string{p}); derr != nil {
+					return derr
+				}
+			}
+			return nil
+		}
+		passed = append(passed, d)
+	}
+	return nil
 }
 
 // unacceptedDotGit is the refusal for a .git that exists in one of dirs and that
@@ -1482,6 +1504,11 @@ var errInvalidGit = errors.New("invalid git file")
 // examined.
 func checkGitDir(gd string) (common, reason string, err error) {
 	head := filepath.Join(gd, "HEAD")
+	if l, err := os.Lstat(head); err == nil && l.Mode()&fs.ModeSymlink != 0 && !symlinkToRefs(head) {
+		// git reads only a symlink into refs/ as a HEAD; any other, dangling or
+		// not, makes the directory "not a repository".
+		return "", "HEAD is a symlink that does not point into refs/", nil
+	}
 	if !symlinkToRefs(head) {
 		info, err := os.Stat(head)
 		switch {
@@ -1535,6 +1562,11 @@ func checkGitDir(gd string) (common, reason string, err error) {
 			return "", "", fmt.Errorf("examining %s: %w", p, err)
 		case !info.IsDir():
 			return "", name + " is not a directory", nil
+		}
+		// Searchable, as git requires: a name that is not there is ENOENT only
+		// when the directory can be searched.
+		if _, err := os.Lstat(filepath.Join(p, ".ethos-access-probe")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", "", fmt.Errorf("examining %s: %w", p, err)
 		}
 	}
 	return common, "", nil

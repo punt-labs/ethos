@@ -666,10 +666,11 @@ func usableGitDir(dot string) (bool, error) {
 	head := filepath.Join(dot, "HEAD")
 	if l, err := os.Lstat(head); err == nil && l.Mode()&fs.ModeSymlink != 0 {
 		// git accepts a HEAD that is a symlink to refs/..., dangling or not (an
-		// unborn branch); any other target is read through the link as a file.
+		// unborn branch).
 		if t, err := os.Readlink(head); err == nil && strings.HasPrefix(t, "refs/") {
 			return usableObjectsAndRefs(dot, refuse)
 		}
+		return false, nil // any other symlink is not a HEAD to git, dangling or not
 	}
 	h, err := os.Stat(head)
 	switch {

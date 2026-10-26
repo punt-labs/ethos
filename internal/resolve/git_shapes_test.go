@@ -45,6 +45,7 @@ var gitShapes = map[string]gitShape{
 	// git takes a HEAD symlink to refs/..., dangling (an unborn branch) or not.
 	"HEAD symlink to refs, dangling":   {mkDir("HEAD->refs/heads/main", "objects/", "refs/"), handInner},
 	"HEAD symlink elsewhere, dangling": {mkDir("HEAD->nowhere", "objects/", "refs/"), handError},
+	"HEAD symlink elsewhere, valid":    {mkDir("HEAD->real", "real=ref: refs/heads/main\n", "objects/", "refs/"), handError},
 	"objects as a file":                {mkDir("HEAD=ref: refs/heads/main\n", "objects=", "refs/"), handError},
 	"hex HEAD":                         {mkDir("HEAD=0123456789abcdef0123456789abcdef01234567\n", "objects/", "refs/"), handInner},
 	"dangling commondir":               {mkDir("HEAD=ref: refs/heads/main\n", "commondir=/nonexistent", "objects/", "refs/"), handError},
@@ -389,6 +390,79 @@ func TestDanglingGitOutsideARepositoryIsAnError(t *testing.T) {
 			require.Error(t, err)
 			assert.NotErrorIs(t, err, ErrNotInRepo)
 			assert.Contains(t, err.Error(), filepath.Join(dir, ".git"))
+		})
+	}
+}
+
+// A .git that is git's own git dir, with core.worktree putting the work tree
+// above it, is the one git chose, not one it walked past.
+func TestCoreWorktreeGitDirIsNotWalkedPast(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	cw := filepath.Join(t.TempDir(), "cw")
+	inner := filepath.Join(cw, "inner")
+	deeper := filepath.Join(inner, "deeper")
+	require.NoError(t, os.MkdirAll(deeper, 0o755))
+	for _, args := range [][]string{{"init", "-q", inner}, {"-C", inner, "config", "core.worktree", "../.."}} {
+		out, err := exec.Command("git", args...).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	for _, dir := range []string{inner, deeper} {
+		t.Run(filepath.Base(dir), func(t *testing.T) {
+			t.Chdir(dir)
+			got, err := locateRepoRoot()
+			require.NoError(t, err)
+			assert.Equal(t, realpath(t, cw), realpath(t, got))
+		})
+	}
+}
+
+// A working directory reached through a symlink: the .git files git passed are
+// those of the physical directories, and a damaged one among them is refused.
+func TestSymlinkedWorkingDirectoryRefusesDamagedDotGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	base := t.TempDir()
+	outer := filepath.Join(base, "outer")
+	inner := filepath.Join(outer, "inner")
+	a := filepath.Join(inner, "a")
+	require.NoError(t, os.MkdirAll(a, 0o755))
+	makeGitDirAt(t, filepath.Join(outer, ".git"))
+	mkDir("HEAD=", "objects/", "refs/")(t, inner)
+	lnk := filepath.Join(base, "elsewhere", "lnk")
+	require.NoError(t, os.MkdirAll(filepath.Dir(lnk), 0o755))
+	if err := os.Symlink(a, lnk); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Chdir(lnk)
+	_, err := locateRepoRoot()
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrNotInRepo)
+	assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
+}
+
+// Without git, an objects/ or refs/ that cannot be searched is refused, as the
+// git-present path refuses it, not read as "not a repository".
+func TestHandRulesRefuseUnsearchableObjectsAndRefs(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	for _, name := range []string{"objects", "refs"} {
+		t.Run(name, func(t *testing.T) {
+			inner, _ := shapeIn(t, gitShapes["gitdir to a git directory"])
+			dot := filepath.Join(inner, ".git")
+			require.NoError(t, os.Remove(dot))
+			makeGitDirAt(t, dot)
+			p := filepath.Join(dot, name)
+			require.NoError(t, os.Chmod(p, 0o000))
+			t.Cleanup(func() { _ = os.Chmod(p, 0o755) })
+			hideGit(t)
+			_, err := locateRepoRoot()
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrNotInRepo)
+			assert.Contains(t, err.Error(), dot)
 		})
 	}
 }
