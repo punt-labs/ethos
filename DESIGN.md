@@ -12842,17 +12842,20 @@ directory is `<parent>/.git` of a non-bare repository, the store is at
 worktree's own top level holds the store. Any other common git directory
 (a separate git directory, a submodule's worktree) is refused rather than
 guessed. `GIT_CEILING_DIRECTORIES` applies, with or without git.
-Git's "not a git repository" means not in a repository; any other git
+Git's "not a git repository" means not in a repository unless a `.git`
+git does not accept lies on the path (see below); any other git
 failure (dubious ownership, an invalid gitfile, an unreadable
 `commondir`, a run inside `.git/` or a bare repository) is a refusal
 carrying git's message. Answers are cached per process for at most 30
 seconds (so each hook process still runs git once), and a refusal is
 never cached. Without git, or with a git that is too old or does not
-run, strict hand rules apply: a `.git/` counts only with a valid `HEAD` and `objects/` and
-`refs/` directories, a `.git` file only when it starts with exactly
-`gitdir:` followed by one space and names a git directory, a dangling symlink or non-file
-`.git` is skipped unread, and an unreadable `.git/` is refused, which is
-stricter than git. The hand rules also refuse a start inside a git
+run, strict hand rules apply: a `.git/` counts only with a valid `HEAD`
+(a regular file, or a symlink whose target starts with `refs/`) and
+searchable `objects/` and `refs/` directories, and a `.git` file only
+when it starts with exactly `gitdir:` followed by one space and names a
+git directory. Any other `.git` (a dangling symlink, a non-file, an
+unreadable `.git/`) is refused unread, which for an unreadable `.git/`
+is stricter than git. The hand rules also refuse a start inside a git
 directory or a bare repository, and stop the upward search at a
 filesystem boundary. Every git command ethos runs has a time limit:
 10 seconds (`gitenv.Timeout`) for lookups, reads and the audit-seal
@@ -12905,9 +12908,12 @@ it switches off ssh's askpass (`SSH_ASKPASS` emptied,
 helper, and ssh's own prompts (an unknown host key, a passphrase) find
 no terminal, so a missing credential fails instead of waiting. git's
 error output goes to the user's terminal unchanged, so clone progress
-shows. Before the clone, ethos refuses what it can see locally: a
-`--global` destination that exists and is not empty, or a submodule
-path already in the work tree or the index. After a clone that exits
+shows. Before the clone, ethos refuses what git would refuse and it can
+see locally: a `--global` destination that is a dangling symlink or
+exists and is not an empty directory (a symlink to an empty directory
+is accepted), or a submodule path already in the index or that exists
+and is not itself the top of a git repository. An existing clone at the
+submodule path is passed to `git submodule add`, which adopts it. After a clone that exits
 with an error (not a timeout or an interrupt), for a URL that is not
 relative (`./`, `../`), ethos runs a bounded `git ls-remote` on the
 same URL; if its output shows an ssh authentication, host-key or
@@ -12935,14 +12941,18 @@ in the hooks-directory advice. Every git read declares what an absent
 answer is (a configuration key that is not set, no such remote, no
 upstream, a path `git check-ignore` does not match, or that discovery
 failure). "Not in a repository" means no `.git` entry of any kind
-exists in the directory or an ancestor below the ceiling. A `.git`
+exists in the directory or an ancestor below the ceiling and the
+filesystem boundary. Ethos checks the physical directories git walks,
+so a working directory reached through a symlink is checked the same
+way, and the `.git` git itself resolved to (for example a `.git` whose
+`core.worktree` points above it) is never refused. A `.git`
 that git does not accept as a repository (a broken link or gitfile, a
 symlink git cannot follow, a FIFO, or a directory whose `HEAD` is
 empty, invalid, missing or unreadable, or whose `objects` or `refs` is
-missing or cannot be searched) is refused, naming that `.git`, even
-though git itself skips such a directory and either reports "not a git
-repository" or answers for an enclosing repository (for an unreadable
-gitfile git reports an error). A `HEAD` that is a symlink to `refs/…`,
+missing or cannot be searched) is refused, naming that `.git`. For such a directory git itself skips
+it and either reports "not a git repository" or answers for an
+enclosing repository; for a broken or unreadable gitfile git reports an
+error. A `HEAD` that is a symlink to `refs/…`,
 dangling or not, is accepted, as git accepts it. Any other failure, a timeout included, is an error that
 carries git's message and names the command and the directory. A git
 failure is therefore never read as "no repository", "no remote", "not a
@@ -13020,13 +13030,13 @@ directories it created and blocks the commit; the error names the
 failed step and states whether the tree is as it was or what is left.
 Removing leftover temporary files from earlier runs is not undone, and
 the live-zone directories and per-session lock files it created (both
-never tracked) remain. Tests compare 28 `.git` shapes with
-`git rev-parse` and run the same shapes with git hidden. On a refusal,
-or a refused `ETHOS_REPO_ROOT`, `ethos doctor` reports the store as one
-failing row; checks that read the store keep their own status and note
-that they saw only the global layer, and checks that read the checkout
-report "not checked" with the reason, a FAIL staying a FAIL (a test
-parses `RunAll` to keep the gate on every check). The MCP server
+never tracked) remain. Tests compare every `.git` shape in
+the shape table (30 on Unix) with `git rev-parse` and run the same
+shapes with git hidden. On a refusal, or a refused `ETHOS_REPO_ROOT`,
+`ethos doctor` reports the store as one failing row; every check that
+reads the store or the checkout reports a would-be PASS as WARN "not
+checked" with the reason, and a FAIL stays a FAIL with the cause added
+(a test parses `runAll` to keep the gate on every check). The MCP server
 locates the store on every call, runs only its read methods while the
 store is unlocated, and appends a note in a separate content block; the
 session hooks say why the persona is missing, the audit hook skips the

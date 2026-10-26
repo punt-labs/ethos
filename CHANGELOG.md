@@ -233,10 +233,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Finding the repository asks git.** With git installed, ethos uses
   `git rev-parse` (in the C locale, with `GIT_DIR` and `GIT_WORK_TREE`
   cleared, and honoring `GIT_CEILING_DIRECTORIES`) to find the working
-  tree and the store, so it agrees with git on every `.git` shape; with
+  tree and the store, and refuses a `.git` git does not accept rather
+  than skipping it as git does; with
   git missing, too old or not working it applies strict `.git` rules
   (and never reads a non-file `.git`, so a FIFO no longer hangs it). Git's
-  "not a git repository" means not in a repository; any other git
+  "not a git repository" means not in a repository when no `.git` git
+  rejected lies on the path; any other git
   failure, or a refused `ETHOS_REPO_ROOT`, makes `ethos doctor` fail a
   "Repository store" row, the MCP server run only its read methods, the
   session hooks say why the persona is missing, the audit hook skip the
@@ -277,8 +279,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors**, reported by every command and hook, instead of reading as
   "not a repository", and so is any `.git` git does not accept (an
   empty or missing `HEAD`, missing `objects`, an unreadable entry, a
-  FIFO): ethos refuses instead of answering from the global store or
-  an enclosing repository. A
+  FIFO), including from a working directory reached through a symlink:
+  ethos refuses instead of answering from the global store or an
+  enclosing repository. A
   malformed or dangling `ethos.yaml` no longer stops the hooks,
   `ethos doctor` or `ethos serve`; they report it, as they do an
   unusable `active_bundle`, `repo-only` policy or unknown `resolution:`
@@ -297,8 +300,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An unreadable git configuration file is reported instead of treated as
   "not set". `ethos team add-bundle` names every unreadable global or
   XDG git configuration before cloning, refuses an unreadable system
-  configuration, and refuses a non-empty destination or a submodule
-  path already in use before contacting the remote. On
+  configuration, and before contacting the remote refuses a non-empty
+  `--global` destination, a submodule path already in the index, or one
+  that exists and is not a git repository (an existing clone there is
+  adopted). On
   Unix, `ethos team add-bundle` no longer overrides your ssh command,
   shows git's clone progress, runs its clone with no terminal so an ssh
   or credential prompt fails
