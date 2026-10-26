@@ -12917,8 +12917,10 @@ a symlink (git would stage the link, not a submodule), a path that
 exists and whose `.git` git does not accept as a git directory (git's
 own test, `git rev-parse --resolve-git-dir`; git's message is shown),
 and a path whose `.git` is the superproject's own git directory or
-shares its common directory (another of its worktrees). A `.git` that
-cannot be examined is reported with the operating-system error. A failed or timed-out
+shares its common directory (another of its worktrees). A bundle path
+whose `.git` cannot be stat'ed (the directory is not searchable) is
+reported with the operating-system error; a `.git` git cannot read is
+reported with git's message. A failed or timed-out
 probe of that path is reported as that failure. Any other existing
 clone is passed to `git submodule add` whatever its `origin` or
 `core.worktree`, as git decides;
