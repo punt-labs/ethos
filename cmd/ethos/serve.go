@@ -15,7 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func runServeImpl() error {
+func runServeImpl(opencodeSessionMetadata bool) error {
 	s := server.NewMCPServer(
 		"ethos",
 		// resolveVersion, not the raw `version` var: `version` is only
@@ -34,12 +34,13 @@ func runServeImpl() error {
 	if loc.Err != nil {
 		fmt.Fprintf(os.Stderr, "ethos serve: %v; guarded tools refuse writes (and, for identity and a bundle or policy failure, reads) until it is repaired\n", loc.Err)
 	}
-	h := buildServeHandler(home, loc)
+	metadata := mcp.WithOpenCodeSessionMetadata(opencodeSessionMetadata)
+	h := buildServeHandler(home, loc, metadata)
 	// The store is located again on every tool call, and the stores rebuilt
 	// when the answer changes: repairing .git, entering a repository, or a
 	// store created by enable or setup takes effect without a restart.
 	h.RelocateStore(loc, locateServeStore, func(loc mcp.StoreLocation) *mcp.Handler {
-		return buildServeHandler(home, loc)
+		return buildServeHandler(home, loc, metadata)
 	})
 	h.RegisterTools(s)
 
@@ -74,8 +75,10 @@ func locateServeStore() mcp.StoreLocation {
 // note that they come from the global store only, except identity (every method
 // refuses) and a bundle or policy failure (every guarded read and write
 // refuses). Doctor, session and adr are unguarded; ethos serve is a command that handles the
-// error itself, so its constructors take the global stores for it.
-func buildServeHandler(home string, loc mcp.StoreLocation) *mcp.Handler {
+// error itself, so its constructors take the global stores for it. extra options
+// (the OpenCode session metadata opt-in) are applied to every handler built, so a
+// relocated handler keeps them.
+func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) *mcp.Handler {
 	storeErr := loc.Err
 	located := resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, StoreErr: loc.Err}
 	var ce *resolve.ConfigError
@@ -106,5 +109,6 @@ func buildServeHandler(home string, loc mcp.StoreLocation) *mcp.Handler {
 	if storeErr != nil {
 		opts = append(opts, mcp.WithStoreError(storeErr))
 	}
+	opts = append(opts, extra...)
 	return mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles, opts...)
 }

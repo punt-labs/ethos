@@ -7,12 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Clear 3 open Dependabot alerts (1 high, 2 low) by bumping
+  `tests/e2e/uv.lock`: filelock 3.32.3 → 4.2.4 (E2E harness only; the Go
+  binary is unaffected).
+
 ### Removed
 
 - The stray `.punt-labs/ethos/ethos.yaml` in this repository. No code read
   or wrote it.
 
 ### Fixed
+
+- With the opt-in `ethos serve --opencode-session-metadata`, native OpenCode
+  MCP `whoami`, implicit roster lookup, and `iam` use
+  request-local `ai.opencode/sessionID` metadata and the exact registered
+  participant instead of the server's process identity. Missing or invalid
+  caller bindings fail visibly; `iam` cannot recreate a removed participant
+  or target a different caller. Default MCP behavior ignores that metadata,
+  preserving existing consumers. Missing-participant recovery recommends
+  joining the existing roster rather than overwriting it with creation.
+  Explicit roster setup is required; mission and fork
+  traceability are not changed.
 
 - **`.claude/settings.json` conforms to `punt-kit/standards/permissions.md`.**
   `Bash(bash:*)` and `Bash(sed:*)` were allowed; the standard forbids both

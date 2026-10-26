@@ -219,11 +219,16 @@ var serveCmd = &cobra.Command{
 	GroupID: "admin",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runServeImpl()
+		enabled, err := cmd.Flags().GetBool("opencode-session-metadata")
+		if err != nil {
+			return err
+		}
+		return runServeImpl(enabled)
 	},
 }
 
 func init() {
+	serveCmd.Flags().Bool("opencode-session-metadata", false, "Opt into OpenCode session metadata caller routing (not authentication)")
 	showCmd.Flags().BoolVar(&showReference, "reference", false, "Include reference identity data")
 	whoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
 	iamCmd.Flags().StringVar(&sessionIamSession, "session", "", "Session ID (full or prefix)")
