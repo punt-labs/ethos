@@ -110,19 +110,27 @@ func UntrackedOrModified(repoRoot string, paths []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, specs...)
+	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--"}, specs...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git status: %w", err)
 	}
+	// -z entries are "XY path", and a rename or copy is followed by one more
+	// entry, the old path, which is skipped: the new path is the one that
+	// matches.
 	dirty := make(map[string]struct{})
-	for _, line := range SplitLines(out) {
-		if len(line) < 4 {
+	toks := bytes.Split(out, []byte{0})
+	for i := 0; i < len(toks); i++ {
+		t := toks[i]
+		if len(t) < 4 {
 			continue
 		}
-		dirty[string(line[3:])] = struct{}{}
+		dirty[string(t[3:])] = struct{}{}
+		if t[0] == 'R' || t[0] == 'C' || t[1] == 'R' || t[1] == 'C' {
+			i++
+		}
 	}
 	if len(dirty) == 0 {
 		return nil, nil
@@ -138,4 +146,57 @@ func UntrackedOrModified(repoRoot string, paths []string) ([]string, error) {
 		}
 	}
 	return pending, nil
+}
+
+// IsTracked reports whether path is in the index.
+func IsTracked(repoRoot, path string) (bool, error) {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return false, err
+	}
+	cmd := exec.Command("git", "ls-files", "--", spec)
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git ls-files: %w", err)
+	}
+	return len(bytes.TrimSpace(out)) > 0, nil
+}
+
+// GitRmCached stages the removal of path from the index and leaves the file.
+// It forces: a path staged and then modified has index content that matches
+// neither the file nor HEAD, which git otherwise refuses to drop.
+func GitRmCached(repoRoot, path string) error {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "rm", "--cached", "-f", "-q", "--", spec)
+	cmd.Dir = repoRoot
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git rm --cached: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// IndexBlob returns the content the index holds at path, and false when the
+// index has no entry for it.
+func IndexBlob(repoRoot, path string) ([]byte, bool, error) {
+	tracked, err := IsTracked(repoRoot, path)
+	if err != nil || !tracked {
+		return nil, false, err
+	}
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return nil, false, err
+	}
+	cmd := exec.Command("git", "show", ":"+spec)
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false, fmt.Errorf("git show :%s: %w", spec, err)
+	}
+	return out, true, nil
 }

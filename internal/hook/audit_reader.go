@@ -98,6 +98,19 @@ func walkAuditLines(r io.Reader, source string, fn func(raw []byte, e auditEntry
 type rawAuditLine struct {
 	key string
 	raw []byte
+	// n is the line's number in the file it was read from, counting every
+	// physical line; 0 when the reader does not record it.
+	n int
+	// note says what migration did to the line, for the notice printed when
+	// the line is appended. It is nil for a line left as it was.
+	note *migrateNote
+}
+
+// migrateNote is what migration did to legacy line n, as the kinds of rewrite
+// that applied: never a value.
+type migrateNote struct {
+	n     int
+	kinds []string
 }
 
 // readRawAuditLines walks an audit JSONL file returning each well-formed line's
@@ -117,6 +130,42 @@ func readRawAuditLines(path string) ([]rawAuditLine, error) {
 		out = append(out, rawAuditLine{key: rawAuditLineKey(e, raw), raw: raw})
 	})
 	return out, err
+}
+
+// readLegacyAuditLines reads every non-blank physical line of a legacy audit
+// file, including one that does not decode as an entry and a torn trailing
+// fragment, so that migration can route each through the guard instead of
+// losing it. A line that does not decode has an empty key, which migration
+// replaces once the guard has made it a line that does. Missing file → nil.
+func readLegacyAuditLines(path string) ([]rawAuditLine, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+	var out []rawAuditLine
+	br := bufio.NewReader(f)
+	for n := 1; ; n++ {
+		line, readErr := br.ReadString('\n')
+		body := strings.TrimRight(strings.TrimRight(line, "\n"), "\r")
+		if strings.TrimSpace(body) != "" {
+			raw := []byte(body)
+			l := rawAuditLine{raw: raw, n: n}
+			if e, err := decodeAuditLine(raw); err == nil {
+				l.key = rawAuditLineKey(e, raw)
+			}
+			out = append(out, l)
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return out, nil
+			}
+			return nil, fmt.Errorf("reading %s: %w", path, readErr)
+		}
+	}
 }
 
 // decodeAuditLine decodes one JSONL line into an auditEntry. The

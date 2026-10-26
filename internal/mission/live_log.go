@@ -57,6 +57,10 @@ func (s *Store) appendLiveEventLocked(missionID string, e Event) error {
 			if mErr != nil {
 				return nil, fmt.Errorf("marshaling event: %w", mErr)
 			}
+			var gErr error
+			if data, gErr = guardWrite(livePath, data); gErr != nil {
+				return nil, gErr
+			}
 			return data, nil
 		})
 		return aErr

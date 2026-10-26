@@ -33,14 +33,14 @@ const (
 // All identity fields hold handles, not display names. Validate() must
 // be called before persisting.
 type Contract struct {
-	MissionID string `yaml:"mission_id" json:"mission_id"`
-	Status    string `yaml:"status" json:"status"`
-	Type      string `yaml:"type,omitempty" json:"type,omitempty"`
-	CreatedAt string `yaml:"created_at" json:"created_at"`
-	UpdatedAt string `yaml:"updated_at" json:"updated_at"`
-	ClosedAt  string `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
-	Session   string `yaml:"session,omitempty" json:"session,omitempty"`
-	Repo      string `yaml:"repo,omitempty" json:"repo,omitempty"`
+	MissionID string `yaml:"mission_id" json:"mission_id" redact:"keep"`
+	Status    string `yaml:"status" json:"status" redact:"keep"`
+	Type      string `yaml:"type,omitempty" json:"type,omitempty" redact:"keep"`
+	CreatedAt string `yaml:"created_at" json:"created_at" redact:"keep"`
+	UpdatedAt string `yaml:"updated_at" json:"updated_at" redact:"keep"`
+	ClosedAt  string `yaml:"closed_at,omitempty" json:"closed_at,omitempty" redact:"keep"`
+	Session   string `yaml:"session,omitempty" json:"session,omitempty" redact:"session"`
+	Repo      string `yaml:"repo,omitempty" json:"repo,omitempty" redact:"path"`
 
 	// Ticket ID lives at inputs.ticket — the single source of truth.
 	// An earlier draft carried both a top-level Bead and Inputs.Ticket
@@ -49,12 +49,12 @@ type Contract struct {
 	// Bead → Ticket for tracker-agnostic language; inputs.bead is
 	// accepted as a deprecated alias during YAML/JSON decode.
 
-	Leader    string    `yaml:"leader" json:"leader"`
-	Worker    string    `yaml:"worker" json:"worker"`
+	Leader    string    `yaml:"leader" json:"leader" redact:"handle"`
+	Worker    string    `yaml:"worker" json:"worker" redact:"handle"`
 	Evaluator Evaluator `yaml:"evaluator" json:"evaluator"`
 
 	Inputs   Inputs   `yaml:"inputs" json:"inputs"`
-	WriteSet []string `yaml:"write_set" json:"write_set"`
+	WriteSet []string `yaml:"write_set" json:"write_set" redact:"path"`
 	// ExtractInto authorizes new-file creation under listed directories
 	// without authorizing modification of existing files in those
 	// directories. Entries are directories — the per-entry validator
@@ -67,7 +67,7 @@ type Contract struct {
 	// any listed directory; existing path Write/Edit still requires
 	// ETHOS_VERIFIER_ALLOWLIST match. See DES-052 in DESIGN.md for full
 	// rationale and the cross-mission admission control table.
-	ExtractInto []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`
+	ExtractInto []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty" redact:"path"`
 	// WriteSetReleasedAt, when set, marks WriteSet/ExtractInto as
 	// released from admission control by Store.ForceReleaseWriteSet
 	// (RFC3339). The fields themselves are left untouched -- clearing
@@ -79,8 +79,8 @@ type Contract struct {
 	// claim stops blocking new missions while the declared write_set
 	// stays intact for validation and audit history. See
 	// docs/mission-force-release-write-set.md.
-	WriteSetReleasedAt string   `yaml:"write_set_released_at,omitempty" json:"write_set_released_at,omitempty"`
-	Tools              []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	WriteSetReleasedAt string   `yaml:"write_set_released_at,omitempty" json:"write_set_released_at,omitempty" redact:"keep"`
+	Tools              []string `yaml:"tools,omitempty" json:"tools,omitempty" redact:"path"`
 	SuccessCriteria    []string `yaml:"success_criteria" json:"success_criteria"`
 
 	Budget Budget `yaml:"budget" json:"budget"`
@@ -104,7 +104,7 @@ type Contract struct {
 	// The trade-off: a malformed CurrentRound on disk fails Validate
 	// at load time, which is symmetric with every other Contract
 	// field — the trust boundary stays in one place.
-	CurrentRound int `yaml:"current_round,omitempty" json:"current_round"`
+	CurrentRound int `yaml:"current_round,omitempty" json:"current_round" redact:"keep"`
 
 	Context string `yaml:"context,omitempty" json:"context,omitempty"`
 
@@ -113,13 +113,13 @@ type Contract struct {
 	// picks it at instantiation time, or ethos auto-generates one. Validate
 	// requires a slug-like value: lowercase letters, digits, and hyphens
 	// only, max 128 characters.
-	Pipeline string `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
+	Pipeline string `yaml:"pipeline,omitempty" json:"pipeline,omitempty" redact:"keep"`
 
 	// DependsOn is an optional list of mission IDs that must reach a
 	// terminal status before this mission's worker should begin. Advisory —
 	// the store does not block Create on dependency status. The leader or
 	// daemon enforces ordering.
-	DependsOn []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	DependsOn []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty" redact:"keep"`
 
 	// Preconditions are admission gates evaluated by the PreToolUse
 	// hook before any non-Read tool call under a Tier B contract.
@@ -186,8 +186,8 @@ type Contract struct {
 // predicate fails. Empty Message is rejected at Validate time so a
 // failed gate is never silently named.
 type Precondition struct {
-	Form        string   `yaml:"form" json:"form"`
-	RequireRead []string `yaml:"require_read,omitempty" json:"require_read,omitempty"`
+	Form        string   `yaml:"form" json:"form" redact:"keep"`
+	RequireRead []string `yaml:"require_read,omitempty" json:"require_read,omitempty" redact:"path"`
 	Message     string   `yaml:"message,omitempty" json:"message,omitempty"`
 }
 
@@ -218,9 +218,9 @@ func (c *Contract) EffectiveStrictPreconditions() bool {
 // "" line on save), but the JSON tag always emits the field so
 // consumers that key on presence see a consistent shape.
 type Evaluator struct {
-	Handle   string `yaml:"handle" json:"handle"`
-	PinnedAt string `yaml:"pinned_at" json:"pinned_at"`
-	Hash     string `yaml:"hash,omitempty" json:"hash"`
+	Handle   string `yaml:"handle" json:"handle" redact:"handle"`
+	PinnedAt string `yaml:"pinned_at" json:"pinned_at" redact:"keep"`
+	Hash     string `yaml:"hash,omitempty" json:"hash" redact:"keep"`
 }
 
 // Trigger captures the provenance of an externally-triggered mission
@@ -240,9 +240,9 @@ type Trigger struct {
 // and "bead" (deprecated alias). Setting both is an error. Marshal
 // emits "ticket" only.
 type Inputs struct {
-	Ticket     string   `yaml:"ticket,omitempty" json:"ticket,omitempty"`
-	Files      []string `yaml:"files,omitempty" json:"files,omitempty"`
-	References []string `yaml:"references,omitempty" json:"references,omitempty"`
+	Ticket     string   `yaml:"ticket,omitempty" json:"ticket,omitempty" redact:"path"`
+	Files      []string `yaml:"files,omitempty" json:"files,omitempty" redact:"path"`
+	References []string `yaml:"references,omitempty" json:"references,omitempty" redact:"path"`
 	Trigger    *Trigger `yaml:"trigger,omitempty" json:"trigger,omitempty"`
 }
 

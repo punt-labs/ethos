@@ -1046,9 +1046,9 @@ func tierBStoreRoot() string {
 //
 // Resolution order:
 //  1. ETHOS_REPO_ROOT env override
-//  2. resolve.FindRepoRoot (walk for .git)
-//  3. os.Getwd fallback (logs to stderr; downstream sites defend
-//     against an empty return)
+//  2. os.Getwd, the current directory as it is: no walk up to a .git
+//     (logs to stderr on failure; downstream sites defend against an
+//     empty return)
 func tierBRepoRoot() string {
 	if root := resolve.EnvRepoRoot(); root != "" {
 		return root

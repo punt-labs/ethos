@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Mission records and audit lines are redacted before they reach disk
+  (DES-080, ethos-3e3f).** Contracts, results, reflections, delegation
+  records and prompts, the mission event log, `missions.jsonl`, plain
+  `ethos mission export`, `ethos mission migrate`, the audit sentinel, the
+  legacy-audit migration and quarantine markers now pass through one
+  redactor: home and repository paths become `~` and `<repo>`, email
+  addresses become `[redacted-email]`, and credentials (GitHub, Anthropic,
+  OpenAI, Stripe, Slack, GitLab, Google, npm, Hugging Face and AWS keys,
+  JWTs, `Bearer` and `Basic` headers, PEM and PGP private-key blocks, URL
+  passwords, and values of secret-named keys) become `[redacted-secret]`.
+  Previously only audit lines and the delegation prompt were redacted,
+  for paths and addresses only. Fields ethos enforces (tool grants, write
+  set, extraction targets, precondition paths) get the path pass only.
+  Every mission writer refuses the write when it cannot redact; the audit
+  hook drops the tool input instead of blocking the tool call. Matching is
+  by name and over-redacts some ordinary text, such as `max_tokens=4096`.
+  Identity files are unchanged: an identity's email is its beadle binding.
+  Already-sealed chunks are not rewritten.
 - Clear 3 open Dependabot alerts (1 high, 2 low) by bumping
   `tests/e2e/uv.lock`: filelock 3.32.3 → 4.2.4 (E2E harness only; the Go
   binary is unaffected).
@@ -97,6 +115,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ethos mission scrub`** rewrites the tracked mission records of a
+  repository written by an earlier ethos through the redactor. It is a
+  dry run by default and lists the files that would change; `--apply`
+  rewrites them. It continues past a file it cannot process, exits
+  non-zero if any failed, and exits 2 outside a repository. Sealed chunks
+  and legacy `log.jsonl` and `audit.jsonl` files are not touched.
 - **Design for native OpenCode integration (DES-078,
   `docs/design-opencode-plugin.md`).** Design only, no implementation.
   It maps the formal model in `docs/spec-opencode-integration.tex` onto an
