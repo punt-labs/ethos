@@ -651,6 +651,10 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 	own, resolved := false, ""
 	if info.IsDir() {
 		if own, resolved, err = isOwnGitRepo(targetDir); err != nil {
+			var refused *dotRefusedError
+			if errors.As(err, &refused) {
+				return err
+			}
 			return fmt.Errorf("examining the bundle path %s: %w", targetDir, err)
 		}
 	}
@@ -661,13 +665,27 @@ func checkBundleDestination(targetDir, gitDir, relTarget string) error {
 }
 
 // refuseOwnGitDir refuses a bundle path whose .git resolves to the
-// superproject's own git dir or common dir (a symlink or a gitfile to it): git
-// submodule add would report success with no gitlink, or a gitlink to the
-// superproject's own HEAD.
+// superproject's own git dir or common dir, or whose common dir is the
+// superproject's (a symlink or a gitfile to it, or a linked worktree of the
+// superproject): git submodule add would report success with no gitlink, or a
+// gitlink to the superproject's own HEAD.
 func refuseOwnGitDir(gitDir, resolved string) error {
 	ri, err := os.Stat(resolved)
 	if err != nil {
 		return fmt.Errorf("examining the git dir %s of the bundle path: %w", resolved, err)
+	}
+	// git's rule: a commondir file names the common dir, relative to the git dir.
+	ci := ri
+	if data, err := os.ReadFile(filepath.Join(resolved, "commondir")); err == nil {
+		c := strings.TrimSpace(string(data))
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(resolved, c)
+		}
+		if ci, err = os.Stat(c); err != nil {
+			return fmt.Errorf("examining the common dir %s of the bundle path's git dir: %w", c, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("reading the commondir of %s: %w", resolved, err)
 	}
 	for _, flag := range []string{"--absolute-git-dir", "--git-common-dir"} {
 		out, err := gitenv.Output(gitDir, "git", "rev-parse", flag)
@@ -682,23 +700,35 @@ func refuseOwnGitDir(gitDir, resolved string) error {
 		if err != nil {
 			return fmt.Errorf("examining the superproject git dir %s: %w", p, err)
 		}
-		if os.SameFile(ri, pi) {
+		if os.SameFile(ri, pi) || flag == "--git-common-dir" && os.SameFile(ci, pi) {
 			return fmt.Errorf("the bundle path's .git is this repository's own git dir (%s): remove it, or choose another --name", p)
 		}
 	}
 	return nil
 }
 
+// dotRefusedError is git's refusal of a .git that exists at the bundle path.
+type dotRefusedError struct {
+	dir, stderr string
+}
+
+func (e *dotRefusedError) Error() string {
+	return fmt.Sprintf("the bundle path %s has a .git git does not accept: %s", e.dir, e.stderr)
+}
+
 // isOwnGitRepo reports whether dir is a git repository of its own by git's own
 // adoption test, `git rev-parse --resolve-git-dir dir/.git`, run from dir's
 // parent so no repository around it is consulted. It returns the resolved git
-// dir. It is (false, nil) when dir/.git is absent or git says "not a gitdir" or
-// "not a git repository"; any other failure, including a timeout, is the error
-// and carries git's stderr.
+// dir. It is (false, nil) only when dir/.git is absent. A .git that git does
+// not accept ("not a gitdir", "not a git repository") is a *dotRefusedError
+// carrying git's message; a .git that cannot be examined, or any other failure
+// including a timeout, is the error.
 func isOwnGitRepo(dir string) (bool, string, error) {
 	dot := filepath.Join(dir, ".git")
 	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
 		return false, "", nil
+	} else if err != nil {
+		return false, "", fmt.Errorf("examining %s: %w", dot, err)
 	}
 	out, err := gitenv.Output(filepath.Dir(dir), "git", "rev-parse", "--resolve-git-dir", dot)
 	if err == nil {
@@ -710,7 +740,7 @@ func isOwnGitRepo(dir string) (bool, string, error) {
 	}
 	stderr := strings.TrimSpace(string(ee.Stderr))
 	if strings.Contains(stderr, "not a gitdir") || strings.Contains(stderr, "not a git repository") {
-		return false, "", nil
+		return false, "", &dotRefusedError{dir: dir, stderr: stderr}
 	}
 	if stderr == "" {
 		return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w", err)

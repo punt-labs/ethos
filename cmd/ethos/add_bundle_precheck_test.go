@@ -358,8 +358,24 @@ func TestIsOwnGitRepoReportsFailures(t *testing.T) {
 			t.Skip("git not installed")
 		}
 		ok, _, err := isOwnGitRepo(withDotGit(t))
-		require.NoError(t, err)
 		assert.False(t, ok)
+		var refused *dotRefusedError
+		require.ErrorAs(t, err, &refused)
+		assert.Contains(t, err.Error(), "has a .git git does not accept")
+		assert.NotContains(t, err.Error(), "remove it")
+	})
+
+	t.Run("a .git that cannot be examined", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores permissions")
+		}
+		dir := withDotGit(t)
+		require.NoError(t, os.Chmod(dir, 0o600))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		ok, _, err := isOwnGitRepo(dir)
+		assert.False(t, ok)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.NotContains(t, err.Error(), "remove it")
 	})
 
 	t.Run("a gitfile to nothing", func(t *testing.T) {
@@ -369,8 +385,10 @@ func TestIsOwnGitRepoReportsFailures(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /nonexistent\n"), 0o644))
 		ok, _, err := isOwnGitRepo(dir)
-		require.NoError(t, err)
 		assert.False(t, ok)
+		var refused *dotRefusedError
+		require.ErrorAs(t, err, &refused)
+		assert.Contains(t, err.Error(), "not a git repository: /nonexistent")
 	})
 
 	t.Run("an empty .git file", func(t *testing.T) {
@@ -546,4 +564,132 @@ func TestAddBundleRefusesTheSuperprojectsOwnGitDir(t *testing.T) {
 			assertNoNetwork(t, logFile)
 		})
 	}
+}
+
+// The two reasons a bundle path is not a repository are worded apart: no .git
+// at all is a directory to remove; a .git git does not accept is git's message,
+// never advice to remove a clone whose separate git dir is merely unreadable.
+func TestAddBundleWordsWhyThePathIsNotARepository(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	setup := func(t *testing.T) string {
+		bundleFlags(t, false)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		repo := t.TempDir()
+		gitInitDir(t, repo, t.TempDir())
+		dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
+		require.NoError(t, os.MkdirAll(dest, 0o755))
+		t.Chdir(repo)
+		return dest
+	}
+
+	t.Run("no .git", func(t *testing.T) {
+		setup(t)
+		_, err := runAddBundle(t, "https://example.invalid/o/b.git")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists and is not a git repository: remove it, or choose another --name")
+	})
+
+	t.Run("a .git git does not accept", func(t *testing.T) {
+		dest := setup(t)
+		require.NoError(t, os.WriteFile(filepath.Join(dest, ".git"), []byte("gitdir: /nonexistent\n"), 0o644))
+		_, err := runAddBundle(t, "https://example.invalid/o/b.git")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has a .git git does not accept")
+		assert.Contains(t, err.Error(), "not a git repository: /nonexistent")
+		assert.NotContains(t, err.Error(), "remove it")
+	})
+
+	t.Run("a .git that cannot be examined", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores permissions")
+		}
+		dest := setup(t)
+		gitInitDir(t, dest, t.TempDir())
+		require.NoError(t, os.Chmod(dest, 0o600))
+		t.Cleanup(func() { _ = os.Chmod(dest, 0o755) })
+		_, err := runAddBundle(t, "https://example.invalid/o/b.git")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, fs.ErrPermission)
+		assert.NotContains(t, err.Error(), "remove it")
+	})
+}
+
+// A bundle path that is a linked worktree of the superproject, or whose git dir
+// has the superproject's common dir, is refused: its common dir is the
+// superproject's own.
+func TestAddBundleRefusesTheSuperprojectsCommonDir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	super := func(t *testing.T) (repo, dest string) {
+		bundleFlags(t, false)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		repo = t.TempDir()
+		gitInitDir(t, repo, t.TempDir())
+		gitCmd(t, repo, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "i")
+		dest = filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
+		require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+		return repo, dest
+	}
+	refused := func(t *testing.T, repo string) {
+		t.Chdir(repo)
+		logFile := loggedGit(t)
+		_, err := runAddBundle(t, "https://example.invalid/o/b.git")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "this repository's own git dir")
+		assertNoNetwork(t, logFile)
+	}
+
+	t.Run("git worktree add at the bundle path", func(t *testing.T) {
+		repo, dest := super(t)
+		gitCmd(t, repo, "worktree", "add", "-q", "--detach", dest)
+		refused(t, repo)
+	})
+
+	t.Run("a gitfile to another linked worktree's git dir", func(t *testing.T) {
+		repo, dest := super(t)
+		other := filepath.Join(t.TempDir(), "other")
+		gitCmd(t, repo, "worktree", "add", "-q", "--detach", other)
+		require.NoError(t, os.MkdirAll(dest, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dest, ".git"), []byte("gitdir: "+filepath.Join(repo, ".git", "worktrees", "other")+"\n"), 0o644))
+		refused(t, repo)
+	})
+}
+
+// The --git-common-dir branch: the superproject is a linked worktree of a bare
+// repository, and the bundle path's git dir is another worktree's, whose
+// commondir file names that repository. Neither its own git dir nor the bare
+// repository itself is the bundle path's resolved dir.
+func TestRefuseOwnGitDirComparesCommonDirs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	src := t.TempDir()
+	gitInitDir(t, src, t.TempDir())
+	gitCmd(t, src, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "i")
+	base := t.TempDir()
+	bare := filepath.Join(base, "r.git")
+	out, err := exec.Command("git", "clone", "-q", "--bare", src, bare).CombinedOutput()
+	require.NoError(t, err, string(out))
+	w1, w2 := filepath.Join(base, "w1"), filepath.Join(base, "w2")
+	for _, w := range []string{w1, w2} {
+		out, err := exec.Command("git", "-C", bare, "worktree", "add", "-q", "--detach", w).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+
+	err = refuseOwnGitDir(w1, filepath.Join(bare, "worktrees", "w2"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "this repository's own git dir")
+
+	other := t.TempDir()
+	gitInitDir(t, other, t.TempDir())
+	require.NoError(t, refuseOwnGitDir(w1, filepath.Join(other, ".git")), "an unrelated repository is accepted")
 }
