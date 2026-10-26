@@ -179,8 +179,9 @@ func TestAddBundleUnreadableConfigFiles(t *testing.T) {
 	})
 }
 
-// What git accepts is not refused: an existing clone at the submodule path is
-// handed to git submodule add, which adopts it, and a --global destination that
+// What git accepts is not refused: an existing clone at the submodule path,
+// whatever its origin (an insteadOf rewrite, a relative URL), is handed to git
+// submodule add, which adopts it, and a --global destination that
 // is a symlink to an empty directory is cloned into.
 func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
 	const url = "https://example.invalid/o/b.git"
@@ -195,7 +196,6 @@ func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
 		dest := filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
 		require.NoError(t, os.MkdirAll(dest, 0o755))
 		gitInitDir(t, dest, t.TempDir())
-		gitCmd(t, dest, "remote", "add", "origin", url)
 		t.Chdir(repo)
 		logFile := loggedGit(t)
 		_, _ = runAddBundle(t, url)
@@ -240,9 +240,9 @@ func TestAddBundleLeavesToGitWhatGitAccepts(t *testing.T) {
 	})
 }
 
-// What git would do something other than the user meant is refused before git
-// runs: a symlink at the submodule path (git stages the link), an existing
-// clone of another remote or with none, a symlink that cannot be followed.
+// What git would do other than the user meant is refused before git runs: a
+// symlink at the submodule path (git stages the link), a symlink that cannot be
+// followed.
 func TestAddBundleRefusesWhatGitWouldDoWrong(t *testing.T) {
 	const url = "https://example.invalid/o/b.git"
 	submodule := func(t *testing.T) (repo, dest string) {
@@ -262,36 +262,11 @@ func TestAddBundleRefusesWhatGitWouldDoWrong(t *testing.T) {
 		_, dest := submodule(t)
 		clone := t.TempDir()
 		gitInitDir(t, clone, t.TempDir())
-		gitCmd(t, clone, "remote", "add", "origin", url)
 		require.NoError(t, os.Symlink(clone, dest))
 		logFile := loggedGit(t)
 		_, err := runAddBundle(t, url)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "is a symlink; git submodule add would stage the link, not a submodule")
-		assertNoNetwork(t, logFile)
-	})
-
-	t.Run("clone of another remote", func(t *testing.T) {
-		_, dest := submodule(t)
-		require.NoError(t, os.MkdirAll(dest, 0o755))
-		gitInitDir(t, dest, t.TempDir())
-		gitCmd(t, dest, "remote", "add", "origin", "https://example.invalid/other/c.git")
-		logFile := loggedGit(t)
-		_, err := runAddBundle(t, url)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "https://example.invalid/other/c.git")
-		assert.Contains(t, err.Error(), url)
-		assertNoNetwork(t, logFile)
-	})
-
-	t.Run("clone with no origin", func(t *testing.T) {
-		_, dest := submodule(t)
-		require.NoError(t, os.MkdirAll(dest, 0o755))
-		gitInitDir(t, dest, t.TempDir())
-		logFile := loggedGit(t)
-		_, err := runAddBundle(t, url)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no readable origin")
 		assertNoNetwork(t, logFile)
 	})
 
@@ -331,6 +306,27 @@ func TestIsOwnGitRepoReportsFailures(t *testing.T) {
 		assert.NotContains(t, err.Error(), "not a git repository")
 	})
 
+	t.Run("a failure with no stderr names the exit", func(t *testing.T) {
+		bin := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 3\n"), 0o755))
+		t.Setenv("PATH", bin)
+		ok, err := isOwnGitRepo(dir)
+		assert.False(t, ok)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exit status 3")
+	})
+
+	t.Run("a top level that cannot be examined", func(t *testing.T) {
+		bin := t.TempDir()
+		gone := filepath.Join(t.TempDir(), "gone")
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho '"+gone+"'\n"), 0o755))
+		t.Setenv("PATH", bin)
+		ok, err := isOwnGitRepo(dir)
+		assert.False(t, ok)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		assert.Contains(t, err.Error(), gone)
+	})
+
 	t.Run("another git failure", func(t *testing.T) {
 		bin := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho 'fatal: detected dubious ownership' >&2\nexit 128\n"), 0o755))
@@ -349,5 +345,45 @@ func TestIsOwnGitRepoReportsFailures(t *testing.T) {
 		ok, err := isOwnGitRepo(dir)
 		require.NoError(t, err)
 		assert.False(t, ok)
+	})
+}
+
+// An existing clone reaches git submodule add whatever its origin looks like:
+// one set through insteadOf (https rewritten to ssh), and one made from a
+// relative URL, are clones of exactly the URL given.
+func TestAddBundleHandsAnExistingCloneToGit(t *testing.T) {
+	setup := func(t *testing.T) (repo, dest string) {
+		bundleFlags(t, false)
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+		repo = t.TempDir()
+		gitInitDir(t, repo, t.TempDir())
+		dest = filepath.Join(repo, ".punt-labs", "ethos-bundles", "b")
+		require.NoError(t, os.MkdirAll(dest, 0o755))
+		gitInitDir(t, dest, t.TempDir())
+		t.Chdir(repo)
+		return repo, dest
+	}
+	ran := func(logFile string) string {
+		b, _ := os.ReadFile(logFile)
+		return string(b)
+	}
+
+	t.Run("origin through insteadOf", func(t *testing.T) {
+		repo, dest := setup(t)
+		gitCmd(t, repo, "config", "url.ssh://git@example.invalid/.insteadOf", "https://example.invalid/")
+		gitCmd(t, dest, "remote", "add", "origin", "ssh://git@example.invalid/o/b.git")
+		logFile := loggedGit(t)
+		_, _ = runAddBundle(t, "https://example.invalid/o/b.git")
+		assert.Contains(t, ran(logFile), "submodule")
+	})
+
+	t.Run("relative URL", func(t *testing.T) {
+		_, dest := setup(t)
+		gitCmd(t, dest, "remote", "add", "origin", "/somewhere/else/src")
+		logFile := loggedGit(t)
+		_, _ = runAddBundle(t, "../src")
+		assert.Contains(t, ran(logFile), "submodule")
 	})
 }
