@@ -533,6 +533,17 @@ func credentialPassLine(line []byte) ([]byte, bool) {
 	if dec.Decode(&m) != nil || m == nil {
 		return line, false
 	}
+	for k := range m {
+		// A decoder reads Tool_Input as the tool_input field, so its hash and
+		// preview cannot be rebuilt from here: the line becomes a loss marker, as
+		// the guard treats a case-variant of a field it rewrites.
+		switch strings.ToLower(k) {
+		case "tool_input", "tool_input_hash", "tool_input_preview":
+			if k != strings.ToLower(k) {
+				return lossMarker(lineTS(line), sessionOf(line), "case-variant of a field ethos writes"), true
+			}
+		}
+	}
 	changed := false
 	if ti, ok := m["tool_input"].(map[string]any); ok {
 		tool, _ := m["tool"].(string)
@@ -567,6 +578,7 @@ func credentialPassLine(line []byte) ([]byte, bool) {
 		for k, v := range out {
 			m[k] = v
 		}
+		m["redacted"] = true
 		changed = true
 	}
 	if !changed {

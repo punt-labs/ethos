@@ -961,3 +961,59 @@ func TestSessionLineGuard_UnusableHomeRedactsAShortAssignment(t *testing.T) {
 		assert.NotContains(t, l, "TOKEN=abc")
 	}
 }
+
+// TestCredentialPassLine_MarksTheLineRedacted: a line whose only change is in a
+// header or an unknown field carries the redacted marker, as one whose
+// tool_input changed does.
+func TestCredentialPassLine_MarksTheLineRedacted(t *testing.T) {
+	for name, extra := range map[string]map[string]any{
+		"header":        {"agent_id": "jane@example.com"},
+		"unknown field": {"x_token": "hunter2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			sid := "sess-mark"
+			live := liveAuditPath(repo, sid)
+			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+			require.NoError(t, os.WriteFile(live, []byte(olderLiveLine(100, sid, extra)), 0o600))
+			lines := sealedLines(t, repo, sid)
+			require.Len(t, lines, 1)
+			var m map[string]any
+			require.NoError(t, json.Unmarshal([]byte(lines[0]), &m))
+			assert.Equal(t, true, m["redacted"], lines[0])
+			assert.NotContains(t, lines[0], "hunter2")
+			assert.NotContains(t, lines[0], "jane@example.com")
+		})
+	}
+}
+
+// TestCredentialPassLine_CaseVariantInputIsALossMarker: a top-level key that is
+// tool_input, tool_input_hash or tool_input_preview in another case is read as
+// the field by a decoder, but its hash and preview cannot be rebuilt; the line
+// becomes a loss marker, as the guard treats a case-variant of a field it
+// rewrites, and holds no credential.
+func TestCredentialPassLine_CaseVariantInputIsALossMarker(t *testing.T) {
+	for _, key := range []string{"Tool_Input", "TOOL_INPUT_HASH", "Tool_Input_Preview"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			sid := "sess-case"
+			live := liveAuditPath(repo, sid)
+			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+			// The only spelling of the field is the variant: no exact tool_input.
+			b, err := json.Marshal(map[string]any{
+				"ts": audit.FormatLineTS(100), "session": sid, "tool": "Bash",
+				key: map[string]any{"api_key": "hunter2"},
+			})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(live, append(b, '\n'), 0o600))
+			lines := sealedLines(t, repo, sid)
+			require.Len(t, lines, 1)
+			assert.NotContains(t, lines[0], "hunter2")
+			assert.Contains(t, lines[0], "audit_error", "a loss marker")
+		})
+	}
+}
