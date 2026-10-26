@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -515,6 +517,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	var gitArgs []string
 	var targetDir string
 	var gitDir string
+	var relTarget string // the submodule path, relative to the repo root
 	if addBundleGlobal {
 		globalRoot := defaultGlobalRoot()
 		if globalRoot == "" {
@@ -535,7 +538,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		// git submodule add expects a path relative to the repo root.
 		// Absolute paths produce "outside repository" errors and
 		// incorrect .gitmodules entries.
-		relTarget := filepath.Join(".punt-labs", "ethos-bundles", name)
+		relTarget = filepath.Join(".punt-labs", "ethos-bundles", name)
 		gitArgs = []string{"git", "submodule", "add", url, relTarget}
 		gitDir = repoRoot
 	}
@@ -556,13 +559,13 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		return nil
 	}
 
-	// A user config git cannot read is skipped by git without a word: its
-	// core.sshCommand, insteadOf and credential settings would not apply. Say so
-	// before the clone, then go on.
-	var unreadable *gitenv.UnreadableConfigError
-	if uerr := gitenv.UnreadableUserConfig(); errors.As(uerr, &unreadable) {
-		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team add-bundle: git will ignore %s: its core.sshCommand, insteadOf and credential settings do not apply (%v)\n",
-			unreadable.Path, unreadable.Err)
+	// What a clone or submodule add would refuse for local reasons is checked
+	// before git runs, so the failure is the real one and no network is touched.
+	if err := checkBundleDestination(targetDir, gitDir, relTarget); err != nil {
+		return err
+	}
+	if err := checkGitConfigReadable(cmd.ErrOrStderr()); err != nil {
+		return err
 	}
 
 	// git's stderr is ethos's own, untouched: clone progress shows when it is a
@@ -589,6 +592,63 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		})
 	}
 	fmt.Fprintf(out, "added bundle %q at %s\n", name, targetDir)
+	return nil
+}
+
+// checkBundleDestination refuses a destination git would refuse: a clone into a
+// directory that exists and is not empty, or a submodule add at a path that is
+// already in the index or exists in the work tree (gitDir is the repo root, ""
+// for a clone).
+func checkBundleDestination(targetDir, gitDir, relTarget string) error {
+	info, err := os.Lstat(targetDir)
+	exists := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("examining the bundle destination %s: %w", targetDir, err)
+	}
+	if gitDir == "" {
+		if !exists {
+			return nil
+		}
+		if info.IsDir() {
+			ents, err := os.ReadDir(targetDir)
+			if err != nil {
+				return fmt.Errorf("reading the bundle destination %s: %w", targetDir, err)
+			}
+			if len(ents) == 0 {
+				return nil
+			}
+		}
+		return fmt.Errorf("the bundle destination %s already exists and is not an empty directory: remove it, or choose another --name", targetDir)
+	}
+	if exists {
+		return fmt.Errorf("the bundle path %s already exists in the work tree: remove it, or choose another --name", targetDir)
+	}
+	out, err := gitenv.Output(gitDir, "git", "ls-files", "--", relTarget)
+	if err != nil {
+		return fmt.Errorf("checking whether %s is in the index: %w", relTarget, err)
+	}
+	if len(bytes.TrimSpace(out)) > 0 {
+		return fmt.Errorf("the bundle path %s is already in the index: choose another --name, or remove it with git rm", relTarget)
+	}
+	return nil
+}
+
+// checkGitConfigReadable names every git config file that cannot be read. An
+// unreadable system file is fatal for git, so it refuses before the clone; an
+// unreadable global or XDG file is skipped by git, so its core.sshCommand,
+// insteadOf and credential settings do not apply, and it is a notice on w.
+func checkGitConfigReadable(w io.Writer) error {
+	var fatal []string
+	for _, u := range gitenv.UnreadableConfigs() {
+		if u.System {
+			fatal = append(fatal, fmt.Sprintf("%s (%v)", u.Path, u.Err))
+			continue
+		}
+		fmt.Fprintf(w, "ethos: team add-bundle: git will ignore %s: its core.sshCommand, insteadOf and credential settings do not apply (%v)\n", u.Path, u.Err)
+	}
+	if len(fatal) > 0 {
+		return fmt.Errorf("team add-bundle: git will refuse the system config %s; make it readable", strings.Join(fatal, ", "))
+	}
 	return nil
 }
 

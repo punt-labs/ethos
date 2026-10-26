@@ -588,10 +588,24 @@ func WithoutTrace(stderr string) string {
 // exit 1 as for an unset key, so a caller that read "unset" checks this before
 // believing it: a value that may have been in the file is not "unset".
 func UnreadableUserConfig() error {
-	var files []string
+	if all := UnreadableConfigs(); len(all) > 0 {
+		return all[0]
+	}
+	return nil
+}
+
+// UnreadableConfigs returns every config file UnreadableUserConfig looks at that
+// exists and cannot be read, in git's reading order. An unreadable system file
+// (System) is fatal for git; an unreadable global or XDG file is skipped.
+func UnreadableConfigs() []*UnreadableConfigError {
+	type file struct {
+		path   string
+		system bool
+	}
+	var files []file
 	if g, ok := os.LookupEnv("GIT_CONFIG_GLOBAL"); ok {
 		if g != "" {
-			files = append(files, g)
+			files = append(files, file{g, false})
 		}
 	} else {
 		home, _ := os.UserHomeDir()
@@ -600,39 +614,42 @@ func UnreadableUserConfig() error {
 			xdg = filepath.Join(home, ".config")
 		}
 		if xdg != "" {
-			files = append(files, filepath.Join(xdg, "git", "config"))
+			files = append(files, file{filepath.Join(xdg, "git", "config"), false})
 		}
 		if home != "" {
-			files = append(files, filepath.Join(home, ".gitconfig"))
+			files = append(files, file{filepath.Join(home, ".gitconfig"), false})
 		}
 	}
 	if b, _ := ParseBool(os.Getenv("GIT_CONFIG_NOSYSTEM")); !b {
 		if s, ok := os.LookupEnv("GIT_CONFIG_SYSTEM"); ok {
 			if s != "" {
-				files = append(files, s)
+				files = append(files, file{s, true})
 			}
 		} else {
-			files = append(files, "/etc/gitconfig")
+			files = append(files, file{"/etc/gitconfig", true})
 		}
 	}
+	var bad []*UnreadableConfigError
 	for _, f := range files {
-		info, err := os.Stat(f)
+		info, err := os.Stat(f.path)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return &UnreadableConfigError{Path: f, Err: fmt.Errorf("the git config %s cannot be examined: %w", f, err)}
+			bad = append(bad, &UnreadableConfigError{Path: f.path, System: f.system, Err: fmt.Errorf("the git config %s cannot be examined: %w", f.path, err)})
+			continue
 		}
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		h, err := os.Open(f)
+		h, err := os.Open(f.path)
 		if err != nil {
-			return &UnreadableConfigError{Path: f, Err: fmt.Errorf("the git config %s cannot be read: %w", f, err)}
+			bad = append(bad, &UnreadableConfigError{Path: f.path, System: f.system, Err: fmt.Errorf("the git config %s cannot be read: %w", f.path, err)})
+			continue
 		}
 		_ = h.Close()
 	}
-	return nil
+	return bad
 }
 
 // usableGitDir applies git's own tests to a .git directory: HEAD must open for
@@ -646,7 +663,15 @@ func usableGitDir(dot string) (bool, error) {
 	refuse := func(what string, err error) error {
 		return fmt.Errorf("%s exists but its %s cannot be used (%v): git would say \"not a git repository\" or answer for an enclosing repository; fix its permissions", dot, what, err)
 	}
-	h, err := os.Stat(filepath.Join(dot, "HEAD"))
+	head := filepath.Join(dot, "HEAD")
+	if l, err := os.Lstat(head); err == nil && l.Mode()&fs.ModeSymlink != 0 {
+		// git accepts a HEAD that is a symlink to refs/..., dangling or not (an
+		// unborn branch); any other target is read through the link as a file.
+		if t, err := os.Readlink(head); err == nil && strings.HasPrefix(t, "refs/") {
+			return usableObjectsAndRefs(dot, refuse)
+		}
+	}
+	h, err := os.Stat(head)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
@@ -655,11 +680,17 @@ func usableGitDir(dot string) (bool, error) {
 	case !h.Mode().IsRegular():
 		return false, nil
 	}
-	f, err := os.Open(filepath.Join(dot, "HEAD"))
+	f, err := os.Open(head)
 	if err != nil {
 		return false, refuse("HEAD", err)
 	}
 	_ = f.Close()
+	return usableObjectsAndRefs(dot, refuse)
+}
+
+// usableObjectsAndRefs is the second half of usableGitDir: objects/ and refs/
+// must be directories that can be searched.
+func usableObjectsAndRefs(dot string, refuse func(string, error) error) (bool, error) {
 	for _, name := range []string{"objects", "refs"} {
 		d := filepath.Join(dot, name)
 		if info, err := os.Stat(d); err != nil || !info.IsDir() {
@@ -679,8 +710,9 @@ func usableGitDir(dot string) (bool, error) {
 // UnreadableConfigError is UnreadableUserConfig's error: Path is the config file
 // git cannot read (and may skip silently).
 type UnreadableConfigError struct {
-	Path string
-	Err  error
+	Path   string
+	System bool // the system file, which git refuses rather than skips
+	Err    error
 }
 
 func (e *UnreadableConfigError) Error() string { return e.Err.Error() }

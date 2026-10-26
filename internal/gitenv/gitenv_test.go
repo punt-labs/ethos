@@ -448,3 +448,28 @@ func TestDanglingDotGitAppliesGitsOwnChecks(t *testing.T) {
 		})
 	}
 }
+
+// A HEAD that is a symlink to refs/... is a repository for git, dangling (an
+// unborn branch) or not; a symlink to anything else is read through, and a
+// dangling one is not a repository.
+func TestUsableGitDirSymlinkedHEAD(t *testing.T) {
+	for name, tc := range map[string]struct {
+		target string
+		want   bool
+	}{
+		"to refs, dangling": {"refs/heads/main", true},
+		"elsewhere":         {"nowhere", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dot := filepath.Join(t.TempDir(), ".git")
+			require.NoError(t, os.MkdirAll(filepath.Join(dot, "objects"), 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(dot, "refs"), 0o755))
+			if err := os.Symlink(tc.target, filepath.Join(dot, "HEAD")); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			ok, err := usableGitDir(dot)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, ok)
+		})
+	}
+}
