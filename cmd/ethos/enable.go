@@ -46,7 +46,9 @@ func runEnable(cmd *cobra.Command) error {
 		if r.StoreErr != nil {
 			return "", r.StoreErr
 		}
-		return r.Store, firstError(r.EthosErr, r.ConfigErr)
+		// A malformed or unreadable ethos.yaml (ConfigErr) does not stop enable:
+		// the store root is known, and EnableTo warns about the config.
+		return r.Store, r.EthosErr
 	})
 	if err != nil {
 		return err

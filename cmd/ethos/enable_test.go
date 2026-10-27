@@ -13,6 +13,8 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func runEnableCmd(t *testing.T, args ...string) (string, string, error) {
@@ -216,4 +218,22 @@ func TestEnableOverrideNamingFreshRepo(t *testing.T) {
 	if strings.Contains(errOut, "refusing") {
 		t.Errorf("stderr = %q, want no refusal for a valid override", errOut)
 	}
+}
+
+// A malformed .punt-labs/ethos.yaml does not stop enable: the store is known,
+// so the hooks, the marker and the guide are deposited, and the config is
+// reported as a warning.
+func TestEnableProceedsWithMalformedConfig(t *testing.T) {
+	dir := enableGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".punt-labs", "ethos.yaml"), []byte("agent: [unclosed\n"), 0o644))
+	t.Chdir(dir)
+
+	out, errOut, err := runEnableCmd(t, "enable")
+	require.NoError(t, err, errOut)
+	assert.Contains(t, out, "ethos enabled in")
+	assert.FileExists(t, filepath.Join(dir, ".punt-labs", "ethos", "enabled"))
+	assert.FileExists(t, filepath.Join(dir, ".git", "hooks", "pre-commit"))
+	assert.FileExists(t, filepath.Join(dir, ".git", "hooks", "commit-msg"))
+	assert.Contains(t, errOut, "ethos.yaml is unreadable")
 }
