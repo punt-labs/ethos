@@ -79,7 +79,7 @@ ethos disable           # remove import line + marker; unchain hooks (non-destru
 ethos disable --force   # unchain even when a sibling worktree is still enabled
 ```
 
-`enable` does four things and is idempotent (re-running is the upgrade path):
+`enable` does five things and is idempotent (re-running is the upgrade path):
 
 1. deposits the vendored agent guide `.punt-labs/ethos/CLAUDE.md` and its
    `.vendored-manifest` (the vendored zone — never touches identities, teams,
@@ -88,12 +88,17 @@ ethos disable --force   # unchain even when a sibling worktree is still enabled
    so a marker present always implies a complete guide;
 3. adds the `@.punt-labs/ethos/CLAUDE.md` import line to the repo `CLAUDE.md`;
 4. chains the `ETHOS DES-058 SEAL` and `ETHOS DES-054 TRAILER` sections into
-   the `pre-commit` and `commit-msg` hooks.
+   the `pre-commit` and `commit-msg` hooks;
+5. allows ethos in the repo's `.claude/settings.json`: `Bash(ethos:*)`,
+   `mcp__plugin_ethos_self__*` and one `Skill(ethos:<command>)` per shipped
+   command. Running `enable` is the consent; no `ethos-dev` rule is granted
+   and `~/.claude/settings.json` is never edited.
 
 `enable` and `setup` stay separate — neither calls the other. `enable` prints
 a "run `ethos setup`" hint when the repo has no identity config.
 
-`disable` removes the import line, deletes the marker, and unchains the hooks,
+`disable` removes the import line and exactly ethos's allow rules, deletes the
+marker, and unchains the hooks,
 but leaves the vendored guide and all config and audit data dormant on disk.
 It runs no final seal; unsealed audit lines stay in the gitignored local zone
 and seal on a later re-enable.

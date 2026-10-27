@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/claudesettings"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
@@ -378,7 +379,9 @@ func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
 	}
 	// After a full enable+disable cycle, nothing named like a lock file may
 	// remain anywhere in the work tree (R2 — the lock lives in the per-user
-	// dir, never beside the target).
+	// dir, never beside the target). The one exception is the tool-agnostic
+	// .claude/.settings.json.punt-import.lock: settings.json is shared with
+	// every punt CLI, and only a lock name they all take serializes them.
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -386,7 +389,7 @@ func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
 		if d.Name() == ".git" && d.IsDir() {
 			return filepath.SkipDir
 		}
-		if strings.HasSuffix(d.Name(), ".lock") {
+		if strings.HasSuffix(d.Name(), ".lock") && d.Name() != claudesettings.LockName {
 			t.Errorf("work-tree litter: %s", path)
 		}
 		return nil
