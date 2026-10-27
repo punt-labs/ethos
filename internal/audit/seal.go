@@ -287,24 +287,32 @@ func WriteChunkAtomic(dir, tempName, chunkName string, lines [][]byte) error {
 	for _, line := range lines {
 		if _, err := f.Write(append(line, '\n')); err != nil {
 			f.Close()
-			_ = os.Remove(tempPath)
-			return fmt.Errorf("writing temp chunk %s: %w", tempPath, err)
+			return discardTemp(tempPath, fmt.Errorf("writing temp chunk %s: %w", tempPath, err))
 		}
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("syncing temp chunk %s: %w", tempPath, err)
+		return discardTemp(tempPath, fmt.Errorf("syncing temp chunk %s: %w", tempPath, err))
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("closing temp chunk %s: %w", tempPath, err)
+		return discardTemp(tempPath, fmt.Errorf("closing temp chunk %s: %w", tempPath, err))
 	}
 	if err := os.Rename(tempPath, finalPath); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("renaming temp chunk %s -> %s: %w", tempPath, finalPath, err)
+		return discardTemp(tempPath, fmt.Errorf("renaming temp chunk %s -> %s: %w", tempPath, finalPath, err))
 	}
 	return nil
+}
+
+// removeFile removes a temp chunk; a test replaces it.
+var removeFile = os.Remove
+
+// discardTemp removes a temp chunk after cause, and returns cause, saying so
+// when the removal failed too: the leftover is then named, not hidden.
+func discardTemp(path string, cause error) error {
+	if err := removeFile(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w; removing the temp chunk %s also failed: %v", cause, path, err)
+	}
+	return cause
 }
 
 // staleTempAge bounds how long a foreign session's chunk temp may linger
@@ -374,12 +382,37 @@ func sweepable(e os.DirEntry, ns Namespace, ownSession, tempSession string, now 
 // session filters to one session's chunks. Returns the count actually staged
 // (already-clean-tracked chunks are not counted).
 func StageUntrackedChunks(repoRoot, dir string, ns Namespace, session string) (int, error) {
+	paths, err := ChunkArtifacts(dir, ns, session)
+	if err != nil {
+		return 0, err
+	}
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	pending, err := UntrackedOrModified(repoRoot, paths)
+	if err != nil {
+		return 0, err
+	}
+	if len(pending) == 0 {
+		return 0, nil
+	}
+	if err := GitAdd(repoRoot, pending...); err != nil {
+		return 0, err
+	}
+	return len(pending), nil
+}
+
+// ChunkArtifacts lists every chunk-namespace artifact in dir — a valid chunk,
+// a quarantine marker, or a .corrupt artifact — as absolute paths, in
+// directory order. In the mission namespace, session filters to one session's
+// artifacts. A missing dir lists nothing. It touches no git.
+func ChunkArtifacts(dir string, ns Namespace, session string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, fmt.Errorf("reading %s: %w", dir, err)
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
 	}
 	var paths []string
 	for _, e := range entries {
@@ -398,20 +431,7 @@ func StageUntrackedChunks(repoRoot, dir string, ns Namespace, session string) (i
 		case KindOther, KindNearMiss, KindTemp:
 		}
 	}
-	if len(paths) == 0 {
-		return 0, nil
-	}
-	pending, err := UntrackedOrModified(repoRoot, paths)
-	if err != nil {
-		return 0, err
-	}
-	if len(pending) == 0 {
-		return 0, nil
-	}
-	if err := GitAdd(repoRoot, pending...); err != nil {
-		return 0, err
-	}
-	return len(pending), nil
+	return paths, nil
 }
 
 // lastNewline returns the index of the last '\n' in b, or -1.

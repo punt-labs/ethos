@@ -52,10 +52,10 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 
 // GenerateAgentFilesTo is GenerateAgentFiles with the config-read root and
 // the output root split. configRoot resolves the repo config and thus the
-// team/agent selection — the shared store (StoreRepoRoot), matching the
+// team/agent selection — the shared store (StoreRootIfAny), matching the
 // team/role data the stores already resolve from main. destRoot is where the
 // .claude/agents/ files are written and the project file-pattern detection
-// runs — the current checkout (FindRepoRoot/EnvRepoRoot), so a worktree
+// runs — the current checkout (CheckoutRootIfAny), so a worktree
 // generates agents into its OWN tree, where its Claude reads them and
 // InstallAgentDefinitions writes (Bugbot HIGH on PR #370). They coincide
 // outside a linked worktree.
@@ -64,7 +64,7 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 		return nil // not configured — nothing to generate
 	}
 
-	cfg, err := resolve.LoadRepoConfig(configRoot)
+	cfg, err := resolve.ConfigOf(configRoot)
 	if err != nil {
 		return fmt.Errorf("generate agents: %w", err)
 	}
@@ -226,7 +226,7 @@ func GeneratedAgentHandles(configRoot string, identities identity.IdentityStore,
 	if teams == nil {
 		return nil, nil
 	}
-	cfg, err := resolve.LoadRepoConfig(configRoot)
+	cfg, err := resolve.ConfigOf(configRoot)
 	if err != nil {
 		return nil, fmt.Errorf("generated agent handles: %w", err)
 	}

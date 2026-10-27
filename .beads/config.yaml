@@ -17,6 +17,7 @@
 # and reading them would be misleading.
 
 issue-prefix: ethos
+linear.pull_label: repo:ethos
 
 directory:
   labels:

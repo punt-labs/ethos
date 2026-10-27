@@ -8,9 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// Verify ANTHROPIC_API_KEY is set.
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		fmt.Fprintln(os.Stderr, "ANTHROPIC_API_KEY not set; skipping behavioral tests")

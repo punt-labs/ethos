@@ -11,7 +11,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mcp"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
 	"github.com/spf13/cobra"
 )
@@ -119,7 +118,11 @@ func runVendor(cmd *cobra.Command, args []string) error {
 	// the moment the .local rule must exist — before the operator's first
 	// `ethos ext set --local` has anywhere to leak to.
 	if plan.Applied {
-		added, ignoreErr := ensureLocalExtIgnored(resolve.EnvRepoRoot())
+		loc := currentRoots()
+		if loc.CheckoutErr != nil {
+			return fmt.Errorf("locating the checkout for the .local ignore rule: %w", loc.CheckoutErr)
+		}
+		added, ignoreErr := ensureLocalExtIgnored(loc.Checkout)
 		if ignoreErr != nil {
 			return ignoreErr
 		}
@@ -167,7 +170,11 @@ func vendorRunner() mcp.VendorRunner {
 			return nil, err
 		}
 		if plan.Applied {
-			if _, err := ensureLocalExtIgnored(resolve.EnvRepoRoot()); err != nil {
+			loc := currentRoots()
+			if loc.CheckoutErr != nil {
+				return nil, fmt.Errorf("locating the checkout for the .local ignore rule: %w", loc.CheckoutErr)
+			}
+			if _, err := ensureLocalExtIgnored(loc.Checkout); err != nil {
 				return nil, err
 			}
 		}
@@ -184,7 +191,11 @@ func vendorDest(is identity.IdentityStore) (string, error) {
 	if ls, ok := is.(*identity.LayeredStore); ok && ls.RepoRoot() != "" {
 		return ls.RepoRoot(), nil
 	}
-	repoRoot := resolve.StoreRepoRoot()
+	loc := currentRoots()
+	if err := loc.StoreFailure(); err != nil {
+		return "", fmt.Errorf("locating the repository store: %w", err)
+	}
+	repoRoot := loc.Store
 	if repoRoot == "" {
 		return "", fmt.Errorf("not in a git repository — name a destination with --to")
 	}

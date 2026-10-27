@@ -1,10 +1,7 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/punt-labs/ethos/v4/internal/enable"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -33,9 +30,8 @@ func init() {
 }
 
 func runDisable(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := locateForCommand(cmd, "disable")
 	if repoRoot == "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), "ethos: disable: not in a git repository")
 		return failClosed{}
 	}
 	rep, err := enable.Disable(repoRoot, disableForce)

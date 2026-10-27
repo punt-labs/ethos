@@ -1,113 +1,261 @@
 package githook
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/v4/internal/textscan"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
-// HooksDir returns the hooks directory git runs for the repo at repoRoot,
-// plus any advisory warnings about a core.hooksPath that lands inside the
-// work tree (a tracked file the seal would dirty) or outside the repo
-// (shared across every repo using that hooksPath).
+// Lookup is the answer to "where does git run this repo's hooks".
 //
-// It asks git directly first — `git rev-parse --git-path hooks` honors
-// core.hooksPath and resolves a worktree's common dir. When git is
-// unavailable it falls back to reading .git and commondir by hand, so a
-// worktree still lands on the common hooks dir git actually runs. This is the
-// one resolver install, enable, and doctor share, so they cannot drift; the
-// manual fallback is kept (not install.sh's git-required form) so enable
-// resolves in a git-less environment where doctor already succeeds.
-func HooksDir(repoRoot string) (string, []string) {
-	if dir, warns, ok := gitHooksPath(repoRoot); ok {
-		return dir, warns
-	}
-	return manualHooksDir(repoRoot), nil
+// Warnings holds every advisory line for the user: a core.hooksPath that lands
+// inside the work tree or outside the repo, and the notice of a degraded
+// lookup. Degraded says the directory was not fully verified against git;
+// Reason says why. The directory is not exported: a caller that acts on it
+// goes through Verified, which refuses a lookup it cannot trust, and one that
+// only shows it uses Display.
+type Lookup struct {
+	dir      string
+	root     string // the work tree the lookup was made for
+	Warnings []string
+	Degraded bool
+	Reason   string
+	cause    error // why the lookup is degraded; Remedy classifies it
 }
 
-// gitHooksPath returns git's own resolution of the hooks directory, warnings
-// about a diverted core.hooksPath, and whether git answered. The
-// work-tree-root anchor matters: without it git would walk up from a non-repo
-// repoRoot and resolve an ancestor repo's hooks.
-func gitHooksPath(repoRoot string) (string, []string, bool) {
-	top, err := gitOut(repoRoot, "rev-parse", "--show-toplevel")
-	if err != nil || !textscan.SamePath(top, repoRoot) {
-		return "", nil, false
+// Display returns the hooks directory for a message or a read-only scan. Do not
+// create or write into it: it may be a guess.
+func (l Lookup) Display() string { return l.dir }
+
+// Explain returns Reason, followed by the advice for its cause when there is
+// one.
+func (l Lookup) Explain() string {
+	if r := l.Remedy(); r != "" {
+		return l.Reason + "; " + r
+	}
+	return l.Reason
+}
+
+// Remedy returns advice matched to why the lookup is degraded, or "" when the
+// cause is not one it recognizes: telling a user to install git when git is
+// installed sends them the wrong way.
+func (l Lookup) Remedy() string {
+	var mismatch *workTreeError
+	msg := ""
+	if l.cause != nil {
+		msg = l.cause.Error()
+	}
+	switch {
+	case errors.Is(l.cause, exec.ErrNotFound):
+		return "install git"
+	case errors.Is(l.cause, gitenv.ErrTimeout):
+		return "find what blocks git there (a FIFO or a special file under .git, or a hung filesystem) and repair it"
+	case strings.Contains(msg, "dubious ownership") || strings.Contains(msg, "safe.directory"):
+		return "fix safe.directory"
+	case errors.As(l.cause, &mismatch):
+		return "run from, or point ETHOS_REPO_ROOT at, the repository's top level"
+	}
+	return ""
+}
+
+// workTreeError says git reports a work tree other than the one asked about.
+type workTreeError struct{ top, root string }
+
+func (e *workTreeError) Error() string {
+	return fmt.Sprintf("git reports the work tree at %s, not %s; %s is a subdirectory of another repository or has no .git of its own", e.top, e.root, e.root)
+}
+
+// Verified returns the hooks directory only when git itself named it. A
+// degraded lookup ignores core.hooksPath, so acting on its directory may touch
+// hooks git never runs, or miss the ones it does.
+func (l Lookup) Verified() (string, error) {
+	if l.Degraded {
+		return "", fmt.Errorf("hooks directory not verified: %w", &lookupRefusal{msg: l.Reason, cause: l.cause})
+	}
+	return l.dir, nil
+}
+
+// Refusal is the error for declining to act on a degraded lookup. Its text is
+// Explain (the reason and the remedy); it unwraps to the cause, so a caller can
+// ask errors.Is(err, gitenv.ErrTimeout) or errors.As a workTreeError.
+func (l Lookup) Refusal() error { return &lookupRefusal{msg: l.Explain(), cause: l.cause} }
+
+// lookupRefusal carries a lookup's explanation and its cause.
+type lookupRefusal struct {
+	msg   string
+	cause error
+}
+
+func (e *lookupRefusal) Error() string { return e.msg }
+func (e *lookupRefusal) Unwrap() error { return e.cause }
+
+// HooksDir returns the hooks directory git runs for the repo at repoRoot.
+//
+// It asks git directly first — `git rev-parse --git-path hooks` honors
+// core.hooksPath and resolves a worktree's common dir. When git cannot answer
+// (missing, failing, or reporting a work tree that is not repoRoot) it falls
+// back to reading .git and commondir by hand and marks the Lookup degraded.
+// That fallback cannot see core.hooksPath. This is the one resolver install,
+// enable, disable, and doctor share, so they cannot drift. The manual fallback
+// exists so doctor and disable can report where hooks would be without git;
+// enable requires a verified lookup and refuses a degraded one.
+//
+// repoRoot is made absolute first; ETHOS_REPO_ROOT may be relative.
+func HooksDir(repoRoot string) Lookup {
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		dir, handErr := manualHooksDir(repoRoot)
+		return degradedLookup(repoRoot, dir, handErr, fmt.Errorf("making %s absolute: %w", repoRoot, err))
+	}
+	l, err := gitHooksPath(root)
+	if err != nil {
+		dir, handErr := manualHooksDir(root)
+		return degradedLookup(root, dir, handErr, err)
+	}
+	return l
+}
+
+// degradedLookup builds the Lookup for a hooks dir found without git's help.
+// handErr is why the hand rules found no git directory either (nil when they
+// did): it is part of the warning, so a reader sees why the default was used.
+func degradedLookup(root, dir string, handErr, cause error) Lookup {
+	warn := fmt.Sprintf(
+		"git did not resolve the hooks directory (%s); core.hooksPath is ignored and %s is assumed", cause, dir)
+	if handErr != nil {
+		warn += fmt.Sprintf(" (the hand rules found no git directory either: %v)", handErr)
+	}
+	return Lookup{
+		dir:      dir,
+		root:     root,
+		Degraded: true,
+		Reason:   cause.Error(),
+		cause:    cause,
+		Warnings: []string{warn},
+	}
+}
+
+// gitHooksPath returns git's own resolution of the hooks directory. A non-nil
+// error says why git did not answer. The work-tree-root anchor matters:
+// without it git would walk up from a non-repo repoRoot and resolve an
+// ancestor repo's hooks.
+func gitHooksPath(repoRoot string) (Lookup, error) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return Lookup{}, fmt.Errorf("running git rev-parse: %w", err)
+	}
+	top, err := resolve.CheckoutOf(repoRoot)
+	if err != nil {
+		return Lookup{}, fmt.Errorf("locating the work tree: %w", err)
+	}
+	if top == "" {
+		return Lookup{}, fmt.Errorf("not a git repository: %s is outside any repository", repoRoot)
+	}
+	if !sameFile(top, repoRoot) {
+		return Lookup{}, &workTreeError{top: top, root: repoRoot}
 	}
 	hdRaw, err := gitOut(repoRoot, "rev-parse", "--git-path", "hooks")
-	if err != nil || hdRaw == "" {
-		return "", nil, false
+	if err != nil {
+		return Lookup{}, fmt.Errorf("git rev-parse --git-path hooks: %w", err)
+	}
+	if hdRaw == "" {
+		return Lookup{}, errors.New("git rev-parse --git-path hooks printed nothing")
 	}
 	hd := hdRaw
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
 	}
-	return hd, classifyHooksPath(repoRoot, top, hdRaw), true
+	warns, err := classifyHooksPath(repoRoot, top, hdRaw)
+	l := Lookup{dir: hd, root: repoRoot, Warnings: warns}
+	if err != nil {
+		l.Degraded = true
+		l.Reason = err.Error()
+		l.cause = err
+		l.Warnings = append(l.Warnings, "hooks directory classification incomplete: "+l.Reason)
+	}
+	return l, nil
+}
+
+// sameFile reports whether a and b name the same directory, by file identity.
+// Text comparison would call `~/coding/x` and `~/Coding/x` different on a
+// case-insensitive file system, where git reports one spelling.
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
 
 // classifyHooksPath warns when the resolved hooks dir is not under the git
 // dir: inside the work tree (a tracked file) or outside the repo (shared).
 // Comparison is done on symlink-resolved paths so a symlinked temp root
-// (macOS /tmp → /private/tmp) does not defeat the prefix test.
-func classifyHooksPath(repoRoot, top, hdRaw string) []string {
-	common, err := gitOut(repoRoot, "rev-parse", "--git-common-dir")
-	if err != nil || common == "" {
-		return nil
-	}
-	if !filepath.IsAbs(common) {
-		common = filepath.Join(repoRoot, common)
-	}
+// (macOS /tmp → /private/tmp) does not defeat the prefix test. When git cannot
+// name the common dir it classifies against <top>/.git, the default location,
+// and returns the failure so the caller can report the lookup unverified.
+func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
 	hd := hdRaw
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
 	}
+	common, err := gitOut(repoRoot, "rev-parse", "--git-common-dir")
+	if err == nil && common == "" {
+		err = errors.New("git rev-parse --git-common-dir printed nothing")
+	} else if err != nil {
+		err = fmt.Errorf("git rev-parse --git-common-dir: %w", err)
+	}
+	if err != nil {
+		common = filepath.Join(top, ".git")
+	} else if !filepath.IsAbs(common) {
+		common = filepath.Join(repoRoot, common)
+	}
 	switch {
 	case isUnder(hd, common):
-		return nil // under the git dir — private, not tracked
+		return nil, err // under the git dir — private, not tracked
 	case isUnder(hd, top):
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}
+			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}, err
 	default:
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}
+			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}, err
 	}
 }
 
-// manualHooksDir resolves the hooks dir without git by reading the ".git"
-// gitdir file and its "commondir", so a worktree still lands on the common
-// ".git/hooks" git actually runs.
-func manualHooksDir(repoRoot string) string {
-	dot := filepath.Join(repoRoot, ".git")
-	gd := dot
-	if info, err := os.Stat(dot); err != nil || !info.IsDir() {
-		if data, err := os.ReadFile(dot); err == nil {
-			line := strings.TrimSpace(string(data))
-			if target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")); target != line && target != "" {
-				gd = target
-				if !filepath.IsAbs(gd) {
-					gd = filepath.Join(repoRoot, gd)
-				}
-			}
-		}
-	}
-	if data, err := os.ReadFile(filepath.Join(gd, "commondir")); err == nil {
-		if common := strings.TrimSpace(string(data)); common != "" {
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(gd, common)
-			}
-			gd = common
-		}
-	}
-	return filepath.Join(gd, "hooks")
-}
-
-func gitOut(repoRoot string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", repoRoot}, args...)...).Output()
+// manualHooksDir resolves the hooks dir without git, by resolve's rules for a
+// .git (resolve.HandGitDirs), so a worktree still lands on the common
+// ".git/hooks" git actually runs and nothing but a regular file or a
+// directory is ever opened. When those rules find no git directory it names
+// <repoRoot>/.git/hooks, the default, and returns why: the lookup is degraded
+// and only shown, with the reason in its warning.
+func manualHooksDir(repoRoot string) (string, error) {
+	_, common, err := resolve.HandGitDirs(repoRoot)
 	if err != nil {
+		return filepath.Join(repoRoot, ".git", "hooks"), err
+	}
+	return filepath.Join(common, "hooks"), nil
+}
+
+// gitOut runs git in repoRoot and returns its trimmed stdout. A failing git's
+// stderr is part of the error: "not a git repository" and "dubious ownership"
+// are what the user needs to see, not "exit status 128". git runs in the C
+// locale, so Remedy can match those words, and without an exported GIT_DIR,
+// so it answers for repoRoot. A git that does not answer within
+// gitenv.Timeout is stopped and returned as gitenv.ErrTimeout (gitenv).
+func gitOut(repoRoot string, args ...string) (string, error) {
+	out, err := gitenv.Output(repoRoot, "git", args...)
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil

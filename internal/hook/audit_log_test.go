@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +50,8 @@ func TestHandleAuditLog_NoSessionID(t *testing.T) {
 	require.NoError(t, err)
 
 	err = HandleAuditLog(bytes.NewReader(data), "", dir)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrAuditDropped, "a payload with no session_id is a lost entry")
+	assert.Contains(t, err.Error(), "session_id")
 
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
@@ -510,7 +512,8 @@ func TestHandleAuditLog_WriteFailureSurfacesLoss(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		err := HandleAuditLog(bytes.NewReader(data), "", dir)
-		require.NoError(t, err)
+		require.ErrorIs(t, err, ErrAuditDropped, "a lost entry is reported to the caller")
+		assert.Contains(t, err.Error(), "sess-blocked")
 	})
 
 	// Original tool input must be recoverable from stderr — the
@@ -552,9 +555,27 @@ func TestHandleAuditLog_StderrCarriesEntryWhenPathResolverFails(t *testing.T) {
 
 	stderr := captureStderr(t, func() {
 		err := HandleAuditLog(bytes.NewReader(data), "", dir)
-		require.NoError(t, err)
+		require.ErrorIs(t, err, ErrAuditDropped, "a lost entry is reported to the caller")
 	})
 	assert.Contains(t, stderr, "sess-noresolve")
 	assert.Contains(t, stderr, "/etc/passwd",
 		"path-resolver failure must still surface the lost tool input")
+}
+
+// WriteAuditNotice puts a dropped entry in front of the session: the
+// operator sees systemMessage, the model sees additionalContext.
+func TestWriteAuditNotice(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, WriteAuditNotice(&buf, fmt.Errorf("%w: disk full", ErrAuditDropped)))
+	var out struct {
+		SystemMessage      string `json:"systemMessage"`
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &out), buf.String())
+	assert.Equal(t, "PostToolUse", out.HookSpecificOutput.HookEventName)
+	assert.Contains(t, out.SystemMessage, "audit entry not written: disk full")
+	assert.Equal(t, out.SystemMessage, out.HookSpecificOutput.AdditionalContext)
 }

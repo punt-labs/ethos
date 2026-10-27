@@ -11266,14 +11266,21 @@ shape (enabled/dormant/gated-but-unenabled/marker-error).
 - **git is now a hard dependency of this specific check.** The rest of
   this codebase deliberately supports a git-less environment for
   identity/team/session resolution (`internal/githook.HooksDir`'s manual
-  fallback, `internal/resolve.FindRepoRoot`'s `.git`-stat-only walk).
+  fallback, and `internal/resolve`'s repository walk, which applies git's
+  `.git` rules when git itself is not installed).
   `hookInvocationObserved` cannot honor that: the hook body itself calls
   `git rev-parse --show-toplevel`, so a git-less host could never run the
   real hook either — this is not a new dependency introduced by the
-  sandbox. When `git` is absent, `checkHookPresence` FAILs loudly
-  ("cannot verify … by execution: git not found on PATH"), the safe
-  direction, rather than silently reusing the old lexical scanner as a
-  fallback (rejected below).
+  sandbox. When `git` is absent, `checkHookPresence` FAILs loudly in an
+  enabled repository, the safe direction, rather than silently reusing
+  the old lexical scanner as a fallback (rejected below). Amended by
+  DES-079 slice 1: the failure now comes earlier, from the
+  hooks-directory lookup itself ("cannot verify hooks: …", with advice
+  that matches the cause), because a lookup made without git cannot see
+  `core.hooksPath`; a dormant repository warns. The same slice makes
+  `ethos enable` require git to install hooks and makes `ethos disable`
+  refuse an unverified hooks directory unless `--force` is given, in
+  which case it leaves the hook sections in place and says so.
 - **A non-shell hook is never executed at all**, by design —
   `checkHookPresence` only attempts `hookInvocationObserved` when
   `textscan.IsShellHook` is true. For a non-shell body, a narrow,
@@ -12687,7 +12694,7 @@ Full writeups, including two historical exploit traces, are in
 **Status**: Settled 2026-10-23 by operator ruling; ADRs added to the blame
 tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
 store in the repository) and `ethos-3e3f` (redaction, DES-080).
-Implementation in progress: the DES-080 redaction is under way; beads `ethos-g3g3` and `ethos-yjh0` are not started.
+Implementation in progress: the DES-080 redaction is under way (PR #539); slice 1 of bead `ethos-g3g3` (the path-class table and the doctor check) is implemented; its later slices and bead `ethos-yjh0` are not started.
 
 ### What this amends
 
@@ -12758,29 +12765,338 @@ forensics, not blame.
 
 ### Decision
 
-Every file ethos writes inside a repository's working tree belongs to
-exactly one of the four classes below. A class says what a file is; where a
+Every file ethos writes inside a repository's working tree at a path it
+chooses belongs to exactly one of the four classes below. Output the user
+directs to a path of their choosing is outside the classification, with
+one exception: mission records written by `ethos mission export --dir`
+under `.punt-labs/ethos/` are class 2 (the fallback entry below) unless
+another entry claims the path, as `identities/` or a mission's
+`artifacts/` does.
+`ethos export --to` (an identity in another format: `SOUL.md`,
+`IDENTITY.md`, `STYLE.md`) writes to the directory its `--dir` names,
+the current directory by default, and is outside the classification
+wherever it lands. Without `--dir`, `ethos mission export` writes to
+`.punt-labs/ethos/missions/` under the repository root, whatever the
+working directory. A writer that follows a symlink (a `CLAUDE.md` linked
+to `AGENTS.md`, a linked `.gitignore`) is classified by the name it was
+asked to write. A class says what a file is; where a
 class-3 file is written depends on the `record` setting (below). The lists
 in this ADR name the paths known on 2026-10-24 and are not the authority.
 The authority is one ordered table in code that maps every path pattern
 ethos writes to its class (bead `ethos-g3g3`). The first matching entry
 gives a path's class, and class-4 entries (locks, temporary files,
 `*.local.*`) come first, so a lock inside a mission directory or an
-`ext/<ns>.local.yaml` file is class 4. A test fails when a writer creates
-a path no entry matches, and when entries of two different classes both
+`ext/<ns>.local.yaml` file is class 4. A test runs every in-tree writer
+it knows of and fails when one creates a path no entry matches (a new
+writer is covered once it is added to that test), and a test fails when entries of two different classes both
 match one path and neither is class 4; class-4 precedence is the only
-overlap the table resolves by order. An `ethos doctor` check
-reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
-that no entry matches; other tools' files under `.punt-labs/` are not
-ethos's to classify. A prose list cannot stay complete as writers are
+overlap the table resolves by order. Overlap is decided pairwise on the
+patterns' segment sequences, not by sampling paths. The one other ordered
+case is a fallback entry: the exported-record shape
+`.punt-labs/ethos/**/m-*.contract.yaml` and `m-*.result.yaml` (output of
+`ethos mission export --dir` under `.punt-labs/ethos/`, such as a
+`missions-closed/` directory) is class 2, sits last, and claims only a path
+no other entry matches, so an agent artifact named `m-1.contract.yaml`
+stays class 3. Every temporary file or staging directory ethos creates in
+the tree carries one marker, `.ethos-tmp`, in its name, wherever it is
+created (a symlinked `CLAUDE.md`'s temporary file sits beside the link
+target), and two class-4 entries match that marker in any directory. A
+mission staging directory left by an earlier version
+(`.punt-labs/ethos/missions/.<id>.migrate-*/`) has its own class-4
+entry, so its copied `contract.yaml` is never taken for a record. The
+original bytes of a retired chunk that the redaction check withheld from
+the tracked tree (`.punt-labs/local/ethos/quarantine/<stem>.<hash>.corrupt`)
+also have one. A
+source scan fails when a temporary-file call (`os.CreateTemp`,
+`os.MkdirTemp`, `ioutil.TempFile`, `ioutil.TempDir`) takes a pattern
+not built by a layout helper, or when a string literal looks like a
+staging name (`.tmp`, `tmp-`); a staging name built another way (for
+example `dest + ".new"`) is not caught by the scan and is reported by
+`ethos doctor` only if it is left under `.punt-labs/ethos/`. Writes
+under the system temporary directory (`TMPDIR`) are out of scope even
+when `TMPDIR` lies inside the working tree, as it does in this
+organization; such writes (doctor's hook sandbox, the attribute editor's
+scratch file) still carry the marker and are removed before the command
+returns. An `ethos doctor`
+check reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
+of the working tree it runs in that no entry matches. It reports, without
+scanning past it, any symlink on the path from the repository root to
+either directory, skips a nested git working tree inside them (such as
+`.punt-labs/ethos` checked out as a submodule) and reports it as not
+scanned, names a `core.hooksPath` directory under `.punt-labs/` that
+holds an ethos hook file (with the class each file actually gets, since a
+zone entry may still match it), and warns whenever the hooks directory
+could not be verified with git (git missing or failing, or the
+repository root not being git's top level), with advice that matches
+the cause (install git, fix `safe.directory`, or run from the top
+level). Under an unverified hooks directory the hook-currency check
+warns, and the hook-presence check fails in an enabled repository and
+warns in a dormant one. When there is no repository or neither
+directory exists the check still passes, and its detail starts with
+"not scanned" and the reason.
+
+Finding the repository asks git when a working git is installed: one
+`git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`
+call, run in the C locale with `GIT_DIR`, `GIT_WORK_TREE` and
+`GIT_COMMON_DIR` cleared, decides the working tree and the store. A
+linked worktree's store is the main checkout's: when the common git
+directory is `<parent>/.git` of a non-bare repository, the store is at
+`<parent>`. When the common git directory is a bare repository, the
+worktree's own top level holds the store. Any other common git directory
+(a separate git directory, a submodule's worktree) is refused rather than
+guessed. `GIT_CEILING_DIRECTORIES` applies, with or without git.
+Git's "not a git repository" means not in a repository unless a `.git`
+git does not accept lies on the path (see below); any other git
+failure (dubious ownership, an invalid gitfile, an unreadable
+`commondir`, a run inside `.git/` or a bare repository) is a refusal
+carrying git's message. Answers are cached per process for at most 30
+seconds (so each hook process still runs git once), and a refusal is
+never cached. Without git, or with a git that is too old or does not
+run, strict hand rules apply: a `.git/` counts only with a valid `HEAD`
+(a regular file, or a symlink whose target starts with `refs/`) and
+searchable `objects/` and `refs/` directories, and a `.git` file only
+when it starts with exactly `gitdir:` followed by one space and names a
+git directory; a `.git` symlink is judged by what it points to. A
+dangling `.git` symlink, a `.git` that is neither a file nor a
+directory, and an unreadable `.git/` are refused unread, which for an
+unreadable `.git/` is stricter than git. The hand rules also refuse a start inside a git
+directory or a bare repository, and stop the upward search at a
+filesystem boundary. Every git command ethos runs has a time limit:
+10 seconds (`gitenv.Timeout`) for lookups, reads and the audit-seal
+commands, 5 minutes for a team-bundle clone, and the existing 2- and
+10-second limits for the working-context and doctor-sandbox commands.
+Two type-checked tests act as tripwires for regressions; they are not
+proofs. The first flags, counted by file, the ways ethos code starts a
+program and their common variants (references to `exec.Command`,
+`exec.Cmd` starts through an alias, `os.StartProcess`, `CreateProcess`,
+the `syscall` and `x/sys/unix` exec calls and raw exec syscalls, any
+cgo file), and fails on a start of git outside `internal/gitenv`; no
+non-test package may import the unbounded test helpers. Known gaps:
+starts hidden behind reflection or an interface, raw syscalls other
+than execve, execveat and clone, `CreateProcessAsUser` and
+`ShellExecute`, architectures other than amd64 and arm64, and a git
+binary named by full path in an allowlisted call. The second flags a
+function that discards a location error, or turns one other than "not
+in a repository" or "does not exist" into an empty root, including an
+error field of `resolve.Located` that a guarded block ignores. Known
+gaps: a helper that blanks a `Located` field, a guarded block that logs
+the error and then falls through to the empty value, and an error
+assigned to `_` inside `internal/resolve`. The shell hooks
+`pre-commit.sh` and `commit-msg.sh` run `git rev-parse` and
+`git interpret-trailers` unbounded, with git tracing switched off, and
+exit 1 with git's error when either fails or when the repository root
+is not a single absolute directory path (`/…`, or a drive path `C:/…`
+when `uname -s` reports MINGW, MSYS or CYGWIN). A merge commit (`git merge --no-ff`) is not sealed: git
+writes its tree before any hook can stage a chunk, so its live lines are
+sealed by the next ordinary commit and nothing is lost. In an enabled repository they also block
+the commit when the `ethos` binary is missing, when a component of the
+`.punt-labs/ethos` path is a dangling link, a non-directory or
+unreadable, or when the `enabled` marker exists but is not a regular
+file; only a marker that is simply absent means "not enabled", and
+`ethos doctor`, `ethos enable` and `ethos disable` (for sibling
+worktrees) apply the same rule. On a timeout
+git's process group receives SIGTERM, so git can remove its index lock,
+and SIGKILL after a one-second grace for the whole group. On Unix, git
+commands that reach the network (the team-bundle clone) run in a new
+session with no controlling terminal; when ethos receives Ctrl-C,
+SIGTERM, SIGHUP or SIGQUIT it sends SIGTERM to their process group (and
+SIGKILL to what remains), and a timeout does the same, so the clone
+stops with its ssh or helper children. They run with the C locale and
+no inherited repository variables (the user's command-scope
+configuration, `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`, is
+kept). Ethos sets no ssh command and reads no ssh setting: whatever ssh
+command the user configured (`GIT_SSH_COMMAND`, `GIT_SSH`,
+`core.sshCommand`, an `insteadOf` rewrite) applies as git resolves it;
+it switches off ssh's askpass (`SSH_ASKPASS` emptied,
+`SSH_ASKPASS_REQUIRE=never`). They run no terminal prompt or askpass
+helper, and ssh's own prompts (an unknown host key, a passphrase) find
+no terminal, so a missing credential fails instead of waiting. git's
+error output goes to the user's terminal unchanged, so clone progress
+shows. Before the clone, ethos refuses what it can see locally. For
+`--global`: a destination that exists and is not an empty directory, or
+a symlink that cannot be followed (a symlink to an empty directory is
+accepted). For a submodule: a path already in the index, a path that is
+a symlink (git would stage the link, not a submodule), a path that
+exists and whose `.git` git does not accept as a git directory (git's
+own test, `git rev-parse --resolve-git-dir`; git's message is shown),
+and a path whose `.git` is the superproject's own git directory or
+shares its common directory (another of its worktrees). A bundle path
+whose `.git` cannot be stat'ed (the directory is not searchable) is
+reported with the operating-system error; a `.git` git cannot read is
+reported with git's message. A failed or timed-out
+probe of that path is reported as that failure. Any other existing
+clone is passed to `git submodule add` whatever its `origin` or
+`core.worktree`, as git decides;
+git adopts it if it has a commit checked out and otherwise refuses it
+with its own message. After a clone that exits
+with an error (not a timeout or an interrupt), for a URL that is not
+relative (`./`, `../`), ethos runs a bounded `git ls-remote` on the
+same URL; if its output shows an ssh authentication, host-key or
+passphrase failure, ethos adds that the user should load the key with
+`ssh-add` or accept the host key with `ssh` first. Every global or XDG
+git configuration file that cannot be read is named before the clone,
+because git ignores it; an unreadable system configuration
+(`GIT_CONFIG_SYSTEM`, `/etc/gitconfig`) makes add-bundle refuse,
+because git would refuse it. On Windows there are no process groups: a timeout kills git
+at once and its children may outlive it. Git tracing is switched off
+through the environment (`GIT_TRACE2*=0` overrides configured targets)
+and any remaining trace lines are removed from stderr. A configuration
+key counts as unset only when `git config` exits 1 with nothing on
+stderr, and every user configuration file (global, XDG, system and
+`GIT_CONFIG_*`) can be read; an unreadable one is an error (a
+`git config --file` read of one named file needs no such check: git
+fails loudly on an unreadable file). Other git stderr text an answer
+depends on: git's "not a git repository (or any" discovery message;
+in the session working context, "no upstream", detached-HEAD and
+bad-revision messages, all read as "no upstream"; `index.lock` "File
+exists" in the seal, read as "another process holds the lock". Text
+that only chooses the wording of an error: bad-revision messages in
+`mission result --verify`, and "dubious ownership" or `safe.directory`
+in the hooks-directory advice. Every git read declares what an absent
+answer is (a configuration key that is not set, no such remote, no
+upstream, a path `git check-ignore` does not match, or that discovery
+failure). "Not in a repository" means no `.git` entry of any kind
+exists in the directory or an ancestor below the ceiling and the
+filesystem boundary. Ethos checks the physical directories git walks,
+so a working directory reached through a symlink is checked the same
+way, and the `.git` git itself resolved to (for example a `.git` whose
+`core.worktree` points above it) is never refused. A `.git`
+that git does not accept as a repository (a broken link or gitfile, a
+symlink git cannot follow, a FIFO, or a directory whose `HEAD` is
+empty, invalid, missing or unreadable, or whose `objects` or `refs` is
+missing or cannot be searched) is refused, naming that `.git`. For such a directory git itself skips
+it and either reports "not a git repository" or answers for an
+enclosing repository; for a broken or unreadable gitfile git reports an
+error. A `HEAD` that is a symlink to `refs/…`,
+dangling or not, is accepted, as git accepts it. Any other failure, a timeout included, is an error that
+carries git's message and names the command and the directory. A git
+failure is therefore never read as "no repository", "no remote", "not a
+gitlink" or an empty identity. One function, `resolve.Roots()`, locates
+the store, its `.punt-labs/ethos` directory, the checkout and the
+repository configuration, with an error for each; the lower-level
+lookups are unexported, so no other package can locate the repository
+another way. It checks every component of the `.punt-labs/ethos` path:
+a dangling symlink at any level, a non-directory, or a component that
+cannot be listed or searched (`.punt-labs` and the final directory
+included) is an error, and only an absent
+directory means "no store yet"; a dangling or malformed `ethos.yaml` is
+an error, not "no configuration", and never stops a command that
+handles the error itself. An unusable bundle or `repo-only` policy, or
+an unknown `resolution:` value, is also reported where the user sees
+it, as a configuration failure. Every store command exits 1, except
+`team deactivate`, `team add-bundle` and `team activate`, which can
+repair a bundle problem: activate checks the chosen bundle against the
+`repo-only` policy before writing, and when the configuration is
+unusable it records the bundle without assigning the leadership roles
+and says to run it again once the configuration is valid. None of the
+three repairs an unknown `resolution:` value; activate says that value
+must be fixed in `.punt-labs/ethos.yaml`. When the configuration or the
+store cannot be used, no hook (session start, `subagent-start`,
+`pre-compact`) answers a persona; `ethos serve` refuses guarded writes
+(the MCP `adr create` included) and identity answers, refuses every
+guarded read too when the cause is an unusable bundle or policy, and
+otherwise answers other reads from the global store with a note; and
+`ethos doctor` fails a "Repository configuration" or "Repository store"
+row and marks a store or identity check that would have passed "not
+checked" (a failing one stays failed, with the cause noted). Identity reads (`git config user.*`) and the origin
+read run in the located checkout. With no checkout, the identity read
+runs as a plain `git config` from a neutral directory outside any
+repository, so included files and command-scope configuration apply
+and the working directory has no effect; with no checkout there is no
+origin. The CLI,
+every hook, `ethos serve` (per call), setup, doctor, the UI and the
+mission, session, vendor and team commands use it. A command that
+needs the store exits 2 when any part cannot be read. Commands
+classified as global-only use the global stores; commands that handle
+the error themselves report a broken store where the user sees it
+(`ethos doctor`, from the CLI or the MCP tool, fails a "Repository
+store" row and marks checks it could not run "not checked", never
+"not in a repo" or "not enabled"; session start tells the
+session, `pre-tool-use` denies, `subagent-start` reports the verifier
+gate as undecidable, `ethos serve` notes it on reads, denies writes and
+refuses identity answers, setup refuses). Session start reads the origin from the located
+checkout, so an `ETHOS_REPO_ROOT` override records that repository's
+origin. Identity resolution fails on a git error
+instead of falling back to `$USER`. When session start cannot resolve
+the identity, the repository or the checkout, the session is told why,
+and the roster records `repo_unresolved` with the reason instead of an
+empty repository; purge and the vacuum cross-check skip such rosters
+and say so (`--json` lists them as skipped), and
+`ethos session purge --force` removes them, live or stale (`--json`
+lists them as `forced_unresolved` with a warning that their unsealed
+state was not verified). The pre-commit seal runs its read-only git
+queries before writing any chunk, then writes every chunk, snapshots
+the index (keeping its mode) and stages the chunks in one `git add`.
+If `git add` failed because another process held `index.lock`, nothing
+was staged: the seal leaves the lock and the index alone. After any
+other failure it restores the index under `index.lock`, as git does,
+but only when the index still holds what its own `git add` left,
+checked again just before the rename; if another process changed it,
+the seal leaves it and says so. A leftover lock is removed only after
+the seal's own `git add` timed out, and only when no process holds the
+same file (compared by inode); when the open files of another user's
+processes cannot be read the lock is left and named. This check sees
+only processes listed in `/proc`: with `/proc` mounted `hidepid` or
+across PID namespaces a holder can be missed, which is bounded by the
+"newer than its own `git add`" rule. On systems without `/proc` the
+lock is always left. Any removal is
+reported. The seal then removes the chunks and the sealed-chunk
+directories it created and blocks the commit; the error names the
+failed step and states whether the tree is as it was or what is left.
+Removing leftover temporary files from earlier runs is not undone, and
+the live-zone directories and per-session lock files it created (both
+never tracked) remain. Tests compare every `.git` shape in
+the shape table (the Unix run adds the shapes only Unix can make) with `git rev-parse` and run the same
+shapes with git hidden. On a refusal, or a refused `ETHOS_REPO_ROOT`,
+`ethos doctor` reports the store as one failing row; a check that reads
+the store reports a PASS as WARN "not checked" with the reason, a check
+that reads the checkout reports any result other than FAIL that way,
+and every other result keeps its status with the cause added
+(a test parses `runAll` to keep the gate on every check). The MCP server
+locates the store on every call, runs only its read methods while the
+store is unlocated, and appends a note in a separate content block; the
+session hooks say why the persona is missing, the audit hook skips the
+entry and says so in the session (as it does for an entry with no
+session id), and `subagent-start` reports that it cannot evaluate the
+verifier gate. While the store is unlocated, `pre-tool-use` denies
+mission-bound tool calls and every `Agent` spawn, including a spawn with
+no session id. The deny message names
+the failure and the fix: repair or remove the `.git` named, or set
+`ETHOS_REPO_ROOT` to the repository that holds the store. It never
+consults the global mission store instead. Every CLI command is classified in
+one table, which a test checks against the full command tree: commands
+that touch only global stores (session roster commands, `iam`,
+`adr list`/`show`/`settle`) and commands that handle the error
+themselves (`doctor`, `setup`, `seed`, `enable`, `disable`, `hook`,
+`serve`, `audit` and a few utilities) run; every other command,
+including `whoami`, `session start` and `adr create`, refuses rather
+than fall back to the global store. Git runs in the C locale with its
+location variables cleared, so a translated message or an exported
+`GIT_DIR` cannot change the answer. `ethos enable` requires git to install hooks.
+`ethos disable` refuses an unverified hooks directory unless `--force`
+is given; with `--force` it removes the import and marker and reports
+that hook sections may remain. Output a user directs into
+`.punt-labs/ethos/` or `.punt-labs/local/ethos/` that no entry claims
+(for example an `ethos export --to` directory there) is reported by
+`ethos doctor` on every run. Other tools' files under `.punt-labs/` are
+not ethos's to classify. A prose list cannot stay complete as writers are
 added; a failing test can.
 
 Files ethos writes outside the working tree are out of scope: git hooks
 in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
 `core.hooksPath` places the hooks directory inside the working tree,
 `ethos enable` writes `pre-commit` and `commit-msg` there
-(`internal/enable/enable.go:232-253`, detected at
-`internal/githook/resolver.go:71`); those hook files are class 1.
+(`chainHooks` in `internal/enable`, the location found by
+`githook.HooksDir`); those hook files are class 1. Their
+entries are derived from the resolved hooks directory, not from the file
+names, so a file named `pre-commit` elsewhere in the tree is not
+classified as a hook. A hooks directory at or under `.punt-labs/` gets no
+entries: it could overlap ethos's own zones. `ethos doctor` names such a
+hooks directory, lists each hook file in it with the class a zone entry
+gives it or as unclassified, and warns. Adding a team bundle as a
+submodule writes
+`.gitmodules` through `git submodule add`
+(`cmd/ethos/team_bundle.go`); it is class 1.
 
 **1. Source and configuration — tracked.**
 
@@ -12792,8 +13108,8 @@ in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
   `.punt-labs/ethos/config.yaml` is read as a fallback and never written,
   `internal/resolve/resolve.go:497`), `.punt-labs/ethos/.vendor.yaml`,
   `.punt-labs/ethos/.vendored-manifest`. This repository also carries a
-  stray `.punt-labs/ethos/ethos.yaml` that no code reads or writes; bead
-  `ethos-g3g3` removes it.
+  stray `.punt-labs/ethos/ethos.yaml` that no code reads or writes; slice 1
+  of bead `ethos-g3g3` removed it.
 - Files `ethos enable` writes: `.punt-labs/ethos/CLAUDE.md`,
   `.punt-labs/ethos/ETHOS-SETUP.md`, `.punt-labs/ethos/enabled`, the
   `@`-import line in the repository's root `CLAUDE.md`, and its rules in
@@ -12832,14 +13148,12 @@ needs:
 - `missions.jsonl`.
 - The output of plain `ethos mission export <id>` at its default
   directory: `missions/<id>.contract.yaml` and `missions/<id>.result.yaml`
-  (`cmd/ethos/mission.go:964`). The same content as the mission's
-  `contract.yaml` and final result, redacted. With `--dir`, the output
-  location is the caller's choice and outside this classification. Today
-  the default directory is a relative path resolved against the current
-  directory (`cmd/ethos/mission.go:1976-1977`), so an export run from a
-  subdirectory writes `<subdir>/.punt-labs/ethos/missions/`, which no
-  class covers; bead `ethos-g3g3` resolves it against the repository
-  root.
+  (`missionExportDirectory` in `cmd/ethos`). The same content as the mission's
+  `contract.yaml` and final result, redacted. The default directory is
+  resolved against the repository root, whatever the working directory.
+  With `--dir`, the output location is the caller's choice: class 2
+  under `.punt-labs/ethos/` unless another entry claims the path, and
+  outside this classification elsewhere.
 - ADRs, as `.punt-labs/ethos/adrs/<id>.yaml` (operator ruling 2026-10-24).
   A design decision is part of the provenance of the code it shaped. Today
   `ethos adr` stores ADRs in `~/.punt-labs/ethos/adrs` (`cmd/ethos/adr.go`,
@@ -13051,10 +13365,56 @@ command, prompt or contract was committed verbatim.
    targets, precondition paths and repository) get the path pass only,
    because a name-based credential match would change what they mean
    (`Bash(gh auth token:*)` is a tool grant, not a secret). For these
-   fields the path pass rewrites only an absolute path that begins with
-   the home directory or repository root; a relative path is left
-   unchanged, so `testdata/home/alice/config.yaml` is never turned into
-   `testdata~/config.yaml`. Identifiers,
+   fields the path pass rewrites an absolute path only where one starts:
+   at the start of the value or after a boundary (`(`, a run of `/`,
+   `scheme://`, whitespace, `=`, `:`, `,`, a quote), and only when the
+   home directory or repository root is followed by `/`, `)`, `:`, `,`,
+   `;`, `]`, whitespace, a quote or the end. A slash directly after a
+   placeholder never starts a path, so the pass is idempotent. A
+   relative path is never rewritten, so `testdata/home/alice/config.yaml`
+   is never turned into `testdata~/config.yaml`. The placeholders are
+   reversible on the machine that reads them: the current repository root
+   becomes `<repo>`, the current home `~`, and the dash-encoded current
+   home (`-home-<user>-` in `~/.claude/projects/` names) `-~-`, and every
+   check that compares these fields (preconditions, write-set admission)
+   expands them back first. The audit writer redacts a read's path with
+   the same function, so a recorded read and a contract entry compare
+   equal. Another user's home becomes a token that never expands
+   (`~[redacted-user]`), so a precondition naming it fails with that
+   reason instead of matching the reader's own home. Audit lines carry a
+   path-format marker; a `~` in a read recorded on a line without it is
+   not trusted, because older lines wrote another user's home as `~`.
+   Leak-freedom is one check, run at every sink that writes the tracked
+   tree (the record writers, `migrate`, `scrub`, export, seal,
+   quarantine and the audit writer) on every key and value after the
+   passes. It is a plain substring test, case-insensitive, over the value
+   as written and over its normalized, unescaped and percent-decoded
+   spellings (normalization only adds spellings, never replaces one). A
+   value leaks if it contains this machine's home directory or its
+   dash-encoded form (each bounded only at its end, so `HOME=/root` does
+   not match `/rootfs`), `/home/<name>` or `/Users/<name>`, or
+   `-home-<name>-` or `-Users-<name>-`, anywhere; or a placeholder
+   followed by `..` steps that climb out of it. Normalization does not
+   collapse a path component that contains whitespace, because shell
+   text such as `cd <repo>/docs && make; cd ../../..` would then read as
+   a climb; a home hidden behind a whitespace-only component followed by
+   `..` (`/home/ /../bob/x`) is therefore not seen. A mission writer refuses
+   it, naming the field and the rule but not the value; the audit writer
+   replaces it with `[redacted-path]` and never blocks a tool call. One
+   exemption keeps enforcement working: a path field whose value is a
+   plain repository-relative path (no leading `/`, `~` or `<`, no `..`)
+   is judged by the two rules about this machine's home only, so a write
+   set naming `app/home/page.tsx` is accepted. Everywhere else the check
+   over-matches by design: prose or a command containing
+   `app/home/page.tsx`, `fix-home-page-layout` or `https://x/home/docs`
+   is refused in a mission record and replaced in an audit line. Ten
+   review rounds of boundary-aware rules each found a new leak, which is
+   why the rule has no position logic. Go fuzz tests drive every sink,
+   check each output against an oracle written separately as the same
+   substring rules, and assert that the path pass is idempotent.
+   Accepted residuals, not checked: double percent-encoding, Unicode
+   look-alike slashes, duplicate JSON keys in raw text, and the loss of a
+   whole very large audit value when part of it leaks. Identifiers,
    hashes, enums and timestamps get no pass. The contract writer
    validates the redacted form and refuses the write if redaction made
    it invalid. Matching by name over-redacts some ordinary text

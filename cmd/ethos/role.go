@@ -95,10 +95,18 @@ func runRoleCreate(cmd *cobra.Command, name string) error {
 	} else {
 		r.Name = name
 		// Read responsibilities and permissions from stdin if available.
+		// One scanner for both lists: a second one on the same input would start
+		// after whatever the first had buffered.
+		sc := bufio.NewScanner(cmd.InOrStdin())
+		var err error
 		fmt.Fprintln(cmd.OutOrStdout(), "Enter responsibilities (one per line, empty line to finish):")
-		r.Responsibilities = readLines()
+		if r.Responsibilities, err = readLines(sc); err != nil {
+			return fmt.Errorf("reading responsibilities: %w", err)
+		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Enter permissions (one per line, empty line to finish):")
-		r.Permissions = readLines()
+		if r.Permissions, err = readLines(sc); err != nil {
+			return fmt.Errorf("reading permissions: %w", err)
+		}
 	}
 
 	s := roleStore()
@@ -190,19 +198,20 @@ func runRoleDelete(cmd *cobra.Command, name string) error {
 	return nil
 }
 
-// readLines reads lines from stdin until an empty line.
-func readLines() []string {
-	scanner := bufio.NewScanner(os.Stdin)
+// readLines reads lines from sc until an empty line or the end of the input.
+// A read that failed (a line longer than the scanner's buffer, an I/O error)
+// is the error, not the end of the list.
+func readLines(sc *bufio.Scanner) ([]string, error) {
 	var lines []string
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			break
 		}
 		lines = append(lines, line)
 	}
-	if len(lines) == 0 {
-		return nil
+	if err := sc.Err(); err != nil {
+		return nil, err
 	}
-	return lines
+	return lines, nil
 }

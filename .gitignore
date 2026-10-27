@@ -103,6 +103,10 @@ research/
 # ethos runtime (never track) — DES-058 live zone + mission locks
 .punt-labs/ethos/missions/**/*.lock
 
+# Staging files and directories a killed writer leaves under .punt-labs/
+# (layout.TmpMarker): git add -A must not commit a half-written file.
+.punt-labs/**/*.ethos-tmp*
+
 # The trace-log lock file (internal/mission/trace.go) sits BESIDE the
 # tracked missions.jsonl, not under missions/ like the rule above — a
 # sibling, not a descendant, so that glob does not reach it. Without this

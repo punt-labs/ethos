@@ -2,17 +2,20 @@ package enable
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
-// The two runtime patterns enable must ensure a consumer repo ignores: the
-// DES-058 live-session zone and the mission runtime locks.
+// The runtime patterns enable must ensure a consumer repo ignores: the
+// DES-058 live-session zone, the mission runtime locks and the staging names a
+// killed writer leaves.
 const (
 	liveZonePattern = ".punt-labs/**/local/**"
 	missionLockPat  = ".punt-labs/ethos/missions/**/*.lock"
+	stagingPat      = ".punt-labs/**/*.ethos-tmp*"
 )
 
 func TestEnableAppendsGitignoreRuntimeZones(t *testing.T) {
@@ -176,7 +179,7 @@ func TestEnableGitignoreBroaderRulesAreCoverage(t *testing.T) {
 	// None of these is a pattern enable writes, but each excludes the paths
 	// enable cares about. Asking git rather than string-matching one blessed
 	// spelling is what keeps enable from appending a redundant near-duplicate.
-	initial := ".punt-labs/**/local/**\n.punt-labs/**/*.lock\n.punt-labs/**/*.local.*\n"
+	initial := ".punt-labs/**/local/**\n.punt-labs/**/*.lock\n.punt-labs/**/*.ethos-tmp*\n.punt-labs/**/*.local.*\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
@@ -245,7 +248,7 @@ func TestLocalIgnored(t *testing.T) {
 // there. It must say so rather than append a second copy on every run.
 func TestEnableReportsDefeatedRule(t *testing.T) {
 	dir := gitRepo(t)
-	initial := ".punt-labs/**/local/**\n" + missionLockPat + "\n" +
+	initial := ".punt-labs/**/local/**\n" + missionLockPat + "\n" + stagingPat + "\n" +
 		LocalIgnoreRule + "\n!.punt-labs/vox/**\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
@@ -352,10 +355,23 @@ func TestLocalIgnoredFallsBackWhenGitCannotAnswer(t *testing.T) {
 	}
 }
 
-// Not a work tree at all: git fails, there is no .gitignore to fall back on,
-// and the answer must be "not covered" rather than an error or a shrug.
+// Not a work tree at all: git says "not a git repository", which is an answer
+// (nothing there is covered), not an error and not the literal-line fallback.
 func TestLocalIgnoredOutsideAWorkTree(t *testing.T) {
-	assertLocalIgnored(t, filepath.Join(t.TempDir(), "no-such-repo"), false)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(LocalIgnoreRule+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertLocalIgnored(t, dir, false)
+}
+
+// A directory that does not exist is a failure git cannot answer: an error,
+// never "not covered".
+func TestLocalIgnoredMissingDirectoryIsAnError(t *testing.T) {
+	got, err := LocalIgnored(filepath.Join(t.TempDir(), "no-such-repo"))
+	if err == nil || got {
+		t.Fatalf("LocalIgnored = %v, %v; want false and an error", got, err)
+	}
 }
 
 func assertLocalIgnored(t *testing.T, dir string, want bool) {
@@ -372,8 +388,8 @@ func assertLocalIgnored(t *testing.T, dir string, want bool) {
 // gitOutput runs git in dir and returns its stdout.
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(cmd.Env,
 		"GIT_CONFIG_COUNT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null")
@@ -531,7 +547,7 @@ func TestEnableGitignoreCRLFIdempotent(t *testing.T) {
 	dir := gitRepo(t)
 	// A CRLF .gitignore already covering the zones must be a no-op on enable —
 	// the trailing \r must not defeat the presence check and cause a duplicate.
-	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n" + LocalIgnoreRule + "\r\n"
+	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n" + stagingPat + "\r\n" + LocalIgnoreRule + "\r\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
@@ -563,5 +579,30 @@ func TestEnableGitignoreCRLFAppendsCRLF(t *testing.T) {
 	}
 	if strings.Contains(got, liveZonePattern+"\n") && !strings.Contains(got, liveZonePattern+"\r\n") {
 		t.Errorf("bare LF appended to a CRLF file; got:\n%q", got)
+	}
+}
+
+// A staging file or directory a killed writer left under .punt-labs/ is ignored
+// once enable has run, so git add -A cannot commit it.
+func TestEnableIgnoresLeftoverStagingNames(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	for _, rel := range []string{
+		".punt-labs/ethos/identities/x.yaml.ethos-tmp",
+		".punt-labs/ethos/.ethos-tmp",
+		".punt-labs/ethos/missions/.m-1.migrate.ethos-tmp-123/m.yaml",
+	} {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("half\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out := gitOutput(t, dir, "check-ignore", rel); !strings.Contains(out, rel) {
+			t.Errorf("git check-ignore %s = %q, want it ignored", rel, out)
+		}
 	}
 }

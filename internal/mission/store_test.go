@@ -26,23 +26,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func testStore(t *testing.T) *Store {
-	t.Helper()
-	return NewStore(t.TempDir())
-}
-
-// mustContractPath returns the contract path for missionID or fails
-// the test. Mirrors the old string-returning helper that tests used
-// before mission m-2026-05-22-027 fix 3 changed the signature to
-// (string, error); keeps test churn confined to one helper per
-// per-artifact path. The unwrapped path is what every test wants.
-func mustContractPath(t *testing.T, s *Store, missionID string) string {
-	t.Helper()
-	p, err := s.contractPath(missionID)
-	require.NoError(t, err)
-	return p
-}
-
 // mustLogPath, mustReflectionsPath, mustResultsPath are the siblings
 // of mustContractPath for the three per-artifact path helpers.
 func mustLogPath(t *testing.T, s *Store, missionID string) string {
@@ -50,28 +33,6 @@ func mustLogPath(t *testing.T, s *Store, missionID string) string {
 	p, err := s.logPath(missionID)
 	require.NoError(t, err)
 	return p
-}
-
-func mustReflectionsPath(t *testing.T, s *Store, missionID string) string {
-	t.Helper()
-	p, err := s.reflectionsPath(missionID)
-	require.NoError(t, err)
-	return p
-}
-
-func mustResultsPath(t *testing.T, s *Store, missionID string) string {
-	t.Helper()
-	p, err := s.resultsPath(missionID)
-	require.NoError(t, err)
-	return p
-}
-
-// newContract returns a fresh, valid contract with the given mission ID
-// for use in store tests.
-func newContract(missionID string) *Contract {
-	c := validContract()
-	c.MissionID = missionID
-	return &c
 }
 
 // disjointContract returns a fresh, valid contract whose write_set is
@@ -87,27 +48,6 @@ func disjointContract(missionID string) *Contract {
 	c.MissionID = missionID
 	c.WriteSet = []string{"tests/" + missionID + "/"}
 	return &c
-}
-
-// submitRoundResult persists a minimal valid result for a mission's
-// current round so the test can drive Store.Close through the
-// Phase 3.6 gate. The helper is a one-liner for every pre-3.6 test
-// whose only interest in the result artifact is "close is allowed".
-// A round-aware variant (submitResultForRound) covers the rarer case
-// of exercising the gate at a non-current round.
-func submitRoundResult(t *testing.T, s *Store, c *Contract, verdict string) {
-	t.Helper()
-	r := &Result{
-		Mission:    c.MissionID,
-		Round:      c.CurrentRound,
-		Author:     c.Worker,
-		Verdict:    verdict,
-		Confidence: 0.8,
-		Evidence: []EvidenceCheck{
-			{Name: "go test ./...", Status: EvidenceStatusPass},
-		},
-	}
-	require.NoError(t, s.AppendResult(c.MissionID, r))
 }
 
 // TestStore_Create_NoBeadWarningFromConflictScan proves ethos-c0yp: a
@@ -294,8 +234,10 @@ func TestStore_RoundTrip_Trigger(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loaded.Inputs.Trigger)
 	assert.Equal(t, "email", loaded.Inputs.Trigger.Type)
-	assert.Equal(t, "<abc@example.com>", loaded.Inputs.Trigger.MessageID)
-	assert.Equal(t, "mal@serenity.ship", loaded.Inputs.Trigger.From)
+	// The contract is a tracked file, so the sender and message ID are
+	// swept; the trigger is provenance for a human, nothing matches on it.
+	assert.Equal(t, "<[redacted-email]>", loaded.Inputs.Trigger.MessageID)
+	assert.Equal(t, "[redacted-email]", loaded.Inputs.Trigger.From)
 	assert.Equal(t, "cargo run", loaded.Inputs.Trigger.Subject)
 	assert.Equal(t, c.Inputs.Ticket, loaded.Inputs.Ticket)
 }
@@ -1868,7 +1810,7 @@ func writeLiveAuditContractIDLine(t *testing.T, root, sessionID, contractID stri
 // regression gate for PR #508 round 4 finding H1: a session running
 // inside a LINKED WORKTREE writes its live (not-yet-sealed) audit
 // file under that worktree's own gitignored local zone, never under
-// the main tree conflictScanIDs' repoRoot points at (StoreRepoRoot
+// the main tree conflictScanIDs' repoRoot points at (StoreRootIfAny
 // always resolves to the main tree — DES-075 Decision 5). A
 // repoRoot-only live scan is therefore blind to exactly the most
 // recent sessions when the caller itself is running from a worktree —
@@ -2515,22 +2457,6 @@ func TestApplyServerFields_HashRoundTripsThroughCreate(t *testing.T) {
 }
 
 // --- 3.4: round-advance gate and reflection store ---
-
-// reflectionFor returns a fresh, valid reflection for the given round
-// with the given recommendation. Tests use this to keep the table
-// rows compact and the assertions focused on the gate behavior, not
-// on building the input.
-func reflectionFor(missionID string, round int, rec string) *Reflection {
-	return &Reflection{
-		Mission:        missionID,
-		Round:          round,
-		Author:         "claude",
-		Converging:     true,
-		Signals:        []string{"all green"},
-		Recommendation: rec,
-		Reason:         "round " + fmt.Sprint(round) + " " + rec,
-	}
-}
 
 // TestStore_FreshContractStartsAtRoundOne asserts the round-tracking
 // default: a mission created via the store starts at round 1, and
@@ -3461,23 +3387,6 @@ func TestCanonicalRoleSlug(t *testing.T) {
 }
 
 // --- Phase 3.6: result artifact and close gate ---
-
-// resultFor returns a minimal valid result for the given mission's
-// current round with the given verdict. Tests that only care about
-// the gate's presence/absence behavior use this; the more detailed
-// tests build results inline.
-func resultFor(c *Contract, verdict string) *Result {
-	return &Result{
-		Mission:    c.MissionID,
-		Round:      c.CurrentRound,
-		Author:     c.Worker,
-		Verdict:    verdict,
-		Confidence: 0.8,
-		Evidence: []EvidenceCheck{
-			{Name: "make check", Status: EvidenceStatusPass},
-		},
-	}
-}
 
 // TestStore_AppendResult_RoundTrip asserts success criterion 1 and 6:
 // a well-formed result is persisted and retrievable via LoadResult
@@ -5604,13 +5513,15 @@ func TestStore_ForceReleaseWriteSet_RedactsReasonInEventLog(t *testing.T) {
 // failure must leave the contract exactly as it was — write_set and
 // extract_into intact, no event appended.
 func TestStore_ForceReleaseWriteSet_RedactorFailureLeavesMissionUnchanged(t *testing.T) {
-	t.Setenv("HOME", "relative/path")
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
 
 	s := forceReleaseTestStore(t, repoRoot, globalRoot)
 	c := forceReleasableContract("m-2026-08-06-052")
 	require.NoError(t, s.Create(c))
+	// Set after Create: the contract writer itself fails closed on an
+	// unusable $HOME.
+	t.Setenv("HOME", "relative/path")
 	originalWriteSet := append([]string(nil), c.WriteSet...)
 
 	_, err := s.ForceReleaseWriteSet("m-2026-08-06-052", "should never land on disk")
@@ -6354,7 +6265,7 @@ func TestCountBlockingDelegations_ExcludesOnlyDisclaimed(t *testing.T) {
 
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
-	_, err = DisclaimDelegationRecord(repoRoot, missionID, "d-2026-09-08-020", redact,
+	_, _, err = DisclaimDelegationRecord(repoRoot, missionID, "d-2026-09-08-020", redact,
 		"capture", time.Now().UTC().Format(time.RFC3339))
 	require.NoError(t, err)
 

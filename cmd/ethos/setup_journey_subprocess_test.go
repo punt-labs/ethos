@@ -132,12 +132,20 @@ func TestCLI_Setup_UnseededFailsLoud(t *testing.T) {
 	stdout, stderr, code := runCLI(t, se, "setup", "--file", answers, "--bundle", "foundation")
 
 	require.NotEqual(t, 0, code, "unseeded setup must exit non-zero; stdout=%s", stdout)
-	assert.Contains(t, stderr, `principal-engineer`)
-	assert.Contains(t, stderr, `run "ethos seed" first`)
+	assert.Contains(t, stderr, "no bundles installed; run `ethos seed` first")
 
 	// Nothing dangling: no global identities directory was written.
 	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nobody.yaml"))
 	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "claude.yaml"))
+	assert.NoFileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos.yaml"))
+
+	// Solo setup needs no bundle: the missing seed is named by the identity's
+	// unresolved personality instead.
+	stdout, stderr, code = runCLI(t, se, "setup", "--file", answers, "--solo")
+	require.NotEqual(t, 0, code, "unseeded solo setup must exit non-zero; stdout=%s", stdout)
+	assert.Contains(t, stderr, `principal-engineer`)
+	assert.Contains(t, stderr, `run "ethos seed" first`)
+	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nobody.yaml"))
 }
 
 // TestCLI_Setup_ReRunIdempotent pins the semantic of a second setup on an

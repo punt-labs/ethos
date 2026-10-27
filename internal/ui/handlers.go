@@ -3,7 +3,9 @@ package ui
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +20,7 @@ type dashboardData struct {
 	Title    string
 	Counts   []countCard
 	Missions []missionRow
+	Notices  []string // what could not be read, shown on the page
 }
 
 type countCard struct {
@@ -41,7 +44,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows := s.readMissionsJSONL()
+	rows, notices := s.readMissionsJSONL()
 
 	counts := map[string]int{}
 	for _, row := range rows {
@@ -71,23 +74,36 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Title:    "Dashboard",
 		Counts:   cards,
 		Missions: recent,
+		Notices:  notices,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
 	}
 }
 
-func (s *Server) readMissionsJSONL() []missionRow {
+// readMissionsJSONL returns the mission rows in missions.jsonl and a notice
+// for everything it could not read: a file that cannot be opened, lines that
+// do not parse (counted, the first named by number), and a scan that stopped
+// early (a line longer than the scanner's buffer). A file that does not exist
+// yet is not a problem. The rows read before a failure are kept.
+func (s *Server) readMissionsJSONL() ([]missionRow, []string) {
 	path := mission.RepoStatePath(s.storeRoot, "missions.jsonl")
 	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, []string{fmt.Sprintf("could not read %s: %v", path, err)}
 	}
 	defer f.Close()
 
 	var rows []missionRow
+	var notices []string
+	bad, firstBad, n := 0, 0, 0
+	var firstErr error
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
+		n++
 		var entry struct {
 			ID        string `json:"id"`
 			Status    string `json:"status"`
@@ -98,6 +114,10 @@ func (s *Server) readMissionsJSONL() []missionRow {
 			Ticket    string `json:"ticket"`
 		}
 		if err := json.Unmarshal(sc.Bytes(), &entry); err != nil {
+			if bad == 0 {
+				firstBad, firstErr = n, err
+			}
+			bad++
 			continue
 		}
 		rows = append(rows, missionRow{
@@ -110,7 +130,13 @@ func (s *Server) readMissionsJSONL() []missionRow {
 			Ticket:    entry.Ticket,
 		})
 	}
-	return rows
+	if bad > 0 {
+		notices = append(notices, fmt.Sprintf("%s: %d line(s) did not parse and are not shown; the first is line %d: %v", path, bad, firstBad, firstErr))
+	}
+	if err := sc.Err(); err != nil {
+		notices = append(notices, fmt.Sprintf("%s: reading stopped after line %d: %v; later missions are not shown", path, n, err))
+	}
+	return rows, notices
 }
 
 type missionData struct {
@@ -127,6 +153,7 @@ type missionData struct {
 	EventsWarnings      []string
 	AuditEntries        []hook.AuditView
 	AuditCount          int
+	Notices             []string // what could not be read, shown on the page
 }
 
 // missionStore builds the mission store the UI reads from. The record
@@ -151,11 +178,11 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	store := s.missionStore()
 	c, err := store.Load(id)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("mission %q: %v", id, err), 404)
+		http.Error(w, fmt.Sprintf("mission %q: %v", id, err), loadStatus(err))
 		return
 	}
 
-	delegations := s.loadDelegations(id)
+	delegations, notices := s.loadDelegations(id)
 	results, resultsErr := s.loadResults(store, id)
 	events, warnings, eventsErr := s.loadEvents(store, id)
 
@@ -171,7 +198,10 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	// Aggregate audit entries across all delegations under this mission.
 	var allAudit []hook.AuditView
 	for _, d := range delegations {
-		entries, _ := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, d.ID)
+		entries, aerr := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, d.ID)
+		if aerr != nil {
+			notices = append(notices, fmt.Sprintf("audit entries for delegation %s could not be queried: %v", d.ID, aerr))
+		}
 		allAudit = append(allAudit, entries...)
 	}
 	sort.Slice(allAudit, func(i, j int) bool { return allAudit[i].Ts < allAudit[j].Ts })
@@ -186,6 +216,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		EventsWarnings: warnings,
 		AuditEntries:   allAudit,
 		AuditCount:     len(allAudit),
+		Notices:        notices,
 	}
 	if resultsErr != nil {
 		data.ResultsError = resultsErr.Error()
@@ -210,13 +241,20 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) loadDelegations(missionID string) []*mission.Delegation {
+// loadDelegations reads the delegation records of a mission, and returns a
+// notice for each thing it could not read: the directory (a mission with no
+// delegations yet is not one) and each record that would not load.
+func (s *Server) loadDelegations(missionID string) ([]*mission.Delegation, []string) {
 	dir := mission.RepoStatePath(s.storeRoot, "missions", missionID, "delegations")
 	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, []string{fmt.Sprintf("could not read the delegations of %s: %v", missionID, err)}
 	}
 	var delegations []*mission.Delegation
+	var notices []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -224,12 +262,13 @@ func (s *Server) loadDelegations(missionID string) []*mission.Delegation {
 		recordPath := filepath.Join(dir, e.Name(), "record.yaml")
 		d, loadErr := mission.LoadDelegation(recordPath)
 		if loadErr != nil {
+			notices = append(notices, fmt.Sprintf("delegation %s of %s is not shown: %v", e.Name(), missionID, loadErr))
 			continue
 		}
 		d.Mission = missionID
 		delegations = append(delegations, d)
 	}
-	return delegations
+	return delegations, notices
 }
 
 // loadResults reads the mission's result log. The error return is
@@ -267,6 +306,7 @@ type delegationData struct {
 	Prompt       string
 	AuditEntries []hook.AuditView
 	AuditCount   int
+	Notices      []string // what could not be read, shown on the page
 }
 
 func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
@@ -285,17 +325,25 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 	dir := mission.RepoStatePath(s.storeRoot, "missions", missionID, "delegations", delegationID)
 	d, err := mission.LoadDelegation(filepath.Join(dir, "record.yaml"))
 	if err != nil {
-		http.Error(w, fmt.Sprintf("delegation %q: %v", delegationID, err), 404)
+		http.Error(w, fmt.Sprintf("delegation %q: %v", delegationID, err), loadStatus(err))
 		return
 	}
 	d.Mission = missionID
 
+	var notices []string
 	prompt := ""
-	if data, readErr := os.ReadFile(filepath.Join(dir, "prompt.md")); readErr == nil {
-		prompt = string(data)
+	promptData, readErr := os.ReadFile(filepath.Join(dir, "prompt.md"))
+	switch {
+	case readErr == nil:
+		prompt = string(promptData)
+	case !errors.Is(readErr, fs.ErrNotExist): // no prompt recorded is not a failure
+		notices = append(notices, fmt.Sprintf("the prompt of %s could not be read: %v", delegationID, readErr))
 	}
 
-	auditEntries, _ := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, delegationID)
+	auditEntries, aerr := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, delegationID)
+	if aerr != nil {
+		notices = append(notices, fmt.Sprintf("audit entries for delegation %s could not be queried: %v", delegationID, aerr))
+	}
 	sort.Slice(auditEntries, func(i, j int) bool { return auditEntries[i].Ts < auditEntries[j].Ts })
 
 	data := delegationData{
@@ -305,8 +353,19 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 		Prompt:       prompt,
 		AuditEntries: auditEntries,
 		AuditCount:   len(auditEntries),
+		Notices:      notices,
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "delegation.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
 	}
+}
+
+// loadStatus is the HTTP status for a failed load: 404 when the record is not
+// there, 500 when it is there and could not be read or parsed. The message is
+// the page: it says which.
+func loadStatus(err error) int {
+	if errors.Is(err, fs.ErrNotExist) {
+		return http.StatusNotFound
+	}
+	return http.StatusInternalServerError
 }

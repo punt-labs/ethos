@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,18 +73,18 @@ func isolateGitConfig(t *testing.T, user string) {
 
 // setupRepoWithAgent creates a fake repo root with .git/ and a
 // .punt-labs/ethos.yaml that sets the agent to the given handle.
-// It chdir's into the repo root so resolve.FindRepoRoot works.
+// It chdir's into the repo root so resolve.Roots works.
 func setupRepoWithAgent(t *testing.T, agentHandle string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	cfg := "agent: " + agentHandle + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(puntDir, "ethos.yaml"), []byte(cfg), 0o644))
 
-	// Create the ethos subdir so FindRepoEthosRoot finds it.
+	// Create the ethos subdir so EthosRootIfAny finds it.
 	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
 
 	orig, err := os.Getwd()
@@ -99,7 +100,7 @@ func setupRepoWithAgent(t *testing.T, agentHandle string) string {
 func setupRepoWithAgentLegacy(t *testing.T, agentHandle string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 
 	ethosDir := filepath.Join(repoRoot, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(ethosDir, 0o755))
@@ -205,16 +206,16 @@ func TestHandleSessionStart_ResolvesIdentityWithoutRetryLatency(t *testing.T) {
 	resolve.UnderClaudeCode = func() bool { return true }
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 
+	// Inflate the delay so one retry costs 5s: elapsed stays under half of
+	// it only if no retry ran, whatever the machine's speed.
+	const delay = 5 * time.Second
+	t.Cleanup(resolve.SetPointerRetryDelayForTest(delay))
+
 	start := time.Now()
 	out := captureSessionStartOutput(t, `{"session_id": "s-r2-timing"}`, SessionStartDeps{Store: s, Sessions: ss})
 	elapsed := time.Since(start)
 
-	// The bound is generous (a single retry attempt alone costs
-	// pointerRetryDelay=50ms; a full suite run under -race/parallel load
-	// can add tens of ms of scheduling noise on its own) but still tight
-	// enough that ANY retry firing at all would trip it several times
-	// over, which is all this assertion needs to prove.
-	assert.Less(t, elapsed, 200*time.Millisecond,
+	assert.Less(t, elapsed, delay/2,
 		"must not pay the pointer-file retry latency resolving identity at SessionStart")
 
 	var result SessionStartResult
@@ -271,6 +272,7 @@ func TestHandleSessionStart_NoIdentity_NoOutput(t *testing.T) {
 	ss := session.NewStore(dir)
 
 	isolateGitConfig(t, "nobody")
+	t.Chdir(t.TempDir()) // outside any repository: no config names an agent
 
 	out := captureSessionStartOutput(t, `{"session_id": "s3"}`, SessionStartDeps{Store: s, Sessions: ss})
 
@@ -588,7 +590,7 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 	// cfg.Team == "missing-team", calls teams.Load("missing-team"),
 	// and returns a wrapped not-found error.
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -691,7 +693,7 @@ func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
 	// content" or similar. Any unambiguously-broken yaml would do; this
 	// shape matches the spec's suggested fixture.
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 	puntDir := filepath.Join(repoRoot, ".punt-labs")
 	require.NoError(t, os.MkdirAll(puntDir, 0o755))
 	require.NoError(t, os.WriteFile(
@@ -772,7 +774,7 @@ func TestCreateSessionRoster_RecordsCheckout(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", checkout)
 	ss := session.NewStore(t.TempDir())
 
-	createSessionRoster(ss, "sess-checkout", nil, "claude")
+	createSessionRoster(ss, "sess-checkout", nil, nil, "claude", resolve.Roots())
 
 	roster, err := ss.Load("sess-checkout")
 	require.NoError(t, err)
@@ -789,7 +791,7 @@ func TestCreateSessionRoster_NoRepoRecordsNoCheckout(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "nope"))
 	ss := session.NewStore(t.TempDir())
 
-	createSessionRoster(ss, "sess-norepo", nil, "claude")
+	createSessionRoster(ss, "sess-norepo", nil, nil, "claude", resolve.Roots())
 
 	roster, err := ss.Load("sess-norepo")
 	require.NoError(t, err)
@@ -805,8 +807,58 @@ func TestResolveCheckoutMatchesLiveWritePath(t *testing.T) {
 	checkout := t.TempDir()
 	t.Setenv("ETHOS_REPO_ROOT", checkout)
 
-	got := ResolveCheckout()
+	loc := resolve.Roots()
+	require.NoError(t, loc.CheckoutErr)
+	got := loc.Checkout
 	assert.Equal(t, checkout, got)
 	assert.Equal(t, liveAuditPath(checkout, "s"), liveAuditPath(got, "s"),
 		"the recorded checkout must resolve the same live path the writer uses")
+}
+
+// A malformed repo config and an agent persona that will not load both reach
+// the session's additionalContext, not stderr alone; and the roster written
+// for the failed store names no owner from $USER.
+func TestHandleSessionStart_FailuresReachAdditionalContext(t *testing.T) {
+	t.Run("malformed config", func(t *testing.T) {
+		dir := t.TempDir()
+		s := identity.NewStore(dir)
+		ss := session.NewStore(dir)
+		repoRoot := t.TempDir()
+		testhelpers.MakeGitDir(t, repoRoot)
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".punt-labs", "ethos.yaml"), []byte("agent: [unclosed\n"), 0o644))
+		t.Chdir(repoRoot)
+		t.Setenv("USER", "jfreeman")
+		isolateGitConfig(t, "test-human")
+
+		out, err := captureStdout(t, func() error {
+			return HandleSessionStart(bytes.NewReader([]byte(`{"session_id":"s-badcfg"}`)), SessionStartDeps{Store: s, Sessions: ss})
+		})
+		require.Error(t, err, "the exit status still reports it")
+		assert.Contains(t, out, "additionalContext")
+		assert.Contains(t, out, "parsing repo config")
+
+		r, lerr := ss.Load("s-badcfg")
+		require.NoError(t, lerr)
+		assert.NotEmpty(t, r.RepoUnresolved)
+		for _, p := range r.Participants {
+			assert.NotEqual(t, "jfreeman", p.AgentID, "no owner is taken from $USER for an unresolved roster")
+			assert.NotEqual(t, "jfreeman", p.Persona)
+		}
+	})
+	t.Run("agent persona does not load", func(t *testing.T) {
+		dir := t.TempDir()
+		s := identity.NewStore(dir)
+		ss := session.NewStore(dir)
+		repoRoot := t.TempDir()
+		testhelpers.MakeGitDir(t, repoRoot)
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".punt-labs", "ethos.yaml"), []byte("agent: ghost\n"), 0o644))
+		t.Chdir(repoRoot)
+		isolateGitConfig(t, "test-human")
+
+		out := captureSessionStartOutput(t, `{"session_id":"s-ghost"}`, SessionStartDeps{Store: s, Sessions: ss})
+		assert.Contains(t, out, "additionalContext")
+		assert.Contains(t, out, `agent identity \"ghost\" could not be loaded`)
+	})
 }

@@ -25,13 +25,145 @@
 # hook that signals failure by fall-through. Standalone, $? = 0 as before.
 _host_status=$?
 
+# _git runs git with every trace variable cleared and trace2 switched off by the
+# environment (which overrides a target set in the user's config): a trace on
+# stdout, from `trace2.normalTarget=/dev/stdout` or GIT_TRACE=/dev/stdout, would
+# otherwise become part of what the hook reads or writes.
+_git() {
+  (
+    for _v in $(env | sed -n 's/^\(GIT_TRACE[A-Za-z0-9_]*\)=.*/\1/p'); do
+      unset "$_v"
+    done
+    unset GIT_CURL_VERBOSE
+    GIT_TRACE=0 GIT_TRACE2=0 GIT_TRACE2_PERF=0 GIT_TRACE2_EVENT=0
+    export GIT_TRACE GIT_TRACE2 GIT_TRACE2_PERF GIT_TRACE2_EVENT
+    exec git "$@"
+  )
+}
+
+# Dormant fast path. git runs a hook at the top of the work tree, so the marker
+# is tested relative to the current directory first, before mktemp or git run:
+# a dormant repository is never blocked by a probe failure. The shortcut is
+# taken only when this directory has its own .git (it is a top level, so the
+# marker there is the marker that counts) and every path component is either
+# absent or a plain readable directory. Anywhere else (a hook run by hand from
+# a subdirectory, a link, an unreadable store) the full resolution below
+# decides and reports as before.
+_ethos_dormant=1
+for _component in .punt-labs .punt-labs/ethos; do
+  if [ -L "$_component" ]; then
+    _ethos_dormant=""
+  elif [ -e "$_component" ] && { [ ! -d "$_component" ] || [ ! -r "$_component" ] || [ ! -x "$_component" ]; }; then
+    _ethos_dormant=""
+  fi
+done
+if [ -e .punt-labs/ethos/enabled ] || [ -L .punt-labs/ethos/enabled ]; then
+  _ethos_dormant=""
+fi
+if [ -n "$_ethos_dormant" ] && [ -e .git ]; then
+  exit "$_host_status"
+fi
+
 # §2.7 marker gate: ethos does no commit-time work unless it is enabled in
 # this repo. REPO_ROOT is resolved inside the hook (worktree-safe), not baked
 # in at install time. Absent marker → exit with the captured host status,
 # never a bare exit 0, so a chained host that signals failure by fall-through
 # still blocks the commit even when ethos is dormant.
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit "$_host_status"
+# A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
+# dormant": the hook prints git's own error and exits 1, so the commit is
+# blocked and the operator sees why, rather than skipping with the host status.
+# git's stderr goes to a file and is shown only on failure: a warning or
+# GIT_TRACE output on a rev-parse that succeeded must not become part of the
+# repository root, nor make the hook skip the seal.
+# A mktemp that fails does not block: rev-parse then runs without the capture
+# file, and is run again to show git's error only if it failed. A dormant
+# repository must not be blocked by a full or read-only temp directory.
+_revparse_err=$(mktemp 2>/dev/null) || _revparse_err=""
+if [ -n "$_revparse_err" ]; then
+  REPO_ROOT=$(_git rev-parse --show-toplevel 2>"$_revparse_err")
+else
+  REPO_ROOT=$(_git rev-parse --show-toplevel 2>/dev/null)
+fi
+_revparse_status=$?
+if [ "$_revparse_status" -ne 0 ]; then
+  if [ -n "$_revparse_err" ]; then
+    _revparse_msg=$(cat "$_revparse_err")
+    rm -f "$_revparse_err"
+  else
+    _revparse_msg=$(_git rev-parse --show-toplevel 2>&1 >/dev/null)
+  fi
+  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed: %s\n' "$_revparse_msg" >&2
+  exit 1
+fi
+[ -n "$_revparse_err" ] && rm -f "$_revparse_err"
+# The root must be one absolute line (a / path, or a Windows drive path under
+# MINGW, MSYS or CYGWIN) naming a
+# directory; anything else (a trace line that got through, a relative path) is
+# not a root to trust.
+case "$REPO_ROOT" in
+/*) ;;
+[A-Za-z]:/*)
+  # A drive path is a root only where git for Windows runs this shell.
+  case "$(uname -s 2>/dev/null)" in
+  MINGW* | MSYS* | CYGWIN*) ;;
+  *) _revparse_bad=1 ;;
+  esac
+  ;;
+*) _revparse_bad=1 ;;
+esac
+case "$REPO_ROOT" in
+*"
+"*) _revparse_bad=1 ;;
+esac
+if [ -n "${_revparse_bad:-}" ] || [ ! -d "$REPO_ROOT" ]; then
+  printf 'ethos: commit-msg: git rev-parse --show-toplevel did not print one absolute directory: %s\n' "$REPO_ROOT" >&2
+  exit 1
+fi
+# "Marker absent" means only that every component of the path exists and the
+# marker file does not. A .punt-labs or .punt-labs/ethos that is a dangling
+# link, is not a directory, or cannot be searched is a store ethos cannot read:
+# say so and block, never treat it as dormant.
+_ethos_path="$REPO_ROOT/.punt-labs"
+for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enabled"; do
+  if [ -L "$_component" ] && [ ! -e "$_component" ]; then
+    printf 'ethos: commit-msg: %s is a dangling link; repair or remove it\n' "$_component" >&2
+    exit 1
+  fi
+  [ -e "$_component" ] || break
+  case "$_component" in
+  */enabled)
+    if [ ! -f "$_component" ]; then
+      printf 'ethos: commit-msg: the enabled marker %s is not a regular file\n' "$_component" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    if [ ! -d "$_component" ]; then
+      printf 'ethos: commit-msg: %s is not a directory\n' "$_component" >&2
+      exit 1
+    fi
+    if [ ! -r "$_component" ] || [ ! -x "$_component" ]; then
+      printf 'ethos: commit-msg: %s cannot be read\n' "$_component" >&2
+      exit 1
+    fi
+    ;;
+  esac
+done
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
+
+# Resolve the binary: PATH first, then the default install dir — the same two
+# steps pre-commit.sh uses. Enabled here and no binary: the commit would carry
+# no trailers and, if this hook runs alone (`git merge --no-ff` runs commit-msg
+# and not pre-commit), unsealed audit lines. Say so and block.
+ethos_bin=""
+if command -v ethos >/dev/null 2>&1; then
+  ethos_bin="ethos"
+elif [ -x "$HOME/.local/bin/ethos" ]; then
+  ethos_bin="$HOME/.local/bin/ethos"
+else
+  printf 'ethos: commit-msg: ethos is enabled here but not installed; the commit is not sealed\n' >&2
+  exit 1
+fi
 
 [ -z "$1" ] && exit "$_host_status"
 msg_file="$1"
@@ -53,14 +185,6 @@ msg_file="$1"
 # No resolvable session, no ethos on PATH, or no active mission means
 # no trailer. The hook never guesses.
 if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
-  # Resolve the binary: PATH first, then the default install dir —
-  # the same two-step pre-commit.sh uses.
-  ethos_bin=""
-  if command -v ethos >/dev/null 2>&1; then
-    ethos_bin="ethos"
-  elif [ -x "$HOME/.local/bin/ethos" ]; then
-    ethos_bin="$HOME/.local/bin/ethos"
-  fi
   if [ -n "$ethos_bin" ]; then
     # KEY=value lines, at most one of each. Strip whitespace so a CRLF
     # or a trailing space cannot end up inside a trailer value.
@@ -114,20 +238,32 @@ add_trailer() {
     tmp=$(mktemp "${msg_file}.XXXXXX" 2>/dev/null)
     if [ -z "$tmp" ]; then
       printf 'ethos: commit-msg: mktemp failed; using plain append\n' >&2
-    elif git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp"; then
+    # The error file is made first, so a redirect that fails is reported as
+    # one and not as git interpret-trailers failing with no message. (`true`,
+    # not `:`: a failed redirect on a special builtin ends a POSIX shell.)
+    elif ! { true > "$tmp.err"; } 2>/dev/null; then
+      printf 'ethos: commit-msg: cannot create %s.err; using plain append\n' "$tmp" >&2
+      rm -f "$tmp"
+    # git interpret-trailers is not bounded here: it runs inside git's own
+    # commit, on the message file only, never on the repository.
+    elif _git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp" 2>"$tmp.err"; then
       # mv can fail on permissions, cross-filesystem, or
       # disk-full. If it does, the temp file is stale and the
       # commit message is untouched — fall through to the plain
       # append path so the trailer still lands (Copilot on PR
       # #328: previously returned 0 after a silent mv failure).
+      rm -f "$tmp.err"
       if mv "$tmp" "$msg_file"; then
         return 0
       fi
       rm -f "$tmp"
       printf 'ethos: commit-msg: mv onto %s failed; using plain append\n' "$msg_file" >&2
     else
-      rm -f "$tmp"
-      printf 'ethos: commit-msg: git interpret-trailers failed; using plain append\n' >&2
+      # A failing git is not "git is unavailable": print its error and block
+      # the commit, never fall back to a plain append behind its back.
+      printf 'ethos: commit-msg: git interpret-trailers failed: %s\n' "$(cat "$tmp.err")" >&2
+      rm -f "$tmp" "$tmp.err"
+      exit 1
     fi
   fi
   # Plain-append fallback. Ensure the file ends with a blank line

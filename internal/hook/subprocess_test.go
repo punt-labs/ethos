@@ -14,6 +14,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -41,7 +42,7 @@ type subprocessEnv struct {
 
 // setupSubprocessEnv creates the minimal filesystem the ethos binary
 // needs: a global identity store, a repo with config, and a real git
-// init (so FindRepoRoot stops at the fake repo, not the real one).
+// init (so CheckoutRootIfAny stops at the fake repo, not the real one).
 func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 	t.Helper()
 
@@ -62,7 +63,7 @@ func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(globalIDs, "test-agent.yaml"), idData, 0o644))
 
-	// Repo: git init so FindRepoRoot stops here.
+	// Repo: git init so CheckoutRootIfAny stops here.
 	repoEthos := filepath.Join(repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(filepath.Join(repoEthos, "identities"), 0o755))
 
@@ -72,7 +73,7 @@ func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	gitInit := exec.Command("git", "init", repo)
+	gitInit := testhelpers.GitCommand("init", repo)
 	gitInit.Env = gitEnv
 	initOut, initErr := gitInit.CombinedOutput()
 	require.NoError(t, initErr, "git init failed: %s", initOut)
@@ -686,6 +687,7 @@ func TestSubprocess_AuditLog(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
 	// presence the signal for "a session was expected, fail loud if

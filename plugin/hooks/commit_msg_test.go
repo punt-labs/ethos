@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // sessionID names the session directory every trailer test writes its
@@ -28,6 +30,7 @@ var (
 // The build is cached across tests by ethosOnce, so no single test can
 // own its lifetime.
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	code := m.Run()
 	if ethosDir != "" {
 		_ = os.RemoveAll(ethosDir)
@@ -421,9 +424,9 @@ func writeFile(t *testing.T, path, content string) {
 // on any error.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testhelpers.GitCommand(args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cmd.Env,
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
 	)

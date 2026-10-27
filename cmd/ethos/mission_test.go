@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,6 +36,7 @@ var ethosBinary string
 // runtime os.Exit error paths in `runMissionCreate` (the in-process
 // captureStdout pattern would crash on os.Exit).
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
 	// presence the signal for "a session was expected, fail loud if
@@ -98,11 +100,11 @@ func missionTestEnv(t *testing.T) string {
 	// keeps the fixture cost out of every test body.
 	seedEvaluator(t, filepath.Join(tmp, ".punt-labs", "ethos"))
 
-	// Create a fake git repo so FindRepoRoot() stops here instead
+	// Create a fake git repo so CheckoutRootIfAny() stops here instead
 	// of finding the real ethos repo — prevents trace writes from
 	// polluting the real .ethos/missions.jsonl.
 	repoDir := filepath.Join(tmp, "repo")
-	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoDir)
 	oldDir, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(repoDir))
@@ -224,10 +226,10 @@ func seedEvaluator(t *testing.T, root string) {
 }
 
 // chdirToFakeRepo creates a fake .git directory inside dir so
-// resolve.FindRepoRoot() stops at dir rather than walking up to the
+// resolve.Roots() stops at dir rather than walking up to the
 // surrounding ethos checkout, then chdirs the test process there.
 // Subprocesses launched via exec.Command inherit the cwd and so
-// FindRepoRoot resolves to dir. Used by CLI subprocess tests that
+// CheckoutRootIfAny resolves to dir. Used by CLI subprocess tests that
 // exercise mission create — without this they would land contracts
 // in the real ethos repo's per-mission tree and collide with existing
 // missions.
@@ -237,7 +239,7 @@ func seedEvaluator(t *testing.T, root string) {
 // is not enough.
 func chdirToFakeRepo(t *testing.T, dir string) {
 	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, dir)
 	t.Chdir(dir)
 }
 
@@ -2699,12 +2701,12 @@ func TestMissionCreate_RoleOverlapThroughLiveStoresSubprocess(t *testing.T) {
 	// bwk and djb with DISTINCT roles (engineering/go-specialist and
 	// engineering/security-engineer). Running the binary inside the
 	// repo would pick up the repo-local identity store via
-	// FindRepoEthosRoot, overriding the test fixture and defeating the
+	// EthosRootIfAny, overriding the test fixture and defeating the
 	// overlap assertion. Give the child a CWD with its own bare .git
-	// so FindRepoRoot stops outside the ethos repo.
+	// so CheckoutRootIfAny stops outside the ethos repo.
 	repo := t.TempDir()
-	gitInit := exec.Command("git", "init", repo)
-	gitInit.Env = append(os.Environ(),
+	gitInit := testhelpers.GitCommand("init", repo)
+	gitInit.Env = append(gitInit.Env,
 		"HOME="+home,
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
@@ -3355,7 +3357,7 @@ func missionResultVerifyEnv(t *testing.T) (home, repo, missionID string) {
 	env := testGitEnv(home)
 
 	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = repo
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
@@ -3575,7 +3577,7 @@ func TestMissionResult_VerifyOn_RejectsUnknownPath(t *testing.T) {
 	repo := t.TempDir()
 	env := testGitEnv(home)
 	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = repo
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
@@ -4000,7 +4002,7 @@ func TestMissionResult_VerifyOn_HandlesRenames(t *testing.T) {
 	repo := t.TempDir()
 	env := testGitEnv(home)
 	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = repo
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
@@ -4578,14 +4580,23 @@ func TestMissionClaim_RefusesWhenSessionRosterGone(t *testing.T) {
 	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
 	require.NoError(t, err)
 
+	reached := make(chan struct{}, 1)
+	beforeDispatchPendingLock = func() { reached <- struct{}{} }
+	t.Cleanup(func() { beforeDispatchPendingLock = func() {} })
 	done := make(chan error, 1)
 	go func() {
 		done <- runMissionClaim(id)
 	}()
 
-	// Give the goroutine time to pass resolveSessionContext (the roster
-	// still exists at this point) and then block entering Flock.
-	time.Sleep(150 * time.Millisecond)
+	// Wait until the goroutine has passed resolveSessionContext (the roster
+	// still exists at this point) and is about to enter the lock held here.
+	select {
+	case <-reached:
+	case err := <-done:
+		t.Fatalf("runMissionClaim finished before it reached the dispatch-pending lock (err=%v)", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("runMissionClaim did not reach the dispatch-pending lock within 10s")
+	}
 	select {
 	case err := <-done:
 		t.Fatalf("runMissionClaim completed while a sibling held the dispatch-pending lock (err=%v)", err)
@@ -4975,17 +4986,25 @@ func TestMissionDispatch_RefusesWhenSessionRosterGone(t *testing.T) {
 	// -- is what guarantees os.Stderr comes back even if a require or
 	// t.Fatal(f) call here Goexits (PR #509 review finding, J-round).
 	var dispatchErr error
+	reached := make(chan struct{}, 1)
+	beforeDispatchPendingLock = func() { reached <- struct{}{} }
+	t.Cleanup(func() { beforeDispatchPendingLock = func() {} })
 	warning := testhelpers.CaptureStderr(t, func() {
 		done := make(chan error, 1)
 		go func() {
 			done <- runMissionDispatch()
 		}()
 
-		// Give the goroutine time to create the contract, pass
-		// resolveSessionContext (the roster still exists at this
-		// point), and then block entering Flock for the sidecar
-		// write.
-		time.Sleep(150 * time.Millisecond)
+		// Wait until the goroutine has created the contract, passed
+		// resolveSessionContext (the roster still exists at this point),
+		// and is about to enter the lock this test holds.
+		select {
+		case <-reached:
+		case dispatchErr = <-done:
+			t.Fatalf("runMissionDispatch finished before it reached the dispatch-pending lock (err=%v)", dispatchErr)
+		case <-time.After(10 * time.Second):
+			t.Fatal("runMissionDispatch did not reach the dispatch-pending lock within 10s")
+		}
 		select {
 		case dispatchErr = <-done:
 			t.Fatalf("runMissionDispatch completed while a sibling held the dispatch-pending lock (err=%v)", dispatchErr)
@@ -5375,7 +5394,7 @@ func TestWarnIfGlobalFallback(t *testing.T) {
 // sees a different store," so reads must not be silent.
 func TestMissionStore_ReadWarnsOnGlobalFallback(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", "")
-	// /tmp has no .git ancestor, so StoreRepoRoot resolves empty.
+	// /tmp has no .git ancestor, so StoreRootIfAny resolves empty.
 	nonRepo, err := os.MkdirTemp("/tmp", "ethos-mission-norepo-*")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
@@ -5390,8 +5409,8 @@ func TestMissionStore_ReadWarnsOnGlobalFallback(t *testing.T) {
 }
 
 // TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect pins the Bugbot MED
-// on PR #370: when ETHOS_REPO_ROOT is set-but-invalid, StoreRepoRoot refuses
-// it (records fall back to global), but EnvRepoRoot re-accepts the bad path.
+// on PR #370: when ETHOS_REPO_ROOT is set-but-invalid, StoreRootIfAny refuses
+// it (records fall back to global), but CheckoutRootIfAny re-accepts the bad path.
 // The mission store's audit checkout root must follow the refused store to
 // empty — not the resurrected override — so records and live/seal stay in one
 // tree instead of splitting contract(global) from audit(<refused>).
@@ -5399,14 +5418,16 @@ func TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect(t *testing.T) {
 	dir := t.TempDir() // exists, but has no .punt-labs/ethos store
 	t.Setenv("ETHOS_REPO_ROOT", dir)
 
-	// StoreRepoRoot fail-closed refuses the override; EnvRepoRoot re-accepts it.
-	require.Equal(t, "", resolve.StoreRepoRoot(),
-		"StoreRepoRoot must refuse an override with no .punt-labs/ethos store")
-	require.Equal(t, dir, resolve.EnvRepoRoot(),
-		"EnvRepoRoot accepts the same path (requireStore=false) — the resurrection risk")
+	// The store root refuses the override (an error, never ""); the checkout
+	// root re-accepts the same path — the resurrection risk.
+	loc := resolve.Roots()
+	require.Error(t, loc.StoreErr, "the store root must refuse an override with no .punt-labs/ethos store")
+	require.NoError(t, loc.CheckoutErr)
+	require.Equal(t, dir, loc.Checkout,
+		"the checkout root accepts the same path (requireStore=false) — the resurrection risk")
 
-	// The checkout root follows the (refused → "") store, not the bad path.
-	assert.Equal(t, "", missionCheckoutRoot(resolve.StoreRepoRoot()),
+	// With no store root the audit checkout root is empty, not the bad path.
+	assert.Equal(t, "", missionCheckoutRoot(""),
 		"a refused override must not leak into the audit checkout root")
 }
 
@@ -5437,4 +5458,25 @@ func TestRefuseBadStoreOverride(t *testing.T) {
 		assert.NoError(t, refuseBadStoreOverride("create"),
 			"a genuinely unset override must not error (global mission mode is supported)")
 	})
+}
+
+// TestWriteExport_DirSyncFailurePrintsTheFilesFirst: when only the directory
+// sync failed, the exported lines are printed, then an error that says both
+// files were written and the export can be re-run.
+func TestWriteExport_DirSyncFailurePrintsTheFilesFirst(t *testing.T) {
+	files := []mission.TrackedFile{{Path: "/x/m.contract.yaml"}, {Path: "/x/m.result.yaml"}}
+	notDurable := func(...mission.TrackedFile) error {
+		return &mission.NotDurableError{Err: errors.New("syncing directory of m.contract.yaml: EIO")}
+	}
+	var out bytes.Buffer
+	err := writeExport(&out, "m-1", files, notDurable)
+	require.Error(t, err)
+	assert.Equal(t, "exported: /x/m.contract.yaml\nexported: /x/m.result.yaml\n", out.String())
+	assert.Contains(t, err.Error(), "all files were written; only the directory sync failed")
+	assert.Contains(t, err.Error(), "re-run")
+
+	out.Reset()
+	err = writeExport(&out, "m-1", files, func(...mission.TrackedFile) error { return errors.New("refused") })
+	require.Error(t, err)
+	assert.Empty(t, out.String(), "nothing is reported exported when the write failed")
 }

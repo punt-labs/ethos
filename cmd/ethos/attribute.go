@@ -9,6 +9,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +44,13 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 	createCmd := &cobra.Command{
 		Use:   "create <slug>",
 		Short: fmt.Sprintf("Create a new %s", kind.DisplayName),
-		Args:  cobra.ExactArgs(1),
+		Long: fmt.Sprintf(`Create a new %s.
+
+It is written to the global layer (~/.punt-labs/ethos/%s), whatever repository
+you are in; under "resolution: repo-only" it is written to the repository store
+instead. Every layer is read to refuse a duplicate, so a repository store ethos
+cannot read refuses the command.`, kind.DisplayName, kind.DirName),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAttributeCreate(cmd, kind, args[0], createFile)
 		},
@@ -298,10 +305,13 @@ func editContent(kind attribute.Kind, slug string) (string, error) {
 		editor = "vi"
 	}
 
-	tmpDir := filepath.Join(os.TempDir(), "ethos")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	// A private directory of our own, marked as temporary: TMPDIR may point
+	// inside a working tree, and a shared fixed name would let two edits collide.
+	tmpDir, err := os.MkdirTemp("", layout.ScratchDirPattern("ethos-edit"))
+	if err != nil {
 		return "", fmt.Errorf("creating temp directory: %w", err)
 	}
+	defer os.RemoveAll(tmpDir)
 
 	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("%s-%s.md", kind.CmdName, slug))
 	// Write a starter template.
@@ -309,7 +319,6 @@ func editContent(kind attribute.Kind, slug string) (string, error) {
 	if err := os.WriteFile(tmpFile, []byte(starter), 0o600); err != nil {
 		return "", fmt.Errorf("writing temp file: %w", err)
 	}
-	defer os.Remove(tmpFile)
 
 	cmd := exec.Command(editor, tmpFile)
 	cmd.Stdin = os.Stdin

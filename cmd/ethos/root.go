@@ -15,6 +15,7 @@ var rootCmd = &cobra.Command{
 Unifies name, email, GitHub handle, writing style, personality, and
 talents into a single identity that other tools read. Same schema for
 humans and agents. Repo-scoped team identities are git-tracked.`,
+	PersistentPreRunE: establishRoots,
 }
 
 func init() {

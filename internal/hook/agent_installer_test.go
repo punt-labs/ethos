@@ -7,6 +7,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,9 +113,9 @@ func TestInstallAgentDefinitions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up a fake repo root with .git marker.
 			repoRoot := t.TempDir()
-			require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+			testhelpers.MakeGitDir(t, repoRoot)
 
-			// Chdir to the repo root so FindRepoRoot works.
+			// Chdir to the repo root so CheckoutRootIfAny works.
 			orig, err := os.Getwd()
 			require.NoError(t, err)
 			require.NoError(t, os.Chdir(repoRoot))
@@ -158,12 +159,12 @@ func TestInstallAgentDefinitions(t *testing.T) {
 }
 
 // setupStubRepo builds a temp git repo holding one stub agent file and
-// chdirs into it, so FindRepoRoot and FindRepoEthosRoot resolve there
+// chdirs into it, so CheckoutRootIfAny and EthosRootIfAny resolve there
 // rather than into the real checkout. Returns the repo root.
 func setupStubRepo(t *testing.T, stub string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, repoRoot)
 
 	orig, err := os.Getwd()
 	require.NoError(t, err)
@@ -199,7 +200,7 @@ func TestInstallStubAgentDefs_FailsClosedOnLookupError(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	stderr := captureStderr(t, func() {
-		installStubAgentDefs(repoRoot, ids, teams)
+		installStubAgentDefs(repoRoot, ethosDir, ids, teams)
 	})
 
 	_, statErr := os.Stat(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))
@@ -224,7 +225,7 @@ func TestInstallStubAgentDefs_CopiesWhenNothingIsOwned(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	captureStderr(t, func() {
-		installStubAgentDefs(repoRoot, ids, teams)
+		installStubAgentDefs(repoRoot, ethosDir, ids, teams)
 	})
 
 	got, err := os.ReadFile(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))
@@ -257,7 +258,7 @@ func TestInstallStubAgentDefs_SkipsOwnedHandle(t *testing.T) {
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
 	captureStderr(t, func() {
-		installStubAgentDefs(repoRoot, ids, teams)
+		installStubAgentDefs(repoRoot, ethosDir, ids, teams)
 	})
 
 	_, statErr := os.Stat(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))

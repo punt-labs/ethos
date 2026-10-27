@@ -2,13 +2,17 @@ package hook
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -203,4 +207,48 @@ func TestHandleSubagentStop_MissingFields(t *testing.T) {
 	input := bytes.NewReader([]byte(`{}`))
 	err := HandleSubagentStop(input, ss)
 	require.NoError(t, err) // No-op, no error.
+}
+
+// With the store unlocated, a spawn that declares a mission is refused with the
+// reason before it joins the roster: the verifier gate cannot run against the
+// global store. A spawn that declares none joins, with a stderr note.
+func TestHandleSubagentStart_StoreErrRefusesDeclaredMission(t *testing.T) {
+	s, ss := testStores(t)
+	require.NoError(t, ss.Create("store-err-1",
+		session.Participant{AgentID: "user1", Persona: "alice"},
+		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", ""))
+	storeErr := errors.New("git cannot resolve the repository at /x/.git")
+	input := `{"agent_id": "sub-1", "agent_type": "bwk", "session_id": "store-err-1"}`
+	deps := SubagentStartDeps{Identities: s, Sessions: ss, StoreErr: storeErr}
+
+	t.Setenv("MISSION_ID", "m-2026-01-01-001")
+	err := HandleSubagentStartWithDeps(strings.NewReader(input), deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verifier gate")
+	assert.Contains(t, err.Error(), storeErr.Error())
+	roster, lerr := ss.Load("store-err-1")
+	require.NoError(t, lerr)
+	assert.Len(t, roster.Participants, 2, "a refused spawn leaves no trace in the roster")
+
+	// No declared mission: the spawn joins, and the operator and the subagent
+	// both see why the gate could not be decided (LoudSkip,
+	// docs/spec-hook-gates.tex) — not a stderr line nobody reads.
+	t.Setenv("MISSION_ID", "")
+	var stdout string
+	testhelpers.CaptureStderr(t, func() {
+		var herr error
+		stdout, herr = captureStdout(t, func() error {
+			return HandleSubagentStartWithDeps(strings.NewReader(input), deps)
+		})
+		require.NoError(t, herr)
+	})
+	var res SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(stdout), &res), stdout)
+	want := "cannot determine verifier gate: repository store not located: " + storeErr.Error()
+	assert.Equal(t, want, res.SystemMessage)
+	assert.Contains(t, res.HookSpecificOutput.AdditionalContext, want)
+	roster, lerr = ss.Load("store-err-1")
+	require.NoError(t, lerr)
+	assert.Len(t, roster.Participants, 3)
 }

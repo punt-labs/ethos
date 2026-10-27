@@ -1,9 +1,10 @@
+//go:build linux || darwin
+
 package main
 
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,6 +73,42 @@ func TestSeed_FreshInstallDeploysEmbeddedBundleSkills(t *testing.T) {
 
 	assert.FileExists(t, filepath.Join(home, ".claude", "skills", "gstack-plan", "SKILL.md"))
 	assert.FileExists(t, filepath.Join(home, ".claude", "skills", "gstack-ship", "SKILL.md"))
+}
+
+// A malformed repo config is not a reason to skip bundle skills silently: seed
+// still runs, and says why no bundle-scoped skills were deployed.
+func TestSeed_MalformedRepoConfigWarns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".punt-labs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".punt-labs", "ethos.yaml"),
+		[]byte("active_bundle: [unterminated\n"), 0o644))
+	t.Setenv("ETHOS_REPO_ROOT", repoRoot)
+
+	var err error
+	stderr := captureStderrFn(t, func() { _, err = execSeed(t, "seed") })
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "seed: reading the repo config")
+	assert.Contains(t, stderr, "parsing repo config")
+	assert.Contains(t, stderr, "no bundle-scoped skills")
+}
+
+// A fresh install (the bundle named in the config is not on disk yet) is
+// expected, and says nothing.
+func TestSeed_FreshInstallBundleIsSilent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".punt-labs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".punt-labs", "ethos.yaml"),
+		[]byte("active_bundle: gstack\n"), 0o644))
+	t.Setenv("ETHOS_REPO_ROOT", repoRoot)
+
+	var err error
+	stderr := captureStderrFn(t, func() { _, err = execSeed(t, "seed") })
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "seed:")
 }
 
 // TestSeed_NoRemedyWhenClean pins that the --force remedy line prints only when
@@ -160,9 +197,6 @@ func TestSeed_SkipReasonOnStdout(t *testing.T) {
 // behavior threw away every Deployed/Repaired/Updated line the moment any
 // single file failed.
 func TestSeed_PrintsBucketsOnPartialFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod-based permission denial is Unix-specific")
-	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores permission bits — cannot reproduce EACCES as root")
 	}

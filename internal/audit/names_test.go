@@ -3,6 +3,8 @@ package audit
 import (
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 func TestTSToField(t *testing.T) {
@@ -89,6 +91,19 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// TestClassifyLegacyTemp: a temp named by a version that staged with ".tmp"
+// classifies as KindTemp and keeps its chunk identity.
+func TestClassifyLegacyTemp(t *testing.T) {
+	file := "." + SessionChunkFile(100, 200) + layout.LegacyTmpSuffix
+	got, kind := Classify(file, SessionNS)
+	if kind != KindTemp {
+		t.Fatalf("Classify(%q) kind = %v, want KindTemp", file, kind)
+	}
+	if got.First != 100 || got.Last != 200 {
+		t.Errorf("Classify(%q) = %+v, want range 100-200", file, got)
+	}
+}
+
 func TestParseLineTSRoundTrip(t *testing.T) {
 	ns := time.Date(2026, 7, 20, 12, 0, 0, 123456789, time.UTC).UnixNano()
 	got, err := ParseLineTS(FormatLineTS(ns))
@@ -119,5 +134,29 @@ func TestSplitLines(t *testing.T) {
 	got = SplitLines([]byte("a\nb"))
 	if len(got) != 2 {
 		t.Fatalf("non-terminated: got %d lines, want 2", len(got))
+	}
+}
+
+// TestCorruptNamesClassify: the constructors the quarantine writes with are the
+// names Classify recognises as retired chunks of the same stem.
+func TestCorruptNamesClassify(t *testing.T) {
+	for _, ns := range []Namespace{SessionNS, MissionNS} {
+		cn := ChunkName{Namespace: ns, First: 1, Last: 2}
+		if ns == MissionNS {
+			cn.Session = "s"
+		}
+		for _, name := range []string{
+			CorruptName(cn.Stem()),
+			CorruptHashName(cn.Stem(), "deadbeef0123", 1),
+			CorruptHashName(cn.Stem(), "deadbeef0123", 2),
+		} {
+			got, kind := Classify(name, ns)
+			if kind != KindCorrupt || got != cn {
+				t.Errorf("Classify(%q) = %+v, %v; want %+v, KindCorrupt", name, got, kind, cn)
+			}
+		}
+	}
+	if got, want := CorruptHashName("x", "h", 2), "x.jsonl.corrupt-h-2"; got != want {
+		t.Errorf("CorruptHashName(x, h, 2) = %q, want %q", got, want)
 	}
 }

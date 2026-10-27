@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,15 +51,26 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return nil
 	}
 
-	// Check for error in result.
-	if errMsg := jsonString(result, "error"); errMsg != "" {
-		return emitSimple(w, "error: "+errMsg)
-	}
-
 	// Extract method for consolidated tools.
 	method := extractMethod(input)
 
-	// Dispatch to tool-specific formatter.
+	notes := extractNotes(input)
+	if len(notes) == 0 {
+		return formatTool(w, toolName, method, result)
+	}
+	var buf bytes.Buffer
+	if err := formatTool(&buf, toolName, method, result); err != nil {
+		return err
+	}
+	return withNotes(w, buf.Bytes(), notes)
+}
+
+// formatTool dispatches result to the formatter for toolName. A result
+// carrying an "error" field is shown as that error.
+func formatTool(w io.Writer, toolName, method, result string) error {
+	if errMsg := jsonString(result, "error"); errMsg != "" {
+		return emitSimple(w, "error: "+errMsg)
+	}
 	switch toolName {
 	case "identity":
 		return formatIdentity(w, method, result)
@@ -1757,6 +1769,47 @@ func extractResult(input map[string]any) string {
 	}
 
 	return text
+}
+
+// extractNotes returns the text of every content block after the first: the
+// first is the tool's result, and a later block is a note about it (such as
+// the store guard's "repository store could not be located").
+func extractNotes(input map[string]any) []string {
+	arr, ok := input["tool_response"].([]any)
+	if !ok || len(arr) < 2 {
+		return nil
+	}
+	var notes []string
+	for _, b := range arr[1:] {
+		if m, ok := b.(map[string]any); ok {
+			if text, ok := m["text"].(string); ok && strings.TrimSpace(text) != "" {
+				notes = append(notes, text)
+			}
+		}
+	}
+	return notes
+}
+
+// withNotes writes a formatter's output with notes added to both channels:
+// after the summary, and at the end of the context. A formatter that wrote
+// nothing leaves Claude Code to show the raw blocks, notes included.
+func withNotes(w io.Writer, formatted []byte, notes []string) error {
+	if len(bytes.TrimSpace(formatted)) == 0 {
+		return nil
+	}
+	var r formatResult
+	if err := json.Unmarshal(formatted, &r); err != nil {
+		return fmt.Errorf("format-output: re-reading formatted output: %w", err)
+	}
+	note := strings.Join(notes, "\n")
+	out := &r.HookSpecificOutput
+	out.UpdatedMCPToolOutput += "\n" + note
+	if out.AdditionalContext == "" {
+		out.AdditionalContext = note
+	} else {
+		out.AdditionalContext += "\n\n" + note
+	}
+	return json.NewEncoder(w).Encode(r)
 }
 
 // extractMethod gets the method parameter from the tool input.

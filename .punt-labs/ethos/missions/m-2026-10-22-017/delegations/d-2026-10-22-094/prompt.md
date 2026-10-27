@@ -18,7 +18,7 @@ Git rules:
 - Run `make check` before each commit and record each result.
 - Commit by explicit path only: `git commit -m "<msg>" -- docs/design-opencode-plugin.md DESIGN.md`.
 - Other files in this checkout are staged or modified. Never stage, unstage, restore, or commit them.
-- End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- End each commit message with `Co-Authored-By: Claude Opus 5.5 <[redacted-email]>`.
 - Commit on your branch; do not push, do not touch PRs or merge — the leader does that. Do not reply to or resolve review threads.
 
 If a finding forces a genuine design choice the contract does not settle, stop and report it. Do not decide it yourself.

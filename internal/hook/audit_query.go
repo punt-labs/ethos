@@ -32,6 +32,9 @@ type AuditView struct {
 	ToolInputHash    string         `json:"tool_input_hash,omitempty"`
 	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
 	Redacted         bool           `json:"redacted,omitempty"`
+
+	PathFormat     int  `json:"path_format,omitempty"`
+	RawPlaceholder bool `json:"raw_placeholder,omitempty"`
 }
 
 // Summary returns a single-line human description of the entry. Prefers
@@ -150,7 +153,9 @@ func queryLegacyAudit(globalSessionsDir, delegationID string, _ map[string]struc
 		if f.IsDir() {
 			continue
 		}
-		name := f.Name()
+		// A file migration has staged (renamed aside) holds legacy lines
+		// until the migration finishes, so it is read as well.
+		name := strings.TrimSuffix(f.Name(), stagedSuffix)
 		if !strings.HasSuffix(name, ".audit.jsonl") {
 			continue
 		}
@@ -158,7 +163,7 @@ func queryLegacyAudit(globalSessionsDir, delegationID string, _ map[string]struc
 		if sessionID == "" {
 			continue
 		}
-		path := filepath.Join(globalSessionsDir, name)
+		path := filepath.Join(globalSessionsDir, f.Name())
 		entries, err := readAuditEntries(path)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", path, err)

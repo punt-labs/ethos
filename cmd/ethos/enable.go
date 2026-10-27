@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -32,14 +33,27 @@ func init() {
 }
 
 func runEnable(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := locateForCommand(cmd, "enable")
 	if repoRoot == "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), "ethos: enable: not in a git repository")
 		return failClosed{}
 	}
 	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
 	// "has setup been run?" config read resolves the shared store (#370).
-	rep, err := enable.EnableTo(repoRoot, resolve.StoreRepoRoot())
+	// A fresh repo named by ETHOS_REPO_ROOT has no store yet, which the store
+	// lookup refuses; enable is what creates it, so the checkout is the store.
+	storeRoot, err := enableStoreRoot(repoRoot, func() (string, error) {
+		r := currentRoots()
+		if r.StoreErr != nil {
+			return "", r.StoreErr
+		}
+		// A malformed or unreadable ethos.yaml (ConfigErr) does not stop enable:
+		// the store root is known, and EnableTo warns about the config.
+		return r.Store, r.EthosErr
+	})
+	if err != nil {
+		return err
+	}
+	rep, err := enable.EnableTo(repoRoot, storeRoot)
 	if err != nil {
 		emitPartialReport(cmd, rep)
 		return err
@@ -49,6 +63,38 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	printEnableReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), rep, "enabled")
 	return nil
+}
+
+// enableStoreRoot is the store enable reads, found by locate. Only an
+// ETHOS_REPO_ROOT naming a repository with no store yet falls back to the
+// checkout: enable creates the store there. Any other failure (an unreadable
+// .git, a refused override) must not send the deposit to a tree locate never
+// chose.
+func enableStoreRoot(repoRoot string, locate func() (string, error)) (string, error) {
+	root, err := locate()
+	switch {
+	case err == nil:
+		return root, nil
+	case errors.Is(err, resolve.ErrOverrideNoStore):
+		return repoRoot, nil
+	}
+	return "", fmt.Errorf("enable: locating the store: %w", err)
+}
+
+// locateForCommand returns the work tree root for verb, or "" after printing
+// why there is none: a plain "not in a git repository", or the cause when a
+// .git exists but cannot be examined or ETHOS_REPO_ROOT was refused.
+func locateForCommand(cmd *cobra.Command, verb string) string {
+	r := currentRoots()
+	if r.Checkout != "" {
+		return r.Checkout
+	}
+	reason := "not in a git repository"
+	if r.CheckoutErr != nil {
+		reason = r.CheckoutErr.Error()
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "ethos: %s: %s\n", verb, reason)
+	return ""
 }
 
 // emitPartialReport surfaces the completed steps and warnings to stderr on the

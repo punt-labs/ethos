@@ -23,12 +23,17 @@ type Participant struct {
 // empty on rosters written before the field existed, which reads as "writer
 // unknown".
 type Roster struct {
-	Session      string        `yaml:"session" json:"session"`
-	Started      string        `yaml:"started" json:"started"`
-	Repo         string        `yaml:"repo,omitempty" json:"repo,omitempty"`
-	Checkout     string        `yaml:"checkout,omitempty" json:"checkout,omitempty"`
-	Host         string        `yaml:"host,omitempty" json:"host,omitempty"`
-	Participants []Participant `yaml:"participants" json:"participants"`
+	Session string `yaml:"session" json:"session"`
+	Started string `yaml:"started" json:"started"`
+	Repo    string `yaml:"repo,omitempty" json:"repo,omitempty"`
+	// RepoUnresolved is why the repository identity could not be resolved when
+	// the session started (a git that did not answer, dubious ownership). It
+	// stands in for Repo: an empty Repo means a checkout with no origin, and a
+	// failed lookup must never be recorded as that.
+	RepoUnresolved string        `yaml:"repo_unresolved,omitempty" json:"repo_unresolved,omitempty"`
+	Checkout       string        `yaml:"checkout,omitempty" json:"checkout,omitempty"`
+	Host           string        `yaml:"host,omitempty" json:"host,omitempty"`
+	Participants   []Participant `yaml:"participants" json:"participants"`
 }
 
 // FindParticipant returns the participant with the given agent_id, or nil.

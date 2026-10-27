@@ -6,17 +6,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// gitInitDir runs `git init` in dir so FindRepoRoot stops there rather
+// gitInitDir runs `git init` in dir so CheckoutRootIfAny stops there rather
 // than walking up past the temp dir into a real git ancestor. It sets a
 // repo-local user.email — the realistic state of a fresh clone, and what
 // setup defaults the identity's email from.
@@ -28,12 +28,12 @@ func gitInitDir(t *testing.T, dir, home string) {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	cmd := exec.Command("git", "init", dir)
+	cmd := testhelpers.GitCommand("init", dir)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git init %s: %s", dir, out)
 
-	cfg := exec.Command("git", "-C", dir, "config", "user.email", "test-user@example.com")
+	cfg := testhelpers.GitCommand("-C", dir, "config", "user.email", "test-user@example.com")
 	cfg.Env = env
 	out, err = cfg.CombinedOutput()
 	require.NoError(t, err, "git config user.email in %s: %s", dir, out)
@@ -154,7 +154,7 @@ func TestRunDoctor_Failure(t *testing.T) {
 	// misconfiguration: the store holds an identity, but none matches the
 	// caller (USER=nobody). An empty store is a fresh-install WARN, not a
 	// FAIL, so a non-matching identity must be present. Git-init the cwd so
-	// FindRepoRoot does not walk up into a real git ancestor.
+	// CheckoutRootIfAny does not walk up into a real git ancestor.
 	home := t.TempDir()
 	globalIDs := filepath.Join(home, ".punt-labs", "ethos", "identities")
 	require.NoError(t, os.MkdirAll(globalIDs, 0o755))
@@ -189,7 +189,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	// ethos-bfml/ethos-hy40 added "Audit trailer hook" and ethos-e05k
 	// added "Code archetype delegated-worker guard", bumping the count
 	// from 12 to 14.
-	require.Len(t, results, 14)
+	require.Len(t, results, 15)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
@@ -478,7 +478,7 @@ func TestRunResolveAgent_Configured(t *testing.T) {
 }
 
 func TestRunResolveAgent_NotConfigured(t *testing.T) {
-	// Git-init repo without ethos.yaml: FindRepoRoot finds repo, but
+	// Git-init repo without ethos.yaml: CheckoutRootIfAny finds repo, but
 	// ResolveAgent returns empty, so handler prints nothing and exits 0.
 	home := t.TempDir()
 	repo := t.TempDir()

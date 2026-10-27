@@ -37,7 +37,7 @@ type Result struct {
 	// file cut loose from its mission can be reunited by inspection.
 	// Validate rejects a file whose Mission field does not match the
 	// caller's expectation — see ResultStore.Append.
-	Mission string `yaml:"mission" json:"mission"`
+	Mission string `yaml:"mission" json:"mission" redact:"keep"`
 
 	// Round is the round this result covers. Results are 1-indexed to
 	// match Contract.CurrentRound. Append refuses any value that does
@@ -47,13 +47,13 @@ type Result struct {
 	// CreatedAt is the RFC3339 timestamp at which the worker submitted
 	// the result. Set by ResultStore.Append when empty, so the caller
 	// can leave it blank.
-	CreatedAt string `yaml:"created_at" json:"created_at"`
+	CreatedAt string `yaml:"created_at" json:"created_at" redact:"keep"`
 
 	// Author is the handle of the worker that produced the result.
 	// Typically equals the contract's Worker; the gate does not
 	// require equality so a delegated sub-worker can still claim
 	// authorship of its own output.
-	Author string `yaml:"author" json:"author"`
+	Author string `yaml:"author" json:"author" redact:"handle"`
 
 	// Verdict is the worker's own assessment of the round. It is a
 	// closed enum: pass (all success criteria met), fail (at least one
@@ -63,7 +63,7 @@ type Result struct {
 	// verdict=fail on a round the leader ultimately chooses to close
 	// as closed_pass — but the fact that verdicts exist as a typed
 	// field is what lets the leader synthesize multi-worker output.
-	Verdict string `yaml:"verdict" json:"verdict"`
+	Verdict string `yaml:"verdict" json:"verdict" redact:"keep"`
 
 	// Confidence is the worker's calibrated confidence in the verdict,
 	// in [0.0, 1.0]. Validate rejects values outside the closed
@@ -102,7 +102,7 @@ type Result struct {
 // WriteSet at Append time; Added/Removed are counts with no upper
 // bound but must be non-negative.
 type FileChange struct {
-	Path    string `yaml:"path" json:"path"`
+	Path    string `yaml:"path" json:"path" redact:"path"`
 	Added   int    `yaml:"added" json:"added"`
 	Removed int    `yaml:"removed" json:"removed"`
 }
@@ -113,7 +113,7 @@ type FileChange struct {
 // enum from a closed set — see validEvidenceStatuses.
 type EvidenceCheck struct {
 	Name   string `yaml:"name" json:"name"`
-	Status string `yaml:"status" json:"status"`
+	Status string `yaml:"status" json:"status" redact:"keep"`
 }
 
 // Verdict enum values. The set is closed; Validate rejects anything

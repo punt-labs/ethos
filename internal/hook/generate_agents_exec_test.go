@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -293,7 +294,7 @@ func runHookInProject(t *testing.T, command, stdin, projectDir string, extraEnv 
 // failing the test on any git error.
 func gitCmd(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testhelpers.GitCommand(args...)
 	cmd.Dir = dir
 	cmd.Env = gitEnv(dir)
 	out, err := cmd.CombinedOutput()

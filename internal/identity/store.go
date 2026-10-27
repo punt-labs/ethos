@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -425,7 +426,7 @@ func (s *Store) Update(handle string, mutate func(*Identity) error) error {
 	if err != nil {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
-	tmpPath := path + ".tmp"
+	tmpPath := layout.TmpPath(path)
 	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("writing identity: %w", err)
 	}
@@ -482,7 +483,7 @@ func (s *Store) updateNoValidate(handle string, mutate func(*Identity) error) er
 	if err != nil {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
-	tmpPath := path + ".tmp"
+	tmpPath := layout.TmpPath(path)
 	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("writing identity: %w", err)
 	}

@@ -1,0 +1,36 @@
+# Qodo v2 review config (punt-kit pr_agent.toml template). One review on open, no per-push re-review, only High findings inline.
+[github_app]
+ignore_bot_pr = true
+pr_commands = ["/agentic_describe", "/agentic_review"]
+handle_push_trigger = false
+
+[review_agent]
+enable_incremental_review = true
+# comments_routing below is authoritative; the threshold restates it (High only inline).
+inline_comments_severity_threshold = 3
+issues_user_guidelines = """
+ethos is a Go CLI and MCP server (identity, team, mission and audit registry) plus bash plugin hooks and a small Python e2e harness.
+Targets: macOS and Linux (amd64 and arm64). Nothing else.
+Report every finding in this one pass; do not hold findings back for a later pass.
+Flag only defects reachable by a real caller of the changed code: logic errors, nil paths, security, API contract breaks, concurrency, resource leaks.
+Do not flag hypothetical environments (exotic env vars such as CDPATH or GIT_TRACE, control bytes in paths, tests run as root).
+Do not flag what CI enforces: golangci-lint (govet, staticcheck, unused), go test -race, shellcheck, markdownlint, ruff and mypy on tests/e2e, content validation, fuzz type-checking of Z specs.
+Do not flag lines the PR did not change.
+Never suggest writing to /tmp or the working directory in tests (tests use t.TempDir()), or storing a context.Context in a struct field.
+"""
+compliance_user_guidelines = """
+Apply code rules only: correctness, typing, error handling, security, and the coding standards for the changed files.
+Do not grade PR titles, PR descriptions, commit messages, or CHANGELOG wording.
+Do not grade agent process rules from CLAUDE.md, AGENTS.md, or WORKFLOW.md (missions, beads, review cycles, delegation).
+"""
+smart_router_extra_instructions = """
+High risk: internal/audit/ (tamper-evident audit seal, flock, quarantine), internal/mission/ (mission lifecycle and write-set enforcement),
+internal/hook/ and internal/githook/ (hook entry points and installers), internal/redact/ (secret redaction), internal/mcp/ (MCP server surface),
+plugin/hooks/*.sh, and install.sh.
+Low risk: docs-only diffs (*.md, docs/) and test-only diffs (*_test.go, tests/, test/).
+"""
+
+[review_agent.comments_routing]
+action_required = "both"
+remediation_recommended = "summary"
+informational = "drop"

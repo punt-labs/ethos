@@ -32,7 +32,7 @@ func globalStore() *identity.Store {
 // role, team, and attribute stores are derived from the returned store,
 // so every layer answers from the same reading of the repo config.
 func identityStore() identity.IdentityStore {
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootForStores()
 	bundleRoot := resolveBundleRoot()
 	return newIdentityStore(repoRoot, bundleRoot, repoAuthoritativeMode(repoRoot, bundleRoot))
 }
@@ -51,7 +51,7 @@ func identityStore() identity.IdentityStore {
 // Everything vendor WRITES is still verified under repo-only, by the
 // completeness check it runs on its own output.
 func vendorSourceStore() identity.IdentityStore {
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootForStores()
 	bundleRoot := resolveBundleRoot()
 	// Resolve the mode anyway, so a misconfigured repo-only repo still
 	// fails at startup rather than silently vendoring under a config
@@ -106,45 +106,54 @@ func requiredExt(repoRoot, bundleRoot string) map[string][]string {
 }
 
 // repoAuthoritativeMode reports whether this repo runs in repo-only mode,
-// and exits with a diagnostic when repo-only is configured but cannot be
+// and reports a diagnostic when repo-only is configured but cannot be
 // honored. The two fatal invariants — no repo layer at all, and an
 // active bundle sourced from the user's home — are checked by
 // bundle.VerifyRepoOnly, the one place that logic lives so
 // cmd/validate-content carries the same two guards rather than a second
 // copy of them (ethos-ccjz).
 //
-// Exiting here matches resolveBundleRoot and globalStore: a
-// misconfiguration the user asked for is reported at startup, not
+// A store command refuses here (configFatal) and any other reports the cause
+// and runs on the global stores, so a misconfiguration is reported, not
 // worked around.
 func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 	mode, err := resolve.ResolveResolution(resolutionConfigRoot())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return unusableRepoOnly(err)
 	}
 	if mode != resolve.ResolutionRepoOnly {
 		return false
 	}
 	if err := bundle.VerifyRepoOnly(repoRoot, bundleRoot, activeBundle()); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return unusableRepoOnly(err)
 	}
 	return true
+}
+
+// unusableRepoOnly handles a resolution policy that cannot be honoured. A store
+// command refuses (exit 1, never the global store in its place); a command
+// that handles the error itself says why and runs without the policy, so a
+// hook or doctor can report it and a running server survives it. It is never
+// "not repo-only": the caller gets false only after the cause was printed.
+func unusableRepoOnly(err error) bool {
+	currentRoots().configFatal(err)
+	fmt.Fprintf(os.Stderr, "ethos: %v; this command does not apply the policy\n", err)
+	return false
 }
 
 // resolutionConfigRoot returns the tree whose .punt-labs/ethos.yaml
 // carries the resolution policy.
 //
-// It is StoreRepoRoot, except when a set ETHOS_REPO_ROOT was REFUSED —
-// StoreRepoRoot returns "" for a refused override, which would leave the
+// It is StoreRootIfAny, except when a set ETHOS_REPO_ROOT was REFUSED —
+// StoreRootIfAny returns "" for a refused override, which would leave the
 // repo's own config unread and let a repo-only repo fall back to global
 // on a warning alone. Reading the mode from the override path directly
 // means the refusal cannot launder itself into the silent fallback
 // repo-only exists to forbid; the missing store then trips the
 // no-repo-layer error above.
 func resolutionConfigRoot() string {
-	if root := resolve.StoreRepoRoot(); root != "" {
-		return root
+	if r := currentRoots(); r.StoreFailure() == nil && r.Store != "" {
+		return r.Store
 	}
 	root, _ := resolve.RepoRootOverride()
 	return root

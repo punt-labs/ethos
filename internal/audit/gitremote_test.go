@@ -1,9 +1,9 @@
 package audit
 
 import (
-	"os/exec"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,7 +101,7 @@ func TestParseGitRemote(t *testing.T) {
 
 func gitInit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 	require.NoError(t, cmd.Run(), "git %v", args)
 }
 
@@ -110,16 +110,22 @@ func TestRepoIdentity(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir, "init")
 		gitInit(t, dir, "remote", "add", "origin", "git@github.com:punt-labs/ethos.git")
-		assert.Equal(t, "punt-labs/ethos", RepoIdentity(dir))
+		got, err := RepoIdentity(dir)
+		require.NoError(t, err)
+		assert.Equal(t, "punt-labs/ethos", got)
 	})
 
 	t.Run("no origin yields empty", func(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir, "init")
-		assert.Equal(t, "", RepoIdentity(dir))
+		got, err := RepoIdentity(dir)
+		require.NoError(t, err)
+		assert.Equal(t, "", got)
 	})
 
 	t.Run("empty root yields empty", func(t *testing.T) {
-		assert.Equal(t, "", RepoIdentity(""))
+		got, err := RepoIdentity("")
+		require.NoError(t, err)
+		assert.Equal(t, "", got)
 	})
 }

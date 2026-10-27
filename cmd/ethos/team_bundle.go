@@ -2,18 +2,22 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -99,7 +103,11 @@ type availableRow struct {
 }
 
 func runTeamAvailable(cmd *cobra.Command) error {
-	repoRoot := resolve.StoreRepoRoot()
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
+		return fmt.Errorf("locating the repository store: %w", rootErr)
+	}
+	repoRoot := loc.Store
 	globalRoot := defaultGlobalRoot()
 
 	bundles, err := bundle.List(repoRoot, globalRoot)
@@ -160,7 +168,11 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	if !bundle.ValidName.MatchString(name) {
 		return fmt.Errorf("invalid bundle name %q (must match %s)", name, bundle.ValidName.String())
 	}
-	repoRoot := resolve.StoreRepoRoot()
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
+		return fmt.Errorf("locating the repository store: %w", rootErr)
+	}
+	repoRoot := loc.Store
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
@@ -184,11 +196,52 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("bundle %q not found; available bundles:\n%s", name, listBundleNames(bundles))
 	}
 
+	out := cmd.OutOrStdout()
+
+	// The chosen bundle is checked against the resolution policy before anything
+	// is written: under `resolution: repo-only` a global bundle does not travel
+	// with the checkout and is refused, with the reason. (An unreadable or
+	// unknown policy cannot be checked; that is the repair path below.)
+	mode, modeErr := resolve.ResolveResolution(repoRoot)
+	if modeErr == nil && mode == resolve.ResolutionRepoOnly {
+		if err := bundle.VerifyRepoOnly(loc.Ethos, match.Path, match); err != nil {
+			return fmt.Errorf("team activate: %w; nothing was written", err)
+		}
+	}
+
+	// A bundle or policy that cannot be honoured is exactly what activate may be
+	// run to repair. Write the two config keys and nothing else: no identity
+	// lookup, no CEO/COO resolution (both would consult stores the broken
+	// configuration governs). Say so, and say how to finish.
+	if issue := loc.configIssue(); issue != nil {
+		if err := setConfigKey(repoRoot, "team", name); err != nil {
+			return fmt.Errorf("writing team: %w", err)
+		}
+		if err := setConfigKey(repoRoot, "active_bundle", name); err != nil {
+			return fmt.Errorf("writing config: %w", err)
+		}
+		if modeErr != nil {
+			// The resolution: value itself is the failure; activate cannot repair it.
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team activate: the resolution: value in .punt-labs/ethos.yaml is not valid (%v) "+
+				"and must be fixed there: activate does not repair it. %q is written as the active bundle, but the policy "+
+				"it is checked against is unknown and the CEO/COO leadership roles were not assigned; "+
+				"after fixing the value, run `ethos team activate %s` again.\n", modeErr, name, name)
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: team activate: the repository's configuration was unusable (%v); "+
+				"%q is written as the active bundle and the CEO/COO leadership roles were not assigned. "+
+				"Once the configuration is valid, run `ethos team activate %s` again to assign them.\n", issue, name, name)
+		}
+		if jsonOutput {
+			return writeJSON(out, map[string]string{"name": name, "status": "activated-leadership-skipped"})
+		}
+		fmt.Fprintf(out, "activated: %s (source: %s, path: %s); leadership not assigned\n", match.Name, match.Source, match.Path)
+		return nil
+	}
+
 	current, err := resolve.ResolveActiveBundle(repoRoot)
 	if err != nil {
 		return fmt.Errorf("reading active bundle: %w", err)
 	}
-	out := cmd.OutOrStdout()
 
 	// Resolve the human CEO to bind BEFORE any config write, so a caller who
 	// cannot supply one (an agent persona such as claude, or no resolvable
@@ -277,7 +330,11 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 // switch reported as a failure.
 func resolveActivateCEO(errw io.Writer) (handle string, ok bool) {
 	is := identityStore()
-	h, err := resolve.Resolve(is, sessionStore())
+	checkout, err := currentRoots().checkoutForGit()
+	var h string
+	if err == nil {
+		h, err = resolve.Resolve(is, sessionStore(), checkout)
+	}
 	if err != nil {
 		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — no caller identity resolved (%v); run \"ethos setup\" first\n", err)
 		return "", false
@@ -349,7 +406,11 @@ func listBundleNames(bundles []bundle.Bundle) string {
 // --- active ---
 
 func runTeamActive(cmd *cobra.Command) error {
-	repoRoot := resolve.StoreRepoRoot()
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
+		return fmt.Errorf("locating the repository store: %w", rootErr)
+	}
+	repoRoot := loc.Store
 	globalRoot := defaultGlobalRoot()
 
 	b, err := bundle.ResolveActive(repoRoot, globalRoot)
@@ -386,7 +447,11 @@ func runTeamActive(cmd *cobra.Command) error {
 // --- deactivate ---
 
 func runTeamDeactivate(cmd *cobra.Command) error {
-	repoRoot := resolve.StoreRepoRoot()
+	loc := currentRoots()
+	if rootErr := loc.StoreFailure(); rootErr != nil {
+		return fmt.Errorf("locating the repository store: %w", rootErr)
+	}
+	repoRoot := loc.Store
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
@@ -432,6 +497,14 @@ func bundleNameFromURL(url string) string {
 	return s
 }
 
+// bundleCloneTimeout bounds `git clone` and `git submodule add` for a team
+// bundle: a network operation, so it gets its own limit, not the 10s every
+// local git read gets.
+const bundleCloneTimeout = 5 * time.Minute
+
+// cloneLimit is the bound runTeamAddBundle applies; a test may shorten it.
+var cloneLimit = bundleCloneTimeout
+
 func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	name := addBundleName
 	if name == "" {
@@ -444,6 +517,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	var gitArgs []string
 	var targetDir string
 	var gitDir string
+	var relTarget string // the submodule path, relative to the repo root
 	if addBundleGlobal {
 		globalRoot := defaultGlobalRoot()
 		if globalRoot == "" {
@@ -452,7 +526,11 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		targetDir = filepath.Join(globalRoot, "bundles", name)
 		gitArgs = []string{"git", "clone", url, targetDir}
 	} else {
-		repoRoot := resolve.StoreRepoRoot()
+		loc := currentRoots()
+		if rootErr := loc.StoreFailure(); rootErr != nil {
+			return fmt.Errorf("locating the repository store: %w", rootErr)
+		}
+		repoRoot := loc.Store
 		if repoRoot == "" {
 			return fmt.Errorf("not in a git repository (use --global to install without a repo)")
 		}
@@ -460,7 +538,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		// git submodule add expects a path relative to the repo root.
 		// Absolute paths produce "outside repository" errors and
 		// incorrect .gitmodules entries.
-		relTarget := filepath.Join(".punt-labs", "ethos-bundles", name)
+		relTarget = filepath.Join(".punt-labs", "ethos-bundles", name)
 		gitArgs = []string{"git", "submodule", "add", url, relTarget}
 		gitDir = repoRoot
 	}
@@ -481,14 +559,30 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		return nil
 	}
 
-	c := exec.Command(gitArgs[0], gitArgs[1:]...)
-	if gitDir != "" {
-		c.Dir = gitDir
+	// What a clone or submodule add would refuse for local reasons is checked
+	// before git runs, so the failure is the real one and no network is touched.
+	if err := checkBundleDestination(targetDir, gitDir, relTarget); err != nil {
+		return err
 	}
-	c.Stdout = out
-	c.Stderr = cmd.ErrOrStderr()
-	if err := c.Run(); err != nil {
-		return fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
+	if err := checkGitConfigReadable(cmd.ErrOrStderr()); err != nil {
+		return err
+	}
+
+	// git's stderr is ethos's own, untouched: clone progress shows when it is a
+	// terminal, and no pipe of ours can hold Wait open after git exits. The ssh
+	// advice is decided only after a failure, from a short second look at the
+	// remote (sshHint), never from what git printed here.
+	_, err := gitenv.Run(gitenv.Spec{
+		Git: gitArgs[0], Args: gitArgs[1:], Dir: gitDir, Env: gitenv.UserConfigEnv(),
+		Stdout: out, Stderr: cmd.ErrOrStderr(), Limit: cloneLimit, Network: true,
+	})
+	if err != nil {
+		wrapped := fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && sshHint(url) {
+			wrapped = fmt.Errorf("%w; add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key", wrapped)
+		}
+		return wrapped
 	}
 	if jsonOutput {
 		return writeJSON(out, map[string]any{
@@ -499,6 +593,225 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	}
 	fmt.Fprintf(out, "added bundle %q at %s\n", name, targetDir)
 	return nil
+}
+
+// checkBundleDestination refuses a destination git itself would refuse. A clone
+// (gitDir "") goes into a directory that is empty or absent; a symlink to an
+// empty directory is accepted, one that cannot be followed is not. A submodule
+// add (gitDir is the repo root) is refused when the path is a symlink (git
+// would stage the link), is already in the index, or exists and is not a git
+// repository of its own. An existing clone is left for git submodule add, which
+// adopts one that has a commit checked out and refuses one that has none.
+func checkBundleDestination(targetDir, gitDir, relTarget string) error {
+	li, lerr := os.Lstat(targetDir)
+	if errors.Is(lerr, fs.ErrNotExist) {
+		if gitDir == "" {
+			return nil
+		}
+	} else if lerr != nil {
+		return fmt.Errorf("examining the bundle destination %s: %w", targetDir, lerr)
+	}
+	exists := lerr == nil
+	isLink := exists && li.Mode()&fs.ModeSymlink != 0
+	if gitDir != "" && isLink {
+		return fmt.Errorf("the bundle path %s is a symlink; git submodule add would stage the link, not a submodule: remove it, or choose another --name", targetDir)
+	}
+	info, err := os.Stat(targetDir)
+	if exists && err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("the bundle destination %s is a symlink to nothing: remove it, or choose another --name", targetDir)
+		}
+		return fmt.Errorf("the bundle destination %s is a symlink that cannot be followed: %w", targetDir, err)
+	}
+	if gitDir == "" {
+		if !exists {
+			return nil
+		}
+		if info.IsDir() {
+			ents, err := os.ReadDir(targetDir)
+			if err != nil {
+				return fmt.Errorf("reading the bundle destination %s: %w", targetDir, err)
+			}
+			if len(ents) == 0 {
+				return nil
+			}
+		}
+		return fmt.Errorf("the bundle destination %s already exists and is not an empty directory: remove it, or choose another --name", targetDir)
+	}
+	out, err := gitenv.Output(gitDir, "git", "ls-files", "--", relTarget)
+	if err != nil {
+		return fmt.Errorf("checking whether %s is in the index: %w", relTarget, err)
+	}
+	if len(bytes.TrimSpace(out)) > 0 {
+		return fmt.Errorf("the bundle path %s is already in the index: choose another --name, or remove it with git rm", relTarget)
+	}
+	if !exists {
+		return nil
+	}
+	own, resolved := false, ""
+	if info.IsDir() {
+		if own, resolved, err = isOwnGitRepo(targetDir); err != nil {
+			var refused *dotRefusedError
+			if errors.As(err, &refused) {
+				return err
+			}
+			return fmt.Errorf("examining the bundle path %s: %w", targetDir, err)
+		}
+	}
+	if !own {
+		return fmt.Errorf("the bundle path %s already exists and is not a git repository: remove it, or choose another --name", targetDir)
+	}
+	return refuseOwnGitDir(gitDir, resolved, targetDir)
+}
+
+// refuseOwnGitDir refuses a bundle path whose .git resolves to the
+// superproject's own git dir or common dir, or whose common dir is the
+// superproject's (a symlink or a gitfile to it, or a linked worktree of the
+// superproject): git submodule add would report success with no gitlink, or a
+// gitlink to the superproject's own HEAD.
+func refuseOwnGitDir(gitDir, resolved, bundlePath string) error {
+	ri, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("examining the git dir %s of the bundle path: %w", resolved, err)
+	}
+	// git's rule: a commondir file names the common dir, relative to the git dir.
+	ci := ri
+	if data, err := os.ReadFile(filepath.Join(resolved, "commondir")); err == nil {
+		c := strings.TrimSpace(string(data))
+		if !filepath.IsAbs(c) {
+			c = filepath.Join(resolved, c)
+		}
+		if ci, err = os.Stat(c); err != nil {
+			return fmt.Errorf("examining the common dir %s of the bundle path's git dir: %w", c, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("reading the commondir of %s: %w", resolved, err)
+	}
+	for _, flag := range []string{"--absolute-git-dir", "--git-common-dir"} {
+		out, err := gitenv.Output(gitDir, "git", "rev-parse", flag)
+		if err != nil {
+			return fmt.Errorf("git rev-parse %s in %s: %w", flag, gitDir, err)
+		}
+		p := strings.TrimSpace(string(out))
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(gitDir, p)
+		}
+		pi, err := os.Stat(p)
+		if err != nil {
+			return fmt.Errorf("examining the superproject git dir %s: %w", p, err)
+		}
+		if os.SameFile(ri, pi) {
+			return fmt.Errorf("the bundle path's .git is this repository's own git dir (%s): remove it, or choose another --name", p)
+		}
+		if flag == "--git-common-dir" && os.SameFile(ci, pi) {
+			return fmt.Errorf("the bundle path's .git shares this repository's common git dir (%s) — it is one of its worktrees: git worktree remove %s, or choose another --name", p, bundlePath)
+		}
+	}
+	return nil
+}
+
+// dotRefusedError is git's refusal of a .git that exists at the bundle path.
+type dotRefusedError struct {
+	dir, stderr string
+}
+
+func (e *dotRefusedError) Error() string {
+	return fmt.Sprintf("the bundle path %s has a .git git does not accept: %s", e.dir, e.stderr)
+}
+
+// isOwnGitRepo reports whether dir is a git repository of its own by git's own
+// adoption test, `git rev-parse --resolve-git-dir dir/.git`, run from dir's
+// parent so no repository around it is consulted. It returns the resolved git
+// dir. It is (false, nil) only when dir/.git is absent. A .git that cannot be
+// stat'ed (its directory is not searchable) is returned as an error; a .git git
+// cannot read ("not a gitdir", "not a git repository") is a *dotRefusedError
+// carrying git's message; any other failure, including a timeout, is the error.
+func isOwnGitRepo(dir string) (bool, string, error) {
+	dot := filepath.Join(dir, ".git")
+	if _, err := os.Lstat(dot); errors.Is(err, fs.ErrNotExist) {
+		return false, "", nil
+	} else if err != nil {
+		return false, "", fmt.Errorf("examining %s: %w", dot, err)
+	}
+	out, err := gitenv.Output(filepath.Dir(dir), "git", "rev-parse", "--resolve-git-dir", dot)
+	if err == nil {
+		return true, strings.TrimSpace(string(out)), nil
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return false, "", err
+	}
+	stderr := strings.TrimSpace(string(ee.Stderr))
+	if strings.Contains(stderr, "not a gitdir") || strings.Contains(stderr, "not a git repository") {
+		return false, "", &dotRefusedError{dir: dir, stderr: stderr}
+	}
+	if stderr == "" {
+		return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w", err)
+	}
+	return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w: %s", err, stderr)
+}
+
+// checkGitConfigReadable names every git config file that cannot be read. An
+// unreadable system file is fatal for git, so it refuses before the clone; an
+// unreadable global or XDG file is skipped by git, so its core.sshCommand,
+// insteadOf and credential settings do not apply, and it is a notice on w.
+func checkGitConfigReadable(w io.Writer) error {
+	var fatal []string
+	for _, u := range gitenv.UnreadableConfigs() {
+		if u.System {
+			fatal = append(fatal, fmt.Sprintf("%s (%v)", u.Path, u.Err))
+			continue
+		}
+		fmt.Fprintf(w, "ethos: team add-bundle: git will ignore %s: its core.sshCommand, insteadOf and credential settings do not apply (%v)\n", u.Path, u.Err)
+	}
+	if len(fatal) > 0 {
+		return fmt.Errorf("team add-bundle: git will refuse the system config %s; make it readable", strings.Join(fatal, ", "))
+	}
+	return nil
+}
+
+// sshHint reports whether the remote refuses for a reason a terminal would have
+// answered. It looks again, only after a failure, with `git ls-remote` bounded
+// at hintLimit and run as the clone ran (no terminal, no prompts), and reads
+// what git says. A relative URL (submodule add) cannot be looked at this way.
+func sshHint(url string) bool {
+	if strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../") {
+		return false
+	}
+	// In a neutral directory: the user's own config applies, and no repository's
+	// (a submodule clone does not apply its superproject's insteadOf either).
+	ndir, nenv, cleanup, nerr := gitenv.Neutral()
+	if nerr != nil {
+		return false
+	}
+	defer cleanup()
+	_, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: ndir, Env: nenv, Network: true, Limit: hintLimit,
+		Args: []string{"ls-remote", "--exit-code", url, "HEAD"},
+	})
+	var ee *exec.ExitError
+	return errors.As(err, &ee) && sshFailed(string(ee.Stderr))
+}
+
+// hintLimit bounds sshHint's second look.
+var hintLimit = 20 * time.Second
+
+// sshFailed reports whether git's stderr shows ssh failing in a way a terminal
+// prompt would have fixed: a key refused or no way to ask for one, or a host key
+// not accepted. Generic transport text ("Could not read from remote repository",
+// a repository not found, a refused connection, a DNS failure) is not evidence
+// of that and gets no advice.
+func sshFailed(stderr string) bool {
+	for _, marker := range []string{
+		"Permission denied (publickey", "Permission denied (password", "Permission denied (keyboard-interactive",
+		"Host key verification failed",
+		"Enter passphrase", "read_passphrase", "Could not open a connection to your authentication agent",
+	} {
+		if strings.Contains(stderr, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- legacy submodule detection ---

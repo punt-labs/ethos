@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -225,6 +226,7 @@ func fixtureEnv(home string) []string {
 		"USER=test-agent",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CEILING_DIRECTORIES=" + testhelpers.GitCeiling(),
 		"PATH=" + os.Getenv("PATH"),
 		"ANTHROPIC_API_KEY=" + os.Getenv("ANTHROPIC_API_KEY"),
 	}

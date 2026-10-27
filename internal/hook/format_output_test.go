@@ -184,6 +184,26 @@ func TestFormatOutput_Identity_List(t *testing.T) {
 	assert.Contains(t, ctx, "bob")
 }
 
+// A note in a second content block does not disturb element 0, which is still
+// formatted; the note is surfaced in both channels.
+func TestFormatOutput_NoteBlock(t *testing.T) {
+	const note = "note: the repository store could not be located (x); this answer is from the global store only"
+	payload, err := json.Marshal(map[string]any{
+		"tool_name":  "mcp__plugin_ethos_self__identity",
+		"tool_input": map[string]any{"method": "list"},
+		"tool_response": []any{
+			map[string]any{"type": "text", "text": `[{"handle":"alice","name":"Alice","kind":"human"}]`},
+			map[string]any{"type": "text", "text": note},
+		},
+	})
+	require.NoError(t, err)
+
+	r := parseFormatResult(t, runFormat(t, payload))
+	assert.Equal(t, "1 identity\n"+note, r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Contains(t, r.HookSpecificOutput.AdditionalContext, "alice")
+	assert.True(t, strings.HasSuffix(r.HookSpecificOutput.AdditionalContext, "\n\n"+note))
+}
+
 func TestFormatOutput_Identity_List_Singular(t *testing.T) {
 	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly"}]`
 	payload := makeToolPayload("identity", "list", result)

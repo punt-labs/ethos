@@ -5,12 +5,14 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +26,7 @@ const phase3RepoID = "punt-labs/ethos"
 // derives id from the checkout.
 func addOriginRemote(t *testing.T, repo, id string) {
 	t.Helper()
-	cmd := exec.Command("git", "-C", repo, "remote", "add", "origin", "git@github.com:"+id+".git")
+	cmd := testhelpers.GitCommand("-C", repo, "remote", "add", "origin", "git@github.com:"+id+".git")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git remote add origin: %v: %s", err, out)
 	}
@@ -468,10 +470,77 @@ func TestRunSessionPurge_JSONRefused(t *testing.T) {
 
 	// stdout must be valid JSON — no stray prose corrupting the payload.
 	assert.NotContains(t, stdout, "Refused to purge")
-	var got map[string][]string
+	var got struct {
+		Refused  []string `json:"refused"`
+		Sessions []string `json:"sessions"`
+		Skipped  []any    `json:"skipped"`
+	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --json stdout must parse: %q", stdout)
-	assert.Equal(t, []string{"sess-refused"}, got["refused"])
-	assert.Empty(t, got["sessions"])
+	assert.Equal(t, []string{"sess-refused"}, got.Refused)
+	assert.Empty(t, got.Sessions)
+	assert.Empty(t, got.Skipped)
+}
+
+// createUnresolvedSession writes a roster whose repository identity was never
+// resolved, with a live primary (this process): not stale.
+func createUnresolvedSession(t *testing.T, se *cliSubprocessEnv, id string) {
+	t.Helper()
+	st := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos"))
+	root := session.Participant{AgentID: "unknown"}
+	primary := session.Participant{AgentID: strconv.Itoa(os.Getpid()), Parent: "unknown"}
+	require.NoError(t, st.CreateUnresolved(id, root, primary, "git did not answer", "", "h"))
+}
+
+// purge --json lists an unresolved roster as skipped, with the reason; --force
+// removes it though its session is alive, and still runs when the checkout
+// cannot be located.
+func TestRunSessionPurge_UnresolvedSkippedThenForced(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	createUnresolvedSession(t, se, "sess-unresolved")
+
+	stdout, _, err := execHandler(t, "session", "purge", "--json")
+	require.NoError(t, err)
+	var got struct {
+		Sessions []string `json:"sessions"`
+		Skipped  []struct {
+			Session string `json:"session"`
+			Reason  string `json:"reason"`
+		} `json:"skipped"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
+	assert.Empty(t, got.Sessions)
+	require.Len(t, got.Skipped, 1)
+	assert.Equal(t, "sess-unresolved", got.Skipped[0].Session)
+	assert.Equal(t, "git did not answer", got.Skipped[0].Reason)
+
+	// The checkout cannot be located; without --force the purge stops.
+	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "absent"))
+	_, _, err = execHandler(t, "session", "purge")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "locating the checkout")
+
+	// With --force it removes the roster anyway, and says what it did.
+	sessionPurgeForce = true
+	stdout, stderr, err := execHandler(t, "session", "purge", "--force", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "purging as if outside any repository")
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
+	assert.Equal(t, []string{"sess-unresolved"}, got.Sessions)
+	var forced struct {
+		Forced []struct {
+			Session string `json:"session"`
+			Reason  string `json:"reason"`
+			Warning string `json:"warning"`
+		} `json:"forced_unresolved"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &forced), stdout)
+	require.Len(t, forced.Forced, 1, "the force-purged unresolved roster is marked")
+	assert.Equal(t, "sess-unresolved", forced.Forced[0].Session)
+	assert.Equal(t, "git did not answer", forced.Forced[0].Reason)
+	assert.Contains(t, forced.Forced[0].Warning, "not verified")
 }
 
 // TestRunSessionPurge_TextRefused is Bugbot R6-2: when the unsealed-lines
@@ -546,4 +615,41 @@ func seedAttr(t *testing.T, se *cliSubprocessEnv, kind, slug, content string) {
 	dir := filepath.Join(se.home, ".punt-labs", "ethos", kind)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, slug+".md"), []byte(content), 0o644))
+}
+
+// A roster whose repository identity was unresolved is shown as such: `list`
+// says "unresolved" where a no-origin checkout says "-", and `show` prints the
+// reason. `purge --force` removes it.
+func TestUnresolvedRosterListShowPurge(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	ss := sessionStore()
+	root := session.Participant{AgentID: "u"}
+	primary := session.Participant{AgentID: "9999999", Parent: "u"}
+	require.NoError(t, ss.CreateUnresolved("sess-unres-1", root, primary, "git did not answer", se.repo, "h"))
+	require.NoError(t, ss.CreateInCheckout("sess-noorigin-1", root, primary, "", se.repo, "h"))
+
+	list, _, err := execHandler(t, "session", "list")
+	require.NoError(t, err)
+	for _, line := range strings.Split(list, "\n") {
+		switch {
+		case strings.Contains(line, "sess-unr"):
+			assert.Contains(t, line, "unresolved", "the unresolved roster says so: %q", line)
+		case strings.Contains(line, "sess-noo"):
+			assert.NotContains(t, line, "unresolved", "a no-origin roster is not unresolved: %q", line)
+		}
+	}
+
+	show, _, err := execHandler(t, "session", "show", "sess-unres-1")
+	require.NoError(t, err)
+	assert.Contains(t, show, "unresolved")
+	assert.Contains(t, show, "git did not answer")
+
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	_, _, err = execHandler(t, "session", "purge", "--force")
+	require.NoError(t, err)
+	ids, err := ss.List()
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "sess-unres-1", "purge --force removes an unresolved roster")
 }

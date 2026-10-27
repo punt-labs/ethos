@@ -9,13 +9,12 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
 // pipelineStore returns a three-layer PipelineStore: repo-local, active
 // bundle, then user-global. Mirrors identityStore() — repo layer comes
-// from FindRepoEthosRoot, bundle from resolveBundleRoot, global from
+// from EthosRootIfAny, bundle from resolveBundleRoot, global from
 // ~/.punt-labs/ethos.
 func pipelineStore() *mission.PipelineStore {
 	home, err := os.UserHomeDir()
@@ -24,7 +23,7 @@ func pipelineStore() *mission.PipelineStore {
 		os.Exit(1)
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootForStores()
 	bundleRoot := resolveBundleRoot()
 	return mission.NewPipelineStoreWithBundle(repoRoot, bundleRoot, globalRoot)
 }
@@ -199,7 +198,7 @@ func runPipelineInstantiate(name string) error {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootForStores()
 	as := mission.NewArchetypeStore(repoRoot, globalRoot)
 
 	// Validate that every stage resolves a non-empty worker and evaluator

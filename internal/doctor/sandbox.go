@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
@@ -25,6 +28,10 @@ import (
 // test can shrink it to prove the bound actually fires rather than trusting
 // the number in this comment.
 var sandboxTimeout = 10 * time.Second
+
+// sandboxGrace is how long a sandboxed command that got SIGTERM on its
+// deadline has to exit before it is killed.
+const sandboxGrace = time.Second
 
 // errSandboxGitUnavailable is returned by hookInvocationObserved when git is
 // not on PATH. The sandboxed hook body cannot be exercised without it — the
@@ -129,7 +136,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		return false, errSandboxGitUnavailable
 	}
 
-	dir, err := os.MkdirTemp("", "ethos-doctor-hook-*")
+	dir, err := os.MkdirTemp("", layout.ScratchDirPattern("ethos-doctor-hook"))
 	if err != nil {
 		return false, fmt.Errorf("creating sandbox: %w", err)
 	}
@@ -172,10 +179,12 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// --template= defeats a caller's init.templateDir/GIT_TEMPLATE_DIR,
 	// which could otherwise seed the "sandbox" with attacker- or
 	// operator-controlled hooks of its own before ours ever runs.
-	initCmd := exec.CommandContext(ctx, "git", "-C", dir, "init", "-q", "--template=")
-	initCmd.Env = sandboxEnv
-	if out, err := initCmd.CombinedOutput(); err != nil {
-		return false, fmt.Errorf("sandbox git init: %w: %s", err, out)
+	var initOut bytes.Buffer
+	if _, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Args: []string{"-C", dir, "init", "-q", "--template="}, Env: sandboxEnv,
+		Stdout: &initOut, Stderr: &initOut, Limit: sandboxTimeout,
+	}); err != nil {
+		return false, fmt.Errorf("sandbox git init: %w: %s", err, initOut.String())
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return false, fmt.Errorf("sandbox git init did not create a repository: %w", err)
@@ -269,8 +278,11 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// the whole group instead (S4, partial — see the unconditional reap
 	// below for the rest of the fix).
 	setNewProcessGroup(cmd)
-	cmd.Cancel = func() error { return reapProcessGroup(cmd) }
-	cmd.WaitDelay = sandboxTimeout // bound Wait() even if Cancel's kill somehow doesn't land
+	// On the deadline the group gets SIGTERM, so the hook can clean up; after
+	// the one-second grace Go kills the direct child, and the unconditional
+	// reap below gives the group the grace again, then SIGKILLs what is left.
+	cmd.Cancel = func() error { return termProcessGroup(cmd) }
+	cmd.WaitDelay = sandboxGrace
 	// The hook's own exit status is not doctor's concern when the stub log
 	// below shows the call happened — a hook that fails for reasons
 	// unrelated to the ethos call (a chained foreign section erroring, a
@@ -280,6 +292,18 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// "never got the chance to call ethos" apart from "ran fine and
 	// genuinely never calls ethos" (H1).
 	runErr := cmd.Run()
+	var reapErrs []error
+	reap := func(c *exec.Cmd) {
+		// A group that hit the deadline was sent SIGTERM: it gets the grace to
+		// finish its cleanup before SIGKILL. One that did not is killed at once.
+		var grace time.Duration
+		if ctx.Err() != nil {
+			grace = sandboxGrace
+		}
+		if err := reapGroup(c, grace); err != nil {
+			reapErrs = append(reapErrs, err)
+		}
+	}
 	// A hook may background a child (`cmd &`, nohup) that outlives the
 	// hook's OWN quick, normal exit — cmd.Cancel above only fires on a
 	// context timeout, which never happens in that case, since Run()
@@ -287,7 +311,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// whole process group unconditionally here too, regardless of how Run
 	// returned, so no orphaned grandchild survives into the sandbox's
 	// temp-dir cleanup below — a directory that is about to not exist (S4).
-	_ = reapProcessGroup(cmd)
+	reap(cmd)
 
 	// libc's execvp (which git uses to spawn hooks) falls back to the shell
 	// when a direct execve fails with ENOEXEC — the kernel's answer for a
@@ -301,10 +325,16 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		shCmd.Dir = dir
 		shCmd.Env = sandboxEnv
 		setNewProcessGroup(shCmd)
-		shCmd.Cancel = func() error { return reapProcessGroup(shCmd) }
-		shCmd.WaitDelay = sandboxTimeout
+		shCmd.Cancel = func() error { return termProcessGroup(shCmd) }
+		shCmd.WaitDelay = sandboxGrace
 		runErr = shCmd.Run()
-		_ = reapProcessGroup(shCmd)
+		reap(shCmd)
+	}
+
+	// A group that could not be ended may leave a process running into the
+	// temp-dir cleanup: say so, whatever the probe saw.
+	if len(reapErrs) > 0 {
+		return false, fmt.Errorf("the sandbox could not end the hook's process group, so a process it started may still be running: %w", errors.Join(reapErrs...))
 	}
 
 	data, err := os.ReadFile(logPath)
@@ -316,6 +346,9 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	}
 	return matchesInvocation(string(data), nonce, argv), nil
 }
+
+// reapGroup ends a sandboxed command's process group; a test replaces it.
+var reapGroup = reapProcessGroup
 
 // invocationRecordSep terminates one logged invocation record in the stub's
 // log file. \x1e (ASCII record separator) is vanishingly unlikely to appear
@@ -415,9 +448,9 @@ func (e *hookExitedEarlyError) Error() string {
 // runner, which is why it always attaches Output()'s stderr on failure
 // rather than exposing a broader interface.
 func gitInSandbox(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = env
-	out, err := cmd.Output()
+	out, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Args: append([]string{"-C", dir}, args...), Env: env, Limit: sandboxTimeout,
+	})
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {

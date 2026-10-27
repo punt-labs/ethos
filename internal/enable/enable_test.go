@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/claudesettings"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
 
@@ -16,6 +17,7 @@ import (
 // (~/.punt-labs/ethos/locks) lands in a temp dir, not the developer's real
 // home, when a test enables/disables a repo.
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	home, err := os.MkdirTemp("", "enable-home-*")
 	if err != nil {
 		panic(err)
@@ -41,11 +43,11 @@ func gitRepo(t *testing.T) string {
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 	// Neutralize the session's env-injected git config (GIT_CONFIG_COUNT with
 	// commit.gpgsign=true and a signing key) — it has the highest precedence
 	// and would force gpg signing, which fails under the isolated test HOME.
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cmd.Env,
 		"GIT_CONFIG_COUNT=0",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null")
@@ -251,7 +253,7 @@ func TestEnableGitlinkGuard(t *testing.T) {
 	dir := gitRepo(t)
 	// Record .punt-labs/ethos as a gitlink (mode 160000) in the index.
 	sha := "0000000000000000000000000000000000000001"
-	cmd := exec.Command("git", "-C", dir, "update-index", "--add", "--cacheinfo", "160000,"+sha+",.punt-labs/ethos")
+	cmd := testhelpers.GitCommand("-C", dir, "update-index", "--add", "--cacheinfo", "160000,"+sha+",.punt-labs/ethos")
 	if err := cmd.Run(); err != nil {
 		t.Skipf("cannot stage a gitlink in this git: %v", err)
 	}
@@ -343,8 +345,9 @@ func TestDisableRefusesEnabledSiblingWorktree(t *testing.T) {
 
 func TestDisableRefusesWhenWorktreeProbeFails(t *testing.T) {
 	// A directory that is not a git repo (and, via /tmp, has no git ancestor)
-	// makes `git worktree list` fail; disable must refuse (fail closed), not
-	// silently degrade to --force behavior (S3). /tmp escapes the repo-nested
+	// makes git fail; disable must refuse (fail closed), not silently degrade
+	// to --force behavior (S3). The hooks lookup fails first, so the refusal
+	// names the unverified hooks directory. /tmp escapes the repo-nested
 	// TMPDIR, the same escape the doctor tests use.
 	nonRepo, err := os.MkdirTemp("/tmp", "ethos-disable-*")
 	if err != nil {
@@ -354,8 +357,8 @@ func TestDisableRefusesWhenWorktreeProbeFails(t *testing.T) {
 
 	if _, err := Disable(nonRepo, false); err == nil {
 		t.Fatal("expected disable to refuse when the worktree probe fails")
-	} else if !strings.Contains(err.Error(), "verify sibling worktrees") {
-		t.Errorf("error = %q, want a fail-closed probe refusal", err)
+	} else if !strings.Contains(err.Error(), "not verified") {
+		t.Errorf("error = %q, want a fail-closed refusal naming the unverified hooks directory", err)
 	}
 	// --force still overrides the probe failure.
 	if _, err := Disable(nonRepo, true); err != nil {
@@ -528,5 +531,202 @@ func TestConfigStatus_ReadsStoreRoot(t *testing.T) {
 	empty := t.TempDir()
 	if hint, _ := configStatus(empty); !strings.Contains(hint, "ethos setup") {
 		t.Errorf("no config: want run-setup hint, got %q", hint)
+	}
+}
+
+// TestEnableRefusesSubdirectoryOfAnotherRepo: a root with no .git of its own
+// must not get a hooks directory git never runs.
+func TestEnableRefusesSubdirectoryOfAnotherRepo(t *testing.T) {
+	parent := gitRepo(t)
+	sub := filepath.Join(parent, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Enable(sub)
+	if err == nil {
+		t.Fatal("Enable on a subdirectory of another repo succeeded")
+	}
+	if !strings.Contains(err.Error(), sub) || !strings.Contains(err.Error(), "work tree") {
+		t.Errorf("error = %q, want it to name %s and git's work tree", err, sub)
+	}
+	if _, statErr := os.Stat(filepath.Join(sub, ".git")); statErr == nil {
+		t.Error("Enable created a fake .git in the subdirectory")
+	}
+	if _, statErr := os.Stat(filepath.Join(sub, markerRel)); statErr == nil {
+		t.Error("Enable wrote the marker before refusing")
+	}
+}
+
+// TestEnableRefusesStaleLinkedWorktree: a .git file whose gitdir target was
+// deleted must not pass for a repository; hooks written under a made-up gitdir
+// are never run by git.
+func TestEnableRefusesStaleLinkedWorktree(t *testing.T) {
+	dir := gitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "f")
+	gitRun(t, dir, "commit", "-q", "-m", "init")
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitRun(t, dir, "worktree", "add", "-q", wt)
+	gitdir := filepath.Join(dir, ".git", "worktrees", "wt")
+	if err := os.RemoveAll(gitdir); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Enable(wt)
+	if err == nil {
+		t.Fatal("Enable in a stale linked worktree succeeded")
+	}
+	if !strings.Contains(err.Error(), gitdir) {
+		t.Errorf("error = %q, want it to name the missing gitdir %s", err, gitdir)
+	}
+	if exists(gitdir) {
+		t.Error("Enable recreated the deleted gitdir")
+	}
+	if exists(filepath.Join(wt, markerRel)) {
+		t.Error("Enable wrote the marker before refusing")
+	}
+}
+
+// TestEnableRequiresVerifiedHooksDir: with git unavailable core.hooksPath
+// cannot be read, so the hooks enable would write into .git/hooks may never
+// run. Enable refuses before writing anything.
+func TestEnableRequiresVerifiedHooksDir(t *testing.T) {
+	dir := gitRepo(t)
+	gitRun(t, dir, "config", "core.hooksPath", ".githooks")
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	_, err := Enable(dir)
+	if err == nil {
+		t.Fatal("Enable with an unverified hooks directory succeeded")
+	}
+	if !strings.Contains(err.Error(), "cannot install hooks") || !strings.Contains(err.Error(), "install git") {
+		t.Errorf("error = %q, want it to say hooks cannot be installed and to install git", err)
+	}
+	if exists(filepath.Join(dir, ".git", "hooks", "pre-commit")) {
+		t.Error("Enable wrote a hook into .git/hooks")
+	}
+	if exists(filepath.Join(dir, markerRel)) {
+		t.Error("Enable wrote the marker before refusing")
+	}
+}
+
+// TestHooksRefusalAdviceFollowsCause: a root git reports as part of another
+// repository is refused with the advice for that cause, never "install git"
+// (git is installed), by both enable and disable.
+func TestHooksRefusalAdviceFollowsCause(t *testing.T) {
+	parent := gitRepo(t)
+	sub := filepath.Join(parent, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(sub); err != nil {
+		t.Run("enable", func(t *testing.T) { checkMismatchAdvice(t, err) })
+	} else {
+		t.Fatal("Enable in a subdirectory of another repository succeeded")
+	}
+	if _, err := Disable(sub, false); err != nil {
+		t.Run("disable", func(t *testing.T) { checkMismatchAdvice(t, err) })
+	} else {
+		t.Fatal("Disable in a subdirectory of another repository succeeded")
+	}
+}
+
+func checkMismatchAdvice(t *testing.T, err error) {
+	t.Helper()
+	if strings.Contains(err.Error(), "install git") {
+		t.Errorf("error = %q, git is installed", err)
+	}
+	if !strings.Contains(err.Error(), "ETHOS_REPO_ROOT") || !strings.Contains(err.Error(), "top level") {
+		t.Errorf("error = %q, want the top-level advice", err)
+	}
+}
+
+// TestDisableRefusesDegradedLookup: with git unavailable core.hooksPath cannot
+// be read, so disable must not strip .git/hooks while the real hooks directory
+// keeps its sections. Without --force it refuses and names the remedy.
+func TestDisableRefusesDegradedLookup(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	gitRun(t, dir, "config", "core.hooksPath", ".githooks")
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	before := readFile(t, hook)
+	_, err := Disable(dir, false)
+	if err == nil {
+		t.Fatal("Disable with an unverified hooks directory succeeded")
+	}
+	for _, want := range []string{"not verified", "install git", "--force"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+	if got := readFile(t, hook); got != before {
+		t.Error("Disable stripped .git/hooks/pre-commit despite refusing")
+	}
+	if !exists(filepath.Join(dir, markerRel)) {
+		t.Error("Disable deleted the marker before refusing")
+	}
+}
+
+// TestDisableForceOnDegradedLookup: --force removes the import and marker,
+// leaves every hook file alone, and records that the hooks were skipped. It
+// does so whether or not the guessed hooks directory exists.
+func TestDisableForceOnDegradedLookup(t *testing.T) {
+	for _, guessExists := range []bool{true, false} {
+		name := "guessed dir missing"
+		if guessExists {
+			name = "guessed dir present"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := gitRepo(t)
+			if _, err := Enable(dir); err != nil {
+				t.Fatalf("Enable: %v", err)
+			}
+			gitRun(t, dir, "config", "core.hooksPath", ".githooks")
+			hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
+			if !guessExists {
+				if err := os.RemoveAll(filepath.Join(dir, ".git", "hooks")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := ""
+			if guessExists {
+				before = readFile(t, hook)
+			}
+			t.Setenv("PATH", t.TempDir()) // no git
+
+			rep, err := Disable(dir, true)
+			if err != nil {
+				t.Fatalf("Disable(force): %v", err)
+			}
+			if exists(filepath.Join(dir, markerRel)) {
+				t.Error("marker still present")
+			}
+			if guessExists {
+				if got := readFile(t, hook); got != before {
+					t.Error("Disable changed .git/hooks/pre-commit")
+				}
+			} else if exists(hook) {
+				t.Error("Disable created the guessed hooks directory")
+			}
+			var found bool
+			for _, s := range rep.Steps {
+				if s.Step == "hook:*" {
+					found = true
+					if s.Status != "skipped" || !strings.Contains(s.Detail, "hooks directory not verified") ||
+						!strings.Contains(s.Detail, "core.hooksPath") {
+						t.Errorf("hook step = %+v", s)
+					}
+				}
+			}
+			if !found {
+				t.Errorf("no hook:* step in %+v", rep.Steps)
+			}
+		})
 	}
 }

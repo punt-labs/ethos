@@ -1,6 +1,7 @@
 package mission
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,7 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -86,10 +89,10 @@ const MaxDelegationDepthDefault = 16
 // through to MISSION_ID-explicit dispatch or Tier A rather than
 // silently matching every spawn.
 type DelegationTemplate struct {
-	Role             string   `yaml:"role" json:"role"`
-	SpawnPattern     string   `yaml:"spawn_pattern" json:"spawn_pattern"`
+	Role             string   `yaml:"role" json:"role" redact:"path"`
+	SpawnPattern     string   `yaml:"spawn_pattern" json:"spawn_pattern" redact:"path"`
 	InheritsContract bool     `yaml:"inherits_contract,omitempty" json:"inherits_contract,omitempty"`
-	ExtractInto      []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`
+	ExtractInto      []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty" redact:"path"`
 }
 
 // Delegation is the on-disk record for one Agent spawn. Tier B
@@ -107,19 +110,19 @@ type DelegationTemplate struct {
 // `ethos mission` close, or the depth/hash-gate refusal path which
 // sets verdict=aborted before the worker ever runs.
 type Delegation struct {
-	ID               string `yaml:"id" json:"id"`
-	Tier             string `yaml:"tier" json:"tier"`
-	Mission          string `yaml:"mission,omitempty" json:"mission,omitempty"`
-	ContractID       string `yaml:"contract_id,omitempty" json:"contract_id,omitempty"`
-	ParentDelegation string `yaml:"parent_delegation,omitempty" json:"parent_delegation,omitempty"`
+	ID               string `yaml:"id" json:"id" redact:"keep"`
+	Tier             string `yaml:"tier" json:"tier" redact:"keep"`
+	Mission          string `yaml:"mission,omitempty" json:"mission,omitempty" redact:"keep"`
+	ContractID       string `yaml:"contract_id,omitempty" json:"contract_id,omitempty" redact:"keep"`
+	ParentDelegation string `yaml:"parent_delegation,omitempty" json:"parent_delegation,omitempty" redact:"keep"`
 	ParentSession    string `yaml:"parent_session,omitempty" json:"parent_session,omitempty"`
 	Session          string `yaml:"session,omitempty" json:"session,omitempty"`
 	AgentType        string `yaml:"agent_type" json:"agent_type"`
 	SpawnPattern     string `yaml:"spawn_pattern,omitempty" json:"spawn_pattern,omitempty"`
-	CreatedAt        string `yaml:"created_at" json:"created_at"`
-	ClosedAt         string `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
-	Verdict          string `yaml:"verdict" json:"verdict"`
-	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty"`
+	CreatedAt        string `yaml:"created_at" json:"created_at" redact:"keep"`
+	ClosedAt         string `yaml:"closed_at,omitempty" json:"closed_at,omitempty" redact:"keep"`
+	Verdict          string `yaml:"verdict" json:"verdict" redact:"keep"`
+	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty" redact:"keep"`
 	Reason           string `yaml:"reason,omitempty" json:"reason,omitempty"`
 
 	// BoundVia, DisclaimedAt, and DisclaimedReason are DES-076 round 2
@@ -128,8 +131,8 @@ type Delegation struct {
 	// this change; a decode of an old record leaves them at their zero
 	// value, which DisclaimDelegationRecord and countBlockingDelegations
 	// (store.go) both treat as "not disclaimed, not disclaimable."
-	BoundVia         string `yaml:"bound_via,omitempty" json:"bound_via,omitempty"`
-	DisclaimedAt     string `yaml:"disclaimed_at,omitempty" json:"disclaimed_at,omitempty"`
+	BoundVia         string `yaml:"bound_via,omitempty" json:"bound_via,omitempty" redact:"keep"`
+	DisclaimedAt     string `yaml:"disclaimed_at,omitempty" json:"disclaimed_at,omitempty" redact:"keep"`
 	DisclaimedReason string `yaml:"disclaimed_reason,omitempty" json:"disclaimed_reason,omitempty"`
 }
 
@@ -357,48 +360,58 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	if err != nil {
 		return "", fmt.Errorf("delegation skeleton: %w", err)
 	}
+	// A prompt that is not valid UTF-8 would be stored as U+FFFD by the
+	// encoder: refused, as a record is.
+	if !utf8.Valid(payload.Prompt) {
+		return "", fmt.Errorf("delegation skeleton: the prompt is not valid UTF-8; remove or rephrase it")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	// Every string field is redacted except the generated IDs, hashes,
+	// enums and timestamps tagged redact:"keep" on Delegation. Redacting
+	// the struct rather than the marshaled YAML avoids a value that
+	// reduces to exactly "~" round-tripping back as a null.
+	d := Delegation{
+		ID:               filepath.Base(delegationID),
+		Tier:             payload.Tier,
+		Mission:          filepath.Base(missionID),
+		ParentDelegation: payload.ParentDelegation,
+		ParentSession:    payload.ParentSession,
+		Session:          payload.Session,
+		AgentType:        payload.AgentType,
+		SpawnPattern:     payload.SpawnPattern,
+		PromptHash:       payload.PromptHash,
+		CreatedAt:        now,
+		Verdict:          DelegationVerdictOpen,
+		BoundVia:         payload.BoundVia,
+	}
+	// Both files are built, and either may refuse, before anything is written.
+	data, sayRecord, err := RedactedYAMLNotify(repoRoot, d)
+	if err != nil {
+		return "", fmt.Errorf("delegation skeleton: %w", err)
+	}
+	body := redact.Body(payload.Prompt)
 	dir := DelegationDir(repoRoot, missionID, delegationID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("creating delegation directory %s: %w", dir, err)
+		return "", ioErr("creating delegation directory", dir, err)
 	}
 	// Order: prompt.md FIRST, then record.yaml. A half-built skeleton
 	// (writer crash between the two writes) must have no record.yaml on
 	// disk — readers branch on record.yaml's presence, so its absence
 	// signals "skeleton not yet committed" and avoids a torn read.
 	if len(payload.Prompt) > 0 {
-		if err := writeAtomicFile(dir, "prompt-*.md.tmp",
-			filepath.Join(dir, "prompt.md"), redact.Body(payload.Prompt)); err != nil {
+		if err := writeAtomicFile(dir, layout.TmpPattern("prompt", ".md"),
+			filepath.Join(dir, "prompt.md"), body); err != nil {
 			return "", fmt.Errorf("writing delegation prompt: %w", err)
 		}
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	// Every field the caller supplies is redacted; the fields this
-	// writer stamps (ID, Mission, CreatedAt, Verdict) are generated
-	// values that cannot carry a path. Redacting the struct rather than
-	// the marshaled YAML avoids a value that reduces to exactly "~"
-	// round-tripping back as a null.
-	d := Delegation{
-		ID:               filepath.Base(delegationID),
-		Tier:             redact.Text(payload.Tier),
-		Mission:          filepath.Base(missionID),
-		ParentDelegation: redact.Text(payload.ParentDelegation),
-		ParentSession:    redact.Text(payload.ParentSession),
-		Session:          redact.Text(payload.Session),
-		AgentType:        redact.Text(payload.AgentType),
-		SpawnPattern:     redact.Text(payload.SpawnPattern),
-		PromptHash:       payload.PromptHash,
-		CreatedAt:        now,
-		Verdict:          DelegationVerdictOpen,
-		BoundVia:         redact.Text(payload.BoundVia),
-	}
-	data, err := yaml.Marshal(&d)
-	if err != nil {
-		return "", fmt.Errorf("marshaling delegation: %w", err)
+		if !bytes.Equal(body, payload.Prompt) {
+			announceRewritten("a delegation prompt.md", redactNoRename).Say()
+		}
 	}
 	recordPath := filepath.Join(dir, "record.yaml")
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return "", fmt.Errorf("writing delegation record: %w", err)
 	}
+	sayRecord.Say()
 	return recordPath, nil
 }
 
@@ -407,41 +420,53 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 // a failed fsync surfaces — djb evaluator gate: a half-written file
 // is unacceptable. The temp file is removed on every error path.
 //
-// pattern is the os.CreateTemp pattern (e.g. "record-*.yaml.tmp"); the
-// random component avoids the predictable ".tmp" suffix that a second
-// writer could trample.
+// pattern is the os.CreateTemp pattern (e.g. layout.TmpPattern("record",
+// ".yaml"), "record-*.yaml.ethos-tmp"); the random component avoids a
+// predictable name that a second writer could trample.
 func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
+	var gErr error
+	if data, gErr = guardWrite(destPath, data); gErr != nil {
+		return gErr
+	}
+	return restoreAtomicFile(dir, pattern, destPath, data)
+}
+
+// restoreAtomicFile writes data to destPath atomically, as writeAtomicFile
+// does, without the sink guard. It puts back bytes that were already on disk:
+// a rollback is not a new tracked write, and must not be refused because the
+// old bytes name a home.
+func restoreAtomicFile(dir, pattern, destPath string, data []byte) error {
 	tmp, err := os.CreateTemp(dir, pattern)
 	if err != nil {
-		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+		return ioErr("creating temp file in", dir, err)
 	}
 	tmpPath := tmp.Name()
 	if n, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("writing %s: %w", tmpPath, err)
+		return ioErr("writing", tmpPath, err)
 	} else if n < len(data) {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("short write to %s: %d of %d bytes", tmpPath, n, len(data))
+		return fmt.Errorf("short write to %s: %d of %d bytes", filepath.Base(tmpPath), n, len(data))
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+		return ioErr("chmod", tmpPath, err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("syncing %s: %w", tmpPath, err)
+		return ioErr("syncing", tmpPath, err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("closing %s: %w", tmpPath, err)
+		return ioErr("closing", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("renaming %s -> %s: %w", tmpPath, destPath, err)
+		return ioErr("renaming the temp file to", destPath, err)
 	}
 	return nil
 }
@@ -577,7 +602,7 @@ func LoadDelegation(recordPath string) (*Delegation, error) {
 // only fire on records that were just written and never advanced).
 //
 // Atomic via os.CreateTemp + Chmod(0o600) + Sync + Close + Rename in
-// the record's own directory. A predictable ".tmp" suffix is avoided
+// the record's own directory. A predictable temp name is avoided
 // so a second writer cannot trample the first. djb evaluator gate:
 // a half-written close is unacceptable — the on-disk record either
 // keeps its prior contents or carries the new verdict in full.
@@ -600,25 +625,37 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	d.Verdict = verdict
 	d.ClosedAt = time.Now().UTC().Format(time.RFC3339)
 	if reason != "" {
-		// The reason is free text and the record is git-tracked, so it
-		// gets the same treatment as the prompt. Only the repo root is
-		// unavailable here — a bare record path does not name the
-		// checkout it belongs to — and <repo> is portability polish, not
-		// the username leak (NewPathRedactor doc).
-		redact, rErr := NewPathRedactor("")
-		if rErr != nil {
-			return fmt.Errorf("close delegation: %w", rErr)
-		}
-		d.Reason = redact.Text(reason)
+		d.Reason = reason
 	}
-	data, err := yaml.Marshal(d)
+	data, say, err := RedactedYAMLNotify(repoRootOfRecord(recordPath), *d)
 	if err != nil {
-		return fmt.Errorf("close delegation: marshaling record: %w", err)
-	}
-	if err := writeAtomicFile(filepath.Dir(recordPath), "record-*.yaml.tmp", recordPath, data); err != nil {
 		return fmt.Errorf("close delegation: %w", err)
 	}
+	if err := writeAtomicFile(filepath.Dir(recordPath), layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
+		return fmt.Errorf("close delegation: %w", err)
+	}
+	say.Say()
 	return nil
+}
+
+// repoRootOfRecord recovers the checkout root from a record path of the
+// form <root>/.punt-labs/ethos/..., so a free-text field gets the <repo>
+// token as well as the home substitution. A path without that segment
+// yields "": <repo> is portability polish, not the username leak
+// (NewPathRedactor doc). So does a record under the global ~/.punt-labs
+// tree, whose "root" is the home directory: it is no repo, and tagging it
+// <repo> would shadow the ~ substitution.
+func repoRootOfRecord(recordPath string) string {
+	marker := string(filepath.Separator) + ".punt-labs" + string(filepath.Separator)
+	i := strings.Index(recordPath, marker)
+	if i <= 0 {
+		return ""
+	}
+	root := recordPath[:i]
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == filepath.Clean(root) {
+		return ""
+	}
+	return root
 }
 
 // CloseDelegationSkeleton rewrites a Tier B delegation record's
@@ -681,13 +718,14 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	}
 	d.Verdict = verdict
 	d.ClosedAt = closedAt
-	data, err := yaml.Marshal(d)
+	data, say, err := RedactedYAMLNotify(repoRoot, *d)
 	if err != nil {
-		return fmt.Errorf("close delegation skeleton: marshaling record: %w", err)
-	}
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
+		return fmt.Errorf("close delegation skeleton: %w", err)
+	}
+	say.Say()
 	return nil
 }
 
@@ -723,70 +761,73 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 // disk, matching every other operator-supplied free-text field this
 // package persists (WriteDelegationSkeleton's prompt body, Abandon's
 // reason).
-func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact PathRedactor, reason, disclaimedAt string) (*Delegation, error) {
+func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact PathRedactor, reason, disclaimedAt string) (*Delegation, Announcement, error) {
 	if strings.TrimSpace(repoRoot) == "" {
-		return nil, fmt.Errorf("disclaim: repoRoot is required")
+		return nil, nil, fmt.Errorf("disclaim: repoRoot is required")
 	}
 	if strings.TrimSpace(missionID) == "" {
-		return nil, fmt.Errorf("disclaim: missionID is required")
+		return nil, nil, fmt.Errorf("disclaim: missionID is required")
 	}
 	if strings.TrimSpace(delegationID) == "" {
-		return nil, fmt.Errorf("disclaim: delegationID is required")
+		return nil, nil, fmt.Errorf("disclaim: delegationID is required")
 	}
 	if strings.TrimSpace(reason) == "" {
-		return nil, fmt.Errorf("disclaim: reason is required")
+		return nil, nil, fmt.Errorf("disclaim: reason is required")
 	}
 	if containsControlChar(reason) {
-		return nil, fmt.Errorf("disclaim: reason contains control character")
+		return nil, nil, fmt.Errorf("disclaim: reason contains control character")
 	}
 	if strings.TrimSpace(disclaimedAt) == "" {
-		return nil, fmt.Errorf("disclaim: disclaimedAt is required")
+		return nil, nil, fmt.Errorf("disclaim: disclaimedAt is required")
 	}
 	dir := DelegationDir(repoRoot, missionID, delegationID)
 	recordPath := filepath.Join(dir, "record.yaml")
 	d, err := LoadDelegation(recordPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"disclaim: delegation %q not found under mission %q", delegationID, missionID,
 			)
 		}
-		return nil, fmt.Errorf("disclaim: loading %s: %w", recordPath, err)
+		return nil, nil, fmt.Errorf("disclaim: loading %s: %w", recordPath, err)
 	}
 	if d.BoundVia != BoundViaSidecarDispatch {
 		reported := d.BoundVia
 		if reported == "" {
 			reported = "unknown (a pre-existing record, or written before provenance tracking)"
 		}
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"disclaim: delegation %q was bound via %s, not an active-mission-sidecar dispatch "+
 				"capture; only that provenance is disclaimable",
 			delegationID, reported,
 		)
 	}
 	if d.Verdict == DelegationVerdictOpen {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"disclaim: delegation %q is still open (no verdict recorded yet); wait for its spawn "+
 				"to finish before disclaiming it, in case it is doing real work",
 			delegationID,
 		)
 	}
 	if d.DisclaimedAt != "" {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"disclaim: delegation %q was already disclaimed at %s: %q",
 			delegationID, d.DisclaimedAt, d.DisclaimedReason,
 		)
 	}
 	d.DisclaimedAt = disclaimedAt
-	d.DisclaimedReason = redact.Text(reason)
-	data, err := yaml.Marshal(d)
+	// The record pass redacts the reason and announces the rewrite; the
+	// returned record carries the redacted text, as it always has.
+	d.DisclaimedReason = reason
+	data, say, err := RedactedYAMLNotify(repoRoot, *d)
 	if err != nil {
-		return nil, fmt.Errorf("disclaim: marshaling record: %w", err)
+		return nil, nil, fmt.Errorf("disclaim: %w", err)
 	}
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
-		return nil, fmt.Errorf("disclaim: %w", err)
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
+		return nil, nil, fmt.Errorf("disclaim: %w", err)
 	}
-	return d, nil
+	d.DisclaimedReason = redact.Content(reason)
+	return d, say, nil
 }
 
 // DelegationDepth walks the parent_delegation chain starting from

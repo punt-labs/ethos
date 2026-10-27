@@ -32,7 +32,8 @@ import (
 // resolve the main work tree in a linked worktree (CR#1). parentDelegation
 // is the value of PARENT_DELEGATION_ID. childAgentType is the
 // CLAUDE_AGENT_TYPE for the spawn being dispatched.
-func tryTierBByInheritance(repoRoot, parentDelegation, childAgentType string) (string, bool) {
+func tryTierBByInheritance(roots tierBRoots, parentDelegation, childAgentType string) (string, bool) {
+	repoRoot := roots.store
 	if parentDelegation == "" || childAgentType == "" {
 		return "", false
 	}
@@ -50,7 +51,7 @@ func tryTierBByInheritance(repoRoot, parentDelegation, childAgentType string) (s
 		return "", false
 	}
 
-	store, err := tierBMissionStore()
+	store, err := tierBMissionStore(roots)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: inheritance: resolving mission store: %v; falling through to Tier A\n",
@@ -253,19 +254,18 @@ var pretooluseInheritReader = tryTierBByInheritance
 // unset. If PARENT_DELEGATION_ID is present the resolver tries
 // inheritance; on a hit the spawn becomes Tier B with the inherited
 // missionID, otherwise it falls through to Tier A.
-func dispatchTierBOrTierA(w io.Writer, sessionID string, toolInput map[string]any) error {
+func dispatchTierBOrTierA(w io.Writer, roots tierBRoots, sessionID string, toolInput map[string]any) error {
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
 	if parentDelegation == "" {
 		return dispatchTierA(w, sessionID)
 	}
 	childAgentType := spawnAgentType(toolInput)
-	repoRoot := tierBStoreRoot()
-	if missionID, ok := pretooluseInheritReader(repoRoot, parentDelegation, childAgentType); ok {
+	if missionID, ok := pretooluseInheritReader(roots, parentDelegation, childAgentType); ok {
 		// Inherited from a parent delegation's SpawnPattern match, not
 		// from the active-mission sidecar — DES-076's consume callback
 		// is not applicable here, and BoundViaInherited (round 2) names
 		// this admission path for the disclaim eligibility check.
-		return dispatchTierB(w, sessionID, missionID, toolInput, mission.BoundViaInherited, nil)
+		return dispatchTierB(w, roots, sessionID, missionID, toolInput, mission.BoundViaInherited, nil)
 	}
 	return dispatchTierA(w, sessionID)
 }

@@ -13,7 +13,7 @@ import (
 )
 
 // importTestDir creates a temp directory under /tmp (not TMPDIR) so the
-// subprocess does not inherit the git repo tree. FindRepoRoot walks
+// subprocess does not inherit the git repo tree. CheckoutRootIfAny walks
 // up from cwd; if TMPDIR is inside the repo, cmd.Dir = t.TempDir()
 // still resolves the repo's .punt-labs/ethos. Using /tmp avoids this.
 func importTestDir(t *testing.T) string {

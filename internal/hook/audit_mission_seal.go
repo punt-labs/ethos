@@ -15,36 +15,17 @@ func WithLiveMissionLock(repoRoot, missionID, sessionID string, fn func() error)
 	return audit.WithLock(liveMissionLockPath(repoRoot, missionID, sessionID), fn)
 }
 
-// sealMissionsInRepo seals every (mission, session) live log tail in the repo
-// and stages the chunks — the pre-commit backstop for the mission tree. Each
-// session seals into the shared missions/<id>/ directory under its own
-// per-(mission, session) flock and its own log-<session-id>-* chunk namespace.
-func sealMissionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *SealResult) error {
-	missions, err := listRepoMissions(repoRoot)
-	if err != nil {
-		return err
-	}
-	for _, missionID := range missions {
-		sessions, err := listMissionSessions(repoRoot, missionID)
-		if err != nil {
-			return err
-		}
-		for _, sessionID := range sessions {
-			if err := sealMissionSession(repoRoot, missionID, sessionID, now, opts, res); err != nil {
-				return fmt.Errorf("sealing mission %s session %s: %w", missionID, sessionID, err)
-			}
-		}
-	}
-	return nil
-}
-
 // SealMission seals every session's not-yet-sealed log tail under one
 // mission's directory and stages the chunks (DES-058 §Seal triggers, the
 // mission-close secondary). It is the authoritative seal for the closing
 // checkout: cross-checkout worker tails ride their own checkouts' triggers.
 // A gitlink-mounted repo defers with a one-line stderr notice.
 func SealMission(repoRoot, missionID string, now time.Time, opts SealOptions) (SealResult, error) {
-	if audit.IsGitlinkMount(repoRoot) {
+	gitlink, err := audit.IsGitlinkMount(repoRoot)
+	if err != nil {
+		return SealResult{}, SealGitError(repoRoot, "checking for a gitlink mount (git ls-files)", err, true)
+	}
+	if gitlink {
 		fmt.Fprintf(os.Stderr,
 			"ethos: mission close: sealing deferred: .punt-labs/ethos is a gitlink mount, pending e29s (%s)\n",
 			repoRoot)
@@ -54,36 +35,41 @@ func SealMission(repoRoot, missionID string, now time.Time, opts SealOptions) (S
 	if err != nil {
 		return SealResult{}, err
 	}
-	var res SealResult
+	units := make([]sealUnit, 0, len(sessions))
 	for _, sessionID := range sessions {
-		if err := sealMissionSession(repoRoot, missionID, sessionID, now, opts, &res); err != nil {
-			return res, fmt.Errorf("sealing mission %s session %s: %w", missionID, sessionID, err)
-		}
+		units = append(units, missionSealUnit(repoRoot, missionID, sessionID, now, opts))
+	}
+	var res SealResult
+	if err := runSeal(repoRoot, units, opts, &res); err != nil {
+		return res, err
 	}
 	return res, nil
 }
 
-// sealMissionSession seals one (mission, session) live log tail under its
-// flock and stages the mission dir's chunks for that session.
-func sealMissionSession(repoRoot, missionID, sessionID string, now time.Time, opts SealOptions, res *SealResult) error {
+// missionSealUnit is one (mission, session) live log tail: sealed under its
+// flock into the mission dir's chunks for that session.
+func missionSealUnit(repoRoot, missionID, sessionID string, now time.Time, opts SealOptions) sealUnit {
 	sealedDir := sealedMissionDir(repoRoot, missionID)
-	var out sealOutcome
-	lockErr := WithLiveMissionLock(repoRoot, missionID, sessionID, func() error {
-		var e error
-		out, e = sealDirLocked(sealDirParams{
-			repoRoot:  repoRoot,
-			ns:        audit.MissionNS,
-			session:   sessionID,
-			sealedDir: sealedDir,
-			livePath:  liveMissionLogPath(repoRoot, missionID, sessionID),
-			chunkName: func(first, last int64) string { return audit.MissionChunkFile(sessionID, first, last) },
-			tempName:  func(first, last int64) string { return audit.MissionTempFile(sessionID, first, last) },
-			label:     "mission " + missionID + " session " + sessionID,
-		}, now, opts)
-		return e
-	})
-	if lockErr != nil {
-		return lockErr
+	return sealUnit{
+		label: "mission " + missionID + " session " + sessionID, ns: audit.MissionNS,
+		session: sessionID, sealedDir: sealedDir,
+		write: func() (sealOutcome, error) {
+			var out sealOutcome
+			err := WithLiveMissionLock(repoRoot, missionID, sessionID, func() error {
+				var e error
+				out, e = sealDirLocked(sealDirParams{
+					repoRoot:  repoRoot,
+					ns:        audit.MissionNS,
+					session:   sessionID,
+					sealedDir: sealedDir,
+					livePath:  liveMissionLogPath(repoRoot, missionID, sessionID),
+					chunkName: func(first, last int64) string { return audit.MissionChunkFile(sessionID, first, last) },
+					tempName:  func(first, last int64) string { return audit.MissionTempFile(sessionID, first, last) },
+					label:     "mission " + missionID + " session " + sessionID,
+				}, now, opts)
+				return e
+			})
+			return out, err
+		},
 	}
-	return tallyAndStage(repoRoot, sealedDir, audit.MissionNS, sessionID, out, opts, res)
 }

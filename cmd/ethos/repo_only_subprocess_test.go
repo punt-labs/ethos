@@ -82,7 +82,7 @@ func TestCLI_RepoOnlyWithoutStoreIsFatal(t *testing.T) {
 	assert.Contains(t, stderr, "no identity store")
 }
 
-// A REFUSED ETHOS_REPO_ROOT leaves StoreRepoRoot empty. If the mode were
+// A REFUSED ETHOS_REPO_ROOT leaves StoreRootIfAny empty. If the mode were
 // read from that empty root, the repo's own config would go unread and a
 // repo-only repo would list global identities on a warning alone, exit
 // 0 — laundering the refusal into the silent fallback repo-only forbids.
@@ -94,8 +94,8 @@ func TestCLI_RefusedRepoRootOverrideCannotFallBackToGlobal(t *testing.T) {
 	se.env = append(se.env, "ETHOS_REPO_ROOT="+se.repo)
 	stdout, stderr, exit := runCLI(t, se, "list")
 
-	assert.Equal(t, 1, exit, "must not succeed by falling back to global")
-	assert.Contains(t, stderr, "no identity store")
+	assert.Equal(t, 2, exit, "must not succeed by falling back to global")
+	assert.Contains(t, stderr, "refusing to use")
 	assert.NotContains(t, stdout, "test-agent")
 }
 

@@ -1,10 +1,14 @@
 package audit
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // writeTemp creates a chunk temp file and stamps its mtime.
@@ -76,5 +80,56 @@ func TestSweepStaleTempsSessionNamespaceSweepsAll(t *testing.T) {
 func TestSweepStaleTempsMissingDir(t *testing.T) {
 	if err := SweepStaleTemps(filepath.Join(t.TempDir(), "nope"), MissionNS, "A", time.Now()); err != nil {
 		t.Fatalf("missing dir must be a no-op, got %v", err)
+	}
+}
+
+// TestSweepStaleTempsLegacyName: a temp left by a crash of a version that
+// staged with ".tmp" is still recognised and swept.
+func TestSweepStaleTempsLegacyName(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	own := "." + MissionChunkFile("A", 100, 200) + layout.LegacyTmpSuffix
+	foreign := "." + MissionChunkFile("B", 100, 200) + layout.LegacyTmpSuffix
+	writeTemp(t, dir, own, now)
+	writeTemp(t, dir, foreign, now.Add(-staleTempAge-time.Minute))
+
+	if err := SweepStaleTemps(dir, MissionNS, "A", now); err != nil {
+		t.Fatal(err)
+	}
+	if exists(dir, own) {
+		t.Error("own session's legacy temp must be swept")
+	}
+	if exists(dir, foreign) {
+		t.Error("a foreign session's stale legacy temp must be swept")
+	}
+}
+
+// A failed write whose temp chunk cannot be removed says so: the leftover is
+// named, not hidden.
+func TestWriteChunkAtomicReportsAFailedTempRemoval(t *testing.T) {
+	dir := t.TempDir()
+	orig := removeFile
+	t.Cleanup(func() { removeFile = orig })
+	removeFile = func(string) error { return errors.New("read-only file system") }
+
+	// The rename fails: its target directory does not exist.
+	chunk := filepath.Join("missing", "c.jsonl")
+	err := WriteChunkAtomic(dir, "t.tmp", chunk, [][]byte{[]byte("x")})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"renaming temp chunk", "removing the temp chunk " + filepath.Join(dir, "t.tmp") + " also failed", "read-only file system"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+
+	removeFile = orig
+	err = WriteChunkAtomic(dir, "t.tmp", chunk, [][]byte{[]byte("x")})
+	if err == nil || strings.Contains(err.Error(), "also failed") {
+		t.Errorf("a removable temp: err = %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "t.tmp")); serr == nil {
+		t.Error("the temp chunk was not removed")
 	}
 }
