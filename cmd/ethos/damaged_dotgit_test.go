@@ -211,3 +211,27 @@ func TestDamagedDotGitThroughASymlinkedWorkingDirectory(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "nested.yaml"))
 	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nested.yaml"))
 }
+
+// team add-bundle --global installs into the global store and does not use the
+// repository store, so a broken .git does not refuse it; without --global it
+// still does.
+func TestAddBundleGlobalIsNotRefusedByABrokenCheckout(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	const refusal = "refusing to use the global store instead"
+	for where, p := range damagedPlaces(t, damagedShapes["HEAD garbage"]) {
+		t.Run(where, func(t *testing.T) {
+			out, code := runEthosIn(t, p, "", "team", "add-bundle", "--global", "https://example.invalid/b/bundle.git")
+			assert.NotContains(t, out, refusal)
+			assert.Equal(t, 0, code, out)
+
+			out, code = runEthosIn(t, p, "", "team", "add-bundle", "https://example.invalid/b/bundle.git")
+			assert.Equal(t, 2, code, out)
+			assert.Contains(t, out, refusal)
+		})
+	}
+}

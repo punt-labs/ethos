@@ -141,7 +141,18 @@ func exemptFromStoreRefusal(cmd *cobra.Command) bool {
 	if slices.Contains(cobraCommands, path) {
 		return true
 	}
+	if path == "ethos team add-bundle" && usesGlobalOnly(cmd) {
+		return true
+	}
 	return storeUses[path] != storeRefuses
+}
+
+// usesGlobalOnly reports whether cmd was given --global: it installs into the
+// global store and never reads the repository store, so a broken checkout is no
+// reason to refuse it.
+func usesGlobalOnly(cmd *cobra.Command) bool {
+	g, err := cmd.Flags().GetBool("global")
+	return err == nil && g
 }
 
 // establishRoots is the root PersistentPreRunE. It locates the repository once
