@@ -1832,3 +1832,14 @@ func GitConfig(checkout, key string) (string, error) {
 	}
 	return v, nil
 }
+
+// SetPointerRetryDelayForTest sets the delay between pointer-file retries and
+// returns a function that restores the previous value. It is for tests in
+// other packages, which cannot reach the unexported variable; a test that
+// inflates the delay can then prove no retry ran by bounding elapsed time far
+// below it, whatever the machine's speed.
+func SetPointerRetryDelayForTest(d time.Duration) (restore func()) {
+	old := pointerRetryDelay
+	pointerRetryDelay = d
+	return func() { pointerRetryDelay = old }
+}

@@ -206,16 +206,16 @@ func TestHandleSessionStart_ResolvesIdentityWithoutRetryLatency(t *testing.T) {
 	resolve.UnderClaudeCode = func() bool { return true }
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 
+	// Inflate the delay so one retry costs 5s: elapsed stays under half of
+	// it only if no retry ran, whatever the machine's speed.
+	const delay = 5 * time.Second
+	t.Cleanup(resolve.SetPointerRetryDelayForTest(delay))
+
 	start := time.Now()
 	out := captureSessionStartOutput(t, `{"session_id": "s-r2-timing"}`, SessionStartDeps{Store: s, Sessions: ss})
 	elapsed := time.Since(start)
 
-	// The bound is generous (a single retry attempt alone costs
-	// pointerRetryDelay=50ms; a full suite run under -race/parallel load
-	// can add tens of ms of scheduling noise on its own) but still tight
-	// enough that ANY retry firing at all would trip it several times
-	// over, which is all this assertion needs to prove.
-	assert.Less(t, elapsed, 200*time.Millisecond,
+	assert.Less(t, elapsed, delay/2,
 		"must not pay the pointer-file retry latency resolving identity at SessionStart")
 
 	var result SessionStartResult
