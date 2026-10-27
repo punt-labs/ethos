@@ -41,6 +41,29 @@ _git() {
   )
 }
 
+# Dormant fast path. git runs a hook at the top of the work tree, so the marker
+# is tested relative to the current directory first, before mktemp or git run:
+# a dormant repository is never blocked by a probe failure. The shortcut is
+# taken only when this directory has its own .git (it is a top level, so the
+# marker there is the marker that counts) and every path component is either
+# absent or a plain readable directory. Anywhere else (a hook run by hand from
+# a subdirectory, a link, an unreadable store) the full resolution below
+# decides and reports as before.
+_ethos_dormant=1
+for _component in .punt-labs .punt-labs/ethos; do
+  if [ -L "$_component" ]; then
+    _ethos_dormant=""
+  elif [ -e "$_component" ] && { [ ! -d "$_component" ] || [ ! -r "$_component" ] || [ ! -x "$_component" ]; }; then
+    _ethos_dormant=""
+  fi
+done
+if [ -e .punt-labs/ethos/enabled ] || [ -L .punt-labs/ethos/enabled ]; then
+  _ethos_dormant=""
+fi
+if [ -n "$_ethos_dormant" ] && [ -e .git ]; then
+  exit "$_host_status"
+fi
+
 # §2.7 marker gate: ethos does no commit-time work unless it is enabled in
 # this repo. REPO_ROOT is resolved inside the hook (worktree-safe), not baked
 # in at install time. Absent marker → exit with the captured host status,
