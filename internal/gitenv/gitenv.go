@@ -42,10 +42,12 @@ func SetTimeout(d time.Duration) time.Duration {
 // git did not answer within its bound.
 var ErrTimeout = errors.New("git did not answer")
 
-// ErrInterrupted is wrapped by the error Run returns for a git stopped because
-// ethos got SIGINT, SIGTERM, SIGHUP or SIGQUIT. Whichever it was, ethos
-// sent SIGTERM to git's group (then SIGKILL to what stayed); the original
-// signal itself is not delivered to git.
+// ErrInterrupted names a git stopped because ethos got SIGINT, SIGTERM, SIGHUP
+// or SIGQUIT. Whichever it was, ethos sent SIGTERM to git's group (then SIGKILL
+// to what stayed); the original signal itself is not delivered to git. Run does
+// not return it in practice: once git's group is stopped the process ends as the
+// signal demands (dieOf), so no caller continues. It is returned only if the
+// process survives that.
 var ErrInterrupted = errors.New("git interrupted")
 
 // Output runs git with args — as `git -C dir args...` when dir is not "" —
@@ -98,7 +100,7 @@ type Spec struct {
 	// group, so a timeout reaches its descendants (ssh, helpers). Run catches
 	// SIGINT, SIGTERM, SIGHUP and SIGQUIT for every git, Network or not: each
 	// makes ethos send SIGTERM to git's group (and SIGKILL to what stays), and
-	// the caught signal itself is not delivered. See ErrInterrupted.
+	// then end itself with that signal. See ErrInterrupted.
 	Network bool
 }
 
@@ -131,19 +133,19 @@ func Run(s Spec) ([]byte, error) {
 	defer cancel()
 	// Every git is stopped, with its group, when ethos is interrupted: ethos
 	// catches SIGINT, SIGTERM, SIGHUP and SIGQUIT while it runs, cancels the
-	// command, and returns ErrInterrupted. Git runs in its own process group
+	// command, and ends itself with the signal. Git runs in its own process group
 	// (a Network git in a session of its own), which the terminal's Ctrl-C or
 	// hangup does not reach, so nothing else would stop it: it would run on
 	// with no deadline, holding index.lock and its filters.
-	var interrupted atomic.Bool
+	var interrupted atomic.Pointer[os.Signal]
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	done := make(chan struct{})
 	defer func() { signal.Stop(sig); close(done) }()
 	go func() {
 		select {
-		case <-sig:
-			interrupted.Store(true)
+		case got := <-sig:
+			interrupted.Store(&got)
 			cancel()
 		case <-done:
 		}
@@ -190,8 +192,12 @@ func Run(s Spec) ([]byte, error) {
 		}
 		return nil, timeoutError(s.Git, s.Args, s.Dir, limit)
 	}
-	if interrupted.Load() {
+	if got := interrupted.Load(); got != nil {
 		endGroup(cmd, groupGrace)
+		// The signal was consumed to stop git. A caller must not go on as if
+		// nothing happened (a probe error reads as "no git", and enable would
+		// write), so the process ends as the signal demands.
+		dieOf(*got)
 		return nil, fmt.Errorf("%w: %s %s", ErrInterrupted, s.Git, strings.Join(s.Args, " "))
 	}
 	return out, err

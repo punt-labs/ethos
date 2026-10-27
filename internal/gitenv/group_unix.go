@@ -4,7 +4,9 @@ package gitenv
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
 	"time"
 )
@@ -52,4 +54,22 @@ func endGroup(cmd *exec.Cmd, grace time.Duration) {
 		}
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+}
+
+// dieOf ends the process as sig demands: the default disposition is restored
+// and sig is raised on the process, so the shell sees the usual signal status
+// (130 for SIGINT). It does not return unless the signal is not a syscall one.
+func dieOf(sig os.Signal) {
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		return
+	}
+	signal.Reset(s)
+	if err := syscall.Kill(os.Getpid(), s); err != nil {
+		return
+	}
+	// Delivery to self is asynchronous; wait for it rather than return.
+	for {
+		time.Sleep(time.Minute)
+	}
 }
