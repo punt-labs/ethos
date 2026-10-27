@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"slices"
 	"unicode/utf8"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // LockName is the shared sibling lock for .claude/settings.json.
@@ -275,7 +277,7 @@ func withLock(lockPath string, fn func() error) error {
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp*")
+	tmp, err := os.CreateTemp(dir, layout.DotTempPattern(filepath.Base(path)))
 	if err != nil {
 		return fmt.Errorf("creating temp file in %s: %w", dir, err)
 	}

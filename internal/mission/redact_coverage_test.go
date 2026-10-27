@@ -201,20 +201,21 @@ var writerRegistry = map[string]writerEntry{
 // or audit records. A package in neither this list nor writerRegistry
 // fails the test when it gains a writer.
 var outOfScopePackages = map[string]string{
-	"cmd/e2e-attribute":    "developer test tool",
-	"internal/adr":         reasonGlobal + "; ADRs move into the repo under ethos-yjh0, which adds its writer to the in-scope set",
-	"internal/attribute":   "operator-authored talents, personalities, writing styles",
-	"internal/claudemd":    "import lines in CLAUDE.md",
-	"internal/doctor":      "health-check probe files",
-	"internal/enable":      "enablement markers, deposited guides, .gitignore lines",
-	"internal/githook":     "git hook scripts",
-	"internal/identity":    "operator-authored identities and extensions",
-	"internal/role":        "operator-authored roles",
-	"internal/seed":        "starter content deployed by ethos seed",
-	"internal/session":     "session roster: " + reasonGlobal,
-	"internal/team":        "operator-authored teams",
-	"internal/testhelpers": "fixture repositories and git shims written under t.TempDir; never a record",
-	"internal/vendor":      "vendored team content",
+	"cmd/e2e-attribute":       "developer test tool",
+	"internal/adr":            reasonGlobal + "; ADRs move into the repo under ethos-yjh0, which adds its writer to the in-scope set",
+	"internal/attribute":      "operator-authored talents, personalities, writing styles",
+	"internal/claudemd":       "import lines in CLAUDE.md",
+	"internal/claudesettings": "permission rules in .claude/settings.json",
+	"internal/doctor":         "health-check probe files",
+	"internal/enable":         "enablement markers, deposited guides, .gitignore lines",
+	"internal/githook":        "git hook scripts",
+	"internal/identity":       "operator-authored identities and extensions",
+	"internal/role":           "operator-authored roles",
+	"internal/seed":           "starter content deployed by ethos seed",
+	"internal/session":        "session roster: " + reasonGlobal,
+	"internal/team":           "operator-authored teams",
+	"internal/testhelpers":    "fixture repositories and git shims written under t.TempDir; never a record",
+	"internal/vendor":         "vendored team content",
 }
 
 // chokePoints are the functions that apply the shared redactor. A writer
