@@ -1053,11 +1053,15 @@ func gitLocate(git, start string) located {
 		if dot := danglingOnWalk(gitWalk(start)); dot != nil {
 			return located{err: dot}
 		}
+		if serr := staleGitfile(start); serr != nil {
+			return located{err: serr}
+		}
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && gitenv.IsNotARepo(string(ee.Stderr)) {
-			// "Not a git repository" is the truth only when no .git is there: one
-			// that exists and that git does not accept (a damaged HEAD, a missing
-			// objects/, a FIFO) must not be answered for from the global store.
+		if errors.As(err, &ee) && gitenv.IsUnacceptedDotGit(string(ee.Stderr)) {
+			// git's wording varies by version: a .git it does not accept (a damaged
+			// HEAD, a missing objects/) is "not a git repository", a FIFO is "not a
+			// regular file". Either way the .git exists and must not be answered for
+			// from the global store or an enclosing repository.
 			if derr := unacceptedDotGit(gitWalk(start)); derr != nil {
 				return located{err: derr}
 			}
@@ -1119,19 +1123,48 @@ func dotIsGitDir(dot string, gi os.FileInfo) bool {
 	if os.SameFile(info, gi) {
 		return true
 	}
+	target, ok := gitfileTarget(dot)
+	if !ok {
+		return false
+	}
+	ti, err := os.Stat(target)
+	return err == nil && os.SameFile(ti, gi)
+}
+
+// gitfileTarget is the directory the gitfile dot names on its "gitdir:" line,
+// made absolute against the gitfile's directory.
+func gitfileTarget(dot string) (string, bool) {
 	data, err := readRegular(dot)
 	if err != nil {
-		return false
+		return "", false
 	}
 	target, ok := strings.CutPrefix(strings.TrimRight(string(data), "\r\n"), "gitdir: ")
 	if !ok || target == "" {
-		return false
+		return "", false
 	}
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(filepath.Dir(dot), target)
 	}
-	ti, err := os.Stat(target)
-	return err == nil && os.SameFile(ti, gi)
+	return target, true
+}
+
+// staleGitfile is the refusal for the nearest .git when it is a gitfile whose
+// gitdir does not exist (a linked worktree whose gitdir was removed). ethos
+// names the directory itself: git's message for it varies by version and newer
+// ones do not name it. nil when the nearest .git is anything else.
+func staleGitfile(start string) error {
+	dot := firstDotGit(start)
+	if dot == "" {
+		return nil
+	}
+	target, ok := gitfileTarget(dot)
+	if !ok {
+		return nil
+	}
+	if _, err := os.Stat(target); errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s names the gitdir %s, which does not exist: git cannot resolve the repository for %s; repair or remove it", dot, target, start)
+	}
+	return nil
 }
 
 // unacceptedDotGit is the refusal for a .git that exists in one of dirs and that

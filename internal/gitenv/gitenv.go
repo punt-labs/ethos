@@ -264,6 +264,13 @@ func IsNotARepo(stderr string) bool {
 	return strings.Contains(stderr, NotARepoMessage)
 }
 
+// IsUnacceptedDotGit reports whether git's stderr says it found no repository,
+// or that a .git is not a regular file (what git 2.4x and newer say of a FIFO
+// where older ones said "not a git repository").
+func IsUnacceptedDotGit(stderr string) bool {
+	return IsNotARepo(stderr) || strings.Contains(stderr, "not a regular file")
+}
+
 // Parsed returns the current environment with git's messages in the C locale
 // (LC_ALL=C, LANGUAGE empty) and none of LocalEnvVars. ethos matches git's
 // English messages ("not a git repository", "dubious ownership"); a
