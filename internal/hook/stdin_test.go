@@ -81,12 +81,13 @@ func TestReadWithTimeout_PipeClosed(t *testing.T) {
 	wFd.Close() // EOF after data
 
 	start := time.Now()
-	data, err := readWithTimeout(rFd, 200*time.Millisecond)
+	const timeout = 5 * time.Second // far above any scheduling noise
+	data, err := readWithTimeout(rFd, timeout)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
 	assert.Equal(t, "timeout-fallback", data["source"])
-	assert.Less(t, elapsed, 100*time.Millisecond, "should return immediately, not wait for timeout")
+	assert.Less(t, elapsed, timeout/2, "should return immediately, not wait for timeout")
 }
 
 func TestReadWithTimeout_EmptyPipe(t *testing.T) {
@@ -122,13 +123,14 @@ func TestReadWithTimeout_OpenPipeWithData(t *testing.T) {
 	// Deliberately NOT closing wFd.
 
 	start := time.Now()
-	data, err := readWithTimeout(rFd, 200*time.Millisecond)
+	const timeout = 5 * time.Second // far above any scheduling noise
+	data, err := readWithTimeout(rFd, timeout)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
 	assert.Equal(t, "linux-open-pipe", data["session_id"],
 		"must return data even when pipe stays open")
-	assert.Less(t, elapsed, 100*time.Millisecond,
+	assert.Less(t, elapsed, timeout/2,
 		"should return as soon as data is read, not wait for timeout")
 }
 

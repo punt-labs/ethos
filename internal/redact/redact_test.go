@@ -2,6 +2,7 @@ package redact
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -634,25 +635,60 @@ func TestDuplicateJSONKey(t *testing.T) {
 	}
 }
 
-// TestPlanKeys_IsLinear: thousands of keys that rename to one name finish
-// quickly and each gets its own name.
-func TestPlanKeys_IsLinear(t *testing.T) {
-	keys := make([]string, 5000)
+// planKeysInput returns n distinct keys that all rename to one name.
+func planKeysInput(n int) []string {
+	keys := make([]string, n)
 	for i := range keys {
-		keys[i] = fmt.Sprintf("bad%04d", i)
+		keys[i] = fmt.Sprintf("bad%07d", i)
 	}
-	start := time.Now()
+	return keys
+}
+
+// bestPlanKeysTime returns the fastest of three runs of PlanKeys over keys.
+func bestPlanKeysTime(keys []string) time.Duration {
+	best := time.Duration(math.MaxInt64)
+	for range 3 {
+		start := time.Now()
+		PlanKeys(keys, func(string) string { return "x" }, true)
+		if d := time.Since(start); d < best {
+			best = d
+		}
+	}
+	return best
+}
+
+// TestPlanKeys_IsLinear: PlanKeys is linear, so quadrupling the keys
+// multiplies the time by about 4, where a quadratic one multiplies it by 16.
+// The bound is a ratio, so it does not depend on the machine or on -race. n
+// doubles until the small run is long enough to measure against the clock.
+func TestPlanKeys_IsLinear(t *testing.T) {
+	const minMeasurable = 5 * time.Millisecond
+	n := 2500
+	small := bestPlanKeysTime(planKeysInput(n))
+	for small < minMeasurable && n < 1<<20 {
+		n *= 2
+		small = bestPlanKeysTime(planKeysInput(n))
+	}
+	require.GreaterOrEqual(t, small, minMeasurable, "n=%d is still too fast to time", n)
+	large := bestPlanKeysTime(planKeysInput(4 * n))
+	assert.Less(t, float64(large)/float64(small), 10.0,
+		"4x the keys took %v against %v for n=%d: not linear", large, small, n)
+}
+
+// TestPlanKeys_GivesEveryKeyItsOwnName: thousands of keys that rename to one
+// name each get a distinct name.
+func TestPlanKeys_GivesEveryKeyItsOwnName(t *testing.T) {
+	keys := planKeysInput(5000)
 	names, renamed := PlanKeys(keys, func(string) string { return "x" }, true)
 	assert.True(t, renamed)
-	assert.Less(t, time.Since(start), 200*time.Millisecond)
 	seen := map[string]bool{}
 	for _, n := range names {
 		assert.False(t, seen[strings.ToLower(n)], n)
 		seen[strings.ToLower(n)] = true
 	}
 	assert.Len(t, seen, 5000)
-	assert.Equal(t, "x", names["bad0000"])
-	assert.Equal(t, "x#2", names["bad0001"])
+	assert.Equal(t, "x", names["bad0000000"])
+	assert.Equal(t, "x#2", names["bad0000001"])
 }
 
 // TestRecordPathsFlag_ReportsARename: a rename in a reflected map is reported.
