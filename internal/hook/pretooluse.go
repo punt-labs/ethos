@@ -206,7 +206,7 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 	if err != nil {
 		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err), true
 	}
-	return gateContract(contract, toolName, toolInput, sessionID)
+	return gateContract(contract, toolName, toolInput, sessionID, roots.store)
 }
 
 // gateContract applies a loaded contract's preconditions to one tool call,
@@ -214,7 +214,7 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 // cannot be located leaves a contract with preconditions unevaluable: it
 // blocks under strict and warns under strict=false, and never reads audit
 // entries from the working directory instead.
-func gateContract(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID string) (string, bool) {
+func gateContract(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID, storeRoot string) (string, bool) {
 	repoRoot, rootErr := tierBRepoRoot()
 	if rootErr != nil {
 		if len(contract.Preconditions) == 0 {
@@ -227,7 +227,7 @@ func gateContract(contract *mission.Contract, toolName string, toolInput map[str
 		fmt.Fprintf(os.Stderr, "%s; strict_preconditions=false, allowing\n", reason)
 		return "", false
 	}
-	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot)
+	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot, storeRoot)
 	if !deny {
 		return "", false
 	}

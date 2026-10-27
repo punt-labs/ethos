@@ -66,7 +66,7 @@ func TestMigrateMission_CopiesAllArtifacts(t *testing.T) {
 
 	legacyMissionFiles(t, globalRoot, id, map[string][]byte{
 		".yaml":             []byte("mission_id: m-2026-05-22-001\nstatus: open\n"),
-		".jsonl":            []byte(`{"type":"create","ts":"2026-05-22T10:00:00Z"}` + "\n"),
+		".jsonl":            []byte(`{"ts":"2026-05-22T10:00:00Z","event":"create","actor":"claude"}` + "\n"),
 		".results.yaml":     []byte("- round: 1\n  verdict: pass\n"),
 		".reflections.yaml": []byte("- round: 1\n  recommendation: stop\n"),
 	})

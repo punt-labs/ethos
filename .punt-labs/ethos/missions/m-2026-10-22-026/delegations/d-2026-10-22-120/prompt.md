@@ -8,7 +8,7 @@ Git rules:
 - Run `make check` before each commit.
 - Commit by explicit path only: `git commit -m "<msg>" -- docs/design-opencode-plugin.md DESIGN.md`.
 - Never stage, unstage, or restore any other file.
-- End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- End each commit message with `Co-Authored-By: Claude Opus 5.5 <[redacted-email]>`.
 - Commit on your branch; do not push, do not touch PRs or merge — the leader does that. Do not reply to or resolve threads.
 
 When done, submit the round-1 result through ethos with a per-criterion table, commit SHAs, and `make check` outcomes. Your final report repeats the table and lists any open question.

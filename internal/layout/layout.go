@@ -128,6 +128,9 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions.jsonl.lock", Class: Never},
 	{Pattern: ".punt-labs/ethos/identities/*.yaml.lock", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
+	// The original bytes of a retired chunk the redaction check withheld from
+	// the tracked tree: <stem>.<hash>.corrupt, kept in the machine-local zone.
+	{Pattern: ".punt-labs/local/ethos/quarantine/*.corrupt", Class: Never},
 	// Every staging name a helper in temp.go builds contains TmpMarker: the
 	// file, and a staging directory with whatever a crash leaves in it.
 	temp("**/*" + TmpMarker + "*"),

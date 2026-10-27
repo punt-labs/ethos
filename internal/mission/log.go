@@ -31,9 +31,9 @@ const maxLogSize = 16 * 1024 * 1024
 // open: Details is a free-form map so future event types do not require
 // a schema migration.
 type Event struct {
-	TS      string         `json:"ts"`    // RFC3339
-	Event   string         `json:"event"` // create|update|close|...
-	Actor   string         `json:"actor"` // identity handle
+	TS      string         `json:"ts" redact:"keep"`      // RFC3339
+	Event   string         `json:"event" redact:"event"`  // create|update|close|...
+	Actor   string         `json:"actor" redact:"handle"` // identity handle
 	Details map[string]any `json:"details,omitempty"`
 }
 
@@ -73,7 +73,22 @@ const EventWriteSetReleased = "write_set_released"
 // original length. This prevents a partially-written JSONL line from
 // corrupting the log. If the truncation-rollback itself fails, the
 // returned error notes both failures.
-func (s *Store) appendEventLocked(missionID string, e Event) error {
+func (s *Store) appendEventLocked(missionID string, e Event) (retErr error) {
+	// Details is free text and both destinations (the tracked log and the
+	// live log that seals into tracked chunks) end up in git. Redacting
+	// here, before the branch, covers both.
+	kind := e.Event
+	e, say, err := RedactRecordNotify(s.repoRoot, e)
+	if err != nil {
+		return fmt.Errorf("appending %s event for %s: %w", kind, missionID, err)
+	}
+	// The notice is said only if the append below succeeds; a failed write
+	// prints its own error and nothing else.
+	defer func() {
+		if retErr == nil {
+			say.Say()
+		}
+	}()
 	// DES-058: in the two-tree repo layout EVERY event append lands in the
 	// machine-local per-(mission, session) live log with a strictly-monotonic
 	// timestamp, so the tracked tree stays clean between seals. This includes a
@@ -99,6 +114,10 @@ func (s *Store) appendEventLocked(missionID string, e Event) error {
 	logPath, err := s.logPath(missionID)
 	if err != nil {
 		return err
+	}
+	var gErr error
+	if line, gErr = guardWrite(logPath, line); gErr != nil {
+		return gErr
 	}
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {

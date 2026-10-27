@@ -12803,7 +12803,10 @@ created (a symlinked `CLAUDE.md`'s temporary file sits beside the link
 target), and two class-4 entries match that marker in any directory. A
 mission staging directory left by an earlier version
 (`.punt-labs/ethos/missions/.<id>.migrate-*/`) has its own class-4
-entry, so its copied `contract.yaml` is never taken for a record. A
+entry, so its copied `contract.yaml` is never taken for a record. The
+original bytes of a retired chunk that the redaction check withheld from
+the tracked tree (`.punt-labs/local/ethos/quarantine/<stem>.<hash>.corrupt`)
+also have one. A
 source scan fails when a temporary-file call (`os.CreateTemp`,
 `os.MkdirTemp`, `ioutil.TempFile`, `ioutil.TempDir`) takes a pattern
 not built by a layout helper, or when a string literal looks like a

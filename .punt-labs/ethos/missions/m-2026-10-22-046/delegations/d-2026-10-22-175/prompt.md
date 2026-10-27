@@ -7,7 +7,7 @@ Authority: `docs/spec-opencode-lifecycle.tex` is a model-checked Z spec, accepte
 Git rules:
 - Run `make check` before each commit.
 - Commit by explicit path only: `git commit -m "<msg>" -- <write-set paths you changed>`.
-- End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- End each commit message with `Co-Authored-By: Claude Opus 5.5 <[redacted-email]>`.
 - Never stage, unstage, or restore any other file.
 - Commit on your branch; do not push, do not touch PRs or merge — the leader does that.
 

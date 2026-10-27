@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -4579,14 +4580,23 @@ func TestMissionClaim_RefusesWhenSessionRosterGone(t *testing.T) {
 	release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
 	require.NoError(t, err)
 
+	reached := make(chan struct{}, 1)
+	beforeDispatchPendingLock = func() { reached <- struct{}{} }
+	t.Cleanup(func() { beforeDispatchPendingLock = func() {} })
 	done := make(chan error, 1)
 	go func() {
 		done <- runMissionClaim(id)
 	}()
 
-	// Give the goroutine time to pass resolveSessionContext (the roster
-	// still exists at this point) and then block entering Flock.
-	time.Sleep(150 * time.Millisecond)
+	// Wait until the goroutine has passed resolveSessionContext (the roster
+	// still exists at this point) and is about to enter the lock held here.
+	select {
+	case <-reached:
+	case err := <-done:
+		t.Fatalf("runMissionClaim finished before it reached the dispatch-pending lock (err=%v)", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("runMissionClaim did not reach the dispatch-pending lock within 10s")
+	}
 	select {
 	case err := <-done:
 		t.Fatalf("runMissionClaim completed while a sibling held the dispatch-pending lock (err=%v)", err)
@@ -4976,17 +4986,25 @@ func TestMissionDispatch_RefusesWhenSessionRosterGone(t *testing.T) {
 	// -- is what guarantees os.Stderr comes back even if a require or
 	// t.Fatal(f) call here Goexits (PR #509 review finding, J-round).
 	var dispatchErr error
+	reached := make(chan struct{}, 1)
+	beforeDispatchPendingLock = func() { reached <- struct{}{} }
+	t.Cleanup(func() { beforeDispatchPendingLock = func() {} })
 	warning := testhelpers.CaptureStderr(t, func() {
 		done := make(chan error, 1)
 		go func() {
 			done <- runMissionDispatch()
 		}()
 
-		// Give the goroutine time to create the contract, pass
-		// resolveSessionContext (the roster still exists at this
-		// point), and then block entering Flock for the sidecar
-		// write.
-		time.Sleep(150 * time.Millisecond)
+		// Wait until the goroutine has created the contract, passed
+		// resolveSessionContext (the roster still exists at this point),
+		// and is about to enter the lock this test holds.
+		select {
+		case <-reached:
+		case dispatchErr = <-done:
+			t.Fatalf("runMissionDispatch finished before it reached the dispatch-pending lock (err=%v)", dispatchErr)
+		case <-time.After(10 * time.Second):
+			t.Fatal("runMissionDispatch did not reach the dispatch-pending lock within 10s")
+		}
 		select {
 		case dispatchErr = <-done:
 			t.Fatalf("runMissionDispatch completed while a sibling held the dispatch-pending lock (err=%v)", dispatchErr)
@@ -5440,4 +5458,25 @@ func TestRefuseBadStoreOverride(t *testing.T) {
 		assert.NoError(t, refuseBadStoreOverride("create"),
 			"a genuinely unset override must not error (global mission mode is supported)")
 	})
+}
+
+// TestWriteExport_DirSyncFailurePrintsTheFilesFirst: when only the directory
+// sync failed, the exported lines are printed, then an error that says both
+// files were written and the export can be re-run.
+func TestWriteExport_DirSyncFailurePrintsTheFilesFirst(t *testing.T) {
+	files := []mission.TrackedFile{{Path: "/x/m.contract.yaml"}, {Path: "/x/m.result.yaml"}}
+	notDurable := func(...mission.TrackedFile) error {
+		return &mission.NotDurableError{Err: errors.New("syncing directory of m.contract.yaml: EIO")}
+	}
+	var out bytes.Buffer
+	err := writeExport(&out, "m-1", files, notDurable)
+	require.Error(t, err)
+	assert.Equal(t, "exported: /x/m.contract.yaml\nexported: /x/m.result.yaml\n", out.String())
+	assert.Contains(t, err.Error(), "all files were written; only the directory sync failed")
+	assert.Contains(t, err.Error(), "re-run")
+
+	out.Reset()
+	err = writeExport(&out, "m-1", files, func(...mission.TrackedFile) error { return errors.New("refused") })
+	require.Error(t, err)
+	assert.Empty(t, out.String(), "nothing is reported exported when the write failed")
 }

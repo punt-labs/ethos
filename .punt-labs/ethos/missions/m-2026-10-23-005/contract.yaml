@@ -29,4 +29,4 @@ budget:
     rounds: 2
     reflection_after_each: true
 current_round: 2
-context: 'Final design-text mission for DES-078, ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in /home/jfreeman/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. The spec is the authority; every criterion is a leader decision; if source or the spec shows one impossible, stop and report.'
+context: 'Final design-text mission for DES-078, ethos-5y4r, PR #536, branch design/opencode-plugin-adapter, already checked out in ~/Coding/punt-labs/ethos -- do not create or switch branches. Commit on this branch; do NOT push, do not touch the PR or threads, do not merge. The spec is the authority; every criterion is a leader decision; if source or the spec shows one impossible, stop and report.'

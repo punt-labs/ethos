@@ -233,11 +233,10 @@ func writeAuditFiles(t *testing.T, root string) {
 func quarantineTwice(t *testing.T, root, dir string, cn audit.ChunkName) {
 	t.Helper()
 
-	live := filepath.Join(t.TempDir(), "live.jsonl") // absent: nothing to re-seal
 	for _, garbage := range []string{"not json\n", "still not json\n"} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(garbage), 0o644))
-		_, err := audit.Quarantine(root, dir, cn, live, "test corruption")
+		_, err := hook.QuarantineChunk(root, filepath.Join(dir, cn.ChunkFile()), "test corruption")
 		require.NoError(t, err)
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, audit.CorruptName(cn.Stem())+"-*"))
@@ -297,8 +296,14 @@ func writeMigrations(t *testing.T, root, global string) {
 	const id = "m-2026-10-24-903" // referenced as contract_id in the live audit file
 	legacy := filepath.Join(global, "missions")
 	require.NoError(t, os.MkdirAll(legacy, 0o755))
-	for _, suffix := range []string{".yaml", ".jsonl", ".results.yaml", ".reflections.yaml"} {
-		require.NoError(t, os.WriteFile(filepath.Join(legacy, id+suffix), []byte("x: 1\n"), 0o644))
+	// The copy parses each file as the record it is, so each holds a minimal one.
+	for suffix, body := range map[string]string{
+		".yaml":             "mission_id: " + id + "\nstatus: open\n",
+		".jsonl":            `{"ts":"2026-10-24T00:00:00Z","event":"create","actor":"bwk"}` + "\n",
+		".results.yaml":     "- round: 1\n  prose: done\n",
+		".reflections.yaml": "- round: 1\n  reason: why\n",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(legacy, id+suffix), []byte(body), 0o644))
 	}
 	require.NoError(t, mission.MigrateMission(global, root, root, id, false, io.Discard))
 

@@ -718,8 +718,15 @@ func (s *Store) Create(c *Contract) error {
 					return err
 				}
 			}
-			if err := s.writeContract(&staged); err != nil {
-				return err
+			if err := refuseOwnDashHome(s.repoRoot, &staged, nil); err != nil {
+				return fmt.Errorf("writing contract %s: %w", staged.MissionID, err)
+			}
+			if err := refuseAmbiguousRequireRead(s.repoRoot, &staged, nil); err != nil {
+				return fmt.Errorf("writing contract %s: %w", staged.MissionID, err)
+			}
+			sayContract, wErr := s.writeContractNote(&staged)
+			if wErr != nil {
+				return wErr
 			}
 			// Test-only seam (ethos-ouy9): invoked between the write above
 			// and the read-back below, matching the existing
@@ -763,6 +770,7 @@ func (s *Store) Create(c *Contract) error {
 				}
 				return fmt.Errorf("create: event append failed, contract rolled back: %w", err)
 			}
+			sayContract.Say()
 			return nil
 		})
 	})
@@ -937,8 +945,15 @@ func (s *Store) Update(c *Contract) error {
 		if err := s.validateContract(&updated); err != nil {
 			return fmt.Errorf("invalid contract: %w", err)
 		}
-		if err := s.writeContract(&updated); err != nil {
-			return err
+		if err := refuseOwnDashHome(s.repoRoot, &updated, onDisk); err != nil {
+			return fmt.Errorf("writing contract %s: %w", updated.MissionID, err)
+		}
+		if err := refuseAmbiguousRequireRead(s.repoRoot, &updated, onDisk); err != nil {
+			return fmt.Errorf("writing contract %s: %w", updated.MissionID, err)
+		}
+		sayContract, wErr := s.writeContractNote(&updated)
+		if wErr != nil {
+			return wErr
 		}
 		if err := s.appendEventLocked(c.MissionID, Event{
 			TS:    updated.UpdatedAt,
@@ -950,6 +965,7 @@ func (s *Store) Update(c *Contract) error {
 			}
 			return fmt.Errorf("update: event append failed, contract rolled back: %w", err)
 		}
+		sayContract.Say()
 		// Success: reflect server-owned fields back to the caller --
 		// this mutation happens only after the event log commits, so
 		// a failed Update leaves the caller's struct unchanged.
@@ -994,8 +1010,18 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	if !validStatuses[status] || status == StatusOpen || status == StatusAbandoned {
 		return nil, fmt.Errorf("invalid close status %q: must be closed, failed, or escalated", status)
 	}
+	// Every record Close writes (the contract, the close event, the
+	// missions.jsonl line) goes through the redactor. Build it before the
+	// lock and before any mutation, as Abandon does: the trace write runs
+	// after the close commits and is non-fatal (DES-050), so a redactor
+	// failure found there would drop the index line silently instead of
+	// refusing the close.
+	if _, err := NewPathRedactor(s.repoRoot); err != nil {
+		return nil, fmt.Errorf("close: building path redactor: %w", err)
+	}
 	var satisfying *Result
-	var closed *Contract
+	var traceLine []byte
+	var traceSay Announcement
 	err := s.withLock(missionID, func() error {
 		dest, err := s.contractPath(missionID)
 		if err != nil {
@@ -1038,8 +1064,15 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		if err := s.validateContract(c); err != nil {
 			return fmt.Errorf("invalid contract after close: %w", err)
 		}
-		if err := s.writeContract(c); err != nil {
-			return err
+		// The missions.jsonl line is built and guarded before anything is
+		// written: a refusal fails the close with the field and rule, rather
+		// than leaving a closed mission with no index line.
+		if traceLine, traceSay, err = s.prepareTraceSummary(c, gated); err != nil {
+			return fmt.Errorf("close: %w", err)
+		}
+		sayContract, wErr := s.writeContractNote(c)
+		if wErr != nil {
+			return wErr
 		}
 		closeDetails := map[string]any{
 			"status":  status,
@@ -1057,12 +1090,12 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 			}
 			return fmt.Errorf("close: event append failed, contract rolled back: %w", err)
 		}
+		sayContract.Say()
 		// Publish the satisfying result only after the close event
 		// commits. A mid-method failure leaves satisfying nil, matching
 		// the "operation did not happen" contract the Update and Close
 		// rollback paths already guarantee for on-disk state.
 		satisfying = gated
-		closed = c
 		return nil
 	})
 	if err != nil {
@@ -1136,11 +1169,13 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		}
 	}
 
-	// Trace: append a summary line to the repo-local JSONL log.
-	// Non-fatal — the mission is already closed; a trace failure
-	// must not roll back the close.
-	if err := s.appendTraceSummary(closed, satisfying); err != nil {
+	// Trace: append the summary line to the repo-local JSONL log. Its
+	// content was checked before the close committed; an I/O failure here is
+	// non-fatal — the mission is already closed and must not roll back.
+	if err := s.appendTraceLine(traceLine); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
+	} else {
+		traceSay.Say()
 	}
 	return satisfying, nil
 }
@@ -1327,35 +1362,26 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 	}
 	// The mission tree is git-tracked and routinely pushed to a
 	// public repo (see the storage layout table in CLAUDE.md), and
-	// reason is operator-supplied free text — the same class of
-	// content WriteDelegationSkeleton redacts before it touches disk
-	// (see the rationale on NewPathRedactor). A reason like
-	// "superseded by the contract in /Users/alice/work/x.yaml" would
-	// otherwise leak the operator's home path and username into
-	// shared history. Redaction failure is fail-closed, not
-	// best-effort: an unresolvable $HOME means the write cannot be
-	// redacted, so Abandon refuses rather than write unredacted
-	// content — mirroring the empty-repoRoot refusal below.
+	// reason is operator-supplied free text. A reason like
+	// "superseded by the contract in /Users/alice/work/x.yaml" is redacted
+	// in appendEventLocked's record pass, which also announces the
+	// rewrite once the event is stored. A failure there restores the saved
+	// contract bytes as they were (restoreContract renames them back, without
+	// the sink guard), and the contract's own rewrite is not announced.
 	//
-	// Built here, before the lock and before any mutation, not next
-	// to the appendEventLocked call it feeds: NewPathRedactor depends
-	// only on s.repoRoot and the environment, nothing the locked
-	// section produces, so there is no reason to defer it. Deferring
-	// it used to mean writeContract could already have stamped
-	// status: abandoned on disk before this could fail — the only
-	// error path in Abandon that did not call restoreContract, since
-	// by the time it fired dest had already been overwritten with no
-	// prior bytes captured for rollback. A retry then hit "already in
-	// terminal state" with no abandon event ever recorded, and no way
-	// back to open. Validating every precondition before the lock
-	// means every failure in this function happens before any
-	// mutation, so there is nothing to roll back and nothing that can
-	// wedge.
-	redact, err := NewPathRedactor(s.repoRoot)
+	// The NewPathRedactor call below is only a fail-closed precheck: an
+	// unresolvable $HOME means no write can be redacted, so Abandon refuses
+	// before the lock and before any mutation rather than discover it after
+	// writeContract has stamped the terminal state. Checking here, with
+	// nothing the locked section produces, means a redactor failure leaves
+	// nothing to roll back.
+	_, err := NewPathRedactor(s.repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("abandon: building path redactor: %w", err)
 	}
 	var abandoned *Contract
+	var traceLine []byte
+	var traceSay Announcement
 	err = s.withLock(missionID, func() error {
 		dest, err := s.contractPath(missionID)
 		if err != nil {
@@ -1478,25 +1504,30 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 			if err := s.validateContract(c); err != nil {
 				return fmt.Errorf("invalid contract after abandon: %w", err)
 			}
-			if err := s.writeContract(c); err != nil {
-				return err
+			if traceLine, traceSay, err = s.prepareTraceSummary(c, &Result{Verdict: StatusAbandoned}); err != nil {
+				return fmt.Errorf("abandon: %w", err)
 			}
-			// redact was built before the lock (see the comment at the top
-			// of Abandon) so its construction cannot fail here, after
-			// writeContract has already stamped the terminal state.
+			sayContract, wErr := s.writeContractNote(c)
+			if wErr != nil {
+				return wErr
+			}
+			// The reason is redacted in appendEventLocked's record pass; a
+			// failure there restores the saved bytes (restoreContract), and the
+			// contract's rewrite is announced only after the event is stored.
 			if err := s.appendEventLocked(missionID, Event{
 				TS:    now,
 				Event: "abandon",
 				Actor: c.Leader,
-				Details: redact.Map(map[string]any{
+				Details: map[string]any{
 					"reason": reason,
-				}),
+				},
 			}); err != nil {
 				if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
 					return fmt.Errorf("abandon: event append failed: %w; rollback failed: %v", err, rbErr)
 				}
 				return fmt.Errorf("abandon: event append failed, contract rolled back: %w", err)
 			}
+			sayContract.Say()
 			abandoned = c
 			return nil
 		})
@@ -1511,8 +1542,10 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 	// Result carries only the terminal-state verdict string for the
 	// trace log's benefit; buildTraceSummary otherwise reads the
 	// abandoned contract's own fields.
-	if err := s.appendTraceSummary(abandoned, &Result{Verdict: StatusAbandoned}); err != nil {
+	if err := s.appendTraceLine(traceLine); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
+	} else {
+		traceSay.Say()
 	}
 	return abandoned, nil
 }
@@ -1622,7 +1655,7 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 			oldData, _ := os.ReadFile(recordPath)
 
 			now := time.Now().UTC().Format(time.RFC3339)
-			d, dErr := DisclaimDelegationRecord(s.repoRoot, missionID, delegationID, redact, reason, now)
+			d, sayRecord, dErr := DisclaimDelegationRecord(s.repoRoot, missionID, delegationID, redact, reason, now)
 			if dErr != nil {
 				return dErr
 			}
@@ -1631,21 +1664,22 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 				TS:    now,
 				Event: "disclaim_delegation",
 				Actor: c.Leader,
-				Details: redact.Map(map[string]any{
+				Details: map[string]any{
 					"delegation_id": delegationID,
 					"bound_via":     d.BoundVia,
 					"reason":        reason,
-				}),
+				},
 			}); evErr != nil {
 				// A disclaim with no matching audit-log entry is
 				// exactly the half-finished state this package's other
 				// terminal-adjacent mutations (Abandon, Update) refuse
-				// to leave behind — restore the pre-disclaim record so
+				// to leave behind — put the saved record bytes back, byte for
+				// byte and unguarded (restoreAtomicFile), so
 				// the delegation still blocks Abandon's gate until a
 				// retry succeeds cleanly.
 				if len(oldData) > 0 {
 					dir := filepath.Dir(recordPath)
-					if rbErr := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, oldData); rbErr != nil {
+					if rbErr := restoreAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, oldData); rbErr != nil {
 						return fmt.Errorf(
 							"disclaim: event append failed: %w; rollback failed: %v", evErr, rbErr,
 						)
@@ -1654,6 +1688,9 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 				}
 				return fmt.Errorf("disclaim: event append failed: %w", evErr)
 			}
+			// The record stays only if the event is stored; its rewrite is
+			// announced now, and never on the rollback paths above.
+			sayRecord.Say()
 			return nil
 		})
 	})
@@ -1708,11 +1745,11 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 	if containsControlChar(reason) {
 		return nil, fmt.Errorf("force-release-write-set: reason contains control character")
 	}
-	// Built before the lock and before any mutation, for the same
-	// reason Abandon's redactor is: a construction failure here must
-	// never follow a writeContract call that already stamped
-	// WriteSetReleasedAt on disk with no release event to explain it.
-	redact, err := NewPathRedactor(s.repoRoot)
+	// A fail-closed precheck before the lock and before any mutation, as in
+	// Abandon: an unresolvable $HOME refuses the release before
+	// writeContract stamps WriteSetReleasedAt. The reason itself is redacted
+	// in appendEventLocked's record pass, and a failure there is rolled back.
+	_, err := NewPathRedactor(s.repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("force-release-write-set: building path redactor: %w", err)
 	}
@@ -1820,8 +1857,9 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 			if err := s.validateContract(c); err != nil {
 				return fmt.Errorf("invalid contract after force-release-write-set: %w", err)
 			}
-			if err := s.writeContract(c); err != nil {
-				return err
+			sayContract, wErr := s.writeContractNote(c)
+			if wErr != nil {
+				return wErr
 			}
 			delegationDetail := any(delegationCount)
 			if !delegationsKnown {
@@ -1841,7 +1879,7 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 				TS:    nowStr,
 				Event: EventWriteSetReleased,
 				Actor: c.Leader,
-				Details: redact.Map(map[string]any{
+				Details: map[string]any{
 					"reason":                  reason,
 					"write_set_at_release":    writeSetAtRelease,
 					"extract_into_at_release": extractIntoAtRelease,
@@ -1851,13 +1889,14 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 						"has_results":      hasResultsDetail,
 						"delegation_count": delegationDetail,
 					},
-				}),
+				},
 			}); err != nil {
 				if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
 					return fmt.Errorf("force-release-write-set: event append failed: %w; rollback failed: %v", err, rbErr)
 				}
 				return fmt.Errorf("force-release-write-set: event append failed, contract rolled back: %w", err)
 			}
+			sayContract.Say()
 			released = c
 			return nil
 		})
@@ -2373,18 +2412,56 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 // serializes every writer for this missionID, so there is no concurrent
 // second writer to trample the shared name.
 func (s *Store) writeContract(c *Contract) error {
-	data, err := yaml.Marshal(c)
+	say, err := s.writeContractNote(c)
+	if err == nil {
+		say.Say()
+	}
+	return err
+}
+
+// writeContractNote is writeContract returning the Announcement of a rewrite
+// instead of saying it. A writer whose contract write is followed by an event
+// append says it only once that append succeeds, so a rolled-back write
+// announces nothing.
+func (s *Store) writeContractNote(c *Contract) (Announcement, error) {
+	// A contract that validates but whose redacted form does not would
+	// land on disk unloadable. Judge only a contract that was valid to
+	// begin with: an archetype may relax rules Validate applies without one.
+	valid := c.Validate() == nil
+	data, say, err := RedactedYAMLNotify(s.repoRoot, *c, func(red Contract) error {
+		// Enforcement fields are checked for every contract: Validate
+		// cannot see a corrupted spawn_pattern or require_read.
+		if err := checkPathFields(s.repoRoot, *c, red); err != nil {
+			return err
+		}
+		if !valid {
+			return nil
+		}
+		return checkRedactedContract(red)
+	})
 	if err != nil {
-		return fmt.Errorf("marshaling contract: %w", err)
+		return nil, fmt.Errorf("writing contract %s: %w", c.MissionID, err)
 	}
 	if err := s.ensureMissionDir(c.MissionID); err != nil {
-		return err
+		return nil, err
 	}
 	dest, err := s.contractPath(c.MissionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return writeContractFile(dest, data)
+	if err := writeContractFile(dest, data); err != nil {
+		return nil, err
+	}
+	return say, nil
+}
+
+// checkRedactedContract refuses a redacted contract that fails
+// validation. The validator names the field.
+func checkRedactedContract(red Contract) error {
+	if err := red.Validate(); err != nil {
+		return fmt.Errorf("redacted contract is invalid: %w", err)
+	}
+	return nil
 }
 
 // writeContractFile writes data to dest atomically via a fixed-name
@@ -2394,6 +2471,16 @@ func (s *Store) writeContract(c *Contract) error {
 // restoreContract so the two on-disk writers of a mission contract
 // cannot drift apart on durability.
 func writeContractFile(dest string, data []byte) error {
+	var gErr error
+	if data, gErr = guardWrite(dest, data); gErr != nil {
+		return gErr
+	}
+	return writeContractBytes(dest, data)
+}
+
+// writeContractBytes is writeContractFile's temp, fsync and rename, for bytes
+// already checked or already on disk.
+func writeContractBytes(dest string, data []byte) error {
 	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
 	// at the temp path. os.WriteFile would follow a symlink at tmp,
@@ -2409,29 +2496,29 @@ func writeContractFile(dest string, data []byte) error {
 	}
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("opening temp contract %s: %w", tmp, err)
+		return ioErr("opening temp contract", tmp, err)
 	}
 	if n, err := f.Write(data); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
-		return fmt.Errorf("writing temp contract %s: %w", tmp, err)
+		return ioErr("writing temp contract", tmp, err)
 	} else if n < len(data) {
 		_ = f.Close()
 		_ = os.Remove(tmp)
-		return fmt.Errorf("short write to temp contract %s: %d of %d bytes", tmp, n, len(data))
+		return fmt.Errorf("short write to temp contract %s: %d of %d bytes", filepath.Base(tmp), n, len(data))
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
-		return fmt.Errorf("syncing temp contract %s: %w", tmp, err)
+		return ioErr("syncing temp contract", tmp, err)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("closing temp contract %s: %w", tmp, err)
+		return ioErr("closing temp contract", tmp, err)
 	}
 	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("renaming temp contract %s -> %s: %w", tmp, dest, err)
+		return ioErr("renaming the temp contract to", dest, err)
 	}
 	// F2 (PR #508 round 2): the FILE's contents were durable the moment
 	// f.Sync() above returned, but the RENAME is a change to the
@@ -2469,7 +2556,10 @@ func writeContractFile(dest string, data []byte) error {
 	return nil
 }
 
-// restoreContract writes oldData back to dest atomically via temp+rename.
+// restoreContract puts oldData back at dest, byte for byte, by temp, fsync and
+// rename. A restore returns the file to what was already on disk, so it is not
+// a new tracked write and does not pass the sink guard: a contract that already
+// names a home must come back exactly as it was, not be refused for it.
 // Used by Update and Close to roll back a contract write when the
 // follow-on event-log append fails, keeping the caller's view of
 // on-disk state consistent with the operation's success/failure.
@@ -2477,7 +2567,7 @@ func writeContractFile(dest string, data []byte) error {
 // (ethos-ouy9) — a rollback that itself lands half-written is exactly
 // as unacceptable as the forward write it is undoing.
 func (s *Store) restoreContract(dest string, oldData []byte) error {
-	return writeContractFile(dest, oldData)
+	return writeContractBytes(dest, oldData)
 }
 
 // withLock executes fn while holding an exclusive lock (flock on Unix,
@@ -2773,7 +2863,7 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 				staged.Round, missionID, c.CurrentRound,
 			)
 		}
-		existing, err := s.loadReflectionsLocked(missionID)
+		existing, prev, err := s.loadReflectionsBytes(missionID)
 		if err != nil {
 			return err
 		}
@@ -2786,7 +2876,12 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 			}
 		}
 		updated := append(existing, staged)
-		if err := s.writeReflectionsLocked(missionID, updated); err != nil {
+		prevPath, perr := s.reflectionsPath(missionID)
+		if perr != nil {
+			return perr
+		}
+		sayWrite, err := s.writeReflectionsLockedNote(missionID, updated)
+		if err != nil {
 			return err
 		}
 		if err := s.appendEventLocked(missionID, Event{
@@ -2805,10 +2900,11 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 			// rejects the reflect record, the reflection itself must
 			// not be observable to a later read.
 			//
-			// If the file did not exist before the append (existing
-			// was nil), remove it entirely rather than writing an
-			// empty reflections: [] stub that would confuse readers.
-			if existing == nil {
+			// If the file did not exist before the append (the bytes read
+			// at load were nil), remove it entirely rather than writing an
+			// empty reflections: [] stub. A file that was there, even one
+			// that decodes to no entries, is put back as it was.
+			if prev == nil {
 				rbPath, pErr := s.reflectionsPath(missionID)
 				if pErr != nil {
 					return fmt.Errorf("reflect: event append failed: %w; rollback path failed: %v", err, pErr)
@@ -2816,11 +2912,12 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("reflect: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
-			} else if rbErr := s.writeReflectionsLocked(missionID, existing); rbErr != nil {
+			} else if rbErr := restoreAtomicFile(filepath.Dir(prevPath), layout.TmpPattern("reflections", ".yaml"), prevPath, prev); rbErr != nil {
 				return fmt.Errorf("reflect: event append failed: %w; rollback failed: %v", err, rbErr)
 			}
 			return fmt.Errorf("reflect: event append failed, reflection rolled back: %w", err)
 		}
+		sayWrite.Say()
 		// Reflect CreatedAt back to the caller — this is the one field
 		// AppendReflection is contracted to set. Author is always
 		// caller-supplied; the default-fill is restricted to CreatedAt
@@ -2836,21 +2933,29 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 // and AdvanceRound use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadReflectionsLocked(missionID string) ([]Reflection, error) {
+	list, _, err := s.loadReflectionsBytes(missionID)
+	return list, err
+}
+
+// loadReflectionsBytes is loadReflectionsLocked also returning the bytes it read, which
+// a rollback restores as they were; nil when the file does not exist.
+func (s *Store) loadReflectionsBytes(missionID string) ([]Reflection, []byte, error) {
 	path, err := s.reflectionsPath(missionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := rejectSymlink(path); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("reading reflections for %q: %w", missionID, err)
+		return nil, nil, fmt.Errorf("reading reflections for %q: %w", missionID, err)
 	}
-	return decodeReflectionsFile(data, missionID)
+	list, err := decodeReflectionsFile(data, missionID)
+	return list, data, err
 }
 
 // writeReflectionsLocked rewrites the reflections file via temp+rename.
@@ -2859,31 +2964,49 @@ func (s *Store) loadReflectionsLocked(missionID string) ([]Reflection, error) {
 // schema_version key) can be added without breaking decode of older
 // files.
 func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error {
-	wrapper := reflectionsFile{Reflections: rs}
-	data, err := yaml.Marshal(&wrapper)
+	say, err := s.writeReflectionsLockedNote(missionID, rs)
+	if err == nil {
+		say.Say()
+	}
+	return err
+}
+
+// writeReflectionsLockedNote is writeReflectionsLocked returning the Announcement of a rewrite
+// instead of saying it, for a writer that says it after a follow-on event append.
+func (s *Store) writeReflectionsLockedNote(missionID string, rs []Reflection) (Announcement, error) {
+	data, say, err := RedactedYAMLNotify(s.repoRoot, reflectionsFile{Reflections: rs})
 	if err != nil {
-		return fmt.Errorf("marshaling reflections: %w", err)
+		return nil, fmt.Errorf("marshaling reflections: %w", err)
 	}
 	if err := s.ensureMissionDir(missionID); err != nil {
-		return err
+		return nil, err
 	}
 	dest, err := s.reflectionsPath(missionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and
 	// tmp before WriteFile would follow them.
 	if err := rejectSymlink(dest); err != nil {
-		return err
+		return nil, err
 	}
 	if err := rejectSymlink(tmp); err != nil {
-		return err
+		return nil, err
+	}
+	var gErr error
+	if data, gErr = guardWrite(dest, data); gErr != nil {
+		return nil, gErr
 	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp reflections: %w", err)
+		_ = os.Remove(tmp)
+		return nil, ioErr("writing temp reflections", tmp, err)
 	}
-	return os.Rename(tmp, dest)
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return nil, ioErr("renaming temp reflections to", dest, err)
+	}
+	return say, nil
 }
 
 // AdvanceRound is the round-advance gate. It moves a mission from
@@ -2966,8 +3089,9 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 		if err := s.validateContract(c); err != nil {
 			return fmt.Errorf("invalid contract after advance: %w", err)
 		}
-		if err := s.writeContract(c); err != nil {
-			return err
+		sayContract, wErr := s.writeContractNote(c)
+		if wErr != nil {
+			return wErr
 		}
 		if err := s.appendEventLocked(missionID, Event{
 			TS:    c.UpdatedAt,
@@ -2984,6 +3108,7 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 			}
 			return fmt.Errorf("advance: event append failed, contract rolled back: %w", err)
 		}
+		sayContract.Say()
 		newRound = c.CurrentRound
 		return nil
 	})
@@ -3417,7 +3542,7 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 		if err := checkFilesChangedContainment(c, &staged); err != nil {
 			return err
 		}
-		existing, err := s.loadResultsLocked(missionID)
+		existing, prev, err := s.loadResultsBytes(missionID)
 		if err != nil {
 			return err
 		}
@@ -3430,7 +3555,12 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 			}
 		}
 		updated := append(existing, staged)
-		if err := s.writeResultsLocked(missionID, updated); err != nil {
+		prevPath, perr := s.resultsPath(missionID)
+		if perr != nil {
+			return perr
+		}
+		sayWrite, err := s.writeResultsLockedNote(missionID, updated)
+		if err != nil {
 			return err
 		}
 		if err := s.appendEventLocked(missionID, Event{
@@ -3450,10 +3580,11 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 			// rejects the result record, the result itself must not
 			// be observable to a later read or to the close gate.
 			//
-			// If the file did not exist before the append (existing
-			// was nil), remove it entirely rather than writing an
-			// empty results: [] stub.
-			if existing == nil {
+			// If the file did not exist before the append (the bytes read
+			// at load were nil), remove it entirely rather than writing an
+			// empty results: [] stub. A file that was there, even one that
+			// decodes to no entries, is put back as it was.
+			if prev == nil {
 				rbPath, pErr := s.resultsPath(missionID)
 				if pErr != nil {
 					return fmt.Errorf("result: event append failed: %w; rollback path failed: %v", err, pErr)
@@ -3461,11 +3592,12 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("result: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
-			} else if rbErr := s.writeResultsLocked(missionID, existing); rbErr != nil {
+			} else if rbErr := restoreAtomicFile(filepath.Dir(prevPath), layout.TmpPattern("results", ".yaml"), prevPath, prev); rbErr != nil {
 				return fmt.Errorf("result: event append failed: %w; rollback failed: %v", err, rbErr)
 			}
 			return fmt.Errorf("result: event append failed, result rolled back: %w", err)
 		}
+		sayWrite.Say()
 		// Reflect CreatedAt back to the caller — the one field
 		// AppendResult is contracted to set. Every other field came
 		// from the caller and is preserved as-is.
@@ -3479,21 +3611,29 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 // checkResultGateLocked use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadResultsLocked(missionID string) ([]Result, error) {
+	list, _, err := s.loadResultsBytes(missionID)
+	return list, err
+}
+
+// loadResultsBytes is loadResultsLocked also returning the bytes it read, which
+// a rollback restores as they were; nil when the file does not exist.
+func (s *Store) loadResultsBytes(missionID string) ([]Result, []byte, error) {
 	path, err := s.resultsPath(missionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := rejectSymlink(path); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("reading results for %q: %w", missionID, err)
+		return nil, nil, fmt.Errorf("reading results for %q: %w", missionID, err)
 	}
-	return decodeResultsFile(data, missionID)
+	list, err := decodeResultsFile(data, missionID)
+	return list, data, err
 }
 
 // writeResultsLocked rewrites the results file via temp+rename.
@@ -3502,31 +3642,49 @@ func (s *Store) loadResultsLocked(missionID string) ([]Result, error) {
 // schema_version key) can be added without breaking decode of older
 // files.
 func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
-	wrapper := resultsFile{Results: rs}
-	data, err := yaml.Marshal(&wrapper)
+	say, err := s.writeResultsLockedNote(missionID, rs)
+	if err == nil {
+		say.Say()
+	}
+	return err
+}
+
+// writeResultsLockedNote is writeResultsLocked returning the Announcement of a rewrite
+// instead of saying it, for a writer that says it after a follow-on event append.
+func (s *Store) writeResultsLockedNote(missionID string, rs []Result) (Announcement, error) {
+	data, say, err := RedactedYAMLNotify(s.repoRoot, resultsFile{Results: rs})
 	if err != nil {
-		return fmt.Errorf("marshaling results: %w", err)
+		return nil, fmt.Errorf("marshaling results: %w", err)
 	}
 	if err := s.ensureMissionDir(missionID); err != nil {
-		return err
+		return nil, err
 	}
 	dest, err := s.resultsPath(missionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and
 	// tmp before WriteFile would follow them.
 	if err := rejectSymlink(dest); err != nil {
-		return err
+		return nil, err
 	}
 	if err := rejectSymlink(tmp); err != nil {
-		return err
+		return nil, err
+	}
+	var gErr error
+	if data, gErr = guardWrite(dest, data); gErr != nil {
+		return nil, gErr
 	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp results: %w", err)
+		_ = os.Remove(tmp)
+		return nil, ioErr("writing temp results", tmp, err)
 	}
-	return os.Rename(tmp, dest)
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return nil, ioErr("renaming temp results to", dest, err)
+	}
+	return say, nil
 }
 
 // checkResultGateLocked is the Phase 3.6 close gate. It runs inside

@@ -785,7 +785,7 @@ func TestWriteDelegationSkeleton_FsyncErrPropagates(t *testing.T) {
 	require.NoError(t, writeAtomicFile(dir, "out-*.tmp", dest, []byte("body")))
 	got, err := os.ReadFile(dest)
 	require.NoError(t, err)
-	assert.Equal(t, "body", string(got))
+	assert.Equal(t, "body\n", string(got), "a YAML file is written in its canonical encoding")
 
 	// Failure path: an unwriteable parent dir forces the temp-create
 	// to fail. The error must surface, not silently drop.
@@ -1064,7 +1064,7 @@ func TestDisclaimDelegationRecord_HappyPath(t *testing.T) {
 
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
-	d, err := DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
+	d, _, err := DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
 		"probe mission never spawned its own worker; this is an unrelated bwk spawn", "2026-09-08T12:05:00Z")
 	require.NoError(t, err)
 	assert.Equal(t, "2026-09-08T12:05:00Z", d.DisclaimedAt)
@@ -1099,7 +1099,7 @@ func TestDisclaimDelegationRecord_RefusesNonSidecarDispatchProvenance(t *testing
 
 			redact, err := NewPathRedactor(repoRoot)
 			require.NoError(t, err)
-			_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
+			_, _, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
 				"trying to disclaim genuine work", "2026-09-08T12:05:00Z")
 			require.Error(t, err, "only active_mission_sidecar_dispatch provenance is disclaimable")
 			assert.Contains(t, err.Error(), "disclaimable")
@@ -1123,7 +1123,7 @@ func TestDisclaimDelegationRecord_RefusesOpenVerdict(t *testing.T) {
 
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
-	_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
+	_, _, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact,
 		"trying to disclaim a still-running spawn", "2026-09-08T12:05:00Z")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "still open")
@@ -1144,10 +1144,10 @@ func TestDisclaimDelegationRecord_RefusesDoubleDisclaim(t *testing.T) {
 
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
-	_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact, "first reason", "2026-09-08T12:05:00Z")
+	_, _, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact, "first reason", "2026-09-08T12:05:00Z")
 	require.NoError(t, err)
 
-	_, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact, "second reason", "2026-09-08T12:06:00Z")
+	_, _, err = DisclaimDelegationRecord(repoRoot, missionID, delegationID, redact, "second reason", "2026-09-08T12:06:00Z")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already disclaimed")
 }
@@ -1158,7 +1158,7 @@ func TestDisclaimDelegationRecord_RequiresReason(t *testing.T) {
 	repoRoot := t.TempDir()
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
-	_, err = DisclaimDelegationRecord(repoRoot, "m-x", "d-x", redact, "  ", "2026-09-08T12:05:00Z")
+	_, _, err = DisclaimDelegationRecord(repoRoot, "m-x", "d-x", redact, "  ", "2026-09-08T12:05:00Z")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reason is required")
 }
@@ -1169,7 +1169,7 @@ func TestDisclaimDelegationRecord_MissingDelegation(t *testing.T) {
 	repoRoot := t.TempDir()
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
-	_, err = DisclaimDelegationRecord(repoRoot, "m-2026-09-08-805", "d-does-not-exist", redact,
+	_, _, err = DisclaimDelegationRecord(repoRoot, "m-2026-09-08-805", "d-does-not-exist", redact,
 		"typo'd delegation id", "2026-09-08T12:05:00Z")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
@@ -1189,15 +1189,15 @@ func TestDisclaimDelegationRecord_EmptyArgs(t *testing.T) {
 	redact, err := NewPathRedactor(repoRoot)
 	require.NoError(t, err)
 
-	_, err = DisclaimDelegationRecord("", "m-1", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
+	_, _, err = DisclaimDelegationRecord("", "m-1", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "repoRoot")
 
-	_, err = DisclaimDelegationRecord(repoRoot, "", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
+	_, _, err = DisclaimDelegationRecord(repoRoot, "", "d-1", redact, "reason", "2026-09-08T12:05:00Z")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missionID")
 
-	_, err = DisclaimDelegationRecord(repoRoot, "m-1", "", redact, "reason", "2026-09-08T12:05:00Z")
+	_, _, err = DisclaimDelegationRecord(repoRoot, "m-1", "", redact, "reason", "2026-09-08T12:05:00Z")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "delegationID")
 }

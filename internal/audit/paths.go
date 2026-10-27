@@ -28,6 +28,13 @@ func LocalZoneBase(repoRoot string) string {
 	return filepath.Join(repoRoot, ".punt-labs", "local", "ethos")
 }
 
+// QuarantineDir is the machine-local, gitignored zone that keeps the original
+// bytes of a retired chunk the redaction check withheld from the tracked tree:
+// <stem>.<hash>.corrupt, untracked, never staged.
+func QuarantineDir(repoRoot string) string {
+	return filepath.Join(LocalZoneBase(repoRoot), "quarantine")
+}
+
 // LiveSessionsDir is the live zone for session audit files.
 func LiveSessionsDir(repoRoot string) string {
 	return filepath.Join(LocalZoneBase(repoRoot), "sessions")

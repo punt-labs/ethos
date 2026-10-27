@@ -182,3 +182,17 @@ func readPrompt(t *testing.T, dir string) string {
 	require.NoError(t, err)
 	return string(data)
 }
+
+// TestRepoRootOfRecord: a record under the global ~/.punt-labs tree has
+// the home directory as its "root"; using that as Repo would tag home
+// paths <repo> instead of ~.
+func TestRepoRootOfRecord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+
+	assert.Equal(t, repo, repoRootOfRecord(filepath.Join(repo, ".punt-labs", "ethos", "missions", "m", "record.yaml")))
+	assert.Equal(t, "", repoRootOfRecord(filepath.Join(home, ".punt-labs", "ethos", "missions", "m", "record.yaml")),
+		"the global tree has no repo")
+	assert.Equal(t, "", repoRootOfRecord(filepath.Join(repo, "elsewhere", "record.yaml")))
+}
