@@ -92,6 +92,18 @@ var gitignoreRules = []ignoreRule{
 		},
 		runtime: true,
 	},
+	{
+		// A writer killed mid-rename leaves its staging file or directory
+		// (layout.TmpMarker) behind; git add -A must not commit it.
+		pattern: ".punt-labs/**/*" + layout.TmpMarker + "*",
+		probes: []string{
+			".punt-labs/ethos/identities/probe.yaml" + layout.TmpMarker,
+			".punt-labs/ethos/missions/m-probe/.probe.json.123" + layout.TmpMarker,
+			".punt-labs/ethos/missions/.m-probe.migrate" + layout.TmpMarker + "-123/probe.yaml",
+			".punt-labs/probe" + layout.TmpMarker,
+		},
+		runtime: true,
+	},
 	machineLocalRule,
 }
 
