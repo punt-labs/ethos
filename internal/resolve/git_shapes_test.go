@@ -326,35 +326,41 @@ func TestRefusalIsNotCached(t *testing.T) {
 	}
 }
 
-// A success answer is reused for at most locateTTL, then asked again.
-func TestAnswerCachedForTTL(t *testing.T) {
-	clock := time.Now()
-	orig := locateNow
-	locateNow = func() time.Time { return clock }
-	t.Cleanup(func() { locateNow = orig })
+// A located repository is never reused: a repository that appears nearer to
+// the working directory is the answer at once, with git and by the hand rules.
+func TestAnswerIsNotCached(t *testing.T) {
+	t.Run("git init in a nested directory", func(t *testing.T) {
+		requireGit(t)
+		outer := t.TempDir()
+		initRepo(t, outer)
+		inner := filepath.Join(outer, "inner")
+		require.NoError(t, os.Mkdir(inner, 0o755))
+		t.Chdir(inner)
+		got, err := captureLocate(t)
+		require.NoError(t, err)
+		assert.Equal(t, realpath(t, outer), realpath(t, got))
 
-	outer := t.TempDir()
-	testhelpers.MakeGitDir(t, outer)
-	inner := filepath.Join(outer, "inner")
-	require.NoError(t, os.Mkdir(inner, 0o755))
-	t.Chdir(inner)
-	hideGit(t)
-	got, err := captureLocate(t)
-	require.NoError(t, err)
-	assert.Equal(t, outer, got)
+		initRepo(t, inner)
+		got, err = captureLocate(t)
+		require.NoError(t, err)
+		assert.Equal(t, realpath(t, inner), realpath(t, got), "the new repository, at once")
+	})
+	t.Run("hand rules", func(t *testing.T) {
+		outer := t.TempDir()
+		testhelpers.MakeGitDir(t, outer)
+		inner := filepath.Join(outer, "inner")
+		require.NoError(t, os.Mkdir(inner, 0o755))
+		t.Chdir(inner)
+		hideGit(t)
+		got, err := captureLocate(t)
+		require.NoError(t, err)
+		assert.Equal(t, outer, got)
 
-	makeGitDirAt(t, filepath.Join(inner, ".git")) // a nearer repository appears
-
-	clock = clock.Add(locateTTL - time.Second)
-	got, err = captureLocate(t)
-	require.NoError(t, err)
-	assert.Equal(t, outer, got, "within the TTL the cached answer stands")
-
-	clock = clock.Add(2 * time.Second)
-	got, err = captureLocate(t)
-	require.NoError(t, err)
-	assert.Equal(t, inner, got, "past the TTL the answer is asked again")
-	assert.LessOrEqual(t, locateTTL, 30*time.Second)
+		makeGitDirAt(t, filepath.Join(inner, ".git"))
+		got, err = captureLocate(t)
+		require.NoError(t, err)
+		assert.Equal(t, inner, got, "the new repository, at once")
+	})
 }
 
 func captureLocate(t *testing.T) (string, error) {

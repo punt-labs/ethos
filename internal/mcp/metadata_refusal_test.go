@@ -15,7 +15,7 @@ import (
 // A caller named by session metadata is refused an identity when the store
 // cannot be located, as every other whoami is: the metadata branch comes after
 // the store-location refusal, so it never answers once the store is located as
-// unusable (a cached healthy location is reused for up to locateTTL).
+// unusable.
 func TestMetadataWhoamiRefusedWhenStoreCannotBeLocated(t *testing.T) {
 	t.Run("live location fails", func(t *testing.T) {
 		h, _ := metadataHandler(t)

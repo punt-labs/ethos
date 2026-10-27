@@ -914,30 +914,20 @@ type location struct {
 	storeErr error  // why the store cannot be named, when root can
 }
 
-// located is one cached resolution: the location and the error.
+// located is one resolution: the location and the error.
 type located struct {
 	loc location
 	err error
 }
 
-// locations caches answers, keyed on the git binary (or its absence) and the
-// starting directory: the resolvers run many times per command, and each
-// answer from git costs a process. Only a location and ErrNotInRepo are
-// cached, and only for locateTTL, so a long-running server sees a repaired or
-// new repository; a refusal is never cached.
-var locations sync.Map
-
-// locateTTL bounds how long a cached answer is reused.
+// locateTTL bounds how long a failed git probe and a repeated warning are
+// remembered. A located repository is never cached: ethos serve relocates the
+// store on every tool call, and a nested git init, an enable or a removed .git
+// must be seen at once.
 const locateTTL = 30 * time.Second
 
-// locateNow is the clock the cache reads; a test may replace it.
+// locateNow is the clock the probe and warning memories read; a test may replace it.
 var locateNow = time.Now
-
-// cachedLocation is a located answer and when it was found.
-type cachedLocation struct {
-	r  located
-	at time.Time
-}
 
 // locateCwd resolves the working directory.
 func locateCwd() (location, error) {
@@ -955,26 +945,12 @@ func locateCwd() (location, error) {
 func locate(start string) located {
 	git, err := usableGit()
 	if err != nil {
-		return located{err: err} // a refusal: never cached
+		return located{err: err}
 	}
-	key := git + "\x00" + start
-	if v, ok := locations.Load(key); ok {
-		if c := v.(cachedLocation); locateNow().Sub(c.at) < locateTTL {
-			return c.r
-		}
-	}
-	var r located
 	if git != "" {
-		r = gitLocate(git, start)
-	} else {
-		r = handLocate(start)
+		return gitLocate(git, start)
 	}
-	if (r.err == nil && r.loc.storeErr == nil) || errors.Is(r.err, ErrNotInRepo) {
-		locations.Store(key, cachedLocation{r: r, at: locateNow()})
-	} else {
-		locations.Delete(key)
-	}
-	return r
+	return handLocate(start)
 }
 
 // gitProbe is what `git --version` said about one git binary, and when.
