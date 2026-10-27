@@ -70,18 +70,6 @@ func ClassifyIn(table []Entry, relPath string) (Class, Entry, bool) {
 	return 0, Entry{}, false
 }
 
-// Matches returns every entry of table that matches relPath, in table order.
-func Matches(table []Entry, relPath string) []Entry {
-	p := normalize(relPath)
-	var out []Entry
-	for _, e := range table {
-		if Match(e.Pattern, p) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 // Match reports whether the slash-separated path p matches pattern.
 func Match(pattern, p string) bool {
 	return matchSegments(strings.Split(pattern, "/"), strings.Split(p, "/"))
