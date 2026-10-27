@@ -161,7 +161,104 @@ func TestHelperRunGit(t *testing.T) {
 	if git == "" {
 		t.Skip("helper process")
 	}
-	_, _ = Run(Spec{Git: git, Network: os.Getenv("ETHOS_HELPER_NETWORK") == "1", Limit: 30 * time.Second})
+	limit := 30 * time.Second
+	if v := os.Getenv("ETHOS_HELPER_LIMIT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		limit = d
+	}
+	_, _ = Run(Spec{Git: git, Network: os.Getenv("ETHOS_HELPER_NETWORK") == "1", Limit: limit})
+}
+
+// TestHelperDieOf is the child of the ignored-signal tests, not a test: it
+// calls dieOf(SIGINT) and must not return.
+func TestHelperDieOf(t *testing.T) {
+	if os.Getenv("ETHOS_HELPER_DIE") == "" {
+		t.Skip("helper process")
+	}
+	dieOf(syscall.SIGINT)
+	os.Exit(99)
+}
+
+// startHelper runs the helper test named by run with SIGINT inherited as
+// ignored, as in a background job.
+func startHelper(t *testing.T, run string, env ...string) *exec.Cmd {
+	t.Helper()
+	c := exec.Command("sh", "-c", `trap '' INT; exec "$0" -test.run="$1"`, os.Args[0], run)
+	c.Env = append(os.Environ(), env...)
+	return c
+}
+
+func waitFor(t *testing.T, c *exec.Cmd, d time.Duration) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- c.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		_ = c.Process.Kill()
+		t.Fatal("the helper did not exit in time")
+		return nil
+	}
+}
+
+// dieOf does not hang when the signal it raises is ignored: it ends the process
+// with 128 plus the signal number.
+func TestDieOfIgnoredSignalExits(t *testing.T) {
+	c := startHelper(t, "^TestHelperDieOf$", "ETHOS_HELPER_DIE=1")
+	require.NoError(t, c.Start())
+	err := waitFor(t, c, 5*time.Second)
+	var ee *exec.ExitError
+	require.ErrorAs(t, err, &ee)
+	assert.Equal(t, 128+int(syscall.SIGINT), ee.ExitCode())
+}
+
+// A SIGINT inherited as ignored stays ignored: Run does not catch it, the git
+// finishes, and Run returns normally.
+func TestRunHonoursInheritedIgnoredSIGINT(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "git.pid")
+	git := fakeGitScript(t, "echo $$ > '"+pidFile+"'\nsleep 1\n")
+	c := startHelper(t, "^TestHelperRunGit$", "ETHOS_HELPER_GIT="+git)
+	require.NoError(t, c.Start())
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(pidFile)
+		return err == nil && len(strings.TrimSpace(string(data))) > 0
+	}, 5*time.Second, 20*time.Millisecond, "the git started")
+	require.NoError(t, c.Process.Signal(syscall.SIGINT))
+	require.NoError(t, waitFor(t, c, 5*time.Second), "the helper ignored SIGINT and exited normally")
+}
+
+// A signal that arrives while a timed-out git is being reaped ends ethos with
+// that signal; it is not swallowed into ErrTimeout. The fake git ignores TERM, so
+// reaping lasts until WaitDelay (a second) after the 300ms limit.
+func TestSignalDuringTimeoutReapEndsTheProcess(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "git.pid")
+	git := fakeGitScript(t, "trap '' TERM\necho $$ > '"+pidFile+"'\nsleep 60\n")
+	c := exec.Command(os.Args[0], "-test.run=^TestHelperRunGit$")
+	c.Env = append(os.Environ(), "ETHOS_HELPER_GIT="+git, "ETHOS_HELPER_LIMIT=300ms")
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	require.NoError(t, c.Start())
+	var pid int
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(pidFile)
+		if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+			return false
+		}
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+		return pid > 0
+	}, 5*time.Second, 20*time.Millisecond, "the git started")
+	defer func() { _ = syscall.Kill(-pid, syscall.SIGKILL) }()
+	time.Sleep(600 * time.Millisecond) // past the limit, before the kill
+	require.NoError(t, c.Process.Signal(syscall.SIGTERM))
+	err := waitFor(t, c, 10*time.Second)
+	var ee *exec.ExitError
+	require.ErrorAs(t, err, &ee)
+	ws, ok := ee.Sys().(syscall.WaitStatus)
+	require.True(t, ok)
+	assert.True(t, ws.Signaled() && ws.Signal() == syscall.SIGTERM, "ended by SIGTERM, got %v", ee)
 }
 
 // runHelperAndInterrupt starts the helper in its own process group (the

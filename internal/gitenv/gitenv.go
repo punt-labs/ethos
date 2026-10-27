@@ -137,15 +137,26 @@ func Run(s Spec) ([]byte, error) {
 	// (a Network git in a session of its own), which the terminal's Ctrl-C or
 	// hangup does not reach, so nothing else would stop it: it would run on
 	// with no deadline, holding index.lock and its filters.
-	var interrupted atomic.Pointer[os.Signal]
+	// A signal the process inherited as ignored (a background job's SIGINT) stays
+	// ignored: ethos does not register for it.
+	var caught []os.Signal
+	for _, s := range []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT} {
+		if !signal.Ignored(s) {
+			caught = append(caught, s)
+		}
+	}
+	var interrupted *os.Signal
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	if len(caught) > 0 { // Notify with no signals would catch all of them
+		signal.Notify(sig, caught...)
+	}
 	done := make(chan struct{})
-	defer func() { signal.Stop(sig); close(done) }()
+	watched := make(chan struct{})
 	go func() {
+		defer close(watched)
 		select {
 		case got := <-sig:
-			interrupted.Store(&got)
+			interrupted = &got
 			cancel()
 		case <-done:
 		}
@@ -186,19 +197,32 @@ func Run(s Spec) ([]byte, error) {
 		cmd.Stdout, cmd.Stderr = s.Stdout, s.Stderr
 		err = cmd.Run()
 	}
+	// Stop the notifications and join the watcher, then take a signal that was
+	// buffered but not yet stored: after this, interrupted is final and read
+	// without a race.
+	signal.Stop(sig)
+	close(done)
+	<-watched
+	select {
+	case got := <-sig:
+		interrupted = &got
+	default:
+	}
+	// A signal outranks the deadline: one that arrived while a timed-out git
+	// was being reaped must still end ethos.
+	if interrupted != nil {
+		endGroup(cmd, groupGrace)
+		// The signal was consumed to stop git. A caller must not go on as if
+		// nothing happened (a probe error reads as "no git", and enable would
+		// write), so the process ends as the signal demands.
+		dieOf(*interrupted)
+		return nil, fmt.Errorf("%w: %s %s", ErrInterrupted, s.Git, strings.Join(s.Args, " "))
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		if group {
 			endGroup(cmd, groupGrace)
 		}
 		return nil, timeoutError(s.Git, s.Args, s.Dir, limit)
-	}
-	if got := interrupted.Load(); got != nil {
-		endGroup(cmd, groupGrace)
-		// The signal was consumed to stop git. A caller must not go on as if
-		// nothing happened (a probe error reads as "no git", and enable would
-		// write), so the process ends as the signal demands.
-		dieOf(*got)
-		return nil, fmt.Errorf("%w: %s %s", ErrInterrupted, s.Git, strings.Join(s.Args, " "))
 	}
 	return out, err
 }

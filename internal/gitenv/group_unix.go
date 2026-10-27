@@ -59,6 +59,7 @@ func endGroup(cmd *exec.Cmd, grace time.Duration) {
 // dieOf ends the process as sig demands: the default disposition is restored
 // and sig is raised on the process, so the shell sees the usual signal status
 // (130 for SIGINT). It does not return unless the signal is not a syscall one.
+// A signal that stays ignored ends the process with 128 plus its number.
 func dieOf(sig os.Signal) {
 	s, ok := sig.(syscall.Signal)
 	if !ok {
@@ -68,8 +69,12 @@ func dieOf(sig os.Signal) {
 	if err := syscall.Kill(os.Getpid(), s); err != nil {
 		return
 	}
-	// Delivery to self is asynchronous; wait for it rather than return.
-	for {
-		time.Sleep(time.Minute)
-	}
+	// Delivery to self is asynchronous; wait for it rather than return. If the
+	// signal is still ignored (Reset restores an inherited ignore) it never
+	// kills us, so end with the shell's status for it.
+	time.Sleep(dieWait)
+	os.Exit(128 + int(s))
 }
+
+// dieWait is how long dieOf waits for its own signal to arrive.
+const dieWait = 250 * time.Millisecond
