@@ -2,11 +2,30 @@ package audit
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
+
+// gitRun runs git in repoRoot, bounded by gitenv's deadline and in the
+// caller's environment: the seal runs inside a pre-commit hook, where
+// GIT_DIR and GIT_INDEX_FILE must reach git. A failing git's stderr is part
+// of the error; a git that does not answer is gitenv.ErrTimeout.
+func gitRun(repoRoot, what string, args ...string) ([]byte, error) {
+	out, err := gitenv.OutputEnv(repoRoot, "git", nil, args...)
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("%s: %w: %s", what, err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	return out, nil
+}
 
 // relPathspec converts an absolute path to a repo-relative, slash-separated git
 // pathspec. Git matches a pathspec against the work-tree prefix; an absolute
@@ -51,14 +70,8 @@ func GitAdd(repoRoot string, paths ...string) error {
 		return err
 	}
 	args := append([]string{"add", "--"}, specs...)
-	cmd := exec.Command("git", args...)
-	cmd.Dir = repoRoot
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git add: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
+	_, err = gitRun(repoRoot, "git add", args...)
+	return err
 }
 
 // GitMv renames src to dst via git so the move is staged. Used by quarantine
@@ -72,34 +85,34 @@ func GitMv(repoRoot, src, dst string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("git", "mv", "--", relSrc, relDst)
-	cmd.Dir = repoRoot
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git mv: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
+	_, err = gitRun(repoRoot, "git mv", "mv", "--", relSrc, relDst)
+	return err
 }
 
 // IsGitlinkMount reports whether <repoRoot>/.punt-labs/ethos is a gitlink
 // (submodule) rather than regular tracked files. In that configuration the
 // sealed-chunk target tree is unreachable and the seal defers. A file with
-// git mode 160000 is a gitlink.
-func IsGitlinkMount(repoRoot string) bool {
+// git mode 160000 is a gitlink. Outside a repository there is none (false).
+// Any other git failure — a timeout, dubious ownership, git not installed —
+// is an error: seal and enable must not proceed on a guess.
+func IsGitlinkMount(repoRoot string) (bool, error) {
 	rel := filepath.Join(".punt-labs", "ethos")
-	cmd := exec.Command("git", "ls-files", "--stage", "--", rel)
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, absent, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Dir: repoRoot, Env: gitenv.Inherited(),
+		Args: []string{"ls-files", "--stage", "--", rel},
+	}, gitenv.AbsentNotRepo)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("git ls-files in %s: %w", repoRoot, err)
+	}
+	if absent {
+		return false, nil // not a repository: there is no gitlink
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "160000") {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // UntrackedOrModified returns the subset of paths git reports as untracked or
@@ -111,11 +124,9 @@ func UntrackedOrModified(repoRoot string, paths []string) ([]string, error) {
 		return nil, err
 	}
 	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--"}, specs...)
-	cmd := exec.Command("git", args...)
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, err := gitRun(repoRoot, "git status", args...)
 	if err != nil {
-		return nil, fmt.Errorf("git status: %w", err)
+		return nil, err
 	}
 	// -z entries are "XY path", and a rename or copy is followed by one more
 	// entry, the old path, which is skipped: the new path is the one that
@@ -154,11 +165,9 @@ func IsTracked(repoRoot, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	cmd := exec.Command("git", "ls-files", "--", spec)
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, err := gitRun(repoRoot, "git ls-files", "ls-files", "--", spec)
 	if err != nil {
-		return false, fmt.Errorf("git ls-files: %w", err)
+		return false, err
 	}
 	return len(bytes.TrimSpace(out)) > 0, nil
 }
@@ -171,14 +180,8 @@ func GitRmCached(repoRoot, path string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("git", "rm", "--cached", "-f", "-q", "--", spec)
-	cmd.Dir = repoRoot
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git rm --cached: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
+	_, err = gitRun(repoRoot, "git rm --cached", "rm", "--cached", "-f", "-q", "--", spec)
+	return err
 }
 
 // IndexBlob returns the content the index holds at path, and false when the
@@ -192,11 +195,9 @@ func IndexBlob(repoRoot, path string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	cmd := exec.Command("git", "show", ":"+spec)
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, err := gitRun(repoRoot, "git show :"+spec, "show", ":"+spec)
 	if err != nil {
-		return nil, false, fmt.Errorf("git show :%s: %w", spec, err)
+		return nil, false, err
 	}
 	return out, true, nil
 }

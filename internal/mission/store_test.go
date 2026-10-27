@@ -1810,7 +1810,7 @@ func writeLiveAuditContractIDLine(t *testing.T, root, sessionID, contractID stri
 // regression gate for PR #508 round 4 finding H1: a session running
 // inside a LINKED WORKTREE writes its live (not-yet-sealed) audit
 // file under that worktree's own gitignored local zone, never under
-// the main tree conflictScanIDs' repoRoot points at (StoreRepoRoot
+// the main tree conflictScanIDs' repoRoot points at (StoreRootIfAny
 // always resolves to the main tree — DES-075 Decision 5). A
 // repoRoot-only live scan is therefore blind to exactly the most
 // recent sessions when the caller itself is running from a worktree —

@@ -20,6 +20,10 @@ type PreCompactDeps struct {
 	Sessions   *session.Store
 	Teams      *team.LayeredStore
 	Roles      *role.LayeredStore
+	// Issue is why the repository cannot be answered for: its store or
+	// configuration could not be read, or its bundle or policy could not be
+	// honoured. Then no persona is injected, whatever the global store holds.
+	Issue error
 }
 
 // HandlePreCompact reads the PreCompact hook payload from stdin,
@@ -48,6 +52,14 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		return nil // sidecar: don't block compaction
 	}
 
+	// A store or configuration that cannot be used refuses the persona: the
+	// layers left are not the ones the repository chose. Say why, as
+	// session-start does.
+	if deps.Issue != nil {
+		_, err = fmt.Fprint(os.Stdout, storeUnlocatedNote(deps.Issue))
+		return err
+	}
+
 	// Find the primary agent: the participant whose Parent is the
 	// human (Participants[0]). This is stable regardless of how many
 	// subagents have joined the roster.
@@ -63,6 +75,12 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	}
 	if agentPersona == "" {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: no agent persona found in session %q roster\n", sessionID)
+		// A session that started with the store unlocatable has no persona
+		// because of that; say so rather than compact in silence.
+		if note := storeUnlocatedNote(resolve.Roots().Err()); note != "" {
+			_, err = fmt.Fprint(os.Stdout, note)
+			return err
+		}
 		return nil
 	}
 
@@ -115,8 +133,12 @@ func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identi
 		return ""
 	}
 
-	repoRoot := resolve.StoreRepoRoot()
-	teamName, err := resolve.ResolveTeam(repoRoot)
+	loc := resolve.Roots()
+	if note := storeUnlocatedNote(loc.Err()); note != "" {
+		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %s\n", note)
+		return "## Team\n\n(" + note + ")"
+	}
+	teamName, err := resolve.ResolveTeam(loc.Store)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %v\n", err)
 		return fmt.Sprintf("## Team\n\n(team resolution failed: %v)", err)

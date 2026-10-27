@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // A sealed chunk is an immutable tracked file holding a contiguous run of a
@@ -52,7 +54,7 @@ const (
 	KindCorrupt
 	// KindQuarantine is a quarantine marker (<stem>.quarantine).
 	KindQuarantine
-	// KindTemp is a stale temp file (.<stem>.jsonl.tmp).
+	// KindTemp is a stale temp file (.<stem>.jsonl.ethos-tmp).
 	KindTemp
 )
 
@@ -112,6 +114,23 @@ func (c ChunkName) MarkerFile() string {
 	return c.Stem() + ".quarantine"
 }
 
+// CorruptName returns the name a retired chunk with the given stem is renamed
+// to: <stem>.jsonl.corrupt.
+func CorruptName(stem string) string {
+	return stem + ".jsonl.corrupt"
+}
+
+// CorruptHashName returns the name a chunk is retired under when
+// <stem>.jsonl.corrupt already holds earlier evidence: <stem>.jsonl.corrupt-<hash>,
+// with a -n suffix for the nth candidate (n >= 2) when that name is taken too.
+func CorruptHashName(stem, hash string, n int) string {
+	name := CorruptName(stem) + "-" + hash
+	if n >= 2 {
+		name += "-" + strconv.Itoa(n)
+	}
+	return name
+}
+
 // TempFile returns the dotted temp name for a parsed chunk's namespace.
 func (c ChunkName) TempFile() string {
 	if c.Namespace == MissionNS {
@@ -124,11 +143,11 @@ func (c ChunkName) TempFile() string {
 // writes before its atomic rename. The name embeds the range so a widened
 // tail after a crash yields a different temp name.
 func SessionTempFile(first, last int64) string {
-	return "." + SessionChunkFile(first, last) + ".tmp"
+	return layout.DotTmp(SessionChunkFile(first, last))
 }
 
 func MissionTempFile(session string, first, last int64) string {
-	return "." + MissionChunkFile(session, first, last) + ".tmp"
+	return layout.DotTmp(MissionChunkFile(session, first, last))
 }
 
 // Classify classifies a filename within a namespace directory. The prefix
@@ -136,16 +155,23 @@ func MissionTempFile(session string, first, last int64) string {
 func Classify(name string, ns Namespace) (ChunkName, Kind) {
 	prefix := chunkPrefix(ns)
 
-	if strings.HasPrefix(name, "."+prefix) && strings.HasSuffix(name, ".jsonl.tmp") {
-		// Recover the temp's identity so a namespace-wide sweep can tell one
-		// session's in-flight temp from another's (SweepStaleTemps). The stem
-		// is the chunk name the temp renames to; an unparseable stem stays a
-		// bare KindTemp so the sweep still treats it as an orphan candidate.
-		stem := strings.TrimSuffix(strings.TrimPrefix(name, "."), ".jsonl.tmp")
-		if cn, ok := parseChunkStem(stem, ns); ok {
-			return cn, KindTemp
+	if strings.HasPrefix(name, "."+prefix) {
+		// The legacy suffix is accepted so a temp left by an earlier version's
+		// crash is still swept.
+		for _, suffix := range []string{layout.TmpMarker, layout.LegacyTmpSuffix} {
+			if strings.HasSuffix(name, ".jsonl"+suffix) {
+				// Recover the temp's identity so a namespace-wide sweep can
+				// tell one session's in-flight temp from another's
+				// (SweepStaleTemps). The stem is the chunk name the temp
+				// renames to; an unparseable stem stays a bare KindTemp so the
+				// sweep still treats it as an orphan candidate.
+				stem := strings.TrimSuffix(strings.TrimPrefix(name, "."), ".jsonl"+suffix)
+				if cn, ok := parseChunkStem(stem, ns); ok {
+					return cn, KindTemp
+				}
+				return ChunkName{Namespace: ns}, KindTemp
+			}
 		}
-		return ChunkName{Namespace: ns}, KindTemp
 	}
 	if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".quarantine") {
 		stem := strings.TrimSuffix(name, ".quarantine")

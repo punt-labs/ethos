@@ -53,7 +53,7 @@ func TestWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
 			defer func() { _ = os.Chmod(blocked, 0o700) }()
 			b, _ := json.Marshal(map[string]any{"session_id": "s", "tool_name": "Read",
 				"tool_input": map[string]any{"file_path": filepath.Join(home, "x")}})
-			require.NoError(t, HandleAuditLog(bytes.NewReader(b), "", blocked))
+			require.ErrorIs(t, HandleAuditLog(bytes.NewReader(b), "", blocked), ErrAuditDropped)
 		},
 		"seal": func(t *testing.T) {
 			repo := t.TempDir()

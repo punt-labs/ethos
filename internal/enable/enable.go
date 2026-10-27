@@ -19,7 +19,9 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/claudemd"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/githook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
@@ -84,11 +86,30 @@ func Enable(repoRoot string) (*Report, error) {
 func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
 
+	// Refuse before writing anything: a root with no .git of its own would
+	// get hook files git never runs.
+	lk, hooksDir, err := hooksTarget(repoRoot)
+	if err != nil {
+		return rep, err
+	}
+
 	// Guard the gitlink case: a submodule-mounted .punt-labs/ethos is a
-	// foreign git repo the vendored zone cannot be written into.
-	if audit.IsGitlinkMount(repoRoot) {
+	// foreign git repo the vendored zone cannot be written into. After the
+	// hooks check, so a missing git is reported as "install git".
+	gitlink, err := audit.IsGitlinkMount(repoRoot)
+	if err != nil {
+		return rep, fmt.Errorf("checking for a gitlink mount: %w", err)
+	}
+	if gitlink {
 		return rep, fmt.Errorf(
 			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
+	}
+
+	// A marker that exists but is not a regular file (a directory, a FIFO, a
+	// link to nothing) is refused before anything is written: writing through
+	// the link or opening the FIFO would be the wrong answer to it.
+	if _, err := resolve.EnabledMarker(repoRoot); err != nil {
+		return rep, fmt.Errorf("enable: %w; remove it and re-run", err)
 	}
 
 	depositWarns, err := deposit(repoRoot, Guide, Setup)
@@ -134,7 +155,7 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 		rep.step("import", "already", CanonicalImport+" already present")
 	}
 
-	if err := chainHooks(repoRoot, rep); err != nil {
+	if err := chainHooks(lk, hooksDir, rep); err != nil {
 		return rep, err
 	}
 
@@ -153,6 +174,14 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 // dormant on disk and does not run a final seal.
 func Disable(repoRoot string, force bool) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
+
+	// Resolve the hooks directory before the sibling probe and before changing
+	// anything, so a refusal leaves the repo enabled rather than half disabled,
+	// and a degraded lookup is reported as such, not as a failed git probe.
+	lk, hooksDir, err := unchainTarget(repoRoot, force)
+	if err != nil {
+		return rep, err
+	}
 
 	if !force {
 		// Fail closed: a probe that cannot confirm the siblings are disabled
@@ -190,7 +219,7 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 		rep.step("marker", "already", "no marker present")
 	}
 
-	if err := unchainHooks(repoRoot, rep); err != nil {
+	if err := unchainHooks(lk, hooksDir, rep); err != nil {
 		return rep, err
 	}
 
@@ -207,7 +236,19 @@ func writeMarker(repoRoot string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating marker dir: %w", err)
 	}
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	present, err := resolve.EnabledMarker(repoRoot)
+	if err != nil {
+		return fmt.Errorf("writing marker %s: %w", markerRel, err)
+	}
+	if present {
+		return nil // a regular file already: nothing to write
+	}
+	// O_EXCL: never through a link or onto anything that appeared since.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("writing marker %s: %w", markerRel, err)
+	}
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("writing marker %s: %w", markerRel, err)
 	}
 	return nil
@@ -227,53 +268,93 @@ func removeMarker(repoRoot string) (bool, error) {
 	return true, nil
 }
 
-// chainHooks resolves the shared hooks directory and chains the seal and
-// trailer sections into pre-commit and commit-msg.
-func chainHooks(repoRoot string, rep *Report) error {
-	dir, warns := githook.HooksDir(repoRoot)
-	rep.Warnings = append(rep.Warnings, warns...)
+// hooksTarget resolves the hooks directory for enable. Only a directory git
+// itself named is acted on: a degraded lookup ignores core.hooksPath, so the
+// hooks written there might never run, and enable would report success for a
+// repo whose seal does not fire.
+func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
+	l := githook.HooksDir(repoRoot)
+	dir, err := l.Verified()
+	if err != nil {
+		return l, "", fmt.Errorf("cannot install hooks: %w", l.Refusal())
+	}
+	return l, dir, nil
+}
+
+// chainHooks chains the seal and trailer sections into pre-commit and
+// commit-msg in dir, the hooks directory hooksTarget verified.
+func chainHooks(l githook.Lookup, dir string, rep *Report) error {
+	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating hooks dir %s: %w", dir, err)
 	}
-	specs := []struct {
-		name  string
-		src   []byte
-		tag   string
-		ident string
-	}{
-		{"pre-commit", hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
-		{"commit-msg", hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
-	}
-	for _, s := range specs {
-		res, err := githook.Chain(filepath.Join(dir, s.name), s.src, s.tag, s.ident)
+	for _, name := range layout.HookNames() {
+		s, ok := hookSpecs[name]
+		if !ok {
+			return fmt.Errorf("no hook template for %s", name)
+		}
+		res, err := githook.Chain(filepath.Join(dir, name), s.src, s.tag, s.ident)
 		if err != nil {
-			return fmt.Errorf("chaining %s: %w", s.name, err)
+			return fmt.Errorf("chaining %s: %w", name, err)
 		}
 		rep.Warnings = append(rep.Warnings, res.Warnings...)
-		rep.step("hook:"+s.name, res.Action, res.Path)
+		rep.step("hook:"+name, res.Action, res.Path)
 	}
 	return nil
 }
 
-// unchainHooks strips the seal and trailer sections from the shared hooks.
-func unchainHooks(repoRoot string, rep *Report) error {
-	dir, warns := githook.HooksDir(repoRoot)
-	rep.Warnings = append(rep.Warnings, warns...)
-	specs := []struct {
-		name  string
-		tag   string
-		ident string
-	}{
-		{"pre-commit", hooks.SealTag, hooks.SealIdent},
-		{"commit-msg", hooks.TrailerTag, hooks.TrailerIdent},
+// hookSpecs is what `ethos enable` chains into each hook named by
+// layout.HookNames.
+var hookSpecs = map[string]struct {
+	src   []byte
+	tag   string
+	ident string
+}{
+	layout.HookPreCommit: {hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
+	layout.HookCommitMsg: {hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
+}
+
+// unchainTarget resolves the hooks directory disable strips. A degraded lookup
+// cannot see core.hooksPath, so the directory it guesses may not be the one git
+// runs, whether or not the guess exists. Without force disable refuses; with
+// force it returns an empty dir and unchainHooks records that the hooks were
+// skipped.
+func unchainTarget(repoRoot string, force bool) (githook.Lookup, string, error) {
+	l := githook.HooksDir(repoRoot)
+	dir, err := l.Verified()
+	switch {
+	case err == nil:
+		return l, dir, nil
+	case force:
+		return l, "", nil
 	}
-	for _, s := range specs {
-		res, err := githook.Unchain(filepath.Join(dir, s.name), s.tag, s.ident)
+	msg := err.Error()
+	if r := l.Remedy(); r != "" {
+		msg += "; " + r
+	}
+	return l, "", fmt.Errorf("%s; or re-run with --force to remove the import and marker and leave hook sections in place", msg)
+}
+
+// unchainHooks strips the seal and trailer sections from the hooks in dir. An
+// empty dir means unchainTarget found none it could verify.
+func unchainHooks(l githook.Lookup, dir string, rep *Report) error {
+	rep.Warnings = append(rep.Warnings, l.Warnings...)
+	if dir == "" {
+		rep.step("hook:*", "skipped", fmt.Sprintf(
+			"hooks directory not verified (%s); ethos sections may remain under core.hooksPath", l.Reason))
+		return nil
+	}
+	for _, name := range layout.HookNames() {
+		s, ok := hookSpecs[name]
+		if !ok {
+			return fmt.Errorf("no hook template for %s", name)
+		}
+		res, err := githook.Unchain(filepath.Join(dir, name), s.tag, s.ident)
 		if err != nil {
-			return fmt.Errorf("unchaining %s: %w", s.name, err)
+			return fmt.Errorf("unchaining %s: %w", name, err)
 		}
 		rep.Warnings = append(rep.Warnings, res.Warnings...)
-		rep.step("hook:"+s.name, res.Action, res.Path)
+		rep.step("hook:"+name, res.Action, res.Path)
 	}
 	return nil
 }
@@ -284,7 +365,7 @@ func unchainHooks(repoRoot string, rep *Report) error {
 // or parsed — a malformed config must not masquerade as absent and draw the
 // setup hint. At most one of the two is non-empty.
 //
-// storeRoot is the shared store (StoreRepoRoot), where setup writes
+// storeRoot is the shared store (StoreRootIfAny), where setup writes
 // .punt-labs/ethos.yaml and identities live — NOT the checkout, or from a
 // worktree the check reads an absent config and spuriously hints "run setup"
 // (#370). An empty storeRoot (no repo / a refused override) yields no hint:
@@ -294,7 +375,7 @@ func configStatus(storeRoot string) (hint, warning string) {
 	if storeRoot == "" {
 		return "", ""
 	}
-	cfg, err := resolve.LoadRepoConfig(storeRoot)
+	cfg, err := resolve.ConfigOf(storeRoot)
 	if err != nil {
 		return "", fmt.Sprintf(".punt-labs/ethos.yaml is unreadable: %v", err)
 	}
@@ -308,13 +389,15 @@ func configStatus(storeRoot string) (hint, warning string) {
 }
 
 // enabledSiblingWorktrees returns the other worktrees of this repo that still
-// carry the enabled marker. The git hooks dir is shared across all worktrees,
+// carry the enabled marker (resolve.EnabledMarker). git runs in the parsed
+// environment, so an inherited GIT_DIR (a hook's) cannot redirect it. The git
+// hooks dir is shared across all worktrees,
 // so unchaining here disables the seal for every one of them. It fails closed:
 // a worktree-list probe failure returns an error (disable refuses), and a
-// sibling marker whose stat fails for a non-IsNotExist reason is counted as
-// enabled with the errno named, never silently treated as disabled.
+// sibling whose marker cannot be examined is counted as enabled with the cause
+// named, never silently treated as disabled.
 func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "worktree", "list", "--porcelain").Output()
+	out, err := gitenv.OutputEnv(repoRoot, "git", gitenv.Parsed(), "worktree", "list", "--porcelain")
 	if err != nil {
 		// Surface git's own diagnostic (dubious ownership, not a repo, …)
 		// rather than a bare "exit status 128".
@@ -334,12 +417,15 @@ func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
 		if path == "" || textscan.SamePath(path, repoRoot) {
 			continue
 		}
-		_, statErr := os.Stat(filepath.Join(path, markerRel))
+		// The same rule as doctor and the hooks: a store path that cannot be read,
+		// or a marker that is not a regular file, is counted as enabled with the
+		// cause named, never silently as disabled.
+		present, markErr := resolve.EnabledMarker(path)
 		switch {
-		case statErr == nil:
+		case markErr != nil:
+			enabled = append(enabled, fmt.Sprintf("%s (cannot tell: %v)", path, markErr))
+		case present:
 			enabled = append(enabled, path)
-		case !os.IsNotExist(statErr):
-			enabled = append(enabled, fmt.Sprintf("%s (marker stat error: %v)", path, statErr))
 		}
 	}
 	return enabled, nil

@@ -2,10 +2,11 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 
 // SessionStartResult is the JSON output of the session-start hook.
 type SessionStartResult struct {
+	// SystemMessage is shown to the user; set only to report a problem.
+	SystemMessage      string `json:"systemMessage,omitempty"`
 	HookSpecificOutput struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext,omitempty"`
@@ -33,6 +36,9 @@ type SessionStartDeps struct {
 	Sessions *session.Store
 	Teams    *team.LayeredStore
 	Roles    *role.LayeredStore
+	// Issue is why the repository's bundle or policy could not be honoured, if
+	// so (bundle.ConfigIssue): the session is told in its systemMessage.
+	Issue error
 }
 
 // HandleSessionStart reads the SessionStart hook payload from stdin,
@@ -50,7 +56,28 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 
 	sessionID, _ := input["session_id"].(string)
-	resolvedID := resolveHumanIdentity(store)
+	// The repository is located once (resolve.Roots) and everything below reads
+	// that answer. A store that cannot be read — a dangling symlink in
+	// .punt-labs/ethos, an unreadable config, an unreadable .git — means this
+	// repo's agent persona and team are not loaded; the session is told, no
+	// persona is taken from the global store in its place, and the roster
+	// records repo_unresolved.
+	loc := resolve.Roots()
+	storeFailure := loc.StoreFailure()
+	// A bundle or policy that cannot be honoured refuses the persona as a broken
+	// store does, as the CLI and the MCP do: answering from the layers left
+	// would consult the global one the repository did not choose.
+	var policy *resolve.ConfigError
+	if storeFailure == nil && errors.As(deps.Issue, &policy) && policy.Policy {
+		storeFailure = deps.Issue
+	}
+	var resolvedID *identity.Identity
+	var humanErr error
+	if storeFailure != nil {
+		humanErr = storeFailure
+	} else {
+		resolvedID, humanErr = resolveHumanIdentity(store, loc.Checkout)
+	}
 	purgeStale(ss)
 
 	// Resolve agent persona from repo config. A non-nil error means
@@ -60,24 +87,52 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// The shell wrapper's `|| true` keeps Claude Code session startup
 	// fail-open (cli.md §Hook Architecture); the non-zero exit code is
 	// the signal for direct CLI invocation and `ethos doctor`.
-	repoRoot := resolve.StoreRepoRoot()
-	agentPersona, err := resolve.ResolveAgent(repoRoot)
-	if err != nil {
-		return fmt.Errorf("resolving agent: %w", err)
+	repoRoot := loc.Store
+	note := storeUnlocatedNote(storeFailure)
+	if issueNote := storeUnlocatedNote(deps.Issue); issueNote != "" && !errors.Is(storeFailure, deps.Issue) {
+		if note != "" {
+			note += " "
+		}
+		note += issueNote
+	}
+	if note != "" {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
+	}
+	agentPersona := ""
+	if storeFailure == nil && loc.Config != nil {
+		agentPersona = loc.Config.Agent
 	}
 
-	createSessionRoster(ss, sessionID, resolvedID, agentPersona)
+	if rosterNotice := createSessionRoster(ss, sessionID, resolvedID, humanErr, agentPersona, loc); rosterNotice != "" {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", rosterNotice)
+		if note != "" {
+			note += " "
+		}
+		note += rosterNotice
+	}
 
 	// Emit the agent's persona block (not the human's).
 	// The agent persona comes from repo config (.punt-labs/ethos.yaml).
 	if agentPersona == "" {
-		return emitHumanFallback(resolvedID)
+		if err := emitHumanFallback(resolvedID, note); err != nil {
+			return err
+		}
+		// An unreadable config is also the hook's exit status: the session was
+		// told above, and a direct invocation or doctor sees the failure.
+		if loc.ConfigErr != nil {
+			return fmt.Errorf("resolving agent: %w", fmt.Errorf("resolve agent: %w", loc.ConfigErr))
+		}
+		return nil
 	}
 
 	agentID, agentLoadErr := store.Load(agentPersona)
 	if agentLoadErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to load agent identity %q: %v\n", agentPersona, agentLoadErr)
-		return emitHumanFallback(resolvedID)
+		loadNote := fmt.Sprintf("Ethos: the agent identity %q could not be loaded (%v), so its persona was not applied.", agentPersona, agentLoadErr)
+		if note != "" {
+			note += " "
+		}
+		return emitHumanFallback(resolvedID, note+loadNote)
 	}
 	for _, w := range agentID.Warnings {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: agent identity %q: %s\n", agentPersona, w)
@@ -92,7 +147,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 			repomiss.New(agentPersona, agentID.MissingExt))
 	}
 
-	installStubAgentDefs(repoRoot, store, deps.Teams)
+	installStubAgentDefs(repoRoot, loc.Ethos, store, deps.Teams)
 
 	// Generate .claude/agents/<handle>.md from ethos identity data.
 	// Propagates: the returned error is the single authoritative
@@ -103,24 +158,30 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// `ethos doctor` and manual debugging.
 	//
 	// Two roots: the config/team selection resolves from the shared store
-	// (repoRoot = StoreRepoRoot), while the agent files are written to the
-	// CURRENT checkout (EnvRepoRoot) — the tree the worktree's Claude reads
+	// (repoRoot = StoreRootIfAny), while the agent files are written to the
+	// CURRENT checkout (CheckoutRootIfAny) — the tree the worktree's Claude reads
 	// and where InstallAgentDefinitions writes. A single root would generate
 	// a worktree's agents into the main tree, invisible to that worktree
 	// (Bugbot HIGH on PR #370).
-	checkoutRoot := resolve.EnvRepoRoot()
+	if loc.CheckoutErr != nil {
+		return fmt.Errorf("locating the checkout for agent generation: %w", loc.CheckoutErr)
+	}
+	checkoutRoot := loc.Checkout
 	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
 		if genErr := GenerateAgentFilesTo(repoRoot, checkoutRoot, store, deps.Teams, deps.Roles); genErr != nil {
 			return fmt.Errorf("generating agents: %w", genErr)
 		}
 	}
 
-	return emitAgentContext(agentID, agentPersona, store, deps)
+	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
 }
 
 // resolveHumanIdentity loads the human caller's identity from git config
-// or the OS user. Returns nil on any resolution or load failure (warnings
-// are logged to stderr).
+// or the OS user. It returns (nil, nil) when no identity matches — an absence,
+// for which the roster falls back to the OS user — and (nil, err) when
+// resolution or the load FAILED (git did not answer, a store would not read):
+// a failure is never recorded as no identity, and never as the OS user's.
+// Warnings are logged to stderr.
 //
 // Deliberately does not consult the session store (resolve.Resolve's step
 // 1, an iam declaration): at SessionStart, this invocation is what WOULD
@@ -137,21 +198,25 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 // to Resolve skips step 1 entirely and restores the pre-DES-074
 // observable behavior (git/OS, immediately, no retry) without weakening
 // DES-074 anywhere a session COULD exist.
-func resolveHumanIdentity(store identity.IdentityStore) *identity.Identity {
-	handle, err := resolve.Resolve(store, nil)
+func resolveHumanIdentity(store identity.IdentityStore, checkout string) (*identity.Identity, error) {
+	handle, err := resolve.Resolve(store, nil, checkout)
+	if errors.Is(err, resolve.ErrNoIdentityMatch) {
+		fmt.Fprintf(os.Stderr, "ethos: identity resolution: %v (using OS username)\n", err)
+		return nil, nil
+	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: identity resolution failed: %v (using OS username)\n", err)
-		return nil
+		fmt.Fprintf(os.Stderr, "ethos: identity resolution failed: %v\n", err)
+		return nil, err
 	}
 	id, err := store.Load(handle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to load identity %q: %v\n", handle, err)
-		return nil
+		return nil, fmt.Errorf("loading identity %q: %w", handle, err)
 	}
 	for _, w := range id.Warnings {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: identity %q: %s\n", handle, w)
 	}
-	return id
+	return id, nil
 }
 
 // purgeStale cleans stale PID files from previous sessions (fire-and-forget).
@@ -165,48 +230,100 @@ func purgeStale(ss *session.Store) {
 
 // createSessionRoster creates the session roster entry when a session ID
 // is available. Logs errors to stderr without returning them — roster
-// creation is not a blocking failure.
-func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identity.Identity, agentPersona string) {
+// creation is not a blocking failure. It returns a notice naming every lookup
+// that failed (the human identity, the repository, the checkout), for the
+// session's additionalContext; "" when none did.
+//
+// A failure is never written as an answer: no persona is recorded for a human
+// whose resolution failed (not the OS user's), and a repository lookup that
+// failed records repo_unresolved with the reason in place of Repo. A checkout
+// with no origin still records Repo "".
+func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identity.Identity, humanErr error, agentPersona string, loc resolve.Located) string {
 	if sessionID == "" {
-		return
+		return "the SessionStart payload carried no session_id, so no session roster was written"
 	}
+	var problems []string
 
 	userID := os.Getenv("USER")
 	if userID == "" {
 		userID = "unknown"
 	}
 	userPersona := ""
-	if resolvedID != nil {
+	switch {
+	case resolvedID != nil:
 		userPersona = resolvedID.Handle
-	}
-	if userPersona == "" {
-		userPersona = userID
+	case humanErr != nil:
+		// The human could not be resolved: nothing about them is recorded, the
+		// OS user's name included (it is how the roster would otherwise name
+		// them, and a roster that failed to resolve must not claim an owner).
+		userID = "unknown"
+		problems = append(problems, fmt.Sprintf(
+			"could not resolve the human identity (%v); no persona is recorded for the human", humanErr))
+	default:
+		userPersona = userID // no identity matched: the OS user is the fallback
 	}
 	claudePID := process.FindClaudePID()
 
 	root := session.Participant{AgentID: userID, Persona: userPersona}
 	primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
 
-	repo := ResolveRepo()
-	checkout := ResolveCheckout()
+	checkout, coErr := loc.Checkout, loc.CheckoutErr
+	storeErr := loc.StoreFailure()
+	var repo string
+	var repoErr error
+	if coErr == nil && storeErr == nil {
+		repo, repoErr = ResolveRepo(checkout)
+	}
 	host := ResolveHost()
 
-	if err := ss.CreateInCheckout(sessionID, root, primary, repo, checkout, host); err != nil {
+	var create func() error
+	if repoErr != nil || coErr != nil || storeErr != nil {
+		var reasons []string
+		for _, e := range []error{storeErr, repoErr, coErr} {
+			// The same failure often arrives twice (the store and the checkout
+			// share a .git): say it once.
+			if e != nil && !slices.Contains(reasons, e.Error()) {
+				reasons = append(reasons, e.Error())
+			}
+		}
+		reason := strings.Join(reasons, "; ")
+		problems = append(problems, "the session's repository could not be resolved ("+reason+
+			"); its roster records repo_unresolved, and purge and the vacuum cross-check skip it")
+		create = func() error {
+			return ss.CreateUnresolved(sessionID, root, primary, reason, checkout, host)
+		}
+	} else {
+		create = func() error { return ss.CreateInCheckout(sessionID, root, primary, repo, checkout, host) }
+	}
+	if err := create(); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", err)
+		problems = append(problems, fmt.Sprintf("the session roster could not be written (%v)", err))
 	} else if err := ss.WriteCurrentSession(claudePID, sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to write current session: %v\n", err)
+		problems = append(problems, fmt.Sprintf("the session pointer could not be written (%v)", err))
 	}
+	return strings.Join(problems, "; ")
 }
 
 // emitHumanFallback emits a one-liner for the human identity when no
-// agent persona is configured or agent loading fails. Returns nil when
-// no human identity is available either.
-func emitHumanFallback(resolvedID *identity.Identity) error {
-	if resolvedID == nil {
+// agent persona is configured or agent loading fails, followed by note (why the
+// repository store was not located) when there is one. Emits nothing when there
+// is neither a human identity nor a note.
+func emitHumanFallback(resolvedID *identity.Identity, note string) error {
+	var msg string
+	if resolvedID != nil {
+		msg = fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
+	}
+	if note != "" {
+		if msg != "" {
+			msg += " "
+		}
+		msg += note
+	}
+	if msg == "" {
 		return nil
 	}
-	msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
-	result := SessionStartResult{}
+	result := SessionStartResult{SystemMessage: note}
 	result.HookSpecificOutput.HookEventName = "SessionStart"
 	result.HookSpecificOutput.AdditionalContext = msg
 	return json.NewEncoder(os.Stdout).Encode(result)
@@ -229,14 +346,14 @@ func emitHumanFallback(resolvedID *identity.Identity) error {
 // copies everything: it means the generator owns nothing — no team store
 // wired, or no team configured — so the stubs are the only source for
 // those agents.
-func installStubAgentDefs(configRoot string, identities identity.IdentityStore, teams *team.LayeredStore) {
+func installStubAgentDefs(configRoot, ethosRoot string, identities identity.IdentityStore, teams *team.LayeredStore) {
 	generated, err := GeneratedAgentHandles(configRoot, identities, teams)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: session-start: resolving generated agents: %v; installing no stubs\n", err)
 		return
 	}
-	installAgentDefs(generated)
+	installAgentDefs(ethosRoot, generated)
 }
 
 // installAgentDefs copies agent definitions from the ethos agents dir
@@ -244,8 +361,7 @@ func installStubAgentDefs(configRoot string, identities identity.IdentityStore, 
 //
 // Call it through installStubAgentDefs, which establishes that generated
 // is a known ownership set and not the nil a failed lookup returns.
-func installAgentDefs(generated map[string]bool) {
-	ethosRoot := resolve.FindRepoEthosRoot()
+func installAgentDefs(ethosRoot string, generated map[string]bool) {
 	if ethosRoot == "" {
 		return
 	}
@@ -260,7 +376,7 @@ func installAgentDefs(generated map[string]bool) {
 
 // emitAgentContext builds and emits the full agent persona block with
 // extensions, team context, and working context.
-func emitAgentContext(agentID *identity.Identity, agentPersona string, store identity.IdentityStore, deps SessionStartDeps) error {
+func emitAgentContext(agentID *identity.Identity, agentPersona string, store identity.IdentityStore, deps SessionStartDeps, checkout, notice string) error {
 	var sections []string
 	if persona := BuildPersonaBlock(agentID); persona != "" {
 		sections = append(sections, persona)
@@ -273,42 +389,30 @@ func emitAgentContext(agentID *identity.Identity, agentPersona string, store ide
 	if teamCtx := BuildTeamSection(deps.Teams, deps.Roles, store, agentPersona); teamCtx != "" {
 		sections = append(sections, teamCtx)
 	}
-	if workCtx := BuildWorkingContext(); workCtx != "" {
+	if workCtx := BuildWorkingContext(checkout); workCtx != "" {
 		sections = append(sections, workCtx)
 	}
 
-	result := SessionStartResult{}
+	if notice != "" {
+		sections = append(sections, notice)
+	}
+
+	result := SessionStartResult{SystemMessage: notice}
 	result.HookSpecificOutput.HookEventName = "SessionStart"
 	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
-// ResolveRepo extracts org/name from the git remote of the working
-// directory — the same value the SessionStart hook records for a roster.
-// Exported so `ethos session start` resolves repo identically. Empty when
-// unresolvable.
-func ResolveRepo() string {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: could not resolve repo from git remote: %v\n", err)
-		return ""
-	}
-	return audit.ParseGitRemote(string(out))
-}
-
-// ResolveCheckout returns the work-tree root whose machine-local live audit
-// zone this session will write to — the same value the SessionStart hook
-// records for a roster. Empty outside a repo. Exported so `ethos session start`
-// resolves it identically.
-//
-// It calls the resolver the live-write path itself uses (cmd/ethos/hook.go's
-// audit-log entry point resolves repoRoot the same way), so the recorded path
-// and the path the live file lands under agree by construction rather than by
-// two walks that could disagree. In a linked worktree that is the WORKTREE
-// root, which is right: the live zone belongs to the checkout, not the shared
-// store.
-func ResolveCheckout() string {
-	return resolve.EnvRepoRoot()
+// ResolveRepo is the org/name identity of the checkout's origin remote — the
+// same value the SessionStart hook records for a roster, read with
+// `git -C <checkout>` as audit.RepoIdentity does, so a session started from a
+// directory outside the repository still records its repository's origin.
+// Exported so `ethos session start` resolves repo identically. It returns
+// ("", nil) for a checkout with no origin, or no checkout; any other failure —
+// a timeout, dubious ownership, git not installed — is the error, and the
+// caller records repo_unresolved, never "".
+func ResolveRepo(checkout string) (string, error) {
+	return audit.RepoIdentity(checkout)
 }
 
 // ResolveHost returns the short hostname (no domain) — the same value the

@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build unix
 
 package hook
 
@@ -15,9 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// The dispatch lock test holds a file lock with syscall.Flock, which Windows
-// lacks; it lives apart from the tests that run everywhere.
 
 // TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks verifies the
 // exclusive-side of the lock contract: a sibling holder of LOCK_EX

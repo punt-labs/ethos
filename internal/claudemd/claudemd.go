@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
@@ -54,7 +55,7 @@ func Register(path, line string) (bool, error) {
 		}
 		out = append(out, line...)
 		out = append(out, eol...)
-		if err := writeAtomic(real, out, mode); err != nil {
+		if err := writeAtomic(real, path, out, mode); err != nil {
 			return err
 		}
 		wrote = true
@@ -102,7 +103,7 @@ func Deregister(path, line string) (bool, error) {
 			}
 			out = append(out, l...)
 		}
-		if err := writeAtomic(real, out, mode); err != nil {
+		if err := writeAtomic(real, path, out, mode); err != nil {
 			return err
 		}
 		wrote = true
@@ -200,12 +201,20 @@ func withLock(real string, fn func() error) error {
 	return fn()
 }
 
+// createTemp creates the staging file for an atomic write to real, in real's
+// own directory. Its name comes from logical, the path the caller asked to
+// write, not from real: when CLAUDE.md is a link to AGENTS.md the file is still
+// classified as CLAUDE.md's staging file (DES-079).
+func createTemp(real, logical string) (*os.File, error) {
+	return os.CreateTemp(filepath.Dir(real), layout.DotTempPattern(filepath.Base(logical)))
+}
+
 // writeAtomic writes data to a temp file in real's own directory, then
 // renames it over real. The rename is atomic on POSIX, so no reader ever
-// sees a torn file.
-func writeAtomic(real string, data []byte, mode os.FileMode) error {
+// sees a torn file. logical is the path the caller named; see createTemp.
+func writeAtomic(real, logical string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(real)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+".tmp*")
+	tmp, err := createTemp(real, logical)
 	if err != nil {
 		return fmt.Errorf("creating temp file in %s: %w", dir, err)
 	}

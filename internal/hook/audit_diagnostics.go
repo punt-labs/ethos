@@ -48,7 +48,10 @@ func CollectAuditDiagnostics(repoRoot string, now time.Time) (AuditDiagnostics, 
 	if err != nil {
 		return diag, err
 	}
-	gitlink := audit.IsGitlinkMount(repoRoot)
+	gitlink, err := audit.IsGitlinkMount(repoRoot)
+	if err != nil {
+		return diag, fmt.Errorf("checking for a gitlink mount: %w", err)
+	}
 	for _, sessionID := range sessions {
 		sealedDir, err := resolveRepoSessionDir(repoRoot, sessionID, now)
 		if err != nil {

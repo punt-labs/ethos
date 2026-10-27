@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -47,7 +49,7 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot := storeRootForStores()
 	warnIfGlobalFallback(repoRoot)
 	// The record resolves to the store root (main in a worktree); the DES-058
 	// audit concern (live zone + sealed chunks) resolves to the checkout so
@@ -59,34 +61,32 @@ func missionStore() *mission.Store {
 
 // missionCheckoutRoot returns the per-checkout root for the DES-058 audit
 // zone of a mission store whose record root is storeRoot. When storeRoot is
-// "" — no repo, or a set-but-invalid ETHOS_REPO_ROOT that StoreRepoRoot
-// fail-closed refused — it returns "" so the audit zone falls back to the
-// global tree WITH the records, instead of honoring the refused override:
-// EnvRepoRoot (FindRepoRoot, requireStore=false) re-accepts the bad path,
-// which would split the contract (global) from the live events/seal (under
-// the refused path). Same fail-closed principle as runUI (Bugbot MED #370).
-// In the legitimate worktree case storeRoot is the main tree (non-empty) and
-// this returns EnvRepoRoot (the worktree), keeping audit per-checkout.
+// "" — outside any repository, or a store that could not be located and
+// degraded to the global tree (a Global command's explicit choice) — it returns "" so the audit
+// zone falls back to the global tree WITH the records, and a refused
+// ETHOS_REPO_ROOT cannot be re-accepted here and split the contract (global)
+// from the live events/seal (under the refused path). In the legitimate
+// worktree case storeRoot is the main tree (non-empty) and this returns the
+// worktree checkout, keeping audit per-checkout.
 func missionCheckoutRoot(storeRoot string) string {
 	if storeRoot == "" {
 		return ""
 	}
-	return resolve.EnvRepoRoot()
+	return checkoutRootForStores()
 }
 
-// refuseBadStoreOverride hard-errors a mission WRITE op when ETHOS_REPO_ROOT
-// is set but StoreRepoRoot refused it — a create/dispatch/claim must not
-// silently land a mission in the global store behind a typo'd override (the
-// yofr symptom gated behind a bad env var), matching setup's fail-loud (#370
-// F-A). It fires ONLY when an override was set AND refused; a genuinely unset
-// override with no repo keeps the legitimate warn+global mission mode
-// (warnIfGlobalFallback), which reads/writes support. Reads stay on
-// warn+global — a read hitting global is not destructive.
+// refuseBadStoreOverride hard-errors a mission WRITE op when the repository
+// store cannot be located for any reason but "not in a repository": a refused
+// ETHOS_REPO_ROOT, a .git git refuses, a git that does not answer. A
+// create/dispatch/claim must not silently land a mission in the global store
+// behind a typo'd override or a broken .git (the yofr symptom), matching
+// setup's fail-loud (#370 F-A). A genuinely unset override with no repo keeps
+// the legitimate warn+global mission mode (warnIfGlobalFallback), which
+// reads/writes support. Reads stay on warn+global — a read hitting global is
+// not destructive.
 func refuseBadStoreOverride(op string) error {
-	if _, set := resolve.RepoRootOverride(); set && resolve.StoreRepoRoot() == "" {
-		return fmt.Errorf("mission %s: ETHOS_REPO_ROOT was refused (missing "+
-			"directory or no .punt-labs/ethos store); unset it or point it at a "+
-			"repo with a store", op)
+	if err := currentRoots().StoreFailure(); err != nil {
+		return fmt.Errorf("mission %s: %w; refusing to use the global store instead", op, err)
 	}
 	return nil
 }
@@ -107,11 +107,18 @@ func warnIfGlobalFallback(repoRoot string) {
 	if home, err := os.UserHomeDir(); err == nil {
 		root = filepath.Join(home, ".punt-labs", "ethos")
 	}
+	// Say why there is no repo store: the located error, or that the
+	// directory is outside any repository.
+	why := "no git repository found for the current directory"
+	if err := currentRoots().Err(); err != nil {
+		what, _, _ := resolve.Describe(err)
+		why = fmt.Sprintf("%s (%v)", what, err)
+	}
 	fmt.Fprintf(os.Stderr,
-		"ethos: no git repository found for the current directory; operating on "+
+		"ethos: %s; operating on "+
 			"the global mission store at %s. Missions here are not visible from any "+
 			"repo checkout — set ETHOS_REPO_ROOT to force a repo store.\n",
-		root)
+		why, root)
 }
 
 // currentSessionIDBestEffort resolves the current session id from
@@ -163,7 +170,7 @@ func missionStoreForCreate() *mission.Store {
 	// fallback. NewStore + WithRepoRoot would only wire the trace
 	// summary and leave per-mission storage on the global tree
 	// (m-2026-05-23-004 escalation).
-	storeRoot := resolve.StoreRepoRoot()
+	storeRoot := storeRootForStores()
 	warnIfGlobalFallback(storeRoot)
 	// Record → store root; DES-058 audit (live + sealed chunks) → checkout
 	// root, matching the pre-commit seal (Bugbot HIGH #370).
@@ -177,7 +184,7 @@ func missionStoreForCreate() *mission.Store {
 			"ethos: mission: cannot wire role overlap check: %v\n", err)
 		os.Exit(1)
 	}
-	repoRoot := resolve.FindRepoEthosRoot()
+	repoRoot := ethosRootForStores()
 	as := mission.NewArchetypeStore(repoRoot, root)
 	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as)
 }
@@ -759,7 +766,11 @@ Example:
   ethos mission create --file contract.yaml`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Print(mission.ScaffoldContractYAML(resolveLeader()))
+		leader, err := resolveLeader()
+		if err != nil {
+			return err
+		}
+		fmt.Print(mission.ScaffoldContractYAML(leader))
 		return nil
 	},
 }
@@ -792,6 +803,16 @@ Example:
 
 var missionExportDir string
 
+// missionExportDefaultDir is where `ethos mission export` writes when --dir is
+// not given, relative to the repository root.
+const missionExportDefaultDir = ".punt-labs/ethos/missions"
+
+// missionExportPaths returns the files `ethos mission export` writes for
+// mission id under dir.
+func missionExportPaths(dir, id string) (contract, result string) {
+	return filepath.Join(dir, id+".contract.yaml"), filepath.Join(dir, id+".result.yaml")
+}
+
 var missionExportCmd = &cobra.Command{
 	Use:   "export <id-or-prefix>",
 	Short: "Export mission contract and result to a repo directory for git tracking",
@@ -799,8 +820,9 @@ var missionExportCmd = &cobra.Command{
 
 Copies the mission's contract and final result (the last result on file)
 to <dir>/<id>.contract.yaml and <dir>/<id>.result.yaml. The directory
-is created if it doesn't exist. Default --dir is .punt-labs/ethos/missions/ in
-the current working directory.
+is created if it doesn't exist. Default --dir is .punt-labs/ethos/missions/ under
+the repository root, wherever in the repository the command runs; an explicit
+--dir is relative to the current working directory.
 
 If the mission has no result yet (still open), only the contract is
 exported and a warning is printed to stderr. The exported files are
@@ -900,10 +922,9 @@ Exit codes:
 // checkout, not the shared store root: the files to scrub are the tracked
 // ones in the tree the operator will commit from.
 func runMissionScrub(out, errOut io.Writer) error {
-	repoRoot := resolve.EnvRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: mission scrub must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireCheckout(errOut, "mission scrub")
+	if err != nil {
+		return err
 	}
 	rels, err := mission.TrackedRecordFiles(repoRoot)
 	if err != nil {
@@ -1041,8 +1062,8 @@ func init() {
 	missionLogCmd.Flags().StringVar(&missionLogSinceFilter, "since", "",
 		"Filter by RFC3339 timestamp (events on or after)")
 
-	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".punt-labs/ethos/missions",
-		"Directory to export artifacts into")
+	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", "",
+		"Directory to export artifacts into (default <repo root>/"+missionExportDefaultDir+")")
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchEvaluator, "evaluator", "", "Evaluator handle (required)")
@@ -1105,10 +1126,9 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 	if !missionMigrateToRepo {
 		return fmt.Errorf("mission migrate: only --to-repo is supported")
 	}
-	repoRoot := resolve.StoreRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: mission migrate must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireStore(errOut, "mission migrate")
+	if err != nil {
+		return err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1602,10 +1622,12 @@ func runMissionClose(idOrPrefix, status string) error {
 	//
 	// Seal against the CHECKOUT root, not the store root: the live zone it
 	// consumes and the chunks it stages belong to the committing checkout,
-	// and this must resolve the same tree the pre-commit seal (EnvRepoRoot)
+	// and this must resolve the same tree the pre-commit seal (CheckoutRootIfAny)
 	// does — else it seals a tree the worktree never commits (Bugbot HIGH
 	// on PR #370).
-	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+	if loc := currentRoots(); loc.CheckoutErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: locating the checkout: %v\n", loc.CheckoutErr)
+	} else if repoRoot := loc.Checkout; repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
 		}
@@ -1685,7 +1707,9 @@ func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 	// Parity with close: seal the checkout's mission-log tail so the
 	// abandon event is complete on disk even if no commit immediately
 	// follows. Non-fatal — the mission is already abandoned.
-	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+	if loc := currentRoots(); loc.CheckoutErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: locating the checkout: %v\n", loc.CheckoutErr)
+	} else if repoRoot := loc.Checkout; repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: %v\n", sErr)
 		}
@@ -1796,7 +1820,11 @@ func runMissionResult(idOrPrefix, file string) error {
 	// and git is a consumer-side convenience, not part of the contract
 	// schema.
 	if missionResultVerify {
-		if err := verifyResultAgainstNumstat(r, missionResultBase); err != nil {
+		loc := currentRoots()
+		if loc.CheckoutErr != nil {
+			return fmt.Errorf("mission result: %s: --verify: locating the checkout: %w", file, loc.CheckoutErr)
+		}
+		if err := verifyResultAgainstNumstat(r, missionResultBase, loc.Checkout); err != nil {
 			return fmt.Errorf("mission result: %s: %w", file, err)
 		}
 	}
@@ -1835,6 +1863,10 @@ func runMissionResult(idOrPrefix, file string) error {
 // rejection — workers may legitimately omit auto-generated files
 // from their accounting.
 //
+// git runs in checkout, the work tree the resolver located, in the C locale
+// (isInvalidRef matches git's English messages) and without a GIT_DIR from an
+// enclosing hook.
+//
 // The base ref is validated with `git rev-parse --verify` before the
 // diff runs so a bad --base value produces a concrete error with
 // "base ref" in the message, not a cryptic git exit code. Git's
@@ -1853,7 +1885,10 @@ func runMissionResult(idOrPrefix, file string) error {
 // submission the validator already admitted. Error messages still
 // quote the operator-supplied path, not the canonical form, so a
 // diagnostic identifies the string the operator typed.
-func verifyResultAgainstNumstat(r *mission.Result, base string) error {
+func verifyResultAgainstNumstat(r *mission.Result, base, checkout string) error {
+	if checkout == "" {
+		return fmt.Errorf("--verify: not inside a git work tree; run it in the checkout the result describes")
+	}
 	base = strings.TrimSpace(base)
 	if base == "" {
 		return fmt.Errorf("--verify: --base must not be empty")
@@ -1869,10 +1904,16 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	// --end-of-options sandboxes the base argument: git treats
 	// everything after it as a positional, so a base like
 	// "--output=/tmp/x" cannot smuggle a flag into rev-parse or diff.
-	check := exec.Command("git", "rev-parse", "--verify", "--end-of-options", base)
-	check.Stderr = os.Stderr
-	if err := check.Run(); err != nil {
-		return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
+	var checkErr bytes.Buffer
+	if _, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: checkout, Env: gitenv.Parsed(),
+		Args: []string{"rev-parse", "--verify", "--end-of-options", base}, Stderr: &checkErr,
+	}); err != nil {
+		os.Stderr.Write(checkErr.Bytes())
+		if isInvalidRef(err, checkErr.String()) {
+			return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
+		}
+		return fmt.Errorf("--verify: git could not check the base ref %q: %w: %s", base, err, strings.TrimSpace(checkErr.String()))
 	}
 
 	// --no-renames tells git to report renames as a delete+add pair
@@ -1890,9 +1931,11 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	//
 	// --end-of-options applies to `base+"..HEAD"` only; git treats
 	// `--no-renames` as a real flag before the sandbox.
-	diff := exec.Command("git", "diff", "--numstat", "--no-renames", "--end-of-options", base+"..HEAD")
-	diff.Stderr = os.Stderr
-	out, err := diff.Output()
+	out, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: checkout, Env: gitenv.Parsed(),
+		Args:   []string{"diff", "--numstat", "--no-renames", "--end-of-options", base + "..HEAD"},
+		Stderr: os.Stderr,
+	})
 	if err != nil {
 		return fmt.Errorf("--verify: running git diff --numstat %s..HEAD: %w", base, err)
 	}
@@ -2040,6 +2083,22 @@ func runMissionAdvance(idOrPrefix string) error {
 	return nil
 }
 
+// missionExportDirectory returns the directory to export into: flag when the
+// caller gave one, else the default under the repository root.
+func missionExportDirectory(flag string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	loc := currentRoots()
+	if loc.CheckoutErr != nil {
+		return "", fmt.Errorf("choosing the export directory: %w; pass --dir", loc.CheckoutErr)
+	}
+	if loc.Checkout == "" {
+		return "", fmt.Errorf("choosing the export directory: not inside a repository; pass --dir")
+	}
+	return filepath.Join(loc.Checkout, missionExportDefaultDir), nil
+}
+
 // runMissionExport handles `ethos mission export <id> [--dir <path>]`.
 //
 // Copies the mission contract and its final result to a repo-local
@@ -2057,7 +2116,10 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	dir := missionExportDir
+	dir, err := missionExportDirectory(missionExportDir)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating export directory %q: %w", dir, err)
 	}
@@ -2071,12 +2133,12 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 	// mismatched pair or a truncated file. A failed directory fsync after the
 	// renames is reported after the exported lines: the files are in place but
 	// may not be durable, and the export can be re-run.
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot := storeRootForStores()
 	contractData, sayContract, err := mission.RedactedYAMLNotify(repoRoot, *c)
 	if err != nil {
 		return fmt.Errorf("exporting contract %s: %w", id, err)
 	}
-	contractPath := filepath.Join(dir, id+".contract.yaml")
+	contractPath, resultPath := missionExportPaths(dir, id)
 	files := []mission.TrackedFile{{Path: contractPath, Data: contractData, Perm: 0o644}}
 	says := []mission.Announcement{sayContract}
 
@@ -2085,7 +2147,6 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading results for %q: %w", id, err)
 	}
 	if len(results) > 0 {
-		resultPath := filepath.Join(dir, id+".result.yaml")
 		resultData, sayResult, err := mission.RedactedYAMLNotify(repoRoot, results[len(results)-1])
 		if err != nil {
 			return fmt.Errorf("exporting result for %s: %w", id, err)
@@ -2155,8 +2216,12 @@ func runMissionDispatch() error {
 		return fmt.Errorf("mission dispatch: --criteria is required")
 	}
 
+	leader, err := resolveLeader()
+	if err != nil {
+		return fmt.Errorf("mission dispatch: %w", err)
+	}
 	c := mission.Contract{
-		Leader:          resolveLeader(),
+		Leader:          leader,
 		Worker:          dispatchWorker,
 		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
 		WriteSet:        splitPathFlag("write-set", dispatchWriteSet),
@@ -2390,7 +2455,7 @@ func bindDispatchedMission(op, missionID, worker string) {
 	// was ~30 duplicated lines with the MCP twin
 	// (internal/mcp/mission_tools.go's bindDispatchedMission) into one
 	// shared implementation.
-	repoRoot := resolve.StoreRepoRoot()
+	repoRoot := storeRootForStores()
 	store := mission.NewStoreWithRoots(repoRoot, globalRoot)
 	remedy := fmt.Sprintf(
 		"run `ethos mission release` to clear every pending dispatch in this session, "+
@@ -2440,14 +2505,19 @@ func clearClosedSessionBindings(missionID string) {
 // resolveLeader returns the agent handle from the repo's ethos config.
 // Falls back to "claude" when not in a repo or when no agent is
 // configured — the common case for dispatch is a leader session inside
-// a repo, but dispatch should not fail when run outside one.
-func resolveLeader() string {
-	repoRoot := resolve.StoreRepoRoot()
+// a repo, but dispatch should not fail when run outside one. A repo config that
+// cannot be read is an error, not "claude": a contract or correction must not
+// be written under a guessed author.
+func resolveLeader() (string, error) {
+	repoRoot := storeRootForStores()
 	agent, err := resolve.ResolveAgent(repoRoot)
-	if err == nil && agent != "" {
-		return agent
+	if err != nil {
+		return "", fmt.Errorf("resolving the leader from the repo config: %w", err)
 	}
-	return "claude"
+	if agent != "" {
+		return agent, nil
+	}
+	return "claude", nil
 }
 
 // splitPathFlag splits a path-list flag value into entries and reports
@@ -2987,4 +3057,21 @@ func printCorrections(cs []mission.Correction) {
 			fmt.Printf("      evidence:   %d\n", len(c.Evidence))
 		}
 	}
+}
+
+// isInvalidRef reports whether a failed `git rev-parse --verify` means the ref
+// does not exist (exit 128 with git's "bad revision", "unknown revision" or
+// "Needed a single revision"), as opposed to git failing for another reason: a
+// timeout, dubious ownership, not a repository.
+func isInvalidRef(err error, stderr string) bool {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 128 {
+		return false
+	}
+	for _, m := range []string{"bad revision", "unknown revision", "Needed a single revision"} {
+		if strings.Contains(stderr, m) {
+			return true
+		}
+	}
+	return false
 }

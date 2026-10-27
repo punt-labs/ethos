@@ -56,6 +56,18 @@ func (s *Store) Create(sessionID string, root, primary Participant, repo, host s
 // checkout read the live files where they were actually written, instead of
 // concluding from their absence here that they were lost.
 func (s *Store) CreateInCheckout(sessionID string, root, primary Participant, repo, checkout, host string) error {
+	return s.create(sessionID, root, primary, repo, "", checkout, host)
+}
+
+// CreateUnresolved is CreateInCheckout for a session whose repository identity
+// could not be resolved: it records unresolved (the reason) in
+// repo_unresolved and no Repo. Purge and the vacuum cross-check skip such a
+// roster with a notice; they never match it against a checkout with no origin.
+func (s *Store) CreateUnresolved(sessionID string, root, primary Participant, unresolved, checkout, host string) error {
+	return s.create(sessionID, root, primary, "", unresolved, checkout, host)
+}
+
+func (s *Store) create(sessionID string, root, primary Participant, repo, unresolved, checkout, host string) error {
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
 	}
@@ -80,12 +92,13 @@ func (s *Store) CreateInCheckout(sessionID string, root, primary Participant, re
 	}
 
 	roster := &Roster{
-		Session:      sessionID,
-		Started:      now,
-		Repo:         repo,
-		Checkout:     checkout,
-		Host:         host,
-		Participants: participants,
+		Session:        sessionID,
+		Started:        now,
+		Repo:           repo,
+		RepoUnresolved: unresolved,
+		Checkout:       checkout,
+		Host:           host,
+		Participants:   participants,
 	}
 
 	return s.withLock(sessionID, func() error {
@@ -482,12 +495,49 @@ func (s *Store) Purge() (purged, refused []string, err error) {
 // force and leaves a flagged tombstone under force, the fail-safe pattern for
 // unprovable state. Returns the purged and refused session ids.
 func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, refused []string, err error) {
+	rep, err := s.PurgeTombstonedReport(repoRoot, repoID, force)
+	return rep.Purged, rep.Refused, err
+}
+
+// PurgeReport is what a purge did: the sessions it removed, the ones it
+// refused to remove (their unsealed state could not be proven clean), and the
+// ones it skipped because they can never be matched to a checkout.
+type PurgeReport struct {
+	Purged  []string
+	Refused []string
+	Skipped []SkippedSession
+	// ForcedUnresolved are the unresolved rosters --force removed: their
+	// unsealed audit state was not verified and no loss was recorded.
+	ForcedUnresolved []ForcedSession
+}
+
+// ForcedSession is an unresolved roster --force removed without verifying what
+// it left unsealed.
+type ForcedSession struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+	Warning string `json:"warning"`
+}
+
+// SkippedSession is a roster a purge left alone, and why.
+type SkippedSession struct {
+	Session string `json:"session"`
+	Reason  string `json:"reason"`
+}
+
+// PurgeTombstonedReport is PurgeTombstoned with the skipped rosters reported
+// as well: a roster whose repository identity was never resolved is skipped,
+// stale or not, and removed under force, stale or not.
+func (s *Store) PurgeTombstonedReport(repoRoot, repoID string, force bool) (PurgeReport, error) {
+	var rep PurgeReport
 	ids, err := s.List()
 	if err != nil {
-		return nil, nil, err
+		return rep, err
 	}
 	for _, id := range ids {
 		var didPurge, didRefuse bool
+		var skip *SkippedSession
+		var forced *ForcedSession
 		if lockErr := s.withLock(id, func() error {
 			roster, lErr := s.Load(id)
 			if lErr != nil {
@@ -541,6 +591,14 @@ func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, re
 				didPurge = true
 				return nil
 			}
+			// A roster whose repository identity was never resolved can be
+			// matched to no checkout, so it is dealt with before the stale
+			// check: nothing else would ever remove it while its session
+			// still looks alive.
+			if roster.RepoUnresolved != "" {
+				didPurge, didRefuse, skip, forced = s.purgeUnresolved(roster, force)
+				return nil
+			}
 			if !isStale(roster) {
 				return nil
 			}
@@ -552,13 +610,45 @@ func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, re
 		}
 		if didPurge {
 			os.Remove(s.lockPath(id))
-			purged = append(purged, id)
+			rep.Purged = append(rep.Purged, id)
 		}
 		if didRefuse {
-			refused = append(refused, id)
+			rep.Refused = append(rep.Refused, id)
+		}
+		if skip != nil {
+			rep.Skipped = append(rep.Skipped, *skip)
+		}
+		if forced != nil && didPurge {
+			rep.ForcedUnresolved = append(rep.ForcedUnresolved, *forced)
 		}
 	}
-	return purged, refused, nil
+	return rep, nil
+}
+
+// purgeUnresolved handles a roster whose repository identity was never
+// resolved, under the caller's lock. Without force it is skipped, with a
+// notice and in the report: it is never matched against a checkout, a
+// no-origin one included. Under force it is removed and no loss is recorded,
+// because a tombstone with Repo "" would match no-origin checkouts.
+func (s *Store) purgeUnresolved(roster *Roster, force bool) (didPurge, didRefuse bool, skip *SkippedSession, forced *ForcedSession) {
+	if !force {
+		fmt.Fprintf(os.Stderr,
+			"ethos: purge: skipping %s: its repository identity was not resolved when it started (%s), so it is never matched against this checkout; "+
+				"remove it with `ethos session delete --session %s`, or re-run `ethos session purge --force`\n",
+			roster.Session, roster.RepoUnresolved, roster.Session)
+		return false, false, &SkippedSession{Session: roster.Session, Reason: roster.RepoUnresolved}, nil
+	}
+	if err := s.deleteFiles(roster.Session); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", roster.Session, err)
+		return false, true, nil, nil
+	}
+	fmt.Fprintf(os.Stderr,
+		"ethos: purge: force-purged %s, whose repository identity was never resolved (%s); its unsealed state was not verified and no loss is recorded\n",
+		roster.Session, roster.RepoUnresolved)
+	return true, false, nil, &ForcedSession{
+		Session: roster.Session, Reason: roster.RepoUnresolved,
+		Warning: "repository identity never resolved: unsealed audit state was not verified and no loss was recorded",
+	}
 }
 
 // purgeOneTombstoned applies the unsealed-lines guard to one stale roster
@@ -883,8 +973,9 @@ func (s *Store) DeleteCurrentSession(claudePID string) error {
 // sessions directory. Sync errors propagate so a failed fsync
 // surfaces — djb evaluator gate: a half-written roster is
 // unacceptable. The temp file is removed on every error path. A
-// random suffix (via os.CreateTemp) avoids the predictable ".tmp"
-// suffix that two concurrent writers could trample.
+// random infix (via os.CreateTemp) keeps two concurrent writers from
+// trampling one temp file; the roster lives under the user's home, outside
+// any repository, so it needs no layout.TmpMarker.
 func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	data, err := yaml.Marshal(roster)
 	if err != nil {

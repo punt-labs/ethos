@@ -3,12 +3,15 @@ package githook
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 const (
@@ -681,7 +684,8 @@ func TestHooksDir(t *testing.T) {
 	t.Run("normal repo under .git, no warning", func(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir)
-		hd, warns := HooksDir(dir)
+		l := HooksDir(dir)
+		hd, warns := l.Display(), l.Warnings
 		if !strings.Contains(hd, filepath.Join(".git", "hooks")) {
 			t.Errorf("hooks dir = %q, want under .git/hooks", hd)
 		}
@@ -694,7 +698,8 @@ func TestHooksDir(t *testing.T) {
 		dir := t.TempDir()
 		gitInit(t, dir)
 		gitConfig(t, dir, "core.hooksPath", ".husky")
-		hd, warns := HooksDir(dir)
+		l := HooksDir(dir)
+		hd, warns := l.Display(), l.Warnings
 		if !strings.Contains(hd, ".husky") {
 			t.Errorf("hooks dir = %q, want .husky", hd)
 		}
@@ -708,7 +713,7 @@ func TestHooksDir(t *testing.T) {
 		shared := t.TempDir()
 		gitInit(t, dir)
 		gitConfig(t, dir, "core.hooksPath", shared)
-		_, warns := HooksDir(dir)
+		warns := HooksDir(dir).Warnings
 		if !hasWarning(warns, "outside the repo") {
 			t.Errorf("warnings = %v, want 'outside the repo'", warns)
 		}
@@ -723,6 +728,7 @@ func TestManualHooksDirWorktree(t *testing.T) {
 	// and a commondir file; manualHooksDir must land on the common hooks.
 	root := t.TempDir()
 	commonGit := filepath.Join(root, "maindir", ".git")
+	makeGitDir(t, commonGit)
 	if err := os.MkdirAll(filepath.Join(commonGit, "hooks"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -737,10 +743,14 @@ func TestManualHooksDirWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wtGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(wtGitDir, "HEAD"), "ref: refs/heads/wt\n")
 	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+wtGitDir+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := manualHooksDir(wt)
+	got, herr := manualHooksDir(wt)
+	if herr != nil {
+		t.Fatal(herr)
+	}
 	want := filepath.Join(commonGit, "hooks")
 	if evalPath(got) != evalPath(want) {
 		t.Errorf("worktree hooks dir = %q, want %q", got, want)
@@ -868,10 +878,263 @@ func gitConfig(t *testing.T, dir, key, val string) {
 
 func run(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, errb.String())
+	}
+}
+
+// TestHooksDirDegradedLookupWarns: when git cannot answer, the manual fallback
+// ignores core.hooksPath; the result says so.
+func TestHooksDirDegradedLookupWarns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	l := HooksDir(dir)
+	hd, warns := l.Display(), l.Warnings
+	if want := filepath.Join(dir, ".git", "hooks"); hd != want {
+		t.Errorf("hooks dir = %q, want %q", hd, want)
+	}
+	if !hasWarning(warns, "core.hooksPath") || !hasWarning(warns, "git") {
+		t.Errorf("warnings = %v, want one naming git and core.hooksPath as ignored", warns)
+	}
+}
+
+// TestHooksDirRelativeRoot: a relative repo root (ETHOS_REPO_ROOT may be one)
+// resolves to the same absolute directory as the absolute spelling of it.
+func TestHooksDirRelativeRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "repo")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, dir)
+	gitConfig(t, dir, "core.hooksPath", ".husky")
+	t.Chdir(parent)
+
+	l := HooksDir("repo")
+	hd, warns := l.Display(), l.Warnings
+	if !filepath.IsAbs(hd) || !strings.HasSuffix(hd, filepath.Join("repo", ".husky")) {
+		t.Errorf("hooks dir = %q, want absolute .../repo/.husky", hd)
+	}
+	if !hasWarning(warns, "inside the work tree") {
+		t.Errorf("warnings = %v, want 'inside the work tree'", warns)
+	}
+	if hasWarning(warns, "ignored") {
+		t.Errorf("git answered, but the lookup is reported degraded: %v", warns)
+	}
+}
+
+func TestHooksDirDegradedFlag(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	t.Run("healthy repo is not degraded", func(t *testing.T) {
+		dir := t.TempDir()
+		gitInit(t, dir)
+		if l := HooksDir(dir); l.Degraded || l.Reason != "" {
+			t.Errorf("Degraded = %v, Reason = %q; want healthy", l.Degraded, l.Reason)
+		}
+	})
+
+	t.Run("subdirectory of another repo is degraded", func(t *testing.T) {
+		parent := t.TempDir()
+		gitInit(t, parent)
+		sub := filepath.Join(parent, "sub")
+		if err := os.Mkdir(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		l := HooksDir(sub)
+		if !l.Degraded {
+			t.Fatalf("Degraded = false for a subdirectory of %s", parent)
+		}
+		if !strings.Contains(l.Reason, "work tree") || !strings.Contains(l.Reason, sub) {
+			t.Errorf("Reason = %q, want it to name the work tree and %s", l.Reason, sub)
+		}
+		if want := filepath.Join(sub, ".git", "hooks"); l.Display() != want {
+			t.Errorf("Display = %q, want %q", l.Display(), want)
+		}
+		if len(l.Warnings) == 0 {
+			t.Error("a degraded lookup carries no warning")
+		}
+	})
+
+	t.Run("a symlinked spelling of the root is not degraded", func(t *testing.T) {
+		real := t.TempDir()
+		gitInit(t, real)
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skipf("symlink: %v", err)
+		}
+		if l := HooksDir(link); l.Degraded {
+			t.Errorf("Degraded for a symlink to the root: %s", l.Reason)
+		}
+	})
+
+	t.Run("not a repository reports git's own message", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir)) // do not find an enclosing repo
+		l := HooksDir(dir)
+		if !l.Degraded {
+			t.Fatal("Degraded = false outside any repository")
+		}
+		if !strings.Contains(l.Reason, "not a git repository") {
+			t.Errorf("Reason = %q, want git's stderr", l.Reason)
+		}
+	})
+}
+
+func TestHooksDirGitMissingIsDegraded(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	l := HooksDir(dir)
+	if !l.Degraded || l.Reason == "" {
+		t.Errorf("Degraded = %v, Reason = %q; want degraded with a reason", l.Degraded, l.Reason)
+	}
+}
+
+func TestClassifyHooksPathCommonDirFailureStillWarns(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := filepath.Join(t.TempDir(), "gone") // git -C fails here
+	warns, err := classifyHooksPath(root, root, ".husky")
+	if err == nil {
+		t.Fatal("err = nil, want the --git-common-dir failure")
+	}
+	if !hasWarning(warns, "inside the work tree") {
+		t.Errorf("warnings = %v, want the inside-the-work-tree warning", warns)
+	}
+}
+
+func TestGitOutIncludesStderr(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	_, err := gitOut(dir, "rev-parse", "--show-toplevel")
+	if err == nil {
+		t.Fatal("git succeeded outside any repository")
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error = %q, want git's stderr", err)
+	}
+}
+
+// TestLookupAccessors: the hooks directory is reachable only through methods
+// that state what they verified.
+func TestLookupAccessors(t *testing.T) {
+	t.Run("healthy lookup yields its dir", func(t *testing.T) {
+		l := Lookup{dir: "/x/hooks"}
+		got, err := l.Verified()
+		if err != nil || got != "/x/hooks" {
+			t.Errorf("Verified = %q, %v; want /x/hooks, nil", got, err)
+		}
+	})
+
+	t.Run("degraded lookup is never Verified", func(t *testing.T) {
+		root := t.TempDir()
+		mkGitDir(t, filepath.Join(root, ".git"))
+		l := Lookup{dir: filepath.Join(root, ".git", "hooks"), root: root, Degraded: true, Reason: "git is absent"}
+		_, err := l.Verified()
+		if err == nil || !strings.Contains(err.Error(), "git is absent") {
+			t.Errorf("Verified error = %v, want one carrying the reason", err)
+		}
+	})
+}
+
+func mkGitDir(t *testing.T, gd string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(gd, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gd, "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLookupRemedy: the advice follows the cause. "install git" is for a
+// missing git alone; a safe.directory refusal and a work-tree mismatch each get
+// their own, and an unknown cause gets none.
+func TestLookupRemedy(t *testing.T) {
+	t.Run("git missing", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		if got := HooksDir(dir).Remedy(); !strings.Contains(got, "install git") {
+			t.Errorf("Remedy = %q, want install git", got)
+		}
+	})
+
+	t.Run("work tree mismatch", func(t *testing.T) {
+		parent := t.TempDir()
+		gitInit(t, parent)
+		sub := filepath.Join(parent, "sub")
+		if err := os.Mkdir(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := HooksDir(sub).Remedy()
+		if !strings.Contains(got, "ETHOS_REPO_ROOT") || !strings.Contains(got, "top level") {
+			t.Errorf("Remedy = %q, want the top-level advice", got)
+		}
+		if strings.Contains(got, "install git") {
+			t.Errorf("Remedy = %q, git is installed", got)
+		}
+	})
+
+	t.Run("safe.directory refusal", func(t *testing.T) {
+		stderr := "fatal: detected dubious ownership in repository at '/x'\n" +
+			"To add an exception for this directory, call:\n\n\tgit config --global --add safe.directory /x"
+		l := degradedLookup("/x", "/x/.git/hooks", nil, fmt.Errorf("git rev-parse --show-toplevel: exit status 128: %s", stderr))
+		got := l.Remedy()
+		if !strings.Contains(got, "safe.directory") {
+			t.Errorf("Remedy = %q, want the safe.directory advice", got)
+		}
+		if strings.Contains(got, "install git") {
+			t.Errorf("Remedy = %q, git is installed", got)
+		}
+	})
+
+	t.Run("unknown cause", func(t *testing.T) {
+		l := degradedLookup("/x", "/x/.git/hooks", nil, errors.New("something else"))
+		if got := l.Remedy(); got != "" {
+			t.Errorf("Remedy = %q, want none", got)
+		}
+		if got := l.Explain(); got != "something else" {
+			t.Errorf("Explain = %q, want the bare reason", got)
+		}
+	})
+}
+
+// makeGitDir makes d the minimal git directory git accepts.
+func makeGitDir(t *testing.T, d string) {
+	t.Helper()
+	for _, sub := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(d, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(d, "HEAD"), "ref: refs/heads/main\n")
+}
+
+func writeFile(t *testing.T, p, content string) {
+	t.Helper()
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

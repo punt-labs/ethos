@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // enableSubprocessRepo builds a git repo and an isolated HOME under /tmp, never
@@ -47,7 +49,7 @@ func enableSubprocessRepo(t *testing.T) *cliSubprocessEnv {
 
 func gitRunEnv(t *testing.T, dir string, env []string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
@@ -207,7 +209,7 @@ func TestCLI_EnableGitlinkGuardExit1(t *testing.T) {
 	}
 	se := enableSubprocessRepo(t)
 	// Record .punt-labs/ethos as a gitlink (mode 160000) in the index.
-	cmd := exec.Command("git", "-C", se.repo, "update-index", "--add",
+	cmd := testhelpers.GitCommand("-C", se.repo, "update-index", "--add",
 		"--cacheinfo", "160000,0000000000000000000000000000000000000001,.punt-labs/ethos")
 	cmd.Env = se.env
 	if out, err := cmd.CombinedOutput(); err != nil {

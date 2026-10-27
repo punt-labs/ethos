@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,18 +41,26 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// agents (DES-070) are Claude Code subagent definitions that belong to
 	// whichever repo `ethos seed` runs in. Outside a repo there is nowhere to
 	// put them, so the category is skipped rather than guessed.
+	loc := currentRoots()
+	if loc.CheckoutErr != nil {
+		return fmt.Errorf("seed: locating the repository: %w", loc.CheckoutErr)
+	}
+	repoRoot := loc.Checkout
 	var agentsRoot, activeBundle, activeBundleDir string
-	if repoRoot := resolve.FindRepoRoot(); repoRoot != "" {
+	if repoRoot != "" {
 		agentsRoot = filepath.Join(repoRoot, ".claude", "agents")
 		// activeBundle/activeBundleDir drive DES-073's bundle-scoped skill
 		// deploy. bundle.ResolveActive is the SAME resolution the
 		// generator uses for default_skills — resolving here too means a
 		// repo-local (or global) bundle override gets ITS skills
 		// deployed, not the embedded ones (Bugbot finding on PR #481). A
-		// resolution error (malformed config, unresolvable active_bundle)
-		// is not fatal to seeding — it just means no bundle-scoped skills
-		// land this run.
-		if b, bErr := bundle.ResolveActive(repoRoot, destRoot); bErr == nil && b != nil {
+		// resolution error (malformed config, a malformed bundle) is not
+		// fatal to seeding — it means no bundle-scoped skills land this
+		// run — but it is said, never swallowed.
+		name, cfgErr := resolve.ResolveActiveBundle(repoRoot)
+		if cfgErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: seed: reading the repo config: %v; deploying no bundle-scoped skills\n", cfgErr)
+		} else if b, bErr := bundle.ResolveActive(repoRoot, destRoot); bErr == nil && b != nil {
 			activeBundle = b.Name
 			activeBundleDir = b.Path
 		} else {
@@ -62,7 +71,10 @@ func runSeed(cmd *cobra.Command, args []string) error {
 			// Fall back to the config's bundle NAME with no resolved dir,
 			// so SeedVersionWithBundleDir's embedded-fallback path
 			// deploys the embedded skills for it instead of no-op'ing.
-			activeBundle, _ = resolve.ResolveActiveBundle(repoRoot)
+			if bErr != nil && !errors.Is(bErr, bundle.ErrActiveNotFound) {
+				fmt.Fprintf(os.Stderr, "ethos: seed: resolving the active bundle: %v; using the embedded skills for %q\n", bErr, name)
+			}
+			activeBundle = name
 		}
 	}
 

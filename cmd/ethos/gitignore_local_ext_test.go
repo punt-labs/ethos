@@ -2,12 +2,12 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // A repo that already excludes machine-local files must come back from setup
@@ -182,11 +182,11 @@ func writeRepoFile(t *testing.T, repoRoot, rel, content string) {
 // in the index — what an operator's `git add -A` would commit.
 func gitAddAll(t *testing.T, repoRoot string) []string {
 	t.Helper()
-	add := exec.Command("git", "-C", repoRoot, "add", "-A")
+	add := testhelpers.GitCommand("-C", repoRoot, "add", "-A")
 	if out, err := add.CombinedOutput(); err != nil {
 		t.Fatalf("git add -A: %v: %s", err, out)
 	}
-	out, err := exec.Command("git", "-C", repoRoot, "diff", "--cached", "--name-only", "-z").Output()
+	out, err := testhelpers.GitCommand("-C", repoRoot, "diff", "--cached", "--name-only", "-z").Output()
 	if err != nil {
 		t.Fatalf("git diff --cached: %v", err)
 	}

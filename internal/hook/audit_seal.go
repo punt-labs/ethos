@@ -7,10 +7,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 // SealOptions configures a seal run.
@@ -46,48 +49,284 @@ type SealResult struct {
 // In a gitlink-mounted repo the sealed tree is the wrong target, so the seal
 // is a no-op exit 0 with a one-line stderr deferral notice; the live lines
 // stay in .punt-labs/local/ and the clean-tree goal is already met.
+//
+// A seal that cannot finish — git did not answer, a chunk would not write —
+// returns an error that blocks the commit and leaves the tree as it found it:
+// see runSeal for the three phases and the rollback.
 func SealRepo(repoRoot string, now time.Time, opts SealOptions) (SealResult, error) {
-	if audit.IsGitlinkMount(repoRoot) {
+	gitlink, err := audit.IsGitlinkMount(repoRoot)
+	if err != nil {
+		return SealResult{}, SealGitError(repoRoot, "checking for a gitlink mount (git ls-files)", err, true)
+	}
+	if gitlink {
 		fmt.Fprintf(os.Stderr,
 			"ethos: audit seal: sealing deferred: .punt-labs/ethos is a gitlink mount, pending e29s (%s)\n",
 			repoRoot)
 		return SealResult{Deferred: true}, nil
 	}
-	var res SealResult
-	if err := sealSessionsInRepo(repoRoot, now, opts, &res); err != nil {
-		return res, err
+	units, err := repoSealUnits(repoRoot, now, opts)
+	if err != nil {
+		return SealResult{}, err
 	}
-	if err := sealMissionsInRepo(repoRoot, now, opts, &res); err != nil {
+	var res SealResult
+	if err := runSeal(repoRoot, units, opts, &res); err != nil {
 		return res, err
 	}
 	return res, nil
 }
 
-// sealSessionsInRepo seals each repo session's audit tail and stages chunks.
-func sealSessionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *SealResult) error {
+// repoSealUnits lists every unit a repo-wide seal covers: each session's audit
+// tail, then each (mission, session) log tail. It reads only the file system.
+func repoSealUnits(repoRoot string, now time.Time, opts SealOptions) ([]sealUnit, error) {
+	var units []sealUnit
 	sessions, err := listRepoSessions(repoRoot)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, sessionID := range sessions {
 		sealedDir, err := resolveSealDir(repoRoot, sessionID, now, opts)
 		if err != nil {
-			return fmt.Errorf("resolving session dir for %s: %w", sessionID, err)
+			return nil, fmt.Errorf("resolving session dir for %s: %w", sessionID, err)
 		}
-		var out sealOutcome
-		lockErr := WithLiveAuditLock(repoRoot, sessionID, func() error {
-			var e error
-			out, e = sealSessionLocked(repoRoot, sessionID, sealedDir, now, opts)
-			return e
-		})
-		if lockErr != nil {
-			return fmt.Errorf("sealing session %s: %w", sessionID, lockErr)
+		units = append(units, sessionSealUnit(repoRoot, sessionID, sealedDir, now, opts))
+	}
+	missions, err := listRepoMissions(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, missionID := range missions {
+		ids, err := listMissionSessions(repoRoot, missionID)
+		if err != nil {
+			return nil, err
 		}
-		if err := tallyAndStage(repoRoot, sealedDir, audit.SessionNS, "", out, opts, res); err != nil {
-			return fmt.Errorf("staging chunks for %s: %w", sessionID, err)
+		for _, sessionID := range ids {
+			units = append(units, missionSealUnit(repoRoot, missionID, sessionID, now, opts))
 		}
 	}
+	return units, nil
+}
+
+// sealUnit is one (session) or (mission, session) tail a seal covers.
+type sealUnit struct {
+	label     string
+	ns        audit.Namespace
+	session   string // mission namespace only; "" for session namespace
+	sealedDir string
+	// write runs the locked critical section: it writes the unit's new chunk,
+	// if any, and touches no git.
+	write func() (sealOutcome, error)
+}
+
+func sessionSealUnit(repoRoot, sessionID, sealedDir string, now time.Time, opts SealOptions) sealUnit {
+	return sealUnit{
+		label: "session " + sessionID, ns: audit.SessionNS, sealedDir: sealedDir,
+		write: func() (sealOutcome, error) {
+			var out sealOutcome
+			err := WithLiveAuditLock(repoRoot, sessionID, func() error {
+				var e error
+				out, e = sealSessionLocked(repoRoot, sessionID, sealedDir, now, opts)
+				return e
+			})
+			return out, err
+		},
+	}
+}
+
+// runSeal seals units in three phases, so a seal that cannot finish leaves the
+// tree as it found it:
+//
+//  1. every read-only git query — one `git status` over the chunks already on
+//     disk, to find orphans a crashed seal left unstaged, and where the index
+//     lives;
+//  2. every chunk write, each under its unit's flock;
+//  3. one `git add` of the orphans and the new chunks, after a snapshot of
+//     the index.
+//
+// A failure in phase 1 happens before anything is written. A failure in phase
+// 2 or 3 removes the chunks this run wrote (the live files are untouched, so
+// the next seal rewrites them) and, after phase 3's git has exited, puts the
+// snapshot back over the index: `git add` of several paths can stage some and
+// then fail, and the index is part of the tree. SweepStaleTemps (removing
+// leftover temp files) and MkdirAll (creating empty directories) may persist:
+// neither changes tracked content, so they are not part of "unchanged". The
+// directories this run creates for the sealed chunks are removed again by the
+// rollback; the live zone's directories and the per-session flock files
+// (under .punt-labs/local) are machine-local and untracked, and stay: a failed
+// seal leaves them as a successful one does. A dry run only counts.
+func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResult) error {
+	if opts.DryRun {
+		for _, u := range units {
+			out, err := u.write()
+			if err != nil {
+				return fmt.Errorf("sealing %s: %w", u.label, err)
+			}
+			res.LinesSealed += out.lineCount
+		}
+		return nil
+	}
+
+	var existing []string
+	for _, u := range units {
+		paths, err := audit.ChunkArtifacts(u.sealedDir, u.ns, u.session)
+		if err != nil {
+			return fmt.Errorf("listing chunks for %s: %w", u.label, err)
+		}
+		existing = append(existing, paths...)
+	}
+	var pending []string
+	if len(existing) > 0 {
+		var err error
+		pending, err = audit.UntrackedOrModified(repoRoot, existing)
+		if err != nil {
+			return SealGitError(repoRoot, "reading the status of the chunks already on disk (git status)", err, true)
+		}
+	}
+	indexPath, err := gitIndexPath(repoRoot)
+	if err != nil {
+		return SealGitError(repoRoot, "locating the index (git rev-parse --git-path index)", err, true)
+	}
+
+	// The directories this run will create: a rollback removes them again, and
+	// says so when it cannot.
+	var newDirs []string
+	for _, u := range units {
+		newDirs = appendMissingDirs(newDirs, repoRoot, u.sealedDir)
+	}
+
+	var wrote []string
+	for _, u := range units {
+		out, err := u.write()
+		if err != nil {
+			return rollbackSeal(wrote, nil, newDirs, fmt.Errorf("sealing %s: %w", u.label, err), "writing chunks")
+		}
+		if out.wroteChunk {
+			res.SessionsSealed++
+			res.LinesSealed += out.lineCount
+			wrote = append(wrote, out.chunkPath)
+		}
+	}
+
+	toAdd := append([]string(nil), pending...)
+	seen := make(map[string]bool, len(pending))
+	for _, p := range pending {
+		seen[p] = true
+	}
+	for _, p := range wrote {
+		if !seen[p] {
+			toAdd = append(toAdd, p)
+		}
+	}
+	if len(toAdd) == 0 {
+		return nil
+	}
+	snap, err := snapshotIndex(indexPath)
+	if err != nil {
+		return rollbackSeal(wrote, nil, newDirs, fmt.Errorf("snapshotting the index: %w", err), "snapshotting the index")
+	}
+	addStart := time.Now()
+	addErr := audit.GitAdd(repoRoot, toAdd...)
+	snap.addFinished(addStart, errors.Is(addErr, gitenv.ErrTimeout))
+	if err := addErr; err != nil {
+		cause := SealGitError(repoRoot, "staging chunks (git add)", err, false)
+		if indexLockExists(err) {
+			// git took nothing and changed nothing: the lock is someone's, the
+			// index is as it was, and there is nothing to restore.
+			snap = snap.abandon()
+			cause = fmt.Errorf("git add could not take %s.lock, which already exists: another git process may be running, or one left it; "+
+				"the lock was left alone and the index was not touched: %w", indexPath, cause)
+		}
+		return rollbackSeal(wrote, snap, newDirs, cause, "staging chunks (git add)")
+	}
+	snap.discard()
+	res.ChunksStaged += len(toAdd)
 	return nil
+}
+
+// gitIndexPath is where git keeps the index for repoRoot: $GIT_INDEX_FILE, or
+// the index of this checkout (a linked worktree has its own).
+func gitIndexPath(repoRoot string) (string, error) {
+	out, _, err := gitenv.Read(gitenv.Spec{
+		Git: "git", Dir: repoRoot, Env: gitenv.Inherited(), Args: []string{"rev-parse", "--git-path", "index"},
+	}, 0)
+	if err != nil {
+		return "", err
+	}
+	p := strings.TrimSpace(string(out))
+	if p == "" {
+		return "", errors.New("git printed no index path")
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(repoRoot, p)
+	}
+	return p, nil
+}
+
+// indexLockExists reports whether git add failed because <index>.lock already
+// existed ("Unable to create '.../index.lock': File exists").
+func indexLockExists(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "index.lock") && strings.Contains(msg, "File exists")
+}
+
+// appendMissingDirs appends to dirs the directories from the first one that
+// does not exist, below root, down to dir (shallowest first): the ones creating
+// dir will make. Entries already in dirs are not repeated.
+func appendMissingDirs(dirs []string, root, dir string) []string {
+	var missing []string
+	for d := dir; d != root && d != filepath.Dir(d); d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		}
+		missing = append([]string{d}, missing...)
+	}
+	for _, d := range missing {
+		if !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// rollbackSeal undoes a failed seal: it restores the index from snap (nil
+// before the add), removes the chunks this run wrote (the live files hold
+// every line) and the directories it created, deepest first, and always
+// removes the index snapshot. It returns the failure naming the phase, saying
+// the tree is unchanged only when every step succeeded and listing what is
+// left, empty directories included, when one did not. A lock it removed is
+// reported.
+func rollbackSeal(wrote []string, snap *indexSnapshot, newDirs []string, cause error, phase string) error {
+	var left []string
+	if snap != nil {
+		if err := snap.restore(); err != nil {
+			left = append(left, fmt.Sprintf("restoring the index: %v", err))
+		}
+		if len(snap.notes) > 0 {
+			cause = fmt.Errorf("%w (%s)", cause, strings.Join(snap.notes, "; "))
+		}
+		snap.cleanup()
+	}
+	for _, p := range wrote {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			left = append(left, fmt.Sprintf("removing chunk %s: %v", p, err))
+		}
+	}
+	for i := len(newDirs) - 1; i >= 0; i-- {
+		if err := os.Remove(newDirs[i]); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			left = append(left, fmt.Sprintf("removing the directory %s this seal created: %v", newDirs[i], err))
+		}
+	}
+	return sealStageFailure(phase, cause, left)
+}
+
+// sealStageFailure is the error for a seal that failed after it began
+// writing: cause, with the phase named. left is what the rollback could not
+// undo; with none, the tree is unchanged and the message says so.
+func sealStageFailure(phase string, cause error, left []string) error {
+	if len(left) == 0 {
+		return fmt.Errorf("%w (%s); nothing was sealed or staged, the commit is blocked and the tree is unchanged", cause, phase)
+	}
+	return fmt.Errorf("%w (%s); the commit is blocked, but the rollback did not finish: %s; "+
+		"the next seal stages the chunks", cause, phase, strings.Join(left, "; "))
 }
 
 // resolveSealDir resolves a session's sealed directory, dating a brand-new one
@@ -122,25 +361,7 @@ func resolveSealDir(repoRoot, sessionID string, now time.Time, opts SealOptions)
 type sealOutcome struct {
 	wroteChunk bool
 	lineCount  int
-}
-
-// tallyAndStage folds one unit's outcome into the run result and, outside the
-// flock, stages every untracked chunk in the sealed dir (orphan recovery).
-func tallyAndStage(repoRoot, sealedDir string, ns audit.Namespace, session string, out sealOutcome, opts SealOptions, res *SealResult) error {
-	if opts.DryRun {
-		res.LinesSealed += out.lineCount
-		return nil
-	}
-	if out.wroteChunk {
-		res.SessionsSealed++
-		res.LinesSealed += out.lineCount
-	}
-	staged, err := audit.StageUntrackedChunks(repoRoot, sealedDir, ns, session)
-	if err != nil {
-		return err
-	}
-	res.ChunksStaged += staged
-	return nil
+	chunkPath  string // the chunk written, when wroteChunk
 }
 
 // sealSessionLocked runs the audit seal's critical section under the caller's
@@ -227,7 +448,7 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 	}
 	printNotices(notes)
 	reportf(opts, "sealed %d line(s) for %s into %s\n", len(tail), p.label, name)
-	return sealOutcome{wroteChunk: true, lineCount: len(tail)}, nil
+	return sealOutcome{wroteChunk: true, lineCount: len(tail), chunkPath: filepath.Join(p.sealedDir, name)}, nil
 }
 
 // reportf writes a verbose/dry-run line to the options' sink when present.
@@ -335,6 +556,25 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+// SealGitError says why a git step of the seal failed, naming the phase. A git
+// that did not answer says so and where. unchanged says whether the tree is
+// known to be as it was (a read-only phase, or nothing written yet): the
+// message claims "the tree is unchanged" only then. A failure after chunks were
+// written passes false and is finished by rollbackSeal, which makes the claim
+// only once the rollback has actually succeeded.
+func SealGitError(repoRoot, phase string, err error, unchanged bool) error {
+	var e error
+	if err != nil && errors.Is(err, gitenv.ErrTimeout) {
+		e = fmt.Errorf("the seal could not run because git did not answer in %s while %s (%w)", repoRoot, phase, err)
+	} else {
+		e = fmt.Errorf("%s: %w", phase, err)
+	}
+	if unchanged {
+		return fmt.Errorf("%w; nothing was sealed or staged, the commit is blocked and the tree is unchanged", e)
+	}
+	return e
 }
 
 // guardTail returns the lines about to be sealed with every line that names a

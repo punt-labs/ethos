@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -287,7 +288,7 @@ email: test-user@example.com
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	cfg := exec.Command("git", "-C", repo, "config", "user.email", "nobody@example.invalid")
+	cfg := testhelpers.GitCommand("-C", repo, "config", "user.email", "nobody@example.invalid")
 	cfg.Env = gitEnv
 	require.NoError(t, cfg.Run(), "repointing git email")
 	t.Setenv("USER", "claude")
@@ -418,7 +419,7 @@ handle: bundle-user
 }
 
 func TestSetup_BundleFlag_Invalid(t *testing.T) {
-	_, repo := setupTestEnv(t)
+	home, repo := setupTestEnv(t)
 
 	cfgPath := filepath.Join(repo, "setup.yaml")
 	writeSetupFile(t, cfgPath, `name: Bad Bundle
@@ -428,6 +429,58 @@ handle: bad-bundle
 	_, _, err := execHandler(t, "setup", "--file", cfgPath, "--bundle", "nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `bundle "nonexistent" not found`)
+
+	// The refusal came before any write: no identity, no repo config.
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "bad-bundle.yaml"))
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "claude.yaml"))
+	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
+}
+
+// A bundle named in the --file is checked before any write too.
+func TestSetup_FileBundle_Invalid(t *testing.T) {
+	home, repo := setupTestEnv(t)
+	// An earlier test's --bundle leaves the flag marked changed on the shared command.
+	setupCmd.Flags().Lookup("bundle").Changed = false
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: File Bundle\nhandle: file-bundle\nbundle: nonexistent\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `bundle "nonexistent" not found`)
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "file-bundle.yaml"))
+	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
+}
+
+// With no bundle installed, setup refuses before any write — even when both
+// identities already exist, so no identity save would catch the missing seed
+// and the repo config would otherwise be written first.
+func TestSetup_NoBundlesRefusesBeforeAnyWrite(t *testing.T) {
+	for _, named := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default bundle", true: "named bundle"}[named], func(t *testing.T) {
+			home, repo := setupTestEnvNoSeed(t)
+			setupCmd.Flags().Lookup("bundle").Changed = false
+			ids := filepath.Join(home, ".punt-labs", "ethos", "identities")
+			require.NoError(t, os.MkdirAll(ids, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(ids, "seeded-user.yaml"),
+				[]byte("name: Seeded User\nhandle: seeded-user\nkind: human\nemail: s@example.com\n"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(ids, "claude.yaml"),
+				[]byte("name: Claude\nhandle: claude\nkind: agent\n"), 0o644))
+
+			cfgPath := filepath.Join(t.TempDir(), "setup.yaml")
+			writeSetupFile(t, cfgPath, "name: Seeded User\nhandle: seeded-user\nemail: s@example.com\n")
+			args := []string{"setup", "--file", cfgPath}
+			if named {
+				args = append(args, "--bundle", "foundation")
+			}
+			_, _, err := execHandler(t, args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "no bundles installed; run `ethos seed` first")
+			assert.NoDirExists(t, filepath.Join(repo, ".punt-labs"))
+			assert.NoFileExists(t, filepath.Join(repo, ".gitignore"))
+			assert.NoDirExists(t, filepath.Join(repo, ".claude"))
+		})
+	}
 }
 
 func TestSetup_Idempotent(t *testing.T) {
@@ -502,7 +555,7 @@ func TestSetup_NoTTY_NoFile(t *testing.T) {
 
 func TestSetup_NotInGitRepo(t *testing.T) {
 	// t.TempDir uses TMPDIR which may be inside the repo (.tmp/).
-	// Create an isolated dir under /tmp so FindRepoRoot finds no .git.
+	// Create an isolated dir under /tmp so CheckoutRootIfAny finds no .git.
 	noRepo, err := os.MkdirTemp("/tmp", "ethos-setup-norepo-*")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(noRepo) })
@@ -553,6 +606,64 @@ email: no-repo@example.com
 	assert.True(t, os.IsNotExist(statErr))
 }
 
+// A .git git refuses (an empty gitfile) fails setup with the cause; it is not "no
+// repo" and must not skip the repo config silently.
+func TestSetup_UnexaminableGitFails(t *testing.T) {
+	noRepo, err := os.MkdirTemp("/tmp", "ethos-setup-baddot-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(noRepo) })
+	home, err := os.MkdirTemp("/tmp", "ethos-setup-home-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(home) })
+	dot := filepath.Join(noRepo, ".git")
+	require.NoError(t, os.WriteFile(dot, nil, 0o644))
+
+	setupBundle = "foundation"
+	setupSolo = false
+	setupFile = ""
+	t.Cleanup(func() {
+		setupBundle = "foundation"
+		setupSolo = false
+		setupFile = ""
+	})
+	t.Setenv("HOME", home)
+	t.Setenv("USER", "test-user")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Chdir(noRepo)
+	_, seedErr := seed.Seed(filepath.Join(home, ".punt-labs", "ethos"), filepath.Join(home, ".claude", "skills"), false)
+	require.NoError(t, seedErr)
+
+	cfgPath := filepath.Join(noRepo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "\nname: Bad Dot\nhandle: bad-dot\nemail: bad-dot@example.com\n")
+
+	_, _, runErr := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, runErr)
+	assert.Contains(t, runErr.Error(), dot)
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "bad-dot.yaml"),
+		"a refusal must precede every write")
+}
+
+// An override naming a directory with no .punt-labs/ethos store is refused by
+// the store lookup; setup must say so before it saves any identity.
+func TestSetup_RefusedStoreWritesNoIdentity(t *testing.T) {
+	home, repo := setupTestEnv(t)
+	bare := t.TempDir()
+	t.Setenv("ETHOS_REPO_ROOT", bare)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `
+name: Refused Store
+handle: refused-store
+email: refused-store@example.com
+`)
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "refused-store.yaml"))
+}
+
 // setupTestEnvNoSeed is like setupTestEnv but does not run seed, so the
 // conventional attributes are absent from the global layer.
 func setupTestEnvNoSeed(t *testing.T) (home, repo string) {
@@ -589,7 +700,16 @@ func TestSetup_HardValidation_UnseededFails(t *testing.T) {
 	cfgPath := filepath.Join(repo, "setup.yaml")
 	writeSetupFile(t, cfgPath, "name: Unseeded User\nhandle: unseeded-user\n")
 
+	// In a repository the missing bundle is found first, before any write.
 	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no bundles installed; run `ethos seed` first")
+	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
+
+	// Solo needs no bundle: the identity's unresolved personality names the
+	// missing seed.
+	_, _, err = execHandler(t, "setup", "--file", cfgPath, "--solo")
+	setupSolo = false
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `references personality "principal-engineer"`)
 	assert.Contains(t, err.Error(), "not installed")
@@ -782,7 +902,7 @@ func TestSetup_EmailDefaultsFromGit(t *testing.T) {
 
 	// The identity resolves by git email: no session, git user.name unset,
 	// so resolve falls to the email step (resolve.Resolve step 3).
-	handle, err := resolve.Resolve(store, session.NewStore(globalRoot))
+	handle, err := resolve.Resolve(store, session.NewStore(globalRoot), repo)
 	require.NoError(t, err)
 	assert.Equal(t, "git-default", handle, "created identity must resolve by git email")
 }
@@ -829,7 +949,7 @@ func TestSetup_HardFailNoEmail(t *testing.T) {
 	home, repo := setupTestEnv(t)
 
 	// Remove the repo-local email so neither the file nor git supplies one.
-	unset := exec.Command("git", "-C", repo, "config", "--unset", "user.email")
+	unset := testhelpers.GitCommand("-C", repo, "config", "--unset", "user.email")
 	unset.Env = []string{
 		"HOME=" + home,
 		"GIT_CONFIG_GLOBAL=/dev/null",
@@ -988,8 +1108,9 @@ func TestSetup_RejectsMalformedAgentKey(t *testing.T) {
 
 	_, _, err := execHandler(t, "setup", "--file", cfgPath)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "non-string value")
-	assert.Contains(t, err.Error(), "agent")
+	// setup refuses at locate time: the config is part of the store, and a
+	// store ethos cannot read is not written to.
+	assert.Contains(t, err.Error(), "parsing repo config")
 
 	// The malformed key is not clobbered.
 	body := readRepoConfigFile(t, repo)
@@ -1081,7 +1202,7 @@ func TestSetup_FromWorktreeWritesConfigToStoreAgentsToCheckout(t *testing.T) {
 
 	git := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 		cmd.Env = []string{
 			"HOME=" + home,
 			"GIT_CONFIG_GLOBAL=/dev/null",
@@ -1142,7 +1263,7 @@ writing_style: concise-quantified
 }
 
 // TestSetup_BadOverrideFailsLoudNotSilentSkip pins the Bugbot HIGH F-A on PR
-// #370: a set-but-refused ETHOS_REPO_ROOT (nonexistent) makes FindRepoRoot
+// #370: a set-but-refused ETHOS_REPO_ROOT (nonexistent) makes CheckoutRootIfAny
 // return "" even though the cwd IS a real repo. setup must fail loud, not
 // silently create identities, skip repo config/bundle/team, and report success.
 func TestSetup_BadOverrideFailsLoudNotSilentSkip(t *testing.T) {
@@ -1161,4 +1282,27 @@ writing_style: concise-quantified
 		"a refused override must fail loud, not succeed with repo config skipped; stderr: %s", stderr)
 	assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT",
 		"the error must name the refused override")
+}
+
+// setup with no email in --file and an unreadable git config names the read
+// error, not "no email": the address may be in the file it could not read.
+func TestSetup_UnreadableGitConfigNamesTheReadError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores permissions")
+	}
+	_, repo := setupTestEnv(t)
+	gitCmd(t, repo, "config", "--unset", "user.email")
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[user]\n\temail = hidden@example.com\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+
+	setupPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, setupPath, "name: No Email\nhandle: no-email\nsolo: true\n")
+	_, _, err := execHandler(t, "setup", "--file", setupPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), cfg)
+	assert.Contains(t, err.Error(), "reading git user.email failed")
+	assert.NotContains(t, err.Error(), "no email — set git user.email")
 }

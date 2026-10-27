@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // vacuumTestRepoID is the identity the vacuum tests give their checkout's origin
@@ -44,7 +44,7 @@ func activeIn(checkout string, sessions ...string) []ActiveSession {
 func gitRepoWithOrigin(t *testing.T, dir, id string) {
 	t.Helper()
 	run := func(args ...string) {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd := testhelpers.GitCommand(append([]string{"-C", dir}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}

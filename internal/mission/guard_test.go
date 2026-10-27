@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 	"gopkg.in/yaml.v3"
 	"os"
@@ -340,7 +341,7 @@ func TestWriteTrackedFiles_FailedReExportKeepsTheOldPair(t *testing.T) {
 	real := renameFile
 	t.Cleanup(func() { renameFile = real })
 	renameFile = func(oldpath, newpath string) error {
-		if newpath == b && strings.HasSuffix(oldpath, tmpMarker) {
+		if newpath == b && strings.HasSuffix(oldpath, layout.TmpMarker) {
 			return errors.New("injected rename failure")
 		}
 		return real(oldpath, newpath)
@@ -480,7 +481,7 @@ func TestWriteTrackedFiles_FailedRestoreLeavesContent(t *testing.T) {
 		if n == "m.one.yaml" || n == "m.two.yaml" {
 			continue
 		}
-		assert.True(t, strings.HasPrefix(n, ".") && strings.HasSuffix(n, tmpMarker), "stray file %q", n)
+		assert.True(t, strings.HasPrefix(n, ".") && strings.HasSuffix(n, layout.TmpMarker), "stray file %q", n)
 	}
 }
 

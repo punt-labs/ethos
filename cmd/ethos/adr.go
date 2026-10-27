@@ -114,9 +114,12 @@ func runADRCreate(cmd *cobra.Command) error {
 		// Try to resolve from session/git.
 		is := identityStore()
 		ss := sessionStore()
-		h, err := resolve.Resolve(is, ss)
-		if err == nil {
-			author = h
+		// The author is optional: when the checkout or the identity cannot be
+		// resolved the ADR is created without one.
+		if checkout, cerr := currentRoots().checkoutForGit(); cerr == nil {
+			if h, err := resolve.Resolve(is, ss, checkout); err == nil {
+				author = h
+			}
 		}
 	}
 

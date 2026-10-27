@@ -2,12 +2,12 @@ package hook
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // writeLiveLines writes ts lines to a session's live audit file.
@@ -148,7 +148,7 @@ func TestSealRepoStagesOrphanChunk(t *testing.T) {
 		t.Errorf("orphan chunk not staged: %+v", res)
 	}
 	// The chunk is now tracked (git status shows it staged, not untracked).
-	cmd := exec.Command("git", "status", "--porcelain", "--", filepath.Join(sealedDir, audit.SessionChunkFile(100, 200)))
+	cmd := testhelpers.GitCommand("status", "--porcelain", "--", filepath.Join(sealedDir, audit.SessionChunkFile(100, 200)))
 	cmd.Dir = repo
 	out, _ := cmd.Output()
 	if len(out) > 0 && out[0] == '?' {

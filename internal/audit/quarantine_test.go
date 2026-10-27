@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,7 +20,7 @@ func initGitRepo(t *testing.T, dir string) {
 	for _, args := range [][]string{
 		{"init", "-b", "main"}, {"config", "user.email", "t@e.com"}, {"config", "user.name", "t"},
 	} {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = dir
 		cmd.Env = env
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -34,7 +33,7 @@ func gitCommitAll(t *testing.T, dir, msg string) {
 	t.Helper()
 	env := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", msg}} {
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = dir
 		cmd.Env = env
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -342,7 +341,7 @@ func homeCheck(b []byte) string {
 
 func gitOut(t *testing.T, repo string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testhelpers.GitCommand(args...)
 	cmd.Dir = repo
 	out, err := cmd.Output()
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -398,7 +399,7 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	// disk — readers branch on record.yaml's presence, so its absence
 	// signals "skeleton not yet committed" and avoids a torn read.
 	if len(payload.Prompt) > 0 {
-		if err := writeAtomicFile(dir, "prompt-*.md.tmp",
+		if err := writeAtomicFile(dir, layout.TmpPattern("prompt", ".md"),
 			filepath.Join(dir, "prompt.md"), body); err != nil {
 			return "", fmt.Errorf("writing delegation prompt: %w", err)
 		}
@@ -407,7 +408,7 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 		}
 	}
 	recordPath := filepath.Join(dir, "record.yaml")
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return "", fmt.Errorf("writing delegation record: %w", err)
 	}
 	sayRecord.Say()
@@ -419,9 +420,9 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 // a failed fsync surfaces — djb evaluator gate: a half-written file
 // is unacceptable. The temp file is removed on every error path.
 //
-// pattern is the os.CreateTemp pattern (e.g. "record-*.yaml.tmp"); the
-// random component avoids the predictable ".tmp" suffix that a second
-// writer could trample.
+// pattern is the os.CreateTemp pattern (e.g. layout.TmpPattern("record",
+// ".yaml"), "record-*.yaml.ethos-tmp"); the random component avoids a
+// predictable name that a second writer could trample.
 func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 	var gErr error
 	if data, gErr = guardWrite(destPath, data); gErr != nil {
@@ -601,7 +602,7 @@ func LoadDelegation(recordPath string) (*Delegation, error) {
 // only fire on records that were just written and never advanced).
 //
 // Atomic via os.CreateTemp + Chmod(0o600) + Sync + Close + Rename in
-// the record's own directory. A predictable ".tmp" suffix is avoided
+// the record's own directory. A predictable temp name is avoided
 // so a second writer cannot trample the first. djb evaluator gate:
 // a half-written close is unacceptable — the on-disk record either
 // keeps its prior contents or carries the new verdict in full.
@@ -630,7 +631,7 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	if err != nil {
 		return fmt.Errorf("close delegation: %w", err)
 	}
-	if err := writeAtomicFile(filepath.Dir(recordPath), "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(filepath.Dir(recordPath), layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return fmt.Errorf("close delegation: %w", err)
 	}
 	say.Say()
@@ -721,7 +722,7 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	if err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
 	say.Say()
@@ -822,7 +823,7 @@ func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact P
 	if err != nil {
 		return nil, nil, fmt.Errorf("disclaim: %w", err)
 	}
-	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
 		return nil, nil, fmt.Errorf("disclaim: %w", err)
 	}
 	d.DisclaimedReason = redact.Content(reason)

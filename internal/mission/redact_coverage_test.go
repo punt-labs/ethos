@@ -172,6 +172,9 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.redactReason":            checkpoint("NewPathRedactor"),
 	"internal/hook.redactLegacyLines":       checkpoint("NewPathRedactor", "redactLegacyLine"),
 	"internal/hook.redactLegacyLine":        checkpoint("redactToolInputQuiet"),
+	"internal/hook.writeFileMode":           exempt("copies git's own index bytes to the snapshot file next to it; the index is not a record, and git never tracks it"),
+	"internal/hook.indexSnapshot.restore":   exempt("puts the saved git index back; the bytes are git's index, not a record"),
+	"internal/hook.indexSnapshot.takeLock":  exempt(reasonLock),
 	"internal/hook.sealDirLocked":           exempt("seals live-file lines; guardTailWith rewrites any that name a home first (see guardedSinks)"),
 	"internal/hook.GenerateAgentFilesTo":    exempt("out of scope (identity graph): generated .claude/agents definitions from identity content"),
 	"internal/hook.InstallAgentDefinitions": exempt("out of scope (identity graph): generated .claude/agents definitions from identity content"),
@@ -198,19 +201,20 @@ var writerRegistry = map[string]writerEntry{
 // or audit records. A package in neither this list nor writerRegistry
 // fails the test when it gains a writer.
 var outOfScopePackages = map[string]string{
-	"cmd/e2e-attribute":  "developer test tool",
-	"internal/adr":       reasonGlobal + "; ADRs move into the repo under ethos-yjh0, which adds its writer to the in-scope set",
-	"internal/attribute": "operator-authored talents, personalities, writing styles",
-	"internal/claudemd":  "import lines in CLAUDE.md",
-	"internal/doctor":    "health-check probe files",
-	"internal/enable":    "enablement markers, deposited guides, .gitignore lines",
-	"internal/githook":   "git hook scripts",
-	"internal/identity":  "operator-authored identities and extensions",
-	"internal/role":      "operator-authored roles",
-	"internal/seed":      "starter content deployed by ethos seed",
-	"internal/session":   "session roster: " + reasonGlobal,
-	"internal/team":      "operator-authored teams",
-	"internal/vendor":    "vendored team content",
+	"cmd/e2e-attribute":    "developer test tool",
+	"internal/adr":         reasonGlobal + "; ADRs move into the repo under ethos-yjh0, which adds its writer to the in-scope set",
+	"internal/attribute":   "operator-authored talents, personalities, writing styles",
+	"internal/claudemd":    "import lines in CLAUDE.md",
+	"internal/doctor":      "health-check probe files",
+	"internal/enable":      "enablement markers, deposited guides, .gitignore lines",
+	"internal/githook":     "git hook scripts",
+	"internal/identity":    "operator-authored identities and extensions",
+	"internal/role":        "operator-authored roles",
+	"internal/seed":        "starter content deployed by ethos seed",
+	"internal/session":     "session roster: " + reasonGlobal,
+	"internal/team":        "operator-authored teams",
+	"internal/testhelpers": "fixture repositories and git shims written under t.TempDir; never a record",
+	"internal/vendor":      "vendored team content",
 }
 
 // chokePoints are the functions that apply the shared redactor. A writer

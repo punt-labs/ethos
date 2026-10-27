@@ -562,25 +562,70 @@ func TestReadsContain(t *testing.T) {
 	}
 }
 
-// TestEnvRepoRoot_PrefersEnvVar pins that ETHOS_REPO_ROOT takes
+// TestTierBRepoRoot_PrefersEnvVar pins that ETHOS_REPO_ROOT takes
 // precedence over the fallback. The override must name an existing
 // directory — a nonexistent one is refused (ethos-yofr SFH F1) — so the
 // test points it at a real temp dir.
-func TestEnvRepoRoot_PrefersEnvVar(t *testing.T) {
+func TestTierBRepoRoot_PrefersEnvVar(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ETHOS_REPO_ROOT", dir)
-	got := envRepoRoot()
+	got, err := tierBRepoRoot()
+	require.NoError(t, err)
 	assert.Equal(t, dir, got)
 }
 
-// TestEnvRepoRoot_FallbackUsedWhenEnvUnset confirms the helper
-// falls back to tierBRepoRoot when the env var is not set. The
-// concrete fallback value depends on the test cwd; we only assert
-// non-empty.
-func TestEnvRepoRoot_FallbackUsedWhenEnvUnset(t *testing.T) {
+// TestTierBRepoRoot_FallbackUsedWhenEnvUnset confirms the helper
+// resolves the checkout from the working directory when the env var is
+// not set: the package directory is inside this repository.
+func TestTierBRepoRoot_FallbackUsedWhenEnvUnset(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", "")
-	got := envRepoRoot()
+	got, err := tierBRepoRoot()
+	require.NoError(t, err)
 	assert.NotEmpty(t, got)
+}
+
+// tierBRepoRoot never answers with the working directory: a checkout that
+// cannot be located is an error naming the reason, and outside a
+// repository there is no checkout at all.
+func TestTierBRepoRootNeverCwd(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	t.Run("refused .git", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), nil, 0o644))
+		t.Chdir(dir)
+		got, err := tierBRepoRoot()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), filepath.Join(dir, ".git"))
+		assert.Empty(t, got)
+	})
+	t.Run("outside a repository", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		got, err := tierBRepoRoot()
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+}
+
+// With the checkout unlocated, a contract with preconditions cannot be
+// evaluated: strict blocks with the reason, strict=false allows, and a
+// contract with no preconditions is not affected.
+func TestGateContractUnlocatedCheckout(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), nil, 0o644))
+	t.Chdir(dir)
+	pre := []mission.Precondition{{Message: "read it first"}}
+	input := map[string]any{"file_path": "a.go"}
+
+	reason, deny := gateContract(makeContractWithPreconditions(pre, mission.Inputs{}, nil), "Edit", input, "s1", "")
+	assert.True(t, deny)
+	assert.Contains(t, reason, filepath.Join(dir, ".git"))
+
+	reason, deny = gateContract(makeContractWithPreconditions(pre, mission.Inputs{}, boolPtr(false)), "Edit", input, "s1", "")
+	assert.False(t, deny, reason)
+
+	reason, deny = gateContract(makeContractWithPreconditions(nil, mission.Inputs{}, nil), "Edit", input, "s1", "")
+	assert.False(t, deny, reason)
 }
 
 // TestEvaluatePreconditions_SessionIDLooksLikePath defends against a
@@ -630,6 +675,44 @@ func TestEvaluatePreconditions_HandleAuditLogIntegration(t *testing.T) {
 		map[string]any{"file_path": "internal/mission/store.go"}, "sess-int", dir, dir)
 	require.NoError(t, err)
 	assert.False(t, deny, "audit log written via HandleAuditLog must satisfy precondition: %s", reason)
+}
+
+// Outside a repository the audit-log hook writes the global legacy log, and
+// the precondition evaluator reads that same log: a Read recorded there
+// satisfies a later Write, and nothing relative to the working directory is
+// consulted.
+func TestEvaluatePreconditions_OutsideRepoRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	const sid = "sess-outside"
+	recorded := "/abs/recorded.go"
+	decoy := "/abs/decoy.go"
+	// A decoy log under the working directory must not count.
+	writeSessionReadAudit(t, cwd, sid, decoy)
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id": sid,
+		"tool_name":  "Read",
+		"tool_input": map[string]any{"file_path": recorded},
+	})
+	require.NoError(t, err)
+	sessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, HandleAuditLog(bytes.NewReader(payload), "", sessions))
+
+	c := makeContractWithPreconditions(
+		[]mission.Precondition{{Form: mission.PreconditionFormImplicit, Message: "read before write"}},
+		mission.Inputs{}, nil,
+	)
+	_, deny, err := EvaluatePreconditions(c, "Write", map[string]any{"file_path": recorded}, sid, "", "")
+	require.NoError(t, err)
+	assert.False(t, deny, "the Read the hook recorded outside a repository satisfies the precondition")
+
+	reason, deny, err := EvaluatePreconditions(c, "Write", map[string]any{"file_path": decoy}, sid, "", "")
+	require.NoError(t, err)
+	assert.True(t, deny, "a log relative to the working directory is not consulted")
+	assert.Equal(t, "read before write", reason)
 }
 
 // TestEvaluatePreconditions_ReadOfCredentialShapedPathClears: a Read of a

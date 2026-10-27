@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -27,7 +28,7 @@ type cliSubprocessEnv struct {
 
 // setupCLISubprocessEnv creates the minimal filesystem the ethos binary
 // needs: a global identity store, a repo with config, and a real git init
-// so FindRepoRoot stops at the fake repo rather than the real one.
+// so CheckoutRootIfAny stops at the fake repo rather than the real one.
 func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 	t.Helper()
 
@@ -48,7 +49,7 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(globalIDs, "test-agent.yaml"), idData, 0o644))
 
-	// Repo: git init so FindRepoRoot stops here.
+	// Repo: git init so CheckoutRootIfAny stops here.
 	repoEthos := filepath.Join(repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(filepath.Join(repoEthos, "identities"), 0o755))
 
@@ -58,7 +59,7 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	gitInit := exec.Command("git", "init", repo)
+	gitInit := testhelpers.GitCommand("init", repo)
 	gitInit.Env = gitEnv
 	initOut, initErr := gitInit.CombinedOutput()
 	require.NoError(t, initErr, "git init failed: %s", initOut)
@@ -283,7 +284,7 @@ func TestCLI_MissingActiveBundle(t *testing.T) {
 
 	_, stderr, exitCode := runCLI(t, se, "list")
 	assert.NotEqual(t, 0, exitCode, "CLI must fail when active_bundle is missing")
-	assert.Contains(t, stderr, "bundle resolution failed")
+	assert.Contains(t, stderr, "bundle or policy configuration is unusable")
 	assert.Contains(t, stderr, "does-not-exist")
 }
 
@@ -303,7 +304,7 @@ func TestCLI_BundleFlow(t *testing.T) {
 	home := t.TempDir()
 	repo := t.TempDir()
 
-	gitInit := exec.Command("git", "init", repo)
+	gitInit := testhelpers.GitCommand("init", repo)
 	gitInit.Env = []string{
 		"HOME=" + home,
 		"GIT_CONFIG_GLOBAL=/dev/null",

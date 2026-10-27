@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // A Tombstone records that `ethos session purge` removed a session's roster
@@ -77,7 +79,7 @@ func WriteTombstone(globalSessionsDir string, t Tombstone) error {
 // leaves either the prior contents or the new file, never a torn one.
 func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	tempPath := filepath.Join(dir, "."+filepath.Base(path)+".tmp")
+	tempPath := filepath.Join(dir, layout.DotTmp(filepath.Base(path)))
 	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("creating temp %s: %w", tempPath, err)

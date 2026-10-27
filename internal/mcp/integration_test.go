@@ -17,6 +17,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,7 @@ var ethosBinary string
 const mcpRPCTimeout = 30 * time.Second
 
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	// This suite normally runs inside a real Claude Code session, where
 	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
 	// presence the signal for "a session was expected, fail loud if
@@ -117,7 +119,7 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(globalIDs, "test-agent.yaml"), idData, 0o644))
 
-	// Repo: git init so FindRepoRoot stops here.
+	// Repo: git init so CheckoutRootIfAny stops here.
 	repoEthos := filepath.Join(repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(filepath.Join(repoEthos, "identities"), 0o755))
 
@@ -127,7 +129,7 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
-	gitInit := exec.Command("git", "init", repo)
+	gitInit := testhelpers.GitCommand("init", repo)
 	gitInit.Env = gitEnv
 	out, gitErr := gitInit.CombinedOutput()
 	require.NoError(t, gitErr, "git init failed: %s", out)
@@ -161,7 +163,7 @@ func startMCPClient(t *testing.T, env *mcpTestEnv) *client.Client {
 	t.Helper()
 
 	// Use WithCommandFunc to set CWD on the subprocess so
-	// FindRepoRoot discovers the fake repo.
+	// CheckoutRootIfAny discovers the fake repo.
 	cmdFunc := func(ctx context.Context, command string, envVars []string, args []string) (*exec.Cmd, error) {
 		cmd := exec.CommandContext(ctx, command, args...)
 		cmd.Dir = env.repo

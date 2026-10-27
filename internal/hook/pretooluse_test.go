@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -633,11 +634,8 @@ func TestPathAllowed_DotDotPrefixedNameNotTreatedAsTraversal(t *testing.T) {
 // TestHandlePreToolUse_RepoRootValidation pins the MEDIUM finding from
 // the re-verification round: pathAllowed's repo-relative branch must
 // never resolve against an unmarked directory. allowlistRepoRoot uses
-// resolve.FindRepoRoot (a .git-marker walk), never envRepoRoot's own
-// last-resort bare-os.Getwd() fallback (tierBRepoRoot,
-// pretooluse_dispatch.go) — that fallback is safe for Tier B
-// mission-store resolution (a missing store just fails a subsequent
-// Load, fail-closed) but not here: resolving a target against a
+// resolve.Roots (a .git-marker walk), never a bare working
+// directory: resolving a target against a
 // directory that is merely SOME subdirectory of the real repo, not
 // the root itself, computes a repo-relative form one level too
 // shallow and lets an ordinary write_set entry admit a file it never
@@ -1125,13 +1123,13 @@ func stageContract(t *testing.T, home, missionID string) {
 }
 
 // stageRepoRoot creates a fake repo directory and runs git init so
-// FindRepoRoot stops there rather than walking up to the real ethos
+// CheckoutRootIfAny stops there rather than walking up to the real ethos
 // checkout. Returns the repo path. The test chdirs into the repo and
 // restores cwd on cleanup.
 func stageRepoRoot(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
-	cmd := exec.Command("git", "init", repo)
+	cmd := testhelpers.GitCommand("init", repo)
 	cmd.Env = []string{
 		"HOME=" + t.TempDir(),
 		"GIT_CONFIG_GLOBAL=/dev/null",
@@ -1229,7 +1227,7 @@ func TestTierBDispatch_FromWorktreeResolvesMainStore(t *testing.T) {
 
 	gitAt := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = dir
 		cmd.Env = []string{
 			"HOME=" + home,
@@ -1312,7 +1310,7 @@ func TestTierBDispatch_FromWorktreeResolvesMainStore(t *testing.T) {
 
 // TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree pins the
 // code-review round-2 finding: a set-but-invalid ETHOS_REPO_ROOT makes
-// StoreRepoRoot return "" (F1 fail-closed). tierBStoreRoot must NOT
+// StoreRootIfAny return "" (F1 fail-closed). tierBStoreRoot must NOT
 // substitute the raw worktree cwd — doing so would resolve the store into
 // the worktree's own tree, reintroducing ethos-yofr behind a bad override.
 // The mission is staged in the global tree so Load succeeds and the write
@@ -1328,7 +1326,7 @@ func TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree(t *testing.T) {
 
 	gitAt := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = dir
 		cmd.Env = []string{
 			"HOME=" + home,
@@ -1374,7 +1372,7 @@ func TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree(t *testing.T) {
 	require.NoError(t, os.Chdir(wt))
 
 	// A bad override: an existing directory with no .punt-labs/ethos store.
-	// F1 makes StoreRepoRoot return ""; tierBStoreRoot must not fall back to
+	// F1 makes StoreRootIfAny return ""; tierBStoreRoot must not fall back to
 	// the worktree cwd.
 	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
@@ -2971,7 +2969,9 @@ func TestMatchDispatchPending_AmbiguitySignal(t *testing.T) {
 
 	var matched string
 	stderrText := captureStderr(t, func() {
-		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+		var err error
+		matched, err = matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 	})
 
 	assert.Equal(t, missionA, matched, "FIFO still resolves to the oldest entry")
@@ -3002,7 +3002,9 @@ func TestMatchDispatchPending_NoAmbiguitySignalForDifferentWorkers(t *testing.T)
 
 	var matched string
 	stderrText := captureStderr(t, func() {
-		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+		var err error
+		matched, err = matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 	})
 
 	assert.Equal(t, missionA, matched)
@@ -3050,7 +3052,7 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNames
 
 	var out bytes.Buffer
 	toolInput := map[string]any{"subagent_type": "bwk"}
-	require.NoError(t, dispatchTierB(&out, sessionID, missionID, toolInput, mission.BoundViaSidecarDispatch, nil))
+	require.NoError(t, dispatchTierB(&out, testStoreRoot(t), sessionID, missionID, toolInput, mission.BoundViaSidecarDispatch, nil))
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
@@ -3094,7 +3096,8 @@ func TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch(t *testing.T) {
 		release, err := mission.AcquireDispatchPendingLock(globalRoot, sessionID)
 		require.NoError(t, err)
 		defer release()
-		m := matchDispatchPending(globalRoot, sessionID, "bwk")
+		m, err := matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 		if m != "" {
 			require.NoError(t, mission.ConsumeDispatchPending(globalRoot, sessionID, m))
 		}
@@ -3265,7 +3268,9 @@ func TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry(t *testing
 
 	var matched string
 	stderrText := captureStderr(t, func() {
-		matched = matchDispatchPending(globalRoot, sessionID, "bwk")
+		var err error
+		matched, err = matchDispatchPending(testStoreRoot(t), globalRoot, sessionID, "bwk")
+		require.NoError(t, err)
 	})
 
 	assert.Equal(t, resolvable, matched,
@@ -3281,4 +3286,13 @@ func TestMatchDispatchPending_UnresolvableEntryDoesNotBlockNewerEntry(t *testing
 	entriesList, _, err := mission.ReadDispatchPending(globalRoot, sessionID)
 	require.NoError(t, err)
 	require.Len(t, entriesList, 2)
+}
+
+// testStoreRoot is the store root the dispatch hook would locate from the
+// test's working directory.
+func testStoreRoot(t *testing.T) tierBRoots {
+	t.Helper()
+	roots, err := locateTierBRoots()
+	require.NoError(t, err)
+	return roots
 }

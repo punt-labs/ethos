@@ -3,6 +3,11 @@ package doctor
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -17,6 +22,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/punt-labs/ethos/v4/plugin/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +36,7 @@ import (
 // instead exercise the loud path. A test that wants the under-Claude-Code
 // path sets one back with t.Setenv.
 func TestMain(m *testing.M) {
+	testhelpers.MustIsolateGit() // no inherited GIT_DIR; temp dirs stop at the temp root
 	os.Unsetenv("CLAUDE_PID")
 	os.Unsetenv("CLAUDECODE")
 	// Stripping the env vars is not enough: a real claude process is
@@ -55,7 +62,7 @@ func newFixture(t *testing.T) (*identity.Store, *session.Store, string) {
 
 // outsideRepoTempDir creates a tempdir at /tmp so none of its ancestors
 // contain a .git directory. Required for tests that must exercise the
-// "not in a git repo" branch of FindRepoRoot — t.TempDir() honors
+// "not in a git repo" branch of CheckoutRootIfAny — t.TempDir() honors
 // $TMPDIR, which is set to .tmp inside the ethos repo.
 func outsideRepoTempDir(t *testing.T) string {
 	t.Helper()
@@ -187,7 +194,7 @@ func TestCheckHumanIdentity(t *testing.T) {
 		writeIdentity(t, root, "mal",
 			"name: Mal\nhandle: mal\nkind: human\n")
 		t.Setenv("USER", "mal")
-		r := CheckHumanIdentity(s, ss)
+		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "mal")
 	})
@@ -197,7 +204,7 @@ func TestCheckHumanIdentity(t *testing.T) {
 		// and point the user at `ethos setup`.
 		s, ss, _ := newFixture(t)
 		t.Setenv("USER", "ghost")
-		r := CheckHumanIdentity(s, ss)
+		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "WARN", r.Status)
 		assert.True(t, r.Passed(), "fresh install must not gate doctor's exit")
 		assert.Contains(t, r.Detail, "ethos setup")
@@ -211,7 +218,7 @@ func TestCheckHumanIdentity(t *testing.T) {
 		writeIdentity(t, root, "mal",
 			"name: Mal\nhandle: mal\nkind: human\n")
 		t.Setenv("USER", "ghost")
-		r := CheckHumanIdentity(s, ss)
+		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no identity matches")
 	})
@@ -223,7 +230,7 @@ func TestCheckHumanIdentity(t *testing.T) {
 		s, ss, root := newFixture(t)
 		writeIdentity(t, root, "bad", "not: [valid: yaml")
 		t.Setenv("USER", "bad")
-		r := CheckHumanIdentity(s, ss)
+		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no identity matches")
 	})
@@ -239,7 +246,7 @@ func TestCheckHumanIdentity(t *testing.T) {
 			"name: Zoe\nhandle: zoe\nkind: human\nemail: crew@serenity.ship\n")
 		t.Setenv("USER", "ghost")
 		setGitEmail(t, "crew@serenity.ship")
-		r := CheckHumanIdentity(s, ss)
+		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "ambiguous identity: 2 matches")
 		assert.Contains(t, r.Detail, "mal, zoe")
@@ -390,7 +397,7 @@ func TestCheckSealHook(t *testing.T) {
 	// writeEnabledHook creates an enabled repo whose pre-commit holds body.
 	writeEnabledHook := func(t *testing.T, body string) string {
 		t.Helper()
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
@@ -407,7 +414,7 @@ func TestCheckSealHook(t *testing.T) {
 	// --- Four-state model (§2.7/§2.11) ---
 
 	t.Run("dormant: no marker, no hook → PASS not enabled here", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -415,7 +422,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("dormant: no marker, foreign hook without ethos → PASS not enabled here", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
@@ -434,7 +441,7 @@ func TestCheckSealHook(t *testing.T) {
 		if _, err := exec.LookPath("git"); err != nil {
 			t.Skip("git not available")
 		}
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		witness := filepath.Join(dir, "witness")
@@ -455,18 +462,22 @@ func TestCheckSealHook(t *testing.T) {
 	// failure unrelated to the hook at all — no git on PATH, here — leaked
 	// through as a FAIL on a repo that was never enabled, contradicting
 	// that documented state. No `exec.LookPath("git")` skip: the whole
-	// point is that a dormant repo must PASS even when the sandbox
-	// couldn't have run at all.
-	t.Run("dormant: no git on PATH still PASSes — execution never attempted (S2/P1)", func(t *testing.T) {
-		dir := t.TempDir()
+	// point is that a dormant repo never FAILs, even when the sandbox
+	// couldn't have run at all; it is a WARN, since the hooks git really runs
+	// cannot be inspected.
+	t.Run("dormant: no git on PATH is WARN cannot verify hooks — execution never attempted (S2/P1)", func(t *testing.T) {
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\ntrue\n"), 0o755))
 
 		t.Setenv("PATH", t.TempDir()) // no git anywhere on PATH
 		r := CheckSealHook(dir)
-		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
-		assert.Equal(t, "not enabled here", r.Detail)
+		// The degraded hooks-dir lookup is named, and it never fails a dormant
+		// repo.
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
+		assert.Contains(t, r.Detail, "install git")
 	})
 
 	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
@@ -482,7 +493,7 @@ func TestCheckSealHook(t *testing.T) {
 	// — is a call assembled dynamically (eval, a variable) that no lexical
 	// scan, marker-based or pattern-based, can see without executing it.
 	t.Run("dormant: a textually-literal unmarked standalone call now WARNs (qodo #5, supersedes P5)", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		// No BEGIN/END markers — hasMarkerSection cannot see this call —
@@ -504,7 +515,7 @@ func TestCheckSealHook(t *testing.T) {
 	// execute. This is the same djb-reviewed trade-off P5 named, narrowed
 	// to the one shape lexical detection genuinely cannot close.
 	t.Run("dormant: an eval-obscured standalone call still PASSes — the narrower residual lexical scanning cannot close", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
@@ -519,7 +530,7 @@ func TestCheckSealHook(t *testing.T) {
 		// A foreign hook that only documents the marker text inside a heredoc,
 		// on a repo with no enabled marker, must not read as a chained section
 		// (no false WARN) — the marker scan consults the heredoc mask (E2).
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		body := "#!/bin/sh\ncat <<'EOF'\n# --- BEGIN ETHOS DES-058 SEAL ---\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
@@ -530,7 +541,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
@@ -542,7 +553,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("enabled but no pre-commit hook → FAIL", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		mark(t, dir)
 		r := CheckSealHook(dir)
@@ -558,7 +569,7 @@ func TestCheckSealHook(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses directory permissions")
 		}
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		zone := filepath.Join(dir, ".punt-labs", "ethos")
 		require.NoError(t, os.MkdirAll(zone, 0o755))
@@ -736,7 +747,7 @@ func TestCheckSealHook(t *testing.T) {
 	// what Chain would produce, so it correctly stays FAIL), this uses the
 	// real githook.Chain output.
 	t.Run("P4: a genuinely current section still WARNs, not FAILs, when the host section exits first", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooksDir := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 		hookPath := filepath.Join(hooksDir, "pre-commit")
@@ -781,7 +792,7 @@ func TestCheckSealHook(t *testing.T) {
 		sandboxGOOS = "linux"
 		t.Cleanup(func() { sandboxGOOS = orig })
 
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
@@ -806,7 +817,7 @@ func TestCheckSealHook(t *testing.T) {
 		sandboxGOOS = "linux"
 		t.Cleanup(func() { sandboxGOOS = orig })
 
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		witness := filepath.Join(t.TempDir(), "witness")
@@ -855,7 +866,7 @@ func TestCheckSealHook(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				simulateWindows(t)
 
-				dir := t.TempDir()
+				dir := repoTemp(t)
 				hooks := filepath.Join(dir, ".git", "hooks")
 				require.NoError(t, os.MkdirAll(hooks, 0o755))
 				body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
@@ -907,22 +918,27 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("gitdir file redirects hooks path", func(t *testing.T) {
-		// A submodule .git file points directly at a dir with hooks/ and
-		// no commondir — the hooks dir is target/hooks.
-		real := t.TempDir()
+		// A .git file points directly at a dir with hooks/ and no commondir
+		// (git init --separate-git-dir) — the hooks dir is target/hooks.
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		real := filepath.Join(t.TempDir(), "gitdir")
+		wt := t.TempDir()
+		cmd := testhelpers.GitCommand("init", "-q", "--separate-git-dir", real, wt)
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
 		hooks := filepath.Join(real, "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
 			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
-		wt := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
-			[]byte("gitdir: "+real+"\n"), 0o644))
 		mark(t, wt)
 		r := CheckSealHook(wt)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
 
-	t.Run("worktree resolves hooks through commondir", func(t *testing.T) {
+	t.Run("hand-built worktree layout is not trusted without git", func(t *testing.T) {
 		// Real worktree layout: the .git file points at
 		// <main>/.git/worktrees/<name>, which has a commondir file (../..)
 		// back to the main .git — where the hooks actually live. The seal
@@ -947,9 +963,11 @@ func TestCheckSealHook(t *testing.T) {
 			[]byte("gitdir: "+wtAdmin+"\n"), 0o644))
 		mark(t, wt)
 
+		// git does not know this layout (the main .git is not a repository), so
+		// the commondir guess is reported, not judged: an enabled repo FAILs.
 		r := CheckSealHook(wt)
-		assert.True(t, r.Passed(), "detail: %s", r.Detail)
-		assert.Contains(t, r.Detail, "standalone")
+		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "cannot verify hooks:")
 	})
 
 	t.Run("worktree via real git worktree add", func(t *testing.T) {
@@ -959,9 +977,9 @@ func TestCheckSealHook(t *testing.T) {
 		mainDir := t.TempDir()
 		gitRun := func(dir string, args ...string) {
 			t.Helper()
-			cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+			cmd := testhelpers.GitCommand(append([]string{"-c", "commit.gpgsign=false"}, args...)...)
 			cmd.Dir = dir
-			cmd.Env = append(os.Environ(),
+			cmd.Env = append(cmd.Env,
 				"HOME="+t.TempDir(),
 				"GIT_CONFIG_GLOBAL=/dev/null",
 				"GIT_CONFIG_SYSTEM=/dev/null",
@@ -992,12 +1010,12 @@ func TestCheckSealHook(t *testing.T) {
 			t.Skip("git not available")
 		}
 		repo := t.TempDir()
-		cmd := exec.Command("git", "-C", repo, "init", "-q")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd := testhelpers.GitCommand("-C", repo, "init", "-q")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git init: %s", out)
-		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd = testhelpers.GitCommand("-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err = cmd.CombinedOutput()
 		require.NoError(t, err, "git config: %s", out)
 
@@ -1028,12 +1046,12 @@ func TestCheckSealHook(t *testing.T) {
 			t.Skip("git not available")
 		}
 		repo := t.TempDir()
-		cmd := exec.Command("git", "-C", repo, "init", "-q")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd := testhelpers.GitCommand("-C", repo, "init", "-q")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git init: %s", out)
-		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd = testhelpers.GitCommand("-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err = cmd.CombinedOutput()
 		require.NoError(t, err, "git config: %s", out)
 
@@ -1066,7 +1084,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	}
 	writeEnabledHook := func(t *testing.T, body string) string {
 		t.Helper()
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooksDir := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte(body), 0o755))
@@ -1081,7 +1099,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	})
 
 	t.Run("dormant: no marker, no hook → PASS not enabled here", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		r := CheckTrailerHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -1089,7 +1107,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	})
 
 	t.Run("enabled but no commit-msg hook → FAIL", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		mark(t, dir)
 		r := CheckTrailerHook(dir)
@@ -1130,7 +1148,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	})
 
 	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		hooksDir := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
@@ -1146,7 +1164,7 @@ func TestCheckTrailerHook(t *testing.T) {
 		if _, err := exec.LookPath("git"); err != nil {
 			t.Skip("git not available")
 		}
-		dir := t.TempDir()
+		dir := repoTemp(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		_, err := githook.Chain(filepath.Join(dir, ".git", "hooks", "commit-msg"), hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent)
 		require.NoError(t, err)
@@ -1178,7 +1196,7 @@ func TestCheckHookPresence_Bfml_Hy40Regression(t *testing.T) {
 	t.Setenv("USER", "mal")
 	t.Setenv("HOME", t.TempDir())
 
-	repo := t.TempDir()
+	repo := repoTemp(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755))
 	// The seal hook is installed and healthy — only the trailer side is
 	// missing, isolating the exact gap hy40 named.
@@ -1187,7 +1205,7 @@ func TestCheckHookPresence_Bfml_Hy40Regression(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 
-	results := RunAll(s, ss, repo, repo, nil)
+	results := RunAll(s, ss, repo, nil, repo, nil, nil)
 
 	var trailerPresence *Result
 	for i := range results {
@@ -1217,7 +1235,7 @@ var currencyTestSpec = HookSpec{
 // currencyRepo creates a bare .git/hooks dir for CheckHookCurrency tests.
 func currencyRepo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := repoTemp(t) // a real repository: a hand-made .git is a degraded lookup
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 	return dir
 }
@@ -1371,12 +1389,12 @@ func TestCheckHookCurrencyHooksPathWarning(t *testing.T) {
 		t.Skip("git not available")
 	}
 	repo := t.TempDir()
-	cmd := exec.Command("git", "-C", repo, "init", "-q")
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	cmd := testhelpers.GitCommand("-C", repo, "init", "-q")
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git init: %s", out)
-	cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	cmd = testhelpers.GitCommand("-C", repo, "config", "core.hooksPath", ".husky")
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	out, err = cmd.CombinedOutput()
 	require.NoError(t, err, "git config: %s", out)
 
@@ -1469,7 +1487,7 @@ func TestRunAllHookCurrencyIndependentOfEnabledMarker(t *testing.T) {
 	t.Setenv("USER", "mal")
 	t.Setenv("HOME", t.TempDir())
 
-	repo := t.TempDir()
+	repo := repoTemp(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755))
 	_, err := githook.Chain(filepath.Join(repo, ".git", "hooks", "pre-commit"), hooks.PreCommit, hooks.SealTag, hooks.SealIdent)
 	require.NoError(t, err)
@@ -1477,7 +1495,7 @@ func TestRunAllHookCurrencyIndependentOfEnabledMarker(t *testing.T) {
 	require.NoError(t, err)
 	// No enabled marker written — the repo stays dormant.
 
-	results := RunAll(s, ss, repo, repo, nil)
+	results := RunAll(s, ss, repo, nil, repo, nil, nil)
 	var sealCurrency, trailerCurrency *Result
 	for i := range results {
 		switch results[i].Name {
@@ -1511,8 +1529,8 @@ func TestRunAllAndHelpers(t *testing.T) {
 
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
-	results := RunAll(s, ss, "", "", nil)
-	require.Len(t, results, 14)
+	results := RunAll(s, ss, "", nil, "", nil, nil)
+	require.Len(t, results, 15)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1533,17 +1551,18 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Extension key names",
 		"Mission file hand-edits",
 		"Code archetype delegated-worker guard",
+		"Unclassified files",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 14, PassedCount(results))
+	assert.Equal(t, 15, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-	results = RunAll(s, ss, "", "", nil)
+	results = RunAll(s, ss, "", nil, "", nil, nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 13)
+	assert.Less(t, PassedCount(results), 14)
 
 	// At least one result should name the identity directory failure.
 	var found bool
@@ -1874,4 +1893,529 @@ func TestChecklistAgentNames_Real(t *testing.T) {
 	assert.Contains(t, names, "invariant-completeness-reviewer")
 	assert.NotContains(t, names, "README",
 		"README.md must not be treated as an exempted agent handle")
+}
+
+// TestHookChecksOnADegradedLookup: with git off PATH core.hooksPath cannot be
+// read, so no hook check may report a verdict on the directory it guessed. An
+// enabled repo whose hooks cannot be verified FAILs the presence check (a
+// green line would hide an unsealed repo); a dormant one WARNs, since a stale
+// chained hook in the directory git really runs would stay hidden; the currency
+// check only WARNs.
+func TestHookChecksOnADegradedLookup(t *testing.T) {
+	enabled := repoTemp(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(enabled, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(enabled, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+	dormant := repoTemp(t)
+	t.Setenv("PATH", t.TempDir()) // no git
+
+	r := CheckSealHook(enabled)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "cannot verify hooks:")
+	assert.Contains(t, r.Detail, "install git")
+
+	r = CheckTrailerHook(enabled)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+
+	r = CheckSealHook(dormant)
+	assert.Equal(t, "WARN", r.Status, r.Detail)
+	assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
+	assert.Contains(t, r.Detail, "git rev-parse")
+
+	for name, dir := range map[string]string{"enabled": enabled, "dormant": dormant} {
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
+		assert.Contains(t, r.Detail, "install git", "currency: %s", name)
+
+		r = CheckUnclassifiedFiles(dir)
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
+		assert.Contains(t, r.Detail, "install git", "unclassified: %s", name)
+	}
+}
+
+// TestHookChecksAdviceFollowsCause: with git installed, a root git reports as
+// part of another repository is told to run from its top level, never to
+// install git.
+func TestHookChecksAdviceFollowsCause(t *testing.T) {
+	parent := repoTemp(t)
+	sub := filepath.Join(parent, "sub")
+	require.NoError(t, os.MkdirAll(filepath.Join(sub, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+
+	r := CheckSealHook(sub)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "top level")
+	assert.NotContains(t, r.Detail, "install git")
+
+	for name, r := range map[string]Result{
+		"currency":     CheckHookCurrency(sub, currencyTestSpec),
+		"unclassified": CheckUnclassifiedFiles(sub),
+	} {
+		assert.Contains(t, r.Detail, "top level", name)
+		assert.NotContains(t, r.Detail, "install git", name)
+	}
+}
+
+// TestRunAllRefusedRootOverride: a refused ETHOS_REPO_ROOT is a WARN on every
+// check that reads the checkout, where being outside a repository stays PASS.
+func TestRunAllRefusedRootOverride(t *testing.T) {
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	checkout := []string{
+		"Default agent", "Orphaned agent files", "Audit seal hook", "Audit trailer hook",
+		"Seal hook currency", "Trailer hook currency", "Local extension files", "Unclassified files",
+	}
+	find := func(results []Result, name string) Result {
+		for _, r := range results {
+			if r.Name == name {
+				return r
+			}
+		}
+		t.Fatalf("no result named %q in %+v", name, results)
+		return Result{}
+	}
+
+	refused := fmt.Errorf("ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it", "/nope")
+	results := RunAll(s, ss, "", refused, "", nil, nil)
+	for _, name := range checkout {
+		r := find(results, name)
+		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
+		assert.Contains(t, r.Detail, "ETHOS_REPO_ROOT", name)
+	}
+
+	outside := fmt.Errorf("/ is %w", resolve.ErrNotInRepo)
+	results = RunAll(s, ss, "", outside, "", nil, nil)
+	for _, name := range checkout {
+		assert.Equal(t, "PASS", find(results, name).Status, name)
+	}
+	assert.Equal(t, "not scanned: not in a repository", find(results, "Unclassified files").Detail)
+}
+
+// TestRunAllRefusedStore: when the store could not be located for a reason
+// other than "not in a repository", doctor emits one FAIL row naming the
+// reason, and every check that read the store keeps its own status with a
+// note that it saw the global layer only. Being outside a repository stays
+// PASS "not in a repo", with no row and no note.
+func TestRunAllRefusedStore(t *testing.T) {
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	storeChecks := []string{
+		"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard",
+		"Identity directory", "Human identity", "Duplicate fields", "Extension key names",
+	}
+	find := func(results []Result, name string) Result {
+		for _, r := range results {
+			if r.Name == name {
+				return r
+			}
+		}
+		t.Fatalf("no result named %q in %+v", name, results)
+		return Result{}
+	}
+
+	outside := fmt.Errorf("/ is %w", resolve.ErrNotInRepo)
+	base := RunAll(s, ss, "", nil, "", outside, nil)
+	for _, r := range base {
+		assert.NotEqual(t, "Repository store", r.Name, "no row outside a repository")
+		assert.NotContains(t, r.Detail, "global layer only", r.Name)
+	}
+	for _, name := range []string{"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard"} {
+		r := find(base, name)
+		assert.Equal(t, "PASS", r.Status, name)
+		assert.Equal(t, "not in a repo", r.Detail, name)
+	}
+
+	refused := fmt.Errorf("ETHOS_REPO_ROOT=%q has no .punt-labs/ethos store; refusing to use it", "/nope")
+	results := RunAll(s, ss, "", nil, "", refused, nil)
+	row := find(results, "Repository store")
+	assert.Equal(t, "FAIL", row.Status)
+	assert.Equal(t, "not located: "+refused.Error(), row.Detail)
+	assert.True(t, AnyFailed(results), "doctor exits non-zero when every command would refuse")
+	for _, name := range storeChecks {
+		r, b := find(results, name), find(base, name)
+		if b.Status == "PASS" {
+			// It saw the global layer only, or examined nothing: it did not check
+			// the repository.
+			assert.Equal(t, "WARN", r.Status, name)
+			assert.Equal(t, "not checked: the repository store could not be located: "+refused.Error(), r.Detail, name)
+			continue
+		}
+		assert.Equal(t, b.Status, r.Status, "%s keeps its status: %s", name, r.Detail)
+		assert.Equal(t, b.Detail+" (global layer only; repo store not located: "+refused.Error()+")", r.Detail, name)
+	}
+}
+
+// A FAIL from a check is never lowered by a gate: the store gate notes the
+// global layer, the checkout gate notes the unlocated checkout.
+func TestRunAllGateKeepsFail(t *testing.T) {
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\nemail: x@example.com\n")
+	writeIdentity(t, root, "zoe", "name: Zoe\nhandle: zoe\nkind: human\nemail: x@example.com\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	refused := errors.New("git cannot resolve the repository")
+	for _, r := range RunAll(s, ss, "", refused, "", refused, nil) {
+		if r.Name == "Duplicate fields" {
+			assert.Equal(t, "FAIL", r.Status, r.Detail)
+			assert.Contains(t, r.Detail, "global layer only")
+		}
+	}
+
+	failed := Result{Name: "x", Status: "FAIL", Detail: "broken"}
+	got := gateCheckout(failed, "", refused)
+	assert.Equal(t, "FAIL", got.Status)
+	assert.Equal(t, "broken (checkout not located: git cannot resolve the repository)", got.Detail)
+	got = gateCheckout(Result{Name: "x", Status: "PASS", Detail: "fine"}, "", refused)
+	assert.Equal(t, "WARN", got.Status)
+	assert.Equal(t, "not checked: git cannot resolve the repository", got.Detail)
+	got = gateStore(failed, "", refused)
+	assert.Equal(t, "FAIL", got.Status)
+}
+
+// TestRunAllGatesEveryLocatedCheck: every check runAll (the body of RunAll) hands a located input
+// goes through checkout (repoRoot) or store (storeRoot, the identity store s,
+// the team store teams). A located input is one of those names, a value
+// derived from one (an alias, or hasRepoLocalTeam's result), however it
+// reaches the call. A call outside both gates also fails when the function it
+// calls locates a repository itself — calls resolve.*Repo* or resolve.Locate*,
+// directly or through any function in internal/doctor or internal/githook —
+// since its result would then bypass the gates. The calls are found in the
+// source, so a check added later without the gate fails here instead of
+// reading PASS for a tree it never examined.
+func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
+	runAll := parseRunAll(t, "doctor.go")
+	locating := locatingFuncs(t, map[string]string{"doctor": ".", "githook": filepath.Join("..", "githook")})
+	gated, ungated := gateAudit(runAll, locating)
+	assert.Empty(t, ungated, "checks given a located input, or locating a repository themselves, outside checkout(...) or store(...)")
+	assert.GreaterOrEqual(t, len(gated), 13, "the scan found too few gated checks: %v", gated)
+}
+
+// The audit catches a check that locates a repository through a chain of
+// helpers ending in githook, and accepts the same call inside a gate.
+func TestGateAuditCatchesTransitiveLocator(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(src), 0o644))
+	}
+	write("doctor/doctor.go", `package doctor
+
+func runAll(repoRoot string) []Result {
+	var results []Result
+	checkout := func(r Result) Result { return r }
+	results = append(results, sneaky())
+	results = append(results, checkout(sneaky()))
+	results = append(results, quiet())
+	return results
+}
+
+func sneaky() Result { return helper() }
+
+func helper() Result { githook.Find(); return Result{} }
+
+func quiet() Result { return Result{} }
+`)
+	write("githook/githook.go", `package githook
+
+func Find() { _, _ = resolve.LocateRepoRoot() }
+`)
+	runAll := parseRunAll(t, filepath.Join(dir, "doctor", "doctor.go"))
+	locating := locatingFuncs(t, map[string]string{
+		"doctor": filepath.Join(dir, "doctor"), "githook": filepath.Join(dir, "githook"),
+	})
+	assert.True(t, locating["doctor.helper"])
+	assert.True(t, locating["doctor.sneaky"])
+	assert.False(t, locating["doctor.quiet"])
+	_, ungated := gateAudit(runAll, locating)
+	assert.Equal(t, []string{"sneaky"}, ungated)
+}
+
+// parseRunAll returns the RunAll declaration in file.
+func parseRunAll(t *testing.T, file string) *ast.FuncDecl {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+	require.NoError(t, err)
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "runAll" {
+			return fn
+		}
+	}
+	t.Fatalf("no runAll in %s", file)
+	return nil
+}
+
+// locatorCall reports whether call is resolve.X for a repository locator: X
+// contains "Repo" or starts with "Locate".
+func locatorCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	name := sel.Sel.Name
+	return ok && pkg.Name == "resolve" && (strings.Contains(name, "Repo") || strings.HasPrefix(name, "Locate"))
+}
+
+// locatingFuncs returns the functions and methods ("pkg.Name") in the
+// non-test files of the packages named by dirs (package name → directory)
+// that call a repository locator, directly or through other functions in
+// those packages. A method call is matched by name, over-approximating.
+func locatingFuncs(t *testing.T, dirs map[string]string) map[string]bool {
+	t.Helper()
+	locating := map[string]bool{}
+	calls := map[string][]string{}
+	for pkg, dir := range dirs {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		require.NotEmpty(t, files, dir)
+		for _, file := range files {
+			if strings.HasSuffix(file, "_test.go") {
+				continue
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+			require.NoError(t, err)
+			for _, d := range f.Decls {
+				fn, ok := d.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				key := pkg + "." + fn.Name.Name
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					if locatorCall(call) {
+						locating[key] = true
+					} else if c := calleeKey(pkg, call, dirs); c != "" {
+						calls[key] = append(calls[key], c)
+					}
+					return true
+				})
+			}
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for key, cs := range calls {
+			if locating[key] {
+				continue
+			}
+			for _, c := range cs {
+				if locating[c] {
+					locating[key], changed = true, true
+					break
+				}
+			}
+		}
+	}
+	return locating
+}
+
+// calleeKey names the function a call in package pkg invokes, as "pkg.Name",
+// when it can be in one of dirs' packages; "" otherwise.
+func calleeKey(pkg string, call *ast.CallExpr, dirs map[string]string) string {
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		return pkg + "." + f.Name
+	case *ast.SelectorExpr:
+		if x, ok := f.X.(*ast.Ident); ok {
+			if _, isPkg := dirs[x.Name]; isPkg {
+				return x.Name + "." + f.Sel.Name
+			}
+		}
+		return pkg + "." + f.Sel.Name // a method call, matched by name
+	}
+	return ""
+}
+
+// gateAudit walks RunAll and returns the checks called inside a gate and those
+// called outside one with a located input or a locating callee.
+func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated []string) {
+	const kindCheckout, kindStore = 1, 2
+	located := map[string]int{
+		"repoRoot": kindCheckout, "storeRoot": kindStore, "s": kindStore, "teams": kindStore,
+	}
+	// hasRepoLocalTeam only chooses a message and reports false for "";
+	// gateCheckout, gateStore and unlocated are the gates themselves.
+	pure := map[string]int{"hasRepoLocalTeam": kindStore, "gateCheckout": 0, "gateStore": 0, "unlocated": 0}
+
+	// kindOf is the located kinds an expression carries: a located name, or a
+	// call to a pure derivation, directly. A nested check call is judged on its
+	// own when the walk reaches it.
+	kindOf := func(e ast.Expr) int {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return located[x.Name]
+		case *ast.CallExpr:
+			return pure[types.ExprString(x.Fun)]
+		}
+		return 0
+	}
+	// An assignment from a located value makes its targets located: aliases.
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(runAll.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			kind := 0
+			for _, r := range as.Rhs {
+				kind |= kindOf(r)
+				if call, ok := r.(*ast.CallExpr); ok && pure[types.ExprString(call.Fun)] != 0 {
+					for _, a := range call.Args {
+						kind |= kindOf(a)
+					}
+				}
+			}
+			for _, l := range as.Lhs {
+				if id, ok := l.(*ast.Ident); ok && kind != 0 && located[id.Name]|kind != located[id.Name] {
+					located[id.Name] |= kind
+					changed = true
+				}
+			}
+			return true
+		})
+	}
+
+	var walk func(n ast.Node, inCheckout, inStore bool)
+	walk = func(n ast.Node, inCheckout, inStore bool) {
+		ast.Inspect(n, func(c ast.Node) bool {
+			call, ok := c.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok && (id.Name == "checkout" || id.Name == "store") {
+				for _, a := range call.Args {
+					walk(a, inCheckout || id.Name == "checkout", inStore || id.Name == "store")
+				}
+				return false
+			}
+			name := types.ExprString(call.Fun)
+			if _, isPure := pure[name]; isPure {
+				return true
+			}
+			if !inCheckout && !inStore && locating[calleeKey("doctor", call, map[string]string{"doctor": "", "githook": ""})] {
+				ungated = append(ungated, name)
+				return true
+			}
+			kind := 0
+			for _, a := range call.Args {
+				kind |= kindOf(a)
+			}
+			if kind == 0 {
+				return true
+			}
+			if (kind&kindCheckout != 0 && !inCheckout) || (kind&kindStore != 0 && !inStore) {
+				ungated = append(ungated, name)
+			} else {
+				gated = append(gated, name)
+			}
+			return true
+		})
+	}
+	walk(runAll.Body, false, false)
+	return gated, ungated
+}
+
+// An unreadable store directory is not "not enabled": the hook presence check
+// FAILs naming it, and a store that was not located turns a "not in a repo" row
+// into a WARN that says it was not checked.
+func TestHookPresenceUnreadableStoreIsNotDormant(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root ignores them")
+	}
+	repo := repoTemp(t)
+	store := filepath.Join(repo, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(store, 0o755))
+	require.NoError(t, os.Chmod(store, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(store, 0o755) })
+
+	r := CheckSealHook(repo)
+	assert.Equal(t, "FAIL", r.Status, r.Detail)
+	assert.Contains(t, r.Detail, "cannot determine enablement here")
+	assert.NotContains(t, r.Detail, "not enabled")
+
+	g := gateStore(Result{Name: "x", Status: "PASS", Detail: "not in a repo"}, "", errors.New("store broken"))
+	assert.Equal(t, "WARN", g.Status)
+	assert.Contains(t, g.Detail, "not checked")
+	assert.NotContains(t, g.Detail, "not in a repo")
+}
+
+// gateStore's note on a FAIL is worded from the failure: under a policy issue the
+// store was located, and the note says the configuration is unusable, not that
+// the store was not located.
+func TestGateStoreNoteFollowsTheFailure(t *testing.T) {
+	policy := &resolve.ConfigError{Err: errors.New("unknown resolution"), What: "the repository's bundle or policy configuration is unusable", Policy: true}
+	g := gateStore(Result{Name: "x", Status: "FAIL", Detail: "boom"}, "", policy)
+	assert.Equal(t, "FAIL", g.Status)
+	assert.Contains(t, g.Detail, "the repository's bundle or policy configuration is unusable: unknown resolution")
+	assert.NotContains(t, g.Detail, "not located")
+
+	g = gateStore(Result{Name: "x", Status: "FAIL", Detail: "boom"}, "", errors.New("git refused"))
+	assert.Contains(t, g.Detail, "repo store not located: git refused")
+}
+
+// Under a policy issue every row RunAll classes as a store check is gated, not
+// only the identity rows: a PASS becomes "not checked" with the issue's wording,
+// a FAIL stays FAIL with the note. The store rows are those a store that was not
+// located gates, so a row added to RunAll is covered without this test naming it.
+func TestRunAllForPolicyIssueGatesEveryStoreRow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USER", "mal")
+	repo := t.TempDir()
+	ethosDir := filepath.Join(repo, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "identities"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("active_bundle: nosuchbundle\n"), 0o644))
+	s, ss := identity.NewStore(ethosDir), session.NewStore(ethosDir)
+	writeIdentity(t, ethosDir, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	writeIdentity(t, ethosDir, "zoe", "name: Zoe\nhandle: zoe\nkind: human\n")
+
+	unlocated := errors.New("store not located")
+	base := RunAll(s, ss, repo, nil, repo, nil, nil)
+	gated := RunAll(s, ss, repo, nil, "", unlocated, nil)
+	byName := func(rs []Result) map[string]Result {
+		m := map[string]Result{}
+		for _, r := range rs {
+			m[r.Name] = r
+		}
+		return m
+	}
+	baseRows := byName(base)
+
+	loc := resolve.Located{Store: repo, Ethos: ethosDir, Checkout: repo}
+	got := byName(RunAllFor(loc, s, ss, nil))
+	cfg, ok := got["Repository configuration"]
+	require.True(t, ok, "the failing configuration row")
+	assert.Equal(t, "FAIL", cfg.Status)
+
+	storeRows := 0
+	for _, g := range gated {
+		b, ok := baseRows[g.Name]
+		if !ok || (g.Detail == b.Detail && g.Status == b.Status) {
+			continue // not a store row: the gate left it alone, or it is the gate's own row
+		}
+		storeRows++
+		r := got[g.Name]
+		if b.Status == "PASS" {
+			assert.Equal(t, "WARN", r.Status, g.Name)
+			assert.True(t, strings.HasPrefix(r.Detail, "not checked: the repository's bundle or policy configuration is unusable"), "%s: %s", g.Name, r.Detail)
+			continue
+		}
+		assert.Equal(t, b.Status, r.Status, "%s keeps its status", g.Name)
+		assert.Contains(t, r.Detail, "the repository's bundle or policy configuration is unusable", g.Name)
+		assert.Contains(t, r.Detail, b.Detail, g.Name)
+	}
+	assert.GreaterOrEqual(t, storeRows, 6, "the comparison found too few store rows")
 }

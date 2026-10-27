@@ -44,7 +44,10 @@ type ActiveSession struct {
 // and the live probes follow it, while the tracked chunks are read from
 // repoRoot, the committing checkout.
 func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSession, w io.Writer) error {
-	repoID := audit.RepoIdentity(repoRoot)
+	repoID, err := audit.RepoIdentity(repoRoot)
+	if err != nil {
+		return err
+	}
 	globalSessionsDir := filepath.Join(globalRoot, "sessions")
 	tombstones, err := audit.ListTombstones(globalSessionsDir, w)
 	if err != nil {

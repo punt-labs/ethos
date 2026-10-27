@@ -73,7 +73,7 @@ func TestResolve_IamDeclaration(t *testing.T) {
 	))
 	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -123,7 +123,7 @@ func TestResolve_ToleratesLegacyKeyedParticipant(t *testing.T) {
 	))
 	require.NoError(t, ss.WriteCurrentSession(preferredPID, sessionID))
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle, "must tolerate a participant keyed on the legacy walk-derived PID")
 }
@@ -158,7 +158,7 @@ func TestResolve_ParticipantMissFallsThroughToGitOS(t *testing.T) {
 	))
 	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err, "a participant miss must not be a fatal error")
 	assert.Equal(t, "someone", handle, "must fall through to the git identity")
 }
@@ -225,7 +225,7 @@ func TestResolve_SessionFromEnv(t *testing.T) {
 	))
 	t.Setenv("ETHOS_SESSION", sessionID)
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle, "whoami must resolve the persona via ETHOS_SESSION, no PID pointer")
 }
@@ -251,7 +251,7 @@ func TestResolve_SessionAgentIDParity(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", sessionID)
 	t.Setenv("ETHOS_AGENT_ID", "bwk-codex")
 
-	handle, err := Resolve(s, ss)
+	handle, err := Resolve(s, ss, "")
 	require.NoError(t, err)
 	assert.Equal(t, "bwk", handle, "participant lookup must honor ETHOS_AGENT_ID")
 }
@@ -727,7 +727,7 @@ func TestResolve_GitNameMatchesGitHub(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human", GitHub: "mal-github",
 	})
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -739,7 +739,7 @@ func TestResolve_GitEmailMatchesEmail(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human", Email: "mal@serenity.ship",
 	})
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -762,7 +762,7 @@ func TestResolve_AmbiguousEmailFailsLoud(t *testing.T) {
 		Name: "Zoe Washburne", Handle: "zoe", Kind: "human", Email: "crew@serenity.ship",
 	}))
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.Error(t, err, "an ambiguous email must not resolve to an arbitrary identity")
 	assert.Empty(t, handle)
 	assert.Contains(t, err.Error(), "ambiguous identity: 2 matches")
@@ -776,7 +776,7 @@ func TestResolve_OSUserMatchesHandle(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
 	})
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
@@ -788,7 +788,7 @@ func TestResolve_NoMatch(t *testing.T) {
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
 	})
 
-	_, err := Resolve(s, nil)
+	_, err := Resolve(s, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown-user")
 	assert.Contains(t, err.Error(), "nobody")
@@ -808,12 +808,12 @@ func TestResolve_NoMatchHintsRepoOnly(t *testing.T) {
 	}))
 
 	layered := identity.NewLayeredStoreWithBundle(repo, nil, global, false)
-	handle, err := Resolve(layered, nil)
+	handle, err := Resolve(layered, nil, "")
 	require.NoError(t, err, "layered still finds the global identity")
 	assert.Equal(t, "nobody", handle)
 
 	repoOnly := identity.NewLayeredStoreWithBundle(repo, nil, global, true)
-	_, err = Resolve(repoOnly, nil)
+	_, err = Resolve(repoOnly, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolution: repo-only")
 	assert.Contains(t, err.Error(), "ethos vendor")
@@ -831,12 +831,12 @@ func TestResolve_PriorityOrder(t *testing.T) {
 		Name: "Other Person", Handle: "other", Kind: "human", GitHub: "other-github",
 	}))
 
-	handle, err := Resolve(s, nil)
+	handle, err := Resolve(s, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
 }
 
-// --- LoadRepoConfig tests ---
+// --- loadRepoConfig tests ---
 
 func TestLoadRepoConfig(t *testing.T) {
 	tests := []struct {
@@ -915,7 +915,7 @@ func TestLoadRepoConfig(t *testing.T) {
 			root := t.TempDir()
 			tt.setup(t, root)
 
-			cfg, err := LoadRepoConfig(root)
+			cfg, err := loadRepoConfig(root)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -945,7 +945,7 @@ func TestLoadRepoConfig_PermissionError(t *testing.T) {
 	require.NoError(t, os.Chmod(f, 0o000))
 	t.Cleanup(func() { os.Chmod(f, 0o644) }) //nolint:errcheck
 
-	cfg, err := LoadRepoConfig(root)
+	cfg, err := loadRepoConfig(root)
 	require.Error(t, err)
 	assert.Nil(t, cfg)
 	assert.Contains(t, err.Error(), "reading")
@@ -1007,7 +1007,7 @@ func TestResolveAgent_NoAgentField(t *testing.T) {
 // TestResolveAgent_MalformedYAML verifies that a .punt-labs/ethos.yaml
 // that exists but cannot be parsed produces an error containing both
 // the "resolve agent" outer wrap and the inner "parsing repo config"
-// wrap from LoadRepoConfig. Pre-dc0, this path silently logged to
+// wrap from loadRepoConfig. Pre-dc0, this path silently logged to
 // stderr and returned the empty string, making every caller treat
 // "broken config" and "not configured" as the same case.
 func TestResolveAgent_MalformedYAML(t *testing.T) {
@@ -1024,7 +1024,7 @@ func TestResolveAgent_MalformedYAML(t *testing.T) {
 	assert.Contains(t, err.Error(), "resolve agent",
 		"outer wrap must name the operation")
 	assert.Contains(t, err.Error(), "parsing repo config",
-		"inner wrap from LoadRepoConfig must be preserved")
+		"inner wrap from loadRepoConfig must be preserved")
 }
 
 // TestResolveAgent_PermissionError verifies the non-parse read-error
@@ -1107,7 +1107,7 @@ func TestResolveTeam_MalformedYAML(t *testing.T) {
 	assert.Contains(t, err.Error(), "resolve team",
 		"outer wrap must name the operation")
 	assert.Contains(t, err.Error(), "parsing repo config",
-		"inner wrap from LoadRepoConfig must be preserved")
+		"inner wrap from loadRepoConfig must be preserved")
 }
 
 // TestResolveTeam_PermissionError mirrors TestResolveAgent_PermissionError
@@ -1240,11 +1240,11 @@ func TestResolveResolution_NoRepoOrConfig(t *testing.T) {
 	assert.Equal(t, ResolutionLayered, got)
 }
 
-// --- FindRepoRoot tests ---
+// --- checkoutRootIfAny tests ---
 
 func TestFindRepoRoot_FindsGitDir(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, root)
 	subdir := filepath.Join(root, "a", "b", "c")
 	require.NoError(t, os.MkdirAll(subdir, 0o755))
 
@@ -1253,7 +1253,9 @@ func TestFindRepoRoot_FindsGitDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 	require.NoError(t, os.Chdir(subdir))
 
-	assert.Equal(t, root, FindRepoRoot())
+	got, err := checkoutRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, root, got)
 }
 
 func TestFindRepoRoot_NoGitDir(t *testing.T) {
@@ -1265,7 +1267,8 @@ func TestFindRepoRoot_NoGitDir(t *testing.T) {
 
 	// May find a .git above the temp dir on some systems.
 	// The important thing is it doesn't panic or error.
-	result := FindRepoRoot()
+	result, err := checkoutRootIfAny()
+	require.NoError(t, err)
 	if result != "" {
 		// Found a .git somewhere above — valid on dev machines.
 		_, err := os.Stat(filepath.Join(result, ".git"))
@@ -1274,9 +1277,9 @@ func TestFindRepoRoot_NoGitDir(t *testing.T) {
 }
 
 // TestStoreRepoRoot_LinkedWorktree pins the ethos-yofr fix: from inside a
-// linked git worktree, StoreRepoRoot (and FindRepoEthosRoot, which rides on
+// linked git worktree, storeRootIfAny (and ethosRootOf, which rides on
 // it) resolves the MAIN work tree that holds .punt-labs/ethos, while
-// FindRepoRoot keeps returning the worktree for per-checkout state.
+// checkoutRootIfAny keeps returning the worktree for per-checkout state.
 func TestStoreRepoRoot_LinkedWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -1296,12 +1299,18 @@ func TestStoreRepoRoot_LinkedWorktree(t *testing.T) {
 
 	chdir(t, wt)
 
-	assert.Equal(t, realpath(t, main), realpath(t, StoreRepoRoot()),
+	store, err := storeRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, main), realpath(t, store),
 		"the store must resolve to the main work tree that holds .punt-labs/ethos")
-	assert.Equal(t, realpath(t, ethosRoot), realpath(t, FindRepoEthosRoot()),
-		"FindRepoEthosRoot rides on StoreRepoRoot, so the repo store resolves from the worktree")
-	assert.Equal(t, realpath(t, wt), realpath(t, FindRepoRoot()),
-		"FindRepoRoot stays worktree-local for per-checkout state")
+	ethos, err := ethosRootOf(store)
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, ethosRoot), realpath(t, ethos),
+		"ethosRootOf rides on the store root, so the repo store resolves from the worktree")
+	checkout, err := checkoutRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, realpath(t, wt), realpath(t, checkout),
+		"checkoutRootIfAny stays worktree-local for per-checkout state")
 }
 
 // TestRepoRoot_EnvOverrideValid pins that a well-formed ETHOS_REPO_ROOT
@@ -1311,9 +1320,12 @@ func TestRepoRoot_EnvOverrideValid(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755))
 	t.Setenv("ETHOS_REPO_ROOT", dir)
-	assert.Equal(t, dir, FindRepoRoot())
-	assert.Equal(t, dir, StoreRepoRoot())
-	assert.Equal(t, dir, EnvRepoRoot())
+	checkout, err := checkoutRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, dir, checkout)
+	store, err := storeRootIfAny()
+	require.NoError(t, err)
+	assert.Equal(t, dir, store)
 }
 
 // TestRepoRoot_EnvOverrideInvalid pins the SFH F1 fix: an override that
@@ -1324,74 +1336,101 @@ func TestRepoRoot_EnvOverrideInvalid(t *testing.T) {
 	t.Run("nonexistent path is refused", func(t *testing.T) {
 		bogus := filepath.Join(t.TempDir(), "does-not-exist")
 		t.Setenv("ETHOS_REPO_ROOT", bogus)
-		out := captureStderr(t, func() {
-			assert.Equal(t, "", StoreRepoRoot())
-			assert.Equal(t, "", FindRepoRoot())
-		})
-		assert.Contains(t, out, bogus)
-		assert.Contains(t, out, "refusing to use it")
+		store, err := storeRootIfAny()
+		require.Error(t, err)
+		assert.Empty(t, store)
+		assert.Contains(t, err.Error(), bogus)
+		assert.Contains(t, err.Error(), "refusing to use it")
+		checkout, err := checkoutRootIfAny()
+		require.Error(t, err)
+		assert.Empty(t, checkout)
 	})
 
-	t.Run("no store is refused by StoreRepoRoot but accepted by FindRepoRoot", func(t *testing.T) {
+	t.Run("no store is refused by storeRootIfAny but accepted by checkoutRootIfAny", func(t *testing.T) {
 		dir := t.TempDir() // exists, but has no .punt-labs/ethos
 		t.Setenv("ETHOS_REPO_ROOT", dir)
+		store, err := storeRootIfAny()
+		require.Error(t, err, "the store root requires a .punt-labs/ethos store")
+		assert.Empty(t, store)
+		assert.Contains(t, err.Error(), dir)
+		assert.Contains(t, err.Error(), ".punt-labs")
+		checkout, err := checkoutRootIfAny()
+		require.NoError(t, err, "the checkout root only requires the directory to exist")
+		assert.Equal(t, dir, checkout)
+	})
+}
+
+// The resolvers run on every command and hook: the same refusal or stale
+// worktree is said once per process, not once per call.
+func TestResolverMessagesPrintOnce(t *testing.T) {
+	t.Run("refused override is an error, not a message", func(t *testing.T) {
+		bogus := filepath.Join(t.TempDir(), "does-not-exist")
+		t.Setenv("ETHOS_REPO_ROOT", bogus)
 		out := captureStderr(t, func() {
-			assert.Equal(t, "", StoreRepoRoot(),
-				"StoreRepoRoot requires a .punt-labs/ethos store")
-			assert.Equal(t, dir, FindRepoRoot(),
-				"FindRepoRoot only requires the directory to exist (per-checkout state)")
+			_, err := storeRootIfAny()
+			assert.Error(t, err)
+			_, err = checkoutRootIfAny()
+			assert.Error(t, err)
 		})
-		assert.Contains(t, out, dir)
-		assert.Contains(t, out, ".punt-labs")
+		assert.Empty(t, out, "the refusal is returned to the caller; nothing is printed on its behalf")
 	})
+
 }
 
-// TestStoreRepoRoot_StaleWorktreeWarns pins the SFH F2 fix: when a
-// worktree's git dir is gone (the main repo moved or was deleted), the
-// resolver warns and falls back to the worktree store rather than silently
-// treating the stale pointer as a clean submodule.
-func TestStoreRepoRoot_StaleWorktreeWarns(t *testing.T) {
-	dir := t.TempDir()
-	// A .git file pointing at a git dir that does not exist — the shape of a
-	// worktree whose main repo has moved. manualStoreRoot handles this
-	// directly; call it so the test does not depend on git's own behavior.
-	gone := filepath.Join(t.TempDir(), "gone", ".git", "worktrees", "wt")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
-		[]byte("gitdir: "+gone+"\n"), 0o644))
-
-	out := captureStderr(t, func() {
-		assert.Equal(t, realpath(t, dir), realpath(t, manualStoreRoot(dir)),
-			"a stale worktree falls back to its own store")
-	})
-	assert.Contains(t, out, "may have moved")
-	assert.Contains(t, out, gone)
+// locateStoreRoot returns an unreadable worktree pointer as its error and
+// prints nothing of it, with git or without: falling back to the worktree's
+// own store would write into the wrong tree.
+func TestLocateStoreRootRefusesUnreadableCommondir(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "git", false: "no git"}[withGit], func(t *testing.T) {
+			if withGit {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("git not installed")
+				}
+			}
+			dir := t.TempDir()
+			admin := filepath.Join(dir, "admin")
+			makeGitDirAt(t, admin)
+			require.NoError(t, os.Mkdir(filepath.Join(admin, "commondir"), 0o755)) // unreadable as a file
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+admin+"\n"), 0o644))
+			t.Chdir(dir)
+			if !withGit {
+				hideGit(t)
+			}
+			var got string
+			var err error
+			out := captureStderr(t, func() { got, err = locateStoreRoot() })
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrNotInRepo)
+			assert.Empty(t, got)
+			assert.Empty(t, out)
+		})
+	}
 }
 
-// TestStoreRepoRoot_SubmoduleWorktreeStaysOut pins the SFH F4 fix: a common
-// dir that is not a .git directory (e.g. a submodule's .git/modules/<name>)
-// must not resolve to a bogus root inside .git — gitStoreRoot keeps the
-// worktree.
-func TestStoreRepoRoot_SubmoduleWorktreeStaysOut(t *testing.T) {
-	// gitStoreRoot's decision hinges on filepath.Base(common). A common dir
-	// under .git/modules has a basename that is the module name, not ".git",
-	// so the resolver must decline to take its parent. manualStoreRoot
-	// applies the same guard; exercise it with a commondir that resolves to
-	// a modules dir.
-	dir := t.TempDir()
-	// The module admin dir lives under a super-repo's .git/modules, not under
-	// the worktree — the worktree's .git is a file pointing at it.
-	admin := filepath.Join(t.TempDir(), "super", ".git", "modules", "sub")
-	require.NoError(t, os.MkdirAll(admin, 0o755))
-	// commondir points at the module admin dir itself (basename "sub").
-	require.NoError(t, os.WriteFile(filepath.Join(admin, "commondir"), []byte(".\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
-		[]byte("gitdir: "+admin+"\n"), 0o644))
-
-	got := manualStoreRoot(dir)
-	assert.Equal(t, realpath(t, dir), realpath(t, got),
-		"a non-.git common dir must not resolve into .git/modules")
-	assert.NotContains(t, got, ".git",
-		"the resolved root must not sit inside a .git path")
+// A submodule's common dir is its own .git/modules/<name>, not a .git: the
+// store stays in the submodule's work tree, never inside .git.
+func TestStoreRepoRoot_SubmoduleStaysOut(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		t.Run(map[bool]string{true: "git", false: "no git"}[withGit], func(t *testing.T) {
+			if withGit {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("git not installed")
+				}
+			}
+			dir := t.TempDir()
+			admin := filepath.Join(t.TempDir(), "super", ".git", "modules", "sub")
+			makeGitDirAt(t, admin)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+admin+"\n"), 0o644))
+			t.Chdir(dir)
+			if !withGit {
+				hideGit(t)
+			}
+			got, err := locateStoreRoot()
+			require.NoError(t, err)
+			assert.Equal(t, realpath(t, dir), realpath(t, got))
+		})
+	}
 }
 
 // realpath resolves symlinks so a comparison holds on macOS, where
@@ -1437,13 +1476,19 @@ var captureStderr = testhelpers.CaptureStderr
 func TestGitConfig_ReadsValue(t *testing.T) {
 	setGitConfig(t, "test-user", "test@example.com")
 
-	assert.Equal(t, "test-user", GitConfig("user.name"))
-	assert.Equal(t, "test@example.com", GitConfig("user.email"))
+	name, err := GitConfig("", "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "test-user", name)
+	email, err := GitConfig("", "user.email")
+	require.NoError(t, err)
+	assert.Equal(t, "test@example.com", email)
 }
 
 func TestGitConfig_MissingKey(t *testing.T) {
 	setGitConfig(t, "", "")
-	assert.Equal(t, "", GitConfig("user.name"))
+	v, err := GitConfig("", "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "", v)
 }
 
 // --- parseRepoName tests ---
@@ -1493,7 +1538,9 @@ func TestRepoName(t *testing.T) {
 			runGit(t, dir, "init")
 			runGit(t, dir, "remote", "add", "origin", tt.url)
 
-			assert.Equal(t, tt.want, RepoName())
+			got, err := RepoName(".")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -1508,7 +1555,9 @@ func TestRepoName_NoRemote(t *testing.T) {
 	setGitConfig(t, "", "")
 	runGit(t, dir, "init")
 
-	assert.Equal(t, "", RepoName())
+	got, err := RepoName(".")
+	require.NoError(t, err)
+	assert.Equal(t, "", got)
 }
 
 // --- ResolveMaxDelegationDepth tests (DES-054 v5) ---
@@ -1615,8 +1664,382 @@ func TestResolveMaxDelegationDepth(t *testing.T) {
 // runGit runs a git command in the given directory.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testhelpers.GitCommand(args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
+}
+
+// --- locateRepoRoot tests ---
+
+func TestLocateRepoRoot(t *testing.T) {
+	t.Run("finds the root", func(t *testing.T) {
+		root := t.TempDir()
+		testhelpers.MakeGitDir(t, root)
+		t.Chdir(root)
+		got, err := locateRepoRoot()
+		require.NoError(t, err)
+		assert.Equal(t, root, got)
+	})
+
+	t.Run("invalid override names ETHOS_REPO_ROOT", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "nope"))
+		got, err := locateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	})
+
+	t.Run("not in a repository", func(t *testing.T) {
+		if _, err := os.Stat("/.git"); err == nil {
+			t.Skip("/ is inside a repository")
+		}
+		t.Chdir("/")
+		got, err := locateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not inside a git repository")
+	})
+
+	t.Run("not in a repository wraps ErrNotInRepo", func(t *testing.T) {
+		if _, err := os.Stat("/.git"); err == nil {
+			t.Skip("/ is inside a repository")
+		}
+		t.Chdir("/")
+		_, err := locateRepoRoot()
+		assert.ErrorIs(t, err, ErrNotInRepo)
+	})
+
+	t.Run("a .git that cannot be examined is an error, not no repo", func(t *testing.T) {
+		inner := unexaminableGit(t, emptyGitFile)
+		got, err := locateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepo)
+		assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
+	})
+
+	t.Run("unreadable working directory", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "gone")
+		require.NoError(t, os.Mkdir(dir, 0o755))
+		t.Chdir(dir)
+		if err := os.Remove(dir); err != nil {
+			t.Skipf("cannot remove the working directory: %v", err)
+		}
+		if _, err := os.Getwd(); err == nil {
+			t.Skip("Getwd still works after removal on this platform")
+		}
+		got, err := locateRepoRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "working directory")
+	})
+}
+
+// unexaminableGit makes a nested directory under an enclosing repository whose
+// own .git is built by mk, and makes it the working directory.
+func unexaminableGit(t *testing.T, mk func(dot string) error) string {
+	t.Helper()
+	outer := t.TempDir()
+	testhelpers.MakeGitDir(t, outer)
+	inner := filepath.Join(outer, "inner")
+	require.NoError(t, os.Mkdir(inner, 0o755))
+	if err := mk(filepath.Join(inner, ".git")); err != nil {
+		t.Skipf("making .git: %v", err)
+	}
+	t.Chdir(inner)
+	return inner
+}
+
+func emptyGitFile(dot string) error { return os.WriteFile(dot, nil, 0o644) }
+
+// A .git that git itself cannot read stops storeRootIfAny: walking past it
+// would resolve the enclosing repository and write into the wrong store.
+func TestStoreRootIfAnyStopsAtUnexaminableGit(t *testing.T) {
+	inner := unexaminableGit(t, emptyGitFile)
+	got, err := storeRootIfAny()
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
+}
+
+func TestLocateStoreRoot(t *testing.T) {
+	t.Run("unreadable .git is an error", func(t *testing.T) {
+		inner := unexaminableGit(t, emptyGitFile)
+		got, err := locateStoreRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepo)
+		assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
+	})
+
+	t.Run("refused override is an error", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
+		got, err := locateStoreRoot()
+		assert.Empty(t, got)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepo)
+		assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+		assert.ErrorIs(t, err, ErrOverrideNoStore)
+	})
+
+	// Only a store that is simply not there is "no store yet"; one ethos cannot
+	// read is a refusal enable must not treat as a fresh repository.
+	t.Run("override with a store that cannot be read is not ErrOverrideNoStore", func(t *testing.T) {
+		mk := map[string]func(t *testing.T, root string){
+			"dangling .punt-labs/ethos": func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+				require.NoError(t, os.Symlink(filepath.Join(root, "nowhere"), filepath.Join(root, ".punt-labs", "ethos")))
+			},
+			"dangling .punt-labs": func(t *testing.T, root string) {
+				require.NoError(t, os.Symlink(filepath.Join(root, "nowhere"), filepath.Join(root, ".punt-labs")))
+			},
+			".punt-labs/ethos is a file": func(t *testing.T, root string) {
+				require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos"), []byte("x"), 0o644))
+			},
+		}
+		for name, f := range mk {
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				f(t, root)
+				t.Setenv("ETHOS_REPO_ROOT", root)
+				_, err := locateStoreRoot()
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, ErrOverrideNoStore)
+				assert.Contains(t, err.Error(), filepath.Join(root, ".punt-labs"))
+			})
+		}
+	})
+
+	t.Run("outside a repository wraps ErrNotInRepo", func(t *testing.T) {
+		if _, err := os.Stat("/.git"); err == nil {
+			t.Skip("/ is inside a repository")
+		}
+		t.Chdir("/")
+		_, err := locateStoreRoot()
+		assert.ErrorIs(t, err, ErrNotInRepo)
+	})
+}
+
+// checkoutRootIfAny reports why it found nothing when the cause is not simply
+// "outside a repository".
+func TestCheckoutRootIfAnyReportsUnexaminableGit(t *testing.T) {
+	inner := unexaminableGit(t, emptyGitFile)
+	got, err := checkoutRootIfAny()
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), filepath.Join(inner, ".git"))
+}
+
+func TestCheckoutRootIfAnySilentOutsideARepo(t *testing.T) {
+	if _, err := os.Stat("/.git"); err == nil {
+		t.Skip("/ is inside a repository")
+	}
+	t.Chdir("/")
+	var got string
+	var err error
+	out := captureStderr(t, func() { got, err = checkoutRootIfAny() })
+	require.NoError(t, err, "outside a repository is not a failure")
+	assert.Empty(t, got)
+	assert.Empty(t, out)
+}
+
+// A trace2 target in the user's git config writes to every git's stderr.
+// `git config core.bare` still answers "unset" by its exit status, so a linked
+// worktree still finds the main work tree's store. Classifying by empty stderr
+// would turn this into a refusal.
+func TestLinkedWorktreeStoreUnderTrace2(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(main, ".punt-labs", "ethos"), 0o755))
+	gitRepo(t, main)
+	runGit(t, main, "config", "--unset", "core.bare") // so `git config core.bare` exits 1
+	wt := filepath.Join(base, "wt")
+	runGit(t, main, "worktree", "add", wt)
+
+	cfg := filepath.Join(base, "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[trace2]\n\tnormalTarget = 2\n\teventTarget = 2\n\tperfTarget = 2\n"), 0o644))
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	chdir(t, wt)
+
+	loc := Roots()
+	require.NoError(t, loc.StoreFailure(), "core.bare unset is exit 1, whatever git wrote to stderr")
+	assert.Equal(t, realpath(t, main), realpath(t, loc.Store))
+}
+
+// The git identity and the origin come from the located checkout, not the
+// working directory: under ETHOS_REPO_ROOT the two are different repositories,
+// and outside any repository the working directory's repository is not read at
+// all.
+func TestGitReadsUseTheLocatedCheckout(t *testing.T) {
+	setGitConfig(t, "global-user", "global@example.com")
+	base := t.TempDir()
+	a := filepath.Join(base, "a")
+	b := filepath.Join(base, "b")
+	for _, d := range []string{a, b} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+		runGit(t, d, "init")
+	}
+	runGit(t, a, "config", "user.name", "alice")
+	runGit(t, a, "remote", "add", "origin", "git@github.com:punt-labs/a.git")
+	runGit(t, b, "config", "user.name", "bob")
+	runGit(t, b, "remote", "add", "origin", "git@github.com:punt-labs/b.git")
+	chdir(t, b) // the working directory is the other repository
+
+	name, err := GitConfig(a, "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "alice", name, "the checkout's own config")
+	repo, err := RepoName(a)
+	require.NoError(t, err)
+	assert.Equal(t, "punt-labs/a", repo, "the checkout's origin, not the cwd's")
+
+	name, err = GitConfig("", "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "global-user", name, "no checkout: the global config, never the cwd repository's")
+	repo, err = RepoName("")
+	require.NoError(t, err)
+	assert.Empty(t, repo, "no checkout: no repository name")
+}
+
+// GitConfig with no checkout is a plain `git config` outside any repository:
+// [include] in the global config, GIT_CONFIG_COUNT config and a broken .git in
+// the working directory are all as git itself would see them.
+func TestGitConfigWithNoCheckoutSeesTheWholeUserConfig(t *testing.T) {
+	base := t.TempDir()
+	inc := filepath.Join(base, "included")
+	require.NoError(t, os.WriteFile(inc, []byte("[user]\n\tname = from-include\n"), 0o644))
+	global := filepath.Join(base, "gitconfig")
+	require.NoError(t, os.WriteFile(global, []byte("[include]\n\tpath = "+inc+"\n[user]\n\temail = global@example.com\n"), 0o644))
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	t.Run("include", func(t *testing.T) {
+		v, err := GitConfig("", "user.name")
+		require.NoError(t, err)
+		assert.Equal(t, "from-include", v)
+	})
+	t.Run("GIT_CONFIG_COUNT", func(t *testing.T) {
+		t.Setenv("GIT_CONFIG_COUNT", "1")
+		t.Setenv("GIT_CONFIG_KEY_0", "user.signingkey")
+		t.Setenv("GIT_CONFIG_VALUE_0", "KEY123")
+		v, err := GitConfig("", "user.signingkey")
+		require.NoError(t, err)
+		assert.Equal(t, "KEY123", v)
+	})
+	t.Run("a cwd with an invalid gitfile", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".git"), []byte("not a gitfile\n"), 0o644))
+		chdir(t, cwd)
+		v, err := GitConfig("", "user.email")
+		require.NoError(t, err, "the user's config does not depend on the working directory's repository")
+		assert.Equal(t, "global@example.com", v)
+	})
+}
+
+// An unreadable user git config is not an unset key: the value may be in it.
+// Identity resolution reports the error and never falls through to $USER.
+func TestUnreadableGitConfigIsAnErrorNotUnset(t *testing.T) {
+	skipIfRoot(t)
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[user]\n\tname = hidden\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", "")                    // registers the restore ...
+	require.NoError(t, os.Unsetenv("GIT_CONFIG_GLOBAL")) // ... then really unsets it
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	v, err := GitConfig("", "user.name")
+	require.Error(t, err)
+	assert.Empty(t, v)
+	assert.Contains(t, err.Error(), cfg)
+
+	// The whole chain: a user named for the OS user must not be returned.
+	s := identity.NewStore(t.TempDir())
+	require.NoError(t, s.Save(&identity.Identity{Name: "Os User", Handle: "osuser", Kind: "human"}))
+	t.Setenv("USER", "osuser")
+	handle, err := Resolve(s, nil, "")
+	require.Error(t, err, "got %q", handle)
+	assert.Contains(t, err.Error(), cfg)
+}
+
+// A trace2 target in the user's config (normal and perf, brief or not) writes
+// to every git's stderr. The environment switches it off for every git ethos
+// runs (these cases pin that; they pass at every commit since 77cebf7), so an unset user.name is unset: GitConfig answers "" and Resolve falls
+// through to the next step instead of reporting an error.
+func TestTrace2FromConfigDoesNotMakeUnsetAnError(t *testing.T) {
+	for name, cfg := range map[string]string{
+		"normal": "[trace2]\n\tnormalTarget = true\n\tnormalBrief = true\n",
+		"perf":   "[trace2]\n\tperfTarget = true\n\tperfBrief = true\n",
+		// The event target beside a brief normal target (lines with no
+		// timestamp). It fails only on a reader that recognises trace formats
+		// instead of switching trace2 off by the environment (before 77cebf7);
+		// at later commits it pins behaviour that already holds.
+		"event and brief normal": "[trace2]\n\teventTarget = true\n\tnormalTarget = true\n\tnormalBrief = true\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "gitconfig")
+			require.NoError(t, os.WriteFile(path, []byte(cfg), 0o644))
+			t.Setenv("GIT_CONFIG_GLOBAL", path)
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			v, err := GitConfig("", "user.name")
+			require.NoError(t, err)
+			assert.Empty(t, v)
+
+			s := identity.NewStore(t.TempDir())
+			require.NoError(t, s.Save(&identity.Identity{Name: "Os User", Handle: "osuser", Kind: "human"}))
+			t.Setenv("USER", "osuser")
+			handle, err := Resolve(s, nil, "")
+			require.NoError(t, err)
+			assert.Equal(t, "osuser", handle)
+		})
+	}
+}
+
+// The neutral directory for a user-config read lives under TMPDIR. A dangling
+// .git above TMPDIR must not refuse it: the walk stops at the ceiling the git it
+// is for has, which is the neutral directory's parent.
+func TestNeutralReadIsNotRefusedByADanglingGitAboveTmpdir(t *testing.T) {
+	base := t.TempDir()
+	if err := os.Symlink(filepath.Join(base, "nowhere"), filepath.Join(base, ".git")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	tmp := filepath.Join(base, "tmp")
+	require.NoError(t, os.Mkdir(tmp, 0o755))
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(base, "none"))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "none"), []byte("[user]\n\tname = fine\n"), 0o644))
+	// The process's own ceiling is deliberately unset: only the spec's counts.
+	t.Setenv("GIT_CEILING_DIRECTORIES", "")
+
+	v, err := GitConfig("", "user.name")
+	require.NoError(t, err)
+	assert.Equal(t, "fine", v)
+}
+
+// `git config --file` does not skip an unreadable file silently: it exits 1 with
+// "warning: unable to access" on stderr, and configBare rejects that because the
+// stderr is not clean, so it needs no user-config readability check. This pins
+// behaviour that already held; it was written to document it, not to drive it.
+func TestConfigBareUnreadableRepoConfigIsAnError(t *testing.T) {
+	skipIfRoot(t)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	common := t.TempDir()
+	cfg := filepath.Join(common, "config")
+	require.NoError(t, os.WriteFile(cfg, []byte("[core]\n\tbare = true\n"), 0o644))
+	require.NoError(t, os.Chmod(cfg, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	_, err = configBare(git, common)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), cfg)
 }

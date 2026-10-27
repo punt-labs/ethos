@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -148,7 +149,7 @@ func (s *Store) write(a *ADR) error {
 		return fmt.Errorf("marshaling ADR: %w", err)
 	}
 	dest := s.path(a.ID)
-	tmp := dest + ".tmp"
+	tmp := layout.TmpPath(dest)
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp ADR: %w", err)
 	}

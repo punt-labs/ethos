@@ -142,6 +142,7 @@ func runHookSessionStart() error {
 		Sessions: sessionStore(),
 		Teams:    layeredTeamStore(is),
 		Roles:    layeredRoleStore(is),
+		Issue:    currentRoots().configIssue(),
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)
@@ -159,31 +160,47 @@ func runHookSessionEnd() error {
 
 func runHookSubagentStart() error {
 	s := identityStore()
-	ss := sessionStore()
-	// Phase 3.3: wire the mission store and live hash sources so the
-	// verifier hash gate enforces frozen-evaluator pinning at every
-	// subagent spawn. A drift between mission create and verifier
-	// spawn refuses the spawn with a fatal, operator-readable error.
-	ms := missionStore()
-	hashSources, err := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
-	if err != nil {
-		return fmt.Errorf("hook subagent-start: %w", err)
-	}
 	deps := hook.SubagentStartDeps{
 		Identities: s,
-		Sessions:   ss,
-		Missions:   ms,
-		Hash:       hashSources,
-		// RepoRoot is the work-tree root for the write-set walk (files
-		// under review live in this checkout); StoreRoot is the mission
-		// store's repo for the hash-refusal skeleton close (CR#3).
-		RepoRoot:  resolve.FindRepoRoot(),
-		StoreRoot: resolve.StoreRepoRoot(),
+		Sessions:   sessionStore(),
+		Issue:      currentRoots().hookIssue(),
+	}
+	// RepoRoot is the work-tree root for the write-set walk (files under
+	// review live in this checkout); StoreRoot is the mission store's repo
+	// for the hash-refusal skeleton close (CR#3). When either cannot be
+	// located, the mission store would be the global one — the wrong
+	// store for the gate — so none is wired and the gate refuses instead.
+	repoRoot, storeRoot, err := locateHookRoots()
+	if err != nil {
+		deps.StoreErr = err
+	} else {
+		// Phase 3.3: wire the mission store and live hash sources so the
+		// verifier hash gate enforces frozen-evaluator pinning at every
+		// subagent spawn. A drift between mission create and verifier
+		// spawn refuses the spawn with a fatal, operator-readable error.
+		hashSources, err := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
+		if err != nil {
+			return fmt.Errorf("hook subagent-start: %w", err)
+		}
+		deps.Missions = missionStore()
+		deps.Hash = hashSources
+		deps.RepoRoot = repoRoot
+		deps.StoreRoot = storeRoot
 	}
 	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook subagent-start: %w", err)
 	}
 	return nil
+}
+
+// locateHookRoots returns the checkout and the store root. Both are empty
+// outside a repository; any other failure to locate either is the error.
+func locateHookRoots() (repoRoot, storeRoot string, err error) {
+	r := currentRoots()
+	if err := firstError(r.CheckoutErr, r.StoreFailure()); err != nil {
+		return "", "", err
+	}
+	return r.Checkout, r.Store, nil
 }
 
 func runHookSubagentStop() error {
@@ -201,6 +218,7 @@ func runHookPreCompact() error {
 		Sessions:   sessionStore(),
 		Teams:      layeredTeamStore(is),
 		Roles:      layeredRoleStore(is),
+		Issue:      currentRoots().hookIssue(),
 	}
 	if err := hook.HandlePreCompact(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook pre-compact: %w", err)
@@ -262,79 +280,90 @@ func runHookAuditLog() error {
 	if err != nil {
 		return fmt.Errorf("hook audit-log: %w", err)
 	}
-	sessionsDir := home + "/.punt-labs/ethos/sessions"
-	// DES-054 phase 1: prefer the date-keyed repo-tree layout when
-	// the hook fires inside a repo; fall back to the legacy global
-	// sessions directory otherwise. FindRepoRoot returns the empty
-	// string outside a git tree, which routes the audit log through
-	// the legacy fallback path without further branching.
-	//
-	// Unified session flock — DES-054 v5 §"Storage Layout": one lock
-	// covers roster + audit log, eliminating the prior two-lock
-	// acquisition order. Drain stdin once into a buffer so the peek
-	// for session_id and the subsequent HandleAuditLog read of the
-	// same bytes do not race against a half-consumed pipe. The drain
-	// reuses the hook package's deadline-aware reader so an open pipe
-	// with no EOF (the real Claude Code shape) does not hang the
-	// process. When the peek fails to find a session_id (malformed
-	// payload, empty input, parse error), fall through to the unlocked
-	// legacy path so an unparseable input still surfaces through
-	// HandleAuditLog's stderr diagnostic rather than failing silently
-	// here.
+	// A dropped or unlocked entry never blocks the tool call, but it is put
+	// in front of the session (systemMessage and additionalContext), not
+	// left on the hook's stderr, which goes to a log file nobody reads.
+	if notice := writeAuditLog(home + "/.punt-labs/ethos/sessions"); notice != nil {
+		if err := hook.WriteAuditNotice(os.Stdout, notice); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
+		}
+	}
+	return nil
+}
+
+// writeAuditLog records the PostToolUse payload on stdin. It returns the
+// error wrapping hook.ErrAuditDropped when the entry was not written, and
+// an error naming the lock when the entry was written without it; either
+// is shown in the session. nil means the entry was written under its lock.
+//
+// DES-054 phase 1: prefer the date-keyed repo-tree layout when the hook
+// fires inside a repo; fall back to the legacy global sessions directory
+// outside one.
+//
+// Unified session flock — DES-054 v5 §"Storage Layout": one lock covers
+// roster + audit log, eliminating the prior two-lock acquisition order.
+// Drain stdin once into a buffer so the peek for session_id and the
+// subsequent HandleAuditLog read of the same bytes do not race against a
+// half-consumed pipe. The drain reuses the hook package's deadline-aware
+// reader so an open pipe with no EOF (the real Claude Code shape) does not
+// hang the process. When the peek fails to find a session_id (malformed
+// payload, empty input, parse error), fall through to the unlocked legacy
+// path so an unparseable input still surfaces through HandleAuditLog's
+// diagnostic rather than failing silently here.
+func writeAuditLog(sessionsDir string) error {
 	data := drainAuditStdin()
 	sessionID := peekSessionID(data)
-	// resolve.EnvRepoRoot is the canonical resolver — ETHOS_REPO_ROOT
-	// first, then FindRepoRoot. Centralized so the audit-write path
-	// picks the same repo as preconditions, dispatch, inheritance,
-	// and the migrate/show CLI commands.
-	repoRoot := resolve.EnvRepoRoot()
+	// LocateRepoRoot is the checkout CheckoutRootIfAny resolves — ETHOS_REPO_ROOT
+	// first, then git — with the reason it found none, so the audit-write
+	// path picks the same repo as preconditions, dispatch, inheritance, and
+	// the migrate/show CLI commands. Outside a repository the legacy global
+	// path is right; any other failure would put the entry in the wrong
+	// tree, so the entry is not written.
+	loc := currentRoots()
+	repoRoot := loc.Checkout
+	if err := loc.CheckoutErr; err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v; audit entry not written rather than written to the global store\n", err)
+		return fmt.Errorf("%w: %v; not written rather than written to the global store", hook.ErrAuditDropped, err)
+	}
+	record := func() error { return hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir) }
 	if sessionID == "" {
-		_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
-		return nil
+		return record()
+	}
+	// WithLiveAuditLock and WithSessionLock return errors from BOTH lock
+	// acquisition AND the callback. handlerRan tells them apart, so a lost
+	// entry is not written twice: an error with handlerRan=false means the
+	// lock was not acquired and the unlocked fall-through is safe (a lost
+	// audit entry is the worse outcome).
+	handlerRan := false
+	var dropErr error
+	run := func() error {
+		dropErr = record()
+		handlerRan = true
+		return dropErr
 	}
 	// DES-058: inside a repo, appends target the machine-local live file
 	// and serialize on the live-zone flock beside it — the same lock a
 	// seal takes. Outside a repo there is no local zone, so the legacy
-	// global session lock still covers the single-tree fallback write.
+	// global session lock covers the single-tree fallback write.
+	var lockErr error
+	lockName := "live lock"
 	if repoRoot != "" {
-		handlerRan := false
-		if lockErr := hook.WithLiveAuditLock(repoRoot, sessionID, func() error {
-			err := hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
-			handlerRan = true
-			return err
-		}); lockErr != nil && !handlerRan {
-			fmt.Fprintf(os.Stderr,
-				"ethos: audit-log: acquiring live lock %s: %v; falling through unlocked\n",
-				sessionID, lockErr)
-			_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
-		}
-		return nil
+		lockErr = hook.WithLiveAuditLock(repoRoot, sessionID, run)
+	} else {
+		lockName = "session lock"
+		lockErr = sessionStore().WithSessionLock(sessionID, run)
 	}
-	ss := sessionStore()
-	// WithSessionLock returns errors from BOTH lock acquisition AND
-	// the callback fn. Distinguish them with a flag so a future
-	// HandleAuditLog error path does not silently double-write the
-	// audit entry (Bugbot LOW on PR #327). The flag flips only when
-	// fn returns; an error from WithSessionLock with handlerRan=false
-	// means lock acquisition failed and the unlocked fall-through is
-	// safe.
-	handlerRan := false
-	if lockErr := ss.WithSessionLock(sessionID, func() error {
-		err := hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
-		handlerRan = true
-		return err
-	}); lockErr != nil && !handlerRan {
-		// Lock acquisition failed — typically a permissions or fs
-		// problem on the session lock file. Surface the failure on
-		// stderr so the operator sees it, then fall through to the
-		// unlocked legacy path so the audit entry still lands. A lost
-		// audit entry is the worse outcome.
+	if lockErr != nil && !handlerRan {
 		fmt.Fprintf(os.Stderr,
-			"ethos: audit-log: acquiring session lock %s: %v; falling through unlocked\n",
-			sessionID, lockErr)
-		_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
+			"ethos: audit-log: acquiring %s %s: %v; falling through unlocked\n",
+			lockName, sessionID, lockErr)
+		if err := record(); err != nil {
+			return fmt.Errorf("%w (tried without the %s: %v)", err, lockName, lockErr)
+		}
+		return fmt.Errorf("audit entry written without the %s (%v); a concurrent write may interleave with it",
+			lockName, lockErr)
 	}
-	return nil
+	return dropErr
 }
 
 // drainAuditStdin reads the hook payload bytes from os.Stdin with a

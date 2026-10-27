@@ -8,10 +8,10 @@ import (
 )
 
 // TestRunUI_RefusedOverrideDoesNotResurrect pins the Bugbot MED on PR #370:
-// runUI must not fall the store root back to repoRoot (EnvRepoRoot), which
-// re-accepts an ETHOS_REPO_ROOT that StoreRepoRoot refused (F1 fail-closed).
+// runUI must not fall the store root back to repoRoot (CheckoutRootIfAny), which
+// re-accepts an ETHOS_REPO_ROOT that StoreRootIfAny refused (F1 fail-closed).
 // A bad override — an existing directory with no .punt-labs/ethos store —
-// makes StoreRepoRoot return "" while EnvRepoRoot accepts the path; runUI must
+// makes StoreRootIfAny return "" while CheckoutRootIfAny accepts the path; runUI must
 // fail loud rather than serve the dashboard off the refused path.
 func TestRunUI_RefusedOverrideDoesNotResurrect(t *testing.T) {
 	dir := t.TempDir() // exists, but has no .punt-labs/ethos store

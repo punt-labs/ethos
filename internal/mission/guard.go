@@ -17,6 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
@@ -1132,16 +1133,6 @@ func (e *NotDurableError) Unwrap() error { return e.Err }
 // the rollback.
 var renameFile = os.Rename
 
-// tmpMarker is in the name of every staging file ethos creates in a working
-// tree, so a stray one is recognisable whatever its base name. It mirrors
-// layout.TmpMarker and layout.DotTempPattern on feat/path-class-table; replace
-// these two with the layout helpers when that branch lands.
-const tmpMarker = ".ethos-tmp"
-
-// dotTempPattern is the os.CreateTemp pattern for a hidden staging sibling of
-// the file called base: ".base.*.ethos-tmp".
-func dotTempPattern(base string) string { return "." + base + ".*" + tmpMarker }
-
 // WriteTrackedFiles writes files for a caller outside this package whose
 // output lands in a tracked tree (the mission export). Every payload is
 // guarded and canonicalised (guardWrite) before any file is touched, and
@@ -1272,7 +1263,7 @@ func restoreTracked(dest string, data []byte, perm os.FileMode, existed bool) er
 // f.Path, sets its mode, fsyncs and closes it, and returns the temp file's name
 // (also on a failure after it was created, so the caller can remove it).
 func writeTrackedTemp(f TrackedFile) (string, error) {
-	tmp, err := os.CreateTemp(filepath.Dir(f.Path), dotTempPattern(filepath.Base(f.Path)))
+	tmp, err := os.CreateTemp(filepath.Dir(f.Path), layout.DotTempPattern(filepath.Base(f.Path)))
 	if err != nil {
 		return "", ioErr("creating temp file for", f.Path, err)
 	}

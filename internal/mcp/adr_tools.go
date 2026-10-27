@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/adr"
@@ -64,6 +65,14 @@ func (h *Handler) handleADR(_ context.Context, req mcplib.CallToolRequest) (*mcp
 }
 
 func (h *Handler) handleCreateADR(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	// The ADR tool is unguarded (its reads use only the global store), but a
+	// create is a write the CLI refuses when the store or its configuration
+	// cannot be used, and so does this.
+	if h.storeErr != nil {
+		what, _, _ := resolve.Describe(h.storeErr)
+		return mcplib.NewToolResultError(fmt.Sprintf(
+			"adr create: %s (%v); refusing: no ADR is written while it cannot be used", what, h.storeErr)), nil
+	}
 	title := stringArg(req, "title", "")
 	if strings.TrimSpace(title) == "" {
 		return mcplib.NewToolResultError("title is required for create"), nil

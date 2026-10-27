@@ -673,7 +673,7 @@ func TestAppender_OneNoticePerStoredLine(t *testing.T) {
 	require.NoError(t, os.Mkdir(blocked, 0o000))
 	defer func() { _ = os.Chmod(blocked, 0o700) }()
 	failed := testhelpers.CaptureStderr(t, func() {
-		require.NoError(t, HandleAuditLog(bytes.NewReader(payload("s3")), "", blocked))
+		require.ErrorIs(t, HandleAuditLog(bytes.NewReader(payload("s3")), "", blocked), ErrAuditDropped)
 	})
 	assert.NotContains(t, failed, "was rewritten")
 }

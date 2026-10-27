@@ -12,6 +12,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // TrackedRecordFiles returns the repo-relative, slash-separated paths git
@@ -19,7 +22,7 @@ import (
 // to be given: scrubbing only tracked files leaves the live zone and any
 // in-flight mission untouched.
 func TrackedRecordFiles(repoRoot string) ([]string, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files", "-z", "--", ".punt-labs/ethos").Output()
+	out, err := gitenv.Output(repoRoot, "git", "ls-files", "-z", "--", ".punt-labs/ethos")
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(bytes.TrimSpace(ee.Stderr)) > 0 {
@@ -283,7 +286,7 @@ func scrubFile(r PathRedactor, repoRoot, rel string, dryRun bool) (bool, error) 
 	if !changed || dryRun {
 		return changed, nil
 	}
-	if err := scrubWrite(filepath.Dir(dest), ".scrub-*.tmp", dest, canon); err != nil {
+	if err := scrubWrite(filepath.Dir(dest), layout.TmpPattern(".scrub", ""), dest, canon); err != nil {
 		return false, err
 	}
 	return true, nil

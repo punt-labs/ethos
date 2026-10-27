@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,11 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
+
+// ErrActiveNotFound is wrapped by the error ResolveActive returns when
+// active_bundle names a bundle in neither scope: on a fresh install, the bundle
+// a seed is about to deploy.
+var ErrActiveNotFound = errors.New("not found in repo or global scope")
 
 // ResolveActive returns the currently active bundle for a repo, or nil
 // if no bundle is active.
@@ -58,7 +64,7 @@ func ResolveActive(repoRoot, globalRoot string) (*Bundle, error) {
 				return b, nil
 			}
 		}
-		return nil, fmt.Errorf("active bundle %q: not found in repo or global scope", name)
+		return nil, fmt.Errorf("active bundle %q: %w", name, ErrActiveNotFound)
 	}
 
 	// No active_bundle set — check legacy dir.

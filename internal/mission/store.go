@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,7 +44,7 @@ type Store struct {
 	// SHARED mission RECORD lives — contracts, results, reflections,
 	// delegations, and the missions.jsonl trace, all under
 	// <repoRoot>/.punt-labs/ethos/missions/. This is the store root
-	// (StoreRepoRoot): in a linked worktree it resolves to the main work
+	// (StoreRootIfAny): in a linked worktree it resolves to the main work
 	// tree so every checkout sees the same record. Set via WithRepoRoot
 	// (legacy single-tree mode) or NewStoreWithRoots (two-tree mode).
 	repoRoot string
@@ -52,7 +53,7 @@ type Store struct {
 	// audit concern lives under — the machine-local live zone
 	// (<checkoutRoot>/.punt-labs/local/ethos/) and the sealed mission chunks
 	// the pre-commit seal writes and stages. It is the current work tree
-	// (FindRepoRoot/EnvRepoRoot), NOT the store root: audit chunks travel in
+	// (CheckoutRootIfAny), NOT the store root: audit chunks travel in
 	// the committing checkout's commit and the pre-commit seal runs there, so
 	// the live append, the seal, and the reader must all agree on the
 	// worktree, while the record resolves to the main store (Bugbot HIGH on
@@ -223,8 +224,8 @@ func (s *Store) WithRepoRoot(root string) *Store {
 // WithCheckoutRoot sets the per-checkout root for the DES-058 audit
 // concern — the live zone and sealed mission chunks. When unset the audit
 // path falls back to repoRoot (auditRoot), preserving single-tree and test
-// behavior. Callers in a worktree pass the work-tree root (FindRepoRoot/
-// EnvRepoRoot) so live appends and the pre-commit seal agree on the
+// behavior. Callers in a worktree pass the work-tree root (CheckoutRootIfAny)
+// so live appends and the pre-commit seal agree on the
 // committing checkout while the record resolves to the main store (Bugbot
 // HIGH on PR #370). Returns the receiver so construction stays compact:
 //
@@ -249,6 +250,14 @@ func (s *Store) auditRoot() string {
 
 // Root returns the store's root directory.
 func (s *Store) Root() string { return s.root }
+
+// RepoRoot is the repository whose .punt-labs/ethos holds the shared mission
+// record ("" when none is wired).
+func (s *Store) RepoRoot() string { return s.repoRoot }
+
+// CheckoutRoot is the per-checkout root of the audit zone ("" when none is
+// wired; the audit zone then falls back to RepoRoot).
+func (s *Store) CheckoutRoot() string { return s.checkoutRoot }
 
 // validateContract resolves the archetype from the contract's Type
 // (if an archetype store is wired) and runs ValidateWithArchetype.
@@ -799,7 +808,7 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("mission %q not found", missionID)
+			return nil, notFoundError{fmt.Sprintf("mission %q not found", missionID)}
 		}
 		return nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
@@ -809,6 +818,14 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	}
 	return c, nil
 }
+
+// notFoundError is "no such mission": it reads as it always did and is
+// fs.ErrNotExist to errors.Is, so a caller can tell a mission that is not there
+// from one that is there and cannot be read.
+type notFoundError struct{ msg string }
+
+func (e notFoundError) Error() string        { return e.msg }
+func (e notFoundError) Is(target error) bool { return target == fs.ErrNotExist }
 
 // decodeAndValidate is the shared strict-decode + validate + filename-
 // match check used by Load and loadLocked. Factored out so the two
@@ -1662,7 +1679,7 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 				// retry succeeds cleanly.
 				if len(oldData) > 0 {
 					dir := filepath.Dir(recordPath)
-					if rbErr := restoreAtomicFile(dir, "record-*.yaml.tmp", recordPath, oldData); rbErr != nil {
+					if rbErr := restoreAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, oldData); rbErr != nil {
 						return fmt.Errorf(
 							"disclaim: event append failed: %w; rollback failed: %v", evErr, rbErr,
 						)
@@ -2464,7 +2481,7 @@ func writeContractFile(dest string, data []byte) error {
 // writeContractBytes is writeContractFile's temp, fsync and rename, for bytes
 // already checked or already on disk.
 func writeContractBytes(dest string, data []byte) error {
-	tmp := dest + ".tmp"
+	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
 	// at the temp path. os.WriteFile would follow a symlink at tmp,
 	// writing through to the link target (write-set bypass); a symlink
@@ -2895,7 +2912,7 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("reflect: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
-			} else if rbErr := restoreAtomicFile(filepath.Dir(prevPath), "reflections-*.yaml.tmp", prevPath, prev); rbErr != nil {
+			} else if rbErr := restoreAtomicFile(filepath.Dir(prevPath), layout.TmpPattern("reflections", ".yaml"), prevPath, prev); rbErr != nil {
 				return fmt.Errorf("reflect: event append failed: %w; rollback failed: %v", err, rbErr)
 			}
 			return fmt.Errorf("reflect: event append failed, reflection rolled back: %w", err)
@@ -2968,7 +2985,7 @@ func (s *Store) writeReflectionsLockedNote(missionID string, rs []Reflection) (A
 	if err != nil {
 		return nil, err
 	}
-	tmp := dest + ".tmp"
+	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and
 	// tmp before WriteFile would follow them.
 	if err := rejectSymlink(dest); err != nil {
@@ -3575,7 +3592,7 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("result: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
-			} else if rbErr := restoreAtomicFile(filepath.Dir(prevPath), "results-*.yaml.tmp", prevPath, prev); rbErr != nil {
+			} else if rbErr := restoreAtomicFile(filepath.Dir(prevPath), layout.TmpPattern("results", ".yaml"), prevPath, prev); rbErr != nil {
 				return fmt.Errorf("result: event append failed: %w; rollback failed: %v", err, rbErr)
 			}
 			return fmt.Errorf("result: event append failed, result rolled back: %w", err)
@@ -3646,7 +3663,7 @@ func (s *Store) writeResultsLockedNote(missionID string, rs []Result) (Announcem
 	if err != nil {
 		return nil, err
 	}
-	tmp := dest + ".tmp"
+	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and
 	// tmp before WriteFile would follow them.
 	if err := rejectSymlink(dest); err != nil {

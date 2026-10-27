@@ -288,10 +288,12 @@ func runDoctor(cmd *cobra.Command) error {
 	is := identityStore()
 	ss := sessionStore()
 	ts := teamStore()
-	repoRoot := resolve.FindRepoRoot()
-	// repoRoot = checkout (agents/seal hook); StoreRepoRoot = shared store
-	// for the team-config read inside CheckOrphanedAgentFiles (#370).
-	results := doctor.RunAll(is, ss, repoRoot, resolve.StoreRepoRoot(), ts)
+	r := currentRoots()
+	// Checkout = agents/seal hook; Store = shared store for the team-config
+	// read inside CheckOrphanedAgentFiles (#370). The store failure includes a
+	// broken .punt-labs/ethos path and an unreadable config, so the
+	// "Repository store" row fails for a store ethos cannot use.
+	results := doctor.RunAllFor(r.Located, is, ss, ts)
 
 	out := cmd.OutOrStdout()
 	if jsonOutput {
@@ -329,7 +331,11 @@ func runWhoami(cmd *cobra.Command) error {
 	is := identityStore()
 	ss := sessionStore()
 
-	handle, err := resolve.Resolve(is, ss)
+	checkout, err := currentRoots().checkoutForGit()
+	if err != nil {
+		return err
+	}
+	handle, err := resolve.Resolve(is, ss, checkout)
 	if err != nil {
 		return err
 	}
@@ -361,10 +367,13 @@ func runWhoami(cmd *cobra.Command) error {
 }
 
 func runResolveAgent(cmd *cobra.Command) error {
-	repoRoot := resolve.StoreRepoRoot()
-	handle, err := resolve.ResolveAgent(repoRoot)
-	if err != nil {
-		return err
+	r := currentRoots()
+	if err := r.StoreFailure(); err != nil {
+		return fmt.Errorf("resolve-agent: locating the repository store: %w", err)
+	}
+	handle := ""
+	if r.Config != nil {
+		handle = r.Config.Agent
 	}
 	if handle != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), handle)

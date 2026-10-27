@@ -11,7 +11,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -75,10 +74,9 @@ func init() {
 // runFindMissions reads missions.jsonl, applies filters, and writes
 // the result to out in the requested format.
 func runFindMissions(out, errOut io.Writer) error {
-	repoRoot := resolve.StoreRepoRoot()
-	if repoRoot == "" {
-		fmt.Fprintln(errOut, "ethos: find missions must run inside a repo")
-		return usageError{}
+	repoRoot, err := requireStore(errOut, "find missions")
+	if err != nil {
+		return err
 	}
 
 	switch findMissionsFormat {

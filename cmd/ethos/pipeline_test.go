@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -78,7 +78,7 @@ func pipelineInProcessEnv(t *testing.T) string {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repo, ".punt-labs", "ethos.yaml"),
 		[]byte("agent: claude\n"), 0o644))
-	cmd := exec.Command("git", "init", repo)
+	cmd := testhelpers.GitCommand("init", repo)
 	cmd.Env = []string{
 		"HOME=" + home,
 		"GIT_CONFIG_GLOBAL=/dev/null",
@@ -641,9 +641,9 @@ func TestPipelineCLI_InstantiateReal(t *testing.T) {
 	}
 	home := pipelineTestEnv(t)
 	seedPipelineYAML(t, home, "quick-test", quickPipeline)
-	// Fake repo so FindRepoRoot stops here rather than walking up
+	// Fake repo so CheckoutRootIfAny stops here rather than walking up
 	// to the real ethos repo (TMPDIR points at <repo>/.tmp).
-	require.NoError(t, os.MkdirAll(filepath.Join(home, ".git"), 0o755))
+	testhelpers.MakeGitDir(t, home)
 
 	env := append(os.Environ(), "HOME="+home)
 	stdout, stderr, exitCode := runCLI(t, &cliSubprocessEnv{home: home, repo: home, env: env},
@@ -809,8 +809,8 @@ func TestPipelineCLI_ListByPipeline(t *testing.T) {
 	}
 	home := pipelineTestEnv(t)
 	seedPipelineYAML(t, home, "quick-test", quickPipeline)
-	// Fake repo so FindRepoRoot stops here, not the surrounding repo.
-	require.NoError(t, os.MkdirAll(filepath.Join(home, ".git"), 0o755))
+	// Fake repo so CheckoutRootIfAny stops here, not the surrounding repo.
+	testhelpers.MakeGitDir(t, home)
 
 	env := append(os.Environ(), "HOME="+home)
 	se := &cliSubprocessEnv{home: home, repo: home, env: env}

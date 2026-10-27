@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/e2e/uv.lock`: filelock 3.32.3 → 4.2.4 (E2E harness only; the Go
   binary is unaffected).
 
+### Removed
+
+- The stray `.punt-labs/ethos/ethos.yaml` in this repository. No code read
+  or wrote it.
+
 ### Fixed
 
 - With the opt-in `ethos serve --opencode-session-metadata`, native OpenCode
@@ -114,6 +119,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and verified live through a real subagent spawn.
 
 ### Added
+
+- **`ethos doctor` reports files ethos does not recognize under
+  `.punt-labs/ethos/` and `.punt-labs/local/ethos/`** (DES-079 slice 1,
+  bead `ethos-g3g3`). A new package, `internal/layout`, holds one ordered
+  table mapping every path ethos writes inside a repository to its class
+  (source and configuration, blame tier, trace tier, never tracked). A
+  test runs every in-tree writer it knows of and fails when one creates a
+  path no entry matches, and a test fails when two entries of different
+  classes can match one path. The new check warns and lists
+  up to 10 unrecognized files; files in other tools' directories under
+  `.punt-labs/` are not checked. Exported mission records placed under
+  `.punt-labs/ethos/` with `ethos mission export --dir` are recognized.
+  The check scans the working tree it runs in (a git worktree's own
+  files), reports any symlink on the way to either directory as not
+  scanned, names a `core.hooksPath` directory under `.punt-labs/` and the
+  class (or none) of each hook file in it, and says when it could not
+  scan.
 
 - **`ethos mission scrub`** rewrites the tracked mission records of a
   repository written by an earlier ethos through the redactor. It is a
@@ -212,6 +234,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   add their own entries when they merge.
 
 ### Changed
+
+- **Every temporary file and staging directory ethos creates inside a
+  repository now has `.ethos-tmp` in its name** (DES-079). A crash of an
+  earlier version can have left a temporary file under its old name:
+  `*.tmp`, `*.jsonl.tmp`, `.<id>.migrate-*/` under
+  `.punt-labs/ethos/missions/`, `.CLAUDE.md.tmp*` or `.CLAUDE.md.*` (or
+  `.<target>.tmp*` beside the target when `CLAUDE.md` is a symlink),
+  `.ETHOS-SETUP.md.*`, `..vendored-manifest.*`, `.gitignore.*`, or
+  `.pre-commit.*` and `.commit-msg.*` in the hooks directory. Any of these
+  can be deleted. `ethos doctor` lists the ones under `.punt-labs/ethos/`
+  and `.punt-labs/local/ethos/` as unrecognized (old `*.tmp` files and
+  the `.punt-labs/ethos/.CLAUDE.md.*`, `.ETHOS-SETUP.md.*` and
+  `..vendored-manifest.*` leftovers of the guide deposit), except an old
+  `.<id>.migrate-*/` staging directory, which is classified never-tracked
+  and not listed; it does not see the ones elsewhere in the repository.
+  The audit sweep still recognizes and removes old `*.jsonl.tmp` chunks.
+- **`ethos mission export` without `--dir` writes to
+  `.punt-labs/ethos/missions/` under the repository root**, not under the
+  current directory. Outside a repository it fails and says why.
+- **`ethos doctor` warns when it could not verify the git hooks directory
+  with git** (git missing or failing, or the repository root not being
+  git's top level), because `core.hooksPath` is then ignored, and shows
+  git's own error. It skips a nested git working tree under
+  `.punt-labs/ethos/`, such as an old team-registry submodule, and reports
+  it as not scanned.
+- **`ethos enable` requires git to install hooks.** Without git, or when
+  git cannot verify the hooks directory (a repository root that is a
+  subdirectory of another repository, a stale linked worktree, a moved
+  submodule), it refuses before writing anything. **`ethos disable`
+  refuses an unverified hooks directory** and names the fix; with
+  `--force` it removes the import and marker and reports that hook
+  sections may remain under `core.hooksPath`.
+- **`ethos doctor` under an unverified hooks directory:** the
+  hook-presence check fails in an enabled repository and warns in a
+  dormant one ("cannot verify hooks"), the hook-currency check warns, and
+  the advice matches the cause (install git, fix `safe.directory`, or run
+  from the repository's top level).
+- **Finding the repository asks git.** With git installed, ethos uses
+  `git rev-parse` (in the C locale, with `GIT_DIR` and `GIT_WORK_TREE`
+  cleared, and honoring `GIT_CEILING_DIRECTORIES`) to find the working
+  tree and the store, and refuses a `.git` git does not accept rather
+  than skipping it as git does; with
+  git missing, too old or not working it applies strict `.git` rules
+  (and never reads a non-file `.git`, so a FIFO no longer hangs it). Git's
+  "not a git repository" means not in a repository when no `.git` git
+  rejected lies on the path; any other git
+  failure, or a refused `ETHOS_REPO_ROOT`, makes `ethos doctor` fail a
+  "Repository store" row, the MCP server run only its read methods, the
+  session hooks say why the persona is missing, the audit hook skip the
+  entry and say so, and other commands refuse instead of silently using
+  the global store. Every command is classified; those that touch only
+  global stores (session roster commands, `iam`, `adr list`/`show`/
+  `settle`) still run, while `whoami`, `session start` and `adr create`
+  refuse. `ethos serve` picks up a repaired repository without a
+  restart. `ethos setup` checks all of this, and that the bundle it will
+  use exists ("no bundles installed; run `ethos seed` first"), before
+  writing anything; `ethos seed` warns on a malformed repository config.
+  A linked worktree of a bare repository keeps its store at its own top
+  level. Without git, ethos refuses a start inside a git directory or a
+  bare repository and stops searching at a filesystem boundary.
+- **While the store cannot be located, `pre-tool-use` denies
+  mission-bound tool calls and every `Agent` spawn**, and the message says
+  how to fix it: repair or remove the `.git` named, or set
+  `ETHOS_REPO_ROOT`.
+- **Every git command the `ethos` binary runs has a time limit**: 10
+  seconds in general, 2 seconds for the session-start working context,
+  and 5 minutes for a team-bundle clone. A git that fails or does
+  not answer is reported as an error naming the command and directory,
+  never read as "no repository", "no remote" or an empty identity.
+  Identity resolution fails instead of falling back to `$USER`; session
+  start tells the session why and records the repository as unresolved;
+  the pre-commit audit seal blocks the commit and leaves the tree
+  unchanged. The `pre-commit` and `commit-msg` hook scripts exit 1 with
+  git's error when `git rev-parse` or `git interpret-trailers` fails,
+  instead of skipping the seal or the trailers; a warning git prints on
+  success no longer stops the seal.
+- **A command that needs the repository store exits 2 (was 1) when the
+  store cannot be located**, and also when `.punt-labs/ethos` exists but
+  cannot be read (a dangling symlink, a file, no permission), instead of
+  writing to the global store. The repository is located once per
+  command.
+- **A dangling or looping `.git` symlink, a dangling `.punt-labs` or
+  `.punt-labs/ethos` symlink, and a dangling `.punt-labs/ethos.yaml` are
+  errors**, reported by every command and hook, instead of reading as
+  "not a repository", and so is any `.git` git does not accept (an
+  empty or missing `HEAD`, missing `objects`, an unreadable entry, a
+  FIFO), including from a working directory reached through a symlink:
+  ethos refuses instead of answering from the global store or an
+  enclosing repository. A
+  malformed or dangling `ethos.yaml` no longer stops the hooks,
+  `ethos doctor` or `ethos serve`; they report it, as they do an
+  unusable `active_bundle`, `repo-only` policy or unknown `resolution:`
+  value. While the configuration or the store cannot be used, no hook
+  answers a persona and `ethos serve` refuses its guarded writes and
+  identity answers (and, for an unusable bundle or policy, its guarded
+  reads). An unusable bundle or policy also makes every store command
+  except `team activate`, `team deactivate` and `team add-bundle` exit
+  1; `team activate` refuses a global bundle under `repo-only`, and
+  otherwise records the bundle without assigning the leadership roles.
+  In an enabled repository, `pre-commit` and
+  `commit-msg` block the commit when `ethos` is not installed, the
+  `.punt-labs/ethos` path is broken, or the `enabled` marker is not a
+  regular file; `ethos enable` refuses such a marker. Git tracing set in
+  the environment or in git configuration no longer makes ethos fail.
+  An unreadable git configuration file is reported instead of treated as
+  "not set". `ethos team add-bundle` names every unreadable global or
+  XDG git configuration before cloning, refuses an unreadable system
+  configuration, and before contacting the remote refuses a non-empty
+  `--global` destination, a submodule path already in the index, a
+  submodule path that is a symlink, one that exists and is not a git
+  repository by git's own test, and one whose `.git` belongs to the
+  superproject or one of its worktrees (any other existing clone there
+  is left to
+  `git submodule add`). On
+  Unix, `ethos team add-bundle` no longer overrides your ssh command,
+  shows git's clone progress, runs its clone with no terminal so an ssh
+  or credential prompt fails
+  at once instead of waiting, and Ctrl-C, a closed terminal or a timeout
+  stops the clone with its ssh children. Identity and origin reads use
+  the located repository, not the current directory; outside a
+  repository the identity read still honours included git configuration
+  files. A merge commit is not sealed; its audit lines are sealed by
+  the next ordinary commit.
+- **The MCP `identity` tool refuses while the repository store or its
+  configuration cannot be read**, instead of answering from the global
+  store.
+- **Session rosters whose repository could not be resolved** show
+  `unresolved` in `ethos session list` (`repo_unresolved` in its JSON),
+  and `ethos session show` prints the reason. `ethos session purge`
+  skips them, names the fix and lists them under `skipped` in `--json`;
+  `ethos session purge --force` removes them, live or stale, and lists
+  them under `forced_unresolved` in `--json`.
+- **`ethos mission dispatch`, `scaffold` and `correct` refuse a malformed
+  `.punt-labs/ethos.yaml`** instead of recording `claude` as the leader.
 
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and

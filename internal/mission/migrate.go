@@ -18,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
@@ -189,8 +190,8 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // genuine read error there still propagates, since each is a single,
 // currently-relevant file rather than an unbounded pool of historical
 // chunks.
-// checkoutRoot names the current work tree (resolve.EnvRepoRoot /
-// FindRepoRoot), distinct from repoRoot (the store root — the main
+// checkoutRoot names the current work tree (resolve.Roots /
+// CheckoutRootIfAny), distinct from repoRoot (the store root — the main
 // work tree) when the caller is running from a linked worktree. Both
 // the sealed scan and the live scan below cover repoRoot AND, when
 // different, checkoutRoot — see collectSealedContractIDs and
@@ -209,7 +210,7 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // PR #508 round 4, finding H1: a session running inside a linked
 // worktree writes its live (not-yet-sealed) audit file under THAT
 // worktree's own .punt-labs/local/ethos/sessions/, never under the
-// main tree StoreRepoRoot points at — so a repoRoot-only live scan
+// main tree StoreRootIfAny points at — so a repoRoot-only live scan
 // is blind to exactly the most recent, most likely-to-be-open
 // sessions when the caller (or `mission create`/`dispatch`) is
 // itself running from a worktree, which per the leader's own report
@@ -482,7 +483,7 @@ func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissi
 		return "", fmt.Errorf("migrate %s: %w", id, err)
 	}
 
-	staging, err := os.MkdirTemp(repoDir, "."+id+".migrate-")
+	staging, err := os.MkdirTemp(repoDir, layout.MigrateStagingPrefix(id))
 	if err != nil {
 		return "", ioErr("creating staging dir in", repoDir, err)
 	}
@@ -491,7 +492,7 @@ func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissi
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.RemoveAll(staging)
+			removeStaging(os.Stderr, staging)
 		}
 	}()
 
@@ -526,6 +527,22 @@ func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissi
 	}
 
 	return fmt.Sprintf("migrate %s -> %s", id, relRepoPath(repoMissionDir)), nil
+}
+
+// removeStaging deletes a migrate staging directory and says on w when it
+// cannot: a leftover staging directory is one the user must remove by hand.
+// The path is reported repo-relative, so a home directory does not leak.
+func removeStaging(w io.Writer, staging string) {
+	err := os.RemoveAll(staging)
+	if err == nil {
+		return
+	}
+	// A PathError's text carries the absolute path; keep the cause only.
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		err = fmt.Errorf("%s: %w", pe.Op, pe.Err)
+	}
+	fmt.Fprintf(w, "ethos: mission migrate: could not remove staging directory %s: %v\n", relRepoPath(staging), err)
 }
 
 // copyIfExists copies src to dst through the redactor when src exists. A

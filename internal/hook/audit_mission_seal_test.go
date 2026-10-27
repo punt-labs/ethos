@@ -191,8 +191,8 @@ func TestSealMissionNearMissDiscovered(t *testing.T) {
 	}
 
 	// SealRepo's mission backstop must fail the same way.
-	if err := sealMissionsInRepo(repo, time.Now().UTC(), SealOptions{}, &SealResult{}); err == nil {
-		t.Fatal("sealMissionsInRepo over a lone near-miss = nil, want fail-closed error")
+	if _, err := SealRepo(repo, time.Now().UTC(), SealOptions{}); err == nil {
+		t.Fatal("SealRepo over a lone near-miss = nil, want fail-closed error")
 	} else if !strings.Contains(err.Error(), nearMiss) {
 		t.Errorf("error = %v, want it to name the malformed file %q", err, nearMiss)
 	}

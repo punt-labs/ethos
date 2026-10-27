@@ -51,3 +51,7 @@ tailwind.config = {
 <footer class="text-center text-neutral-700 text-xs py-6 border-t border-neutral-900 mt-12">ethos — absolute traceability for agent delegation</footer>
 </body>
 </html>{{end}}
+
+{{define "notices"}}{{if .Notices}}<div class="ethos-notice border border-amber-900 bg-amber-950/30 text-amber-400 text-xs p-3 mb-6">
+{{range .Notices}}  <div><span class="uppercase tracking-wider text-amber-500">Notice:</span> {{.}}</div>
+{{end}}</div>{{end}}{{end}}

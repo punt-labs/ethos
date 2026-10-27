@@ -125,6 +125,13 @@ func runSetup(cmd *cobra.Command) error {
 		cfg.Handle = slugify(cfg.Name)
 	}
 
+	// Locate the checkout and the shared store BEFORE any write, applying
+	// both refusals, so a refusal leaves no identity behind.
+	repoRoot, storeRoot, err := locateSetupRoots()
+	if err != nil {
+		return err
+	}
+
 	// Default the human's email to git user.email when unspecified. This is
 	// what makes the created identity resolvable out of the box: resolve.Resolve
 	// matches git user.email against the identity's email field. Without it, a
@@ -136,10 +143,27 @@ func runSetup(cmd *cobra.Command) error {
 	// (then the hard-fail), not persist blank.
 	cfg.Email = strings.TrimSpace(cfg.Email)
 	if cfg.Email == "" {
-		cfg.Email = resolve.GitConfig("user.email")
+		email, err := resolve.GitConfig(repoRoot, "user.email")
+		if err != nil {
+			return fmt.Errorf("setup: no email in --file, and reading git user.email failed: %w", err)
+		}
+		cfg.Email = email
 	}
 	if cfg.Email == "" {
 		return fmt.Errorf("setup: no email — set git user.email or pass email: in --file")
+	}
+
+	// Without --bundle, a re-run keeps the active bundle (see Bundle
+	// activation below), so the active bundle is the one every check before
+	// the first write validates — not the "foundation" default.
+	if !cfg.Solo && repoRoot != "" && !cmd.Flags().Changed("bundle") {
+		current, err := resolve.ResolveActiveBundle(storeRoot)
+		if err != nil {
+			return fmt.Errorf("setup: reading active bundle: %w", err)
+		}
+		if current != "" {
+			cfg.Bundle = current
+		}
 	}
 
 	// Validate the leadership assignment BEFORE any write, so a bad handle or
@@ -147,7 +171,7 @@ func runSetup(cmd *cobra.Command) error {
 	// repo config, no bundle activation). The handle-collision check is cheap
 	// and unconditional — "claude" is reserved for the COO agent. The
 	// incomplete-pair check is a read-only load of the target bundle's team.
-	if err := precheckLeadership(&cfg); err != nil {
+	if err := precheckLeadership(&cfg, storeRoot); err != nil {
 		return fmt.Errorf("setup: %w", err)
 	}
 
@@ -157,6 +181,15 @@ func runSetup(cmd *cobra.Command) error {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	store := identity.NewStore(globalRoot)
+
+	// The bundle must exist before anything is written: finding out afterwards
+	// leaves an identity and a repo config behind a failed setup.
+	var bundles []bundle.Bundle
+	if !cfg.Solo && repoRoot != "" {
+		if bundles, err = findBundle(storeRoot, globalRoot, cfg.Bundle); err != nil {
+			return err
+		}
+	}
 
 	result := &setupResult{
 		HumanIdentity: cfg.Handle,
@@ -213,18 +246,7 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// --- Repo config and bundle ---
-	repoRoot := resolve.FindRepoRoot()
 	if repoRoot == "" {
-		// Distinguish "genuinely not in a repo" from "a bad ETHOS_REPO_ROOT
-		// was refused." The latter must FAIL LOUD, not silently skip repo
-		// config and report success — a set-but-refused override while the cwd
-		// is a real repo/worktree would otherwise degrade setup to no-repo mode
-		// (#370 F-A). FindRepoRoot returns "" for a set override only when it
-		// was refused (a valid one resolves non-empty).
-		if override, set := resolve.RepoRootOverride(); set {
-			return fmt.Errorf("setup: ETHOS_REPO_ROOT=%q was refused (not an "+
-				"existing directory); unset it or point it at a repo", override)
-		}
 		fmt.Fprintln(errw, "ethos: setup: not in a git repository (identities created, skipping repo config and team)")
 		if result.Skipped == nil {
 			result.Skipped = []string{}
@@ -240,18 +262,12 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// The repo config, bundle, team, and default-agent selection all resolve
-	// from the SHARED store (StoreRepoRoot) — the tree every reader uses (team
+	// from the SHARED store (storeRoot) — the tree every reader uses (team
 	// activate, resolveBundleRoot, the SessionStart persona, doctor) — so
 	// setup's writes are visible to them. Only the "in a git repo" guard above
 	// and the .claude/agents destination below stay on the checkout (repoRoot).
 	// In a linked worktree these differ; on a plain checkout or first run they
 	// coincide, so this is a no-op there.
-	storeRoot := resolve.StoreRepoRoot()
-	if storeRoot == "" {
-		return fmt.Errorf("setup: cannot resolve the mission store root " +
-			"(ETHOS_REPO_ROOT was set but refused); unset it or point it at a repo " +
-			"with a .punt-labs/ethos store")
-	}
 
 	// Legacy submodule check (the shared .punt-labs/ethos submodule). No
 	// migration command exists — the resolver falls back to two-layer
@@ -270,6 +286,8 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: writing repo config: %w", err)
 	}
 	fmt.Fprintf(errw, "wrote: %s\n", configPath)
+	// The repo config now exists: stores built from here on must see it.
+	refreshRoots()
 
 	// --- Bundle activation ---
 	if cfg.Solo {
@@ -284,25 +302,6 @@ func runSetup(cmd *cobra.Command) error {
 			printSetupTable(cmd.OutOrStdout(), result)
 		}
 		return nil
-	}
-
-	// Validate the bundle exists.
-	bundles, err := bundle.List(storeRoot, globalRoot)
-	if err != nil {
-		return fmt.Errorf("setup: listing bundles: %w", err)
-	}
-	var match *bundle.Bundle
-	for i := range bundles {
-		if bundles[i].Source == bundle.SourceLegacy {
-			continue
-		}
-		if bundles[i].Name == cfg.Bundle {
-			match = &bundles[i]
-			break
-		}
-	}
-	if match == nil {
-		return fmt.Errorf("setup: bundle %q not found; available bundles:\n%s", cfg.Bundle, listBundleNames(bundles))
 	}
 
 	// Check if already active. If --bundle wasn't explicit and a bundle
@@ -365,6 +364,9 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// --- Generate agent files ---
+	// Setup has just created the repo store (the leadership team lives in it):
+	// the stores built from here on must see it.
+	refreshRoots()
 	is := identityStore()
 	ts := layeredTeamStore(is)
 	rs := layeredRoleStore(is)
@@ -462,14 +464,14 @@ const cooIdentity = "claude"
 // leadership pair. Bundle-not-found and team-load issues are left to the
 // authoritative activation path; this fails only on a definitively illegal
 // rebind.
-func precheckLeadership(cfg *setupConfig) error {
+func precheckLeadership(cfg *setupConfig, storeRoot string) error {
 	if cfg.Handle == cooIdentity {
 		return fmt.Errorf("handle %q is reserved for the COO agent; choose a different handle", cfg.Handle)
 	}
 	if cfg.Solo {
 		return nil
 	}
-	bundleRoot := bundleRootByName(resolve.StoreRepoRoot(), defaultGlobalRoot(), cfg.Bundle)
+	bundleRoot := bundleRootByName(storeRoot, defaultGlobalRoot(), cfg.Bundle)
 	if bundleRoot == "" {
 		return nil // not in a repo, or bundle unresolved — validated later
 	}
@@ -582,7 +584,14 @@ func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 	// Prompt 3: Email (default: git user.email). The created identity must
 	// carry an email so it resolves by git email; runSetup hard-fails if this
 	// stays empty and git user.email is unset.
-	defaultEmail := resolve.GitConfig("user.email")
+	var defaultEmail string
+	checkout, err := currentRoots().checkoutForGit()
+	if err == nil {
+		defaultEmail, err = resolve.GitConfig(checkout, "user.email")
+	}
+	if err != nil {
+		fmt.Fprintf(errw, "ethos: setup: no email default: %v\n", err)
+	}
 	if defaultEmail != "" {
 		fmt.Fprintf(errw, "Email [%s]: ", defaultEmail)
 	} else {
@@ -868,4 +877,54 @@ func contains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// findBundle lists the bundles visible from storeRoot and globalRoot and
+// returns them, or an error when none is installed (the seed is missing) or
+// none is named name.
+func findBundle(storeRoot, globalRoot, name string) ([]bundle.Bundle, error) {
+	bundles, err := bundle.List(storeRoot, globalRoot)
+	if err != nil {
+		return nil, fmt.Errorf("setup: listing bundles: %w", err)
+	}
+	installed := false
+	for _, b := range bundles {
+		if b.Source == bundle.SourceLegacy {
+			continue
+		}
+		installed = true
+		if b.Name == name {
+			return bundles, nil
+		}
+	}
+	if !installed {
+		return nil, fmt.Errorf("setup: no bundles installed; run `ethos seed` first")
+	}
+	return nil, fmt.Errorf("setup: bundle %q not found; available bundles:\n%s", name, listBundleNames(bundles))
+}
+
+// locateSetupRoots returns the checkout and the shared store setup writes to.
+// Both are empty outside a repository. Any other failure to locate either —
+// a refused ETHOS_REPO_ROOT, a .git that cannot be read — is an error: setup
+// must not degrade to no-repo mode.
+func locateSetupRoots() (repoRoot, storeRoot string, err error) {
+	r := currentRoots()
+	if r.Checkout == "" {
+		// A set-but-refused override must FAIL LOUD, not silently skip repo
+		// config and report success (#370 F-A).
+		if override, set := resolve.RepoRootOverride(); set {
+			return "", "", fmt.Errorf("setup: ETHOS_REPO_ROOT=%q was refused (not an "+
+				"existing directory); unset it or point it at a repo", override)
+		}
+		if r.CheckoutErr != nil {
+			return "", "", fmt.Errorf("setup: locating the repository: %w", r.CheckoutErr)
+		}
+		return "", "", nil
+	}
+	// setup writes to the store, so it refuses a store ethos cannot read: a
+	// dangling .punt-labs or .punt-labs/ethos symlink, an unreadable config.
+	if err := r.StoreFailure(); err != nil {
+		return "", "", fmt.Errorf("setup: locating the store: %w", err)
+	}
+	return r.Checkout, r.Store, nil
 }

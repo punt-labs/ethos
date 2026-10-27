@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/adr"
 	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/doctor"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -40,6 +42,8 @@ type Handler struct {
 	adrStore                *adr.Store
 	vendor                  VendorRunner
 	opencodeSessionMetadata bool
+	storeErr                error            // why the repository store could not be located, if so
+	relocation              *storeRelocation // set by RelocateStore
 }
 
 // Option configures optional Handler fields.
@@ -135,34 +139,34 @@ func NewHandlerWithOptions(s identity.IdentityStore, talents, personalities, wri
 // RegisterTools adds all ethos MCP tools to the given server.
 func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// Identity tool (consolidated)
-	s.AddTool(h.identityTool(), h.handleIdentity)
+	h.addTool(s, h.identityTool(), (*Handler).handleIdentity)
 	// Extension tool (consolidated)
-	s.AddTool(h.extTool(), h.handleExt)
+	h.addTool(s, h.extTool(), (*Handler).handleExt)
 	// Session tool (consolidated)
-	s.AddTool(h.sessionTool(), h.handleSession)
+	h.addTool(s, h.sessionTool(), (*Handler).handleSession)
 	// Doctor tool (standalone admin tool)
-	s.AddTool(h.doctorTool(), h.handleDoctor)
+	h.addTool(s, h.doctorTool(), (*Handler).handleDoctor)
 	// Attribute tools (consolidated)
 	h.registerAttributeTools(s)
 	// Role tool (if store configured)
 	if h.roles != nil {
-		s.AddTool(h.roleTool(), h.handleRole)
+		h.addTool(s, h.roleTool(), (*Handler).handleRole)
 	}
 	// Team tool (if store configured)
 	if h.teams != nil {
-		s.AddTool(h.teamTool(), h.handleTeam)
+		h.addTool(s, h.teamTool(), (*Handler).handleTeam)
 	}
 	// Mission tool (if store configured)
 	if h.missionStore != nil {
-		s.AddTool(h.missionTool(), h.handleMission)
+		h.addTool(s, h.missionTool(), (*Handler).handleMission)
 	}
 	// ADR tool (if store configured)
 	if h.adrStore != nil {
-		s.AddTool(h.adrTool(), h.handleADR)
+		h.addTool(s, h.adrTool(), (*Handler).handleADR)
 	}
 	// Vendor tool (if a runner is configured)
 	if h.vendor != nil {
-		s.AddTool(h.vendorTool(), h.handleVendor)
+		h.addTool(s, h.vendorTool(), (*Handler).handleVendor)
 	}
 }
 
@@ -211,6 +215,13 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 	if sid, present, err := h.metadataSessionID(req); present {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if err := h.unusableStore(); err != nil {
+			// The persona is checked against the identity store: a store that
+			// cannot be used must not answer for it (the session tool itself is
+			// unguarded, its roster being global).
+			what, _, _ := resolve.Describe(err)
+			return mcplib.NewToolResultError(fmt.Sprintf("iam: %s (%v); the persona is refused rather than checked against the global store", what, err)), nil
 		}
 		if sessionID != sid {
 			return mcplib.NewToolResultError("session_id must match the metadata caller for iam"), nil
@@ -267,7 +278,33 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
 }
 
+// unusableStore is why the repository store cannot answer an identity now: the
+// location the handler was built for, or, as handleWhoami checks, the store
+// located again and the bundle or policy configuration read again. nil when it
+// can.
+func (h *Handler) unusableStore() error {
+	if h.storeErr != nil {
+		return h.storeErr
+	}
+	loc := resolve.Roots()
+	if err := loc.Err(); err != nil {
+		return err
+	}
+	return bundle.ConfigIssue(loc.Store, loc.Ethos, h.globalRoot())
+}
+
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	loc := resolve.Roots()
+	if err := loc.Err(); err != nil {
+		// As the CLI: an identity answered from a store that cannot be used is
+		// the wrong answer, not a partial one.
+		what, _, _ := resolve.Describe(err)
+		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %s (%v); identity is refused rather than answered from the global store", what, err)), nil
+	}
+	if issue := bundle.ConfigIssue(loc.Store, loc.Ethos, h.globalRoot()); issue != nil {
+		what, _, _ := resolve.Describe(issue)
+		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %s (%v); identity is refused", what, issue)), nil
+	}
 	if sid, present, err := h.metadataSessionID(req); present {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
@@ -282,7 +319,7 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		}
 		return jsonResult(id)
 	}
-	handle, err := resolve.Resolve(h.store, h.sessionStore)
+	handle, err := resolve.Resolve(h.store, h.sessionStore, loc.Checkout)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
 	}
@@ -629,7 +666,8 @@ func (h *Handler) doctorTool() mcplib.Tool {
 }
 
 func (h *Handler) handleDoctor(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	results := doctor.RunAll(h.store, h.sessionStore, resolve.FindRepoRoot(), resolve.StoreRepoRoot(), h.teams)
+	loc := resolve.Roots()
+	results := doctor.RunAllFor(loc, h.store, h.sessionStore, h.teams)
 
 	// Format as table text per DES-020.
 	headers := []string{"NAME", "STATUS", "DETAIL"}
@@ -719,4 +757,13 @@ func jsonResult(v any) (*mcplib.CallToolResult, error) {
 		return mcplib.NewToolResultError(fmt.Sprintf("JSON marshal error: %v", err)), nil
 	}
 	return mcplib.NewToolResultText(string(data)), nil
+}
+
+// globalRoot is ~/.punt-labs/ethos, or "" when home cannot be determined.
+func (h *Handler) globalRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".punt-labs", "ethos")
 }

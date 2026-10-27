@@ -11,7 +11,6 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.
@@ -123,7 +122,14 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
-	repoRoot := allowlistRepoRoot()
+	repoRoot, rootErr := tierBRepoRoot()
+	if rootErr != nil {
+		// The checkout cannot be located, so a repo-relative target cannot
+		// be resolved against it: deny, naming the cause, rather than fall
+		// back to comparing the raw path.
+		return json.NewEncoder(w).Encode(preToolUseDeny(fmt.Sprintf(
+			"ethos pre-tool-use: cannot check %s against the write allowlist: %v", target, rootErr)))
+	}
 	entries := splitAllowlist(allowlist)
 	if pathAllowed(target, entries, repoRoot) {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
@@ -186,7 +192,11 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 		// Tier A spawn — no contract, no preconditions.
 		return "", false
 	}
-	store, err := tierBMissionStore()
+	roots, rootErr := locateTierBRoots()
+	if rootErr != nil {
+		return fmt.Sprintf("ethos pre-tool-use: %v", rootErr), true
+	}
+	store, err := tierBMissionStore(roots)
 	if err != nil {
 		// Persistence layer unreachable. The contract cannot be read
 		// so the strict pointer cannot be consulted; fail-closed.
@@ -196,13 +206,27 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 	if err != nil {
 		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err), true
 	}
-	// envRepoRoot honors ETHOS_REPO_ROOT before falling back to cwd-
-	// derived tierBRepoRoot, so an operator running the hook from a
-	// subdirectory or with an explicit override sees consistent
-	// repo resolution between the dispatch path and the precondition
-	// evaluator (Copilot + Bugbot on PR #328).
-	repoRoot := envRepoRoot()
-	storeRoot := tierBStoreRoot()
+	return gateContract(contract, toolName, toolInput, sessionID, roots.store)
+}
+
+// gateContract applies a loaded contract's preconditions to one tool call,
+// with the same fail policy as evalContractPreconditions. A checkout that
+// cannot be located leaves a contract with preconditions unevaluable: it
+// blocks under strict and warns under strict=false, and never reads audit
+// entries from the working directory instead.
+func gateContract(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID, storeRoot string) (string, bool) {
+	repoRoot, rootErr := tierBRepoRoot()
+	if rootErr != nil {
+		if len(contract.Preconditions) == 0 {
+			return "", false
+		}
+		reason := fmt.Sprintf("ethos pre-tool-use: preconditions cannot be evaluated: %v", rootErr)
+		if contract.EffectiveStrictPreconditions() {
+			return reason, true
+		}
+		fmt.Fprintf(os.Stderr, "%s; strict_preconditions=false, allowing\n", reason)
+		return "", false
+	}
 	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot, storeRoot)
 	if !deny {
 		return "", false
@@ -352,38 +376,18 @@ func pathAllowed(target string, entries []string, repoRoot string) bool {
 	return false
 }
 
-// allowlistRepoRoot returns the repo root pathAllowed's repo-relative
-// resolution branch may trust, or "" when no such root can be
-// validated.
-//
-// This is deliberately NOT envRepoRoot(), whose own last-resort
-// fallback — tierBRepoRoot's bare os.Getwd() (pretooluse_dispatch.go)
-// — exists so Tier B mission-store resolution always has SOME
-// directory to try, even an unmarked one; that fallback is safe there
-// because a missing/wrong store just fails a subsequent Load, fail-
-// closed. It is NOT safe here: pathAllowed's repo-relative branch
-// resolves a target against whatever root it is given and then
-// compares the RESULT against a relative write_set entry. If the hook
-// process's cwd is merely some subdirectory of the repo rather than
-// the repo root itself (a verifier subprocess launched from
-// <repo>/internal, say) and ETHOS_REPO_ROOT is unset, treating that
-// cwd as the root resolves "<repo>/internal/docs/x.md" to "docs/x.md"
-// against the wrong base — one directory too shallow — so a
-// write_set entry like "docs/**" wrongly admits a file it never
-// authorized. Before repo-relative resolution existed, such a target
-// was always denied (right answer, wrong reason); this must not
-// become a NEW way to be admitted.
-//
-// resolve.FindRepoRoot is reused rather than re-deriving the same
-// check: it already honors ETHOS_REPO_ROOT first, then walks upward
-// for the .git marker, and returns "" — never a bare, unmarked cwd —
-// when neither resolves. An empty return here means pathAllowed's
-// repoRoot parameter is "", which its own repoRoot != "" guard
-// already treats as "skip the repo-relative try, raw comparison
-// only" — i.e. the pre-fix behavior, not a new admission.
-func allowlistRepoRoot() string {
-	return resolve.FindRepoRoot()
-}
+// The repo root pathAllowed's repo-relative resolution branch may trust is
+// tierBRepoRoot's: the checkout resolve.Roots validated, or "" outside
+// any repository. It must never be a bare working directory:
+// pathAllowed's repo-relative branch resolves a target against whatever root
+// it is given and then compares the RESULT against a relative write_set
+// entry. If the hook process's cwd is merely some subdirectory of the repo
+// (a verifier subprocess launched from <repo>/internal, say) and
+// ETHOS_REPO_ROOT is unset, treating that cwd as the root resolves
+// "<repo>/internal/docs/x" against a write_set entry like "docs/**" and
+// wrongly admits a file it never authorized. An empty root means pathAllowed
+// skips the repo-relative try (raw comparison only), not a new admission; a
+// root that cannot be located at all is a deny naming the cause.
 
 // tierAAdvice is the one-line suggestion emitted to stderr when an
 // ad-hoc Agent spawn fires PreToolUse without a governance context.

@@ -15,8 +15,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -45,67 +47,177 @@ func (r Result) Passed() bool {
 	return r.Status == "PASS" || r.Status == "WARN"
 }
 
+// RunAllFor is RunAll for a located repository: a store ethos cannot use
+// (StoreFailure) is passed as no store root, so no check reads a broken store
+// as if it were usable, and the "Repository store" row fails. The CLI and the
+// MCP doctor tool both go through it.
+func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore) []Result {
+	storeRoot, storeErr := loc.Store, loc.StoreFailure()
+	if storeErr != nil {
+		storeRoot = ""
+	}
+	// A bundle or policy that cannot be honoured is its own failing row, and
+	// every row that read a store read layers the configuration governs.
+	var issue error
+	if storeErr == nil {
+		home, herr := os.UserHomeDir()
+		global := ""
+		if herr == nil {
+			global = filepath.Join(home, ".punt-labs", "ethos")
+		}
+		issue = bundle.ConfigIssue(loc.Store, loc.Ethos, global)
+	}
+	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, teams)
+	if issue != nil {
+		what, _, _ := resolve.Describe(issue)
+		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
+	}
+	return results
+}
+
 // RunAll executes every standard health check and returns the results.
 //
-// repoRoot is the current work tree (FindRepoRoot) — the checkout whose
+// repoRoot is the current work tree (LocateRepoRoot) — the checkout whose
 // .claude/agents and seal hook the checks inspect. storeRoot is the shared
-// mission/config store (StoreRepoRoot); it differs from repoRoot only inside
+// mission/config store (StoreRootIfAny); it differs from repoRoot only inside
 // a linked worktree, and only the team-config read in CheckOrphanedAgentFiles
 // needs it (Bugbot #370 class: resolving the active team from the worktree
 // while activation wrote it to the store produced false orphan reports).
-func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot string, teams *team.LayeredStore) []Result {
-	results := make([]Result, 0, 14) // matches today's check count; a stale hint just costs one reallocation, not correctness
+//
+// rootErr is LocateRepoRoot's error. When repoRoot is empty because an
+// ETHOS_REPO_ROOT was refused, or the checkout could not be examined, the
+// checks that read the checkout are gated (gateCheckout); being outside any
+// repository is not a problem.
+//
+// storeErr is LocateStoreRoot's error. When the store could not be located
+// for any other reason, doctor emits a FAIL "Repository store" row — every
+// non-exempt command refuses in that state — and the checks that read the
+// store are gated (gateStore).
+func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr error, teams *team.LayeredStore) []Result {
+	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, teams)
+}
 
-	dir, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
-	results = append(results, passFail("Identity directory", dir, ok))
+// runAll is RunAll with the configuration issue that governs the store layers
+// (nil for none): every store check gates on it as it does on a store that was
+// not located.
+func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, teams *team.LayeredStore) []Result {
+	results := make([]Result, 0, 16) // matches today's check count; a stale hint just costs one reallocation, not correctness
+
+	checkout := func(r Result) Result { return gateCheckout(r, repoRoot, rootErr) }
+	store := func(r Result) Result { return gateStore(r, storeRoot, storeErr) }
+	if policy != nil {
+		store = func(r Result) Result { return gateStore(r, "", policy) }
+	}
+
+	if unlocated(storeRoot, storeErr) {
+		detail := "not located: " + storeErr.Error()
+		if what, _, _ := resolve.Describe(storeErr); what != "the repository store could not be located" {
+			detail = what + ": " + storeErr.Error()
+		}
+		results = append(results, Result{Name: "Repository store", Status: "FAIL", Detail: detail})
+	}
+
+	// The identity store, like the team store, is layered over the repository
+	// store, so these checks read it and are gated with it.
+	results = append(results, store(identityDirResult(s, ss, storeRoot)))
 
 	// Human identity carries its own status: a fresh install (no identity
 	// yet) is a WARN pointing at `ethos setup`, not a FAIL.
-	results = append(results, CheckHumanIdentity(s, ss))
+	results = append(results, checkout(store(CheckHumanIdentity(s, ss, repoRoot))))
 
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
 	// guard stays on the checkout (repoRoot) (#370).
-	agent, ok := CheckDefaultAgent(repoRoot, storeRoot)
-	results = append(results, passFail("Default agent", agent, ok))
+	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot))))
 
-	dup, ok := CheckDuplicateFields(s, ss)
-	results = append(results, passFail("Duplicate fields", dup, ok))
+	results = append(results, store(duplicateFieldsResult(s, ss)))
 
-	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))
-	results = append(results, CheckSealHook(repoRoot))
+	results = append(results, checkout(store(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))))
 
-	// ethos-bfml/ethos-hy40: the trailer hook gets the same presence check
-	// the seal hook already had — gated on the enabled marker, active
-	// determined by execution (checkHookPresence), not by whether a section
-	// merely exists. See the DES-hook-presence ADR in DESIGN.md.
-	results = append(results, CheckTrailerHook(repoRoot))
+	// ethos-bfml/ethos-hy40: every hook gets the presence check the seal hook
+	// had first — gated on the enabled marker, active determined by execution
+	// (checkHookPresence), not by whether a section merely exists. See the
+	// DES-hook-presence ADR in DESIGN.md.
+	for _, spec := range hookSpecs {
+		results = append(results, checkout(checkHookPresence(repoRoot, spec)))
+	}
 
 	// DES-hook-drift-detection: content-currency checks, independent of the
 	// enabled marker and of the presence checks' active states — see
 	// docs/design-hook-drift-detection.md.
-	results = append(results, CheckHookCurrency(repoRoot, sealHookSpec))
-	results = append(results, CheckHookCurrency(repoRoot, trailerHookSpec))
+	for _, spec := range hookSpecs {
+		results = append(results, checkout(CheckHookCurrency(repoRoot, spec)))
+	}
 
 	// DES-057. The completeness gate reads the shared store (storeRoot),
 	// matching every other resolution consumer; the git-boundary check
 	// reads the checkout (repoRoot), because the index and .gitignore
 	// belong to the tree being committed.
-	results = append(results, CheckRepoSetComplete(s, storeRoot))
-	results = append(results, CheckLocalExtNotTracked(repoRoot))
-	results = append(results, CheckExtCredentialNames(s))
+	results = append(results, store(CheckRepoSetComplete(s, storeRoot)))
+	results = append(results, checkout(CheckLocalExtNotTracked(repoRoot)))
+	results = append(results, store(CheckExtCredentialNames(s)))
 
 	// DES-072: hand-edited mission files read as machine-written and
 	// are invisible to every mission-reading surface — the exact
 	// failure mode `ethos mission correct` exists to replace. Reads
 	// storeRoot (the shared record), matching CheckRepoSetComplete.
-	results = append(results, CheckNoHandEditedMissionFiles(storeRoot))
+	results = append(results, store(CheckNoHandEditedMissionFiles(storeRoot)))
 
 	// ethos-e05k: the delegated-worker invariant on the "implement" and
 	// "test" archetypes is data-driven from the deployed YAML, so a binary
 	// upgrade with no `ethos seed` re-run silently loses enforcement.
-	results = append(results, CheckDelegatedWorkerArchetypes(storeRoot))
+	results = append(results, store(CheckDelegatedWorkerArchetypes(storeRoot)))
+
+	// DES-079: every file ethos owns has a class in the path-class table.
+	results = append(results, checkout(CheckUnclassifiedFiles(repoRoot)))
 	return results
+}
+
+// unlocated reports whether a tree was not located for a reason other than
+// being outside a repository.
+func unlocated(root string, err error) bool {
+	return root == "" && err != nil && !errors.Is(err, resolve.ErrNotInRepo)
+}
+
+// gateStore marks a check that read the identity, team or repository store
+// when the repository store was not located: a PASS becomes WARN "not checked"
+// (it saw the global layer only), a FAIL keeps its status with a note.
+func gateStore(r Result, root string, err error) Result {
+	if !unlocated(root, err) {
+		return r
+	}
+	// A check that PASSed on the global layer alone, or examined nothing because
+	// the store was not located, did not check the repository: it is a WARN
+	// that says so. A FAIL stays a FAIL, with a note.
+	if r.Status == "PASS" {
+		what, _, _ := resolve.Describe(err)
+		r.Status, r.Detail = "WARN", "not checked: "+what+": "+err.Error()
+		return r
+	}
+	// Worded from the failure: a policy that cannot be honoured is not a store
+	// that was not located.
+	var ce *resolve.ConfigError
+	if errors.As(err, &ce) {
+		r.Detail += " (" + ce.What + ": " + err.Error() + ")"
+		return r
+	}
+	r.Detail += " (global layer only; repo store not located: " + err.Error() + ")"
+	return r
+}
+
+// gateCheckout marks a check that reads the checkout when the checkout was not
+// located: a FAIL keeps its status with a note; anything else, which examined
+// no tree, becomes WARN "not checked".
+func gateCheckout(r Result, root string, err error) Result {
+	if !unlocated(root, err) {
+		return r
+	}
+	if r.Status == "FAIL" {
+		r.Detail += " (checkout not located: " + err.Error() + ")"
+		return r
+	}
+	r.Status, r.Detail = "WARN", "not checked: "+err.Error()
+	return r
 }
 
 // passFail builds a Result from a boolean check outcome: true is PASS, false
@@ -116,6 +228,24 @@ func passFail(name, detail string, ok bool) Result {
 		status = "FAIL"
 	}
 	return Result{Name: name, Status: status, Detail: detail}
+}
+
+// identityDirResult is CheckIdentityDir as a Result.
+func identityDirResult(s identity.IdentityStore, ss *session.Store, storeRoot string) Result {
+	detail, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
+	return passFail("Identity directory", detail, ok)
+}
+
+// duplicateFieldsResult is CheckDuplicateFields as a Result.
+func duplicateFieldsResult(s identity.IdentityStore, ss *session.Store) Result {
+	detail, ok := CheckDuplicateFields(s, ss)
+	return passFail("Duplicate fields", detail, ok)
+}
+
+// defaultAgentResult is CheckDefaultAgent as a Result.
+func defaultAgentResult(repoRoot, storeRoot string) Result {
+	detail, ok := CheckDefaultAgent(repoRoot, storeRoot)
+	return passFail("Default agent", detail, ok)
 }
 
 // AllPassed returns true when every result passed.
@@ -174,7 +304,7 @@ func PassedCount(results []Result) int {
 // .claude/agents/ is per-checkout state (session_start and agent_installer
 // write it there), so the glob is checkout-rooted. storeRoot is the shared
 // store: the active team lives in .punt-labs/ethos.yaml resolved via
-// StoreRepoRoot by every other reader and the writer (team activate), so the
+// StoreRootIfAny by every other reader and the writer (team activate), so the
 // team read must use it too — resolving the team from the worktree while
 // activation wrote it to the store would compute "expected" agents from the
 // wrong team and flag valid agents as orphaned (Bugbot #370 class). They
@@ -350,7 +480,9 @@ func CheckSealHook(repoRoot string) Result { return checkHookPresence(repoRoot, 
 func CheckTrailerHook(repoRoot string) Result { return checkHookPresence(repoRoot, trailerHookSpec) }
 
 // checkHookPresence reports on spec's hook, keyed on the enabled marker
-// (§2.11). Four states:
+// (§2.11). Four states, each resolved against the hooks directory git itself
+// names; when git cannot name it (a degraded lookup) an enabled repo is a FAIL
+// and a dormant one a WARN, both "cannot verify hooks" with the reason:
 //
 //   - Enabled (marker present): FAIL when the hook is missing or inactive;
 //     PASS when it carries an active call, proven by executing it
@@ -378,13 +510,28 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// "not enabled" — a doubly-broken repo (unreadable .punt-labs/ethos plus a
 	// lost hook) would then read PASS while commits flow unsealed. Surface it
 	// as a FAIL instead of guessing dormancy (S4).
-	markerPresent := false
-	if _, err := os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "enabled")); err == nil {
-		markerPresent = true
-	} else if !os.IsNotExist(err) {
+	// resolve.EnabledMarker validates the store path and the marker: a dangling
+	// link, an unreadable directory, or a marker that is not a regular file is
+	// an error here, never "not enabled".
+	markerPresent, err := resolve.EnabledMarker(repoRoot)
+	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
 	}
-	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	lk := githook.HooksDir(repoRoot)
+	// A degraded lookup did not read core.hooksPath: the directory it guessed
+	// may not be the one git runs, so a verdict on its files would be a guess.
+	// An enabled repo must not read green on a guess (its commits may be
+	// unsealed); a dormant one is a WARN, because a stale chained hook in the
+	// directory git really runs would otherwise stay hidden.
+	dir, lkErr := lk.Verified()
+	if lkErr != nil {
+		status := "WARN"
+		if markerPresent {
+			status = "FAIL"
+		}
+		return Result{Name: name, Status: status, Detail: "cannot verify hooks: " + lk.Explain()}
+	}
+	hooksDirWarnings := lk.Warnings
 	// A diverted core.hooksPath (inside the work tree, or outside the repo
 	// entirely) is exactly the kind of surprise an operator running `ethos
 	// doctor` needs named, not silently discarded — doctor is the one place
@@ -647,10 +794,13 @@ type HookSpec struct {
 	NeedsMsgArg bool
 }
 
+// hookSpecs is every hook doctor verifies, one per layout.HookNames entry.
+var hookSpecs = []HookSpec{sealHookSpec, trailerHookSpec}
+
 var sealHookSpec = HookSpec{
 	Name:       "Seal hook",
 	ShortName:  "seal",
-	File:       "pre-commit",
+	File:       layout.HookPreCommit,
 	Tag:        hooks.SealTag,
 	Ident:      hooks.SealIdent,
 	Canonical:  hooks.PreCommit,
@@ -660,7 +810,7 @@ var sealHookSpec = HookSpec{
 var trailerHookSpec = HookSpec{
 	Name:        "Trailer hook",
 	ShortName:   "trailer",
-	File:        "commit-msg",
+	File:        layout.HookCommitMsg,
 	Tag:         hooks.TrailerTag,
 	Ident:       hooks.TrailerIdent,
 	Canonical:   hooks.CommitMsg,
@@ -709,7 +859,12 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
-	dir, hooksDirWarnings := githook.HooksDir(repoRoot)
+	lk := githook.HooksDir(repoRoot)
+	dir, lkErr := lk.Verified()
+	if lkErr != nil {
+		return Result{Name: name, Status: "WARN", Detail: "hooks directory not verified: " + lk.Explain()}
+	}
+	hooksDirWarnings := lk.Warnings
 	if len(hooksDirWarnings) > 0 {
 		defer func() {
 			result.Detail += " (" + strings.Join(hooksDirWarnings, "; ") + ")"
@@ -833,9 +988,9 @@ func hasRepoLocalTeam(storeRoot string) bool {
 // or "ambiguous identity: 2 matches for email ...". The old "no match — "
 // prefix contradicted the second one: an ambiguous store has too many matches,
 // not none.
-func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) Result {
+func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout string) Result {
 	name := "Human identity"
-	handle, err := resolve.Resolve(s, ss)
+	handle, err := resolve.Resolve(s, ss, checkout)
 	if err != nil {
 		if list, listErr := s.List(); listErr == nil &&
 			len(list.Identities) == 0 && len(list.Warnings) == 0 {
@@ -860,7 +1015,7 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) Result {
 // the returned bool, so prepending "error: " would double-label.
 //
 // repoRoot is the checkout, used only for the "in a git repo" guard.
-// storeRoot is the shared store: the agent: key resolves via StoreRepoRoot
+// storeRoot is the shared store: the agent: key resolves via StoreRootIfAny
 // in every other consumer (session_start's persona, resolveLeader, ethos
 // resolve-agent), so this health check must read it from the same tree — or
 // from a worktree it would report a default agent that disagrees with the

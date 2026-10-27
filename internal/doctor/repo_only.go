@@ -3,12 +3,12 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
@@ -183,8 +183,8 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 // read the pattern with .gitignore's own semantics, where `/**/` spans zero
 // or more directories — so a file directly under .punt-labs/ is caught too.
 func trackedLocalExt(repoRoot string) ([]string, error) {
-	out, err := exec.Command("git", "-C", repoRoot, "ls-files",
-		"--", ":(glob)"+GitignoreRule).Output()
+	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "ls-files",
+		"--", ":(glob)"+GitignoreRule)
 	if err != nil {
 		return nil, fmt.Errorf("could not ask git for tracked files: %v", err)
 	}
@@ -212,13 +212,15 @@ func CheckExtCredentialNames(s identity.IdentityStore) Result {
 	}
 	list, err := s.List()
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not list identities: %v", err)}
+		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf("not checked: could not list identities: %v", err)}
 	}
 
-	var flagged []string
+	// A file the check could not read is not a pass: each is reported.
+	var flagged, unread []string
 	for _, id := range list.Identities {
-		namespaces, nsErr := s.ExtList(id.Handle)
-		if nsErr != nil {
+		namespaces, err := s.ExtList(id.Handle)
+		if err != nil {
+			unread = append(unread, fmt.Sprintf("%s: %v", id.Handle, err))
 			continue
 		}
 		for _, ns := range namespaces {
@@ -227,8 +229,9 @@ func CheckExtCredentialNames(s identity.IdentityStore) Result {
 			// merged view would keep flagging the key after the user did
 			// exactly that, so following the advice would never clear the
 			// warning and the check would become noise.
-			keys, keyErr := vendor.BaseExtKeys(filepath.Join(s.ExtDir(id.Handle), ns+".yaml"))
-			if keyErr != nil {
+			keys, err := vendor.BaseExtKeys(filepath.Join(s.ExtDir(id.Handle), ns+".yaml"))
+			if err != nil {
+				unread = append(unread, fmt.Sprintf("%s %s: %v", id.Handle, ns, err))
 				continue
 			}
 			for _, key := range keys {
@@ -238,11 +241,19 @@ func CheckExtCredentialNames(s identity.IdentityStore) Result {
 			}
 		}
 	}
-	if len(flagged) == 0 {
+	if len(flagged) == 0 && len(unread) == 0 {
 		return Result{Name: name, Status: "PASS", Detail: "no credential-named keys"}
 	}
 	sort.Strings(flagged)
-	return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-		"credential-named: %s — move each to a <namespace>.local.yaml (`ethos ext set ... --local`); `ethos vendor` will refuse them",
-		strings.Join(flagged, ", "))}
+	sort.Strings(unread)
+	var parts []string
+	if len(flagged) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"credential-named: %s — move each to a <namespace>.local.yaml (`ethos ext set ... --local`); `ethos vendor` will refuse them",
+			strings.Join(flagged, ", ")))
+	}
+	if len(unread) > 0 {
+		parts = append(parts, "not checked: "+strings.Join(unread, "; "))
+	}
+	return Result{Name: name, Status: "WARN", Detail: strings.Join(parts, "; ")}
 }

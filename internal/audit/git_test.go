@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // TestRelPathspec_Normalizes is C1/C2/C5 at the unit level: an absolute path is
@@ -78,7 +80,7 @@ func TestGitAdd_SymlinkedRootStagesChunk(t *testing.T) {
 // on error.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := testhelpers.GitCommand(args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

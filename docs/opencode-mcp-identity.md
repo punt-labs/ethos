@@ -59,6 +59,8 @@ caller participant. It rejects a different explicit `session_id` or
 `agent_id`. The participant must still exist when the locked update runs;
 a concurrent leave cannot cause `iam` to recreate it.
 
+Metadata `whoami` and `iam` refuse while the repository store cannot be located, or while the bundle or policy configuration is unusable, as plain `whoami` does.
+
 Explicit `session_id` remains an administrative target for `roster`, `join`,
 and `leave`, including when it differs from the metadata caller. Metadata
 IDs themselves must be nonempty strings containing only ASCII letters,

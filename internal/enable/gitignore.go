@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // gitignoreMarker heads the block enable appends so the patterns are
@@ -89,6 +92,18 @@ var gitignoreRules = []ignoreRule{
 		},
 		runtime: true,
 	},
+	{
+		// A writer killed mid-rename leaves its staging file or directory
+		// (layout.TmpMarker) behind; git add -A must not commit it.
+		pattern: ".punt-labs/**/*" + layout.TmpMarker + "*",
+		probes: []string{
+			".punt-labs/ethos/identities/probe.yaml" + layout.TmpMarker,
+			".punt-labs/ethos/missions/m-probe/.probe.json.123" + layout.TmpMarker,
+			".punt-labs/ethos/missions/.m-probe.migrate" + layout.TmpMarker + "-123/probe.yaml",
+			".punt-labs/probe" + layout.TmpMarker,
+		},
+		runtime: true,
+	},
 	machineLocalRule,
 }
 
@@ -130,7 +145,11 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	var missing []ignoreRule
 	var patterns, defeated []string
 	for _, r := range gitignoreRules {
-		if covers(repoRoot, r, present) {
+		covered, err := covers(repoRoot, r, present)
+		if err != nil {
+			return "", "", err
+		}
+		if covered {
 			continue
 		}
 		// The pattern is uncovered but its literal line is already in the
@@ -233,22 +252,27 @@ func presentLines(data []byte) map[string]bool {
 // in gitExcludes: which rules travel with the repo, and whether one probe
 // standing in for a whole pattern is enough.
 //
-// It answers false on any doubt. A rule that covers part of the pattern, a
-// match that comes from an untraveling source, and a git that cannot answer at
-// all all mean "write the rule" — a redundant line costs nothing, a secret
-// staged by a repo that reported itself protected costs everything.
+// It answers false when git answers "not excluded": a rule that covers part
+// of the pattern, or a match that comes from an untraveling source, means
+// "write the rule" — a redundant line costs nothing, a secret staged by a
+// repo that reported itself protected costs everything.
 //
-// The literal pattern is consulted only when git cannot answer (no git in
-// PATH, not a work tree). It is a fallback, not a second opinion: when git
-// answers "not excluded" for a pattern whose line is right there in the file,
-// something overrides it, and taking the line's word for it is the fail-open
-// this predicate exists to prevent.
-func covers(repoRoot string, r ignoreRule, present map[string]bool) bool {
+// The literal pattern is consulted only when git is not installed. It is a
+// fallback, not a second opinion: when git answers "not excluded" for a
+// pattern whose line is right there in the file, something overrides it, and
+// taking the line's word for it is the fail-open this predicate exists to
+// prevent. Any other git failure (a timeout, dubious ownership, not a
+// repository) is an error: a git that could not answer must not read as "not
+// covered" or as "covered".
+func covers(repoRoot string, r ignoreRule, present map[string]bool) (bool, error) {
 	excluded, err := gitExcludes(repoRoot, r.probes)
-	if err != nil {
-		return present[r.pattern]
+	switch {
+	case err == nil:
+		return excluded, nil
+	case errors.Is(err, exec.ErrNotFound):
+		return present[r.pattern], nil
 	}
-	return excluded
+	return false, err
 }
 
 // gitExcludes reports whether the repo's own ignore rules exclude every path
@@ -277,16 +301,24 @@ func covers(repoRoot string, r ignoreRule, present map[string]bool) bool {
 // path matches; any other failure means git could not answer and is returned
 // as an error for the caller to fall back on.
 func gitExcludes(repoRoot string, probes []string) (bool, error) {
-	cmd := exec.Command("git", "-C", repoRoot, "-c", "core.excludesFile="+os.DevNull,
-		"check-ignore", "-v", "-z", "--no-index", "--stdin")
-	cmd.Stdin = strings.NewReader(strings.Join(probes, "\x00") + "\x00")
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	_, err := gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: repoRoot,
+		Args: []string{"-c", "core.excludesFile=" + os.DevNull,
+			"check-ignore", "-v", "-z", "--no-index", "--stdin"},
+		// The caller's environment, in the C locale: the "not a git
+		// repository" message below is matched in English.
+		Env:    gitenv.Inherited(),
+		Stdin:  strings.NewReader(strings.Join(probes, "\x00") + "\x00"),
+		Stdout: &stdout, Stderr: &stderr,
+	})
+	if err != nil {
 		var ee *exec.ExitError
 		// Exit 1 is "no path matched" — an answer, and the answer is no.
 		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			if gitenv.IsNotARepo(stderr.String()) {
+				return false, nil // nothing in a non-repository is covered
+			}
 			return false, fmt.Errorf("git check-ignore: %w: %s", err, strings.TrimSpace(stderr.String()))
 		}
 	}
@@ -343,7 +375,15 @@ func LocalIgnored(repoRoot string) (bool, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("reading .gitignore: %w", err)
 	}
-	return covers(repoRoot, machineLocalRule, presentLines(data)), nil
+	return covers(repoRoot, machineLocalRule, presentLines(data))
+}
+
+// createGitignoreTemp creates the staging file for an atomic write to target,
+// beside target. Its name comes from logical, the path the caller asked to
+// write, not from target: a .gitignore linked to another name is still
+// classified as .gitignore's staging file (DES-079).
+func createGitignoreTemp(target, logical string) (*os.File, error) {
+	return os.CreateTemp(filepath.Dir(target), layout.SiblingTempPattern(filepath.Base(logical)))
 }
 
 // writeGitignore replaces the .gitignore at path atomically and durably: it
@@ -369,7 +409,7 @@ func writeGitignore(path string, data []byte) error {
 	}
 
 	dir := filepath.Dir(target)
-	tmp, err := os.CreateTemp(dir, ".gitignore.*")
+	tmp, err := createGitignoreTemp(target, path)
 	if err != nil {
 		return fmt.Errorf("creating temp .gitignore in %s: %w", dir, err)
 	}
@@ -414,13 +454,13 @@ func writeGitignore(path string, data []byte) error {
 // folded into this warning. Untracking (git rm --cached) is the operator's
 // call, so the caller only warns.
 func trackedRuntimeFiles(repoRoot string) ([]string, error) {
-	args := []string{"-C", repoRoot, "ls-files", "-z", "--"}
+	args := []string{"ls-files", "-z", "--"}
 	for _, r := range gitignoreRules {
 		if r.runtime {
 			args = append(args, ":(glob)"+r.pattern)
 		}
 	}
-	out, err := exec.Command("git", args...).Output()
+	out, err := gitenv.OutputEnv(repoRoot, "git", nil, args...)
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {

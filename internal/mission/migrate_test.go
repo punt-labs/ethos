@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -301,8 +302,8 @@ func TestMigrateMission_PartialFailureLeavesLegacyIntact(t *testing.T) {
 	// If the repo-tree mission directory parent is unwritable, the
 	// rename fails and both sources stay intact. Skip on root since
 	// permissions are bypassed.
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses unix mode checks")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root bypasses them")
 	}
 	globalRoot := t.TempDir()
 	repoRoot := t.TempDir()
@@ -325,4 +326,27 @@ func TestMigrateMission_PartialFailureLeavesLegacyIntact(t *testing.T) {
 	// Legacy still present.
 	_, statErr := os.Stat(filepath.Join(globalRoot, "missions", id+".yaml"))
 	require.NoError(t, statErr, "legacy contract must survive failed migrate")
+}
+
+// TestRemoveStagingReportsFailure: a staging directory that cannot be removed
+// is named on the writer, repo-relative; one that can is silent.
+func TestRemoveStagingReportsFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root ignores them")
+	}
+	missions := filepath.Join(t.TempDir(), "home", "r", ".punt-labs", "ethos", "missions")
+	staging := filepath.Join(missions, ".m-1.migrate.ethos-tmp-123")
+	require.NoError(t, os.MkdirAll(staging, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(staging, "contract.yaml"), nil, 0o600))
+
+	var ok bytes.Buffer
+	removeStaging(&ok, filepath.Join(missions, "absent"))
+	assert.Empty(t, ok.String())
+
+	require.NoError(t, os.Chmod(staging, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(staging, 0o700) })
+	var buf bytes.Buffer
+	removeStaging(&buf, staging)
+	assert.Contains(t, buf.String(), ".punt-labs/ethos/missions/.m-1.migrate.ethos-tmp-123")
+	assert.NotContains(t, buf.String(), "/home/r/", "the home prefix must not leak")
 }
