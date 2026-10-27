@@ -3,6 +3,8 @@
 package gitenv
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,8 +166,8 @@ func TestHelperRunGit(t *testing.T) {
 
 // runHelperAndInterrupt starts the helper in its own process group (the
 // terminal's foreground group), waits for the fake git to report its pid, sends
-// SIGINT to the whole group as Ctrl-C does, and returns the git's pid.
-func runHelperAndInterrupt(t *testing.T, network bool) int {
+// sig to the whole group as Ctrl-C does for SIGINT, and returns the git's pid.
+func runHelperAndInterrupt(t *testing.T, network bool, sig syscall.Signal) int {
 	t.Helper()
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "git.pid")
@@ -188,24 +190,28 @@ func runHelperAndInterrupt(t *testing.T, network bool) int {
 		pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
 		return pid > 0
 	}, 5*time.Second, 20*time.Millisecond, "the git started")
-	require.NoError(t, syscall.Kill(-c.Process.Pid, syscall.SIGINT))
+	require.NoError(t, syscall.Kill(-c.Process.Pid, sig))
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the helper did not exit on SIGINT")
+		t.Fatal("the helper did not exit on the signal")
 	}
 	return pid
 }
 
-// Ctrl-C does not leave a Network git running: ethos forwards the signal to its
-// group. An ordinary git has no forwarder, and is in its own group, so it is
-// not reached (it is bounded by its timeout instead).
-func TestCtrlCDoesNotLeaveANetworkGitRunning(t *testing.T) {
-	pid := runHelperAndInterrupt(t, true)
-	require.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 3*time.Second, 50*time.Millisecond,
-		"the network git (pid %d) outlived Ctrl-C", pid)
-
-	pid = runHelperAndInterrupt(t, false)
-	assert.NoError(t, syscall.Kill(pid, 0), "an ordinary git runs in its own group and is not reached by a terminal's SIGINT")
-	_ = syscall.Kill(pid, syscall.SIGKILL)
+// A terminating signal does not leave any git running, Network or ordinary:
+// ethos stops git's whole process group, which the terminal's signal does not
+// reach (git is in a group of its own), so no git is left holding index.lock.
+func TestSignalDoesNotLeaveAGitRunning(t *testing.T) {
+	for _, network := range []bool{true, false} {
+		for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
+			t.Run(fmt.Sprintf("network=%v/%v", network, sig), func(t *testing.T) {
+				pid := runHelperAndInterrupt(t, network, sig)
+				defer func() { _ = syscall.Kill(-pid, syscall.SIGKILL) }()
+				// git is its group's leader, so its group is gone when kill(-pid) finds nobody.
+				require.Eventually(t, func() bool { return errors.Is(syscall.Kill(-pid, 0), syscall.ESRCH) }, 3*time.Second, 50*time.Millisecond,
+					"git (pid %d) or its group outlived %v", pid, sig)
+			})
+		}
+	}
 }

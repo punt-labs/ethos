@@ -42,8 +42,8 @@ func SetTimeout(d time.Duration) time.Duration {
 // git did not answer within its bound.
 var ErrTimeout = errors.New("git did not answer")
 
-// ErrInterrupted is wrapped by the error Run returns for a Network git stopped
-// because ethos got SIGINT, SIGTERM, SIGHUP or SIGQUIT. Whichever it was, ethos
+// ErrInterrupted is wrapped by the error Run returns for a git stopped because
+// ethos got SIGINT, SIGTERM, SIGHUP or SIGQUIT. Whichever it was, ethos
 // sent SIGTERM to git's group (then SIGKILL to what stayed); the original
 // signal itself is not delivered to git.
 var ErrInterrupted = errors.New("git interrupted")
@@ -95,10 +95,10 @@ type Spec struct {
 	// host key, a passphrase) fail at once without BatchMode, and the user's ssh
 	// setup (GIT_SSH_COMMAND, GIT_SSH, core.sshCommand) applies untouched, as git
 	// resolves it: ethos sets none of them. The session is also its own process
-	// group, so a timeout reaches its descendants (ssh, helpers). While it runs
-	// ethos catches SIGINT, SIGTERM, SIGHUP and SIGQUIT; each makes ethos send
-	// SIGTERM to that group (and SIGKILL to what stays), so a Ctrl-C or a hangup
-	// does not leave a clone running. The caught signal itself is not delivered.
+	// group, so a timeout reaches its descendants (ssh, helpers). Run catches
+	// SIGINT, SIGTERM, SIGHUP and SIGQUIT for every git, Network or not: each
+	// makes ethos send SIGTERM to git's group (and SIGKILL to what stays), and
+	// the caught signal itself is not delivered. See ErrInterrupted.
 	Network bool
 }
 
@@ -129,27 +129,25 @@ func Run(s Spec) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	// A Network git is stopped, with its group, when ethos is interrupted:
-	// ethos catches SIGINT, SIGTERM, SIGHUP and SIGQUIT while it runs, cancels the command, and
-	// returns ErrInterrupted. It runs in its own process group, which the
-	// terminal's Ctrl-C or hangup does not reach (it is also a session of its
-	// own, so a hangup of ethos's terminal does not reach it), so nothing else
-	// would.
+	// Every git is stopped, with its group, when ethos is interrupted: ethos
+	// catches SIGINT, SIGTERM, SIGHUP and SIGQUIT while it runs, cancels the
+	// command, and returns ErrInterrupted. Git runs in its own process group
+	// (a Network git in a session of its own), which the terminal's Ctrl-C or
+	// hangup does not reach, so nothing else would stop it: it would run on
+	// with no deadline, holding index.lock and its filters.
 	var interrupted atomic.Bool
-	if s.Network {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
-		done := make(chan struct{})
-		defer func() { signal.Stop(sig); close(done) }()
-		go func() {
-			select {
-			case <-sig:
-				interrupted.Store(true)
-				cancel()
-			case <-done:
-			}
-		}()
-	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	done := make(chan struct{})
+	defer func() { signal.Stop(sig); close(done) }()
+	go func() {
+		select {
+		case <-sig:
+			interrupted.Store(true)
+			cancel()
+		case <-done:
+		}
+	}()
 	cmd := exec.CommandContext(ctx, s.Git, s.Args...)
 	cmd.Dir = s.Dir
 	// Trace2 is switched off by the environment, which overrides a target set in
