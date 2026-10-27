@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -301,8 +302,8 @@ func TestMigrateMission_PartialFailureLeavesLegacyIntact(t *testing.T) {
 	// If the repo-tree mission directory parent is unwritable, the
 	// rename fails and both sources stay intact. Skip on root since
 	// permissions are bypassed.
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses unix mode checks")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root bypasses them")
 	}
 	globalRoot := t.TempDir()
 	repoRoot := t.TempDir()
@@ -330,8 +331,8 @@ func TestMigrateMission_PartialFailureLeavesLegacyIntact(t *testing.T) {
 // TestRemoveStagingReportsFailure: a staging directory that cannot be removed
 // is named on the writer, repo-relative; one that can is silent.
 func TestRemoveStagingReportsFailure(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root ignores them")
 	}
 	missions := filepath.Join(t.TempDir(), "home", "r", ".punt-labs", "ethos", "missions")
 	staging := filepath.Join(missions, ".m-1.migrate.ethos-tmp-123")

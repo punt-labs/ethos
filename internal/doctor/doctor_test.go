@@ -2333,8 +2333,8 @@ func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated [
 // FAILs naming it, and a store that was not located turns a "not in a repo" row
 // into a WARN that says it was not checked.
 func TestHookPresenceUnreadableStoreIsNotDormant(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores permissions")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root ignores them")
 	}
 	repo := repoTemp(t)
 	store := filepath.Join(repo, ".punt-labs", "ethos")

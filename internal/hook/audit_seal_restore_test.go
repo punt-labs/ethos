@@ -36,6 +36,9 @@ func indexFixtureTimedOut(t *testing.T, mode os.FileMode, before, afterAdd strin
 
 // The snapshot keeps the index's mode, and so does the restored index.
 func TestIndexSnapshotKeepsTheMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes are not POSIX permissions here")
+	}
 	snap, path, _ := indexFixture(t, 0o640, "before", "after")
 	info, err := os.Stat(snap.snap)
 	require.NoError(t, err)

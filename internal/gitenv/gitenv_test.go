@@ -365,8 +365,8 @@ func TestDanglingDotGitReasons(t *testing.T) {
 // A .git that exists but cannot be read (mode 000) is refused, in the directory
 // and in an ancestor below the ceiling, whether it is a directory or a gitfile.
 func TestDanglingDotGitUnreadable(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores permissions")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root ignores them")
 	}
 	base := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", base)
@@ -412,8 +412,8 @@ func mkGitDir(t *testing.T, dot string) {
 // refuses each. A .git it accepts at mode 0300 or 0500 still resolves, and so
 // does git.
 func TestDanglingDotGitAppliesGitsOwnChecks(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores permissions")
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes are not POSIX permissions here, or root ignores them")
 	}
 	base := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", base)

@@ -488,9 +488,7 @@ func TestSymlinkedWorkingDirectoryRefusesDamagedDotGit(t *testing.T) {
 // Without git, an objects/ or refs/ that cannot be searched is refused, as the
 // git-present path refuses it, not read as "not a repository".
 func TestHandRulesRefuseUnsearchableObjectsAndRefs(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores permissions")
-	}
+	skipIfRoot(t)
 	for _, name := range []string{"objects", "refs"} {
 		t.Run(name, func(t *testing.T) {
 			inner, _ := shapeIn(t, gitShapes["gitdir to a git directory"])
