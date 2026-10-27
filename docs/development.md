@@ -120,7 +120,7 @@ dogfooding change, not a claim that ours are better. Both are being run
 for one PR cycle (DES-070's transition plan) before the plugin dependency
 is dropped from this repo.
 
-PR review follows punt-kit/standards/pr-review.md: local review (qodo review + silent-failure-hunter + code-reviewer) before the PR, then Qodo and Bugbot once at open, at most two rounds, Copilot only on request.
+PR review follows punt-kit/standards/pr-review.md: local review (qodo review + code-reviewer + silent-failure-hunter + invariant-completeness-reviewer) before the PR, then Qodo and Bugbot once at open, at most two rounds, Copilot only on request.
 
 ## Quality Gates
 
