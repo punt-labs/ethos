@@ -1652,7 +1652,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", nil, "", nil, nil)
-	require.Len(t, results, 15)
+	require.Len(t, results, 16)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1664,6 +1664,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Default agent",
 		"Duplicate fields",
 		"Orphaned agent files",
+		"Team members",
 		"Audit seal hook",
 		"Audit trailer hook",
 		"Seal hook currency",
@@ -1677,14 +1678,14 @@ func TestRunAllAndHelpers(t *testing.T) {
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 15, PassedCount(results))
+	assert.Equal(t, 16, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", nil, "", nil, nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 14)
+	assert.Less(t, PassedCount(results), 15)
 
 	// At least one result should name the identity directory failure.
 	var found bool
@@ -2631,4 +2632,59 @@ func TestRunAllForPolicyIssueGatesEveryStoreRow(t *testing.T) {
 		assert.Contains(t, r.Detail, b.Detail, g.Name)
 	}
 	assert.GreaterOrEqual(t, storeRows, 6, "the comparison found too few store rows")
+}
+
+func TestCheckTeamMembers(t *testing.T) {
+	// setup builds a repo whose team lists the given members, plus a global
+	// store holding identities in global.
+	setup := func(t *testing.T, config string, members, global []string) (string, *team.LayeredStore, identity.IdentityStore) {
+		t.Helper()
+		root, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		for _, h := range global {
+			writeIdentity(t, globalRoot, h, "name: "+h+"\nhandle: "+h+"\nkind: agent\n")
+		}
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		if config != "" {
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte(config), 0o644))
+		}
+		ed := filepath.Join(root, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ed, "teams"), 0o755))
+		y := "name: solo\nmembers:\n"
+		for _, m := range members {
+			y += "  - identity: " + m + "\n    role: r\n"
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(ed, "teams", "solo.yaml"), []byte(y), 0o644))
+		return root, team.NewLayeredStore(ed, ed),
+			identity.NewLayeredStore(identity.NewStore(root), identity.NewStore(globalRoot))
+	}
+
+	t.Run("all resolve", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\n", []string{"a", "b"}, []string{"a", "b"})
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+		assert.Equal(t, "2 members resolve", res.Detail)
+	})
+
+	t.Run("unresolved members are all listed", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\n", []string{"a", "zed", "ghost"}, []string{"a"})
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "ghost, zed")
+		assert.NotContains(t, res.Detail, ": a")
+	})
+
+	t.Run("no team configured", func(t *testing.T) {
+		root, teams, s := setup(t, "", []string{"ghost"}, nil)
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status)
+		assert.Equal(t, "no team configured", res.Detail)
+	})
+
+	t.Run("repo-only defers to the repo-set check", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\nresolution: repo-only\n", []string{"ghost"}, nil)
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status)
+		assert.Contains(t, res.Detail, "Repo-only completeness")
+	})
 }

@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the identities directory) fails with the error. Under `resolution: repo-only`
   an identity that exists only in the global store reads "not vendored — run
   ethos vendor" instead of "no longer exists".
+- `ethos doctor` has a new "Team members" check. Under layered resolution it
+  fails, listing every member of the active team whose identity is in none of
+  the repo, bundle, or global stores. Under `resolution: repo-only` it defers
+  to "Repo-only completeness".
 
 ## [4.20.2] - 2026-11-03
 

@@ -102,7 +102,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 // (nil for none): every store check gates on it as it does on a store that was
 // not located.
 func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, teams *team.LayeredStore) []Result {
-	results := make([]Result, 0, 16) // matches today's check count; a stale hint just costs one reallocation, not correctness
+	results := make([]Result, 0, 17) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
 	checkout := func(r Result) Result { return gateCheckout(r, repoRoot, rootErr) }
 	store := func(r Result) Result { return gateStore(r, storeRoot, storeErr) }
@@ -134,6 +134,8 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	results = append(results, store(duplicateFieldsResult(s, ss)))
 
 	results = append(results, checkout(store(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))))
+
+	results = append(results, store(CheckTeamMembers(storeRoot, teams, s)))
 
 	// ethos-bfml/ethos-hy40: every hook gets the presence check the seal hook
 	// had first — gated on the enabled marker, active determined by execution
@@ -490,6 +492,56 @@ func classifyOrphans(orphaned []orphanFile, s identity.IdentityStore) (status, d
 		detail += " (" + note + ")"
 	}
 	return "FAIL", detail
+}
+
+// CheckTeamMembers fails when a member of the active team has no identity
+// in any layer s reads (repo, bundle, global). Under `resolution: repo-only`
+// it defers to CheckRepoSetComplete, which already reports an incomplete
+// repo set; reporting it here would double-count.
+func CheckTeamMembers(storeRoot string, teams *team.LayeredStore, s identity.IdentityStore) Result {
+	name := "Team members"
+
+	if storeRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+	teamName, err := resolve.ResolveTeam(storeRoot)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", err)}
+	}
+	if teamName == "" {
+		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
+	}
+	mode, err := resolve.ResolveResolution(storeRoot)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
+	}
+	if mode == resolve.ResolutionRepoOnly {
+		return Result{Name: name, Status: "PASS", Detail: "resolution: repo-only — see Repo-only completeness"}
+	}
+	if teams == nil || s == nil {
+		return Result{Name: name, Status: "FAIL", Detail: "no team or identity store available to verify members against"}
+	}
+	t, err := teams.Load(teamName)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load team %q: %s", teamName, err)}
+	}
+	var missing []string
+	for _, m := range t.Members {
+		p, err := identityPresence(s, m.Identity)
+		switch {
+		case err != nil:
+			missing = append(missing, fmt.Sprintf("%s (%v)", m.Identity, err))
+		case p == idAbsent:
+			missing = append(missing, m.Identity)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+			"team %q members with no identity in the repo, bundle, or global store: %s",
+			teamName, strings.Join(missing, ", "))}
+	}
+	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("%d members resolve", len(t.Members))}
 }
 
 type presence int
