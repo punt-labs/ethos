@@ -13,6 +13,7 @@ func TestAdd(t *testing.T) {
 	}{
 		{"frontmatter", "---\nname: x\n---\nbody\n", "---\n" + Line + "\nname: x\n---\nbody\n"},
 		{"already marked", "---\n" + Line + "\nname: x\n---\n", "---\n" + Line + "\nname: x\n---\n"},
+		{"crlf", "---\r\nname: x\r\n---\r\nbody\r\n", "---\r\n" + Line + "\r\nname: x\r\n---\r\nbody\r\n"},
 		{"no frontmatter", "body\n", "body\n"},
 		{"empty", "", ""},
 	}
@@ -30,6 +31,8 @@ func TestHas(t *testing.T) {
 	assert.False(t, Has("---\nname: x\n---\n"))
 	assert.False(t, Has("---\nname: x\n"+Line+"\n---\n"), "marker must be the first frontmatter line")
 	assert.False(t, Has(""))
+	assert.True(t, Has(Add("---\r\nname: x\r\n---\r\n")))
+	assert.False(t, Has("---\r\nname: x\r\n---\r\n"))
 }
 
 func TestFrontmatterStaysValidYAML(t *testing.T) {

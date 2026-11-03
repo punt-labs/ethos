@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read as hand-authored until the next SessionStart rewrites them; a leftover
   whose identity is already gone is not rewritten, so delete it once by hand.
   An agent with a source file in `.punt-labs/ethos/agents/` is never reported:
-  the installer re-copies it every SessionStart.
+  the installer re-copies it every SessionStart. The marker follows the file's
+  line ending, so a CRLF stub is marked too.
 - `ethos doctor` no longer fails "Identity directory" for a repo that has no
   `.punt-labs/ethos/identities/` of its own. Under layered resolution identities
   resolve from the global store, so doctor passes when the global identities
