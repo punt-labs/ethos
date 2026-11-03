@@ -117,4 +117,19 @@ func TestForCaller_GlobalMatchShadowedByADifferentRepoPersonIsAnError(t *testing
 	assert.Contains(t, err.Error(), `handle "jim"`)
 	assert.Contains(t, err.Error(), repo.Path("jim"))
 	assert.Contains(t, err.Error(), global.Path("jim"))
+	assert.NotContains(t, err.Error(), "different people", "the code does not know that")
+	assert.Contains(t, err.Error(), "if they are the same person")
+}
+
+// The same collision with the handle held by the active bundle: the error names
+// the bundle's file, not a repo path that does not exist.
+func TestForCaller_GlobalMatchShadowedByABundlePersonNamesTheBundleFile(t *testing.T) {
+	ls, repo, bundle, global := setupRepoOnly(t)
+	require.NoError(t, bundle.Save(&Identity{Name: "Bundle Jim", Handle: "jim", Kind: "human", Email: "a@x.com"}))
+	require.NoError(t, global.Save(&Identity{Name: "Global Jim", Handle: "jim", Kind: "human", Email: "b@y.com"}))
+
+	_, err := ForCaller(ls).FindBy("email", "b@y.com")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), bundle.Path("jim"))
+	assert.NotContains(t, err.Error(), repo.Path("jim"))
 }
