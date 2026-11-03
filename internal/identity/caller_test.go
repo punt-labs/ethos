@@ -1,6 +1,8 @@
 package identity
 
 import (
+	"errors"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,4 +59,31 @@ func TestForCaller_InNeitherStoreIsAnError(t *testing.T) {
 func TestForCaller_LayeredStoreIsUnchanged(t *testing.T) {
 	ls := NewLayeredStoreWithBundle(NewStore(t.TempDir()), nil, NewStore(t.TempDir()), false)
 	assert.Same(t, ls, ForCaller(ls))
+}
+
+// A damaged repo identity file may be the one sought: FindBy reports it rather
+// than answering from the global store.
+func TestForCaller_DamagedRepoFileBlocksTheGlobalFallback(t *testing.T) {
+	ls, repo, _, global := setupRepoOnly(t)
+	saveHuman(t, repo, "impl")
+	saveHuman(t, global, "claude")
+	require.NoError(t, os.WriteFile(repo.Path("broken"), []byte("handle: [unclosed\n"), 0o600))
+
+	_, err := ForCaller(ls).FindBy("email", "claude@example.com")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "broken")
+}
+
+// A global store that fails for any reason but a miss is reported, not read as
+// "not found".
+func TestForCaller_GlobalLoadFailureIsReported(t *testing.T) {
+	ls, repo, _, global := setupRepoOnly(t)
+	saveHuman(t, repo, "impl")
+	require.NoError(t, os.MkdirAll(global.IdentitiesDir(), 0o700))
+	require.NoError(t, os.WriteFile(global.Path("claude"), []byte("handle: [unclosed\n"), 0o600))
+
+	_, _, err := ForCaller(ls).(*CallerStore).LoadCaller("claude", Reference(true))
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, os.ErrNotExist), "a damaged global file is not a miss: %v", err)
+	assert.Contains(t, err.Error(), "global store")
 }

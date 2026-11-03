@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Under `resolution: repo-only`, the caller lookup no longer hides damage. A repo
+  identity file ethos cannot load now fails the lookup with the file named,
+  instead of falling through to a match in the global store. A global store
+  that fails for any reason but a missing file now reports that failure instead
+  of the repo's miss.
 - A damaged chunk, or an interrupted quarantine, in a session directory the repo
   gitignores no longer blocks every commit. Such a chunk is local only and
   cannot reach the tracked tree, so the seal skips that session, prints one line

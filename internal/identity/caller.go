@@ -2,7 +2,9 @@ package identity
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 )
 
 // CallerStore reads the identity of whoever is running ethos. Under DES-057
@@ -25,11 +27,21 @@ func ForCaller(s IdentityStore) IdentityStore {
 	return &CallerStore{IdentityStore: s, global: NewStore(ls.GlobalRoot())}
 }
 
-// FindBy searches the repo's store, then the global store.
+// FindBy searches the repo's store, then the global store. A repo with an
+// identity file it cannot load does not fall through: the file may be the one
+// sought, so the damage is returned instead of a global match.
 func (c *CallerStore) FindBy(field, value string) (*Identity, error) {
 	id, err := c.IdentityStore.FindBy(field, value)
 	if err != nil || id != nil {
 		return id, err
+	}
+	listed, err := c.IdentityStore.List()
+	if err != nil {
+		return nil, fmt.Errorf("listing the repo's identities before looking in the global store: %w", err)
+	}
+	if len(listed.Warnings) > 0 {
+		return nil, fmt.Errorf("finding %s %q: the repo holds identity files that cannot be loaded, so the global store was not consulted: %s",
+			field, value, strings.Join(listed.Warnings, "; "))
 	}
 	return c.global.FindBy(field, value)
 }
@@ -50,7 +62,10 @@ func (c *CallerStore) LoadCaller(handle string, opts ...LoadOption) (id *Identit
 	}
 	id, gerr := c.global.Load(handle, opts...)
 	if gerr != nil {
-		return nil, false, err // the repo's miss names where ethos looked
+		if errors.Is(gerr, os.ErrNotExist) {
+			return nil, false, err // the repo's miss names where ethos looked
+		}
+		return nil, false, fmt.Errorf("loading %q from the global store after the repo had none: %w", handle, gerr)
 	}
 	return id, true, nil
 }
