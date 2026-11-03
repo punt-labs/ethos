@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot reach the tracked tree, so the seal skips that session, prints one line
   naming the chunk and `ethos audit quarantine <path>`, and seals the others.
   In a tracked session the same damage still blocks the commit.
+- An audit notice that a line was rewritten no longer ends in a dangling
+  "; it ". It did whenever a credential or address rewrite was the only rule
+  that applied.
 
 ## [4.20.1] - 2026-11-03
 

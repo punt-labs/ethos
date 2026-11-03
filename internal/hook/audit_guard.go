@@ -156,6 +156,9 @@ func joinRules(a, b string) string {
 	if a == "" {
 		return b
 	}
+	if b == "" {
+		return a
+	}
 	return a + "; it " + b
 }
 
