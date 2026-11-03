@@ -7,16 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The recovery commands `ethos audit seal` and `ethos audit quarantine` print
+  (`ethos audit quarantine <path>`, `git add -f <marker>`) now quote the path,
+  so a checkout path with spaces or quotes can be copied into a shell as is.
+- Under `resolution: repo-only`, a caller found in the global store no longer
+  becomes someone else when the repo or the active bundle holds an identity with
+  the same handle but another email or GitHub name than the global one (both
+  set, and not equal).
+  `whoami` and session start reported the local identity. They now fail with an
+  error naming both files; rename one, or correct the field in one of them. A
+  local copy that lacks a field, or spells an email in another case, is the
+  same person and still resolves.
+- The audit hook no longer loses the entry for a large tool call. A hook payload
+  bigger than one pipe write, such as an Edit of a large file, was parsed after
+  the first read and rejected as "invalid JSON input". The hook now keeps
+  reading until the payload parses as one JSON value, or the pipe closes, or the
+  timeout passes.
+- Under `resolution: repo-only`, the caller lookup no longer hides damage. A repo
+  identity file ethos cannot load now fails the lookup with the file named,
+  instead of falling through to a match in the global store. A global store
+  that fails for any reason but a missing file now reports that failure instead
+  of the repo's miss.
+- A damaged chunk, or an interrupted quarantine, in a session directory the repo
+  gitignores no longer blocks every commit. Such a chunk is local only and
+  cannot reach the tracked tree, so the seal skips that session, prints one line
+  naming the chunk and `ethos audit quarantine <path>`, and seals the others.
+  The seal skips only when the session directory is ignored and the index
+  holds nothing under it; if any chunk there is tracked or staged, the same
+  damage still blocks the commit.
+- An audit notice that a line was rewritten no longer ends in a dangling
+  "; it ". It did whenever a credential or address rewrite was the only rule
+  that applied.
+- `ethos audit seal` and `ethos audit quarantine` no longer print one notice per
+  rewritten line. A commit that rewrote 130 lines printed 130 lines. Each run
+  now prints one line per session for the rewritten lines and one for the loss
+  markers, with the count and the distinct rules, never a value.
+- `ethos audit quarantine` said "staged, commit to record" in a repo that
+  gitignores the session, where nothing was staged. It now says "kept local
+  (this repo gitignores it)" then, and keeps the old wording when it staged.
+  The wording comes from what the index holds after the run, not from the
+  ignore rules: a chunk tracked before the repo began to ignore its directory
+  has its removal staged, and when changes are staged under the directory but
+  the ignored marker is not, the line says so, with the `git add -f` to record
+  it. When git cannot say, the line says the status
+  is unknown.
+- The quarantine notice `retired chunk NAME was withheld from the tracked tree`
+  no longer prints in a repo that gitignores the session directory, where
+  nothing was tracked. It says `retired chunk NAME kept local (this repo
+  gitignores it); the original is in ...` there. It keeps the location of the
+  original, so the notice is reworded, not dropped. Tracked repos see the old
+  text.
+
 ## [4.20.1] - 2026-11-03
 
 ### Fixed
 
+- In a repo that sets `resolution: repo-only` and vendors a team that does not
+  include the person running ethos, `ethos doctor` no longer fails the Human
+  identity check, and `whoami` and session start no longer fail to find the
+  caller. The caller is a person, not repo data, so ethos now looks for them in
+  `~/.punt-labs/ethos/identities` when the repo does not hold them, and doctor
+  reports PASS with "resolved from the global store". A caller found in neither
+  place still fails. Team and agent identities still resolve from the repo only.
 - Commits are no longer blocked in a repo that gitignores
   `.punt-labs/ethos/sessions/` (biff, mcp-proxy and quarry do). The pre-commit
   audit seal and `ethos audit quarantine` now skip staging any path the repo
   ignores, print one note saying so, and keep the audit files locally. Before,
   `git add` refused the ignored path, the seal rolled back, and every commit
   failed. A failure of the ignore check itself is still an error.
+- The setup guide no longer tells agents to run `ethos disable --purge`, a flag
+  that does not exist. It now says what `ethos disable` does (it keeps the
+  guide, config and audit data on disk) and what `--force` is for, and it
+  describes the git hooks `ethos enable` chains. A test fails if the guide
+  names an `ethos` command or flag the CLI does not define.
 
 ## [4.20.0] - 2026-11-03
 

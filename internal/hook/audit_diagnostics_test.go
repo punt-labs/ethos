@@ -74,7 +74,7 @@ func TestCollectAuditDiagnosticsTotalLossGap(t *testing.T) {
 	}
 
 	cn, _ := audit.Classify(chunk, audit.SessionNS)
-	m, err := audit.Quarantine(repo, sealedDir, cn, live, "unparseable", redactReason, guardAuditLineNote, corruptRule)
+	m, err := audit.Quarantine(repo, sealedDir, cn, live, "unparseable", redactReason, guardAuditLineFull, corruptRule)
 	if err != nil {
 		t.Fatalf("Quarantine: %v", err)
 	}

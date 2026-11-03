@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -68,43 +69,54 @@ func readFromFile(f *os.File, timeout time.Duration) (map[string]any, error) {
 	return parseJSON(buf)
 }
 
-// readWithTimeout reads from f in a goroutine and returns whatever was
-// read before timeout expires. Used when SetReadDeadline is not supported
-// (e.g., Linux pipes inherited from a parent process).
+// readWithTimeout reads from f in a goroutine and returns what was read when
+// the payload is complete or timeout expires. Used when SetReadDeadline is not
+// supported (e.g., Linux pipes inherited from a parent process).
 //
-// Uses a single f.Read (not io.ReadAll) because ReadAll blocks until EOF.
-// On an open pipe, EOF never arrives — ReadAll consumes the data into its
-// internal buffer, then blocks on the second Read waiting for more. The
-// timer fires, the goroutine hasn't returned, and the data is lost.
+// It cannot use io.ReadAll: on an open pipe EOF never arrives, so ReadAll
+// consumes the data and then blocks, and the data is lost when the timer fires.
+// Nor can it stop after one Read: a payload larger than one pipe write (an
+// Edit's old and new strings, a tool response) arrives in several, and parsing
+// the first fragment loses the audit entry. So the goroutine accumulates reads
+// until EOF, an error, or until what it holds is one complete JSON value, which
+// ends the payload even when the writer keeps the pipe open.
 //
-// A single Read returns as soon as data is available. Hook payloads are
-// small JSON objects (< 4KB, well within PIPE_BUF), delivered in one
-// pipe write, so one Read gets the full payload. The goroutine may leak
-// if no data ever arrives — acceptable for a short-lived hook process.
+// On timeout the data so far is parsed: none is the empty map, a fragment is
+// the parse error, as it was. The goroutine may outlive the call if the writer
+// stalls: acceptable for a short-lived hook process.
 func readWithTimeout(f *os.File, timeout time.Duration) (map[string]any, error) {
-	type result struct {
-		data []byte
-		err  error
+	var mu sync.Mutex
+	var buf []byte
+	snapshot := func() []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]byte(nil), buf...)
 	}
-	ch := make(chan result, 1)
+	done := make(chan struct{})
 	go func() {
-		buf := make([]byte, 65536)
-		n, err := f.Read(buf)
-		if n > 0 {
-			ch <- result{buf[:n], nil}
-			return
+		defer close(done)
+		chunk := make([]byte, 65536)
+		for {
+			n, err := f.Read(chunk)
+			if n > 0 {
+				mu.Lock()
+				buf = append(buf, chunk[:n]...)
+				whole := json.Valid(bytes.TrimSpace(buf))
+				mu.Unlock()
+				if whole {
+					return
+				}
+			}
+			if err != nil {
+				return // EOF or a failed read: what was read is all there is
+			}
 		}
-		ch <- result{nil, err}
 	}()
 	select {
-	case r := <-ch:
-		if r.err != nil {
-			return map[string]any{}, nil // no data — treat like timeout
-		}
-		return parseJSON(r.data)
+	case <-done:
 	case <-time.After(timeout):
-		return map[string]any{}, nil
 	}
+	return parseJSON(snapshot())
 }
 
 // parseJSON attempts to parse data as a JSON object. Returns an empty

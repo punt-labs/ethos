@@ -113,9 +113,9 @@ var (
 	ignoreNote    sync.Once
 )
 
-// dropIgnored returns the specs git does not ignore, in order. Tracked paths
-// are never reported ignored by check-ignore, so a tracked chunk still stages.
-func dropIgnored(repoRoot string, specs []string) ([]string, error) {
+// ignoredSet returns the specs git ignores. Tracked paths are never reported
+// ignored by check-ignore, so a tracked chunk is not in the set.
+func ignoredSet(repoRoot string, specs []string) (map[string]bool, error) {
 	// Paths go on stdin, NUL-separated: -z is only valid with --stdin, and it
 	// keeps git from quoting odd names in its answer.
 	in := strings.NewReader(strings.Join(specs, "\x00") + "\x00")
@@ -123,7 +123,7 @@ func dropIgnored(repoRoot string, specs []string) ([]string, error) {
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 1 {
-			return specs, nil // exit 1: no path is ignored
+			return nil, nil // exit 1: no path is ignored
 		}
 		return nil, err
 	}
@@ -132,6 +132,85 @@ func dropIgnored(repoRoot string, specs []string) ([]string, error) {
 		if len(t) > 0 {
 			ignored[string(t)] = true
 		}
+	}
+	return ignored, nil
+}
+
+// IsIgnored reports whether git ignores path, which need not exist. A failure
+// of the check is returned, never read as "not ignored".
+func IsIgnored(repoRoot, path string) (bool, error) {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return false, err
+	}
+	ignored, err := ignoredSet(repoRoot, []string{spec})
+	if err != nil {
+		return false, err
+	}
+	return ignored[spec], nil
+}
+
+// StagedChange reports whether the index holds a change to path that HEAD does
+// not: an addition, a modification, a removal, or the old name of a rename.
+func StagedChange(repoRoot, path string) (bool, error) {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return false, err
+	}
+	out, err := gitRun(repoRoot, "git diff --cached", "diff", "--cached", "--no-renames", "--name-only", "-z", "--", spec)
+	if err != nil {
+		return false, err
+	}
+	return len(out) > 0, nil
+}
+
+// TracksAnyUnder reports whether the index lists, or has a staged change to,
+// any path under dir: a tracked file, a staged addition or rename, a staged
+// removal. A failure of git is returned, and a caller that must not guess
+// treats it as "tracked".
+func TracksAnyUnder(repoRoot, dir string) (bool, error) {
+	spec, err := relPathspec(repoRoot, dir)
+	if err != nil {
+		return false, err
+	}
+	for _, args := range [][]string{
+		{"ls-files", "-z", "--", spec},
+		{"diff", "--cached", "--name-only", "-z", "--", spec}, // a staged removal is not in ls-files
+	} {
+		out, err := gitRun(repoRoot, "git "+args[0], args...)
+		if err != nil {
+			return false, err
+		}
+		if len(out) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// LocalOnly reports whether path, in directory dir, can never reach the tracked
+// tree: the repo ignores it and the index holds nothing under dir. Either git
+// question failing is an error; the caller does not guess.
+func LocalOnly(repoRoot, dir, path string) (bool, error) {
+	ignored, err := IsIgnored(repoRoot, path)
+	if err != nil {
+		return false, fmt.Errorf("could not tell whether the repo ignores %s: %w", path, err)
+	}
+	if !ignored {
+		return false, nil
+	}
+	tracked, err := TracksAnyUnder(repoRoot, dir)
+	if err != nil {
+		return false, fmt.Errorf("could not tell whether the index holds anything under %s: %w", dir, err)
+	}
+	return !tracked, nil
+}
+
+// dropIgnored returns the specs git does not ignore, in order.
+func dropIgnored(repoRoot string, specs []string) ([]string, error) {
+	ignored, err := ignoredSet(repoRoot, specs)
+	if err != nil {
+		return nil, err
 	}
 	kept := make([]string, 0, len(specs))
 	skipped := ""
@@ -276,4 +355,22 @@ func IndexBlob(repoRoot, path string) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	return out, true, nil
+}
+
+// ShellQuote returns s as one word for a POSIX shell: unchanged when it holds
+// only characters a shell leaves alone, else in single quotes with each embedded
+// single quote closed, backslash-escaped and reopened. A recovery command printed for the operator to copy
+// must survive a path with spaces or quotes.
+func ShellQuote(s string) string {
+	safe := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_@%+=:,./-", r)) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

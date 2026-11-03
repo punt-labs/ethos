@@ -983,6 +983,11 @@ func hasRepoLocalTeam(storeRoot string) bool {
 // broken file is a misconfiguration, so it FAILs rather than masquerading as a
 // clean first run.
 //
+// Under repo-only resolution the caller is looked up in the repo's store and
+// then the global store (identity.ForCaller): the repo commits its team and
+// agents, not the person running ethos. A caller found only in the global store
+// is a PASS that says so. A caller in neither is a FAIL.
+//
 // The failure detail is the resolver's own error, with no prefix. Every error
 // it returns already says what went wrong — "no identity matches git user ..."
 // or "ambiguous identity: 2 matches for email ...". The old "no match — "
@@ -990,6 +995,7 @@ func hasRepoLocalTeam(storeRoot string) bool {
 // not none.
 func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout string) Result {
 	name := "Human identity"
+	s = identity.ForCaller(s)
 	handle, err := resolve.Resolve(s, ss, checkout)
 	if err != nil {
 		if list, listErr := s.List(); listErr == nil &&
@@ -998,11 +1004,21 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout st
 		}
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
-	id, err := s.Load(handle, identity.Reference(true))
+	var id *identity.Identity
+	fromGlobal := false
+	if cs, ok := s.(*identity.CallerStore); ok {
+		id, fromGlobal, err = cs.LoadCaller(handle, identity.Reference(true))
+	} else {
+		id, err = s.Load(handle, identity.Reference(true))
+	}
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("handle %q not loadable: %v", handle, err)}
 	}
-	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("%s (%s)", id.Name, id.Handle)}
+	detail := fmt.Sprintf("%s (%s)", id.Name, id.Handle)
+	if fromGlobal {
+		detail += " — resolved from the global store"
+	}
+	return Result{Name: name, Status: "PASS", Detail: detail}
 }
 
 // CheckDefaultAgent checks whether a default agent is configured for the

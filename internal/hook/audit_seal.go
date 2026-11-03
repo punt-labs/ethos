@@ -402,14 +402,25 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 		}
 	}
 	// Verify every sealed chunk's content against its name; a corrupt chunk
-	// fails the seal (exit 2), the escape being audit quarantine.
+	// fails the seal (exit 2), the escape being audit quarantine. A damaged
+	// chunk the repo gitignores is local only and cannot reach the tracked
+	// tree, so it skips the session instead (skipIfLocalOnly).
 	sc, err := audit.ScanSealedDir(p.sealedDir, p.ns, p.session)
 	if err != nil {
+		var orphan *audit.OrphanCorruptError
+		if errors.As(err, &orphan) {
+			return p.skipIfLocalOnly(orphan.Chunk, err)
+		}
 		return sealOutcome{}, err
 	}
 	for _, c := range sc.Chunks {
-		if _, err := audit.ReadChunkVerified(filepath.Join(p.sealedDir, c.ChunkFile()), c.Last); err != nil {
-			return sealOutcome{}, err
+		path := filepath.Join(p.sealedDir, c.ChunkFile())
+		if _, err := audit.ReadChunkVerified(path, c.Last); err != nil {
+			var rerr *audit.ChunkReadError
+			if errors.As(err, &rerr) {
+				return sealOutcome{}, err // unreadable, not damaged: quarantine would not help
+			}
+			return p.skipIfLocalOnly(path, err)
 		}
 	}
 	// Tail selection uses the sealed watermark (this session's own chunks +
@@ -449,6 +460,24 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 	printNotices(notes)
 	reportf(opts, "sealed %d line(s) for %s into %s\n", len(tail), p.label, name)
 	return sealOutcome{wroteChunk: true, lineCount: len(tail), chunkPath: filepath.Join(p.sealedDir, name)}, nil
+}
+
+// skipIfLocalOnly is the outcome for a unit whose damaged chunk is err. The
+// session is skipped, with one line naming the chunk and the recovery command,
+// only when audit.LocalOnly says no damaged chunk can reach the tracked tree.
+// If anything under the directory is tracked or staged, or a git check fails
+// (the error says so), the seal fails with err as it always did.
+func (p sealDirParams) skipIfLocalOnly(chunk string, err error) (sealOutcome, error) {
+	local, lerr := audit.LocalOnly(p.repoRoot, p.sealedDir, chunk)
+	if lerr != nil {
+		return sealOutcome{}, fmt.Errorf("%w (%v)", err, lerr)
+	}
+	if !local {
+		return sealOutcome{}, err
+	}
+	fmt.Fprintf(os.Stderr, "ethos: audit seal: %s skipped, a damaged chunk is local only (this repo gitignores it): %v; recover with: ethos audit quarantine %s\n",
+		p.label, err, audit.ShellQuote(chunk))
+	return sealOutcome{}, nil
 }
 
 // reportf writes a verbose/dry-run line to the options' sink when present.
@@ -578,9 +607,10 @@ func SealGitError(repoRoot, phase string, err error, unchanged bool) error {
 }
 
 // guardTail returns the lines about to be sealed with every line that names a
-// home rewritten, as the live appender would have, and one notice per rewritten
-// line with its number and the rule, never the value. The caller prints the
-// notices once the chunk is written.
+// home rewritten, as the live appender would have, and the notices that say so:
+// one line for the rewritten lines and one for the loss markers, with the count
+// and the distinct rules, never a value. The caller prints the notices once the
+// chunk is written.
 func guardTail(tail [][]byte, label string) ([][]byte, []string) {
 	return guardTailWith(tail, label, guardAuditLineFull)
 }
@@ -588,16 +618,11 @@ func guardTail(tail [][]byte, label string) ([][]byte, []string) {
 // guardTailWith is guardTail with the guard for the namespace being sealed.
 func guardTailWith(tail [][]byte, label string, guard lineGuard) ([][]byte, []string) {
 	out := make([][]byte, len(tail))
-	var notes []string
+	var tally audit.GuardTally
 	for i, l := range tail {
 		g, rule, marker := guard(l)
-		switch {
-		case marker:
-			notes = append(notes, fmt.Sprintf("ethos: audit seal: %s: line %d replaced by a loss marker before sealing: it %s", label, i+1, rule))
-		case rule != "":
-			notes = append(notes, fmt.Sprintf("ethos: audit seal: %s: line %d rewritten before sealing: it %s", label, i+1, rule))
-		}
+		tally.Add(rule, marker)
 		out[i] = g
 	}
-	return out, notes
+	return out, tally.Notices("ethos: audit seal: " + label + ":")
 }

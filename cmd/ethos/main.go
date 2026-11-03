@@ -328,7 +328,7 @@ func runDoctor(cmd *cobra.Command) error {
 }
 
 func runWhoami(cmd *cobra.Command) error {
-	is := identityStore()
+	is := identity.ForCaller(identityStore())
 	ss := sessionStore()
 
 	checkout, err := currentRoots().checkoutForGit()

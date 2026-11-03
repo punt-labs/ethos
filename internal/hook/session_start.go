@@ -199,6 +199,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 // observable behavior (git/OS, immediately, no retry) without weakening
 // DES-074 anywhere a session COULD exist.
 func resolveHumanIdentity(store identity.IdentityStore, checkout string) (*identity.Identity, error) {
+	store = identity.ForCaller(store)
 	handle, err := resolve.Resolve(store, nil, checkout)
 	if errors.Is(err, resolve.ErrNoIdentityMatch) {
 		fmt.Fprintf(os.Stderr, "ethos: identity resolution: %v (using OS username)\n", err)

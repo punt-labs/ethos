@@ -5470,7 +5470,8 @@ Three coordinated parts, shipped together in v1.
 A string enum `resolution: layered | repo-only` in `.punt-labs/ethos.yaml`,
 sibling to `active_bundle`. Unset ⇒ `layered` ⇒ byte-identical to today.
 `repo-only` disables the **global read** across all four layered stores,
-keeping repo → bundle and dropping the global tail.
+keeping repo → bundle and dropping the global tail. The one exception is the
+caller (see "Caller carve-out" below).
 
 - **One policy** (`repoAuthoritative bool`) threaded into every
   `NewLayeredStoreWithBundle`, read once through `identityStore()`. It gates
@@ -5495,6 +5496,13 @@ keeping repo → bundle and dropping the global tail.
 - **`resolution: repo-only` with no repo layer** (no `.punt-labs/ethos/`
   directory and no repo-local/legacy bundle) is a **hard startup error**, not
   a silent fall-through to global.
+- **Caller carve-out.** Repo-only governs the team and agent identities a repo
+  commits. The caller — the human or the leader running ethos — is a person, not
+  repo data, so a caller the repo does not hold is looked up in the global store
+  (`identity.ForCaller`). It applies where the CLI resolves the caller: `doctor`'s
+  Human identity check (PASS, noting "resolved from the global store"),
+  `whoami` (CLI and MCP), and session start. A caller in neither store is
+  still a FAIL. Team, agent, role, attribute and ext reads are unchanged.
 - **active_bundle**: keep repo → bundle for `SourceRepo`/`SourceLegacy` (both
   travel with the checkout); reject a `SourceGlobal` bundle under repo-only at
   startup.

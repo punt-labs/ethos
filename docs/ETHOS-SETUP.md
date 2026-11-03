@@ -33,18 +33,21 @@ versions may ship additional starter content.
 
 ## `ethos enable` — turn ethos on in the current repo
 
-Writes the `.punt-labs/ethos` tracking marker, adds
-`@.punt-labs/ethos/CLAUDE.md` to the repo's top-level `CLAUDE.md` (so agent
-sessions in this repo auto-load daily-use ethos guidance), and registers
-the SessionStart / PreCompact / pre-commit hooks in `.claude/settings.json`.
+Deposits the vendored agent guide and its manifest, writes the enabled
+marker, adds `@.punt-labs/ethos/CLAUDE.md` to the repo's top-level
+`CLAUDE.md` (so agent sessions in this repo auto-load daily-use ethos
+guidance), and chains the audit-seal and trailer git hooks.
 
 ```bash
 ethos enable
 ```
 
 After enable, restart Claude Code once so SessionStart fires with the new
-hook configuration. `ethos disable` reverses this; `ethos disable --purge`
-also removes the `.punt-labs/ethos/` subtree.
+hook configuration. `ethos disable` reverses this: it removes the import
+line, deletes the marker, and unchains the git hooks. It is non-destructive:
+the guide, config and audit data stay on disk. It refuses while a sibling
+worktree is still enabled, because the git hooks are shared; `ethos disable
+--force` unchains anyway.
 
 ## `ethos setup` — populate this repo's identities + team
 
@@ -107,7 +110,7 @@ DOES add the `@`-import so daily-use guidance auto-injects.
 ## Troubleshooting for the agent
 
 - **`ethos doctor` reports "hook missing"** → run `ethos enable` (it
-  registers all hooks in `.claude/settings.json`).
+  chains the audit-seal and trailer git hooks again).
 - **`ethos doctor` reports "stale binary version"** → the binary on PATH
   is older than the plugin. Ask the human to run `make install` from a
   shell (agent sessions cannot overwrite their own running binary on
