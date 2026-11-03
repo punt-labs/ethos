@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still fails as stale. Files generated before this release carry no marker and
   read as hand-authored until the next SessionStart rewrites them; a leftover
   whose identity is already gone is not rewritten, so delete it once by hand.
+- `ethos doctor` no longer fails "Identity directory" for a repo that has no
+  `.punt-labs/ethos/identities/` of its own. Under layered resolution identities
+  resolve from the global store, so doctor passes when the global identities
+  directory exists and names it. Previously this passed only if the repo also
+  held a repo-local team, which failed repos with only an `ethos.yaml` or only
+  `missions/`. Under `resolution: repo-only` a missing repo identities
+  directory still fails.
 
 ## [4.20.2] - 2026-11-03
 

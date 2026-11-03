@@ -120,7 +120,7 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 
 	// The identity store, like the team store, is layered over the repository
 	// store, so these checks read it and are gated with it.
-	results = append(results, store(identityDirResult(s, ss, storeRoot)))
+	results = append(results, store(identityDirResult(s, ss)))
 
 	// Human identity carries its own status: a fresh install (no identity
 	// yet) is a WARN pointing at `ethos setup`, not a FAIL.
@@ -232,8 +232,8 @@ func passFail(name, detail string, ok bool) Result {
 }
 
 // identityDirResult is CheckIdentityDir as a Result.
-func identityDirResult(s identity.IdentityStore, ss *session.Store, storeRoot string) Result {
-	detail, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
+func identityDirResult(s identity.IdentityStore, ss *session.Store) Result {
+	detail, ok := CheckIdentityDir(s, ss)
 	return passFail("Identity directory", detail, ok)
 }
 
@@ -964,43 +964,26 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 // CheckIdentityDir verifies the identity directory exists.
 //
 // A layered store reports its repo-local identities dir as primary. That
-// dir is legitimately absent when a repo carries a repo-local team under
-// .punt-labs/ethos/ and its identities live in the active bundle or the
-// global store — the default shape after `ethos setup`. Only in that case
-// does the check fall back to the global identities dir. The fallback is
-// gated on hasRepoTeam so a repo missing its identities with NO repo-local
-// team — for example an uninitialized submodule checkout with an empty
-// .punt-labs/ethos/identities/ — still FAILs loudly with the correct
-// "not found" signal instead of being masked by a populated global store.
-func CheckIdentityDir(s identity.IdentityStore, _ *session.Store, hasRepoTeam bool) (string, bool) {
+// dir is legitimately absent when a repo keeps its identities in the active
+// bundle or the global store — a repo with only an ethos.yaml, or only
+// missions/ under .punt-labs/ethos/. Layered resolution reads the global
+// store, so when the global identities dir exists the check passes and names
+// it. Under `resolution: repo-only` nothing else can resolve an identity, so
+// a missing repo dir stays a FAIL.
+func CheckIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	dir := s.IdentitiesDir()
 	if _, err := os.Stat(dir); err == nil {
 		return dir, true
 	} else if !os.IsNotExist(err) {
 		return fmt.Sprintf("error: %v", err), false
 	}
-	if hasRepoTeam {
-		if ls, ok := s.(*identity.LayeredStore); ok {
-			gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
-			if _, err := os.Stat(gdir); err == nil {
-				return gdir, true
-			}
+	if ls, ok := s.(*identity.LayeredStore); ok && !ls.RepoAuthoritative() {
+		gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
+		if _, err := os.Stat(gdir); err == nil {
+			return gdir + " (repo has none; layered resolution reads the global store)", true
 		}
 	}
 	return fmt.Sprintf("not found: %s", dir), false
-}
-
-// hasRepoLocalTeam reports whether the repo carries at least one team file
-// under <storeRoot>/.punt-labs/ethos/teams/. This is the signal that a repo
-// is legitimately teams-only: the team is repo-tracked while identities
-// resolve from the active bundle or the global store.
-func hasRepoLocalTeam(storeRoot string) bool {
-	if storeRoot == "" {
-		return false
-	}
-	ethosRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
-	names, err := team.NewStore(ethosRoot).List()
-	return err == nil && len(names) > 0
 }
 
 // CheckHumanIdentity resolves and loads the current human identity. When

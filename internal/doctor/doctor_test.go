@@ -119,7 +119,7 @@ func TestPassedCountExcludesWarn(t *testing.T) {
 func TestCheckIdentityDir(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
 		s, ss, _ := newFixture(t)
-		detail, ok := CheckIdentityDir(s, ss, false)
+		detail, ok := CheckIdentityDir(s, ss)
 		assert.True(t, ok)
 		assert.Equal(t, s.IdentitiesDir(), detail)
 	})
@@ -127,59 +127,54 @@ func TestCheckIdentityDir(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		s, ss, root := newFixture(t)
 		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-		detail, ok := CheckIdentityDir(s, ss, false)
+		detail, ok := CheckIdentityDir(s, ss)
 		assert.False(t, ok)
 		assert.Contains(t, detail, "not found")
 	})
 
-	// A layered repo whose repo-local identities dir is absent is healthy
-	// ONLY when the repo is teams-only (hasRepoTeam) and the global store
-	// holds identities: the fallback resolves to the global dir. With no
-	// repo-local team the same absent dir must still FAIL, so an
-	// uninitialized submodule checkout is not masked by a populated global
-	// store.
-	t.Run("layered teams-only falls back to global", func(t *testing.T) {
+	// A layered repo with no repo-local identities dir resolves from the global
+	// store, so it passes when the global dir exists. Under repo-only nothing
+	// else resolves, so it fails.
+	layered := func(t *testing.T, globalHasIdentities, repoOnly bool) (identity.IdentityStore, *session.Store, string) {
+		t.Helper()
 		repoRoot := t.TempDir()   // no identities/ subdir
-		globalRoot := t.TempDir() // has identities/
-		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
-		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
-		ss := session.NewStore(globalRoot)
+		globalRoot := t.TempDir() // identities/ only if asked
+		if globalHasIdentities {
+			require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		}
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
+		return ls, session.NewStore(globalRoot), globalRoot
+	}
 
-		detail, ok := CheckIdentityDir(ls, ss, true)
-		assert.True(t, ok, "teams-only repo should pass via the global fallback")
-		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir(), detail)
+	t.Run("layered, no repo dir, global dir passes naming it", func(t *testing.T) {
+		ls, ss, globalRoot := layered(t, true, false)
+		detail, ok := CheckIdentityDir(ls, ss)
+		assert.True(t, ok)
+		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir()+
+			" (repo has none; layered resolution reads the global store)", detail)
 	})
 
-	t.Run("layered no repo team still fails", func(t *testing.T) {
-		repoRoot := t.TempDir()   // no identities/ subdir
-		globalRoot := t.TempDir() // has identities/
-		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
-		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
-		ss := session.NewStore(globalRoot)
-
-		detail, ok := CheckIdentityDir(ls, ss, false)
-		assert.False(t, ok, "no repo-local team: absent identities must FAIL, not fall back")
+	t.Run("layered, neither dir fails", func(t *testing.T) {
+		ls, ss, _ := layered(t, false, false)
+		detail, ok := CheckIdentityDir(ls, ss)
+		assert.False(t, ok)
 		assert.Contains(t, detail, "not found")
 	})
-}
 
-func TestHasRepoLocalTeam(t *testing.T) {
-	t.Run("empty storeRoot", func(t *testing.T) {
-		assert.False(t, hasRepoLocalTeam(""))
+	t.Run("repo-only, no repo dir fails", func(t *testing.T) {
+		ls, ss, _ := layered(t, true, true)
+		detail, ok := CheckIdentityDir(ls, ss)
+		assert.False(t, ok, "repo-only never reads the global store")
+		assert.Contains(t, detail, "not found")
 	})
 
-	t.Run("no team dir", func(t *testing.T) {
-		assert.False(t, hasRepoLocalTeam(t.TempDir()))
-	})
-
-	t.Run("repo-local team present", func(t *testing.T) {
-		storeRoot := t.TempDir()
-		teamsDir := filepath.Join(storeRoot, ".punt-labs", "ethos", "teams")
-		require.NoError(t, os.MkdirAll(teamsDir, 0o700))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(teamsDir, "foundation.yaml"),
-			[]byte("name: foundation\n"), 0o600))
-		assert.True(t, hasRepoLocalTeam(storeRoot))
+	t.Run("layered, repo dir present is unchanged", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(t.TempDir()))
+		detail, ok := CheckIdentityDir(ls, session.NewStore(repoRoot))
+		assert.True(t, ok)
+		assert.Equal(t, identity.NewStore(repoRoot).IdentitiesDir(), detail)
 	})
 }
 
@@ -2150,7 +2145,7 @@ func TestRunAllGateKeepsFail(t *testing.T) {
 // TestRunAllGatesEveryLocatedCheck: every check runAll (the body of RunAll) hands a located input
 // goes through checkout (repoRoot) or store (storeRoot, the identity store s,
 // the team store teams). A located input is one of those names, a value
-// derived from one (an alias, or hasRepoLocalTeam's result), however it
+// derived from one (an alias), however it
 // reaches the call. A call outside both gates also fails when the function it
 // calls locates a repository itself — calls resolve.*Repo* or resolve.Locate*,
 // directly or through any function in internal/doctor or internal/githook —
@@ -2313,9 +2308,8 @@ func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated [
 	located := map[string]int{
 		"repoRoot": kindCheckout, "storeRoot": kindStore, "s": kindStore, "teams": kindStore,
 	}
-	// hasRepoLocalTeam only chooses a message and reports false for "";
 	// gateCheckout, gateStore and unlocated are the gates themselves.
-	pure := map[string]int{"hasRepoLocalTeam": kindStore, "gateCheckout": 0, "gateStore": 0, "unlocated": 0}
+	pure := map[string]int{"gateCheckout": 0, "gateStore": 0, "unlocated": 0}
 
 	// kindOf is the located kinds an expression carries: a located name, or a
 	// call to a pure derivation, directly. A nested check call is judged on its
