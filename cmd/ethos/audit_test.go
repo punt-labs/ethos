@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // auditMigrateEnv stages a fake $HOME with a global sessions dir and
@@ -464,6 +465,24 @@ func TestAuditQuarantine_SaysKeptLocalWhenTheRepoIgnoresTheSession(t *testing.T)
 	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n")
 	assert.Contains(t, out, "kept local (this repo gitignores it)")
 	assert.NotContains(t, out, "staged")
+}
+
+// quarantineStderr is quarantineOutput returning the notices on stderr.
+func quarantineStderr(t *testing.T, ignore string) string {
+	t.Helper()
+	return testhelpers.CaptureStderr(t, func() { quarantineOutput(t, ignore) })
+}
+
+func TestAuditQuarantine_WithheldNoticeInIgnoringRepoSaysKeptLocal(t *testing.T) {
+	notice := quarantineStderr(t, ".punt-labs/ethos/sessions/\n")
+	assert.Contains(t, notice, "kept local (this repo gitignores it); the original is in")
+	assert.NotContains(t, notice, "withheld from the tracked tree")
+}
+
+func TestAuditQuarantine_WithheldNoticeInTrackedRepoIsUnchanged(t *testing.T) {
+	notice := quarantineStderr(t, "unrelated/\n")
+	assert.Contains(t, notice, "was withheld from the tracked tree (retired chunk withheld); the original is in")
+	assert.NotContains(t, notice, "kept local")
 }
 
 func TestAuditQuarantine_SaysStagedWhenItStaged(t *testing.T) {

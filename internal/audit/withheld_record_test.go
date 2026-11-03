@@ -52,7 +52,7 @@ func TestNoticeWithheld_SaysWhereTheOriginalIs(t *testing.T) {
 		require.NoError(t, err)
 		old := os.Stderr
 		os.Stderr = w
-		noticeWithheld("c.corrupt", WithheldRule, local)
+		noticeWithheld("c.corrupt", WithheldRule, local, false)
 		os.Stderr = old
 		require.NoError(t, w.Close())
 		out, err := io.ReadAll(r)

@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ethos audit quarantine` said "staged, commit to record" in a repo that
   gitignores the session, where nothing was staged. It now says "kept local
   (this repo gitignores it)" then, and keeps the old wording when it staged.
+- The quarantine notice `retired chunk NAME was withheld from the tracked tree`
+  no longer prints in a repo that gitignores the session directory, where
+  nothing was tracked. It says `retired chunk NAME kept local (this repo
+  gitignores it); the original is in ...` there. It keeps the location of the
+  original, so the notice is reworded, not dropped. Tracked repos see the old
+  text.
 
 ## [4.20.1] - 2026-11-03
 

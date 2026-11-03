@@ -55,7 +55,7 @@ import (
 // check. Returns the marker it wrote (or found).
 func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string, redactReason func(string) string, guardLine func([]byte) ([]byte, string, bool), checkRetired func([]byte) string) (Marker, error) {
 	reason = redactReason(reason)
-	np := &notePad{}
+	np := &notePad{repoRoot: repoRoot}
 	stem := cn.Stem()
 	chunkPath := filepath.Join(sealedDir, cn.ChunkFile())
 	corruptPath := filepath.Join(sealedDir, CorruptName(stem))
@@ -551,10 +551,11 @@ func writeRecord(path string, b []byte, rule string) error {
 // addUnstagedRecords, to queue the notice for a record found unstaged; print
 // says the queued ones once the run's final staging has succeeded.
 type notePad struct {
-	rules   map[string]string
-	local   map[string]bool // add: whether a local copy of the original exists
-	order   []string
-	printed map[string]bool
+	repoRoot string // to ask git whether the repo ignores a path
+	rules    map[string]string
+	local    map[string]bool // add: whether a local copy of the original exists
+	order    []string
+	printed  map[string]bool
 }
 
 // say prints the notice for path now, unless this run already has.
@@ -566,7 +567,7 @@ func (n *notePad) say(path, rule string) {
 		return
 	}
 	n.printed[path] = true
-	noticeWithheld(path, rule, true)
+	noticeWithheld(path, rule, true, n.ignores(path))
 }
 
 func (n *notePad) add(path, rule string, local bool) {
@@ -625,20 +626,31 @@ func (n *notePad) print() {
 			continue
 		}
 		n.printed[path] = true
-		noticeWithheld(path, n.rules[path], n.local[path])
+		noticeWithheld(path, n.rules[path], n.local[path], n.ignores(path))
 	}
 }
 
+// ignores reports whether the repo gitignores path. A failed check reads as
+// "not ignored": the notice then keeps its tracked-repo wording.
+func (n *notePad) ignores(path string) bool {
+	ignored, err := IsIgnored(n.repoRoot, path)
+	return err == nil && ignored
+}
+
 // noticeWithheld says that a retired chunk's bytes were replaced by a record.
-func noticeWithheld(path, rule string, local bool) {
+// In a repo that gitignores the chunk's directory nothing was ever going to be
+// tracked, so the notice says the record stayed local instead.
+func noticeWithheld(path, rule string, local, ignored bool) {
 	where := filepath.Join(".punt-labs", "local", "ethos", "quarantine")
+	what := fmt.Sprintf("was withheld from the tracked tree (%s)", rule)
+	if ignored {
+		what = "kept local (this repo gitignores it)"
+	}
 	if local {
-		fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s was withheld from the tracked tree (%s); the original is in %s\n",
-			filepath.Base(path), rule, where)
+		fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s %s; the original is in %s\n", filepath.Base(path), what, where)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s was withheld from the tracked tree (%s); no local copy of the original was found in %s\n",
-		filepath.Base(path), rule, where)
+	fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s %s; no local copy of the original was found in %s\n", filepath.Base(path), what, where)
 }
 
 // hasLocalCopy reports whether the local zone holds the original a record names:
