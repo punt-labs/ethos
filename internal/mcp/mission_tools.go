@@ -68,6 +68,7 @@ func (h *Handler) missionTool() mcplib.Tool {
 		mcplib.WithString("since",
 			mcplib.Description("Optional RFC3339 timestamp for log; events on or after the cutoff are included."),
 		),
+		callerOption(),
 	)
 }
 
@@ -175,7 +176,7 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	// DES-076 round 3 keys this per mission (review finding C1,
 	// m-2026-09-08-004 round 2) — it no longer overwrites a DIFFERENT
 	// mission's own pending dispatch the way the old single slot did.
-	if warnings := h.bindDispatchedMission(c.MissionID, c.Worker); len(warnings) > 0 {
+	if warnings := h.bindDispatchedMission(req, c.MissionID, c.Worker); len(warnings) > 0 {
 		return jsonResult(createMissionResponse{Contract: &c, Warnings: warnings})
 	}
 	return jsonResult(&c)
@@ -229,14 +230,14 @@ type createMissionResponse struct {
 // into the result's warnings array -- MCP has no stderr channel to
 // print the CLI's line to, so this is the only signal an MCP-driven
 // leader gets that the binding exists and which worker it is scoped to.
-func (h *Handler) bindDispatchedMission(missionID, worker string) []string {
+func (h *Handler) bindDispatchedMission(req mcplib.CallToolRequest, missionID, worker string) []string {
 	if h.sessionStore == nil {
 		return []string{
 			"binding mission: no session store wired -- pending-dispatch entry not written; " +
 				"the worker's matching Agent() spawn will not be attributed to this mission",
 		}
 	}
-	sessionID, _, err := resolve.SessionID(h.sessionStore)
+	sessionID, err := h.callerSessionID(req)
 	if err != nil {
 		// Mission 005 finding A: distinguish the ordinary "no session was
 		// ever expected" case (resolve.ErrNotUnderClaudeCode) from a
@@ -441,7 +442,7 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	// MCP used to skip this, leaving the active-mission sidecar in place
 	// and the commit-msg hook tagging later missionless commits with the
 	// closed mission (ethos-jawp).
-	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
+	if warnings := h.clearClosedMissionBindings(req, id); len(warnings) > 0 {
 		payload["warnings"] = warnings
 	}
 	return jsonResult(payload)
@@ -513,7 +514,7 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 	}
 	// Parity with close: a terminal transition ends this session's work
 	// on the mission, so clear its sidecars.
-	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
+	if warnings := h.clearClosedMissionBindings(req, id); len(warnings) > 0 {
 		payload["warnings"] = warnings
 	}
 	return jsonResult(payload)
@@ -536,11 +537,11 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 // on a mission that is no longer open, with no signal to the caller at
 // all -- collapsing both sentinels the same way bindDispatchedMission
 // used to.
-func (h *Handler) clearClosedMissionBindings(missionID string) []string {
+func (h *Handler) clearClosedMissionBindings(req mcplib.CallToolRequest, missionID string) []string {
 	if h.sessionStore == nil {
 		return nil
 	}
-	sessionID, _, err := resolve.SessionID(h.sessionStore)
+	sessionID, err := h.callerSessionID(req)
 	if err != nil {
 		if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
 			return nil

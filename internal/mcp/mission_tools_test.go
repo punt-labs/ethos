@@ -558,7 +558,7 @@ func TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 	h := testHandlerWithSessions(t)
 
-	warnings := h.bindDispatchedMission("m-test-001", "bwk")
+	warnings := h.bindDispatchedMission(callTool(map[string]any{}), "m-test-001", "bwk")
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "resolving session")
 	assert.NotContains(t, warnings[0], "no session in context",
@@ -578,7 +578,7 @@ func TestClearClosedMissionBindings_ReportsRealCauseUnderClaudeCode(t *testing.T
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 	h := testHandlerWithSessions(t)
 
-	warnings := h.clearClosedMissionBindings("m-test-001")
+	warnings := h.clearClosedMissionBindings(callTool(map[string]any{}), "m-test-001")
 	require.Len(t, warnings, 1, "an unresolvable session must not silently skip with no signal")
 	assert.Contains(t, warnings[0], "resolving session")
 }
