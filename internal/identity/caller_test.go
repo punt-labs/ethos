@@ -87,3 +87,18 @@ func TestForCaller_GlobalLoadFailureIsReported(t *testing.T) {
 	assert.False(t, errors.Is(err, os.ErrNotExist), "a damaged global file is not a miss: %v", err)
 	assert.Contains(t, err.Error(), "global store")
 }
+
+// A repo identity whose plain-string voice: parses but cannot be migrated is
+// dropped by the repo lookup; the caller must not fall through to global.
+func TestForCaller_UnmigratableRepoVoiceBlocksTheGlobalFallback(t *testing.T) {
+	ls, repo, _, global := setupRepoOnly(t)
+	saveHuman(t, global, "claude")
+	require.NoError(t, os.MkdirAll(repo.IdentitiesDir(), 0o700))
+	body := "name: Claude\nhandle: mine\nkind: human\nemail: claude@example.com\nvoice: elevenlabs\n"
+	require.NoError(t, os.WriteFile(repo.Path("mine"), []byte(body), 0o600))
+
+	id, err := ForCaller(ls).FindBy("email", "claude@example.com")
+	require.Error(t, err)
+	assert.Nil(t, id)
+	assert.Contains(t, err.Error(), "mine.yaml")
+}

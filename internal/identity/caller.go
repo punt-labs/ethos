@@ -12,8 +12,9 @@ import (
 // the repo commits, and nothing else; the caller is a person, not repo data,
 // so a caller the repo does not hold is looked up in the global store.
 type CallerStore struct {
-	IdentityStore        // the repo's store, for everything but the caller lookups
-	global        *Store // the global store, consulted after the repo misses
+	IdentityStore          // the repo's store, for everything but the caller lookups
+	global        *Store   // the global store, consulted after the repo misses
+	local         []*Store // the repo and bundle layers, as FindBy reads them
 }
 
 // ForCaller returns s with the global fallback for the caller's identity when s
@@ -24,7 +25,13 @@ func ForCaller(s IdentityStore) IdentityStore {
 	if !ok || !ls.RepoAuthoritative() {
 		return s
 	}
-	return &CallerStore{IdentityStore: s, global: NewStore(ls.GlobalRoot())}
+	var local []*Store
+	for _, l := range []*Store{ls.repo, ls.bundle} {
+		if l != nil {
+			local = append(local, l)
+		}
+	}
+	return &CallerStore{IdentityStore: s, global: NewStore(ls.GlobalRoot()), local: local}
 }
 
 // FindBy searches the repo's store, then the global store. A repo with an
@@ -35,13 +42,17 @@ func (c *CallerStore) FindBy(field, value string) (*Identity, error) {
 	if err != nil || id != nil {
 		return id, err
 	}
-	listed, err := c.IdentityStore.List()
-	if err != nil {
-		return nil, fmt.Errorf("listing the repo's identities before looking in the global store: %w", err)
-	}
-	if len(listed.Warnings) > 0 {
-		return nil, fmt.Errorf("finding %s %q: the repo holds identity files that cannot be loaded, so the global store was not consulted: %s",
-			field, value, strings.Join(listed.Warnings, "; "))
+	// The lookup above drops a file its layer cannot load (Store.FindBy lists
+	// with voice migration), so ask each layer the same question.
+	for _, l := range c.local {
+		listed, err := l.List()
+		if err != nil {
+			return nil, fmt.Errorf("listing %s before looking in the global store: %w", l.Root(), err)
+		}
+		if len(listed.Warnings) > 0 {
+			return nil, fmt.Errorf("finding %s %q: %s holds identity files that cannot be loaded, so the global store was not consulted: %s",
+				field, value, l.Root(), strings.Join(listed.Warnings, "; "))
+		}
 	}
 	return c.global.FindBy(field, value)
 }
