@@ -437,18 +437,38 @@ func splitNonEmpty(s string) []string {
 	return out
 }
 
+// trackMode says what the repo committed (with git add -f) before it began to
+// ignore the session directory.
+type trackMode int
+
+const (
+	trackNothing trackMode = iota
+	trackChunk             // the chunk about to be quarantined
+	trackSibling           // an older, healthy chunk beside it
+)
+
 // quarantineOutput quarantines a corrupt session chunk in a fresh repo whose
 // .gitignore is ignore, with its lines still in the live file, and returns what
 // the command printed.
-func quarantineOutput(t *testing.T, ignore string, committed bool) string {
+func quarantineOutput(t *testing.T, ignore string, track trackMode) string {
 	t.Helper()
 	_, repo, _ := auditMigrateEnv(t)
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-01-01-sq")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	chunk := filepath.Join(dir, audit.SessionChunkFile(100, 200))
 	require.NoError(t, os.WriteFile(chunk, []byte("not json\n"), 0o600))
-	if committed { // tracked before the repo began to ignore it
-		for _, args := range [][]string{{"add", "-f", ".punt-labs"}, {"-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "chunk"}} {
+	if track == trackSibling {
+		sib := filepath.Join(dir, audit.SessionChunkFile(10, 20))
+		body := `{"ts":"` + audit.FormatLineTS(10) + `","session":"sq","tool":"Read"}` + "\n" +
+			`{"ts":"` + audit.FormatLineTS(20) + `","session":"sq","tool":"Read"}` + "\n"
+		require.NoError(t, os.WriteFile(sib, []byte(body), 0o600))
+	}
+	if track != trackNothing {
+		dirRel := filepath.Join(".punt-labs", "ethos", "sessions")
+		if track == trackSibling {
+			dirRel = filepath.Join(dirRel, "2026-01-01-sq", audit.SessionChunkFile(10, 20))
+		}
+		for _, args := range [][]string{{"add", "-f", dirRel}, {"-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "chunk"}} {
 			cmd := testhelpers.GitCommand(args...)
 			cmd.Dir = repo
 			out, err := cmd.CombinedOutput()
@@ -470,45 +490,60 @@ func quarantineOutput(t *testing.T, ignore string, committed bool) string {
 }
 
 func TestAuditQuarantine_SaysKeptLocalWhenTheRepoIgnoresTheSession(t *testing.T) {
-	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n", false)
+	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n", trackNothing)
 	assert.Contains(t, out, "kept local (this repo gitignores it)")
 	assert.NotContains(t, out, "staged")
 }
 
 // quarantineStderr is quarantineOutput returning the notices on stderr.
-func quarantineStderr(t *testing.T, ignore string, committed bool) string {
+func quarantineStderr(t *testing.T, ignore string, track trackMode) string {
 	t.Helper()
-	return testhelpers.CaptureStderr(t, func() { quarantineOutput(t, ignore, committed) })
+	return testhelpers.CaptureStderr(t, func() { quarantineOutput(t, ignore, track) })
 }
 
 func TestAuditQuarantine_WithheldNoticeInIgnoringRepoSaysKeptLocal(t *testing.T) {
-	notice := quarantineStderr(t, ".punt-labs/ethos/sessions/\n", false)
+	notice := quarantineStderr(t, ".punt-labs/ethos/sessions/\n", trackNothing)
 	assert.Contains(t, notice, "kept local (this repo gitignores it); the original is in")
 	assert.NotContains(t, notice, "withheld from the tracked tree")
 }
 
 func TestAuditQuarantine_WithheldNoticeInTrackedRepoIsUnchanged(t *testing.T) {
-	notice := quarantineStderr(t, "unrelated/\n", false)
+	notice := quarantineStderr(t, "unrelated/\n", trackNothing)
 	assert.Contains(t, notice, "was withheld from the tracked tree (retired chunk withheld); the original is in")
 	assert.NotContains(t, notice, "kept local")
 }
 
 func TestAuditQuarantine_SaysStagedWhenItStaged(t *testing.T) {
-	out := quarantineOutput(t, "unrelated/\n", false)
+	out := quarantineOutput(t, "unrelated/\n", trackNothing)
 	assert.Contains(t, out, "staged, commit to record")
 	assert.NotContains(t, out, "kept local")
 }
 
-// A chunk tracked before the repo began to ignore its directory is still in the
-// index: the quarantine stages a change and says so, and the notice does not
-// claim the record stayed local.
-func TestAuditQuarantine_TrackedChunkInIgnoredDirIsStagedNotKeptLocal(t *testing.T) {
+// A chunk tracked before the repo began to ignore its directory: the
+// quarantine stages the chunk's removal, but the marker and record are ignored
+// and are not staged. The summary says exactly that.
+func TestAuditQuarantine_TrackedChunkInIgnoredDirSaysTheMarkerIsNotStaged(t *testing.T) {
 	var out string
 	notice := testhelpers.CaptureStderr(t, func() {
-		out = quarantineOutput(t, ".punt-labs/ethos/sessions/\n", true)
+		out = quarantineOutput(t, ".punt-labs/ethos/sessions/\n", trackChunk)
 	})
-	assert.Contains(t, out, "staged, commit to record")
+	assert.Contains(t, out, "the chunk's removal is staged but its marker is gitignored and was not; record it with `git add -f ")
+	assert.NotContains(t, out, "staged, commit to record")
 	assert.NotContains(t, out, "kept local")
 	assert.Contains(t, notice, "was withheld from the tracked tree")
 	assert.NotContains(t, notice, "kept local")
+}
+
+// An older sibling chunk is tracked, the damaged one is not: GitAdd drops the
+// ignored marker and record, so nothing was staged and the summary says kept
+// local, though something under the directory is tracked.
+func TestAuditQuarantine_TrackedSiblingDoesNotMakeItStaged(t *testing.T) {
+	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n", trackSibling)
+	assert.Contains(t, out, "kept local (this repo gitignores it)")
+	assert.NotContains(t, out, "staged")
+}
+
+func TestQuarantineFate_SaysWhenGitCannotTell(t *testing.T) {
+	got := quarantineFate(t.TempDir(), "d/audit-1-2.jsonl", audit.Marker{Chunk: "audit-1-2"})
+	assert.Contains(t, got, "staging status unknown:")
 }

@@ -291,14 +291,7 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
 		return failClosed{}
 	}
-	// GitAdd skips a path the repo ignores, so nothing was staged only when the
-	// directory is ignored and the index holds nothing under it.
-	fate := "staged, commit to record"
-	if local, err := audit.LocalOnly(repoRoot, filepath.Dir(chunkPath), chunkPath); err != nil {
-		fate = fmt.Sprintf("staging status unknown: %v", err)
-	} else if local {
-		fate = "kept local (this repo gitignores it)"
-	}
+	fate := quarantineFate(repoRoot, chunkPath, marker)
 	if marker.HasGap() {
 		fmt.Fprintf(out,
 			"quarantined %s: recovered through ts %d, lost [%d,%d] — %s\n",
@@ -309,6 +302,36 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 			marker.Chunk, marker.VerifiedLast, fate)
 	}
 	return nil
+}
+
+// quarantineFate says what a finished quarantine left in the index, from the
+// index itself: GitAdd drops every path the repo ignores, so what was staged
+// is not knowable from whether the directory is ignored.
+func quarantineFate(repoRoot, chunkPath string, m audit.Marker) string {
+	unknown := func(err error) string { return fmt.Sprintf("staging status unknown: %v", err) }
+	markerPath := filepath.Join(filepath.Dir(chunkPath), m.Chunk+".quarantine")
+	markerStaged, err := audit.StagedChange(repoRoot, markerPath)
+	if err != nil {
+		return unknown(err)
+	}
+	if markerStaged {
+		return "staged, commit to record"
+	}
+	removed, err := audit.StagedChange(repoRoot, chunkPath)
+	if err != nil {
+		return unknown(err)
+	}
+	ignored, err := audit.IsIgnored(repoRoot, markerPath)
+	if err != nil {
+		return unknown(err)
+	}
+	switch {
+	case removed && ignored:
+		return fmt.Sprintf("the chunk's removal is staged but its marker is gitignored and was not; record it with `git add -f %s`", markerPath)
+	case ignored:
+		return "kept local (this repo gitignores it)"
+	}
+	return "nothing new to stage"
 }
 
 // runAuditSeal is the audit-seal command implementation. It seals every

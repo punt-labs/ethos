@@ -31,8 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ethos audit quarantine` said "staged, commit to record" in a repo that
   gitignores the session, where nothing was staged. It now says "kept local
   (this repo gitignores it)" then, and keeps the old wording when it staged.
-  A chunk tracked before the repo began to ignore its directory still counts as
-  staged. When git cannot say, the line says the status is unknown.
+  The wording comes from what the index holds after the run, not from the
+  ignore rules: a chunk tracked before the repo began to ignore its directory
+  has its removal staged, and the line says the ignored marker was not, with
+  the `git add -f` to record it. When git cannot say, the line says the status
+  is unknown.
 - The quarantine notice `retired chunk NAME was withheld from the tracked tree`
   no longer prints in a repo that gitignores the session directory, where
   nothing was tracked. It says `retired chunk NAME kept local (this repo

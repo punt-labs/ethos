@@ -150,6 +150,20 @@ func IsIgnored(repoRoot, path string) (bool, error) {
 	return ignored[spec], nil
 }
 
+// StagedChange reports whether the index holds a change to path that HEAD does
+// not: an addition, a modification, a removal, or the old name of a rename.
+func StagedChange(repoRoot, path string) (bool, error) {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return false, err
+	}
+	out, err := gitRun(repoRoot, "git diff --cached", "diff", "--cached", "--no-renames", "--name-only", "-z", "--", spec)
+	if err != nil {
+		return false, err
+	}
+	return len(out) > 0, nil
+}
+
 // TracksAnyUnder reports whether the index lists, or has a staged change to,
 // any path under dir: a tracked file, a staged addition or rename, a staged
 // removal. A failure of git is returned, and a caller that must not guess
