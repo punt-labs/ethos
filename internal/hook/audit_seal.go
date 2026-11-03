@@ -599,9 +599,10 @@ func SealGitError(repoRoot, phase string, err error, unchanged bool) error {
 }
 
 // guardTail returns the lines about to be sealed with every line that names a
-// home rewritten, as the live appender would have, and one notice per rewritten
-// line with its number and the rule, never the value. The caller prints the
-// notices once the chunk is written.
+// home rewritten, as the live appender would have, and the notices that say so:
+// one line for the rewritten lines and one for the loss markers, with the count
+// and the distinct rules, never a value. The caller prints the notices once the
+// chunk is written.
 func guardTail(tail [][]byte, label string) ([][]byte, []string) {
 	return guardTailWith(tail, label, guardAuditLineFull)
 }
@@ -609,16 +610,11 @@ func guardTail(tail [][]byte, label string) ([][]byte, []string) {
 // guardTailWith is guardTail with the guard for the namespace being sealed.
 func guardTailWith(tail [][]byte, label string, guard lineGuard) ([][]byte, []string) {
 	out := make([][]byte, len(tail))
-	var notes []string
+	var tally audit.GuardTally
 	for i, l := range tail {
 		g, rule, marker := guard(l)
-		switch {
-		case marker:
-			notes = append(notes, fmt.Sprintf("ethos: audit seal: %s: line %d replaced by a loss marker before sealing: it %s", label, i+1, rule))
-		case rule != "":
-			notes = append(notes, fmt.Sprintf("ethos: audit seal: %s: line %d rewritten before sealing: it %s", label, i+1, rule))
-		}
+		tally.Add(rule, marker)
 		out[i] = g
 	}
-	return out, notes
+	return out, tally.Notices("ethos: audit seal: " + label + ":")
 }

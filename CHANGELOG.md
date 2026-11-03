@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An audit notice that a line was rewritten no longer ends in a dangling
   "; it ". It did whenever a credential or address rewrite was the only rule
   that applied.
+- `ethos audit seal` and `ethos audit quarantine` no longer print one notice per
+  rewritten line. A commit that rewrote 130 lines printed 130 lines. Each run
+  now prints one line per session for the rewritten lines and one for the loss
+  markers, with the count and the distinct rules, never a value.
 
 ## [4.20.1] - 2026-11-03
 

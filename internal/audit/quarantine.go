@@ -53,7 +53,7 @@ import (
 // Other .corrupt files of this namespace (in the mission namespace, of this
 // session) are not in that set: StageUntrackedChunks stages them without the
 // check. Returns the marker it wrote (or found).
-func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string, redactReason func(string) string, guardLine func([]byte) ([]byte, string), checkRetired func([]byte) string) (Marker, error) {
+func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string, redactReason func(string) string, guardLine func([]byte) ([]byte, string, bool), checkRetired func([]byte) string) (Marker, error) {
 	reason = redactReason(reason)
 	np := &notePad{}
 	stem := cn.Stem()
@@ -130,15 +130,14 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 	// The re-sealed lines come from the live file, which an older binary or
 	// another process may have appended to; each goes through guardLine, the
 	// caller's check that it names no home, before it is sealed. Its ts is
-	// kept, so the chunk name still matches. guardLine returns a notice for a
-	// line it rewrote; the notices are printed only if the chunk is written.
-	var notes []string
+	// kept, so the chunk name still matches. guardLine returns the rule that
+	// forced a rewrite and whether the line became a loss marker; the tally is
+	// printed, as one line per kind, only if the chunk is written.
+	var tally GuardTally
 	for i, l := range reseal {
-		g, note := guardLine(l)
+		g, rule, marker := guardLine(l)
 		reseal[i] = g
-		if note != "" {
-			notes = append(notes, note)
-		}
+		tally.Add(rule, marker)
 	}
 	resealMax := cn.First - 1
 	if len(reseal) > 0 {
@@ -154,7 +153,7 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 		} else if err := WriteChunkAtomic(sealedDir, re.TempFile(), re.ChunkFile(), reseal); err != nil {
 			return Marker{}, err
 		} else {
-			for _, n := range notes {
+			for _, n := range tally.Notices("ethos: audit quarantine:") {
 				fmt.Fprintln(os.Stderr, n)
 			}
 		}
