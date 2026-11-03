@@ -356,3 +356,21 @@ func IndexBlob(repoRoot, path string) ([]byte, bool, error) {
 	}
 	return out, true, nil
 }
+
+// ShellQuote returns s as one word for a POSIX shell: unchanged when it holds
+// only characters a shell leaves alone, else in single quotes with each single
+// quote written as '\”. A recovery command printed for the operator to copy
+// must survive a path with spaces or quotes.
+func ShellQuote(s string) string {
+	safe := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_@%+=:,./-", r)) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

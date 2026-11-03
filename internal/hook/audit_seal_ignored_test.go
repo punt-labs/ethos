@@ -146,3 +146,23 @@ func TestSealRepo_UnreadableChunkInIgnoredSessionStillBlocks(t *testing.T) {
 	assert.Contains(t, err.Error(), "reading chunk")
 	assert.NotContains(t, stderr, "ethos audit quarantine")
 }
+
+// The recovery command in the skip line is copied into a shell: a checkout path
+// with a space and a quote must stay one word.
+func TestSealRepo_SkipLineQuotesThePathInTheRecoveryCommand(t *testing.T) {
+	now := time.Now().UTC()
+	repo := filepath.Join(t.TempDir(), "my repo's checkout")
+	require.NoError(t, os.MkdirAll(repo, 0o700))
+	initGitRepo(t, repo)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(ignoreSessions), 0o600))
+	dir, _ := resolveRepoSessionDir(repo, "sess-q", now)
+	name := audit.SessionChunkFile(100, 200)
+	writeChunkFile(t, dir, name, 100, 150)
+	writeLiveLines(t, repo, "sess-q", 300)
+
+	var err error
+	stderr := captureStderr(t, func() { _, err = SealRepo(repo, now, SealOptions{}) })
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "ethos audit quarantine "+audit.ShellQuote(filepath.Join(dir, name)))
+	assert.Contains(t, stderr, `'\''`)
+}

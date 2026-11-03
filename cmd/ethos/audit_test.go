@@ -638,3 +638,23 @@ func TestAuditQuarantine_OtherChunkRetiredInIgnoredDirNamesTheMarker(t *testing.
 	assert.Contains(t, stdout, "record it with `git add -f ")
 	assert.NotContains(t, stdout, "staged, commit to record")
 }
+
+func TestQuarantineFate_QuotesTheMarkerPathInTheRecoveryCommand(t *testing.T) {
+	_, repo, _ := auditMigrateEnv(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("sessions-x/\n"), 0o600))
+	// A tracked file beside the marker makes a staged change under the
+	// directory while the ignored marker stays unstaged.
+	d := filepath.Join(repo, "sessions-x", "it's here")
+	require.NoError(t, os.MkdirAll(d, 0o700))
+	tracked := filepath.Join(d, "audit-1-2.jsonl")
+	require.NoError(t, os.WriteFile(tracked, []byte("x\n"), 0o600))
+	cmd := testhelpers.GitCommand("add", "-f", tracked)
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	got := quarantineFate(repo, tracked, audit.Marker{Chunk: "audit-1-2"})
+	want := audit.ShellQuote(filepath.Join(d, "audit-1-2.quarantine"))
+	assert.Contains(t, got, "git add -f "+want)
+	assert.Contains(t, got, `'\''`)
+}

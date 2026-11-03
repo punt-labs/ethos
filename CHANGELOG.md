@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The recovery commands `ethos audit seal` and `ethos audit quarantine` print
+  (`ethos audit quarantine <path>`, `git add -f <marker>`) now quote the path,
+  so a checkout path with spaces or quotes can be copied into a shell as is.
 - Under `resolution: repo-only`, a caller found in the global store no longer
   becomes someone else when the repo holds a different person with the same
   handle. `whoami` and session start reported the repo's person. They now fail

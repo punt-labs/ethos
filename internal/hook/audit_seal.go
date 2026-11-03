@@ -476,7 +476,7 @@ func (p sealDirParams) skipIfLocalOnly(chunk string, err error) (sealOutcome, er
 		return sealOutcome{}, err
 	}
 	fmt.Fprintf(os.Stderr, "ethos: audit seal: %s skipped, a damaged chunk is local only (this repo gitignores it): %v; recover with: ethos audit quarantine %s\n",
-		p.label, err, chunk)
+		p.label, err, audit.ShellQuote(chunk))
 	return sealOutcome{}, nil
 }
 

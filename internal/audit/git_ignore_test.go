@@ -204,3 +204,19 @@ func TestLocalOnly(t *testing.T) {
 		t.Error("LocalOnly outside a repository: want an error")
 	}
 }
+
+func TestShellQuote(t *testing.T) {
+	cases := map[string]string{
+		"/a/b-c_d.jsonl": "/a/b-c_d.jsonl",
+		"":               "''",
+		"/my repo/x":     "'/my repo/x'",
+		"/it's/x":        `'/it'\''s/x'`,
+		"a;rm -rf b":     "'a;rm -rf b'",
+		"$HOME":          "'$HOME'",
+	}
+	for in, want := range cases {
+		if got := ShellQuote(in); got != want {
+			t.Errorf("ShellQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}

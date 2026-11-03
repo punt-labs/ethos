@@ -329,7 +329,7 @@ func quarantineFate(repoRoot, chunkPath string, m audit.Marker) string {
 	}
 	switch {
 	case anyStaged && ignored && !markerStaged:
-		return fmt.Sprintf("changes under the chunk's directory are staged but its marker is gitignored and was not; record it with `git add -f %s`", markerPath)
+		return fmt.Sprintf("changes under the chunk's directory are staged but its marker is gitignored and was not; record it with `git add -f %s`", audit.ShellQuote(markerPath))
 	case anyStaged:
 		return "staged, commit to record"
 	case ignored:
