@@ -1,0 +1,57 @@
+results:
+    - mission: m-2026-10-23-027
+      round: 1
+      created_at: "2026-10-23T23:16:28Z"
+      author: ghr
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: prfaq.tex
+          added: 82
+          removed: 71
+        - path: prfaq.pdf
+          added: 0
+          removed: 0
+      evidence:
+        - name: 'commit df3d9a3: mechanical em-dash cleanup, make check green'
+          status: pass
+        - name: 'commit 79e3e97: content changes for DES-079/080/081, make check green'
+          status: pass
+        - name: prfaq.pdf rebuilt by make docs-pdf, 21 pages, no undefined references in final pass
+          status: pass
+        - name: 'make docs-pdf exit status: fails on docs/spec-opencode-integration.tex line 1487 (Missing $ inserted), outside write set; prfaq step succeeded first'
+          status: fail
+      open_questions:
+        - docs/spec-opencode-integration.tex fails pdflatex (line 1487, field{implies} outside math mode), so make docs-pdf exits 2. It is outside this write set. Who fixes it?
+      prose: |
+        Two commits. df3d9a3 replaces every em dash in prfaq.tex and rewords
+        "default team shape". 79e3e97 bumps the version to 3.4 and applies the
+        DES-079/080/081 changes. DES-079 and DES-080 are stated as decided and in
+        progress; DES-081 as proposed only.
+    - mission: m-2026-10-23-027
+      round: 2
+      created_at: "2026-10-23T23:21:59Z"
+      author: ghr
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: prfaq.tex
+          added: 10
+          removed: 10
+        - path: prfaq.pdf
+          added: 0
+          removed: 0
+      evidence:
+        - name: 'commit 089a9ab: fixes for all four adt findings, make check green'
+          status: pass
+        - name: make docs-pdf exits 0 (includes jms fix ef0ea15); prfaq.pdf 21 pages
+          status: pass
+      prose: |
+        Finding 1: ADRs removed from the git list; stated as global in
+        ~/.punt-labs/ethos/adrs and untracked in the data FAQ, home list and
+        audit-trails FAQ. Finding 2: session state in ~/.punt-labs/ethos/sessions,
+        live audit and mission files under .punt-labs/local/, trace-tier locality
+        marked as the DES-079 target. Finding 3: redaction scope, named gaps,
+        export wording moved to in-progress, shipped list reworded, cloud-sync
+        paragraph and Won't Do item reworded. Finding 4: F4 states what holds
+        today and what DES-079 decides.

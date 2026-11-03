@@ -1,5 +1,6 @@
 reflections:
-    - round: 1
+    - mission: ""
+      round: 1
       created_at: "2026-07-21T05:30:37Z"
       author: claude
       converging: true
@@ -10,7 +11,8 @@ reflections:
         - 'deferred to round 2 with leader ordering ruling requested: mission-log live-write/seal + mission-close trigger (criterion 6; chunk primitives already built and tested), quarantine verb + resume state machine, purge tombstone + vacuum cross-check + --ack, gitlink deferred-flag + gap markers in the read'
       recommendation: continue
       reason: 'Leader ruling on round-2 ordering: (1) mission-log subsystem + mission-close seal first — contract criterion 6, no half-wiring of mission log; (2) read-side gitlink deferred-flag and gap markers next; (3) quarantine/resume and purge/vacuum/--ack verbs last. All are in the merged design and therefore in scope — round 2 completes the full contract; the evaluator reviews the completed branch; round 3 reserved for evaluator findings.'
-    - round: 2
+    - mission: ""
+      round: 2
       created_at: "2026-07-21T06:30:21Z"
       author: claude
       converging: true
@@ -24,7 +26,8 @@ reflections:
         - 'round 3 also carries: sealed-dir date from roster / purge-tombstone fallback; drained legacy missions/<id>.jsonl residue + full mission-binding vacuum set; canonical .punt-labs/**/local/** line in ethos .gitignore (authorized) + clean-tree verification in this repo'
       recommendation: continue
       reason: Round 3 (final budgeted round) lands three REQ fixes with named regression tests, three OPTs, two carried refinements, and the gitignore line; evaluator does a targeted re-check of the fixes, then local review gate, PR, merge, release.
-    - round: 3
+    - mission: ""
+      round: 3
       created_at: "2026-07-21T07:26:50Z"
       author: claude
       converging: true

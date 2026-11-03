@@ -1,0 +1,30 @@
+results:
+    - mission: m-2026-10-24-002
+      round: 1
+      created_at: "2026-10-24T00:18:47Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: internal/mission/redact_coverage_test.go
+          added: 126
+          removed: 45
+      evidence:
+        - name: make check (full output read), commit 720a9a8
+          status: pass
+        - name: mutant os.WriteFile(RedactRecord(name), b, ...) fails the rule
+          status: pass
+        - name: mutant Inner(append([]byte(RedactRecord(dir)), b...)) fails the rule
+          status: pass
+        - name: sink without a data-argument index fails
+          status: pass
+      prose: |
+        The per-write rule now checks only the data argument: index 1 for
+        os.WriteFile, and the registered index for each sink (writeContractFile 1,
+        writeAtomicFile 3, writeSyncedFile 1, appendRawAuditLines 1,
+        AppendMonotonic 3, WriteChunkAtomic 3, writeMarkerAtomic 2). A sink
+        registered without an index fails. Both djb mutants fail in
+        TestCheckWriters_Mutants. The second mutant has its choke point inside the
+        data argument, so append counts only if every part is redacted; a var-declared
+        accumulator is neutral (needed by migrateOneSession). The file header states
+        what the rule proves and does not prove.

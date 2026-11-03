@@ -1,0 +1,87 @@
+results:
+    - mission: m-2026-10-23-025
+      round: 1
+      created_at: "2026-10-23T23:48:20Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: internal/redact/redact_test.go
+          added: 240
+          removed: 0
+        - path: internal/mission/redact.go
+          added: 54
+          removed: 6
+        - path: internal/mission/redact_coverage_test.go
+          added: 521
+          removed: 0
+        - path: internal/mission/scrub.go
+          added: 122
+          removed: 0
+        - path: internal/mission/migrate.go
+          added: 261
+          removed: 16
+        - path: internal/mission/store.go
+          added: 12
+          removed: 5
+        - path: internal/hook/audit_content.go
+          added: 30
+          removed: 35
+        - path: cmd/ethos/mission.go
+          added: 8
+          removed: 5
+        - path: .punt-labs/ethos/missions/
+          added: 33
+          removed: 33
+      evidence:
+        - name: make check green on every commit (full output read)
+          status: pass
+        - name: TestTrackedWritersAreRedacted plus mutants (stray WriteFile in internal/mission and internal/hook fail it)
+          status: pass
+        - name: git grep on HEAD, mutable mission records clean of home paths; sealed chunks untouched per DES-058
+          status: pass
+        - name: doctor hand-edit check and Load/LoadResults/LoadReflections over all scrubbed missions
+          status: pass
+      open_questions:
+        - 'Sealed chunks still hold credentials: two audit chunks under sessions/2026-09-09-00f1ab56 carry a 64-hex desk daemon token (VITE_DESKD_TOKEN) and four daemon bearer tokens. DES-058 forbids rewriting them. Rotate the token.'
+        - 'Out-of-write-set files edited on leader rulings 7 and 9, not listed in files_changed because containment refuses them: internal/hook/audit_sentinel.go, internal/hook/audit_migrate.go, internal/hook/audit_redact_writers_test.go, internal/audit/quarantine.go, internal/audit/quarantine_test.go.'
+        - The pre-commit seal hook swept three rewritten sealed chunks into commit 694bd1e; commit 7f66c6d restores them byte for byte. One more sealed file, sessions/2026-05-23-f8f75233-.../audit.jsonl, is modified and uncommitted in the worktree, left as ruled.
+      prose: |
+        Design: one package, internal/redact, with the shared email pattern, the credential sweep, HomePaths and a reflective Record walker that redacts every string field not tagged redact:"keep". mission.RedactRecord and mission.RedactedYAML are the choke points; every record writer in internal/mission calls one of them and fails closed. The audit hook keeps its fail-open exception. Coverage is a structural rule (TestTrackedWritersAreRedacted), not a list of approved writers.
+    - mission: m-2026-10-23-025
+      round: 2
+      created_at: "2026-10-24T00:03:35Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: internal/redact/redact.go
+          added: 150
+          removed: 46
+        - path: internal/redact/round2_test.go
+          added: 180
+          removed: 0
+        - path: internal/mission/redact.go
+          added: 17
+          removed: 1
+        - path: internal/mission/redact_test.go
+          added: 15
+          removed: 0
+        - path: internal/mission/migrate.go
+          added: 34
+          removed: 2
+        - path: internal/mission/scrub_test.go
+          added: 31
+          removed: 0
+        - path: internal/mission/redact_coverage_test.go
+          added: 53
+          removed: 0
+      evidence:
+        - name: make check green on every round-2 commit
+          status: pass
+        - name: ScrubFiles dry run over mutable records with the round-2 redactor, 0 of 1584 tracked files change
+          status: pass
+      open_questions:
+        - No file outside the write set was needed in round 2. The 2026-05-23 sealed audit.jsonl is still modified and unstaged, untouched.
+      prose: |
+        Findings 1-7 fixed with tests first. redact.go: escaped-quote values and JSON pairs, URL userinfo before the email pass, name: value and NAME = value, PGP blocks, dash-encoded slugs (HomePaths plus PathRedactor.Text for any home), Stripe, Slack, GitLab, Google, npm, Hugging Face and JWT shapes, an explicit boundary instead of \b, and numbers and lists under credential-named keys. A $-prefixed value is exempt only when it is a real reference. redactYAMLDoc and redactJSONLines now apply the key-name pass. Coverage counts Body and Content as choke points and fails on io/ioutil and aliased os imports, with mutants for both. Pinned false positives: max_tokens, token_count, secret_manager (colon and equals forms); command substitution contents are trusted.

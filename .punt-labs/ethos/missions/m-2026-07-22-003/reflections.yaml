@@ -1,5 +1,6 @@
 reflections:
-    - round: 1
+    - mission: ""
+      round: 1
       created_at: "2026-07-22T17:38:32Z"
       author: claude
       converging: true
@@ -10,7 +11,8 @@ reflections:
         - 'out-of-scope catch: TestMCP_ToolsList (internal/mcp) fails the same clean -race run with a load timeout — same class; round 2 investigates (fix if a timeout tune, bead if deeper)'
       recommendation: continue
       reason: 'One small fix round on the shared helper (wait-for-done before buffer reads, realistic budget), verified the way it was caught: two clean-cache full -race runs.'
-    - round: 2
+    - mission: ""
+      round: 2
       created_at: "2026-07-22T18:08:12Z"
       author: claude
       converging: true

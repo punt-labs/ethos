@@ -1,0 +1,27 @@
+mission_id: m-2026-10-24-001
+status: failed
+type: task
+created_at: "2026-10-24T00:07:45Z"
+updated_at: "2026-10-24T00:16:17Z"
+closed_at: "2026-10-24T00:16:17Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: djb
+    pinned_at: "2026-10-24T00:07:45Z"
+    hash: 358417d39d5e88f3febe956588d46a5a72063bcea45ffe10b0a8879b7c3a543b
+inputs:
+    ticket: ethos-3e3f
+write_set:
+    - internal/mission/redact_coverage_test.go
+success_criteria:
+    - 'Successor to m-2026-10-23-025 (closed failed at its round cap with one open finding). Finding (djb, round 2): the result of 025 states that redact.Body and redact.Content are redaction choke points, but the real chokePoints map in internal/mission/redact_coverage_test.go:187-196 does not list them; only the mutant test''s local map does. So TestTrackedWritersAreRedacted still accepts WriteDelegationSkeleton (internal/mission/delegation.go:370 prompt.md write) by its unrelated RedactedYAML call.'
+    - 'Make the real rule check what 025 claimed: add Body and Content to chokePoints, and make the rule verify the specific write, not mere presence of any choke-point call in the function, at least for WriteDelegationSkeleton''s prompt.md write. If per-write checking is not feasible in this test design, stop and report the reason instead of weakening the claim.'
+    - 'Prove it with a mutant in TestCheckWriters_Mutants: a function that writes prompt.md with os.WriteFile of an unredacted body while also calling RedactedYAML for another file must fail the rule.'
+    - Commit incrementally -- one commit per logical step. Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - Commit by explicit path only. Do not stage .punt-labs/ethos/sessions/2026-05-23-f8f75233-e179-460c-8871-f243bc3b1a85/audit.jsonl or anything outside the write set; the pre-commit seal hook may add chunk files, which is expected.
+budget:
+    rounds: 1
+    reflection_after_each: true
+current_round: 1
+context: Worktree <repo>/.claude/worktrees/redact on branch fix/redact-tracked-writers -- work only there; do not create or switch branches. Commit on this branch; do NOT push, do not touch PRs, do not merge -- the leader does that.
