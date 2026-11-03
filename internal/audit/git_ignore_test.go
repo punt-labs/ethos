@@ -45,8 +45,12 @@ func TestGitAdd_IgnoredPathIsSkippedNotAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := GitAdd(repo, filepath.Join(dir, SessionChunkFile(100, 200)), other); err != nil {
+	staged, err := GitAdd(repo, filepath.Join(dir, SessionChunkFile(100, 200)), other)
+	if err != nil {
 		t.Fatalf("GitAdd with an ignored path: %v", err)
+	}
+	if len(staged) != 1 || staged[0] != other {
+		t.Errorf("staged = %v, want only %s", staged, other)
 	}
 	tracked := runGit(t, repo, "ls-files")
 	if strings.Contains(tracked, "sessions") {
@@ -66,7 +70,7 @@ func TestGitAdd_NoteIsPrintedOncePerProcess(t *testing.T) {
 	writeChunk(t, dir, SessionChunkFile(100, 200), 100, 200)
 	writeChunk(t, dir, SessionChunkFile(201, 300), 201, 300)
 	for _, n := range []string{SessionChunkFile(100, 200), SessionChunkFile(201, 300)} {
-		if err := GitAdd(repo, filepath.Join(dir, n)); err != nil {
+		if _, err := GitAdd(repo, filepath.Join(dir, n)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -79,7 +83,7 @@ func TestGitAdd_NotIgnoredStagesAndStaysSilent(t *testing.T) {
 	note := captureIgnoreNote(t)
 	repo, dir := ignoringRepo(t, "unrelated/\n")
 	writeChunk(t, dir, SessionChunkFile(100, 200), 100, 200)
-	if err := GitAdd(repo, filepath.Join(dir, SessionChunkFile(100, 200))); err != nil {
+	if _, err := GitAdd(repo, filepath.Join(dir, SessionChunkFile(100, 200))); err != nil {
 		t.Fatalf("GitAdd: %v", err)
 	}
 	if !strings.Contains(runGit(t, repo, "ls-files"), "sessions/2026-01-01-s1/") {
@@ -93,7 +97,7 @@ func TestGitAdd_NotIgnoredStagesAndStaysSilent(t *testing.T) {
 func TestGitAdd_IgnoreCheckFailureIsAnError(t *testing.T) {
 	captureIgnoreNote(t)
 	dir := t.TempDir() // not a repository
-	if err := GitAdd(dir, "a"); err == nil {
+	if _, err := GitAdd(dir, "a"); err == nil {
 		t.Fatal("GitAdd outside a repository succeeded")
 	}
 }

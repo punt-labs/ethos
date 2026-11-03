@@ -66,30 +66,44 @@ func relPathspecs(repoRoot string, paths []string) ([]string, error) {
 	return out, nil
 }
 
-// GitAdd stages one or more paths from repoRoot, skipping any path the repo
-// ignores: a repo that gitignores its session audit has chosen not to track it,
-// and `git add` on an ignored path exits 1, which would block every commit. An
-// ignored path is not an error; one note per process names the skip. A failure
-// of the ignore check, or of the add itself, is returned: staging a new or
-// orphan chunk is fail-closed (exit 2) per §Seal failure policy.
-func GitAdd(repoRoot string, paths ...string) error {
+// GitAdd stages one or more paths from repoRoot and returns the ones it
+// staged, as the caller passed them. It skips any path the repo ignores: a repo
+// that gitignores its session audit has chosen not to track it, and `git add`
+// on an ignored path exits 1, which would block every commit. An ignored path
+// is not an error and is not in the result; one note per process names the
+// skip. A failure of the ignore check, or of the add itself, is returned:
+// staging a new or orphan chunk is fail-closed (exit 2) per §Seal failure
+// policy.
+func GitAdd(repoRoot string, paths ...string) ([]string, error) {
 	if len(paths) == 0 {
-		return nil
+		return nil, nil
 	}
 	specs, err := relPathspecs(repoRoot, paths)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	specs, err = dropIgnored(repoRoot, specs)
+	kept, err := dropIgnored(repoRoot, specs)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(specs) == 0 {
-		return nil
+	if len(kept) == 0 {
+		return nil, nil
 	}
-	args := append([]string{"add", "--"}, specs...)
-	_, err = gitRun(repoRoot, "git add", args...)
-	return err
+	args := append([]string{"add", "--"}, kept...)
+	if _, err = gitRun(repoRoot, "git add", args...); err != nil {
+		return nil, err
+	}
+	keep := make(map[string]bool, len(kept))
+	for _, s := range kept {
+		keep[s] = true
+	}
+	var staged []string
+	for i, p := range paths {
+		if keep[specs[i]] {
+			staged = append(staged, p)
+		}
+	}
+	return staged, nil
 }
 
 // ignoreNoteOut receives the one-per-process note that a path was skipped

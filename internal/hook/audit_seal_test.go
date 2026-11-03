@@ -258,6 +258,9 @@ func TestSealRepoInRepoThatIgnoresSessions(t *testing.T) {
 	if res.LinesSealed != 3 {
 		t.Errorf("res = %+v, want 3 lines sealed", res)
 	}
+	if res.ChunksStaged != 0 {
+		t.Errorf("ChunksStaged = %d, want 0: the chunk is ignored and stays local", res.ChunksStaged)
+	}
 	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
 	if _, err := os.Stat(filepath.Join(sealedDir, audit.SessionChunkFile(100, 300))); err != nil {
 		t.Errorf("chunk not written locally: %v", err)
