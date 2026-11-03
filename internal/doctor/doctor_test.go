@@ -1926,6 +1926,32 @@ func TestCheckOrphanedAgentFiles_ErrorPathsFail(t *testing.T) {
 	})
 }
 
+// TestCheckOrphanedAgentFiles_InstallerOwned: a handle with a source file in
+// .punt-labs/ethos/agents/ is re-copied every SessionStart, so deleting it is
+// undone; it must never FAIL, whether it has no identity (utility agent) or
+// an off-team one.
+func TestCheckOrphanedAgentFiles_InstallerOwned(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	writeIdentity(t, root, "offteam", "name: Off\nhandle: offteam\nkind: agent\n")
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	out := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(out, 0o755))
+	for _, h := range []string{"utility", "offteam"} {
+		src := "---\nname: " + h + "\n---\nbody\n"
+		require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "agents", h+".md"), []byte(src), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(out, h+".md"), []byte(agentmark.Add(src)), 0o644))
+	}
+	res := CheckOrphanedAgentFiles(root, root, team.NewLayeredStore(ethosDir, ethosDir), identity.NewStore(root))
+	assert.Equal(t, "PASS", res.Status, "detail: %s", res.Detail)
+	assert.Equal(t, "no orphaned agent files", res.Detail)
+}
+
 // brokenFS.ReadDir always fails, simulating a build-broken embed.
 type brokenFS struct{}
 
