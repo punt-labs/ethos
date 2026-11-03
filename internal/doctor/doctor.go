@@ -234,9 +234,9 @@ func passFail(name, detail string, ok bool) Result {
 }
 
 // identityDirResult is CheckIdentityDir as a Result.
-func identityDirResult(s identity.IdentityStore, ss *session.Store) Result {
-	detail, ok := CheckIdentityDir(s, ss)
-	return passFail("Identity directory", detail, ok)
+func identityDirResult(s identity.IdentityStore, _ *session.Store) Result {
+	detail, status := identityDirStatus(s)
+	return Result{Name: "Identity directory", Status: status, Detail: detail}
 }
 
 // duplicateFieldsResult is CheckDuplicateFields as a Result.
@@ -1104,25 +1104,35 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 // identity, so a missing or empty repo dir stays a FAIL. A dir that is not a
 // directory or cannot be read fails in every mode, naming the cause.
 func CheckIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool) {
+	detail, status := identityDirStatus(s)
+	return detail, status != "FAIL"
+}
+
+// identityDirStatus is CheckIdentityDir with the advisory state: under
+// layered resolution, no usable identities in the repo or the global store is
+// a fresh install, a WARN pointing at `ethos setup` that matches
+// CheckHumanIdentity's first-run WARN, not a FAIL.
+func identityDirStatus(s identity.IdentityStore) (detail, status string) {
 	dir := s.IdentitiesDir()
 	state, why := inspectIdentitiesDir(dir)
 	switch state {
 	case dirUsable:
-		return dir, true
+		return dir, "PASS"
 	case dirBroken:
-		return "error: " + why, false
+		return "error: " + why, "FAIL"
 	}
 	if ls, ok := s.(*identity.LayeredStore); ok && !ls.RepoAuthoritative() {
 		gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
 		gstate, gwhy := inspectIdentitiesDir(gdir)
 		switch gstate {
 		case dirUsable:
-			return gdir + " (repo has none; layered resolution reads the global store)", true
+			return gdir + " (repo has none; layered resolution reads the global store)", "PASS"
 		case dirBroken:
-			return fmt.Sprintf("error: global identities dir %s: %s", gdir, gwhy), false
+			return fmt.Sprintf("error: global identities dir %s: %s", gdir, gwhy), "FAIL"
 		}
+		return "no identities yet — run `ethos setup` to create yours", "WARN"
 	}
-	return why, false
+	return why, "FAIL"
 }
 
 type dirState int

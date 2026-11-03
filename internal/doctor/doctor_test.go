@@ -156,11 +156,25 @@ func TestCheckIdentityDir(t *testing.T) {
 			" (repo has none; layered resolution reads the global store)", detail)
 	})
 
-	t.Run("layered, neither dir fails", func(t *testing.T) {
-		ls, ss, _ := layered(t, false, false)
-		detail, ok := CheckIdentityDir(ls, ss)
-		assert.False(t, ok)
-		assert.Contains(t, detail, "not found")
+	t.Run("layered, neither dir is a fresh-install WARN", func(t *testing.T) {
+		ls, _, _ := layered(t, false, false)
+		res := identityDirResult(ls, nil)
+		assert.Equal(t, "WARN", res.Status)
+		assert.Contains(t, res.Detail, "ethos setup")
+		assert.True(t, res.Passed(), "a fresh install must not gate doctor's exit")
+	})
+
+	t.Run("layered, empty repo and empty global dirs are a WARN", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), false)
+		assert.Equal(t, "WARN", identityDirResult(ls, nil).Status)
+	})
+
+	t.Run("repo-only fresh install stays FAIL", func(t *testing.T) {
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(t.TempDir()), nil, identity.NewStore(t.TempDir()), true)
+		assert.Equal(t, "FAIL", identityDirResult(ls, nil).Status)
 	})
 
 	t.Run("repo-only, no repo dir fails", func(t *testing.T) {
