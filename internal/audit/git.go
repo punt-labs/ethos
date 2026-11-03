@@ -113,9 +113,9 @@ var (
 	ignoreNote    sync.Once
 )
 
-// dropIgnored returns the specs git does not ignore, in order. Tracked paths
-// are never reported ignored by check-ignore, so a tracked chunk still stages.
-func dropIgnored(repoRoot string, specs []string) ([]string, error) {
+// ignoredSet returns the specs git ignores. Tracked paths are never reported
+// ignored by check-ignore, so a tracked chunk is not in the set.
+func ignoredSet(repoRoot string, specs []string) (map[string]bool, error) {
 	// Paths go on stdin, NUL-separated: -z is only valid with --stdin, and it
 	// keeps git from quoting odd names in its answer.
 	in := strings.NewReader(strings.Join(specs, "\x00") + "\x00")
@@ -123,7 +123,7 @@ func dropIgnored(repoRoot string, specs []string) ([]string, error) {
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 1 {
-			return specs, nil // exit 1: no path is ignored
+			return nil, nil // exit 1: no path is ignored
 		}
 		return nil, err
 	}
@@ -132,6 +132,29 @@ func dropIgnored(repoRoot string, specs []string) ([]string, error) {
 		if len(t) > 0 {
 			ignored[string(t)] = true
 		}
+	}
+	return ignored, nil
+}
+
+// IsIgnored reports whether git ignores path, which need not exist. A failure
+// of the check is returned, never read as "not ignored".
+func IsIgnored(repoRoot, path string) (bool, error) {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return false, err
+	}
+	ignored, err := ignoredSet(repoRoot, []string{spec})
+	if err != nil {
+		return false, err
+	}
+	return ignored[spec], nil
+}
+
+// dropIgnored returns the specs git does not ignore, in order.
+func dropIgnored(repoRoot string, specs []string) ([]string, error) {
+	ignored, err := ignoredSet(repoRoot, specs)
+	if err != nil {
+		return nil, err
 	}
 	kept := make([]string, 0, len(specs))
 	skipped := ""

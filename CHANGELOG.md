@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A damaged chunk, or an interrupted quarantine, in a session directory the repo
+  gitignores no longer blocks every commit. Such a chunk is local only and
+  cannot reach the tracked tree, so the seal skips that session, prints one line
+  naming the chunk and `ethos audit quarantine <path>`, and seals the others.
+  In a tracked session the same damage still blocks the commit.
+
 ## [4.20.1] - 2026-11-03
 
 ### Fixed

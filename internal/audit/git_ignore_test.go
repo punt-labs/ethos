@@ -141,3 +141,23 @@ func TestQuarantineInRepoThatIgnoresSessions(t *testing.T) {
 		t.Errorf("ignored artifacts were staged: %q", tracked)
 	}
 }
+
+func TestIsIgnored(t *testing.T) {
+	repo, dir := ignoringRepo(t, sessionsIgnore)
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{filepath.Join(dir, SessionChunkFile(1, 2)), true}, // need not exist
+		{filepath.Join(repo, "other.txt"), false},
+	}
+	for _, c := range cases {
+		got, err := IsIgnored(repo, c.path)
+		if err != nil || got != c.want {
+			t.Errorf("IsIgnored(%s) = %v, %v; want %v", c.path, got, err, c.want)
+		}
+	}
+	if _, err := IsIgnored(t.TempDir(), "a"); err == nil {
+		t.Error("IsIgnored outside a repository: want an error")
+	}
+}

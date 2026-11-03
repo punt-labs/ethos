@@ -402,14 +402,21 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 		}
 	}
 	// Verify every sealed chunk's content against its name; a corrupt chunk
-	// fails the seal (exit 2), the escape being audit quarantine.
+	// fails the seal (exit 2), the escape being audit quarantine. A damaged
+	// chunk the repo gitignores is local only and cannot reach the tracked
+	// tree, so it skips the session instead (skipIfLocalOnly).
 	sc, err := audit.ScanSealedDir(p.sealedDir, p.ns, p.session)
 	if err != nil {
+		var orphan *audit.OrphanCorruptError
+		if errors.As(err, &orphan) {
+			return p.skipIfLocalOnly(orphan.Chunk, err)
+		}
 		return sealOutcome{}, err
 	}
 	for _, c := range sc.Chunks {
-		if _, err := audit.ReadChunkVerified(filepath.Join(p.sealedDir, c.ChunkFile()), c.Last); err != nil {
-			return sealOutcome{}, err
+		path := filepath.Join(p.sealedDir, c.ChunkFile())
+		if _, err := audit.ReadChunkVerified(path, c.Last); err != nil {
+			return p.skipIfLocalOnly(path, err)
 		}
 	}
 	// Tail selection uses the sealed watermark (this session's own chunks +
@@ -449,6 +456,20 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 	printNotices(notes)
 	reportf(opts, "sealed %d line(s) for %s into %s\n", len(tail), p.label, name)
 	return sealOutcome{wroteChunk: true, lineCount: len(tail), chunkPath: filepath.Join(p.sealedDir, name)}, nil
+}
+
+// skipIfLocalOnly is the outcome for a unit whose damaged chunk is err: when
+// the repo gitignores the chunk, the session is skipped with one line naming
+// the chunk and the recovery command, and the seal goes on; otherwise, or when
+// the ignore check itself fails, the seal fails with err.
+func (p sealDirParams) skipIfLocalOnly(chunk string, err error) (sealOutcome, error) {
+	ignored, ierr := audit.IsIgnored(p.repoRoot, chunk)
+	if ierr != nil || !ignored {
+		return sealOutcome{}, err
+	}
+	fmt.Fprintf(os.Stderr, "ethos: audit seal: %s skipped, a damaged chunk is local only (this repo gitignores it): %v; recover with: ethos audit quarantine %s\n",
+		p.label, err, chunk)
+	return sealOutcome{}, nil
 }
 
 // reportf writes a verbose/dry-run line to the options' sink when present.
