@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 }
 
 // newFixture builds an identity.Store and matching session.Store at a
-// fresh temp root. The identities directory is created so CheckIdentityDir
+// fresh temp root. The identities directory is created so identityDirStatus
 // passes by default; individual tests remove it when they need a failure.
 func newFixture(t *testing.T) (*identity.Store, *session.Store, string) {
 	t.Helper()
@@ -117,26 +117,26 @@ func TestPassedCountExcludesWarn(t *testing.T) {
 	assert.Equal(t, len(results), PassedCount(results)+WarnCount(results)+1)
 }
 
-func TestCheckIdentityDir(t *testing.T) {
+func TestIdentityDirStatus(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
-		s, ss, _ := newFixture(t)
-		detail, ok := CheckIdentityDir(s, ss)
-		assert.True(t, ok)
+		s, _, _ := newFixture(t)
+		detail, status := identityDirStatus(s)
+		assert.Equal(t, "PASS", status)
 		assert.Equal(t, s.IdentitiesDir(), detail)
 	})
 
 	t.Run("missing", func(t *testing.T) {
-		s, ss, root := newFixture(t)
+		s, _, root := newFixture(t)
 		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-		detail, ok := CheckIdentityDir(s, ss)
-		assert.False(t, ok)
+		detail, status := identityDirStatus(s)
+		assert.Equal(t, "FAIL", status)
 		assert.Contains(t, detail, "not found")
 	})
 
 	// A layered repo with no repo-local identities dir resolves from the global
 	// store, so it passes when the global dir exists. Under repo-only nothing
 	// else resolves, so it fails.
-	layered := func(t *testing.T, globalHasIdentities, repoOnly bool) (identity.IdentityStore, *session.Store, string) {
+	layered := func(t *testing.T, globalHasIdentities, repoOnly bool) (identity.IdentityStore, string) {
 		t.Helper()
 		repoRoot := t.TempDir()   // no identities/ subdir
 		globalRoot := t.TempDir() // identities/ only if asked
@@ -145,19 +145,19 @@ func TestCheckIdentityDir(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities", "g.yaml"), []byte("handle: g\n"), 0o600))
 		}
 		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
-		return ls, session.NewStore(globalRoot), globalRoot
+		return ls, globalRoot
 	}
 
 	t.Run("layered, no repo dir, global dir passes naming it", func(t *testing.T) {
-		ls, ss, globalRoot := layered(t, true, false)
-		detail, ok := CheckIdentityDir(ls, ss)
-		assert.True(t, ok)
+		ls, globalRoot := layered(t, true, false)
+		detail, status := identityDirStatus(ls)
+		assert.Equal(t, "PASS", status)
 		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir()+
 			" (repo has none; layered resolution reads the global store)", detail)
 	})
 
 	t.Run("layered, neither dir is a fresh-install WARN", func(t *testing.T) {
-		ls, _, _ := layered(t, false, false)
+		ls, _ := layered(t, false, false)
 		res := identityDirResult(ls, nil)
 		assert.Equal(t, "WARN", res.Status)
 		assert.Contains(t, res.Detail, "ethos setup")
@@ -178,9 +178,9 @@ func TestCheckIdentityDir(t *testing.T) {
 	})
 
 	t.Run("repo-only, no repo dir fails", func(t *testing.T) {
-		ls, ss, _ := layered(t, true, true)
-		detail, ok := CheckIdentityDir(ls, ss)
-		assert.False(t, ok, "repo-only never reads the global store")
+		ls, _ := layered(t, true, true)
+		detail, status := identityDirStatus(ls)
+		assert.Equal(t, "FAIL", status, "repo-only never reads the global store")
 		assert.Contains(t, detail, "not found")
 	})
 
@@ -189,13 +189,13 @@ func TestCheckIdentityDir(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "identities", "r.yaml"), []byte("handle: r\n"), 0o600))
 		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(t.TempDir()))
-		detail, ok := CheckIdentityDir(ls, session.NewStore(repoRoot))
-		assert.True(t, ok)
+		detail, status := identityDirStatus(ls)
+		assert.Equal(t, "PASS", status)
 		assert.Equal(t, identity.NewStore(repoRoot).IdentitiesDir(), detail)
 	})
 }
 
-func TestCheckIdentityDir_Hardening(t *testing.T) {
+func TestIdentityDirStatus_Hardening(t *testing.T) {
 	notRoot := os.Geteuid() != 0 && runtime.GOOS != "windows"
 	layered := func(repoRoot, globalRoot string, repoOnly bool) identity.IdentityStore {
 		return identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
@@ -208,34 +208,34 @@ func TestCheckIdentityDir_Hardening(t *testing.T) {
 	}
 
 	t.Run("regular file is not a directory", func(t *testing.T) {
-		s, ss, root := newFixture(t)
+		s, _, root := newFixture(t)
 		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 		require.NoError(t, os.WriteFile(filepath.Join(root, "identities"), []byte("x"), 0o600))
-		detail, ok := CheckIdentityDir(s, ss)
-		assert.False(t, ok)
+		detail, status := identityDirStatus(s)
+		assert.Equal(t, "FAIL", status)
 		assert.Contains(t, detail, "not a directory")
 	})
 
 	t.Run("empty dir fails with the reason", func(t *testing.T) {
-		s, ss, root := newFixture(t)
+		s, _, root := newFixture(t)
 		require.NoError(t, os.Remove(filepath.Join(root, "identities", "seed.yaml")))
-		detail, ok := CheckIdentityDir(s, ss)
-		assert.False(t, ok)
+		detail, status := identityDirStatus(s)
+		assert.Equal(t, "FAIL", status)
 		assert.Contains(t, detail, "no identity files")
 	})
 
 	t.Run("layered empty repo dir falls back to global", func(t *testing.T) {
 		repoRoot := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
-		_, ok := CheckIdentityDir(layered(repoRoot, populated(t), false), nil)
-		assert.True(t, ok)
+		_, status := identityDirStatus(layered(repoRoot, populated(t), false))
+		assert.Equal(t, "PASS", status)
 	})
 
 	t.Run("repo-only empty repo dir fails", func(t *testing.T) {
 		repoRoot := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
-		detail, ok := CheckIdentityDir(layered(repoRoot, populated(t), true), nil)
-		assert.False(t, ok)
+		detail, status := identityDirStatus(layered(repoRoot, populated(t), true))
+		assert.Equal(t, "FAIL", status)
 		assert.Contains(t, detail, "no identity files")
 	})
 
@@ -243,12 +243,12 @@ func TestCheckIdentityDir_Hardening(t *testing.T) {
 		if !notRoot {
 			t.Skip("permission bits do not bind root or windows")
 		}
-		s, ss, root := newFixture(t)
+		s, _, root := newFixture(t)
 		dir := filepath.Join(root, "identities")
 		require.NoError(t, os.Chmod(dir, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-		detail, ok := CheckIdentityDir(s, ss)
-		assert.False(t, ok)
+		detail, status := identityDirStatus(s)
+		assert.Equal(t, "FAIL", status)
 		assert.Contains(t, detail, "permission denied")
 	})
 
@@ -259,8 +259,8 @@ func TestCheckIdentityDir_Hardening(t *testing.T) {
 		globalRoot := populated(t)
 		require.NoError(t, os.Chmod(globalRoot, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(globalRoot, 0o700) })
-		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
-		assert.False(t, ok)
+		detail, status := identityDirStatus(layered(t.TempDir(), globalRoot, false))
+		assert.Equal(t, "FAIL", status)
 		assert.Contains(t, detail, "error: global identities dir")
 		assert.NotContains(t, detail, "not found")
 	})
@@ -268,13 +268,13 @@ func TestCheckIdentityDir_Hardening(t *testing.T) {
 	t.Run("global dir that is a file fails naming the global dir", func(t *testing.T) {
 		globalRoot := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities"), []byte("x"), 0o600))
-		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
-		assert.False(t, ok)
+		detail, status := identityDirStatus(layered(t.TempDir(), globalRoot, false))
+		assert.Equal(t, "FAIL", status)
 		assert.Contains(t, detail, "error: global identities dir")
 	})
 }
 
-func TestCheckIdentityDir_Bundle(t *testing.T) {
+func TestIdentityDirStatus_Bundle(t *testing.T) {
 	bundleWith := func(t *testing.T, files ...string) string {
 		root := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
