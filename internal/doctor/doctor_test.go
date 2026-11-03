@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -57,6 +58,7 @@ func newFixture(t *testing.T) (*identity.Store, *session.Store, string) {
 	t.Helper()
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "identities", "seed.yaml"), []byte("name: Seed\nhandle: seed\nkind: agent\n"), 0o600))
 	return identity.NewStore(root), session.NewStore(root), root
 }
 
@@ -118,7 +120,7 @@ func TestPassedCountExcludesWarn(t *testing.T) {
 func TestCheckIdentityDir(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
 		s, ss, _ := newFixture(t)
-		detail, ok := CheckIdentityDir(s, ss, false)
+		detail, ok := CheckIdentityDir(s, ss)
 		assert.True(t, ok)
 		assert.Equal(t, s.IdentitiesDir(), detail)
 	})
@@ -126,59 +128,240 @@ func TestCheckIdentityDir(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		s, ss, root := newFixture(t)
 		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-		detail, ok := CheckIdentityDir(s, ss, false)
+		detail, ok := CheckIdentityDir(s, ss)
 		assert.False(t, ok)
 		assert.Contains(t, detail, "not found")
 	})
 
-	// A layered repo whose repo-local identities dir is absent is healthy
-	// ONLY when the repo is teams-only (hasRepoTeam) and the global store
-	// holds identities: the fallback resolves to the global dir. With no
-	// repo-local team the same absent dir must still FAIL, so an
-	// uninitialized submodule checkout is not masked by a populated global
-	// store.
-	t.Run("layered teams-only falls back to global", func(t *testing.T) {
+	// A layered repo with no repo-local identities dir resolves from the global
+	// store, so it passes when the global dir exists. Under repo-only nothing
+	// else resolves, so it fails.
+	layered := func(t *testing.T, globalHasIdentities, repoOnly bool) (identity.IdentityStore, *session.Store, string) {
+		t.Helper()
 		repoRoot := t.TempDir()   // no identities/ subdir
-		globalRoot := t.TempDir() // has identities/
-		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
-		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
-		ss := session.NewStore(globalRoot)
+		globalRoot := t.TempDir() // identities/ only if asked
+		if globalHasIdentities {
+			require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities", "g.yaml"), []byte("handle: g\n"), 0o600))
+		}
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
+		return ls, session.NewStore(globalRoot), globalRoot
+	}
 
-		detail, ok := CheckIdentityDir(ls, ss, true)
-		assert.True(t, ok, "teams-only repo should pass via the global fallback")
-		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir(), detail)
+	t.Run("layered, no repo dir, global dir passes naming it", func(t *testing.T) {
+		ls, ss, globalRoot := layered(t, true, false)
+		detail, ok := CheckIdentityDir(ls, ss)
+		assert.True(t, ok)
+		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir()+
+			" (repo has none; layered resolution reads the global store)", detail)
 	})
 
-	t.Run("layered no repo team still fails", func(t *testing.T) {
-		repoRoot := t.TempDir()   // no identities/ subdir
-		globalRoot := t.TempDir() // has identities/
-		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
-		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
-		ss := session.NewStore(globalRoot)
+	t.Run("layered, neither dir is a fresh-install WARN", func(t *testing.T) {
+		ls, _, _ := layered(t, false, false)
+		res := identityDirResult(ls, nil)
+		assert.Equal(t, "WARN", res.Status)
+		assert.Contains(t, res.Detail, "ethos setup")
+		assert.True(t, res.Passed(), "a fresh install must not gate doctor's exit")
+	})
 
-		detail, ok := CheckIdentityDir(ls, ss, false)
-		assert.False(t, ok, "no repo-local team: absent identities must FAIL, not fall back")
+	t.Run("layered, empty repo and empty global dirs are a WARN", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), false)
+		assert.Equal(t, "WARN", identityDirResult(ls, nil).Status)
+	})
+
+	t.Run("repo-only fresh install stays FAIL", func(t *testing.T) {
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(t.TempDir()), nil, identity.NewStore(t.TempDir()), true)
+		assert.Equal(t, "FAIL", identityDirResult(ls, nil).Status)
+	})
+
+	t.Run("repo-only, no repo dir fails", func(t *testing.T) {
+		ls, ss, _ := layered(t, true, true)
+		detail, ok := CheckIdentityDir(ls, ss)
+		assert.False(t, ok, "repo-only never reads the global store")
 		assert.Contains(t, detail, "not found")
+	})
+
+	t.Run("layered, repo dir present is unchanged", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "identities", "r.yaml"), []byte("handle: r\n"), 0o600))
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(t.TempDir()))
+		detail, ok := CheckIdentityDir(ls, session.NewStore(repoRoot))
+		assert.True(t, ok)
+		assert.Equal(t, identity.NewStore(repoRoot).IdentitiesDir(), detail)
 	})
 }
 
-func TestHasRepoLocalTeam(t *testing.T) {
-	t.Run("empty storeRoot", func(t *testing.T) {
-		assert.False(t, hasRepoLocalTeam(""))
+func TestCheckIdentityDir_Hardening(t *testing.T) {
+	notRoot := os.Geteuid() != 0 && runtime.GOOS != "windows"
+	layered := func(repoRoot, globalRoot string, repoOnly bool) identity.IdentityStore {
+		return identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
+	}
+	populated := func(t *testing.T) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "identities", "g.yaml"), []byte("handle: g\n"), 0o600))
+		return root
+	}
+
+	t.Run("regular file is not a directory", func(t *testing.T) {
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "identities"), []byte("x"), 0o600))
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "not a directory")
 	})
 
-	t.Run("no team dir", func(t *testing.T) {
-		assert.False(t, hasRepoLocalTeam(t.TempDir()))
+	t.Run("empty dir fails with the reason", func(t *testing.T) {
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.Remove(filepath.Join(root, "identities", "seed.yaml")))
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "no identity files")
 	})
 
-	t.Run("repo-local team present", func(t *testing.T) {
-		storeRoot := t.TempDir()
-		teamsDir := filepath.Join(storeRoot, ".punt-labs", "ethos", "teams")
-		require.NoError(t, os.MkdirAll(teamsDir, 0o700))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(teamsDir, "foundation.yaml"),
-			[]byte("name: foundation\n"), 0o600))
-		assert.True(t, hasRepoLocalTeam(storeRoot))
+	t.Run("layered empty repo dir falls back to global", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		_, ok := CheckIdentityDir(layered(repoRoot, populated(t), false), nil)
+		assert.True(t, ok)
+	})
+
+	t.Run("repo-only empty repo dir fails", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		detail, ok := CheckIdentityDir(layered(repoRoot, populated(t), true), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "no identity files")
+	})
+
+	t.Run("unreadable repo dir fails", func(t *testing.T) {
+		if !notRoot {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		s, ss, root := newFixture(t)
+		dir := filepath.Join(root, "identities")
+		require.NoError(t, os.Chmod(dir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "permission denied")
+	})
+
+	t.Run("global stat error is not blamed on the repo", func(t *testing.T) {
+		if !notRoot {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		globalRoot := populated(t)
+		require.NoError(t, os.Chmod(globalRoot, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(globalRoot, 0o700) })
+		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "error: global identities dir")
+		assert.NotContains(t, detail, "not found")
+	})
+
+	t.Run("global dir that is a file fails naming the global dir", func(t *testing.T) {
+		globalRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities"), []byte("x"), 0o600))
+		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "error: global identities dir")
+	})
+}
+
+func TestCheckIdentityDir_Bundle(t *testing.T) {
+	bundleWith := func(t *testing.T, files ...string) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		for _, f := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(root, "identities", f), []byte("handle: b\n"), 0o600))
+		}
+		return root
+	}
+	store := func(repoRoot, bundleRoot string, repoOnly bool) identity.IdentityStore {
+		return identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot),
+			identity.NewStore(bundleRoot), identity.NewStore(t.TempDir()), repoOnly)
+	}
+	emptyRepo := func(t *testing.T) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		return root
+	}
+
+	t.Run("repo-only, bundle holds identities, empty repo dir passes", func(t *testing.T) {
+		b := bundleWith(t, "b.yaml")
+		res := identityDirResult(store(emptyRepo(t), b, true), nil)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+		assert.Contains(t, res.Detail, identity.NewStore(b).IdentitiesDir())
+	})
+
+	t.Run("layered, bundle only, no repo dir, no global passes", func(t *testing.T) {
+		b := bundleWith(t, "b.yaml")
+		res := identityDirResult(store(t.TempDir(), b, false), nil)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+	})
+
+	t.Run("broken bundle dir fails", func(t *testing.T) {
+		b := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(b, "identities"), []byte("x"), 0o600))
+		for _, repoOnly := range []bool{true, false} {
+			res := identityDirResult(store(emptyRepo(t), b, repoOnly), nil)
+			assert.Equal(t, "FAIL", res.Status)
+			assert.Contains(t, res.Detail, "bundle identities dir")
+		}
+	})
+
+	t.Run("empty bundle dir does not mask a repo-only failure", func(t *testing.T) {
+		res := identityDirResult(store(emptyRepo(t), bundleWith(t), true), nil)
+		assert.Equal(t, "FAIL", res.Status)
+	})
+}
+
+func TestClassifyOrphans_IdentityPresence(t *testing.T) {
+	marked := func(h string) []orphanFile { return []orphanFile{{handle: h, marked: true}} }
+
+	t.Run("stat error is reported, not classified", func(t *testing.T) {
+		if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		root := t.TempDir()
+		dir := filepath.Join(root, "identities")
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		require.NoError(t, os.Chmod(dir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		status, detail := classifyOrphans(marked("x"), identity.NewStore(root))
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "cannot tell whether an identity exists: x")
+		assert.NotContains(t, detail, "safe to delete")
+	})
+
+	t.Run("repo-only global-only identity is unvendored, not removed", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		writeIdentity(t, globalRoot, "gonly", "name: G\nhandle: gonly\nkind: agent\n")
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), true)
+		status, detail := classifyOrphans(marked("gonly"), ls)
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "not vendored (exists in the global store) — run ethos vendor: gonly")
+		assert.NotContains(t, detail, "no longer exists")
+
+		// A truly absent identity is still "removed".
+		_, detail = classifyOrphans(marked("nowhere"), ls)
+		assert.Contains(t, detail, "no longer exists")
+	})
+
+	t.Run("layered global identity is stale", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		writeIdentity(t, globalRoot, "gonly", "name: G\nhandle: gonly\nkind: agent\n")
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
+		_, detail := classifyOrphans(marked("gonly"), ls)
+		assert.Contains(t, detail, "stale")
 	})
 }
 
@@ -202,7 +385,8 @@ func TestCheckHumanIdentity(t *testing.T) {
 	t.Run("fresh install — no identities", func(t *testing.T) {
 		// An empty store is the expected first-run state, not a fault: WARN
 		// and point the user at `ethos setup`.
-		s, ss, _ := newFixture(t)
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.Remove(filepath.Join(root, "identities", "seed.yaml")))
 		t.Setenv("USER", "ghost")
 		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "WARN", r.Status)
@@ -1530,7 +1714,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", nil, "", nil, nil)
-	require.Len(t, results, 15)
+	require.Len(t, results, 16)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1542,6 +1726,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Default agent",
 		"Duplicate fields",
 		"Orphaned agent files",
+		"Team members",
 		"Audit seal hook",
 		"Audit trailer hook",
 		"Seal hook currency",
@@ -1555,14 +1740,14 @@ func TestRunAllAndHelpers(t *testing.T) {
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 15, PassedCount(results))
+	assert.Equal(t, 16, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", nil, "", nil, nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 14)
+	assert.Less(t, PassedCount(results), 15)
 
 	// At least one result should name the identity directory failure.
 	var found bool
@@ -1728,22 +1913,21 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
-	t.Run("with an identity store, stale and unresolved are distinguished", func(t *testing.T) {
+	t.Run("with an identity store, stale fails and unresolved is ignored", func(t *testing.T) {
 		res := CheckOrphanedAgentFiles(root, root, teams, s)
 		assert.Equal(t, "FAIL", res.Status)
 		assert.Contains(t, res.Detail, "stale", "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, "retired", "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, "safe to delete", "detail: %s", res.Detail)
-		assert.Contains(t, res.Detail, "unresolved", "detail: %s", res.Detail)
-		assert.Contains(t, res.Detail, "phantom", "detail: %s", res.Detail)
-		assert.Contains(t, res.Detail, "investigate", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "not ethos-generated, ignored: phantom", "detail: %s", res.Detail)
+		assert.NotContains(t, res.Detail, "investigate", "detail: %s", res.Detail)
 		if haveWounded {
 			// N1: an unreadable-but-present identity file still classifies
 			// as stale (a file IS there), never crashing into an error path
 			// and never landing in the genuine-absence bucket.
 			assert.Contains(t, res.Detail, "stale (known identity, not on the active team", "detail: %s", res.Detail)
 			assert.Contains(t, res.Detail, "wounded", "detail: %s", res.Detail)
-			assert.NotContains(t, res.Detail, "unresolved (no matching identity anywhere — investigate before deleting): wounded",
+			assert.NotContains(t, res.Detail, "ignored: wounded",
 				"an unreadable-but-present identity file must not be folded into the genuine-absence bucket: %s", res.Detail)
 			woundedPath := filepath.Join(root, "identities", "wounded.yaml")
 			info, statErr := os.Stat(woundedPath)
@@ -1787,6 +1971,73 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 		_, extErr := os.Stat(filepath.Join(legacyRoot, "identities", "legacy.ext", "vox.yaml"))
 		assert.True(t, os.IsNotExist(extErr),
 			"classification must not trigger the voice-to-ext migration as a side effect")
+	})
+
+	// A handle matching no identity cannot have been generated by ethos: a
+	// hand-authored agent (biff alex-chen) must not fail doctor.
+	t.Run("only unresolved handles pass with a note", func(t *testing.T) {
+		r := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(r, "identities"), 0o700))
+		a := filepath.Join(r, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(a, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "alex-chen.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(r, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(r, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		ed := filepath.Join(r, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ed, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ed, "teams", "solo.yaml"),
+			[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+
+		res := CheckOrphanedAgentFiles(r, r, team.NewLayeredStore(ed, ed), identity.NewStore(r))
+		assert.Equal(t, "PASS", res.Status, "detail: %s", res.Detail)
+		assert.Equal(t, "no orphaned agent files (not ethos-generated, ignored: alex-chen)", res.Detail)
+	})
+
+	t.Run("only stale handles fail with no ignored note", func(t *testing.T) {
+		status, detail := classifyOrphans([]orphanFile{{handle: "retired"}}, s)
+		assert.Equal(t, "FAIL", status)
+		assert.Equal(t, "orphaned agent files — stale (known identity, not on the active team — generated for a previous team scope, safe to delete): retired", detail)
+	})
+
+	// ethos never deletes agent files it wrote, and `vendor --prune` removes
+	// identities, so a marked file with no identity is a leftover of ours.
+	t.Run("marked unresolved fails, unmarked unresolved is ignored", func(t *testing.T) {
+		r := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(r, "identities"), 0o700))
+		a := filepath.Join(r, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(a, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "gone.md"), []byte(agentmark.Add("---\nname: gone\n---\nbody\n")), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "alex-chen.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(r, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(r, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		ed := filepath.Join(r, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ed, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ed, "teams", "solo.yaml"),
+			[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+		tm := team.NewLayeredStore(ed, ed)
+
+		res := CheckOrphanedAgentFiles(r, r, tm, identity.NewStore(r))
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Equal(t, "orphaned agent files — generated by ethos for an identity that no longer exists — safe to delete: gone (not ethos-generated, ignored: alex-chen)", res.Detail)
+
+		// Only a marked leftover, no hand-authored file.
+		require.NoError(t, os.Remove(filepath.Join(a, "alex-chen.md")))
+		res = CheckOrphanedAgentFiles(r, r, tm, identity.NewStore(r))
+		assert.Equal(t, "FAIL", res.Status)
+		assert.NotContains(t, res.Detail, "ignored")
+
+		// Only the hand-authored file.
+		require.NoError(t, os.Remove(filepath.Join(a, "gone.md")))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "alex-chen.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		res = CheckOrphanedAgentFiles(r, r, tm, identity.NewStore(r))
+		assert.Equal(t, "PASS", res.Status)
+	})
+
+	t.Run("a marked file with a known identity is stale, not removed", func(t *testing.T) {
+		status, detail := classifyOrphans([]orphanFile{{handle: "retired", marked: true}}, s)
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "stale")
+		assert.NotContains(t, detail, "no longer exists")
 	})
 
 	t.Run("without an identity store, the distinction is not guessed", func(t *testing.T) {
@@ -1862,6 +2113,60 @@ func TestCheckOrphanedAgentFiles_ErrorPathsFail(t *testing.T) {
 		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, `could not load team "solo"`)
 	})
+}
+
+// TestCheckOrphanedAgentFiles_InstallerOwned: a handle with a source file in
+// .punt-labs/ethos/agents/ is re-copied every SessionStart, so deleting it is
+// undone; it must never FAIL, whether it has no identity (utility agent) or
+// an off-team one.
+func TestCheckOrphanedAgentFiles_InstallerOwned(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	writeIdentity(t, root, "offteam", "name: Off\nhandle: offteam\nkind: agent\n")
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	out := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(out, 0o755))
+	for _, h := range []string{"utility", "offteam"} {
+		src := "---\nname: " + h + "\n---\nbody\n"
+		require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "agents", h+".md"), []byte(src), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(out, h+".md"), []byte(agentmark.Add(src)), 0o644))
+	}
+	res := CheckOrphanedAgentFiles(root, root, team.NewLayeredStore(ethosDir, ethosDir), identity.NewStore(root))
+	assert.Equal(t, "PASS", res.Status, "detail: %s", res.Detail)
+	assert.Equal(t, "no orphaned agent files", res.Detail)
+}
+
+// An agents source dir that cannot be searched leaves ownership unknown; the
+// check must say so rather than classify the file.
+func TestCheckOrphanedAgentFiles_SourceStatError(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission bits do not bind root or windows")
+	}
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	writeIdentity(t, root, "offteam", "name: Off\nhandle: offteam\nkind: agent\n")
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	agentsSrc := filepath.Join(ethosDir, "agents")
+	require.NoError(t, os.MkdirAll(agentsSrc, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	out := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(out, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(out, "offteam.md"), []byte(agentmark.Add("---\nname: offteam\n---\n")), 0o644))
+	require.NoError(t, os.Chmod(agentsSrc, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(agentsSrc, 0o755) })
+
+	res := CheckOrphanedAgentFiles(root, root, team.NewLayeredStore(ethosDir, ethosDir), identity.NewStore(root))
+	assert.Equal(t, "FAIL", res.Status)
+	assert.Contains(t, res.Detail, "could not stat agent source")
+	assert.NotContains(t, res.Detail, "safe to delete")
 }
 
 // brokenFS.ReadDir always fails, simulating a build-broken embed.
@@ -2083,7 +2388,7 @@ func TestRunAllGateKeepsFail(t *testing.T) {
 // TestRunAllGatesEveryLocatedCheck: every check runAll (the body of RunAll) hands a located input
 // goes through checkout (repoRoot) or store (storeRoot, the identity store s,
 // the team store teams). A located input is one of those names, a value
-// derived from one (an alias, or hasRepoLocalTeam's result), however it
+// derived from one (an alias), however it
 // reaches the call. A call outside both gates also fails when the function it
 // calls locates a repository itself — calls resolve.*Repo* or resolve.Locate*,
 // directly or through any function in internal/doctor or internal/githook —
@@ -2246,9 +2551,8 @@ func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated [
 	located := map[string]int{
 		"repoRoot": kindCheckout, "storeRoot": kindStore, "s": kindStore, "teams": kindStore,
 	}
-	// hasRepoLocalTeam only chooses a message and reports false for "";
 	// gateCheckout, gateStore and unlocated are the gates themselves.
-	pure := map[string]int{"hasRepoLocalTeam": kindStore, "gateCheckout": 0, "gateStore": 0, "unlocated": 0}
+	pure := map[string]int{"gateCheckout": 0, "gateStore": 0, "unlocated": 0}
 
 	// kindOf is the located kinds an expression carries: a located name, or a
 	// call to a pure derivation, directly. A nested check call is judged on its
@@ -2418,4 +2722,59 @@ func TestRunAllForPolicyIssueGatesEveryStoreRow(t *testing.T) {
 		assert.Contains(t, r.Detail, b.Detail, g.Name)
 	}
 	assert.GreaterOrEqual(t, storeRows, 6, "the comparison found too few store rows")
+}
+
+func TestCheckTeamMembers(t *testing.T) {
+	// setup builds a repo whose team lists the given members, plus a global
+	// store holding identities in global.
+	setup := func(t *testing.T, config string, members, global []string) (string, *team.LayeredStore, identity.IdentityStore) {
+		t.Helper()
+		root, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		for _, h := range global {
+			writeIdentity(t, globalRoot, h, "name: "+h+"\nhandle: "+h+"\nkind: agent\n")
+		}
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		if config != "" {
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte(config), 0o644))
+		}
+		ed := filepath.Join(root, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ed, "teams"), 0o755))
+		y := "name: solo\nmembers:\n"
+		for _, m := range members {
+			y += "  - identity: " + m + "\n    role: r\n"
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(ed, "teams", "solo.yaml"), []byte(y), 0o644))
+		return root, team.NewLayeredStore(ed, ed),
+			identity.NewLayeredStore(identity.NewStore(root), identity.NewStore(globalRoot))
+	}
+
+	t.Run("all resolve", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\n", []string{"a", "b"}, []string{"a", "b"})
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+		assert.Equal(t, "2 members resolve", res.Detail)
+	})
+
+	t.Run("unresolved members are all listed", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\n", []string{"a", "zed", "ghost"}, []string{"a"})
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "ghost, zed")
+		assert.NotContains(t, res.Detail, ": a")
+	})
+
+	t.Run("no team configured", func(t *testing.T) {
+		root, teams, s := setup(t, "", []string{"ghost"}, nil)
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status)
+		assert.Equal(t, "no team configured", res.Detail)
+	})
+
+	t.Run("repo-only defers to the repo-set check", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\nresolution: repo-only\n", []string{"ghost"}, nil)
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status)
+		assert.Contains(t, res.Detail, "Repo-only completeness")
+	})
 }

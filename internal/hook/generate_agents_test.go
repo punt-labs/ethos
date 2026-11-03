@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -2462,4 +2463,34 @@ func TestGenerateAgentFiles_ProjectPatterns(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGenerateAgentFiles_ProvenanceMarker pins that every generated file
+// carries the ethos marker (doctor's only basis for telling a leftover from
+// a hand-authored agent), that the frontmatter still parses, and that a
+// second run rewrites nothing.
+func TestGenerateAgentFiles_ProvenanceMarker(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+	require.NoError(t, GenerateAgentFilesTo(root, root, ids, teams, roles))
+
+	path := filepath.Join(root, ".claude", "agents", "bwk.md")
+	first, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.True(t, agentmark.Has(string(first)), "generated file must carry the marker")
+
+	parts := strings.SplitN(string(first), "---", 3)
+	require.Len(t, parts, 3)
+	var fm struct {
+		Name string `yaml:"name"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(parts[1]), &fm), "frontmatter must remain valid YAML")
+	assert.Equal(t, "bwk", fm.Name)
+
+	stderr := captureStderr(t, func() {
+		require.NoError(t, GenerateAgentFilesTo(root, root, ids, teams, roles))
+	})
+	assert.NotContains(t, stderr, "updated", "regeneration must be idempotent")
+	second, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(first), string(second))
 }
