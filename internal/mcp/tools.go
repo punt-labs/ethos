@@ -319,7 +319,8 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		}
 		return jsonResult(id)
 	}
-	handle, err := resolve.Resolve(h.store, h.sessionStore, loc.Checkout)
+	caller := identity.ForCaller(h.store)
+	handle, err := resolve.Resolve(caller, h.sessionStore, loc.Checkout)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
 	}
@@ -329,7 +330,7 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		opts = append(opts, identity.Reference(true))
 	}
 
-	id, loadErr := h.store.Load(handle, opts...)
+	id, loadErr := caller.Load(handle, opts...)
 	if loadErr != nil {
 		return identityLoadError(handle, loadErr), nil
 	}

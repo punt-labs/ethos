@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- In a repo that sets `resolution: repo-only` and vendors a team that does not
+  include the person running ethos, `ethos doctor` no longer fails the Human
+  identity check, and `whoami` and session start no longer fail to find the
+  caller. The caller is a person, not repo data, so ethos now looks for them in
+  `~/.punt-labs/ethos/identities` when the repo does not hold them, and doctor
+  reports PASS with "resolved from the global store". A caller found in neither
+  place still fails. Team and agent identities still resolve from the repo only.
 - Commits are no longer blocked in a repo that gitignores
   `.punt-labs/ethos/sessions/` (biff, mcp-proxy and quarry do). The pre-commit
   audit seal and `ethos audit quarantine` now skip staging any path the repo
