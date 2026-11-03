@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 const ignoreSessions = ".punt-labs/ethos/sessions/\n"
@@ -71,4 +72,54 @@ func TestSealRepo_DamagedChunkInTrackedSessionStillBlocks(t *testing.T) {
 	_, err := SealRepo(repo, now, SealOptions{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "corrupt chunk")
+}
+
+func gitIn(t *testing.T, repo string, args ...string) {
+	t.Helper()
+	cmd := testhelpers.GitCommand(args...)
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
+}
+
+// A repo that committed session chunks and later gitignored the directory
+// still tracks them: damage there blocks, and so does a damaged chunk beside a
+// tracked good one.
+func TestSealRepo_TrackedChunkInIgnoredDirStillBlocks(t *testing.T) {
+	now := time.Now().UTC()
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	dir, _ := resolveRepoSessionDir(repo, "sess-t", now)
+	writeChunkFile(t, dir, audit.SessionChunkFile(100, 200), 100, 200)
+	gitIn(t, repo, "add", "-f", ".punt-labs")
+	gitIn(t, repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "chunk")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(ignoreSessions), 0o600))
+	// A later chunk is damaged: the tracked one beside it is why this blocks.
+	writeChunkFile(t, dir, audit.SessionChunkFile(300, 400), 300, 350)
+	writeLiveLines(t, repo, "sess-t", 500)
+
+	_, err := SealRepo(repo, now, SealOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "corrupt chunk")
+}
+
+// A tracked chunk staged as renamed to .corrupt, with no marker, is an
+// interrupted quarantine in a tracked tree: the original path is no longer in
+// the index and matches the ignore rule, but the rename is staged.
+func TestSealRepo_StagedRenameToCorruptInIgnoredDirStillBlocks(t *testing.T) {
+	now := time.Now().UTC()
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	dir, _ := resolveRepoSessionDir(repo, "sess-t", now)
+	name := audit.SessionChunkFile(100, 200)
+	writeChunkFile(t, dir, name, 100, 200)
+	gitIn(t, repo, "add", "-f", ".punt-labs")
+	gitIn(t, repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "chunk")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(ignoreSessions), 0o600))
+	gitIn(t, repo, "mv", filepath.Join(dir, name), filepath.Join(dir, name+".corrupt"))
+	writeLiveLines(t, repo, "sess-t", 300)
+
+	_, err := SealRepo(repo, now, SealOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "orphan")
 }

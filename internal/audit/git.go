@@ -150,6 +150,21 @@ func IsIgnored(repoRoot, path string) (bool, error) {
 	return ignored[spec], nil
 }
 
+// TracksAnyUnder reports whether the index lists any path under dir, staged
+// additions and renames included. A failure of git is returned, and a caller
+// that must not guess treats it as "tracked".
+func TracksAnyUnder(repoRoot, dir string) (bool, error) {
+	spec, err := relPathspec(repoRoot, dir)
+	if err != nil {
+		return false, err
+	}
+	out, err := gitRun(repoRoot, "git ls-files", "ls-files", "-z", "--", spec)
+	if err != nil {
+		return false, err
+	}
+	return len(out) > 0, nil
+}
+
 // dropIgnored returns the specs git does not ignore, in order.
 func dropIgnored(repoRoot string, specs []string) ([]string, error) {
 	ignored, err := ignoredSet(repoRoot, specs)
