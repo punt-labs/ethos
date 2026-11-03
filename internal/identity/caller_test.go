@@ -103,33 +103,64 @@ func TestForCaller_UnmigratableRepoVoiceBlocksTheGlobalFallback(t *testing.T) {
 	assert.Contains(t, err.Error(), "mine.yaml")
 }
 
-// A global caller whose handle also names a different person in the repo would
-// be reported as that person, since Load reads the repo first: the lookup
-// reports the collision instead.
-func TestForCaller_GlobalMatchShadowedByADifferentRepoPersonIsAnError(t *testing.T) {
-	ls, repo, _, global := setupRepoOnly(t)
-	require.NoError(t, repo.Save(&Identity{Name: "Repo Jim", Handle: "jim", Kind: "human", Email: "a@x.com"}))
-	require.NoError(t, global.Save(&Identity{Name: "Global Jim", Handle: "jim", Kind: "human", Email: "b@y.com"}))
-
-	id, err := ForCaller(ls).FindBy("email", "b@y.com")
-	require.Error(t, err)
-	assert.Nil(t, id)
-	assert.Contains(t, err.Error(), `handle "jim"`)
-	assert.Contains(t, err.Error(), repo.Path("jim"))
-	assert.Contains(t, err.Error(), global.Path("jim"))
-	assert.NotContains(t, err.Error(), "different people", "the code does not know that")
-	assert.Contains(t, err.Error(), "if they are the same person")
+// collide sets up a global "jim" and a local "jim" (in the repo layer, or the
+// bundle layer) and returns the caller store.
+func collide(t *testing.T, inBundle bool, local, global *Identity) (IdentityStore, *Store) {
+	t.Helper()
+	ls, repo, bundle, g := setupRepoOnly(t)
+	require.NoError(t, g.Save(global))
+	layer := repo
+	if inBundle {
+		layer = bundle
+	}
+	require.NoError(t, layer.Save(local))
+	return ForCaller(ls), layer
 }
 
-// The same collision with the handle held by the active bundle: the error names
-// the bundle's file, not a repo path that does not exist.
-func TestForCaller_GlobalMatchShadowedByABundlePersonNamesTheBundleFile(t *testing.T) {
-	ls, repo, bundle, global := setupRepoOnly(t)
-	require.NoError(t, bundle.Save(&Identity{Name: "Bundle Jim", Handle: "jim", Kind: "human", Email: "a@x.com"}))
-	require.NoError(t, global.Save(&Identity{Name: "Global Jim", Handle: "jim", Kind: "human", Email: "b@y.com"}))
+func jim(email, github string) *Identity {
+	return &Identity{Name: "Jim", Handle: "jim", Kind: "human", Email: email, GitHub: github}
+}
 
-	_, err := ForCaller(ls).FindBy("email", "b@y.com")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), bundle.Path("jim"))
-	assert.NotContains(t, err.Error(), repo.Path("jim"))
+// (a) The local copy lacks the searched field: it is the same person, and Load
+// returns the local copy.
+func TestForCaller_SameHandleLocalCopyLackingTheFieldIsTheSamePerson(t *testing.T) {
+	cs, _ := collide(t, false, jim("a@x.com", ""), jim("a@x.com", "jimgh"))
+	id, err := cs.FindBy("github", "jimgh")
+	require.NoError(t, err)
+	require.NotNil(t, id)
+	assert.Equal(t, "jim", id.Handle)
+	loaded, err := cs.Load("jim", Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "", loaded.GitHub, "Load returns the local copy")
+}
+
+// (b) An email that differs only in case is the same value.
+func TestForCaller_SameHandleEmailDifferingInCaseIsTheSamePerson(t *testing.T) {
+	cs, _ := collide(t, false, jim("Jim@X.com", ""), jim("jim@x.com", ""))
+	id, err := cs.FindBy("email", "jim@x.com")
+	require.NoError(t, err)
+	require.NotNil(t, id)
+	assert.Equal(t, "jim", id.Handle)
+}
+
+// (c) and (d) A local copy with a different value for the searched field is a
+// collision, and the error names the file of the layer that holds it.
+func TestForCaller_SameHandleDifferentValueIsACollision(t *testing.T) {
+	for _, inBundle := range []bool{false, true} {
+		name := "repo"
+		if inBundle {
+			name = "bundle"
+		}
+		t.Run(name, func(t *testing.T) {
+			cs, layer := collide(t, inBundle, jim("a@x.com", ""), jim("b@y.com", ""))
+			id, err := cs.FindBy("email", "b@y.com")
+			require.Error(t, err)
+			assert.Nil(t, id)
+			msg := err.Error()
+			assert.Contains(t, msg, layer.Path("jim"))
+			assert.Contains(t, msg, `email "a@x.com"`)
+			assert.Contains(t, msg, `handle "jim"`)
+			assert.NotContains(t, msg, "different people")
+		})
+	}
 }

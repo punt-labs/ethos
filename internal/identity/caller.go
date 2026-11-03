@@ -59,14 +59,25 @@ func (c *CallerStore) FindBy(field, value string) (*Identity, error) {
 		return id, err
 	}
 	// Load resolves a handle repo-first, so a global match whose handle is also
-	// held locally would come back as the local identity. Two files claiming
-	// one handle is not something to pick between; fail and name the file of the
-	// layer that holds it.
+	// held locally comes back as the local identity. That is right when it is the
+	// same person, the local copy merely lacking the searched field (or spelling
+	// it in another case), and wrong when the local copy names a different value
+	// for it: then two files claim one handle, and the lookup fails and names
+	// the file of the layer that holds it.
 	for _, l := range c.local {
-		if l.Exists(id.Handle) {
-			return nil, fmt.Errorf("the global identity %s matches %s %q but the identity %s with the same handle %q does not; they collide on handle: rename one, or set %s in %s if they are the same person",
-				c.global.Path(id.Handle), field, value, l.Path(id.Handle), id.Handle, field, l.Path(id.Handle))
+		if !l.Exists(id.Handle) {
+			continue
 		}
+		local, err := l.Load(id.Handle, Reference(true))
+		if err != nil {
+			return nil, fmt.Errorf("loading %s to compare it with the global identity %s: %w", l.Path(id.Handle), c.global.Path(id.Handle), err)
+		}
+		have := identityField(local, field)
+		if have == "" || sameFieldValue(field, have, value) {
+			break
+		}
+		return nil, fmt.Errorf("the global identity %s matches %s %q but the identity %s with the same handle %q has %s %q; they collide on handle: rename one, or correct %s in one of them",
+			c.global.Path(id.Handle), field, value, l.Path(id.Handle), id.Handle, field, have, field)
 	}
 	return id, nil
 }
@@ -98,4 +109,13 @@ func (c *CallerStore) LoadCaller(handle string, opts ...LoadOption) (id *Identit
 // Exists reports whether handle is in the repo's store or the global store.
 func (c *CallerStore) Exists(handle string) bool {
 	return c.IdentityStore.Exists(handle) || c.global.Exists(handle)
+}
+
+// sameFieldValue compares two values of an identity field: emails without
+// regard to case, the rest exactly.
+func sameFieldValue(field, a, b string) bool {
+	if field == "email" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
