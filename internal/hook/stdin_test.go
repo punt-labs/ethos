@@ -2,7 +2,9 @@ package hook
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,4 +144,78 @@ func TestReadInput_NestedJSON(t *testing.T) {
 	inner, ok := data["tool_input"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "ls", inner["command"])
+}
+
+// bigPayload is an Edit-sized PostToolUse input: well past one pipe write.
+func bigPayload(t *testing.T) []byte {
+	t.Helper()
+	p, err := json.Marshal(map[string]any{
+		"tool_name": "Edit",
+		"tool_input": map[string]any{
+			"old_string": strings.Repeat("old line of a large markdown file\n", 3000),
+			"new_string": strings.Repeat("new line of a large markdown file\n", 3000),
+		},
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(p), 200_000)
+	return p
+}
+
+// writeSlowly sends p in pieces with small pauses, as a busy writer does.
+func writeSlowly(w *os.File, p []byte) {
+	const piece = 40_000
+	for len(p) > 0 {
+		n := min(piece, len(p))
+		_, _ = w.Write(p[:n])
+		p = p[n:]
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A payload larger than one read, written in several pieces and then closed.
+func TestReadWithTimeout_LargePayloadInSeveralWrites(t *testing.T) {
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	payload := bigPayload(t)
+	go func() {
+		defer wFd.Close()
+		writeSlowly(wFd, payload)
+	}()
+
+	data, err := readWithTimeout(rFd, 10*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, "Edit", data["tool_name"])
+}
+
+// The same payload with the write end left open: the payload is complete when
+// it parses, and the read must not wait for an EOF that never comes.
+func TestReadWithTimeout_LargePayloadPipeLeftOpen(t *testing.T) {
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	defer wFd.Close()
+	payload := bigPayload(t)
+	go writeSlowly(wFd, payload)
+
+	const timeout = 10 * time.Second
+	start := time.Now()
+	data, err := readWithTimeout(rFd, timeout)
+	require.NoError(t, err)
+	assert.Equal(t, "Edit", data["tool_name"])
+	assert.Less(t, time.Since(start), timeout/2, "must return when the payload is whole, not at the timeout")
+}
+
+// A fragment that never completes is still a loud parse error at the timeout.
+func TestReadWithTimeout_PartialPayloadIsAnError(t *testing.T) {
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	defer wFd.Close()
+	_, err = wFd.Write([]byte(`{"tool_name": "Ed`))
+	require.NoError(t, err)
+
+	_, err = readWithTimeout(rFd, 200*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid JSON input")
 }

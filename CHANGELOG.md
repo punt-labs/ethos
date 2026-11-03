@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The audit hook no longer loses the entry for a large tool call. A hook payload
+  bigger than one pipe write, such as an Edit of a large file, was parsed after
+  the first read and rejected as "invalid JSON input". The hook now keeps
+  reading until the payload parses as one JSON value, or the pipe closes, or the
+  timeout passes.
 - Under `resolution: repo-only`, the caller lookup no longer hides damage. A repo
   identity file ethos cannot load now fails the lookup with the file named,
   instead of falling through to a match in the global store. A global store
