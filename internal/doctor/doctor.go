@@ -443,11 +443,16 @@ func classifyOrphans(orphaned []orphanFile, s identity.IdentityStore) (status, d
 		}
 		return "FAIL", "orphaned agent files (not on any team): " + strings.Join(handles, ", ")
 	}
-	var stale, removed, unresolved []string
+	var stale, removed, unresolved, unvendored, unknown []string
 	for _, o := range orphaned {
+		p, err := identityPresence(s, o.handle)
 		switch {
-		case s.Exists(o.handle):
+		case err != nil:
+			unknown = append(unknown, fmt.Sprintf("%s (%v)", o.handle, err))
+		case p == idPresent:
 			stale = append(stale, o.handle)
+		case p == idGlobalOnly && o.marked:
+			unvendored = append(unvendored, o.handle)
 		case o.marked:
 			removed = append(removed, o.handle)
 		default:
@@ -455,6 +460,14 @@ func classifyOrphans(orphaned []orphanFile, s identity.IdentityStore) (status, d
 		}
 	}
 	var parts []string
+	if len(unknown) > 0 {
+		parts = append(parts, "cannot tell whether an identity exists: "+strings.Join(unknown, ", "))
+	}
+	if len(unvendored) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"not vendored (exists in the global store) — run ethos vendor: %s",
+			strings.Join(unvendored, ", ")))
+	}
 	if len(stale) > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"stale (known identity, not on the active team — generated for a previous team scope, safe to delete): %s",
@@ -477,6 +490,66 @@ func classifyOrphans(orphaned []orphanFile, s identity.IdentityStore) (status, d
 		detail += " (" + note + ")"
 	}
 	return "FAIL", detail
+}
+
+type presence int
+
+const (
+	idAbsent     presence = iota
+	idPresent             // resolvable through s
+	idGlobalOnly          // only in the global store, which repo-only never reads
+)
+
+// identityPresence reports where handle's identity file is, stat-ing each
+// layer s resolves from (repo, bundle, and global unless repo-only). Unlike
+// IdentityStore.Exists it distinguishes absence from a stat error such as
+// EACCES, and it finds a global-only identity under repo-only.
+func identityPresence(s identity.IdentityStore, handle string) (presence, error) {
+	roots := []string{s.Root()}
+	global := ""
+	if ls, ok := s.(*identity.LayeredStore); ok {
+		roots = nil
+		for _, r := range []string{ls.RepoRoot(), ls.BundleRoot()} {
+			if r != "" {
+				roots = append(roots, r)
+			}
+		}
+		if ls.RepoAuthoritative() {
+			global = ls.GlobalRoot()
+		} else {
+			roots = append(roots, ls.GlobalRoot())
+		}
+	}
+	for _, r := range roots {
+		found, err := identityFileExists(r, handle)
+		if err != nil {
+			return idAbsent, err
+		}
+		if found {
+			return idPresent, nil
+		}
+	}
+	if global != "" {
+		found, err := identityFileExists(global, handle)
+		if err != nil {
+			return idAbsent, err
+		}
+		if found {
+			return idGlobalOnly, nil
+		}
+	}
+	return idAbsent, nil
+}
+
+func identityFileExists(root, handle string) (bool, error) {
+	_, err := os.Stat(identity.NewStore(root).Path(handle))
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // checklistAgentNames returns the handles this check exempts as seeded
@@ -967,29 +1040,69 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 }
 
-// CheckIdentityDir verifies the identity directory exists.
+// CheckIdentityDir verifies the identity directory exists, is a readable
+// directory, and holds at least one identity file (*.yaml).
 //
 // A layered store reports its repo-local identities dir as primary. That
-// dir is legitimately absent when a repo keeps its identities in the active
-// bundle or the global store — a repo with only an ethos.yaml, or only
+// dir is legitimately absent or empty when a repo keeps its identities in the
+// active bundle or the global store — a repo with only an ethos.yaml, or only
 // missions/ under .punt-labs/ethos/. Layered resolution reads the global
-// store, so when the global identities dir exists the check passes and names
-// it. Under `resolution: repo-only` nothing else can resolve an identity, so
-// a missing repo dir stays a FAIL.
+// store, so then the check passes when the global identities dir is usable
+// and names it. Under `resolution: repo-only` nothing else can resolve an
+// identity, so a missing or empty repo dir stays a FAIL. A dir that is not a
+// directory or cannot be read fails in every mode, naming the cause.
 func CheckIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	dir := s.IdentitiesDir()
-	if _, err := os.Stat(dir); err == nil {
+	state, why := inspectIdentitiesDir(dir)
+	switch state {
+	case dirUsable:
 		return dir, true
-	} else if !os.IsNotExist(err) {
-		return fmt.Sprintf("error: %v", err), false
+	case dirBroken:
+		return "error: " + why, false
 	}
 	if ls, ok := s.(*identity.LayeredStore); ok && !ls.RepoAuthoritative() {
 		gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
-		if _, err := os.Stat(gdir); err == nil {
+		gstate, gwhy := inspectIdentitiesDir(gdir)
+		switch gstate {
+		case dirUsable:
 			return gdir + " (repo has none; layered resolution reads the global store)", true
+		case dirBroken:
+			return fmt.Sprintf("error: global identities dir %s: %s", gdir, gwhy), false
 		}
 	}
-	return fmt.Sprintf("not found: %s", dir), false
+	return why, false
+}
+
+type dirState int
+
+const (
+	dirUsable  dirState = iota // a readable directory with at least one *.yaml
+	dirMissing                 // absent or empty: layered resolution may fall back
+	dirBroken                  // exists but cannot serve as an identities dir
+)
+
+// inspectIdentitiesDir classifies dir and returns the reason it is not usable.
+func inspectIdentitiesDir(dir string) (dirState, string) {
+	info, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		return dirMissing, "not found: " + dir
+	}
+	if err != nil {
+		return dirBroken, err.Error()
+	}
+	if !info.IsDir() {
+		return dirBroken, "not a directory: " + dir
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return dirBroken, err.Error()
+	}
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".yaml" {
+			return dirUsable, ""
+		}
+	}
+	return dirMissing, "no identity files (*.yaml) in " + dir
 }
 
 // CheckHumanIdentity resolves and loads the current human identity. When

@@ -58,6 +58,7 @@ func newFixture(t *testing.T) (*identity.Store, *session.Store, string) {
 	t.Helper()
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "identities", "seed.yaml"), []byte("name: Seed\nhandle: seed\nkind: agent\n"), 0o600))
 	return identity.NewStore(root), session.NewStore(root), root
 }
 
@@ -141,6 +142,7 @@ func TestCheckIdentityDir(t *testing.T) {
 		globalRoot := t.TempDir() // identities/ only if asked
 		if globalHasIdentities {
 			require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities", "g.yaml"), []byte("handle: g\n"), 0o600))
 		}
 		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
 		return ls, session.NewStore(globalRoot), globalRoot
@@ -171,10 +173,133 @@ func TestCheckIdentityDir(t *testing.T) {
 	t.Run("layered, repo dir present is unchanged", func(t *testing.T) {
 		repoRoot := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "identities", "r.yaml"), []byte("handle: r\n"), 0o600))
 		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(t.TempDir()))
 		detail, ok := CheckIdentityDir(ls, session.NewStore(repoRoot))
 		assert.True(t, ok)
 		assert.Equal(t, identity.NewStore(repoRoot).IdentitiesDir(), detail)
+	})
+}
+
+func TestCheckIdentityDir_Hardening(t *testing.T) {
+	notRoot := os.Geteuid() != 0 && runtime.GOOS != "windows"
+	layered := func(repoRoot, globalRoot string, repoOnly bool) identity.IdentityStore {
+		return identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
+	}
+	populated := func(t *testing.T) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "identities", "g.yaml"), []byte("handle: g\n"), 0o600))
+		return root
+	}
+
+	t.Run("regular file is not a directory", func(t *testing.T) {
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "identities"), []byte("x"), 0o600))
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "not a directory")
+	})
+
+	t.Run("empty dir fails with the reason", func(t *testing.T) {
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.Remove(filepath.Join(root, "identities", "seed.yaml")))
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "no identity files")
+	})
+
+	t.Run("layered empty repo dir falls back to global", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		_, ok := CheckIdentityDir(layered(repoRoot, populated(t), false), nil)
+		assert.True(t, ok)
+	})
+
+	t.Run("repo-only empty repo dir fails", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		detail, ok := CheckIdentityDir(layered(repoRoot, populated(t), true), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "no identity files")
+	})
+
+	t.Run("unreadable repo dir fails", func(t *testing.T) {
+		if !notRoot {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		s, ss, root := newFixture(t)
+		dir := filepath.Join(root, "identities")
+		require.NoError(t, os.Chmod(dir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "permission denied")
+	})
+
+	t.Run("global stat error is not blamed on the repo", func(t *testing.T) {
+		if !notRoot {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		globalRoot := populated(t)
+		require.NoError(t, os.Chmod(globalRoot, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(globalRoot, 0o700) })
+		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "error: global identities dir")
+		assert.NotContains(t, detail, "not found")
+	})
+
+	t.Run("global dir that is a file fails naming the global dir", func(t *testing.T) {
+		globalRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities"), []byte("x"), 0o600))
+		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "error: global identities dir")
+	})
+}
+
+func TestClassifyOrphans_IdentityPresence(t *testing.T) {
+	marked := func(h string) []orphanFile { return []orphanFile{{handle: h, marked: true}} }
+
+	t.Run("stat error is reported, not classified", func(t *testing.T) {
+		if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		root := t.TempDir()
+		dir := filepath.Join(root, "identities")
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		require.NoError(t, os.Chmod(dir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		status, detail := classifyOrphans(marked("x"), identity.NewStore(root))
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "cannot tell whether an identity exists: x")
+		assert.NotContains(t, detail, "safe to delete")
+	})
+
+	t.Run("repo-only global-only identity is unvendored, not removed", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		writeIdentity(t, globalRoot, "gonly", "name: G\nhandle: gonly\nkind: agent\n")
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), true)
+		status, detail := classifyOrphans(marked("gonly"), ls)
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "not vendored (exists in the global store) — run ethos vendor: gonly")
+		assert.NotContains(t, detail, "no longer exists")
+
+		// A truly absent identity is still "removed".
+		_, detail = classifyOrphans(marked("nowhere"), ls)
+		assert.Contains(t, detail, "no longer exists")
+	})
+
+	t.Run("layered global identity is stale", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		writeIdentity(t, globalRoot, "gonly", "name: G\nhandle: gonly\nkind: agent\n")
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
+		_, detail := classifyOrphans(marked("gonly"), ls)
+		assert.Contains(t, detail, "stale")
 	})
 }
 
@@ -198,7 +323,8 @@ func TestCheckHumanIdentity(t *testing.T) {
 	t.Run("fresh install — no identities", func(t *testing.T) {
 		// An empty store is the expected first-run state, not a fault: WARN
 		// and point the user at `ethos setup`.
-		s, ss, _ := newFixture(t)
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.Remove(filepath.Join(root, "identities", "seed.yaml")))
 		t.Setenv("USER", "ghost")
 		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "WARN", r.Status)

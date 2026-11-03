@@ -29,7 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory exists and names it. Previously this passed only if the repo also
   held a repo-local team, which failed repos with only an `ethos.yaml` or only
   `missions/`. Under `resolution: repo-only` a missing repo identities
-  directory still fails.
+  directory still fails. The check now also fails an identities path that is
+  not a directory, cannot be read, or holds no `*.yaml` file, and a global
+  directory that cannot be read is named instead of blamed on the repo. A
+  fresh install with an empty identities directory now fails this check until
+  `ethos setup` creates an identity.
+- `ethos doctor` no longer reports an agent file as "safe to delete" when it
+  cannot tell whether its identity exists. A stat error (for example EACCES on
+  the identities directory) fails with the error. Under `resolution: repo-only`
+  an identity that exists only in the global store reads "not vendored — run
+  ethos vendor" instead of "no longer exists".
 
 ## [4.20.2] - 2026-11-03
 
