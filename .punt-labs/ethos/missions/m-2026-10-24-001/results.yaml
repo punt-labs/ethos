@@ -1,0 +1,22 @@
+results:
+    - mission: m-2026-10-24-001
+      round: 1
+      created_at: "2026-10-24T00:13:36Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: internal/mission/redact_coverage_test.go
+          added: 131
+          removed: 16
+      evidence:
+        - name: make check (full, all gates) on commit 074fa53
+          status: pass
+        - name: 'mutant: os.WriteFile of an unredacted prompt beside a RedactRecord call fails with ''the WriteFile call is not fed by a redaction choke point'' (TestCheckWriters_Mutants/one_redacted_write_does_not_excuse_an_unredacted_one); Body(body) directly or via a local variable passes'
+          status: pass
+        - name: production TestTrackedWritersAreRedacted with Body and Content in chokePoints and the per-write rule
+          status: pass
+      prose: |
+        Per-write checking was feasible. scanFuncs now records each call's arguments and each local assignment (assign, var, range). For an unregistered writer, every call to a sink or os.WriteFile must have an argument that contains a choke-point call, directly or through local variables assigned from one. Body and Content are in the real chokePoints map. Writers that only use os.OpenFile/Create/CreateTemp (no data argument) keep the presence rule.
+        The stricter rule flagged two unregistered writers. hook.migrateOneSession passes honestly once range assignments are traced (newLines from rl.raw from legacyLines from redactLegacyLines). audit.Quarantine re-seals live-file lines already redacted when appended, so it is registered exempt with that reason; it is the one place the rule is bypassed by registration, not proven.
+        Limits: tracing is intra-function and ignores struct fields and callee returns.

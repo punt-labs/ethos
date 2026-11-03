@@ -1,0 +1,32 @@
+mission_id: m-2026-10-23-027
+status: closed
+type: task
+created_at: "2026-10-23T23:08:59Z"
+updated_at: "2026-10-23T23:25:48Z"
+closed_at: "2026-10-23T23:25:48Z"
+leader: claude
+worker: ghr
+evaluator:
+    handle: adt
+    pinned_at: "2026-10-23T23:08:59Z"
+    hash: f4822d0281ba4c1b67b2db5b6b4be838a5eedd05089be8a17480efe09be83523
+inputs:
+    ticket: ethos-g3g3
+write_set:
+    - prfaq.tex
+    - prfaq.pdf
+success_criteria:
+    - 'Authority: DESIGN.md DES-079, DES-080 and DES-081 on branch docs/git-tiers-and-ethos2-adrs (read them first). Bring prfaq.tex into line. Shipped vs planned must be stated truthfully: DES-079 and DES-080 are decided but not yet implemented (in progress, beads ethos-g3g3 and ethos-3e3f); DES-081 is proposed only.'
+    - 'FAQ "What happens to my data?" (\label{faq:data}, ~line 262): it says all data is local in ~/.punt-labs/ethos/ and mission contracts and audit logs are local JSONL. That is false today. Replace with the layered model: the identity graph and the mission blame record live in the repository and travel with git; live session state and the trace tier stay on the developer''s machine; global starter content lives in ~/.punt-labs/ethos/. State the redaction guarantee of DES-080 (paths, addresses, credentials) as in progress. Keep the no-server, no-telemetry statements, which remain true.'
+    - 'FAQ "How does ethos capture intent and maintain audit trails?" (\label{faq:audit-trails}, ~line 409): rewrite the git and local layers to the DES-079 tiers. Git: commit trailers, contracts, results, delegation records, missions.jsonl, ADRs. Local: live files plus the sealed trace tier (prompts, reflections, mission event logs, per-tool-call audit), promoted into git only by ethos mission export <id> --full or record: full. Mark the change as in progress.'
+    - 'Feature appendix: F4 "Agent file generation" (~line 513) states that generated files are committed and regenerated deterministically. F23 "Git-tracked mission export" (~line 532) is redefined as the trace-tier opt-in (export --full), with the default blame tier tracked automatically. F "Sealed audit record" (~line 543) states the seal goes to a machine-local archive by default (in progress). Development status (~line 398) and the Feasibility risk row (~line 484) phrase "committed sealed chunks" consistently with the change.'
+    - 'Add to Should Do: the DES-081 storage interface with an embedded local backend that replaces file locks and sidecars (ethos 2.0). In Won''t Do, the "Cloud sync or remote identity" and "Authentication" items stay excluded; add one sentence to each noting that a team service (ethosd) is under design in DES-081 and that these items change only with a PR/FAQ amendment. Do not otherwise change product direction.'
+    - Bump \prfaqversion minor (3.3 -> 3.4). Rebuild prfaq.pdf with make docs-pdf (read the full output; it must succeed) and commit tex and pdf together. Do not touch prfaq.bib; cite nothing new.
+    - 'Writing: plain, literal sentences; no new marketing claims; every factual statement must be checkable against DES-079..081 or the code.'
+    - Commit incrementally -- one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass `make check`. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Commit by explicit path only: git commit -m <msg> -- prfaq.tex prfaq.pdf. Never stage any other file. The ethos pre-commit seal hook may add audit chunk files; that is expected.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: Worktree <repo>/.claude/worktrees/adrs on branch docs/git-tiers-and-ethos2-adrs -- work only there; do not create or switch branches. Commit on this branch; do NOT push, do not touch PRs, do not merge -- the leader does that. Every criterion is a leader decision; if one conflicts with the ADRs or the code, stop and report.

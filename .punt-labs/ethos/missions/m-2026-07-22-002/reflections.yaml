@@ -1,5 +1,6 @@
 reflections:
-    - round: 1
+    - mission: ""
+      round: 1
       created_at: "2026-07-22T16:33:23Z"
       author: claude
       converging: true
@@ -10,7 +11,8 @@ reflections:
         - contract defect (space-joined write_set from pipeline instantiate --var, bead ethos-t2lb) blocks the result gate; resolution deferred to close time via escalate-close-recreate
       recommendation: continue
       reason: 'One small, well-located fix round: writer errors on an open-fence host (boring, content-preserving) + trailing-whitespace-tolerant match, both with table cases. NIT-1''s design-doc sentence goes to the document stage.'
-    - round: 2
+    - mission: ""
+      round: 2
       created_at: "2026-07-22T16:56:21Z"
       author: claude
       converging: true

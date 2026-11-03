@@ -1,0 +1,14 @@
+reflections:
+    - mission: m-2026-10-23-027
+      round: 1
+      created_at: "2026-10-23T23:19:20Z"
+      author: claude
+      converging: true
+      signals:
+        - 'adt ACCEPT on df3d9a3 (em-dash cleanup): ~75 replacements read, none changes meaning'
+        - 'F1: ADRs live in ~/.punt-labs/ethos/adrs (cmd/ethos/adr.go:21, serve.go:44), not the repo; lines 266/268/420 contradict. Leader error in the contract; leader ruling: state where ADRs actually live'
+        - 'F2: line 267 places live session state under .punt-labs/local/; the roster is ~/.punt-labs/ethos/sessions; trace-tier statement is target state, not present'
+        - 'F3: redaction scope and tense (271, 406, 422, 424) and lines 465/567 contradict the new data FAQ and DES-081'
+        - 'F4: F4 entry (523) states committed/deterministic generation as fact; qualify as decided'
+      recommendation: continue
+      reason: All findings are prfaq.tex text fixes with no design question; round 2 applies them

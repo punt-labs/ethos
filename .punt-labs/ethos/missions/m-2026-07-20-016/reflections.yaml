@@ -1,5 +1,6 @@
 reflections:
-    - round: 1
+    - mission: ""
+      round: 1
       created_at: "2026-07-20T20:22:26Z"
       author: claude
       converging: true
@@ -14,7 +15,8 @@ reflections:
         - no finding reopens an operator ruling — verified by evaluator and leader
       recommendation: continue
       reason: Round 2 applies four doc-only REQ edits and three OPTs inside the ruled model; no redesign, no ruling relitigated. On pass the mission closes and the doc PR opens.
-    - round: 2
+    - mission: ""
+      round: 2
       created_at: "2026-07-20T20:28:35Z"
       author: claude
       converging: true

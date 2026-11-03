@@ -742,13 +742,37 @@ func isOwnGitRepo(dir string) (bool, string, error) {
 		return false, "", err
 	}
 	stderr := strings.TrimSpace(string(ee.Stderr))
-	if strings.Contains(stderr, "not a gitdir") || strings.Contains(stderr, "not a git repository") {
+	if strings.Contains(stderr, "not a gitdir") || gitenv.IsUnacceptedDotGit(stderr) {
+		// Newer gits do not name a missing gitdir, and older ones word it
+		// differently: name it from the gitfile itself.
+		if target, ok := gitfileTarget(dot); ok {
+			if _, serr := os.Stat(target); errors.Is(serr, fs.ErrNotExist) {
+				stderr = "not a git repository: " + target
+			}
+		}
 		return false, "", &dotRefusedError{dir: dir, stderr: stderr}
 	}
 	if stderr == "" {
 		return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w", err)
 	}
 	return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w: %s", err, stderr)
+}
+
+// gitfileTarget is the directory the gitfile dot names on its "gitdir:" line,
+// made absolute against the gitfile's directory.
+func gitfileTarget(dot string) (string, bool) {
+	data, err := os.ReadFile(dot)
+	if err != nil {
+		return "", false
+	}
+	target, ok := strings.CutPrefix(strings.TrimRight(string(data), "\r\n"), "gitdir: ")
+	if !ok || target == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(dot), target)
+	}
+	return target, true
 }
 
 // checkGitConfigReadable names every git config file that cannot be read. An
