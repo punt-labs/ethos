@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.20.3] - 2026-11-03
+
 ### Fixed
 
 - `ethos doctor` no longer fails "Orphaned agent files" for a hand-authored
