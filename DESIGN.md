@@ -8899,6 +8899,76 @@ directly above, and exists so a future, well-intentioned fallback
 cannot reintroduce the collision this ruling explicitly rejected without
 first deleting or rewriting this test.
 
+### Amendment 2026-11-03: MCP servers never receive `CLAUDE_PID`; a PreToolUse hook declares the caller
+
+**The gap.** The Decision's item 1 says Claude Code sets `CLAUDE_PID` "on
+every spawned subprocess." That is true for hooks and Bash tool shells and
+false for MCP servers. Measured on pembroke, Claude Code 2.1.309: none of six
+live `ethos serve` processes (the oldest started 2026-10-26) had `CLAUDE_PID`
+in its environment; each had `CLAUDECODE=1`. Under the PR #502 amendment's
+no-fallback rule, every MCP call that needs the caller therefore returns
+`ErrNoSession`: `identity whoami`, implicit `session roster`, `session iam`,
+mission binding, and `doctor`'s Human identity check. The CLI is unaffected.
+This is the harness gap in anthropics/claude-code#41836: an MCP request
+carries no session or agent identity.
+
+**A second, silent case.** A `claude -p` started from inside a session's Bash
+shell inherits that session's `CLAUDE_PID`, and so does the nested session's
+MCP server. Corroboration passes, because the outer `claude` is a live
+ancestor. Measured: the nested session's MCP `session roster` returned the
+OUTER session's roster (837b52b4) instead of its own (2c031a42), with no
+error. Item 1's "a nested `claude` process gets its own `CLAUDE_PID`" holds
+for the nested session's Bash commands, not for its MCP server.
+
+**Decision.** The caller is declared per call by ethos's own PreToolUse hook,
+which Claude Code invokes before every MCP tool call with the harness's
+`session_id`, plus `agent_id` when a subagent is calling (hooks reference,
+code.claude.com/docs/en/hooks). For calls to ethos's own MCP tools
+(`mcp__plugin_ethos(-dev)?_self__*`), the hook returns `updatedInput`: the
+original arguments plus one reserved argument, `_caller`, holding
+`{session_id, agent_id}`. `agent_id` is the payload's `agent_id` when present,
+otherwise the hook's own corroborated `CLAUDE_PID` (DES-061 R4's key order).
+The hook always overwrites `_caller`, so a model-supplied value never
+survives. The MCP server resolves `_caller` through the same exact-participant
+path as the OpenCode `_meta` pilot (`internal/mcp/caller.go`,
+`docs/opencode-mcp-identity.md`): an exact roster and participant, or an
+error; never a fallback. Without `_caller` (a client that is not Claude Code,
+or the hook absent), behavior is unchanged.
+
+Why this satisfies this decision's principles:
+
+- Identity is declared by the harness, per call. No process-tree walk, no
+  PID inference in the server.
+- The hook reads `session_id` at the moment of the call, so `/clear` cannot
+  leave it stale — the reason `CLAUDE_CODE_SESSION_ID` was rejected above.
+- Subagents get their own key from the payload's `agent_id`, which neither
+  `CLAUDE_PID` nor any server-side PID can provide (item 1's correction).
+- MCP and CLI resolve the same caller (DES-061 R4, punt-kit `plugins.md`
+  surface parity).
+- It survives DES-081: hooks remain the channel through which Claude Code
+  declares session and agent identity, whichever storage backend is active.
+
+**Rejected: a separate `session_id` argument.** `session_id` on `roster`,
+`join`, and `leave` is an administrative target and may name another session
+(`docs/opencode-mcp-identity.md`). A hook that overwrote it would remove that
+capability; a hook that filled it only when empty would let a model-supplied
+value stand in for the caller.
+
+**Rejected: parse the PID from `CLAUDE_CODE_MESSAGING_SOCKET`.** The variable
+does reach MCP servers, and its file name is `<claude pid>.sock`. It is
+undocumented (anthropics/claude-code#103048), it identifies the session's
+`claude` process and so cannot tell a subagent from its leader, and it keeps
+the pointer-file mechanism DES-081 replaces.
+
+**Rejected: tell MCP callers to use the CLI.** Violates DES-061 R4 and
+`plugins.md`'s MCP/CLI equivalence.
+
+**Permissions are unchanged.** Measured with a probe hook that returns
+`updatedInput` and no `permissionDecision`: the injected argument reaches the
+server, and an explicit `ask` rule for the tool still refuses the call in
+`claude -p`, with the hook and without it. The hook never returns a
+permission decision for this purpose.
+
 ## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08; 2026-10-24 by DES-079)
 
 **Context.** `internal/mission` (DES-054 phase 1) stores a mission in one
