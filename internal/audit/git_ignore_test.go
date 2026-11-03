@@ -161,3 +161,46 @@ func TestIsIgnored(t *testing.T) {
 		t.Error("IsIgnored outside a repository: want an error")
 	}
 }
+
+// TestLocalOnly: a path stays local only when the repo ignores it and the index
+// holds nothing under its directory, staged changes included.
+func TestLocalOnly(t *testing.T) {
+	name := SessionChunkFile(100, 200)
+	commit := func(repo string) {
+		runGit(t, repo, "add", "-f", ".punt-labs")
+		runGit(t, repo, "-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "c")
+	}
+	cases := map[string]struct {
+		ignore string
+		setup  func(repo, dir string)
+		want   bool
+	}{
+		"ignored, nothing tracked": {sessionsIgnore, func(string, string) {}, true},
+		"not ignored":              {"unrelated/\n", func(string, string) {}, false},
+		"ignored but tracked": {sessionsIgnore, func(repo, dir string) {
+			commit(repo)
+		}, false},
+		"ignored, tracked chunk staged as renamed": {sessionsIgnore, func(repo, dir string) {
+			commit(repo)
+			runGit(t, repo, "mv", filepath.Join(dir, name), filepath.Join(dir, name+".corrupt"))
+		}, false},
+		"ignored, tracked chunk staged as removed": {sessionsIgnore, func(repo, dir string) {
+			commit(repo)
+			runGit(t, repo, "rm", "--cached", "-q", filepath.Join(dir, name))
+		}, false},
+	}
+	for label, c := range cases {
+		t.Run(label, func(t *testing.T) {
+			repo, dir := ignoringRepo(t, c.ignore)
+			writeChunk(t, dir, name, 100, 200)
+			c.setup(repo, dir)
+			got, err := LocalOnly(repo, dir, filepath.Join(dir, name))
+			if err != nil || got != c.want {
+				t.Errorf("LocalOnly = %v, %v; want %v", got, err, c.want)
+			}
+		})
+	}
+	if _, err := LocalOnly(t.TempDir(), "d", "d/x"); err == nil {
+		t.Error("LocalOnly outside a repository: want an error")
+	}
+}

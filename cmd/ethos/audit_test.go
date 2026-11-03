@@ -440,14 +440,22 @@ func splitNonEmpty(s string) []string {
 // quarantineOutput quarantines a corrupt session chunk in a fresh repo whose
 // .gitignore is ignore, with its lines still in the live file, and returns what
 // the command printed.
-func quarantineOutput(t *testing.T, ignore string) string {
+func quarantineOutput(t *testing.T, ignore string, committed bool) string {
 	t.Helper()
 	_, repo, _ := auditMigrateEnv(t)
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(ignore), 0o600))
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-01-01-sq")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	chunk := filepath.Join(dir, audit.SessionChunkFile(100, 200))
 	require.NoError(t, os.WriteFile(chunk, []byte("not json\n"), 0o600))
+	if committed { // tracked before the repo began to ignore it
+		for _, args := range [][]string{{"add", "-f", ".punt-labs"}, {"-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "chunk"}} {
+			cmd := testhelpers.GitCommand(args...)
+			cmd.Dir = repo
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "git %v: %s", args, out)
+		}
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(ignore), 0o600))
 	var live strings.Builder
 	for _, ts := range []int64{100, 200} {
 		live.WriteString(`{"ts":"` + audit.FormatLineTS(ts) + `","session":"sq","tool":"Read"}` + "\n")
@@ -462,31 +470,45 @@ func quarantineOutput(t *testing.T, ignore string) string {
 }
 
 func TestAuditQuarantine_SaysKeptLocalWhenTheRepoIgnoresTheSession(t *testing.T) {
-	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n")
+	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n", false)
 	assert.Contains(t, out, "kept local (this repo gitignores it)")
 	assert.NotContains(t, out, "staged")
 }
 
 // quarantineStderr is quarantineOutput returning the notices on stderr.
-func quarantineStderr(t *testing.T, ignore string) string {
+func quarantineStderr(t *testing.T, ignore string, committed bool) string {
 	t.Helper()
-	return testhelpers.CaptureStderr(t, func() { quarantineOutput(t, ignore) })
+	return testhelpers.CaptureStderr(t, func() { quarantineOutput(t, ignore, committed) })
 }
 
 func TestAuditQuarantine_WithheldNoticeInIgnoringRepoSaysKeptLocal(t *testing.T) {
-	notice := quarantineStderr(t, ".punt-labs/ethos/sessions/\n")
+	notice := quarantineStderr(t, ".punt-labs/ethos/sessions/\n", false)
 	assert.Contains(t, notice, "kept local (this repo gitignores it); the original is in")
 	assert.NotContains(t, notice, "withheld from the tracked tree")
 }
 
 func TestAuditQuarantine_WithheldNoticeInTrackedRepoIsUnchanged(t *testing.T) {
-	notice := quarantineStderr(t, "unrelated/\n")
+	notice := quarantineStderr(t, "unrelated/\n", false)
 	assert.Contains(t, notice, "was withheld from the tracked tree (retired chunk withheld); the original is in")
 	assert.NotContains(t, notice, "kept local")
 }
 
 func TestAuditQuarantine_SaysStagedWhenItStaged(t *testing.T) {
-	out := quarantineOutput(t, "unrelated/\n")
+	out := quarantineOutput(t, "unrelated/\n", false)
 	assert.Contains(t, out, "staged, commit to record")
 	assert.NotContains(t, out, "kept local")
+}
+
+// A chunk tracked before the repo began to ignore its directory is still in the
+// index: the quarantine stages a change and says so, and the notice does not
+// claim the record stayed local.
+func TestAuditQuarantine_TrackedChunkInIgnoredDirIsStagedNotKeptLocal(t *testing.T) {
+	var out string
+	notice := testhelpers.CaptureStderr(t, func() {
+		out = quarantineOutput(t, ".punt-labs/ethos/sessions/\n", true)
+	})
+	assert.Contains(t, out, "staged, commit to record")
+	assert.NotContains(t, out, "kept local")
+	assert.Contains(t, notice, "was withheld from the tracked tree")
+	assert.NotContains(t, notice, "kept local")
 }

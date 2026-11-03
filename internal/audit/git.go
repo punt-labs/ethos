@@ -150,19 +150,46 @@ func IsIgnored(repoRoot, path string) (bool, error) {
 	return ignored[spec], nil
 }
 
-// TracksAnyUnder reports whether the index lists any path under dir, staged
-// additions and renames included. A failure of git is returned, and a caller
-// that must not guess treats it as "tracked".
+// TracksAnyUnder reports whether the index lists, or has a staged change to,
+// any path under dir: a tracked file, a staged addition or rename, a staged
+// removal. A failure of git is returned, and a caller that must not guess
+// treats it as "tracked".
 func TracksAnyUnder(repoRoot, dir string) (bool, error) {
 	spec, err := relPathspec(repoRoot, dir)
 	if err != nil {
 		return false, err
 	}
-	out, err := gitRun(repoRoot, "git ls-files", "ls-files", "-z", "--", spec)
-	if err != nil {
-		return false, err
+	for _, args := range [][]string{
+		{"ls-files", "-z", "--", spec},
+		{"diff", "--cached", "--name-only", "-z", "--", spec}, // a staged removal is not in ls-files
+	} {
+		out, err := gitRun(repoRoot, "git "+args[0], args...)
+		if err != nil {
+			return false, err
+		}
+		if len(out) > 0 {
+			return true, nil
+		}
 	}
-	return len(out) > 0, nil
+	return false, nil
+}
+
+// LocalOnly reports whether path, in directory dir, can never reach the tracked
+// tree: the repo ignores it and the index holds nothing under dir. Either git
+// question failing is an error; the caller does not guess.
+func LocalOnly(repoRoot, dir, path string) (bool, error) {
+	ignored, err := IsIgnored(repoRoot, path)
+	if err != nil {
+		return false, fmt.Errorf("could not tell whether the repo ignores %s: %w", path, err)
+	}
+	if !ignored {
+		return false, nil
+	}
+	tracked, err := TracksAnyUnder(repoRoot, dir)
+	if err != nil {
+		return false, fmt.Errorf("could not tell whether the index holds anything under %s: %w", dir, err)
+	}
+	return !tracked, nil
 }
 
 // dropIgnored returns the specs git does not ignore, in order.

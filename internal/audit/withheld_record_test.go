@@ -3,6 +3,7 @@ package audit
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -52,7 +53,7 @@ func TestNoticeWithheld_SaysWhereTheOriginalIs(t *testing.T) {
 		require.NoError(t, err)
 		old := os.Stderr
 		os.Stderr = w
-		noticeWithheld("c.corrupt", WithheldRule, local, false)
+		noticeWithheld("c.corrupt", WithheldRule, local, localState{})
 		os.Stderr = old
 		require.NoError(t, w.Close())
 		out, err := io.ReadAll(r)
@@ -131,4 +132,27 @@ func TestUnstagedRecordNotice_NamesOnlyItsOwnCopy(t *testing.T) {
 	out, err = io.ReadAll(r)
 	require.NoError(t, err)
 	assert.Contains(t, string(out), "the original is in")
+}
+
+// TestNoticeWithheld_SaysWhatIsKnownOfTheIgnoreStatus: the wording follows
+// whether the record can reach the tracked tree, and says so when git could not
+// tell.
+func TestNoticeWithheld_SaysWhatIsKnownOfTheIgnoreStatus(t *testing.T) {
+	say := func(st localState) string {
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+		old := os.Stderr
+		os.Stderr = w
+		noticeWithheld("c.corrupt", WithheldRule, true, st)
+		os.Stderr = old
+		require.NoError(t, w.Close())
+		out, err := io.ReadAll(r)
+		require.NoError(t, err)
+		return string(out)
+	}
+	assert.Contains(t, say(localState{}), "was withheld from the tracked tree (retired chunk withheld); the original is in")
+	assert.Contains(t, say(localState{kept: true}), "kept local (this repo gitignores it); the original is in")
+	unknown := say(localState{err: errors.New("boom")})
+	assert.Contains(t, unknown, "was withheld from the tracked tree")
+	assert.Contains(t, unknown, "(ignore status unknown: boom)")
 }

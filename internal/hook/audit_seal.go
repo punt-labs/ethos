@@ -464,16 +464,15 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 
 // skipIfLocalOnly is the outcome for a unit whose damaged chunk is err. The
 // session is skipped, with one line naming the chunk and the recovery command,
-// only when its directory is gitignored and the index holds nothing under it:
-// then no damaged chunk can reach the tracked tree. If anything under the
-// directory is tracked or staged (a rename to .corrupt included), or either
-// git check fails, the seal fails with err as it always did.
+// only when audit.LocalOnly says no damaged chunk can reach the tracked tree.
+// If anything under the directory is tracked or staged, or a git check fails
+// (the error says so), the seal fails with err as it always did.
 func (p sealDirParams) skipIfLocalOnly(chunk string, err error) (sealOutcome, error) {
-	ignored, ierr := audit.IsIgnored(p.repoRoot, chunk)
-	if ierr != nil || !ignored {
-		return sealOutcome{}, err
+	local, lerr := audit.LocalOnly(p.repoRoot, p.sealedDir, chunk)
+	if lerr != nil {
+		return sealOutcome{}, fmt.Errorf("%w (%v)", err, lerr)
 	}
-	if tracked, terr := audit.TracksAnyUnder(p.repoRoot, p.sealedDir); terr != nil || tracked {
+	if !local {
 		return sealOutcome{}, err
 	}
 	fmt.Fprintf(os.Stderr, "ethos: audit seal: %s skipped, a damaged chunk is local only (this repo gitignores it): %v; recover with: ethos audit quarantine %s\n",

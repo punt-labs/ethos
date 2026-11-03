@@ -567,7 +567,7 @@ func (n *notePad) say(path, rule string) {
 		return
 	}
 	n.printed[path] = true
-	noticeWithheld(path, rule, true, n.ignores(path))
+	noticeWithheld(path, rule, true, n.state(path))
 }
 
 func (n *notePad) add(path, rule string, local bool) {
@@ -626,27 +626,35 @@ func (n *notePad) print() {
 			continue
 		}
 		n.printed[path] = true
-		noticeWithheld(path, n.rules[path], n.local[path], n.ignores(path))
+		noticeWithheld(path, n.rules[path], n.local[path], n.state(path))
 	}
 }
 
-// ignores reports whether the repo gitignores path. A failed check reads as
-// "not ignored": the notice then keeps its tracked-repo wording.
-func (n *notePad) ignores(path string) bool {
-	ignored, err := IsIgnored(n.repoRoot, path)
-	return err == nil && ignored
+// localState is what is known of whether a retired chunk's record stays local.
+type localState struct {
+	kept bool  // the repo ignores it and the index holds nothing beside it
+	err  error // the git check failed: not known
+}
+
+// state asks git, once per notice, whether path stays local (LocalOnly).
+func (n *notePad) state(path string) localState {
+	kept, err := LocalOnly(n.repoRoot, filepath.Dir(path), path)
+	return localState{kept: kept, err: err}
 }
 
 // noticeWithheld says that a retired chunk's bytes were replaced by a record.
-// In a repo that gitignores the chunk's directory nothing was ever going to be
-// tracked, so the notice says the record stayed local instead.
-func noticeWithheld(path, rule string, local, ignored bool) {
+// Where nothing can reach the tracked tree it says the record stayed local
+// instead; when git could not say, it says so.
+func noticeWithheld(path, rule string, haveCopy bool, st localState) {
 	where := filepath.Join(".punt-labs", "local", "ethos", "quarantine")
 	what := fmt.Sprintf("was withheld from the tracked tree (%s)", rule)
-	if ignored {
+	switch {
+	case st.err != nil:
+		what += fmt.Sprintf(" (ignore status unknown: %v)", st.err)
+	case st.kept:
 		what = "kept local (this repo gitignores it)"
 	}
-	if local {
+	if haveCopy {
 		fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s %s; the original is in %s\n", filepath.Base(path), what, where)
 		return
 	}
