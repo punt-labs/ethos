@@ -266,7 +266,7 @@ func TestSealRepoInRepoThatIgnoresSessions(t *testing.T) {
 		t.Errorf("chunk not written locally: %v", err)
 	}
 
-	for _, args := range [][]string{{"add", ".gitignore"}, {"commit", "-m", "land"}} {
+	for _, args := range [][]string{{"add", ".gitignore"}, {"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "land"}} {
 		cmd := testhelpers.GitCommand(args...)
 		cmd.Dir = repo
 		if out, err := cmd.CombinedOutput(); err != nil {
