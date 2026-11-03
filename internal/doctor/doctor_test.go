@@ -2141,6 +2141,34 @@ func TestCheckOrphanedAgentFiles_InstallerOwned(t *testing.T) {
 	assert.Equal(t, "no orphaned agent files", res.Detail)
 }
 
+// An agents source dir that cannot be searched leaves ownership unknown; the
+// check must say so rather than classify the file.
+func TestCheckOrphanedAgentFiles_SourceStatError(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission bits do not bind root or windows")
+	}
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	writeIdentity(t, root, "offteam", "name: Off\nhandle: offteam\nkind: agent\n")
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	agentsSrc := filepath.Join(ethosDir, "agents")
+	require.NoError(t, os.MkdirAll(agentsSrc, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	out := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(out, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(out, "offteam.md"), []byte(agentmark.Add("---\nname: offteam\n---\n")), 0o644))
+	require.NoError(t, os.Chmod(agentsSrc, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(agentsSrc, 0o755) })
+
+	res := CheckOrphanedAgentFiles(root, root, team.NewLayeredStore(ethosDir, ethosDir), identity.NewStore(root))
+	assert.Equal(t, "FAIL", res.Status)
+	assert.Contains(t, res.Detail, "could not stat agent source")
+	assert.NotContains(t, res.Detail, "safe to delete")
+}
+
 // brokenFS.ReadDir always fails, simulating a build-broken embed.
 type brokenFS struct{}
 

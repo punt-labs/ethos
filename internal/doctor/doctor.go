@@ -387,8 +387,13 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 		// The installer copies <store>/.punt-labs/ethos/agents/<handle>.md
 		// into .claude/agents/ every SessionStart, so deleting such a file
 		// is undone. It is not an orphan whatever its identity state.
-		if _, err := os.Stat(filepath.Join(storeRoot, ".punt-labs", "ethos", "agents", handle+".md")); err == nil {
+		srcPath := filepath.Join(storeRoot, ".punt-labs", "ethos", "agents", handle+".md")
+		if _, err := os.Stat(srcPath); err == nil {
 			continue
+		} else if !os.IsNotExist(err) {
+			// Classifying on a guess would call an installer-owned file
+			// "safe to delete", and the next SessionStart would undo it.
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not stat agent source %s: %s", srcPath, err)}
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
