@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Under `resolution: repo-only`, a caller found in the global store no longer
+  becomes someone else when the repo holds a different person with the same
+  handle. `whoami` and session start reported the repo's person. They now fail
+  with an error naming both files.
 - The audit hook no longer loses the entry for a large tool call. A hook payload
   bigger than one pipe write, such as an Edit of a large file, was parsed after
   the first read and rejected as "invalid JSON input". The hook now keeps

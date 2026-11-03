@@ -102,3 +102,19 @@ func TestForCaller_UnmigratableRepoVoiceBlocksTheGlobalFallback(t *testing.T) {
 	assert.Nil(t, id)
 	assert.Contains(t, err.Error(), "mine.yaml")
 }
+
+// A global caller whose handle also names a different person in the repo would
+// be reported as that person, since Load reads the repo first: the lookup
+// reports the collision instead.
+func TestForCaller_GlobalMatchShadowedByADifferentRepoPersonIsAnError(t *testing.T) {
+	ls, repo, _, global := setupRepoOnly(t)
+	require.NoError(t, repo.Save(&Identity{Name: "Repo Jim", Handle: "jim", Kind: "human", Email: "a@x.com"}))
+	require.NoError(t, global.Save(&Identity{Name: "Global Jim", Handle: "jim", Kind: "human", Email: "b@y.com"}))
+
+	id, err := ForCaller(ls).FindBy("email", "b@y.com")
+	require.Error(t, err)
+	assert.Nil(t, id)
+	assert.Contains(t, err.Error(), `handle "jim"`)
+	assert.Contains(t, err.Error(), repo.Path("jim"))
+	assert.Contains(t, err.Error(), global.Path("jim"))
+}

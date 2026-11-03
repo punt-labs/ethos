@@ -54,7 +54,18 @@ func (c *CallerStore) FindBy(field, value string) (*Identity, error) {
 				field, value, l.Root(), strings.Join(listed.Warnings, "; "))
 		}
 	}
-	return c.global.FindBy(field, value)
+	id, err = c.global.FindBy(field, value)
+	if err != nil || id == nil {
+		return id, err
+	}
+	// Load resolves a handle repo-first, so a global match whose handle names a
+	// different person in the repo would come back as that person. Two files
+	// claiming one handle is not something to pick between.
+	if c.IdentityStore.Exists(id.Handle) {
+		return nil, fmt.Errorf("finding %s %q: the global identity %s and the repo identity %s both have handle %q, and they are different people; rename one",
+			field, value, c.global.Path(id.Handle), c.IdentityStore.Path(id.Handle), id.Handle)
+	}
+	return id, nil
 }
 
 // Load reads handle from the repo's store, then the global store.
