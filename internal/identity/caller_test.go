@@ -164,3 +164,24 @@ func TestForCaller_SameHandleDifferentValueIsACollision(t *testing.T) {
 		})
 	}
 }
+
+// The searched field is empty in the local copy, but its email names someone
+// else: resolve searches github first, and must not be handed the repo's person.
+func TestForCaller_LocalCopyLackingTheFieldButNamingAnotherEmailIsACollision(t *testing.T) {
+	cs, layer := collide(t, false, jim("jsmith@other.com", ""), jim("jim@punt-labs.com", "jfreeman"))
+	id, err := cs.FindBy("github", "jfreeman")
+	require.Error(t, err)
+	assert.Nil(t, id)
+	assert.Contains(t, err.Error(), layer.Path("jim"))
+	assert.Contains(t, err.Error(), `email "jsmith@other.com"`)
+	assert.Contains(t, err.Error(), `"jim@punt-labs.com"`)
+}
+
+// A local copy with only a matching email, and no github, is the same person.
+func TestForCaller_LocalCopyWithOnlyAMatchingEmailIsTheSamePerson(t *testing.T) {
+	cs, _ := collide(t, false, jim("JIM@punt-labs.com", ""), jim("jim@punt-labs.com", "jfreeman"))
+	id, err := cs.FindBy("github", "jfreeman")
+	require.NoError(t, err)
+	require.NotNil(t, id)
+	assert.Equal(t, "jim", id.Handle)
+}

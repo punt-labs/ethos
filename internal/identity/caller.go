@@ -61,9 +61,9 @@ func (c *CallerStore) FindBy(field, value string) (*Identity, error) {
 	// Load resolves a handle repo-first, so a global match whose handle is also
 	// held locally comes back as the local identity. That is right when it is the
 	// same person, the local copy merely lacking the searched field (or spelling
-	// it in another case), and wrong when the local copy names a different value
-	// for it: then two files claim one handle, and the lookup fails and names
-	// the file of the layer that holds it.
+	// it in another case), and wrong when the two copies disagree on a field both
+	// set: then two files claim one handle, and the lookup fails and names the
+	// file of the layer that holds it.
 	for _, l := range c.local {
 		if !l.Exists(id.Handle) {
 			continue
@@ -72,12 +72,18 @@ func (c *CallerStore) FindBy(field, value string) (*Identity, error) {
 		if err != nil {
 			return nil, fmt.Errorf("loading %s to compare it with the global identity %s: %w", l.Path(id.Handle), c.global.Path(id.Handle), err)
 		}
-		have := identityField(local, field)
-		if have == "" || sameFieldValue(field, have, value) {
-			break
+		// The searched field alone is not enough: a local copy that lacks it may
+		// still name another person by its other fields (resolve searches github
+		// before email). Every searchable field set in both copies must agree.
+		for _, f := range []string{"email", "github"} {
+			have, want := identityField(local, f), identityField(id, f)
+			if have == "" || want == "" || sameFieldValue(f, have, want) {
+				continue
+			}
+			return nil, fmt.Errorf("the global identity %s matches %s %q but the identity %s with the same handle %q has %s %q where the global one has %q; they collide on handle: rename one, or correct %s in one of them",
+				c.global.Path(id.Handle), field, value, l.Path(id.Handle), id.Handle, f, have, want, f)
 		}
-		return nil, fmt.Errorf("the global identity %s matches %s %q but the identity %s with the same handle %q has %s %q; they collide on handle: rename one, or correct %s in one of them",
-			c.global.Path(id.Handle), field, value, l.Path(id.Handle), id.Handle, field, have, field)
+		break
 	}
 	return id, nil
 }
