@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewritten line. A commit that rewrote 130 lines printed 130 lines. Each run
   now prints one line per session for the rewritten lines and one for the loss
   markers, with the count and the distinct rules, never a value.
+- `ethos audit quarantine` said "staged, commit to record" in a repo that
+  gitignores the session, where nothing was staged. It now says "kept local
+  (this repo gitignores it)" then, and keeps the old wording when it staged.
 
 ## [4.20.1] - 2026-11-03
 

@@ -291,14 +291,22 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
 		return failClosed{}
 	}
+	// GitAdd skips a path the repo ignores, so the artifacts were staged only
+	// when the chunk's directory is not ignored.
+	fate := "staged, commit to record"
+	if ignored, err := audit.IsIgnored(repoRoot, chunkPath); err != nil {
+		fate = fmt.Sprintf("staging status unknown: %v", err)
+	} else if ignored {
+		fate = "kept local (this repo gitignores it)"
+	}
 	if marker.HasGap() {
 		fmt.Fprintf(out,
-			"quarantined %s: recovered through ts %d, lost [%d,%d] — staged, commit to record\n",
-			marker.Chunk, marker.VerifiedLast, marker.UnrecoveredFirst, marker.UnrecoveredLast)
+			"quarantined %s: recovered through ts %d, lost [%d,%d] — %s\n",
+			marker.Chunk, marker.VerifiedLast, marker.UnrecoveredFirst, marker.UnrecoveredLast, fate)
 	} else {
 		fmt.Fprintf(out,
-			"quarantined %s: fully recovered through ts %d — staged, commit to record\n",
-			marker.Chunk, marker.VerifiedLast)
+			"quarantined %s: fully recovered through ts %d — %s\n",
+			marker.Chunk, marker.VerifiedLast, fate)
 	}
 	return nil
 }

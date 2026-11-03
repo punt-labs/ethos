@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // auditMigrateEnv stages a fake $HOME with a global sessions dir and
@@ -432,4 +434,40 @@ func splitNonEmpty(s string) []string {
 		}
 	}
 	return out
+}
+
+// quarantineOutput quarantines a corrupt session chunk in a fresh repo whose
+// .gitignore is ignore, with its lines still in the live file, and returns what
+// the command printed.
+func quarantineOutput(t *testing.T, ignore string) string {
+	t.Helper()
+	_, repo, _ := auditMigrateEnv(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(ignore), 0o600))
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-01-01-sq")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	chunk := filepath.Join(dir, audit.SessionChunkFile(100, 200))
+	require.NoError(t, os.WriteFile(chunk, []byte("not json\n"), 0o600))
+	var live strings.Builder
+	for _, ts := range []int64{100, 200} {
+		live.WriteString(`{"ts":"` + audit.FormatLineTS(ts) + `","session":"sq","tool":"Read"}` + "\n")
+	}
+	livePath := audit.LiveAuditPath(repo, "sq")
+	require.NoError(t, os.MkdirAll(filepath.Dir(livePath), 0o700))
+	require.NoError(t, os.WriteFile(livePath, []byte(live.String()), 0o600))
+
+	stdout, _, err := execHandler(t, "audit", "quarantine", chunk)
+	require.NoError(t, err)
+	return stdout
+}
+
+func TestAuditQuarantine_SaysKeptLocalWhenTheRepoIgnoresTheSession(t *testing.T) {
+	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n")
+	assert.Contains(t, out, "kept local (this repo gitignores it)")
+	assert.NotContains(t, out, "staged")
+}
+
+func TestAuditQuarantine_SaysStagedWhenItStaged(t *testing.T) {
+	out := quarantineOutput(t, "unrelated/\n")
+	assert.Contains(t, out, "staged, commit to record")
+	assert.NotContains(t, out, "kept local")
 }
