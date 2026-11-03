@@ -274,6 +274,54 @@ func TestCheckIdentityDir_Hardening(t *testing.T) {
 	})
 }
 
+func TestCheckIdentityDir_Bundle(t *testing.T) {
+	bundleWith := func(t *testing.T, files ...string) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		for _, f := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(root, "identities", f), []byte("handle: b\n"), 0o600))
+		}
+		return root
+	}
+	store := func(repoRoot, bundleRoot string, repoOnly bool) identity.IdentityStore {
+		return identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot),
+			identity.NewStore(bundleRoot), identity.NewStore(t.TempDir()), repoOnly)
+	}
+	emptyRepo := func(t *testing.T) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		return root
+	}
+
+	t.Run("repo-only, bundle holds identities, empty repo dir passes", func(t *testing.T) {
+		b := bundleWith(t, "b.yaml")
+		res := identityDirResult(store(emptyRepo(t), b, true), nil)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+		assert.Contains(t, res.Detail, identity.NewStore(b).IdentitiesDir())
+	})
+
+	t.Run("layered, bundle only, no repo dir, no global passes", func(t *testing.T) {
+		b := bundleWith(t, "b.yaml")
+		res := identityDirResult(store(t.TempDir(), b, false), nil)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+	})
+
+	t.Run("broken bundle dir fails", func(t *testing.T) {
+		b := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(b, "identities"), []byte("x"), 0o600))
+		for _, repoOnly := range []bool{true, false} {
+			res := identityDirResult(store(emptyRepo(t), b, repoOnly), nil)
+			assert.Equal(t, "FAIL", res.Status)
+			assert.Contains(t, res.Detail, "bundle identities dir")
+		}
+	})
+
+	t.Run("empty bundle dir does not mask a repo-only failure", func(t *testing.T) {
+		res := identityDirResult(store(emptyRepo(t), bundleWith(t), true), nil)
+		assert.Equal(t, "FAIL", res.Status)
+	})
+}
+
 func TestClassifyOrphans_IdentityPresence(t *testing.T) {
 	marked := func(h string) []orphanFile { return []orphanFile{{handle: h, marked: true}} }
 

@@ -1121,7 +1121,20 @@ func identityDirStatus(s identity.IdentityStore) (detail, status string) {
 	case dirBroken:
 		return "error: " + why, "FAIL"
 	}
-	if ls, ok := s.(*identity.LayeredStore); ok && !ls.RepoAuthoritative() {
+	ls, layered := s.(*identity.LayeredStore)
+	if layered && ls.BundleRoot() != "" {
+		// The active bundle supplies identities in both modes, so a repo dir
+		// that is missing or empty is fine when the bundle's is usable.
+		bdir := identity.NewStore(ls.BundleRoot()).IdentitiesDir()
+		bstate, bwhy := inspectIdentitiesDir(bdir)
+		switch bstate {
+		case dirUsable:
+			return bdir + " (repo has none; resolved from the active bundle)", "PASS"
+		case dirBroken:
+			return fmt.Sprintf("error: bundle identities dir %s: %s", bdir, bwhy), "FAIL"
+		}
+	}
+	if layered && !ls.RepoAuthoritative() {
 		gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
 		gstate, gwhy := inspectIdentitiesDir(gdir)
 		switch gstate {

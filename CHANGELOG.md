@@ -35,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory that cannot be read is named instead of blamed on the repo. Under
   layered resolution a fresh install, with no identities in the repo or the
   global store, is a WARN pointing at `ethos setup`, as for "Human identity";
-  under repo-only it fails.
+  under repo-only it fails. Identities supplied by the active bundle satisfy
+  the check in both modes.
 - `ethos doctor` no longer reports an agent file as "safe to delete" when it
   cannot tell whether its identity exists. A stat error (for example EACCES on
   the identities directory) fails with the error. Under `resolution: repo-only`
