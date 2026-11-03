@@ -295,7 +295,7 @@ func retireChecked(repoRoot, stem, src, dst string, check func([]byte) string, n
 	if err := os.Remove(src); err != nil {
 		return fmt.Errorf("removing %s: %w", src, err)
 	}
-	if err := GitAdd(repoRoot, dst); err != nil {
+	if _, err := GitAdd(repoRoot, dst); err != nil {
 		return err
 	}
 	return nil
@@ -331,7 +331,7 @@ func withholdSweep(repoRoot, sealedDir string, cn ChunkName, check func([]byte) 
 			return err
 		}
 		np.say(cf.path, rule)
-		if err := GitAdd(repoRoot, cf.path); err != nil {
+		if _, err := GitAdd(repoRoot, cf.path); err != nil {
 			return err
 		}
 	}
@@ -389,7 +389,7 @@ func restageIfDifferent(repoRoot, path string, b []byte, stem string, check func
 			return err
 		}
 	}
-	if err := GitAdd(repoRoot, path); err != nil {
+	if _, err := GitAdd(repoRoot, path); err != nil {
 		return err
 	}
 	if rule != "" {
@@ -446,7 +446,7 @@ func finishRecordedRetirement(repoRoot, sealedDir string, cn ChunkName, chunkPat
 		if err := os.Remove(chunkPath); err != nil {
 			return false, fmt.Errorf("removing %s: %w", chunkPath, err)
 		}
-		if err := GitAdd(repoRoot, path); err != nil {
+		if _, err := GitAdd(repoRoot, path); err != nil {
 			return false, err
 		}
 		np.say(path, rec.Rule)

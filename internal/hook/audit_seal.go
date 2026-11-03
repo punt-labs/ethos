@@ -224,7 +224,7 @@ func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResul
 		return rollbackSeal(wrote, nil, newDirs, fmt.Errorf("snapshotting the index: %w", err), "snapshotting the index")
 	}
 	addStart := time.Now()
-	addErr := audit.GitAdd(repoRoot, toAdd...)
+	staged, addErr := audit.GitAdd(repoRoot, toAdd...)
 	snap.addFinished(addStart, errors.Is(addErr, gitenv.ErrTimeout))
 	if err := addErr; err != nil {
 		cause := SealGitError(repoRoot, "staging chunks (git add)", err, false)
@@ -238,7 +238,7 @@ func runSeal(repoRoot string, units []sealUnit, opts SealOptions, res *SealResul
 		return rollbackSeal(wrote, snap, newDirs, cause, "staging chunks (git add)")
 	}
 	snap.discard()
-	res.ChunksStaged += len(toAdd)
+	res.ChunksStaged += len(staged)
 	return nil
 }
 

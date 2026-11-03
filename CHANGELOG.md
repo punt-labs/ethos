@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Commits are no longer blocked in a repo that gitignores
+  `.punt-labs/ethos/sessions/` (biff, mcp-proxy and quarry do). The pre-commit
+  audit seal and `ethos audit quarantine` now skip staging any path the repo
+  ignores, print one note saying so, and keep the audit files locally. Before,
+  `git add` refused the ignored path, the seal rolled back, and every commit
+  failed. A failure of the ignore check itself is still an error.
+
 ## [4.20.0] - 2026-11-03
 
 ### Security
