@@ -527,7 +527,7 @@ func TestAuditQuarantine_TrackedChunkInIgnoredDirSaysTheMarkerIsNotStaged(t *tes
 	notice := testhelpers.CaptureStderr(t, func() {
 		out = quarantineOutput(t, ".punt-labs/ethos/sessions/\n", trackChunk)
 	})
-	assert.Contains(t, out, "the chunk's removal is staged but its marker is gitignored and was not; record it with `git add -f ")
+	assert.Contains(t, out, "changes under the chunk's directory are staged but its marker is gitignored and was not; record it with `git add -f ")
 	assert.NotContains(t, out, "staged, commit to record")
 	assert.NotContains(t, out, "kept local")
 	assert.Contains(t, notice, "was withheld from the tracked tree")
@@ -546,4 +546,95 @@ func TestAuditQuarantine_TrackedSiblingDoesNotMakeItStaged(t *testing.T) {
 func TestQuarantineFate_SaysWhenGitCannotTell(t *testing.T) {
 	got := quarantineFate(t.TempDir(), "d/audit-1-2.jsonl", audit.Marker{Chunk: "audit-1-2"})
 	assert.Contains(t, got, "staging status unknown:")
+}
+
+// requarantineOutput quarantines a corrupt chunk (its lines still live), then
+// damages the re-sealed chunk that now stands at the same name and quarantines
+// again under the existing marker, which retires it as a new .corrupt-<hash>.
+// commitBetween commits the first run's artifacts before the second.
+func requarantineOutput(t *testing.T, commitBetween bool) string {
+	t.Helper()
+	_, repo, _ := auditMigrateEnv(t)
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-01-01-sq")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	chunk := filepath.Join(dir, audit.SessionChunkFile(100, 200))
+	require.NoError(t, os.WriteFile(chunk, []byte("not json\n"), 0o600))
+	var live strings.Builder
+	for _, ts := range []int64{100, 200} {
+		live.WriteString(`{"ts":"` + audit.FormatLineTS(ts) + `","session":"sq","tool":"Read"}` + "\n")
+	}
+	livePath := audit.LiveAuditPath(repo, "sq")
+	require.NoError(t, os.MkdirAll(filepath.Dir(livePath), 0o700))
+	require.NoError(t, os.WriteFile(livePath, []byte(live.String()), 0o600))
+
+	_, _, err := execHandler(t, "audit", "quarantine", chunk)
+	require.NoError(t, err)
+	if commitBetween {
+		for _, args := range [][]string{{"add", "-A"}, {"-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "first"}} {
+			cmd := testhelpers.GitCommand(args...)
+			cmd.Dir = repo
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "git %v: %s", args, out)
+		}
+	}
+	require.NoError(t, os.WriteFile(chunk, []byte("damaged again\n"), 0o600))
+	stdout, _, err := execHandler(t, "audit", "quarantine", chunk)
+	require.NoError(t, err)
+	return stdout
+}
+
+// Case A: the marker and the chunk are committed; the second quarantine stages
+// a rename and an addition but leaves the marker alone.
+func TestAuditQuarantine_RerunOverCommittedMarkerSaysStaged(t *testing.T) {
+	out := requarantineOutput(t, true)
+	assert.Contains(t, out, "staged, commit to record")
+	assert.NotContains(t, out, "nothing new")
+}
+
+// Case B: nothing is committed; the second run's git mv moves the staged chunk
+// entry, so the chunk's own path shows no change, but the new artifacts are
+// staged.
+func TestAuditQuarantine_RerunOverStagedMarkerSaysStaged(t *testing.T) {
+	out := requarantineOutput(t, false)
+	assert.Contains(t, out, "staged, commit to record")
+	assert.NotContains(t, out, "nothing new")
+}
+
+// A sub-range chunk other than the one named is retired under the existing
+// marker in an ignored directory: its rename is staged, the ignored marker is
+// not, and the summary says so.
+func TestAuditQuarantine_OtherChunkRetiredInIgnoredDirNamesTheMarker(t *testing.T) {
+	_, repo, _ := auditMigrateEnv(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/ethos/sessions/\n"), 0o600))
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-01-01-sq")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	chunk := filepath.Join(dir, audit.SessionChunkFile(100, 200))
+	require.NoError(t, os.WriteFile(chunk, []byte("not json\n"), 0o600))
+	var live strings.Builder
+	for _, ts := range []int64{100, 200} {
+		live.WriteString(`{"ts":"` + audit.FormatLineTS(ts) + `","session":"sq","tool":"Read"}` + "\n")
+	}
+	livePath := audit.LiveAuditPath(repo, "sq")
+	require.NoError(t, os.MkdirAll(filepath.Dir(livePath), 0o700))
+	require.NoError(t, os.WriteFile(livePath, []byte(live.String()), 0o600))
+	_, _, err := execHandler(t, "audit", "quarantine", chunk)
+	require.NoError(t, err)
+
+	// A tracked chunk inside the marker's range, damaged since.
+	other := filepath.Join(dir, audit.SessionChunkFile(110, 120))
+	good := `{"ts":"` + audit.FormatLineTS(110) + `","session":"sq","tool":"Read"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(120) + `","session":"sq","tool":"Read"}` + "\n"
+	require.NoError(t, os.WriteFile(other, []byte(good), 0o600))
+	for _, args := range [][]string{{"add", "-f", other}, {"-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "other"}} {
+		cmd := testhelpers.GitCommand(args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	require.NoError(t, os.WriteFile(other, []byte("damaged\n"), 0o600))
+
+	stdout, _, err := execHandler(t, "audit", "quarantine", chunk)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "record it with `git add -f ")
+	assert.NotContains(t, stdout, "staged, commit to record")
 }

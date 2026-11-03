@@ -304,20 +304,22 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 	return nil
 }
 
-// quarantineFate says what a finished quarantine left in the index, from the
-// index itself: GitAdd drops every path the repo ignores, so what was staged
-// is not knowable from whether the directory is ignored.
+// quarantineFate says what a finished quarantine left in the index, decided
+// from the index alone: GitAdd drops every path the repo ignores, and git mv
+// moves index entries, so neither the ignore rules nor the state of one path
+// says what was staged. In order: a git failure is unknown; anything staged
+// under the chunk's directory while the marker is ignored and not staged is a
+// partial record; anything staged there is staged; an ignored marker is kept
+// local; anything else has nothing new. The run may retire a chunk other than
+// the one named, so the directory is the unit, not the chunk.
 func quarantineFate(repoRoot, chunkPath string, m audit.Marker) string {
 	unknown := func(err error) string { return fmt.Sprintf("staging status unknown: %v", err) }
 	markerPath := filepath.Join(filepath.Dir(chunkPath), m.Chunk+".quarantine")
-	markerStaged, err := audit.StagedChange(repoRoot, markerPath)
+	anyStaged, err := audit.StagedChange(repoRoot, filepath.Dir(chunkPath))
 	if err != nil {
 		return unknown(err)
 	}
-	if markerStaged {
-		return "staged, commit to record"
-	}
-	removed, err := audit.StagedChange(repoRoot, chunkPath)
+	markerStaged, err := audit.StagedChange(repoRoot, markerPath)
 	if err != nil {
 		return unknown(err)
 	}
@@ -326,8 +328,10 @@ func quarantineFate(repoRoot, chunkPath string, m audit.Marker) string {
 		return unknown(err)
 	}
 	switch {
-	case removed && ignored:
-		return fmt.Sprintf("the chunk's removal is staged but its marker is gitignored and was not; record it with `git add -f %s`", markerPath)
+	case anyStaged && ignored && !markerStaged:
+		return fmt.Sprintf("changes under the chunk's directory are staged but its marker is gitignored and was not; record it with `git add -f %s`", markerPath)
+	case anyStaged:
+		return "staged, commit to record"
 	case ignored:
 		return "kept local (this repo gitignores it)"
 	}

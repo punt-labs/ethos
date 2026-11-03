@@ -33,8 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (this repo gitignores it)" then, and keeps the old wording when it staged.
   The wording comes from what the index holds after the run, not from the
   ignore rules: a chunk tracked before the repo began to ignore its directory
-  has its removal staged, and the line says the ignored marker was not, with
-  the `git add -f` to record it. When git cannot say, the line says the status
+  has its removal staged, and when changes are staged under the directory but
+  the ignored marker is not, the line says so, with the `git add -f` to record
+  it. When git cannot say, the line says the status
   is unknown.
 - The quarantine notice `retired chunk NAME was withheld from the tracked tree`
   no longer prints in a repo that gitignores the session directory, where
