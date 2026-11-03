@@ -416,6 +416,10 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 	for _, c := range sc.Chunks {
 		path := filepath.Join(p.sealedDir, c.ChunkFile())
 		if _, err := audit.ReadChunkVerified(path, c.Last); err != nil {
+			var rerr *audit.ChunkReadError
+			if errors.As(err, &rerr) {
+				return sealOutcome{}, err // unreadable, not damaged: quarantine would not help
+			}
 			return p.skipIfLocalOnly(path, err)
 		}
 	}

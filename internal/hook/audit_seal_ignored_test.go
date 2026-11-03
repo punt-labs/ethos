@@ -123,3 +123,26 @@ func TestSealRepo_StagedRenameToCorruptInIgnoredDirStillBlocks(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "orphan")
 }
+
+// A chunk that cannot be read (permissions) is not damaged: quarantine would
+// not help, so even a gitignored session blocks.
+func TestSealRepo_UnreadableChunkInIgnoredSessionStillBlocks(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	now := time.Now().UTC()
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(ignoreSessions), 0o600))
+	dir, _ := resolveRepoSessionDir(repo, "sess-u", now)
+	name := audit.SessionChunkFile(100, 200)
+	writeChunkFile(t, dir, name, 100, 200)
+	require.NoError(t, os.Chmod(filepath.Join(dir, name), 0o000))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, name), 0o600) })
+
+	var err error
+	stderr := captureStderr(t, func() { _, err = SealRepo(repo, now, SealOptions{}) })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading chunk")
+	assert.NotContains(t, stderr, "ethos audit quarantine")
+}
