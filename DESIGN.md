@@ -2021,7 +2021,11 @@ non-zero and keeps the data, which is why `HOOK_INPUT=""` stays before the
 read and `|| true` after it. Go's `ReadInput` now waits up to 10 seconds with
 one overall deadline and returns as soon as the buffer is a complete JSON
 value, so the shell and Go bounds agree. A test proves each wrapper hands Go a
-fresh pipe, not the inherited fd (`TestWrappersGiveEthosAFreshPipe`). A
+fresh pipe, not the inherited fd (`TestWrappersGiveEthosAFreshPipe`). Each
+wrapper captures `read`'s status and, on a timeout (status above 128), appends
+"ethos <hook>: stdin read timed out after 10s (N bytes)" to `hook-errors.log`
+before forwarding what arrived. The wrapper list under test is read from
+`hooks.json`. A
 round of this fix briefly passed stdin straight to Go, which is this
 decision's first rejected alternative; that was reverted before merge, and
 the branch was verified in a real Claude Code session on Linux with only the
@@ -8951,8 +8955,12 @@ code.claude.com/docs/en/hooks). For calls to ethos's own MCP tools
 original arguments plus one reserved argument, `_caller`, holding
 `{session_id, agent_id}`. `agent_id` is the payload's `agent_id` when present,
 otherwise the hook's own corroborated `CLAUDE_PID` (DES-061 R4's key order).
-The hook always overwrites `_caller`, so a model-supplied value never
-survives. The MCP server resolves `_caller` through the same exact-participant
+When the hook runs, it always overwrites or strips `_caller`, so a
+model-supplied value does not survive a hook that ran. *(Corrected
+2026-11-03: a model value does survive when the hook does not run — kill
+switch, missing binary, a server registered outside the plugin — which is
+why the server fails closed; see "Fail closed on both sides of the hook"
+below.)* The MCP server resolves `_caller` through the same exact-participant
 path as the OpenCode `_meta` pilot (`internal/mcp/caller.go`,
 `docs/opencode-mcp-identity.md`): an exact roster and participant, or an
 error; never a fallback. Without `_caller` (a client that is not Claude Code,
@@ -9022,6 +9030,70 @@ leader `whoami` returned `claude`; a `bwk` subagent returned `bwk`; a
 `general-purpose` subagent returned "General-purpose has no ethos identity";
 `session roster` returned the nested session's own roster.
 
+### Amendment 2026-11-03: fail closed on both sides of the hook
+
+**The gap.** The amendment above made the PreToolUse hook the only declarer of
+the caller but left the server's old chain in place for a call that arrives
+without `_caller`. With the hook missing, killed (`~/.punt-hooks-kill`),
+crashed, or unable to declare a caller, a Claude Code call fell through to
+`ETHOS_SESSION`, `ETHOS_AGENT_ID`, and the process tree — in an MCP server that
+has no `CLAUDE_PID` and may have inherited another session's. That chain can
+answer with another session's identity at exit 0, the wrong answer this
+decision exists to close. Found by local review (silent-failure-hunter and
+invariant-completeness-reviewer) before the PR opened.
+
+**Decision.**
+
+1. **Server.** Under Claude Code (`resolve.UnderClaudeCode()`), a
+   caller-dependent method that receives neither `_caller` nor OpenCode `_meta`
+   returns the named error "Claude Code call arrived without _caller: the ethos
+   PreToolUse hook did not declare the caller (is it installed, enabled, and not
+   killed?)", before consulting `resolve.SessionID`, `resolve.Resolve`,
+   `process.FindClaudePID`, or `ETHOS_*`. All such resolution lives in
+   `internal/mcp/nocaller.go`; `TestNoCallerResolutionLivesInOneFile` fails if
+   it appears elsewhere in the package. An explicit `session_id` on `roster`,
+   `join`, and `leave` is an administrative target and still works. `mission
+   create` reports the error as a warning (the mission is created);
+   `mission close` and `abandon` return an error result for any failure to
+   clear the active-mission bindings. Doctor's Human identity row is supplied
+   by the caller (`doctor.RunAllForCaller`, `doctor.HumanIdentityRow`). Clients
+   that are not Claude Code keep the existing chain.
+2. **Hook.** For ethos MCP tools the hook denies, naming the cause, when it
+   cannot read or parse the payload (a payload too broken to parse is still
+   denied if its raw bytes name an ethos MCP `tool_name`) or when routing or
+   gate decoding fails — never an error with no output, which Claude Code reads
+   as "proceed". When it cannot declare a caller it strips any `_caller`, logs
+   the cause, and the server refuses the call. `agent_id` presence is the
+   subagent signal; `agent_type` alone appears on the main thread of a
+   `claude --agent` session (measured), which keys on the corroborated
+   `CLAUDE_PID`.
+3. **Input.** `ReadInput` returns `ErrInputTimeout`, with the byte count,
+   instead of an empty map, wraps other read errors, and ends a read early only
+   on a complete JSON object.
+
+**Residual risks, accepted.** A Claude Code version whose subagent payloads
+lack `agent_id` would key a subagent on the leader's `CLAUDE_PID`; the hooks
+reference documents `agent_id` inside subagents, and 2.1.309 sends it. A
+non-Claude MCP client started from a Claude Code shell inherits `CLAUDECODE=1`
+and is refused unless it sends `_meta` — failing closed. `_caller` remains
+routing, not authentication: a well-formed `_caller` naming a real participant
+is routed whoever wrote it, which matters only when the hook does not run.
+
+**Rejected:** keep the environment chain for a caller-less Claude Code call and
+log it (a log is not a refusal); deny every ethos MCP call when the hook cannot
+declare a caller (the server refuses the ones that need a caller; the rest need
+none); gate the plugin hooks on the per-repo enabled marker (Qodo finding) —
+DES-059 scopes that gate to the git hooks, and gating would skip `_caller`
+injection and the verifier fence.
+
+**Measured end to end** (2026-11-03, Claude Code 2.1.309, Linux, branch plugin,
+wrappers, and binary only): leader `claude`; `bwk` subagent `bwk`;
+`general-purpose` subagent "general-purpose has no ethos identity"; `--agent
+bwk` main thread `claude` (DES-011's repo agent; whether `--agent` should set
+the primary persona is bead ethos-eqnd); nested session its own roster. A
+probe hook confirmed Claude Code replaces the tool input with `updatedInput`
+(a removed field does not reach the server), so stripping works.
+
 ### Amendment 2026-11-03: PreToolUse never decides "allow" (amends DES-054)
 
 DES-054's pseudocode writes "allow" for "not a verifier spawn" and for an
@@ -9034,7 +9106,9 @@ hooks enabled and was refused with hooks disabled; an explicit `ask` rule was
 still honored. Ruling: ethos's PreToolUse hook emits `deny` or no permission
 decision. Pass-through emits only `hookEventName` (plus `updatedInput` or the
 delegation env block where those apply). "Allow" in DES-054's pseudocode reads
-as "do not block".
+as "do not block". The output field is `permissionDecision`, an unexported
+bool type that marshals only to `"deny"` and is omitted otherwise, so `allow`
+cannot be written.
 
 ## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08; 2026-10-24 by DES-079)
 
