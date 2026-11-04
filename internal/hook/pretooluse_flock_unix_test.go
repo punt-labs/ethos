@@ -75,7 +75,7 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 	select {
 	case r := <-done:
 		require.NoError(t, r.err)
-		assert.Equal(t, "allow", r.decision,
+		assert.Equal(t, "", r.decision,
 			"dispatch must allow after exclusive holder releases")
 		assert.GreaterOrEqual(t, r.waited, 60*time.Millisecond,
 			"dispatch wait must reflect the exclusive hold (got %v)", r.waited)

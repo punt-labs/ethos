@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -28,18 +27,21 @@ type preToolUseOutput struct {
 	UpdatedInput             map[string]any    `json:"updatedInput,omitempty"`
 }
 
-func preToolUseAllow() PreToolUseResult {
+// preToolUsePass lets the call proceed. It carries no permissionDecision: in
+// Claude Code "allow" approves a call without asking, past the user's own
+// permission checks, and ethos is a permission authority only where it denies
+// (a verifier's allowlist, a mission's preconditions).
+func preToolUsePass() PreToolUseResult {
 	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
-		HookEventName:      "PreToolUse",
-		PermissionDecision: "allow",
+		HookEventName: "PreToolUse",
 	}}
 }
 
-func preToolUseAllowWithEnv(env map[string]string) PreToolUseResult {
+// preToolUsePassWithEnv is preToolUsePass with the spawn's delegation env.
+func preToolUsePassWithEnv(env map[string]string) PreToolUseResult {
 	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
-		HookEventName:      "PreToolUse",
-		PermissionDecision: "allow",
-		AdditionalEnv:      env,
+		HookEventName: "PreToolUse",
+		AdditionalEnv: env,
 	}}
 }
 
@@ -85,7 +87,7 @@ func preToolUseDeny(reason string) PreToolUseResult {
 // allowlist, so the hot path (verifier touching a declared file) is
 // unchanged.
 func HandlePreToolUse(r io.Reader, w io.Writer) error {
-	input, err := ReadInput(r, time.Second)
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("pre-tool-use: %w", err)
 	}
@@ -120,7 +122,7 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 
 	allowlist := os.Getenv("ETHOS_VERIFIER_ALLOWLIST")
 	if allowlist == "" {
-		return json.NewEncoder(w).Encode(preToolUseAllow())
+		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
 	if reason, deny := denyInRepoMCPWrite(toolName, toolInput); deny {
@@ -130,7 +132,7 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 	target := extractTargetPath(toolName, toolInput)
 	if target == "" {
 		// Tool does not target a file path — allow unconditionally.
-		return json.NewEncoder(w).Encode(preToolUseAllow())
+		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
 	repoRoot, rootErr := tierBRepoRoot()
@@ -143,7 +145,7 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 	}
 	entries := splitAllowlist(allowlist)
 	if pathAllowed(target, entries, repoRoot) {
-		return json.NewEncoder(w).Encode(preToolUseAllow())
+		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
 	// DES-052 stat-then-allow: a path outside the write_set allowlist
@@ -166,7 +168,7 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 					target, statErr)
 			}
 			if !exists {
-				return json.NewEncoder(w).Encode(preToolUseAllow())
+				return json.NewEncoder(w).Encode(preToolUsePass())
 			}
 		}
 	}

@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Ethos no longer auto-approves tool calls. The PreToolUse hook answered
+  `permissionDecision: "allow"` for every call it did not deny, and in Claude
+  Code "allow" approves a call without asking, past the user's own permission
+  checks, in every repo with ethos hooks installed (a Bash command Claude Code
+  refused ran with the hooks on). A pass-through now carries no
+  `permissionDecision`, so Claude Code's own rules decide. `deny` is unchanged:
+  verifier allowlists and mission preconditions still refuse.
+
 ### Fixed
+
+- Hooks wait up to 10 seconds, as one overall deadline, for Claude Code's
+  payload instead of one second with a tenth-of-that gap between chunks, so a
+  writer that pauses mid-payload no longer truncates a large Edit.
 
 - The MCP identity and session tools work under Claude Code. Claude Code gives
   MCP servers no `CLAUDE_PID`, so `identity whoami`, `session roster` and `iam`

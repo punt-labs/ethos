@@ -91,13 +91,13 @@ func TestPreToolUse_NoCallerNoInjection(t *testing.T) {
 		delete(p, "session_id")
 		out := runPreToolUse(t, p)["hookSpecificOutput"]
 		assert.NotContains(t, out, "updatedInput")
-		assert.Equal(t, "allow", out["permissionDecision"], "unchanged behaviour")
+		assert.NotContains(t, out, "permissionDecision")
 	})
 	t.Run("no agent key", func(t *testing.T) {
 		t.Setenv("CLAUDE_PID", "")
 		out := runPreToolUse(t, ethosCall(nil))["hookSpecificOutput"]
 		assert.NotContains(t, out, "updatedInput")
-		assert.Equal(t, "allow", out["permissionDecision"])
+		assert.NotContains(t, out, "permissionDecision")
 	})
 	t.Run("uncorroborated CLAUDE_PID", func(t *testing.T) {
 		t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getpid())) // live, but not an ancestor
@@ -126,7 +126,7 @@ func TestPreToolUse_OnlyEthosMCPToolsAreDeclared(t *testing.T) {
 				assert.NotContains(t, out, "permissionDecision")
 			} else {
 				assert.NotContains(t, out, "updatedInput")
-				assert.Equal(t, "allow", out["permissionDecision"], "unchanged behaviour")
+				assert.NotContains(t, out, "permissionDecision")
 			}
 		})
 	}
@@ -164,7 +164,7 @@ func TestPreToolUse_NonEthosToolsUnchanged(t *testing.T) {
 			"session_id": "sess-1",
 		}
 		out := runPreToolUse(t, p)["hookSpecificOutput"]
-		assert.Equal(t, "allow", out["permissionDecision"], tool)
+		assert.NotContains(t, out, "permissionDecision")
 		assert.NotContains(t, out, "updatedInput", tool)
 	}
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "docs/")
