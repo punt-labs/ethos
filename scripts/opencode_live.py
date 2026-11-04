@@ -361,6 +361,19 @@ def runtime_config(entries):
     return default, reasoning, fmt
 
 
+def resolved_formatters(fmt, expected):
+    gofmt = fmt.get("gofmt", {})
+    require(gofmt.get("disabled") is not True, "live gofmt is disabled")
+    require(all(gofmt.get(key) == expected["gofmt"][key] for key in ("command", "extensions")),
+            "live gofmt command/extensions differ from reviewed policy")
+    require(all(fmt.get(name, {}).get("disabled") is True for name in NON_GO),
+            "live non-Go built-in formatter is enabled")
+    for name, entry in fmt.items():
+        if not entry.get("disabled"):
+            require(name == "gofmt" or entry.get("extensions") == [".go"],
+                    "inherited non-Go custom formatter requires review")
+
+
 def connected_servers(api, budget=180):
     deadline = time.monotonic() + budget
     while True:
@@ -412,13 +425,7 @@ def doctor(root):
                         {"providerID": expected["providerID"], "id": expected["id"]}),
             "live default model differs from project Astra")
     require(reasoning == "high", "live default reasoning is not high")
-    require(fmt.get("gofmt", {}).get("disabled") is not True, "live gofmt is disabled")
-    require(all(fmt.get(name, {}).get("disabled") is True for name in NON_GO),
-            "live non-Go built-in formatter is enabled")
-    for name, entry in fmt.items():
-        if not entry.get("disabled"):
-            require(name == "gofmt" or entry.get("extensions") == [".go"],
-                    "inherited non-Go custom formatter requires review")
+    resolved_formatters(fmt, config["formatter"])
     for endpoint, expected_ids in (("/api/skill", SKILLS), ("/api/command", COMMANDS)):
         entries = api.location(endpoint)["data"]
         # Skill IDs are path-derived; command IDs are returned as name.
@@ -520,6 +527,14 @@ def formatter_outputs(fixture, samples):
         require((fixture / name).read_bytes() == expected, f"formatter behavior differs: {name}")
 
 
+def dispatch_evidence(calls, child):
+    require(len(calls) == 1 and calls[0].get("name") == "subagent",
+            "parent must use exactly one native subagent tool and no other tools")
+    state = completed(calls[0])
+    require(child in json.dumps(state.get("metadata", {})) or
+            child in json.dumps(state.get("content", [])), "parent dispatch did not expose exact child ID")
+
+
 def child_evidence(api, parent, author, task):
     children = api.pages("/api/session", {"parentID": parent})
     require(len(children) == 1, "smoke must dispatch exactly one native child")
@@ -529,8 +544,9 @@ def child_evidence(api, parent, author, task):
     artifact = result(info, messages, child, parent, task, 1, author)
     calls = tools(messages)
     required_calls(calls, "read", lambda args: args.get("path") == "go.mod", "child read go.mod")
-    require(not any(t.get("name") in {"edit", "write", "patch", "subagent"} for t in calls),
-            "read-only child attempted mutation/delegation")
+    for tool in calls:
+        require(tool.get("name") == "read", "read-only child used a tool other than read")
+        completed(tool)
     return child, artifact
 
 
@@ -590,11 +606,7 @@ def smoke(root, stages=None):
                 "docs/opencode-workflow.md and a brief observed module line. Do not edit, shell, "
                 "delegate, install or publish. After it returns report only completion and native child ID.")
             child, artifact = child_evidence(api, parent, author, task)
-            dispatch = [t for t in tools(messages) if t.get("name") == "subagent"]
-            require(len(dispatch) == 1, "parent did not use exactly one native subagent tool")
-            state = completed(dispatch[0])
-            require(child in json.dumps(state.get("metadata", {})) or
-                    child in json.dumps(state.get("content", [])), "parent dispatch did not expose exact child ID")
+            dispatch_evidence(tools(messages), child)
             (evidence / f"{author}-result.md").write_text(artifact)
             receipt["checks"].append({"agent": author, "parent": parent, "child": child,
                                       "model": ROSTER[author], "go_mod_read": True})

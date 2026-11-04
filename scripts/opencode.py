@@ -331,6 +331,8 @@ def result(info, messages, child, parent, task, round_number, author, expected_m
             "explicit --model cannot override a configured author's pinned model")
     expected_model = pinned_model or expected_model
     require(expected_model, "unconfigured author requires an explicit --model selector")
+    require(pinned_model or expected_model.partition("#")[2],
+            "unconfigured author requires an explicit --model provider/model#variant")
     require(info.get("model") == model_ref(expected_model), "result model mismatch")
     candidates = []
     for message in messages:

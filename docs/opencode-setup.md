@@ -100,7 +100,7 @@ It does not assert the leader-owned root documentation relocation is complete.
 
 Doctor inspects live discovery without printing raw config or credentials.
 It verifies the full effective permission suffix for every role, including
-reviewed exceptions, secret-read protections and denial of nested delegation.
+reviewed exceptions, native read-action restrictions and denial of nested delegation.
 After the reviewed policy, only no additional rules or OpenCode 2.2.5's exact
 native browser-unavailable pair is accepted, in order: deny `browser` on `*`,
 then deny `skill` on `browser`. No other trailing deny, ask or grant is accepted;

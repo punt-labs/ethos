@@ -183,6 +183,8 @@ class ConfigTests(unittest.TestCase):
                          {"providerID": "bifrost", "id": "openai/gpt-6.1-sol", "variant": "high"})
         self.assertEqual(oc.model_ref(oc.ROSTER["researcher"]),
                          {"providerID": "bifrost", "id": "openai/gpt-5.6-terra", "variant": "medium"})
+        self.assertEqual(oc.model_ref(oc.ASTRA.split("#")[0]),
+                         {"providerID": "bifrost", "id": "openai/gpt-6-astra"})
 
     def test_duplicate_json_key(self):
         with self.assertRaises(oc.CheckError):
@@ -320,8 +322,58 @@ class ResultTests(unittest.TestCase):
         with self.assertRaisesRegex(oc.CheckError, "cannot override"):
             oc.result(info, [message], *args[2:], expected_model=other)
 
+    def test_nonproject_author_rejects_missing_or_empty_variant(self):
+        selector = oc.ASTRA.split("#")[0]
+        info = dict(self.info, agent="team/custom-reviewer", model=oc.model_ref(selector))
+        message = copy.deepcopy(self.message)
+        message.update(agent=info["agent"], model=info["model"])
+        message["content"][0]["text"] = message["content"][0]["text"].replace("author: rsc", "author: " + info["agent"])
+        for invalid in (selector, selector + "#"):
+            with self.subTest(selector=invalid), self.assertRaisesRegex(oc.CheckError, "variant"):
+                oc.result(info, [message], "ses_child", "ses_parent", "ethos-t1uy", 1,
+                          info["agent"], expected_model=invalid)
+
 
 class LiveHelperTests(unittest.TestCase):
+    def test_child_parent_dispatch_rejects_extra_tools(self):
+        dispatch = {"name": "subagent", "state": {"status": "completed", "metadata": {"sessionID": "ses_child"}}}
+        live.dispatch_evidence([dispatch], "ses_child")
+        for name in ("execute", "read", "shell", "subagent"):
+            extra = {"name": name, "state": {"status": "completed"}}
+            for calls in ([dispatch, extra], [extra, dispatch]):
+                with self.subTest(name=name, calls=calls), self.assertRaisesRegex(oc.CheckError, "no other tools"):
+                    live.dispatch_evidence(calls, "ses_child")
+        for calls in ([], [{"name": "read"}], [dict(dispatch, state={"status": "error"})]):
+            with self.subTest(calls=calls), self.assertRaises(oc.CheckError):
+                live.dispatch_evidence(calls, "ses_child")
+        with self.assertRaisesRegex(oc.CheckError, "exact child ID"):
+            live.dispatch_evidence([dispatch], "ses_other")
+
+    def test_child_evidence_rejects_non_read_tools(self):
+        info = {"id": "ses_child", "parentID": "ses_parent", "agent": "rsc",
+                "outcome": "succeeded", "model": oc.model_ref(oc.ROSTER["rsc"])}
+        artifact = f"{oc.START}\ntask: ethos-t1uy\nround: 1\nauthor: rsc\n{oc.END}\nObserved module.\n"
+        read = {"type": "tool", "name": "read", "state": {"status": "completed", "input": {"path": "go.mod"}}}
+        message = {"id": "msg_final", "type": "assistant", "agent": "rsc", "model": info["model"],
+                   "time": {"completed": 20}, "content": [read, {"type": "text", "text": artifact}]}
+        api = live.API(oc.ROOT)
+        with patch.object(api, "call", return_value={"data": info}), \
+                patch.object(api, "pages", side_effect=lambda path, *args: [info] if path == "/api/session" else [message]):
+            self.assertEqual(live.child_evidence(api, "ses_parent", "rsc", "ethos-t1uy"), ("ses_child", artifact))
+            for name in ("shell", "execute", "edit", "write", "patch", "subagent", "skill"):
+                extra = {"type": "tool", "name": name, "state": {"status": "completed"}}
+                message["content"] = [read, extra, {"type": "text", "text": artifact}]
+                with self.subTest(name=name), self.assertRaisesRegex(oc.CheckError, "other than read"):
+                    live.child_evidence(api, "ses_parent", "rsc", "ethos-t1uy")
+            workflow_read = {"type": "tool", "name": "read", "state": {"status": "completed",
+                             "input": {"path": "docs/opencode-workflow.md"}}}
+            message["content"] = [read, workflow_read, {"type": "text", "text": artifact}]
+            self.assertEqual(live.child_evidence(api, "ses_parent", "rsc", "ethos-t1uy"), ("ses_child", artifact))
+            for status in ("error", "running"):
+                workflow_read["state"]["status"] = status
+                with self.subTest(status=status), self.assertRaisesRegex(oc.CheckError, "did not complete"):
+                    live.child_evidence(api, "ses_parent", "rsc", "ethos-t1uy")
+
     @staticmethod
     def health_values():
         return {
@@ -637,6 +689,21 @@ class LiveHelperTests(unittest.TestCase):
         self.assertEqual(reasoning, "high")
         self.assertEqual(fmt["custom-md"]["extensions"], [".md"])
         self.assertTrue(fmt["latexindent"]["disabled"])
+
+    def test_live_gofmt_requires_reviewed_command_and_extensions(self):
+        expected = oc.check()["formatter"]
+        live.resolved_formatters(expected, expected)
+        for override in ({"command": ["other", "$FILE"]}, {"extensions": [".md"]},
+                         {"command": None}, {"extensions": None}, {"disabled": True}):
+            _, _, fmt = live.runtime_config([
+                {"info": {"formatter": expected}}, {"info": {"formatter": {"gofmt": override}}}
+            ])
+            with self.subTest(override=override), self.assertRaisesRegex(oc.CheckError, "live gofmt"):
+                live.resolved_formatters(fmt, expected)
+        fmt = copy.deepcopy(expected)
+        del fmt["gofmt"]
+        with self.assertRaisesRegex(oc.CheckError, "command/extensions"):
+            live.resolved_formatters(fmt, expected)
 
     def test_direct_provider_reasoning_cannot_mask_missing_bifrost_default(self):
         _, reasoning, _ = live.runtime_config([

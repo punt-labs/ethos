@@ -3,7 +3,7 @@
 > **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
 > It describes the Phase 6.1 implementation work for `ethos-2hh` (team
 > bundle activation). That feature shipped in v3.7.0 across PRs
-> #287–#292; the current state is documented in AGENTS.md, CLAUDE.md,
+> #287–#292; the current state is documented in `docs/agent-guide.md`,
 > and `docs/gstack-getting-started.md`.
 >
 > **Current build planning lives in

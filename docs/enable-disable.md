@@ -372,7 +372,7 @@ no per-repo rendering. It is **not** this repo's developer `CLAUDE.md` and
 **not** a reference dump. Imports stay shallow — no deep `@`-chains from
 the guide (§2.5).
 
-Proposed content outline, sourced from `README.md` and `AGENTS.md` usage
+Proposed content outline, sourced from `README.md` and `docs/agent-guide.md` usage
 material (agent-facing, condensed):
 
 ```text
