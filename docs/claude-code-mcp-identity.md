@@ -44,6 +44,26 @@ falls back to the environment, the process tree, git, or the OS user.
 - Without `_caller` (a client other than Claude Code, or no hook) behavior is
   unchanged.
 
+### Callers with no persona
+
+A participant whose `persona` is empty is a built-in subagent such as
+`general-purpose` or `Explore`: `SubagentStart` found no ethos identity named
+for its `agent_type` (DES-007, "Null persona handling"). It is a valid caller
+with no identity, not an error.
+
+- `identity whoami` returns the text `<agent_type> has no ethos identity`, or
+  `<agent_id> has no ethos identity` when the roster recorded no `agent_type`.
+  It does not return the leader's, the environment's, or the OS user's identity.
+- `session roster` and mission binding act on the caller's session as for any
+  caller.
+- `session iam` lets the caller declare a persona for its own participant; the
+  persona must name an existing identity.
+- `doctor` shows the same text on its Human identity row, status PASS.
+
+The convention that maps an `agent_type` to a persona is DES-007's: an identity
+whose handle equals the `agent_type`, matched when the subagent starts. Repo
+config holds no other `agent_type` mapping.
+
 `_caller` identifies the caller for routing. It is not authentication: any
 client that can send arguments can send it. The hook is what makes it
 trustworthy under Claude Code.
@@ -58,7 +78,11 @@ nested session.
 
 ## Hook wrappers
 
-The wrappers in `plugin/hooks/*.sh` pass stdin to the ethos binary unmodified.
-They used to read one line with `read -r -t 1`, which cut a large payload (an
-Edit of a large file) at 8 KiB when the writer paused, and logged `invalid JSON
-input (8192 bytes)`. The ethos binary bounds its own wait.
+The wrappers in `plugin/hooks/*.sh` read stdin in bash and pipe it to the ethos
+binary, as DES-029 requires: Claude Code starts hooks through `/bin/sh -c`, and
+Go's read of the inherited fd hung on Linux. They used to read one line with
+`read -r -t 1`, which cut a large payload (an Edit of a large file) at 8 KiB
+when the writer paused, and logged `invalid JSON input (8192 bytes)`. They now
+run `read -r -d "" -t 10`, which takes the whole payload, newlines included,
+and waits up to 10 seconds for a stalled writer. ethos still bounds its own
+wait for callers that pass it an fd directly.

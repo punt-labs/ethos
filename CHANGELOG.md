@@ -39,7 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hook wrappers truncated payloads over 8 KiB. A writer that paused after its
   first 8 KiB left `read -r -t 1` with a partial line, and `hook-errors.log`
   filled with `invalid JSON input (8192 bytes)`; a multi-line payload was cut at
-  its first newline. The wrappers now pass stdin to ethos unmodified.
+  its first newline. The wrappers still read stdin in bash and hand ethos a
+  fresh pipe (DES-029: Go hung on the fd Claude Code's `/bin/sh` passes down,
+  on Linux), but now read the whole payload, waiting up to 10 seconds.
+- A subagent with no ethos persona (general-purpose, Explore) made every MCP
+  call that resolves the caller fail with `invalid caller persona ""`. Per
+  DES-007, `identity whoami` now answers that the caller has no ethos identity,
+  naming its `agent_type` (or its `agent_id` when none was recorded); `iam`
+  lets such a caller declare a persona; `doctor` reports it on the Human
+  identity row. No other identity answers for it.
 
 ## [4.20.3] - 2026-11-03
 
