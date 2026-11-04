@@ -15,7 +15,8 @@ import (
 // hookHandler is a handler whose OpenCode _meta pilot is off, as under Claude
 // Code, with three sessions:
 //
-//	sess-lead   leader keyed on its CLAUDE_PID (4242, alice), subagent agent-sub1 (carol)
+//	sess-lead   leader keyed on its CLAUDE_PID (4242, alice), subagent agent-sub1 (carol),
+//	            persona-less subagent agent-gp (agent_type general-purpose)
 //	sess-outer  leader keyed on 999 (bob): the session a nested claude -p inherits
 //	sess-inner  leader keyed on 4242 (alice): the nested session itself
 func hookHandler(t *testing.T) *Handler {
@@ -29,6 +30,7 @@ func hookHandler(t *testing.T) *Handler {
 		{"sess-lead", []session.Participant{
 			{AgentID: "4242", Persona: "alice"},
 			{AgentID: "agent-sub1", Persona: "carol", Parent: "4242"},
+			{AgentID: "agent-gp", AgentType: "general-purpose", Parent: "4242"},
 		}},
 		{"sess-outer", []session.Participant{{AgentID: "999", Persona: "bob"}}},
 		{"sess-inner", []session.Participant{{AgentID: "4242", Persona: "carol"}}},
@@ -288,4 +290,78 @@ func TestDeclaredCaller_SchemaEntries(t *testing.T) {
 		assert.Equal(t, "object", prop["type"], tool.Name)
 		assert.Equal(t, "Set by the ethos hook; do not supply.", prop["description"], tool.Name)
 	}
+}
+
+// A participant with no persona (a built-in subagent such as general-purpose)
+// has no ethos identity; DES-007 has query tools name its agent_type instead.
+// It is an answer, not an error, and no other source answers for it.
+func TestDeclaredCaller_PersonaLessWhoami(t *testing.T) {
+	h := hookHandler(t)
+	t.Setenv("CLAUDE_PID", "4242")
+	t.Setenv("ETHOS_SESSION", "sess-lead")
+	t.Setenv("ETHOS_AGENT_ID", "4242")
+	t.Setenv("USER", "bob")
+
+	result, text := whoami(t, h, map[string]any{callerArg: declared("sess-lead", "agent-gp")})
+	require.False(t, result.IsError, text)
+	assert.Contains(t, text, "no ethos identity")
+	assert.Contains(t, text, "general-purpose")
+	for _, other := range []string{"alice", "bob", "carol"} {
+		assert.NotContains(t, text, other, "must not fall back to another identity")
+	}
+
+	t.Run("without agent_type it names the agent_id", func(t *testing.T) {
+		require.NoError(t, h.sessionStore.Join("sess-lead", session.Participant{AgentID: "agent-bare", Parent: "4242"}))
+		result, text := whoami(t, h, map[string]any{callerArg: declared("sess-lead", "agent-bare")})
+		require.False(t, result.IsError, text)
+		assert.Contains(t, text, "agent-bare")
+	})
+}
+
+func TestDeclaredCaller_PersonaLessIam(t *testing.T) {
+	h := hookHandler(t)
+	c := declared("sess-lead", "agent-gp")
+
+	result, err := h.handleSession(context.Background(), callTool(map[string]any{
+		"method": "iam", "persona": "missing", callerArg: c,
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError, "an unknown persona is still refused")
+
+	result, err = h.handleSession(context.Background(), callTool(map[string]any{
+		"method": "iam", "persona": "bob", callerArg: c,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, resultText(t, result))
+	roster, err := h.sessionStore.Load("sess-lead")
+	require.NoError(t, err)
+	assert.Equal(t, "bob", roster.FindParticipant("agent-gp").Persona)
+	assert.Equal(t, "general-purpose", roster.FindParticipant("agent-gp").AgentType, "agent_type is kept")
+	assert.Equal(t, "alice", roster.FindParticipant("4242").Persona, "its leader's persona does not change")
+
+	_, text := whoami(t, h, map[string]any{callerArg: c})
+	assert.Equal(t, "bob", handleOf(t, text))
+}
+
+func TestDeclaredCaller_PersonaLessRosterMissionDoctor(t *testing.T) {
+	h := hookHandler(t)
+	c := declared("sess-lead", "agent-gp")
+
+	result, err := h.handleSession(context.Background(), callTool(map[string]any{"method": "roster", callerArg: c}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, resultText(t, result))
+	var roster session.Roster
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &roster))
+	assert.Equal(t, "sess-lead", roster.Session)
+
+	sid, err := h.callerSessionID(callTool(map[string]any{callerArg: c}))
+	require.NoError(t, err)
+	assert.Equal(t, "sess-lead", sid)
+
+	result, err = h.handleDoctor(context.Background(), callTool(map[string]any{callerArg: c}))
+	require.NoError(t, err)
+	text := resultText(t, result)
+	assert.Contains(t, text, "Human identity")
+	assert.Contains(t, text, "general-purpose")
+	assert.NotContains(t, text, "invalid caller persona")
 }

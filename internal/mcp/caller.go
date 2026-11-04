@@ -129,6 +129,18 @@ func (h *Handler) callerParticipant(ref callerRef) (*session.Participant, error)
 	return caller, nil
 }
 
+// noIdentity describes a caller whose participant has no persona (DES-007,
+// "Null persona handling"): a built-in subagent such as general-purpose. It
+// names the agent_type as the display name, or the agent_id when the roster
+// recorded none. The caller has no identity to load, and none is borrowed.
+func noIdentity(p *session.Participant) string {
+	label := p.AgentType
+	if label == "" {
+		label = p.AgentID
+	}
+	return fmt.Sprintf("%s has no ethos identity", label)
+}
+
 // declaredCallerResult is doctor's "Human identity" row for a declared caller.
 // refErr is the error requestCaller returned with it, if any.
 func (h *Handler) declaredCallerResult(ref callerRef, refErr error) doctor.Result {
@@ -139,6 +151,9 @@ func (h *Handler) declaredCallerResult(ref callerRef, refErr error) doctor.Resul
 	p, err := h.callerParticipant(ref)
 	if err != nil {
 		return doctor.Result{Name: name, Status: "FAIL", Detail: err.Error()}
+	}
+	if p.Persona == "" {
+		return doctor.Result{Name: name, Status: "PASS", Detail: noIdentity(p)}
 	}
 	id, err := h.loadCallerIdentity(p.Persona, identity.Reference(true))
 	if err != nil {

@@ -238,8 +238,12 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		if _, err := h.loadCallerIdentity(caller.Persona); err != nil {
-			return mcplib.NewToolResultError(err.Error()), nil
+		// A persona-less caller (DES-007) has nothing to validate: iam is how
+		// such an instance declares one.
+		if caller.Persona != "" {
+			if _, err := h.loadCallerIdentity(caller.Persona); err != nil {
+				return mcplib.NewToolResultError(err.Error()), nil
+			}
 		}
 		if _, err := h.loadCallerIdentity(persona); err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
@@ -313,6 +317,9 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		caller, err := h.callerParticipant(ref)
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if caller.Persona == "" {
+			return mcplib.NewToolResultText(noIdentity(caller)), nil
 		}
 		id, err := h.loadCallerIdentity(caller.Persona, identity.Reference(boolArg(req, "reference", false)))
 		if err != nil {
