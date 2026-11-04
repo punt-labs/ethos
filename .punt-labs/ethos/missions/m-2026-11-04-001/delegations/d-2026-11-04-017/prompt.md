@@ -1,0 +1,5 @@
+You are the worker for ethos mission m-2026-11-04-001. Read the contract: `ethos mission show m-2026-11-04-001` (draft: <repo>/.tmp/missions/mcp-caller-hook-r2.yaml). Worktree <repo>/.claude/worktrees/mcp-caller, branch fix/mcp-caller-hook — work only there.
+
+Before writing any code, read in that worktree's DESIGN.md: DES-007 (especially "Null persona handling"), DES-029 in full, DES-054, DES-061 R4, and DES-074 with its 2026-11-03 amendment. Your previous wrapper commit 2ed8f81 reversed DES-029 (a SETTLED decision) without a ruling; this mission restores DES-029's shell-reads-stdin pattern with a full-payload read. If any instruction conflicts with an ADR, stop and report with file:line instead of resolving it.
+
+Commit per logical step by explicit path, each passing `make check` (read its full output). Do not push or touch PRs. Never print environment variables. Submit the result with `ethos mission result m-2026-11-04-001 --file <path>` (round 1), then report commits, tests with fail-before evidence, and the make check summary.
