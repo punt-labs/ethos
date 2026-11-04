@@ -442,8 +442,8 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	// MCP used to skip this, leaving the active-mission sidecar in place
 	// and the commit-msg hook tagging later missionless commits with the
 	// closed mission (ethos-jawp).
-	if warnings := h.clearClosedMissionBindings(req, id); len(warnings) > 0 {
-		payload["warnings"] = warnings
+	if problems := h.clearClosedMissionBindings(req, id); len(problems) > 0 {
+		return bindingsNotCleared(id, status, problems), nil
 	}
 	return jsonResult(payload)
 }
@@ -514,21 +514,32 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 	}
 	// Parity with close: a terminal transition ends this session's work
 	// on the mission, so clear its sidecars.
-	if warnings := h.clearClosedMissionBindings(req, id); len(warnings) > 0 {
-		payload["warnings"] = warnings
+	if problems := h.clearClosedMissionBindings(req, id); len(problems) > 0 {
+		return bindingsNotCleared(id, c.Status, problems), nil
 	}
 	return jsonResult(payload)
 }
 
+// bindingsNotCleared is the error result for a mission that reached a terminal
+// status but whose session bindings could not be cleared. The status change is
+// on disk and stands; the result says so and is an error, because a sidecar
+// left behind keeps stamping the closed mission on later commits, which a
+// warning in a successful result does not stop anyone from missing.
+func bindingsNotCleared(missionID, status string, problems []string) *mcplib.CallToolResult {
+	return mcplib.NewToolResultError(fmt.Sprintf(
+		"mission %s is %s, but its session bindings were not cleared and it may still stamp commit trailers: %s",
+		missionID, status, strings.Join(problems, "; ")))
+}
+
 // clearClosedMissionBindings clears the calling session's mission
-// sidecars for a mission that just closed, and returns one warning per
+// sidecars for a mission that just closed, and returns one problem per
 // genuine failure — nil when there was nothing to do.
 //
-// The close is already on disk and cannot be undone, so a cleanup
-// failure must not turn the call into an error result. It rides back in
-// the successful result's `warnings` array instead, which the formatter
-// renders under a Warnings header: the mission closed, but a sidecar may
-// still be tagging commits.
+// The close is already on disk and cannot be undone, but a cleanup failure
+// is not advisory: a sidecar left behind keeps tagging commits with a
+// closed mission. The caller turns any problem into an error result
+// (bindingsNotCleared), including a Claude Code call that declared no
+// caller (errNoCaller), whose session cannot be known.
 //
 // No session in context means no sidecars to clear, which is ordinary
 // and silent. A session that WAS expected but could not be resolved

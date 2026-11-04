@@ -141,10 +141,10 @@ func noIdentity(p *session.Participant) string {
 	return fmt.Sprintf("%s has no ethos identity", label)
 }
 
-// declaredCallerResult is doctor's "Human identity" row for a declared caller.
+// declaredCallerResult is doctor's human-identity row for a declared caller.
 // refErr is the error requestCaller returned with it, if any.
 func (h *Handler) declaredCallerResult(ref callerRef, refErr error) doctor.Result {
-	const name = "Human identity"
+	const name = doctor.HumanIdentityRow
 	if refErr != nil {
 		return doctor.Result{Name: name, Status: "FAIL", Detail: refErr.Error()}
 	}

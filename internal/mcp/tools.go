@@ -17,7 +17,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
@@ -254,31 +253,9 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 		return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, ref.agentID, ref.sessionID)), nil
 	}
 
-	// Key the participant on ETHOS_AGENT_ID then the Claude PID — parity
-	// with the CLI so the same declaration records the same agent key on
-	// both surfaces (DES-061 R4).
-	agentID := os.Getenv("ETHOS_AGENT_ID")
-	selfKeyed := agentID == ""
-	if selfKeyed {
-		agentID = process.FindClaudePID()
-	}
-
-	p := session.Participant{AgentID: agentID, Persona: persona}
-	var joinErr error
-	if selfKeyed {
-		// Tolerate a session that started before this fix and keyed its
-		// primary participant on the walk-derived PID instead of the new
-		// preferred CLAUDE_PID — a plain Join would find no match and
-		// file a duplicate participant for the same physical process
-		// rather than updating the one already there (round 2 finding).
-		// An explicit ETHOS_AGENT_ID is exact by the caller's own
-		// declaration and is never subject to this fallback.
-		joinErr = h.sessionStore.JoinSelf(sessionID, agentID, process.LegacyClaudePID(), p)
-	} else {
-		joinErr = h.sessionStore.Join(sessionID, p)
-	}
-	if joinErr != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", joinErr)), nil
+	agentID, err := h.noCallerIam(sessionID, persona)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
 	}
 	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
 }
@@ -328,7 +305,10 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		return jsonResult(id)
 	}
 	caller := identity.ForCaller(h.store)
-	handle, err := resolve.Resolve(caller, h.sessionStore, loc.Checkout)
+	handle, err := h.noCallerHandle(caller, loc.Checkout)
+	if errors.Is(err, errNoCaller) {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
 	}
@@ -564,9 +544,11 @@ func (h *Handler) sessionTool() mcplib.Tool {
 	)
 }
 
-// resolveSessionID discovers the session ID: the session_id arg, then the
-// shared harness-neutral chain (ETHOS_SESSION, then the Claude PID walk) —
-// parity with the CLI (DES-061 R4).
+// resolveSessionID discovers the session ID: a declared caller's session, the
+// session_id arg (an administrative target), then, for a call that declared no
+// caller, noCallerSessionID: errNoCaller under Claude Code, otherwise the shared
+// harness-neutral chain (ETHOS_SESSION, then the Claude PID walk), parity with
+// the CLI (DES-061 R4).
 //
 // Mission 005 finding A: this used to collapse resolve.SessionID's two
 // failure sentinels into one generic message, so a corrupt pointer file
@@ -606,9 +588,12 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	if h.sessionStore == nil {
 		return "", fmt.Errorf("session store not configured")
 	}
-	sid, _, err := resolve.SessionID(h.sessionStore)
+	sid, err := h.noCallerSessionID()
 	if err == nil {
 		return sid, nil
+	}
+	if errors.Is(err, errNoCaller) {
+		return "", err
 	}
 	if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
 		return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")
@@ -618,13 +603,12 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 
 // callerSessionID is the session of the caller a request declares, for the
 // operations that act on the caller's own session (mission binding). Without a
-// declared caller it is resolve.SessionID, unchanged. A declared caller must be
-// an exact roster participant, and no other source answers for it.
+// declared caller it is noCallerSessionID. A declared caller must be an exact
+// roster participant, and no other source answers for it.
 func (h *Handler) callerSessionID(req mcplib.CallToolRequest) (string, error) {
 	ref, present, err := h.requestCaller(req)
 	if !present {
-		sid, _, err := resolve.SessionID(h.sessionStore)
-		return sid, err
+		return h.noCallerSessionID()
 	}
 	if err != nil {
 		return "", err
@@ -697,16 +681,14 @@ func (h *Handler) doctorTool() mcplib.Tool {
 
 func (h *Handler) handleDoctor(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	loc := resolve.Roots()
-	results := doctor.RunAllFor(loc, h.store, h.sessionStore, h.teams)
-	ref, present, err := h.requestCaller(req)
-	if present {
-		// The Human identity row resolves the caller; a declared caller is
-		// answered from its exact participant, not from env, PID, git or OS.
-		for i := range results {
-			if results[i].Name == "Human identity" {
-				results[i] = h.declaredCallerResult(ref, err)
-			}
-		}
+	// The Human identity row is the caller's: a declared caller is answered from
+	// its exact participant, a call with none from noCallerDoctor. No row is
+	// ever derived from the environment, PID, git or OS under Claude Code.
+	var results []doctor.Result
+	if ref, present, err := h.requestCaller(req); present {
+		results = doctor.RunAllForCaller(loc, h.store, h.sessionStore, h.teams, h.declaredCallerResult(ref, err))
+	} else {
+		results = h.noCallerDoctor(loc)
 	}
 
 	// Format as table text per DES-020.
