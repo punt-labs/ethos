@@ -168,8 +168,24 @@ def required_calls(calls, name, matches, description):
     selected = [tool for tool in calls if tool.get("name") == name
                 and matches(tool.get("state", {}).get("input", {}))]
     require(selected, "smoke missing required operation: " + description)
-    for tool in selected:
-        completed(tool)
+    return [completed(tool) for tool in selected]
+
+
+def required_read(calls, matches, path, description):
+    """Bind required reads to a nonempty, bounded prefix of the trusted file.
+
+    Observed 2.2.5 read content has a header followed by numbered source lines.
+    Compare up to 10 complete lines, not a filename/header or model summary.
+    The retained researcher smoke legitimately requested only the first 10.
+    Other reads may legitimately be empty; keep this out of completed().
+    """
+    lines = path.read_text().splitlines()[:10]
+    require(any(line.strip() for line in lines), description + ": trusted file prefix is empty")
+    expected = "\n" + "\n".join(f"{number}: {line}" for number, line in enumerate(lines, 1)) + "\n"
+    for state in required_calls(calls, "read", matches, description):
+        require(any(part.get("type") == "text" and isinstance(part.get("text"), str)
+                    and expected in "\n" + part["text"] + "\n" for part in state.get("content", [])),
+                description + ": returned text does not match trusted file prefix")
 
 
 DISCOVERY_SKILLS = ("ethos-prfaq", "ethos-punt-release", "ethos-zspec")
@@ -192,8 +208,8 @@ def discovery_evidence(calls, root):
         for tool in matching:
             completed(tool)
     for source in sources(root, "release") + sources(root, "prfaq"):
-        required_calls(calls, "read", lambda args: (root / args.get("path", "")).resolve() == source,
-                       "read maintained source " + source.name)
+        required_read(calls, lambda args: (root / args.get("path", "")).resolve() == source,
+                      source, "read maintained source " + source.name)
 
 
 HEALTH_INPUTS = {
@@ -543,7 +559,7 @@ def child_evidence(api, parent, author, task):
     messages = api.pages(f"/api/session/{child}/message")
     artifact = result(info, messages, child, parent, task, 1, author)
     calls = tools(messages)
-    required_calls(calls, "read", lambda args: args.get("path") == "go.mod", "child read go.mod")
+    required_read(calls, lambda args: args.get("path") == "go.mod", api.root / "go.mod", "child read go.mod")
     for tool in calls:
         require(tool.get("name") == "read", "read-only child used a tool other than read")
         completed(tool)

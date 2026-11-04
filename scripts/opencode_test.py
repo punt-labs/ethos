@@ -335,6 +335,21 @@ class ResultTests(unittest.TestCase):
 
 
 class LiveHelperTests(unittest.TestCase):
+    @staticmethod
+    def read_tool(path):
+        lines = (oc.ROOT / path).read_text().splitlines()
+        text = f"Read file {path}, lines 1-{len(lines)}\n"
+        text += "\n".join(f"{number}: {line}" for number, line in enumerate(lines, 1))
+        return {"type": "tool", "name": "read", "state": {
+            "status": "completed", "input": {"path": str(path)},
+            "content": [{"type": "text", "text": text}], "metadata": {"truncated": False}}}
+
+    @staticmethod
+    def invalid_read_contents():
+        return (None, [], [{"type": "text", "text": ""}], [{"type": "text", "text": " \n"}],
+                [{"type": "text", "text": "Read file go.mod, lines 1-1\n1: unrelated source"}],
+                [{"type": "text", "text": "Read completed successfully"}])
+
     def test_child_parent_dispatch_rejects_extra_tools(self):
         dispatch = {"name": "subagent", "state": {"status": "completed", "metadata": {"sessionID": "ses_child"}}}
         live.dispatch_evidence([dispatch], "ses_child")
@@ -349,17 +364,28 @@ class LiveHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(oc.CheckError, "exact child ID"):
             live.dispatch_evidence([dispatch], "ses_other")
 
-    def test_child_evidence_rejects_non_read_tools(self):
+    def test_child_evidence_requires_read_content_and_rejects_non_read_tools(self):
         info = {"id": "ses_child", "parentID": "ses_parent", "agent": "rsc",
                 "outcome": "succeeded", "model": oc.model_ref(oc.ROSTER["rsc"])}
         artifact = f"{oc.START}\ntask: ethos-t1uy\nround: 1\nauthor: rsc\n{oc.END}\nObserved module.\n"
-        read = {"type": "tool", "name": "read", "state": {"status": "completed", "input": {"path": "go.mod"}}}
+        read = self.read_tool("go.mod")
         message = {"id": "msg_final", "type": "assistant", "agent": "rsc", "model": info["model"],
                    "time": {"completed": 20}, "content": [read, {"type": "text", "text": artifact}]}
         api = live.API(oc.ROOT)
         with patch.object(api, "call", return_value={"data": info}), \
                 patch.object(api, "pages", side_effect=lambda path, *args: [info] if path == "/api/session" else [message]):
             self.assertEqual(live.child_evidence(api, "ses_parent", "rsc", "ethos-t1uy"), ("ses_child", artifact))
+            for content in self.invalid_read_contents():
+                bad = copy.deepcopy(read)
+                if content is None:
+                    del bad["state"]["content"]
+                else:
+                    bad["state"]["content"] = content
+                for attempts in ([bad], [bad, read], [read, bad]):
+                    message["content"] = [*attempts, {"type": "text", "text": artifact}]
+                    with self.subTest(content=content, attempts=len(attempts)), \
+                            self.assertRaisesRegex(oc.CheckError, "returned text"):
+                        live.child_evidence(api, "ses_parent", "rsc", "ethos-t1uy")
             for name in ("shell", "execute", "edit", "write", "patch", "subagent", "skill"):
                 extra = {"type": "tool", "name": name, "state": {"status": "completed"}}
                 message["content"] = [read, extra, {"type": "text", "text": artifact}]
@@ -517,17 +543,35 @@ class LiveHelperTests(unittest.TestCase):
                     live.required_calls(calls, "shell", matches, "required")
 
     def test_discovery_requires_zspec_help_and_all_required_operations(self):
-        paths = [oc.ROOT / "procedure/SKILL.md", oc.ROOT / "procedure/release.yaml"]
+        temp = tempfile.TemporaryDirectory(dir=oc.ROOT / ".tmp/opencode", prefix="round10-discovery-")
+        self.addCleanup(temp.cleanup)
+        paths = [Path(temp.name) / name for name in ("SKILL.md", "release.yaml")]
+        for path in paths:
+            path.write_text(f"# Maintained procedure {path.name}\n\nRead this actual source.\n")
         calls = [{"name": "skill", "state": {"status": "completed", "input": {"id": skill}}}
                  for skill in live.DISCOVERY_SKILLS]
         calls += [{"name": "shell", "state": {"status": "completed", "input": {"command": command},
                                               "metadata": {"status": "completed", "exit": 0}}}
                   for command in live.DISCOVERY_COMMANDS]
-        calls += [{"name": "read", "state": {"status": "completed", "input": {"path": str(path)}}}
-                  for path in paths]
+        calls += [self.read_tool(path) for path in paths]
         self.assertIn("z-spec --help", live.DISCOVERY_COMMANDS)
         with patch.object(live, "sources", return_value=paths):
             live.discovery_evidence(calls, oc.ROOT)
+            for index in range(len(calls) - len(paths), len(calls)):
+                for content in self.invalid_read_contents():
+                    changed = copy.deepcopy(calls)
+                    if content is None:
+                        del changed[index]["state"]["content"]
+                    else:
+                        changed[index]["state"]["content"] = content
+                    for attempts in (changed, changed + calls, calls + changed):
+                        with self.subTest(read=index, content=content, attempts=len(attempts)), \
+                                self.assertRaisesRegex(oc.CheckError, "returned text"):
+                            live.discovery_evidence(attempts, oc.ROOT)
+                changed = copy.deepcopy(calls)
+                changed[index]["state"]["content"] = calls[-1 if index == len(calls) - 2 else -2]["state"]["content"]
+                with self.subTest(wrong_file=index), self.assertRaisesRegex(oc.CheckError, "returned text"):
+                    live.discovery_evidence(changed, oc.ROOT)
             unrelated = {"name": "shell", "state": {"status": "error", "input": {"command": "unrelated"}}}
             live.discovery_evidence([unrelated, *calls], oc.ROOT)
             for command in live.DISCOVERY_ADAPTER_COMMANDS:
@@ -544,6 +588,25 @@ class LiveHelperTests(unittest.TestCase):
                 changed[index]["state"]["status"] = "error"
                 with self.subTest(failed=index), self.assertRaises(oc.CheckError):
                     live.discovery_evidence(changed + calls, oc.ROOT)
+
+    def test_required_read_compares_complete_bounded_source_lines(self):
+        read = self.read_tool("go.mod")
+        def matches(args):
+            return args.get("path") == "go.mod"
+        text = read["state"]["content"][0]["text"]
+        # The real retained researcher read requested offset 1, limit 10.
+        read["state"]["input"].update(offset=1, limit=10)
+        read["state"]["content"][0]["text"] = "\n".join(text.splitlines()[:11])
+        live.required_read([read], matches, oc.ROOT / "go.mod", "child read go.mod")
+        for bad_text in (text.splitlines()[0], "\n".join(text.splitlines()[:2]),
+                         text.replace("10: ", "10: unrelated "),
+                         "\n".join(text.splitlines()[:11]) + " unrelated suffix"):
+            changed = copy.deepcopy(read)
+            changed["state"]["content"][0]["text"] = bad_text
+            with self.subTest(text=bad_text), self.assertRaisesRegex(oc.CheckError, "returned text"):
+                live.required_read([changed], matches, oc.ROOT / "go.mod", "child read go.mod")
+        # Generic completion must still accept a legitimate empty read.
+        live.completed({"name": "read", "state": {"status": "completed", "content": []}})
 
     def test_smoke_cli_passes_explicit_stage_selection(self):
         with patch("sys.argv", ["opencode.py", "smoke", "--stage", "discovery", "--stage", "health"]), \
