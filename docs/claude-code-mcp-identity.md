@@ -20,12 +20,11 @@ resolves to its own persona and not its leader's. For the leader it is the
 hook's own corroborated `CLAUDE_PID`, the key `SessionStart` wrote for the
 primary participant. The hook overwrites any `_caller` the model supplied. It
 returns no `permissionDecision`, so permission rules apply as they would
-without the hook. A payload with no `agent_id` is the main thread, even when it carries an
-`agent_type` (a `claude --agent` session does), and keys on `CLAUDE_PID`. If the
-payload has no `session_id`, or no agent key can be determined, the hook
-declares no caller,
-removes any `_caller` the model supplied so the server sees none, and logs the
-cause to `hook-errors.log`.
+without the hook. A payload with no `agent_id` is the main thread, even when it
+carries an `agent_type` (a `claude --agent` session does), and keys on
+`CLAUDE_PID`. If the payload has no `session_id`, or no agent key can be
+determined, the hook declares no caller, removes any `_caller` the model
+supplied so the server sees none, and logs the cause to `hook-errors.log`.
 
 ### When the hook cannot do its work
 
@@ -50,6 +49,22 @@ exact-participant path as the OpenCode pilot (`docs/opencode-mcp-identity.md`):
 the roster for `session_id` must exist and hold exactly one participant with
 that `agent_id`. Otherwise the call fails with a named error. The server never
 falls back to the environment, the process tree, git, or the OS user.
+
+A `_caller` that is present is judged on its own: a malformed one, or one naming
+a participant that is not in the roster, is refused, and the environment does
+not stand in for it. A well-formed `_caller` naming a real participant is
+routed, whoever wrote it (see below).
+
+- `session_id` and `agent_id` must each be nonempty and contain only ASCII
+  letters, digits, underscores, or hyphens. Any other key, type, or value is an
+  error.
+- An explicit `session_id` argument keeps its meaning as an administrative
+  target for `roster`, `join`, and `leave`; `_caller` does not override it.
+- `iam` changes only the declared caller's own participant, and refuses a
+  different `session_id` or `agent_id`.
+- A client that is not Claude Code keeps the existing chain (`ETHOS_SESSION`,
+  `ETHOS_AGENT_ID`, the process tree). A Claude Code call with no `_caller` is
+  refused (see below).
 
 ### A Claude Code call with no `_caller`
 
@@ -80,21 +95,6 @@ every session the server outlives, and Claude Code gives the server no
   that is an administrative target, not a declaration about the caller.
 - A client that is not Claude Code is unchanged: the harness-neutral chain
   (`ETHOS_SESSION`, `ETHOS_AGENT_ID`, the process tree) still answers.
-
-A `_caller` that is present is judged on its own: a malformed one, or one naming
-a participant that is not in the roster, is refused, and the environment does
-not stand in for it. A well-formed `_caller` naming a real participant is
-routed, whoever wrote it (see below).
-
-- `session_id` and `agent_id` must each be nonempty and contain only ASCII
-  letters, digits, underscores, or hyphens. Any other key, type, or value is an
-  error.
-- An explicit `session_id` argument keeps its meaning as an administrative
-  target for `roster`, `join`, and `leave`; `_caller` does not override it.
-- `iam` changes only the declared caller's own participant, and refuses a
-  different `session_id` or `agent_id`.
-- Without `_caller` (a client other than Claude Code, or no hook) behavior is
-  unchanged, as for any client that is not Claude Code.
 
 ### Callers with no persona
 
