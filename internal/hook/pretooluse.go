@@ -20,11 +20,53 @@ type PreToolUseResult struct {
 }
 
 type preToolUseOutput struct {
-	HookEventName            string            `json:"hookEventName"`
-	PermissionDecision       string            `json:"permissionDecision,omitempty"`
-	PermissionDecisionReason string            `json:"permissionDecisionReason,omitempty"`
-	AdditionalEnv            map[string]string `json:"additionalEnv,omitempty"`
-	UpdatedInput             map[string]any    `json:"updatedInput,omitempty"`
+	HookEventName            string             `json:"hookEventName"`
+	PermissionDecision       permissionDecision `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string             `json:"permissionDecisionReason,omitempty"`
+	AdditionalEnv            map[string]string  `json:"additionalEnv,omitempty"`
+	UpdatedInput             map[string]any     `json:"updatedInput,omitempty"`
+}
+
+// permissionDecision is the one permission decision ethos's PreToolUse hook can
+// express: deny. The zero value is no decision and is left out of the output.
+// There is deliberately no value for "allow": in Claude Code it approves a call
+// without asking, past the user's own permission rules, and ethos is a
+// permission authority only where it denies (DESIGN.md DES-074, amendment
+// 2026-11-03). A type that cannot hold the word keeps it from coming back.
+type permissionDecision bool
+
+const decisionDeny permissionDecision = true
+
+func (d permissionDecision) MarshalJSON() ([]byte, error) {
+	if d {
+		return []byte(`"deny"`), nil
+	}
+	return []byte(`""`), nil
+}
+
+func (d *permissionDecision) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("permissionDecision: %w", err)
+	}
+	switch s {
+	case "":
+		*d = false
+	case "deny":
+		*d = true
+	default:
+		return fmt.Errorf("permissionDecision %q is not expressible: ethos decides deny or nothing", s)
+	}
+	return nil
+}
+
+// Decision is the permission decision as Claude Code reads it: "deny", or ""
+// for none.
+func (o preToolUseOutput) Decision() string {
+	if o.PermissionDecision {
+		return "deny"
+	}
+	return ""
 }
 
 // preToolUsePass lets the call proceed. It carries no permissionDecision: in
@@ -48,7 +90,7 @@ func preToolUsePassWithEnv(env map[string]string) PreToolUseResult {
 func preToolUseDeny(reason string) PreToolUseResult {
 	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
 		HookEventName:            "PreToolUse",
-		PermissionDecision:       "deny",
+		PermissionDecision:       decisionDeny,
 		PermissionDecisionReason: reason,
 	}}
 }
@@ -87,9 +129,13 @@ func preToolUseDeny(reason string) PreToolUseResult {
 // allowlist, so the hot path (verifier touching a declared file) is
 // unchanged.
 func HandlePreToolUse(r io.Reader, w io.Writer) error {
-	input, err := ReadInput(r, hookInputTimeout)
+	raw, err := readRaw(r, hookInputTimeout)
+	var input map[string]any
+	if err == nil {
+		input, err = parseJSON(raw)
+	}
 	if err != nil {
-		return fmt.Errorf("pre-tool-use: %w", err)
+		return refuseUnreadable(raw, w, fmt.Errorf("pre-tool-use: %w", err))
 	}
 
 	toolName, _ := input["tool_name"].(string)

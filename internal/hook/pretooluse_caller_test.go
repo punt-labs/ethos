@@ -3,10 +3,14 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -212,4 +216,118 @@ func TestPreToolUse_NoCallerStripsSpoofedCaller(t *testing.T) {
 		assert.Equal(t, "deny", out["permissionDecision"])
 		assert.NotContains(t, out, "updatedInput")
 	})
+}
+
+// A payload that names an agent_type but no agent_id is not the leader, and
+// CLAUDE_PID would name it as one: no caller is declared, a supplied _caller is
+// stripped, and the cause is logged.
+func TestPreToolUse_AgentTypeWithoutAgentIDDeclaresNoCaller(t *testing.T) {
+	withCorroboratedPID(t)
+	p := ethosCall(map[string]any{"agent_type": "bwk"})
+	p["tool_input"] = map[string]any{"method": "whoami", callerArg: map[string]any{"session_id": "victim", "agent_id": "x"}}
+	var out map[string]map[string]any
+	stderr := captureStderr(t, func() { out = runPreToolUse(t, p) })
+	got := out["hookSpecificOutput"]
+	assert.Equal(t, map[string]any{"method": "whoami"}, got["updatedInput"], "no _caller, and the spoofed one stripped")
+	assert.NotContains(t, got, "permissionDecision")
+	assert.Contains(t, stderr, `agent_type "bwk" but no agent_id`)
+
+	// With agent_id the same agent_type is declared, keyed on the agent_id.
+	p = ethosCall(map[string]any{"agent_type": "bwk", "agent_id": "agent-sub1"})
+	caller := runPreToolUse(t, p)["hookSpecificOutput"]["updatedInput"].(map[string]any)[callerArg]
+	assert.Equal(t, map[string]any{"session_id": "sess-1", "agent_id": "agent-sub1"}, caller)
+}
+
+// Every reason no caller can be declared is logged, not only the spoofed case.
+func TestPreToolUse_NoCallerLogsTheCause(t *testing.T) {
+	withCorroboratedPID(t)
+	for name, tc := range map[string]struct {
+		setup func(p map[string]any)
+		want  string
+	}{
+		"no session_id":   {func(p map[string]any) { delete(p, "session_id") }, "no session_id"},
+		"no agent key":    {func(p map[string]any) { t.Setenv("CLAUDE_PID", "") }, "CLAUDE_PID is absent or not a live ancestor"},
+		"agent_type only": {func(p map[string]any) { p["agent_type"] = "Explore" }, "no agent_id"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := ethosCall(nil)
+			tc.setup(p)
+			stderr := captureStderr(t, func() { runPreToolUse(t, p) })
+			assert.Contains(t, stderr, "no caller declared for mcp__plugin_ethos_self__identity")
+			assert.Contains(t, stderr, tc.want)
+		})
+	}
+}
+
+// A payload that cannot be read or parsed, for a call to an ethos MCP tool, is
+// denied with the cause named, never an error with no output: the call would
+// reach the server with no caller declared. Before this the hook returned the
+// error and wrote nothing.
+func TestPreToolUse_UnreadablePayloadForEthosToolDenies(t *testing.T) {
+	boom := errors.New("boom")
+	whole := `{"tool_name":"mcp__plugin_ethos_self__session","session_id":"s","tool_input":{"method":"roster"}}`
+	for name, tc := range map[string]struct {
+		in   io.Reader
+		tool string
+		want string
+	}{
+		"truncated":        {strings.NewReader(whole[:len(whole)-9]), "mcp__plugin_ethos_self__session", "invalid JSON input"},
+		"trailing garbage": {strings.NewReader(whole + "x"), "mcp__plugin_ethos_self__session", "invalid JSON input"},
+		"read error": {io.MultiReader(strings.NewReader(whole[:len(whole)-9]), iotest.ErrReader(boom)),
+			"mcp__plugin_ethos_self__session", "boom"},
+		"dev prefix": {strings.NewReader(`{"tool_name": "mcp__plugin_ethos-dev_self__doctor", "tool_in`),
+			"mcp__plugin_ethos-dev_self__doctor", "invalid JSON input"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			var err error
+			stderr := captureStderr(t, func() { err = HandlePreToolUse(tc.in, &out) })
+			require.NoError(t, err, "the hook answers; it does not fail with no output")
+			var got PreToolUseResult
+			require.NoError(t, json.Unmarshal(out.Bytes(), &got), out.String())
+			assert.Equal(t, "deny", got.HookSpecificOutput.Decision())
+			assert.Contains(t, got.HookSpecificOutput.PermissionDecisionReason, tc.tool)
+			assert.Contains(t, got.HookSpecificOutput.PermissionDecisionReason, tc.want)
+			assert.Contains(t, stderr, tc.want, "the cause is logged for hook-errors.log")
+			assert.Empty(t, got.HookSpecificOutput.UpdatedInput)
+		})
+	}
+
+	t.Run("a payload that is not for an ethos tool keeps the error", func(t *testing.T) {
+		for _, in := range []string{
+			`{"tool_name":"Bash","tool_input":{"command":"ls"`,
+			`{"tool_name":"mcp__plugin_ethosx_self__identity","tool_in`,
+			`{"tool_input":{"x":"mcp__plugin_ethos_self__identity"`, // not its tool_name
+			`not json`,
+		} {
+			var out bytes.Buffer
+			err := HandlePreToolUse(strings.NewReader(in), &out)
+			require.Error(t, err, in)
+			assert.Empty(t, out.String(), in)
+		}
+	})
+}
+
+// The output type cannot say "allow": a decoded permissionDecision is deny or
+// nothing, so a handler cannot return the word that approves a call past the
+// user's permission rules.
+func TestPermissionDecisionCannotExpressAllow(t *testing.T) {
+	assert.Equal(t, reflect.Bool, reflect.TypeOf(preToolUseOutput{}.PermissionDecision).Kind())
+
+	deny, err := json.Marshal(preToolUseDeny("why"))
+	require.NoError(t, err)
+	assert.Contains(t, string(deny), `"permissionDecision":"deny"`)
+	pass, err := json.Marshal(preToolUsePass())
+	require.NoError(t, err)
+	assert.NotContains(t, string(pass), "permissionDecision")
+
+	for _, word := range []string{"allow", "ask", "Deny", "true"} {
+		var o preToolUseOutput
+		err := json.Unmarshal([]byte(`{"permissionDecision":"`+word+`"}`), &o)
+		require.Error(t, err, word)
+		assert.Contains(t, err.Error(), "not expressible")
+	}
+	var o preToolUseOutput
+	require.NoError(t, json.Unmarshal([]byte(`{"permissionDecision":"deny"}`), &o))
+	assert.Equal(t, "deny", o.Decision())
 }

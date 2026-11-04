@@ -64,7 +64,7 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 			done <- result{err: err}
 			return
 		}
-		done <- result{decision: r.HookSpecificOutput.PermissionDecision, waited: waited}
+		done <- result{decision: r.HookSpecificOutput.Decision(), waited: waited}
 	}()
 
 	hold := 80 * time.Millisecond
