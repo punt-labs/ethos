@@ -715,14 +715,11 @@ func TestResolveSessionID_NeverReturnsEmptySidWithNilErr(t *testing.T) {
 	assert.Empty(t, sid)
 }
 
-// TestResolveSessionID_ReportsRealCauseUnderClaudeCode pins mission 005
-// finding A at this site: before this fix, resolveSessionID's loud
-// branch was reachable in shape but untested, and the sibling
-// silent-path message ("no active session; run `ethos session start`
-// or pass session_id") is generic enough that a caller reading it for
-// a genuine resolution failure (session expected, pointer file
-// corrupt or missing under Claude Code) would have no way to tell that
-// apart from the ordinary "nothing is running" case.
+// TestResolveSessionID_ReportsRealCauseUnderClaudeCode: under Claude Code a
+// call that declared no caller is refused with the named error that says why
+// (the hook did not declare one), not the generic absent-session text and not
+// an answer from the pointer file: the MCP server has no CLAUDE_PID, so any
+// session the chain found would be a guess (DES-074, amendment 2026-11-03).
 func TestResolveSessionID_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	h := testHandlerWithSession(t)
 	t.Setenv("ETHOS_SESSION", "")
@@ -731,10 +728,9 @@ func TestResolveSessionID_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 
 	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
-	require.Error(t, err)
+	require.ErrorIs(t, err, errNoCaller)
 	assert.Empty(t, sid)
-	assert.Contains(t, err.Error(), "cannot identify the calling session",
-		"a session that was expected but unresolvable must name the real cause, not the generic absent-session text")
+	assert.Contains(t, err.Error(), "without _caller")
 }
 
 // TestHandleIam_HonorsAgentID pins DES-061 R4: the MCP iam handler keys the

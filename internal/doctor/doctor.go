@@ -48,11 +48,29 @@ func (r Result) Passed() bool {
 	return r.Status == "PASS" || r.Status == "WARN"
 }
 
+// HumanIdentityRow is the name of doctor's human-identity row. Everything that
+// reports or replaces that row uses it, so the row cannot be told apart by a
+// string that has drifted.
+const HumanIdentityRow = "Human identity"
+
 // RunAllFor is RunAll for a located repository: a store ethos cannot use
 // (StoreFailure) is passed as no store root, so no check reads a broken store
 // as if it were usable, and the "Repository store" row fails. The CLI and the
 // MCP doctor tool both go through it.
 func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore) []Result {
+	return runAllFor(loc, s, ss, teams, nil)
+}
+
+// RunAllForCaller is RunAllFor with the "Human identity" row supplied by the
+// caller instead of resolved here. A caller that already knows who is calling
+// (the MCP server, answering from a declared participant) passes its answer, so
+// the row can never be one derived from the environment, the process tree, git
+// or the OS user. The row's Name must be HumanIdentityRow.
+func RunAllForCaller(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore, human Result) []Result {
+	return runAllFor(loc, s, ss, teams, &human)
+}
+
+func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore, human *Result) []Result {
 	storeRoot, storeErr := loc.Store, loc.StoreFailure()
 	if storeErr != nil {
 		storeRoot = ""
@@ -68,7 +86,7 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 		}
 		issue = bundle.ConfigIssue(loc.Store, loc.Ethos, global)
 	}
-	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, teams)
+	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, teams, human)
 	if issue != nil {
 		what, _, _ := resolve.Describe(issue)
 		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
@@ -95,13 +113,14 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 // non-exempt command refuses in that state — and the checks that read the
 // store are gated (gateStore).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr error, teams *team.LayeredStore) []Result {
-	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, teams)
+	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, teams, nil)
 }
 
 // runAll is RunAll with the configuration issue that governs the store layers
 // (nil for none): every store check gates on it as it does on a store that was
-// not located.
-func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, teams *team.LayeredStore) []Result {
+// not located. human, when not nil, is the "Human identity" row to report in
+// place of resolving one.
+func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, teams *team.LayeredStore, human *Result) []Result {
 	results := make([]Result, 0, 17) // matches today's check count; a stale hint just costs one reallocation, not correctness
 
 	checkout := func(r Result) Result { return gateCheckout(r, repoRoot, rootErr) }
@@ -124,7 +143,11 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 
 	// Human identity carries its own status: a fresh install (no identity
 	// yet) is a WARN pointing at `ethos setup`, not a FAIL.
-	results = append(results, checkout(store(CheckHumanIdentity(s, ss, repoRoot))))
+	if human != nil {
+		results = append(results, checkout(store(*human)))
+	} else {
+		results = append(results, checkout(store(CheckHumanIdentity(s, ss, repoRoot))))
+	}
 
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
@@ -1210,7 +1233,7 @@ func inspectIdentitiesDir(dir string) (dirState, string) {
 // prefix contradicted the second one: an ambiguous store has too many matches,
 // not none.
 func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout string) Result {
-	name := "Human identity"
+	name := HumanIdentityRow
 	s = identity.ForCaller(s)
 	handle, err := resolve.Resolve(s, ss, checkout)
 	if err != nil {

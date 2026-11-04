@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Ethos no longer auto-approves tool calls. The PreToolUse hook answered
+  `permissionDecision: "allow"` for every call it did not deny, and in Claude
+  Code "allow" approves a call without asking, past the user's own permission
+  checks, in every repo with ethos hooks installed (a Bash command Claude Code
+  refused ran with the hooks on). A pass-through now carries no
+  `permissionDecision`, so Claude Code's own rules decide. `deny` is unchanged:
+  verifier allowlists and mission preconditions still refuse.
+
+- The MCP server no longer answers a Claude Code call whose caller nobody
+  declared. With the PreToolUse hook missing, disabled, killed
+  (`~/.punt-hooks-kill`) or unable to declare a caller, `identity whoami`,
+  `session roster`, `join`, `leave` and `iam` without a `session_id`, mission
+  binding, and the `doctor` Human identity row fell back to the environment and
+  the process tree, which the server shares with every session it outlives, and
+  could answer with another session's identity and no error. They now return
+  "Claude Code call arrived without _caller: the ethos PreToolUse hook did not
+  declare the caller (is it installed, enabled, and not killed?)". An explicit
+  `session_id` on `roster`, `join` and `leave` still works, and a client that is
+  not Claude Code keeps the old chain.
+- The PreToolUse hook denies a call to an ethos MCP tool when it cannot read or
+  parse the payload or a step fails, naming the cause, instead of exiting with
+  an error and no output (which let the call through with no caller declared).
+
+### Fixed
+
+- Closing or abandoning a mission over MCP returns an error result, not a
+  warning in a successful one, when its session bindings could not be cleared
+  (including a Claude Code call with no declared caller). The status change
+  stands; the result says so, and that the closed mission may still stamp commit
+  trailers.
+- A hook that stalled or failed while reading its payload was indistinguishable
+  from one given no input. `ReadInput` now returns an error wrapping
+  `ErrInputTimeout` (with the bytes read) when the deadline fires, and an error
+  for a read failure other than end of input, and treats only a complete JSON
+  object as a whole payload. The hook wrappers append
+  `ethos session-start: stdin read timed out after 10s (N bytes)` (with their
+  own hook's name) to `hook-errors.log` when their own read times out.
+- Hooks wait up to 10 seconds, as one overall deadline, for Claude Code's
+  payload instead of one second with a tenth-of-that gap between chunks, so a
+  writer that pauses mid-payload no longer truncates a large Edit.
+
+- The MCP identity and session tools work under Claude Code. Claude Code gives
+  MCP servers no `CLAUDE_PID`, so `identity whoami`, `session roster` and `iam`
+  without a `session_id`, mission binding, and the `doctor` Human identity row
+  failed with "cannot identify the calling session". The PreToolUse hook now
+  declares the caller on every ethos MCP call (`_caller`: the payload's
+  `session_id`, and its `agent_id` for a subagent or the leader's corroborated
+  `CLAUDE_PID`), and the server resolves it from the exact roster participant,
+  never from the environment. A subagent resolves to its own persona. See
+  `docs/claude-code-mcp-identity.md`.
+- MCP calls from a nested `claude -p` resolved the outer session. The nested
+  session's MCP server inherited the outer `CLAUDE_PID`, corroborated it, and
+  returned the outer roster with no error. The caller now comes from the hook
+  payload's own `session_id`.
+- Hook wrappers truncated payloads over 8 KiB. A writer that paused after its
+  first 8 KiB left `read -r -t 1` with a partial line, and `hook-errors.log`
+  filled with `invalid JSON input (8192 bytes)`; a multi-line payload was cut at
+  its first newline. The wrappers still read stdin in bash and hand ethos a
+  fresh pipe (DES-029: Go hung on the fd Claude Code's `/bin/sh` passes down,
+  on Linux), but now read the whole payload, waiting up to 10 seconds.
+- A subagent with no ethos persona (general-purpose, Explore) made every MCP
+  call that resolves the caller fail with `invalid caller persona ""`. Per
+  DES-007, `identity whoami` now answers that the caller has no ethos identity,
+  naming its `agent_type` (or its `agent_id` when none was recorded); `iam`
+  lets such a caller declare a persona; `doctor` reports it on the Human
+  identity row. No other identity answers for it.
+
 ## [4.20.3] - 2026-11-03
 
 ### Fixed
