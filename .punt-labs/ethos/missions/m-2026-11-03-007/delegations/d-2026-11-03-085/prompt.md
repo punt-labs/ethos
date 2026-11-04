@@ -1,0 +1,7 @@
+You are the worker for ethos mission m-2026-11-03-007. Read the contract first: `ethos mission show m-2026-11-03-007` (draft copy: <repo>/.tmp/missions/mcp-caller-hook.yaml). Work only in the worktree <repo>/.claude/worktrees/mcp-caller on branch fix/mcp-caller-hook.
+
+Before any code, read in that worktree: DESIGN.md DES-074 in full including the new "Amendment 2026-11-03" at its end (commit 1de1d61), DES-061 (R4), DES-017, and docs/opencode-mcp-identity.md, plus internal/mcp/caller.go and internal/hook/pretooluse*.go. The amendment is the authority; if the code contradicts it, stop and report with file:line.
+
+Commit on your branch, by explicit path, one logical step per commit, each passing `make check` (read its full output). Do not push, do not touch PRs or merge — the leader does that. Never print environment variables (no bare `env`/`printenv`; secrets are present). If you need to test under a nested `claude -p`, do it only in a sandbox under the worktree's .tmp/ and report what you ran.
+
+When done, submit your result to the mission (`ethos mission result` per the CLI help) and report: commits (SHA + subject), test names with fail-before/pass-after evidence, the exact make check summary, and any DES-074 amendment text you think is needed.
