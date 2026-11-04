@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The MCP identity and session tools work under Claude Code. Claude Code gives
+  MCP servers no `CLAUDE_PID`, so `identity whoami`, `session roster` and `iam`
+  without a `session_id`, mission binding, and the `doctor` Human identity row
+  failed with "cannot identify the calling session". The PreToolUse hook now
+  declares the caller on every ethos MCP call (`_caller`: the payload's
+  `session_id`, and its `agent_id` for a subagent or the leader's corroborated
+  `CLAUDE_PID`), and the server resolves it from the exact roster participant,
+  never from the environment. A subagent resolves to its own persona. See
+  `docs/claude-code-mcp-identity.md`.
+- MCP calls from a nested `claude -p` resolved the outer session. The nested
+  session's MCP server inherited the outer `CLAUDE_PID`, corroborated it, and
+  returned the outer roster with no error. The caller now comes from the hook
+  payload's own `session_id`.
+- Hook wrappers truncated payloads over 8 KiB. A writer that paused after its
+  first 8 KiB left `read -r -t 1` with a partial line, and `hook-errors.log`
+  filled with `invalid JSON input (8192 bytes)`; a multi-line payload was cut at
+  its first newline. The wrappers now pass stdin to ethos unmodified.
+
 ## [4.20.3] - 2026-11-03
 
 ### Fixed
