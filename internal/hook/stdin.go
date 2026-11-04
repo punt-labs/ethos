@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+// hookInputTimeout bounds how long a hook waits for Claude Code's payload.
+// Claude Code serializes a large payload (an Edit of a big file) in pieces and
+// can pause for more than a second between them while it is busy. A complete
+// JSON value ends the wait at once, so the bound is paid only when the payload
+// never completes: a hook that is given no input and an open stdin.
+const hookInputTimeout = 10 * time.Second
+
 // ReadInput reads a JSON object from r with a timeout. Returns an empty
 // map on empty input or timeout. Returns an error on read failures or
 // malformed JSON (callers should log but continue — hooks must be
@@ -50,15 +57,12 @@ func readFromFile(f *os.File, timeout time.Duration) (map[string]any, error) {
 		n, err := f.Read(chunk)
 		if n > 0 {
 			buf = append(buf, chunk[:n]...)
-			// Use a fraction of the initial timeout for inter-chunk
-			// gaps. Large enough for OS-level buffering delays, small
-			// enough to detect an open pipe without EOF promptly.
-			interChunk := timeout / 10
-			if interChunk < 20*time.Millisecond {
-				interChunk = 20 * time.Millisecond
-			}
-			if sdErr := f.SetReadDeadline(time.Now().Add(interChunk)); sdErr != nil {
-				break // stop reading rather than risk hanging
+			// A complete JSON value ends the payload even when the writer
+			// keeps the pipe open. Until then the one deadline set above
+			// bounds the wait: a writer may pause between the pieces of a
+			// large payload for longer than any fixed gap.
+			if json.Valid(bytes.TrimSpace(buf)) {
+				break
 			}
 		}
 		if err != nil {

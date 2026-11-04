@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -50,7 +49,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 
 	store := deps.Store
 	ss := deps.Sessions
-	input, err := ReadInput(r, time.Second)
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("session-start: %w", err)
 	}
