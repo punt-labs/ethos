@@ -447,4 +447,4 @@ ID (if any), round count, and timestamps. See DES-050 in
   discussion and rationale
 - [Mission pipelines design](mission-pipelines.md) — pipeline
   semantics, error handling, events
-- [Agent guide](../AGENTS.md) — CLI, MCP tools, hooks
+- [Agent guide](agent-guide.md) — CLI, MCP tools, hooks

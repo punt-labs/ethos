@@ -1,0 +1,86 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "bifrost/openai/gpt-6-astra",
+  "default_agent": "build",
+  "providers": {
+    "bifrost": {
+      "models": {
+        "openai/gpt-6-astra": { "settings": { "reasoningEffort": "high" } },
+        "openai/gpt-6.1-sol": {
+          "name": "openai/gpt-6.1-sol",
+          "limit": { "context": 200000, "output": 32000 },
+          "variants": [{ "id": "high", "settings": { "reasoningEffort": "high" } }]
+        }
+      }
+    }
+  },
+  "instructions": ["docs/opencode-workflow.md"],
+  "agents": {
+    "build": { "model": "bifrost/openai/gpt-6-astra#high" }
+  },
+  "commands": {
+    "punt:auto": {
+      "description": "Run the approved punt auto-release workflow using maintained procedures",
+      "agent": "build",
+      "model": "bifrost/openai/gpt-6-astra#high",
+      "template": "Load ethos-punt-release. Request: $ARGUMENTS. Support release only. Locate and read both maintained executor/playbook sources with scripts/opencode.py, then execute their protocol against the current target repo only when explicitly authorized. For discovery/smoke, read procedures/help only; never release. Preserve review gates and use a separate independent verification context."
+    }
+  },
+  "permissions": [
+    { "action": "*", "resource": "*", "effect": "allow" },
+    { "action": "read", "resource": "*.env*", "effect": "ask" },
+    { "action": "read", "resource": "*.envrc*", "effect": "ask" },
+    { "action": "edit", "resource": "*.env*", "effect": "deny" },
+    { "action": "edit", "resource": "*.envrc*", "effect": "deny" },
+    { "action": "shell", "resource": "sudo *", "effect": "ask" },
+    { "action": "shell", "resource": "su *", "effect": "ask" },
+    { "action": "shell", "resource": "direnv allow *", "effect": "ask" }
+  ],
+  "lsp": {
+    "gopls": { "command": ["gopls"], "extensions": [".go"] }
+  },
+  "formatter": {
+    "gofmt": { "command": ["gofmt", "-w", "$FILE"], "extensions": [".go"] },
+    "mix": { "disabled": true },
+    "oxfmt": { "disabled": true },
+    "prettier": { "disabled": true },
+    "biome": { "disabled": true },
+    "zig": { "disabled": true },
+    "clang-format": { "disabled": true },
+    "ktlint": { "disabled": true },
+    "ruff": { "disabled": true },
+    "air": { "disabled": true },
+    "uv": { "disabled": true },
+    "rubocop": { "disabled": true },
+    "standardrb": { "disabled": true },
+    "htmlbeautifier": { "disabled": true },
+    "dart": { "disabled": true },
+    "ocamlformat": { "disabled": true },
+    "terraform": { "disabled": true },
+    "latexindent": { "disabled": true },
+    "gleam": { "disabled": true },
+    "shfmt": { "disabled": true },
+    "nixfmt": { "disabled": true },
+    "rustfmt": { "disabled": true },
+    "pint": { "disabled": true },
+    "ormolu": { "disabled": true },
+    "cljfmt": { "disabled": true },
+    "dfmt": { "disabled": true }
+  },
+  "mcp": {
+    "timeout": { "startup": 120000, "catalog": 60000, "execution": 3600000 },
+    "servers": {
+      "vox": { "type": "local", "cwd": ".", "command": ["direnv", "exec", ".", "vox", "mcp"] },
+      "beadle": { "type": "local", "cwd": ".", "command": ["direnv", "exec", ".", "beadle-email", "serve"] },
+      "quarry": { "type": "local", "cwd": ".", "command": ["direnv", "exec", ".", "quarry", "mcp"] },
+      "zspec": { "type": "local", "cwd": ".", "command": ["direnv", "exec", ".", "z-spec", "mcp"] },
+      "lux": { "type": "remote", "url": "http://127.0.0.1:8430/mcp" },
+      "context7": {
+        "type": "remote",
+        "url": "https://mcp.context7.com/mcp",
+        "oauth": false,
+        "headers": { "Authorization": "Bearer {env:CONTEXT7_API_KEY}" }
+      }
+    }
+  }
+}

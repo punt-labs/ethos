@@ -80,6 +80,9 @@ jobs:
       - name: Validate content
         run: go run ./cmd/validate-content
 
+      - name: Offline OpenCode configuration and helper tests
+        run: make check-opencode
+
       - name: fuzz type-check (Z specs)
         run: make fuzz-check
 
