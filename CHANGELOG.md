@@ -17,8 +17,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `permissionDecision`, so Claude Code's own rules decide. `deny` is unchanged:
   verifier allowlists and mission preconditions still refuse.
 
+- The MCP server no longer answers a Claude Code call whose caller nobody
+  declared. With the PreToolUse hook missing, disabled, killed
+  (`~/.punt-hooks-kill`) or unable to declare a caller, `identity whoami`,
+  `session roster`, `join`, `leave` and `iam` without a `session_id`, mission
+  binding, and the `doctor` Human identity row fell back to the environment and
+  the process tree, which the server shares with every session it outlives, and
+  could answer with another session's identity and no error. They now return
+  "Claude Code call arrived without _caller: the ethos PreToolUse hook did not
+  declare the caller (is it installed, enabled, and not killed?)". An explicit
+  `session_id` on `roster`, `join` and `leave` still works, and a client that is
+  not Claude Code keeps the old chain.
+- The PreToolUse hook denies a call to an ethos MCP tool when it cannot read or
+  parse the payload or a step fails, naming the cause, instead of exiting with
+  an error and no output (which let the call through with no caller declared).
+  A payload that names an `agent_type` but no `agent_id` declares no caller
+  rather than naming the leader.
+
 ### Fixed
 
+- Closing or abandoning a mission over MCP returns an error result, not a
+  warning in a successful one, when its session bindings could not be cleared
+  (including a Claude Code call with no declared caller). The status change
+  stands; the result says so, and that the closed mission may still stamp commit
+  trailers.
+- A hook that stalled or failed while reading its payload was indistinguishable
+  from one given no input. `ReadInput` now returns an error wrapping
+  `ErrInputTimeout` (with the bytes read) when the deadline fires, and an error
+  for a read failure other than end of input, and treats only a complete JSON
+  object as a whole payload. The hook wrappers append
+  `ethos session-start: stdin read timed out after 10s (N bytes)` (with their
+  own hook's name) to `hook-errors.log` when their own read times out.
 - Hooks wait up to 10 seconds, as one overall deadline, for Claude Code's
   payload instead of one second with a tenth-of-that gap between chunks, so a
   writer that pauses mid-payload no longer truncates a large Edit.
