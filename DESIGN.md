@@ -2023,7 +2023,7 @@ one overall deadline and returns as soon as the buffer is a complete JSON
 value, so the shell and Go bounds agree. A test proves each wrapper hands Go a
 fresh pipe, not the inherited fd (`TestWrappersGiveEthosAFreshPipe`). Each
 wrapper captures `read`'s status and, on a timeout (status above 128), appends
-"ethos <hook>: stdin read timed out after 10s (N bytes)" to `hook-errors.log`
+`ethos <hook>: stdin read timed out after 10s (N bytes)` to `hook-errors.log`
 before forwarding what arrived. The wrapper list under test is read from
 `hooks.json`. A
 round of this fix briefly passed stdin straight to Go, which is this
