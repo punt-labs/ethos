@@ -318,6 +318,7 @@ func noCallerCalls(t *testing.T, name, src string) []string {
 		"process": {"FindClaudePID": true, "LegacyClaudePID": true, "ClaudePIDFromEnvCorroborated": true},
 	}
 	local := map[string]string{} // local import name -> package
+	var hits []string
 	for _, imp := range file.Imports {
 		path, err := strconv.Unquote(imp.Path.Value)
 		require.NoError(t, err)
@@ -329,10 +330,16 @@ func noCallerCalls(t *testing.T, name, src string) []string {
 		if imp.Name != nil {
 			n = imp.Name.Name
 		}
+		// A dot import makes a call a bare *ast.Ident the selector check cannot see.
+		if n == "." {
+			hits = append(hits, "dot import of "+pkg)
+			continue
+		}
 		local[n] = pkg
 	}
 
-	var hits []string
+	// A name denylist cannot catch a new wrapper exported from resolve or
+	// process, or an env name split across literals.
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
@@ -385,4 +392,27 @@ func f() {
 		"process.FindClaudePID", "process.LegacyClaudePID",
 		"resolve.Resolve", "resolve.SessionID",
 	}, noCallerCalls(t, "x.go", src))
+
+	// A function value is a selector too: no call is needed to reach the answer.
+	fv := `package mcp
+
+import "github.com/punt-labs/ethos/v4/internal/resolve"
+
+func f() {
+	g := resolve.SessionID
+	_ = g
+}
+`
+	assert.Equal(t, []string{"resolve.SessionID"}, noCallerCalls(t, "fv.go", fv))
+
+	// A dot import hides the package name, so the import itself is the hit.
+	dot := `package mcp
+
+import . "github.com/punt-labs/ethos/v4/internal/resolve"
+
+func f() {
+	SessionID(nil)
+}
+`
+	assert.Equal(t, []string{"dot import of resolve"}, noCallerCalls(t, "dot.go", dot))
 }
