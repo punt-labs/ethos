@@ -218,23 +218,19 @@ func TestPreToolUse_NoCallerStripsSpoofedCaller(t *testing.T) {
 	})
 }
 
-// A payload that names an agent_type but no agent_id is not the leader, and
-// CLAUDE_PID would name it as one: no caller is declared, a supplied _caller is
-// stripped, and the cause is logged.
-func TestPreToolUse_AgentTypeWithoutAgentIDDeclaresNoCaller(t *testing.T) {
-	withCorroboratedPID(t)
+// claude --agent X puts agent_type in every main-thread payload; agent_id
+// appears only inside a subagent. So agent_id is the subagent signal, and a
+// payload with agent_type but no agent_id is the main thread, keyed on the
+// corroborated CLAUDE_PID like any leader.
+func TestPreToolUse_AgentFlagMainThreadDeclaresLeader(t *testing.T) {
+	pid := withCorroboratedPID(t)
 	p := ethosCall(map[string]any{"agent_type": "bwk"})
-	p["tool_input"] = map[string]any{"method": "whoami", callerArg: map[string]any{"session_id": "victim", "agent_id": "x"}}
-	var out map[string]map[string]any
-	stderr := captureStderr(t, func() { out = runPreToolUse(t, p) })
-	got := out["hookSpecificOutput"]
-	assert.Equal(t, map[string]any{"method": "whoami"}, got["updatedInput"], "no _caller, and the spoofed one stripped")
-	assert.NotContains(t, got, "permissionDecision")
-	assert.Contains(t, stderr, `agent_type "bwk" but no agent_id`)
-
-	// With agent_id the same agent_type is declared, keyed on the agent_id.
-	p = ethosCall(map[string]any{"agent_type": "bwk", "agent_id": "agent-sub1"})
 	caller := runPreToolUse(t, p)["hookSpecificOutput"]["updatedInput"].(map[string]any)[callerArg]
+	assert.Equal(t, map[string]any{"session_id": "sess-1", "agent_id": pid}, caller)
+
+	// Inside a subagent the same agent_type is keyed on the agent_id.
+	p = ethosCall(map[string]any{"agent_type": "bwk", "agent_id": "agent-sub1"})
+	caller = runPreToolUse(t, p)["hookSpecificOutput"]["updatedInput"].(map[string]any)[callerArg]
 	assert.Equal(t, map[string]any{"session_id": "sess-1", "agent_id": "agent-sub1"}, caller)
 }
 
@@ -245,9 +241,8 @@ func TestPreToolUse_NoCallerLogsTheCause(t *testing.T) {
 		setup func(p map[string]any)
 		want  string
 	}{
-		"no session_id":   {func(p map[string]any) { delete(p, "session_id") }, "no session_id"},
-		"no agent key":    {func(p map[string]any) { t.Setenv("CLAUDE_PID", "") }, "CLAUDE_PID is absent or not a live ancestor"},
-		"agent_type only": {func(p map[string]any) { p["agent_type"] = "Explore" }, "no agent_id"},
+		"no session_id": {func(p map[string]any) { delete(p, "session_id") }, "no session_id"},
+		"no agent key":  {func(p map[string]any) { t.Setenv("CLAUDE_PID", "") }, "CLAUDE_PID is absent or not a live ancestor"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := ethosCall(nil)

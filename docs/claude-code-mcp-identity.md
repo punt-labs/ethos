@@ -20,9 +20,10 @@ resolves to its own persona and not its leader's. For the leader it is the
 hook's own corroborated `CLAUDE_PID`, the key `SessionStart` wrote for the
 primary participant. The hook overwrites any `_caller` the model supplied. It
 returns no `permissionDecision`, so permission rules apply as they would
-without the hook. If the payload has no `session_id`, names an `agent_type`
-but no `agent_id` (it is not the leader, and `CLAUDE_PID` would name the
-leader), or no agent key can be determined, the hook declares no caller,
+without the hook. A payload with no `agent_id` is the main thread, even when it carries an
+`agent_type` (a `claude --agent` session does), and keys on `CLAUDE_PID`. If the
+payload has no `session_id`, or no agent key can be determined, the hook
+declares no caller,
 removes any `_caller` the model supplied so the server sees none, and logs the
 cause to `hook-errors.log`.
 

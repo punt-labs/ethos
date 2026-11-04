@@ -31,8 +31,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The PreToolUse hook denies a call to an ethos MCP tool when it cannot read or
   parse the payload or a step fails, naming the cause, instead of exiting with
   an error and no output (which let the call through with no caller declared).
-  A payload that names an `agent_type` but no `agent_id` declares no caller
-  rather than naming the leader.
 
 ### Fixed
 

@@ -99,10 +99,10 @@ func handleEthosMCPCall(input map[string]any, w io.Writer) error {
 
 // declaredCaller is the {session_id, agent_id} of the call's author, or nil and
 // the reason when either cannot be determined. session_id is the payload's.
-// agent_id is the payload's when a subagent is calling, else this hook's own
-// corroborated CLAUDE_PID, which names the leader (DES-061 R4's key order). A
-// payload that names an agent_type but no agent_id is not the leader, and
-// CLAUDE_PID would name it as one, so no caller is declared.
+// agent_id is the payload's when a subagent is calling (Claude Code sends it
+// only inside a subagent; agent_type alone also appears on the main thread of
+// a --agent session), else this hook's own corroborated CLAUDE_PID, which
+// names the leader (DES-061 R4's key order).
 func declaredCaller(input map[string]any) (map[string]any, error) {
 	sessionID, _ := input["session_id"].(string)
 	if sessionID == "" {
@@ -110,9 +110,6 @@ func declaredCaller(input map[string]any) (map[string]any, error) {
 	}
 	agentID, _ := input["agent_id"].(string)
 	if agentID == "" {
-		if agentType, _ := input["agent_type"].(string); agentType != "" {
-			return nil, fmt.Errorf("the payload names agent_type %q but no agent_id, so the caller is not the leader CLAUDE_PID names", agentType)
-		}
 		pid, ok := process.ClaudePIDFromEnvCorroborated()
 		if !ok {
 			return nil, errors.New("CLAUDE_PID is absent or not a live ancestor of the hook")
