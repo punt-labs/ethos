@@ -547,8 +547,9 @@ def dispatch_evidence(calls, child):
     require(len(calls) == 1 and calls[0].get("name") == "subagent",
             "parent must use exactly one native subagent tool and no other tools")
     state = completed(calls[0])
-    require(child in json.dumps(state.get("metadata", {})) or
-            child in json.dumps(state.get("content", [])), "parent dispatch did not expose exact child ID")
+    dispatched_child = state.get("metadata", {}).get("sessionID")
+    require(isinstance(dispatched_child, str) and dispatched_child == child,
+            "parent dispatch did not expose exact child ID")
 
 
 def child_evidence(api, parent, author, task):

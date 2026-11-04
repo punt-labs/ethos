@@ -363,6 +363,14 @@ class LiveHelperTests(unittest.TestCase):
                 live.dispatch_evidence(calls, "ses_child")
         with self.assertRaisesRegex(oc.CheckError, "exact child ID"):
             live.dispatch_evidence([dispatch], "ses_other")
+        for metadata in ({}, {"sessionID": "ses_other"}, {"sessionID": "ses_child_suffix"},
+                         {"sessionID": "prefix_ses_child"}, {"sessionID": None}, {"sessionID": 123},
+                         {"sessionID": True}, {"sessionID": ["ses_child"]}, {"sessionID": {"id": "ses_child"}}):
+            changed = copy.deepcopy(dispatch)
+            changed["state"].update(metadata=dict(metadata, note="ses_child"),
+                                    content=[{"type": "text", "text": "ses_child"}])
+            with self.subTest(metadata=metadata), self.assertRaisesRegex(oc.CheckError, "exact child ID"):
+                live.dispatch_evidence([changed], "ses_child")
 
     def test_child_evidence_requires_read_content_and_rejects_non_read_tools(self):
         info = {"id": "ses_child", "parentID": "ses_parent", "agent": "rsc",
