@@ -1,7 +1,7 @@
 {
   "name": "ethos-dev",
   "description": "Identity binding for humans and AI agents — voice, email, GitHub, writing style, personality.",
-  "version": "4.20.3",
+  "version": "4.20.4",
   "author": {
     "name": "Punt Labs",
     "email": "hello@punt-labs.com"
