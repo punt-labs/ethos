@@ -22,9 +22,10 @@ type PreToolUseResult struct {
 
 type preToolUseOutput struct {
 	HookEventName            string            `json:"hookEventName"`
-	PermissionDecision       string            `json:"permissionDecision"`
+	PermissionDecision       string            `json:"permissionDecision,omitempty"`
 	PermissionDecisionReason string            `json:"permissionDecisionReason,omitempty"`
 	AdditionalEnv            map[string]string `json:"additionalEnv,omitempty"`
+	UpdatedInput             map[string]any    `json:"updatedInput,omitempty"`
 }
 
 func preToolUseAllow() PreToolUseResult {
@@ -89,6 +90,16 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		return fmt.Errorf("pre-tool-use: %w", err)
 	}
 
+	toolName, _ := input["tool_name"].(string)
+	if ethosMCPTool.MatchString(toolName) {
+		return handleEthosMCPCall(input, w)
+	}
+	return routePreToolUse(input, w)
+}
+
+// routePreToolUse is HandlePreToolUse after the payload is read: the Agent
+// dispatch, the preconditions gate and the verifier allowlist.
+func routePreToolUse(input map[string]any, w io.Writer) error {
 	toolName, _ := input["tool_name"].(string)
 	toolInput, _ := input["tool_input"].(map[string]any)
 	sessionID, _ := input["session_id"].(string)
