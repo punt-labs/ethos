@@ -33,18 +33,24 @@ func handleEthosMCPCall(input map[string]any, w io.Writer) error {
 	if err := json.Unmarshal(buf.Bytes(), &gate); err != nil {
 		return fmt.Errorf("pre-tool-use: decoding the gate result: %w", err)
 	}
+	toolInput, _ := input["tool_input"].(map[string]any)
 	caller := declaredCaller(input)
-	if gate.HookSpecificOutput.PermissionDecision == "deny" || caller == nil {
+	_, spoofed := toolInput[callerArg]
+	if gate.HookSpecificOutput.PermissionDecision == "deny" || (caller == nil && !spoofed) {
 		_, err := w.Write(buf.Bytes())
 		return err
 	}
-	toolInput, _ := input["tool_input"].(map[string]any)
 	updated := make(map[string]any, len(toolInput)+1)
 	for k, v := range toolInput {
 		updated[k] = v
 	}
-	// Always overwrite: a model-supplied value must never name the caller.
-	updated[callerArg] = caller
+	// Always overwrite, or with no caller to declare remove: a model-supplied
+	// value must never name the caller.
+	if caller != nil {
+		updated[callerArg] = caller
+	} else {
+		delete(updated, callerArg)
+	}
 	return json.NewEncoder(w).Encode(PreToolUseResult{HookSpecificOutput: preToolUseOutput{
 		HookEventName: "PreToolUse",
 		UpdatedInput:  updated,

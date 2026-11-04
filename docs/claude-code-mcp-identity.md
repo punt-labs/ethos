@@ -21,7 +21,8 @@ hook's own corroborated `CLAUDE_PID`, the key `SessionStart` wrote for the
 primary participant. The hook overwrites any `_caller` the model supplied. It
 returns no `permissionDecision`, so permission rules apply as they would
 without the hook. If the payload has no `session_id`, or no agent key can be
-determined, the hook adds nothing.
+determined, the hook declares no caller and removes any `_caller` the model
+supplied, so the server sees none.
 
 ## What the server does with it
 

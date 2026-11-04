@@ -86,23 +86,32 @@ func TestPreToolUse_OverwritesModelSuppliedCaller(t *testing.T) {
 
 func TestPreToolUse_NoCallerNoInjection(t *testing.T) {
 	withCorroboratedPID(t)
+	noCaller := func(t *testing.T, out map[string]any) {
+		t.Helper()
+		if ui, ok := out["updatedInput"].(map[string]any); ok {
+			assert.NotContains(t, ui, callerArg, "no _caller may survive")
+		}
+	}
 	t.Run("no session_id", func(t *testing.T) {
 		p := ethosCall(nil)
 		delete(p, "session_id")
 		out := runPreToolUse(t, p)["hookSpecificOutput"]
 		assert.NotContains(t, out, "updatedInput")
 		assert.NotContains(t, out, "permissionDecision")
+		noCaller(t, out)
 	})
 	t.Run("no agent key", func(t *testing.T) {
 		t.Setenv("CLAUDE_PID", "")
 		out := runPreToolUse(t, ethosCall(nil))["hookSpecificOutput"]
 		assert.NotContains(t, out, "updatedInput")
 		assert.NotContains(t, out, "permissionDecision")
+		noCaller(t, out)
 	})
 	t.Run("uncorroborated CLAUDE_PID", func(t *testing.T) {
 		t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getpid())) // live, but not an ancestor
 		out := runPreToolUse(t, ethosCall(nil))["hookSpecificOutput"]
 		assert.NotContains(t, out, "updatedInput")
+		noCaller(t, out)
 	})
 }
 
@@ -170,4 +179,37 @@ func TestPreToolUse_NonEthosToolsUnchanged(t *testing.T) {
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "docs/")
 	p := map[string]any{"tool_name": "Write", "tool_input": map[string]any{"file_path": "/elsewhere/y.go"}, "session_id": "sess-1"}
 	assert.Equal(t, "deny", runPreToolUse(t, p)["hookSpecificOutput"]["permissionDecision"])
+}
+
+// When the hook cannot declare a caller it must still not let the model name
+// one: a supplied _caller is stripped, the rest of the input kept, and no
+// permission decision is made.
+func TestPreToolUse_NoCallerStripsSpoofedCaller(t *testing.T) {
+	withCorroboratedPID(t)
+	spoof := map[string]any{"session_id": "victim", "agent_id": "victim-agent"}
+	for name, setup := range map[string]func(t *testing.T, p map[string]any){
+		"no session_id": func(t *testing.T, p map[string]any) { delete(p, "session_id") },
+		"no agent key":  func(t *testing.T, p map[string]any) { t.Setenv("CLAUDE_PID", "") },
+		"uncorroborated CLAUDE_PID": func(t *testing.T, p map[string]any) {
+			t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getpid())) // live, but not an ancestor
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := ethosCall(nil)
+			p["tool_input"] = map[string]any{"method": "whoami", "reference": true, callerArg: spoof}
+			setup(t, p)
+			out := runPreToolUse(t, p)["hookSpecificOutput"]
+			assert.NotContains(t, out, "permissionDecision")
+			assert.Equal(t, map[string]any{"method": "whoami", "reference": true}, out["updatedInput"])
+		})
+	}
+	t.Run("a deny still stands", func(t *testing.T) {
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "docs/")
+		p := ethosCall(nil)
+		delete(p, "session_id")
+		p["tool_input"] = map[string]any{"method": "create", callerArg: spoof}
+		out := runPreToolUse(t, p)["hookSpecificOutput"]
+		assert.Equal(t, "deny", out["permissionDecision"])
+		assert.NotContains(t, out, "updatedInput")
+	})
 }
