@@ -367,9 +367,13 @@ participants:
 
 **Null persona handling:** When `persona` is `~`, the participant has no
 ethos identity. Query tools return the `agent_type` as a display name.
-A default persona can be configured in repo config for common agent types
-(e.g., map all `code-reviewer` subagents to a shared persona with a
-defined writing style and personality).
+*(Corrected 2026-11-03: no repo-config mapping from agent type to persona
+exists; the only default is the same-name convention in "Resolved: Persona
+Default by Agent Type" below. MCP `identity whoami` and `doctor`'s Human
+identity row answer a persona-less caller with "`<agent_type>` has no ethos
+identity" (the `agent_id` when no `agent_type` was recorded), never an
+error and never another participant's identity; such a caller may declare
+a persona with `iam`. See DES-074's 2026-11-03 amendment.)*
 
 **Primary agent identification:** The SessionStart hook resolves the
 primary agent's `agent_id` by walking the process tree to the topmost
@@ -2003,6 +2007,25 @@ identified `INPUT=$(cat)` as the blocking pattern and recommended
 workarounds (`SetReadDeadline`, `readWithTimeout`) fail on Linux
 inherited pipe fds in production, and the bash `read -t` approach
 is the only reliable solution across platforms.
+
+### Amendment 2026-11-03: read the whole payload
+
+The decision stands: bash reads the inherited fd and forwards over a fresh
+pipe. The read changes from `IFS= read -r -t 1` to
+`IFS= read -r -d "" -t 10`. The one-line, one-second read truncated real
+payloads: it stopped at the first newline, and it returned exactly 8192
+bytes when Claude Code paused for more than a second after writing the first
+8 KiB of a large Edit (measured in production: "invalid JSON input (8192
+bytes)" in `hook-errors.log`). `-d ""` reads to EOF; at EOF `read` returns
+non-zero and keeps the data, which is why `HOOK_INPUT=""` stays before the
+read and `|| true` after it. Go's `ReadInput` now waits up to 10 seconds with
+one overall deadline and returns as soon as the buffer is a complete JSON
+value, so the shell and Go bounds agree. A test proves each wrapper hands Go a
+fresh pipe, not the inherited fd (`TestWrappersGiveEthosAFreshPipe`). A
+round of this fix briefly passed stdin straight to Go, which is this
+decision's first rejected alternative; that was reverted before merge, and
+the branch was verified in a real Claude Code session on Linux with only the
+branch's own wrappers loaded.
 
 ## DES-030: Subprocess integration tests for hooks (SETTLED)
 
@@ -8968,6 +8991,50 @@ the pointer-file mechanism DES-081 replaces.
 server, and an explicit `ask` rule for the tool still refuses the call in
 `claude -p`, with the hook and without it. The hook never returns a
 permission decision for this purpose.
+
+**No caller, no `_caller`.** When the hook cannot determine a caller (no
+`session_id`; no `agent_id` and no corroborated `CLAUDE_PID`), it removes any
+model-supplied `_caller` from the input. The server cannot tell a
+hook-written `_caller` from a model-written one, so the hook is the only place
+this can be enforced.
+
+**Routing, not authentication.** Like the OpenCode `_meta` key, `_caller`
+routes a call to a roster participant. A client that does not run ethos's
+hook can supply any `_caller`. The server trusts it because the MCP server is
+a local, per-session process; it is not an authorization boundary.
+
+**Persona-less callers.** A caller whose roster participant has no persona (a
+`general-purpose` or `Explore` subagent) is a valid caller with no identity,
+per DES-007's null-persona rule: `whoami` answers "`<agent_type>` has no ethos
+identity", `iam` may declare a persona, and nothing falls back to the leader
+or to env, PID, git, or OS identity. The OpenCode `_meta` path follows the same
+rule.
+
+**Sessions started before the upgrade.** A leader participant keyed on the
+legacy walk PID does not match the exact `_caller` key and gets a named
+"participant not found" error until the session restarts — the same one-time,
+loud, self-healing cost the upgrade-migration amendment above accepts for the
+pointer lookup.
+
+**Measured end to end** (2026-11-03, Claude Code 2.1.309, Linux, only the
+branch's plugin, wrappers, and binary loaded, in a nested `claude -p`):
+leader `whoami` returned `claude`; a `bwk` subagent returned `bwk`; a
+`general-purpose` subagent returned "General-purpose has no ethos identity";
+`session roster` returned the nested session's own roster.
+
+### Amendment 2026-11-03: PreToolUse never decides "allow" (amends DES-054)
+
+DES-054's pseudocode writes "allow" for "not a verifier spawn" and for an
+in-allowlist write. Its intent is pass-through. In Claude Code's hook protocol,
+`permissionDecision: "allow"` means approve without prompting, and ethos's
+PreToolUse hook matches every tool, so ethos was auto-approving every tool
+call in every repository with the plugin installed. Measured: a Bash command
+that Claude Code's permission checker refuses ran without a prompt with ethos
+hooks enabled and was refused with hooks disabled; an explicit `ask` rule was
+still honored. Ruling: ethos's PreToolUse hook emits `deny` or no permission
+decision. Pass-through emits only `hookEventName` (plus `updatedInput` or the
+delegation env block where those apply). "Allow" in DES-054's pseudocode reads
+as "do not block".
 
 ## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08; 2026-10-24 by DES-079)
 
