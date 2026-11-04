@@ -4,9 +4,12 @@ package hooks
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -17,17 +20,56 @@ import (
 )
 
 // stdinWrappers are the wrappers that forward Claude Code's hook payload to
-// the ethos binary, with the ethos subcommand each one runs.
-var stdinWrappers = map[string]string{
-	"audit-log.sh":       "audit-log",
-	"pre-compact.sh":     "pre-compact",
-	"pre-tool-use.sh":    "pre-tool-use",
-	"session-end.sh":     "session-end",
-	"session-start.sh":   "session-start",
-	"subagent-start.sh":  "subagent-start",
-	"subagent-stop.sh":   "subagent-stop",
-	"suppress-output.sh": "format-output",
+// the ethos binary, with the ethos subcommand each one runs. The list is read
+// from hooks.json, the file Claude Code reads, so a wrapper registered there is
+// tested and a wrapper that is not tested cannot be registered. It must also be
+// every script in the directory that runs `ethos hook`, apart from none: a
+// script nothing registers would never run.
+func stdinWrappers(t *testing.T) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile("hooks.json")
+	require.NoError(t, err)
+	var cfg struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	registered := map[string]string{}
+	for event, groups := range cfg.Hooks {
+		for _, g := range groups {
+			for _, h := range g.Hooks {
+				const prefix = "${CLAUDE_PLUGIN_ROOT}/hooks/"
+				require.True(t, strings.HasPrefix(h.Command, prefix), "%s command %q", event, h.Command)
+				name := strings.TrimPrefix(h.Command, prefix)
+				src, err := os.ReadFile(name)
+				require.NoError(t, err, "%s registers %s", event, name)
+				m := ethosHookCall.FindSubmatch(src)
+				require.NotNil(t, m, "%s does not run `ethos hook <name>`", name)
+				registered[name] = string(m[1])
+			}
+		}
+	}
+	require.NotEmpty(t, registered)
+
+	scripts, err := filepath.Glob("*.sh")
+	require.NoError(t, err)
+	onDisk := map[string]string{}
+	for _, name := range scripts {
+		src, err := os.ReadFile(name)
+		require.NoError(t, err)
+		if m := ethosHookCall.FindSubmatch(src); m != nil {
+			onDisk[name] = string(m[1])
+		}
+	}
+	require.Equal(t, onDisk, registered, "hooks.json and the wrappers that run `ethos hook` must be the same set")
+	return registered
 }
+
+// ethosHookCall finds the subcommand a wrapper pipes its payload to.
+var ethosHookCall = regexp.MustCompile(`(?m)\| ethos hook ([a-z-]+) `)
 
 // runWrapper runs hook with payload on stdin and a fake ethos that records its
 // arguments, its stdin, and whether its stdin is a pipe ("pipe") or not
@@ -35,9 +77,18 @@ var stdinWrappers = map[string]string{
 // got a fresh fd and not the inherited one (DES-029).
 func runWrapper(t *testing.T, hook string, payload []byte, stall time.Duration, setup func(home string)) (stdin []byte, args, kind string) {
 	t.Helper()
+	stdin, args, kind, _ = runWrapperFull(t, hook, payload, stall, false, setup)
+	return stdin, args, kind
+}
+
+// runWrapperFull is runWrapper that can hold the writer's end open after the
+// payload, as Claude Code does when it never finishes, and also returns the
+// HOME the wrapper ran with, so a test can read the log it wrote there.
+func runWrapperFull(t *testing.T, hook string, payload []byte, stall time.Duration, hold bool, setup func(home string)) (stdin []byte, args, kind, home string) {
+	t.Helper()
 	script, err := filepath.Abs(hook)
 	require.NoError(t, err)
-	home := t.TempDir()
+	home = t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".punt-labs", "ethos"), 0o755))
 	if setup != nil {
 		setup(home)
@@ -82,14 +133,19 @@ func runWrapper(t *testing.T, hook string, payload []byte, stall time.Duration, 
 			time.Sleep(stall)
 			parent.Write(payload[len(first):]) //nolint:errcheck // as above
 		}
-		parent.Close()
+		if !hold {
+			parent.Close()
+		}
 	}()
 	require.NoError(t, cmd.Wait())
+	if hold {
+		parent.Close()
+	}
 
 	stdin, _ = os.ReadFile(out)
 	a, _ := os.ReadFile(argv)
 	k, _ := os.ReadFile(kindf)
-	return stdin, strings.TrimSpace(string(a)), strings.TrimSpace(string(k))
+	return stdin, strings.TrimSpace(string(a)), strings.TrimSpace(string(k)), home
 }
 
 // sameJSON reports whether got is want with at most one extra trailing
@@ -108,7 +164,7 @@ func largePayload() []byte {
 // is invalid JSON, and the hook then acts on an empty input.
 func TestWrappersForwardLargePayloadIntact(t *testing.T) {
 	payload := largePayload()
-	for hook, sub := range stdinWrappers {
+	for hook, sub := range stdinWrappers(t) {
 		t.Run(hook, func(t *testing.T) {
 			got, args, _ := runWrapper(t, hook, payload, 0, nil)
 			assert.Equal(t, "hook "+sub, args)
@@ -121,7 +177,7 @@ func TestWrappersForwardLargePayloadIntact(t *testing.T) {
 // wrapper: Go's read of that fd hung on Linux in production (DES-029) and no
 // test harness reproduces it.
 func TestWrappersGiveEthosAFreshPipe(t *testing.T) {
-	for hook := range stdinWrappers {
+	for hook := range stdinWrappers(t) {
 		t.Run(hook, func(t *testing.T) {
 			_, _, kind := runWrapper(t, hook, []byte("{}\n"), 0, nil)
 			assert.Equal(t, "pipe", kind, "ethos stdin")
@@ -135,7 +191,7 @@ func TestWrappersGiveEthosAFreshPipe(t *testing.T) {
 // read with -t 1. The wrapper waits up to 10s for the whole payload.
 func TestWrappersForwardStalledPayloadIntact(t *testing.T) {
 	payload := largePayload()
-	for hook := range stdinWrappers {
+	for hook := range stdinWrappers(t) {
 		t.Run(hook, func(t *testing.T) {
 			t.Parallel()
 			got, _, _ := runWrapper(t, hook, payload, 1300*time.Millisecond, nil)
@@ -147,7 +203,7 @@ func TestWrappersForwardStalledPayloadIntact(t *testing.T) {
 // A multi-line payload is forwarded as sent, not cut at the first newline.
 func TestWrappersForwardMultilinePayload(t *testing.T) {
 	payload := []byte("{\"a\":\n\"b\"}\n")
-	for hook := range stdinWrappers {
+	for hook := range stdinWrappers(t) {
 		t.Run(hook, func(t *testing.T) {
 			got, _, _ := runWrapper(t, hook, payload, 0, nil)
 			assert.True(t, sameJSON(payload, got), "got %q", got)
@@ -158,7 +214,7 @@ func TestWrappersForwardMultilinePayload(t *testing.T) {
 // The kill switch and the missing-binary bypass still stop the wrapper before
 // it runs ethos.
 func TestWrappersBypasses(t *testing.T) {
-	for hook := range stdinWrappers {
+	for hook := range stdinWrappers(t) {
 		t.Run(hook+"/kill switch", func(t *testing.T) {
 			got, args, _ := runWrapper(t, hook, []byte("{}\n"), 0, func(home string) {
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".punt-hooks-kill"), nil, 0o644))
@@ -172,6 +228,41 @@ func TestWrappersBypasses(t *testing.T) {
 			})
 			assert.Empty(t, got)
 			assert.Empty(t, args)
+		})
+	}
+}
+
+// A payload that never completes is read for 10 seconds and then forwarded as
+// it stands. The wrapper logs that the read timed out, with the byte count and
+// the hook, to hook-errors.log: the Go side sees only a fragment, and the log
+// would otherwise show a parse error with no hint of why. The fake ethos here
+// records what it was given; the log is what the test is about.
+func TestWrappersLogAStdinReadTimeout(t *testing.T) {
+	partial := []byte(`{"tool_name":"mcp__plugin_ethos_self__identity","tool_in`)
+	for hook, sub := range stdinWrappers(t) {
+		t.Run(hook, func(t *testing.T) {
+			t.Parallel()
+			got, args, _, home := runWrapperFull(t, hook, partial, 0, true, nil)
+			assert.Equal(t, "hook "+sub, args, "the fragment is still forwarded")
+			assert.True(t, sameJSON(partial, got), "forwarded %q", got)
+			log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
+			require.NoError(t, err)
+			assert.Equal(t, fmt.Sprintf("ethos %s: stdin read timed out after 10s (%d bytes)\n", sub, len(partial)), string(log))
+		})
+	}
+}
+
+// A payload that arrives whole and is closed writes no timeout line.
+func TestWrappersLogNoTimeoutForACompletePayload(t *testing.T) {
+	for hook := range stdinWrappers(t) {
+		t.Run(hook, func(t *testing.T) {
+			_, _, _, home := runWrapperFull(t, hook, []byte("{}\n"), 0, false, nil)
+			log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
+			if err == nil {
+				assert.NotContains(t, string(log), "timed out")
+			} else {
+				assert.ErrorIs(t, err, os.ErrNotExist)
+			}
 		})
 	}
 }
