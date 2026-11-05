@@ -256,7 +256,7 @@ func passFail(name, detail string, ok bool) Result {
 	return Result{Name: name, Status: status, Detail: detail}
 }
 
-// identityDirResult is CheckIdentityDir as a Result.
+// identityDirResult is identityDirStatus as a Result.
 func identityDirResult(s identity.IdentityStore, _ *session.Store) Result {
 	detail, status := identityDirStatus(s)
 	return Result{Name: "Identity directory", Status: status, Detail: detail}
@@ -1120,7 +1120,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 }
 
-// CheckIdentityDir verifies the identity directory exists, is a readable
+// identityDirStatus verifies the identity directory exists, is a readable
 // directory, and holds at least one identity file (*.yaml).
 //
 // A layered store reports its repo-local identities dir as primary. That
@@ -1128,18 +1128,12 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 // active bundle or the global store — a repo with only an ethos.yaml, or only
 // missions/ under .punt-labs/ethos/. Layered resolution reads the global
 // store, so then the check passes when the global identities dir is usable
-// and names it. Under `resolution: repo-only` nothing else can resolve an
-// identity, so a missing or empty repo dir stays a FAIL. A dir that is not a
-// directory or cannot be read fails in every mode, naming the cause.
-func CheckIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool) {
-	detail, status := identityDirStatus(s)
-	return detail, status != "FAIL"
-}
-
-// identityDirStatus is CheckIdentityDir with the advisory state: under
-// layered resolution, no usable identities in the repo or the global store is
-// a fresh install, a WARN pointing at `ethos setup` that matches
-// CheckHumanIdentity's first-run WARN, not a FAIL.
+// and names it; no usable identities in the repo or the global store is a
+// fresh install, a WARN pointing at `ethos setup` that matches
+// CheckHumanIdentity's first-run WARN, not a FAIL. Under `resolution:
+// repo-only` nothing else can resolve an identity, so a missing or empty repo
+// dir stays a FAIL. A dir that is not a directory or cannot be read fails in
+// every mode, naming the cause.
 func identityDirStatus(s identity.IdentityStore) (detail, status string) {
 	dir := s.IdentitiesDir()
 	state, why := inspectIdentitiesDir(dir)
