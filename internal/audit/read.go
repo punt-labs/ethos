@@ -81,6 +81,16 @@ func DecodeChunkStrict(data []byte, path string) ([]Line, error) {
 	return out, nil
 }
 
+// ChunkReadError is a failure to read a chunk's bytes (permissions, I/O), as
+// opposed to bytes that are damaged: quarantining the chunk would not help.
+type ChunkReadError struct {
+	Path string
+	Err  error
+}
+
+func (e *ChunkReadError) Error() string { return fmt.Sprintf("reading chunk %s: %v", e.Path, e.Err) }
+func (e *ChunkReadError) Unwrap() error { return e.Err }
+
 // ReadChunkVerified reads a sealed chunk and verifies its content matches its
 // name: it must parse whole and its last line's ts must equal the <last> in
 // its filename. Corruption is surfaced as an error (exit 2), the escape being
@@ -88,7 +98,7 @@ func DecodeChunkStrict(data []byte, path string) ([]Line, error) {
 func ReadChunkVerified(path string, expectedLast int64) ([]Line, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading chunk %s: %w", path, err)
+		return nil, &ChunkReadError{Path: path, Err: err}
 	}
 	lines, err := DecodeChunkStrict(data, path)
 	if err != nil {

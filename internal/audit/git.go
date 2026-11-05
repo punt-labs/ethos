@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
@@ -16,7 +19,12 @@ import (
 // GIT_DIR and GIT_INDEX_FILE must reach git. A failing git's stderr is part
 // of the error; a git that does not answer is gitenv.ErrTimeout.
 func gitRun(repoRoot, what string, args ...string) ([]byte, error) {
-	out, err := gitenv.OutputEnv(repoRoot, "git", nil, args...)
+	return gitRunIn(repoRoot, what, nil, args...)
+}
+
+// gitRunIn is gitRun with stdin for git to read.
+func gitRunIn(repoRoot, what string, stdin io.Reader, args ...string) ([]byte, error) {
+	out, err := gitenv.Run(gitenv.Spec{Git: "git", Dir: repoRoot, Args: args, Stdin: stdin})
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
@@ -58,20 +66,167 @@ func relPathspecs(repoRoot string, paths []string) ([]string, error) {
 	return out, nil
 }
 
-// GitAdd stages one or more paths from repoRoot. A git-add failure staging a
-// new or orphan chunk is fail-closed (exit 2) per §Seal failure policy, so
-// the error is returned, never swallowed.
-func GitAdd(repoRoot string, paths ...string) error {
+// GitAdd stages one or more paths from repoRoot and returns the ones it
+// staged, as the caller passed them. It skips any path the repo ignores: a repo
+// that gitignores its session audit has chosen not to track it, and `git add`
+// on an ignored path exits 1, which would block every commit. An ignored path
+// is not an error and is not in the result; one note per process names the
+// skip. A failure of the ignore check, or of the add itself, is returned:
+// staging a new or orphan chunk is fail-closed (exit 2) per §Seal failure
+// policy.
+func GitAdd(repoRoot string, paths ...string) ([]string, error) {
 	if len(paths) == 0 {
-		return nil
+		return nil, nil
 	}
 	specs, err := relPathspecs(repoRoot, paths)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	args := append([]string{"add", "--"}, specs...)
-	_, err = gitRun(repoRoot, "git add", args...)
-	return err
+	kept, err := dropIgnored(repoRoot, specs)
+	if err != nil {
+		return nil, err
+	}
+	if len(kept) == 0 {
+		return nil, nil
+	}
+	args := append([]string{"add", "--"}, kept...)
+	if _, err = gitRun(repoRoot, "git add", args...); err != nil {
+		return nil, err
+	}
+	keep := make(map[string]bool, len(kept))
+	for _, s := range kept {
+		keep[s] = true
+	}
+	var staged []string
+	for i, p := range paths {
+		if keep[specs[i]] {
+			staged = append(staged, p)
+		}
+	}
+	return staged, nil
+}
+
+// ignoreNoteOut receives the one-per-process note that a path was skipped
+// because the repo ignores it; ignoreNote guards it. Tests replace both.
+var (
+	ignoreNoteOut io.Writer = os.Stderr
+	ignoreNote    sync.Once
+)
+
+// ignoredSet returns the specs git ignores. Tracked paths are never reported
+// ignored by check-ignore, so a tracked chunk is not in the set.
+func ignoredSet(repoRoot string, specs []string) (map[string]bool, error) {
+	// Paths go on stdin, NUL-separated: -z is only valid with --stdin, and it
+	// keeps git from quoting odd names in its answer.
+	in := strings.NewReader(strings.Join(specs, "\x00") + "\x00")
+	out, err := gitRunIn(repoRoot, "git check-ignore", in, "check-ignore", "-z", "--stdin")
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 {
+			return nil, nil // exit 1: no path is ignored
+		}
+		return nil, err
+	}
+	ignored := make(map[string]bool)
+	for _, t := range bytes.Split(out, []byte{0}) {
+		if len(t) > 0 {
+			ignored[string(t)] = true
+		}
+	}
+	return ignored, nil
+}
+
+// IsIgnored reports whether git ignores path, which need not exist. A failure
+// of the check is returned, never read as "not ignored".
+func IsIgnored(repoRoot, path string) (bool, error) {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return false, err
+	}
+	ignored, err := ignoredSet(repoRoot, []string{spec})
+	if err != nil {
+		return false, err
+	}
+	return ignored[spec], nil
+}
+
+// StagedChange reports whether the index holds a change to path that HEAD does
+// not: an addition, a modification, a removal, or the old name of a rename.
+func StagedChange(repoRoot, path string) (bool, error) {
+	spec, err := relPathspec(repoRoot, path)
+	if err != nil {
+		return false, err
+	}
+	out, err := gitRun(repoRoot, "git diff --cached", "diff", "--cached", "--no-renames", "--name-only", "-z", "--", spec)
+	if err != nil {
+		return false, err
+	}
+	return len(out) > 0, nil
+}
+
+// TracksAnyUnder reports whether the index lists, or has a staged change to,
+// any path under dir: a tracked file, a staged addition or rename, a staged
+// removal. A failure of git is returned, and a caller that must not guess
+// treats it as "tracked".
+func TracksAnyUnder(repoRoot, dir string) (bool, error) {
+	spec, err := relPathspec(repoRoot, dir)
+	if err != nil {
+		return false, err
+	}
+	for _, args := range [][]string{
+		{"ls-files", "-z", "--", spec},
+		{"diff", "--cached", "--name-only", "-z", "--", spec}, // a staged removal is not in ls-files
+	} {
+		out, err := gitRun(repoRoot, "git "+args[0], args...)
+		if err != nil {
+			return false, err
+		}
+		if len(out) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// LocalOnly reports whether path, in directory dir, can never reach the tracked
+// tree: the repo ignores it and the index holds nothing under dir. Either git
+// question failing is an error; the caller does not guess.
+func LocalOnly(repoRoot, dir, path string) (bool, error) {
+	ignored, err := IsIgnored(repoRoot, path)
+	if err != nil {
+		return false, fmt.Errorf("could not tell whether the repo ignores %s: %w", path, err)
+	}
+	if !ignored {
+		return false, nil
+	}
+	tracked, err := TracksAnyUnder(repoRoot, dir)
+	if err != nil {
+		return false, fmt.Errorf("could not tell whether the index holds anything under %s: %w", dir, err)
+	}
+	return !tracked, nil
+}
+
+// dropIgnored returns the specs git does not ignore, in order.
+func dropIgnored(repoRoot string, specs []string) ([]string, error) {
+	ignored, err := ignoredSet(repoRoot, specs)
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]string, 0, len(specs))
+	skipped := ""
+	for _, s := range specs {
+		if ignored[s] {
+			skipped = s
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if skipped != "" {
+		ignoreNote.Do(func() {
+			fmt.Fprintf(ignoreNoteOut, "ethos: not staging %s: this repo gitignores it, so its audit stays local\n", skipped)
+		})
+	}
+	return kept, nil
 }
 
 // GitMv renames src to dst via git so the move is staged. Used by quarantine
@@ -200,4 +355,22 @@ func IndexBlob(repoRoot, path string) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	return out, true, nil
+}
+
+// ShellQuote returns s as one word for a POSIX shell: unchanged when it holds
+// only characters a shell leaves alone, else in single quotes with each embedded
+// single quote closed, backslash-escaped and reopened. A recovery command printed for the operator to copy
+// must survive a path with spaces or quotes.
+func ShellQuote(s string) string {
+	safe := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_@%+=:,./-", r)) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

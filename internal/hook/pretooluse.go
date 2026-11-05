@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -21,31 +20,77 @@ type PreToolUseResult struct {
 }
 
 type preToolUseOutput struct {
-	HookEventName            string            `json:"hookEventName"`
-	PermissionDecision       string            `json:"permissionDecision"`
-	PermissionDecisionReason string            `json:"permissionDecisionReason,omitempty"`
-	AdditionalEnv            map[string]string `json:"additionalEnv,omitempty"`
+	HookEventName            string             `json:"hookEventName"`
+	PermissionDecision       permissionDecision `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string             `json:"permissionDecisionReason,omitempty"`
+	AdditionalEnv            map[string]string  `json:"additionalEnv,omitempty"`
+	UpdatedInput             map[string]any     `json:"updatedInput,omitempty"`
 }
 
-func preToolUseAllow() PreToolUseResult {
+// permissionDecision is the one permission decision ethos's PreToolUse hook can
+// express: deny. The zero value is no decision and is left out of the output.
+// There is deliberately no value for "allow": in Claude Code it approves a call
+// without asking, past the user's own permission rules, and ethos is a
+// permission authority only where it denies (DESIGN.md DES-074, amendment
+// 2026-11-03). A type that cannot hold the word keeps it from coming back.
+type permissionDecision bool
+
+const decisionDeny permissionDecision = true
+
+func (d permissionDecision) MarshalJSON() ([]byte, error) {
+	if d {
+		return []byte(`"deny"`), nil
+	}
+	return []byte(`""`), nil
+}
+
+func (d *permissionDecision) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("permissionDecision: %w", err)
+	}
+	switch s {
+	case "":
+		*d = false
+	case "deny":
+		*d = true
+	default:
+		return fmt.Errorf("permissionDecision %q is not expressible: ethos decides deny or nothing", s)
+	}
+	return nil
+}
+
+// Decision is the permission decision as Claude Code reads it: "deny", or ""
+// for none.
+func (o preToolUseOutput) Decision() string {
+	if o.PermissionDecision {
+		return "deny"
+	}
+	return ""
+}
+
+// preToolUsePass lets the call proceed. It carries no permissionDecision: in
+// Claude Code "allow" approves a call without asking, past the user's own
+// permission checks, and ethos is a permission authority only where it denies
+// (a verifier's allowlist, a mission's preconditions).
+func preToolUsePass() PreToolUseResult {
 	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
-		HookEventName:      "PreToolUse",
-		PermissionDecision: "allow",
+		HookEventName: "PreToolUse",
 	}}
 }
 
-func preToolUseAllowWithEnv(env map[string]string) PreToolUseResult {
+// preToolUsePassWithEnv is preToolUsePass with the spawn's delegation env.
+func preToolUsePassWithEnv(env map[string]string) PreToolUseResult {
 	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
-		HookEventName:      "PreToolUse",
-		PermissionDecision: "allow",
-		AdditionalEnv:      env,
+		HookEventName: "PreToolUse",
+		AdditionalEnv: env,
 	}}
 }
 
 func preToolUseDeny(reason string) PreToolUseResult {
 	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
 		HookEventName:            "PreToolUse",
-		PermissionDecision:       "deny",
+		PermissionDecision:       decisionDeny,
 		PermissionDecisionReason: reason,
 	}}
 }
@@ -84,11 +129,25 @@ func preToolUseDeny(reason string) PreToolUseResult {
 // allowlist, so the hot path (verifier touching a declared file) is
 // unchanged.
 func HandlePreToolUse(r io.Reader, w io.Writer) error {
-	input, err := ReadInput(r, time.Second)
+	raw, err := readRaw(r, hookInputTimeout)
+	var input map[string]any
+	if err == nil {
+		input, err = parseJSON(raw)
+	}
 	if err != nil {
-		return fmt.Errorf("pre-tool-use: %w", err)
+		return refuseUnreadable(raw, w, fmt.Errorf("pre-tool-use: %w", err))
 	}
 
+	toolName, _ := input["tool_name"].(string)
+	if ethosMCPTool.MatchString(toolName) {
+		return handleEthosMCPCall(input, w)
+	}
+	return routePreToolUse(input, w)
+}
+
+// routePreToolUse is HandlePreToolUse after the payload is read: the Agent
+// dispatch, the preconditions gate and the verifier allowlist.
+func routePreToolUse(input map[string]any, w io.Writer) error {
 	toolName, _ := input["tool_name"].(string)
 	toolInput, _ := input["tool_input"].(map[string]any)
 	sessionID, _ := input["session_id"].(string)
@@ -109,7 +168,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 
 	allowlist := os.Getenv("ETHOS_VERIFIER_ALLOWLIST")
 	if allowlist == "" {
-		return json.NewEncoder(w).Encode(preToolUseAllow())
+		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
 	if reason, deny := denyInRepoMCPWrite(toolName, toolInput); deny {
@@ -119,7 +178,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	target := extractTargetPath(toolName, toolInput)
 	if target == "" {
 		// Tool does not target a file path — allow unconditionally.
-		return json.NewEncoder(w).Encode(preToolUseAllow())
+		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
 	repoRoot, rootErr := tierBRepoRoot()
@@ -132,7 +191,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	}
 	entries := splitAllowlist(allowlist)
 	if pathAllowed(target, entries, repoRoot) {
-		return json.NewEncoder(w).Encode(preToolUseAllow())
+		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
 	// DES-052 stat-then-allow: a path outside the write_set allowlist
@@ -155,7 +214,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 					target, statErr)
 			}
 			if !exists {
-				return json.NewEncoder(w).Encode(preToolUseAllow())
+				return json.NewEncoder(w).Encode(preToolUsePass())
 			}
 		}
 	}

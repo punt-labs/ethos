@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -44,7 +43,7 @@ import (
 // improve on that guarantee (the roster was already left in place by
 // ss.Delete) and would only make session end itself unreliable.
 func HandleSessionEnd(r io.Reader, ss *session.Store) error {
-	input, err := ReadInput(r, time.Second)
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("session-end: %w", err)
 	}

@@ -53,9 +53,9 @@ import (
 // Other .corrupt files of this namespace (in the mission namespace, of this
 // session) are not in that set: StageUntrackedChunks stages them without the
 // check. Returns the marker it wrote (or found).
-func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string, redactReason func(string) string, guardLine func([]byte) ([]byte, string), checkRetired func([]byte) string) (Marker, error) {
+func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason string, redactReason func(string) string, guardLine func([]byte) ([]byte, string, bool), checkRetired func([]byte) string) (Marker, error) {
 	reason = redactReason(reason)
-	np := &notePad{}
+	np := &notePad{repoRoot: repoRoot}
 	stem := cn.Stem()
 	chunkPath := filepath.Join(sealedDir, cn.ChunkFile())
 	corruptPath := filepath.Join(sealedDir, CorruptName(stem))
@@ -130,15 +130,14 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 	// The re-sealed lines come from the live file, which an older binary or
 	// another process may have appended to; each goes through guardLine, the
 	// caller's check that it names no home, before it is sealed. Its ts is
-	// kept, so the chunk name still matches. guardLine returns a notice for a
-	// line it rewrote; the notices are printed only if the chunk is written.
-	var notes []string
+	// kept, so the chunk name still matches. guardLine returns the rule that
+	// forced a rewrite and whether the line became a loss marker; the tally is
+	// printed, as one line per kind, only if the chunk is written.
+	var tally GuardTally
 	for i, l := range reseal {
-		g, note := guardLine(l)
+		g, rule, marker := guardLine(l)
 		reseal[i] = g
-		if note != "" {
-			notes = append(notes, note)
-		}
+		tally.Add(rule, marker)
 	}
 	resealMax := cn.First - 1
 	if len(reseal) > 0 {
@@ -154,7 +153,7 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 		} else if err := WriteChunkAtomic(sealedDir, re.TempFile(), re.ChunkFile(), reseal); err != nil {
 			return Marker{}, err
 		} else {
-			for _, n := range notes {
+			for _, n := range tally.Notices("ethos: audit quarantine:") {
 				fmt.Fprintln(os.Stderr, n)
 			}
 		}
@@ -295,7 +294,7 @@ func retireChecked(repoRoot, stem, src, dst string, check func([]byte) string, n
 	if err := os.Remove(src); err != nil {
 		return fmt.Errorf("removing %s: %w", src, err)
 	}
-	if err := GitAdd(repoRoot, dst); err != nil {
+	if _, err := GitAdd(repoRoot, dst); err != nil {
 		return err
 	}
 	return nil
@@ -331,7 +330,7 @@ func withholdSweep(repoRoot, sealedDir string, cn ChunkName, check func([]byte) 
 			return err
 		}
 		np.say(cf.path, rule)
-		if err := GitAdd(repoRoot, cf.path); err != nil {
+		if _, err := GitAdd(repoRoot, cf.path); err != nil {
 			return err
 		}
 	}
@@ -389,7 +388,7 @@ func restageIfDifferent(repoRoot, path string, b []byte, stem string, check func
 			return err
 		}
 	}
-	if err := GitAdd(repoRoot, path); err != nil {
+	if _, err := GitAdd(repoRoot, path); err != nil {
 		return err
 	}
 	if rule != "" {
@@ -446,7 +445,7 @@ func finishRecordedRetirement(repoRoot, sealedDir string, cn ChunkName, chunkPat
 		if err := os.Remove(chunkPath); err != nil {
 			return false, fmt.Errorf("removing %s: %w", chunkPath, err)
 		}
-		if err := GitAdd(repoRoot, path); err != nil {
+		if _, err := GitAdd(repoRoot, path); err != nil {
 			return false, err
 		}
 		np.say(path, rec.Rule)
@@ -552,10 +551,11 @@ func writeRecord(path string, b []byte, rule string) error {
 // addUnstagedRecords, to queue the notice for a record found unstaged; print
 // says the queued ones once the run's final staging has succeeded.
 type notePad struct {
-	rules   map[string]string
-	local   map[string]bool // add: whether a local copy of the original exists
-	order   []string
-	printed map[string]bool
+	repoRoot string // to ask git whether the repo ignores a path
+	rules    map[string]string
+	local    map[string]bool // add: whether a local copy of the original exists
+	order    []string
+	printed  map[string]bool
 }
 
 // say prints the notice for path now, unless this run already has.
@@ -567,7 +567,7 @@ func (n *notePad) say(path, rule string) {
 		return
 	}
 	n.printed[path] = true
-	noticeWithheld(path, rule, true)
+	noticeWithheld(path, rule, true, n.state(path))
 }
 
 func (n *notePad) add(path, rule string, local bool) {
@@ -626,20 +626,39 @@ func (n *notePad) print() {
 			continue
 		}
 		n.printed[path] = true
-		noticeWithheld(path, n.rules[path], n.local[path])
+		noticeWithheld(path, n.rules[path], n.local[path], n.state(path))
 	}
 }
 
+// localState is what is known of whether a retired chunk's record stays local.
+type localState struct {
+	kept bool  // the repo ignores it and the index holds nothing beside it
+	err  error // the git check failed: not known
+}
+
+// state asks git, once per notice, whether path stays local (LocalOnly).
+func (n *notePad) state(path string) localState {
+	kept, err := LocalOnly(n.repoRoot, filepath.Dir(path), path)
+	return localState{kept: kept, err: err}
+}
+
 // noticeWithheld says that a retired chunk's bytes were replaced by a record.
-func noticeWithheld(path, rule string, local bool) {
+// Where nothing can reach the tracked tree it says the record stayed local
+// instead; when git could not say, it says so.
+func noticeWithheld(path, rule string, haveCopy bool, st localState) {
 	where := filepath.Join(".punt-labs", "local", "ethos", "quarantine")
-	if local {
-		fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s was withheld from the tracked tree (%s); the original is in %s\n",
-			filepath.Base(path), rule, where)
+	what := fmt.Sprintf("was withheld from the tracked tree (%s)", rule)
+	switch {
+	case st.err != nil:
+		what += fmt.Sprintf(" (ignore status unknown: %v)", st.err)
+	case st.kept:
+		what = "kept local (this repo gitignores it)"
+	}
+	if haveCopy {
+		fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s %s; the original is in %s\n", filepath.Base(path), what, where)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s was withheld from the tracked tree (%s); no local copy of the original was found in %s\n",
-		filepath.Base(path), rule, where)
+	fmt.Fprintf(os.Stderr, "ethos: audit: retired chunk %s %s; no local copy of the original was found in %s\n", filepath.Base(path), what, where)
 }
 
 // hasLocalCopy reports whether the local zone holds the original a record names:

@@ -72,12 +72,23 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 	}
 	for _, c := range corrupts {
 		if !coveredByMarker(c, sc.Markers) {
-			return ScannedDir{}, fmt.Errorf(
-				"orphan .corrupt for range [%d,%d] in %s: quarantine incomplete",
-				c.First, c.Last, dir)
+			return ScannedDir{}, &OrphanCorruptError{
+				Chunk: filepath.Join(dir, c.ChunkFile()), Dir: dir, First: c.First, Last: c.Last,
+			}
 		}
 	}
 	return sc, nil
+}
+
+// OrphanCorruptError is a .corrupt whose quarantine never finished. Chunk is
+// the chunk path `ethos audit quarantine` resumes from.
+type OrphanCorruptError struct {
+	Chunk, Dir  string
+	First, Last int64
+}
+
+func (e *OrphanCorruptError) Error() string {
+	return fmt.Sprintf("orphan .corrupt for range [%d,%d] in %s: quarantine incomplete", e.First, e.Last, e.Dir)
 }
 
 // coveredByMarker reports whether some marker of the SAME session contains the

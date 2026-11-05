@@ -19,7 +19,8 @@ func TestGitCommandsTimeOut(t *testing.T) {
 	dir := t.TempDir()
 	testhelpers.HangingGit(t)
 	t.Run("GitAdd", func(t *testing.T) {
-		assert.ErrorIs(t, GitAdd(dir, "a"), gitenv.ErrTimeout)
+		_, err := GitAdd(dir, "a")
+		assert.ErrorIs(t, err, gitenv.ErrTimeout)
 	})
 	t.Run("GitMv", func(t *testing.T) {
 		assert.ErrorIs(t, GitMv(dir, "a", "b"), gitenv.ErrTimeout)

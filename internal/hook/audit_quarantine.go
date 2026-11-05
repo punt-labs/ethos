@@ -37,15 +37,10 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 		}
 		livePath := liveAuditPath(repoRoot, sessionID)
 		redactReason := quarantineReason(pr)
-		sg := sessionLineGuard(repoRoot)
-		sessionNote := func(l []byte) ([]byte, string) {
-			out, rule, marker := sg(l)
-			return out, auditGuardNotice(rule, marker)
-		}
 		var marker audit.Marker
 		err := WithLiveAuditLock(repoRoot, sessionID, func() error {
 			var e error
-			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, sessionNote, corruptRule)
+			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, sessionLineGuard(repoRoot), corruptRule)
 			return e
 		})
 		return marker, err
@@ -55,15 +50,10 @@ func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
 		missionID := filepath.Base(sealedDir)
 		livePath := liveMissionLogPath(repoRoot, missionID, cn.Session)
 		redactReason := quarantineReason(pr)
-		guard := missionLineGuard(repoRoot)
-		guardLine := func(l []byte) ([]byte, string) {
-			out, rule, marker := guard(l)
-			return out, auditGuardNotice(rule, marker)
-		}
 		var marker audit.Marker
 		err := WithLiveMissionLock(repoRoot, missionID, cn.Session, func() error {
 			var e error
-			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, guardLine, corruptRule)
+			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, missionLineGuard(repoRoot), corruptRule)
 			return e
 		})
 		return marker, err

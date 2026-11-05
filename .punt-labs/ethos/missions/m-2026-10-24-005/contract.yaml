@@ -1,0 +1,28 @@
+mission_id: m-2026-10-24-005
+status: closed
+type: task
+created_at: "2026-10-24T02:41:55Z"
+updated_at: "2026-10-24T02:46:22Z"
+closed_at: "2026-10-24T02:46:22Z"
+leader: claude
+worker: rmh
+evaluator:
+    handle: adb
+    pinned_at: "2026-10-24T02:41:55Z"
+    hash: c02a4ea1b4080add05ac180abcb5eaaaf7e3bf851edd4cc9b1b06f9273e96088
+inputs:
+    ticket: ethos-4udw
+write_set:
+    - tests/e2e/uv.lock
+    - tests/e2e/pyproject.toml
+success_criteria:
+    - 'All 31 open Dependabot alerts on punt-labs/ethos are in tests/e2e/uv.lock (the e2e test harness; nothing here ships in the ethos binary). Upgrade the locked versions to at least: PyJWT 2.15.0, certifi 2026.10.19, aiohttp 3.14.4, multidict 6.9.1, mcp 1.30.0, urllib3 2.8.0, oauthlib 4.0.0. Alert 42 (GHSA-gvp8-978c-rx2q, PyJWT >=2.11.0,<=2.13.0) is covered by PyJWT >= 2.15.0.'
+    - Use uv (`uv lock --upgrade-package <name>` per package, run in tests/e2e). Change tests/e2e/pyproject.toml only if a lower bound must be raised to make the resolver pick a fixed version, and say why in the commit.
+    - After the lock change, show for each package the old and new locked version (from `git diff` of uv.lock) and confirm no locked version is still inside any alert's vulnerable range (query `gh api "repos/punt-labs/ethos/dependabot/alerts?state=open&per_page=100"`; read the vulnerable_version_range of each alert).
+    - '`make check` passes (it runs ruff, mypy and pytest in tests/e2e); read its full output, never pipe through head, tail or grep. If the e2e suite marked e2e can run locally (`uv run pytest tests/ -m e2e` in tests/e2e), run it and report the result; if it needs something unavailable, report what.'
+    - 'One commit, by explicit path: git commit -m <msg> -- tests/e2e/uv.lock [tests/e2e/pyproject.toml]. The ethos pre-commit seal hook may add chunk files; that is expected.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: Worktree <repo>/.claude/worktrees/deps on branch fix/e2e-lock-vulns -- work only there; do not create or switch branches. Commit on this branch; do NOT push, do not touch PRs, do not merge -- the leader does that. If an upgrade breaks a test or needs a code change outside the write set, stop and report.

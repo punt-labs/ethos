@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
@@ -768,7 +769,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		b.WriteString("\n")
 	}
 
-	return b.String()
+	return agentmark.Add(b.String())
 }
 
 // extractDescription returns the first prose sentence from markdown

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -59,10 +60,13 @@ func InstallAgentDefinitions(ethosRoot string, generated map[string]bool) ([]str
 		}
 
 		srcPath := filepath.Join(srcDir, e.Name())
-		srcData, err := os.ReadFile(srcPath)
+		raw, err := os.ReadFile(srcPath)
 		if err != nil {
 			return deployed, fmt.Errorf("reading agent file %s: %w", srcPath, err)
 		}
+		// The marker lets doctor tell this copy from a hand-authored file
+		// if its identity is later removed.
+		srcData := []byte(agentmark.Add(string(raw)))
 
 		destPath := filepath.Join(destDir, e.Name())
 		destData, err := os.ReadFile(destPath)

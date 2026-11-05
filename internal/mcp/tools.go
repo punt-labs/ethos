@@ -17,7 +17,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/role"
@@ -185,6 +184,7 @@ func (h *Handler) identityTool() mcplib.Tool {
 		mcplib.WithBoolean("reference",
 			mcplib.Description("If true, return attribute slugs only without resolving .md content. For whoami, get."),
 		),
+		callerOption(),
 	}
 	return mcplib.NewTool("identity", withOptions(fixed, schema.Identity)...)
 }
@@ -212,7 +212,7 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 	if persona == "" {
 		return mcplib.NewToolResultError("persona is required for iam"), nil
 	}
-	if sid, present, err := h.metadataSessionID(req); present {
+	if ref, present, err := h.requestCaller(req); present {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
@@ -223,57 +223,39 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 			what, _, _ := resolve.Describe(err)
 			return mcplib.NewToolResultError(fmt.Sprintf("iam: %s (%v); the persona is refused rather than checked against the global store", what, err)), nil
 		}
-		if sessionID != sid {
-			return mcplib.NewToolResultError("session_id must match the metadata caller for iam"), nil
+		if sessionID != ref.sessionID {
+			return mcplib.NewToolResultError("session_id must match the declared caller for iam"), nil
 		}
 		agentID, err := stringArgStrict(req, "agent_id")
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		if agentID != "" && agentID != sid {
-			return mcplib.NewToolResultError("agent_id must match the metadata caller for iam"), nil
+		if agentID != "" && agentID != ref.agentID {
+			return mcplib.NewToolResultError("agent_id must match the declared caller for iam"), nil
 		}
-		caller, err := h.callerParticipant(sid)
+		caller, err := h.callerParticipant(ref)
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		if _, err := h.loadCallerIdentity(caller.Persona); err != nil {
-			return mcplib.NewToolResultError(err.Error()), nil
+		// A persona-less caller (DES-007) has nothing to validate: iam is how
+		// such an instance declares one.
+		if caller.Persona != "" {
+			if _, err := h.loadCallerIdentity(caller.Persona); err != nil {
+				return mcplib.NewToolResultError(err.Error()), nil
+			}
 		}
 		if _, err := h.loadCallerIdentity(persona); err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		if err := h.sessionStore.SetExistingPersona(sid, sid, persona); err != nil {
+		if err := h.sessionStore.SetExistingPersona(ref.sessionID, ref.agentID, persona); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
 		}
-		return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, sid, sid)), nil
+		return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, ref.agentID, ref.sessionID)), nil
 	}
 
-	// Key the participant on ETHOS_AGENT_ID then the Claude PID — parity
-	// with the CLI so the same declaration records the same agent key on
-	// both surfaces (DES-061 R4).
-	agentID := os.Getenv("ETHOS_AGENT_ID")
-	selfKeyed := agentID == ""
-	if selfKeyed {
-		agentID = process.FindClaudePID()
-	}
-
-	p := session.Participant{AgentID: agentID, Persona: persona}
-	var joinErr error
-	if selfKeyed {
-		// Tolerate a session that started before this fix and keyed its
-		// primary participant on the walk-derived PID instead of the new
-		// preferred CLAUDE_PID — a plain Join would find no match and
-		// file a duplicate participant for the same physical process
-		// rather than updating the one already there (round 2 finding).
-		// An explicit ETHOS_AGENT_ID is exact by the caller's own
-		// declaration and is never subject to this fallback.
-		joinErr = h.sessionStore.JoinSelf(sessionID, agentID, process.LegacyClaudePID(), p)
-	} else {
-		joinErr = h.sessionStore.Join(sessionID, p)
-	}
-	if joinErr != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", joinErr)), nil
+	agentID, err := h.noCallerIam(sessionID, persona)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
 	}
 	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
 }
@@ -305,13 +287,16 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		what, _, _ := resolve.Describe(issue)
 		return mcplib.NewToolResultError(fmt.Sprintf("whoami: %s (%v); identity is refused", what, issue)), nil
 	}
-	if sid, present, err := h.metadataSessionID(req); present {
+	if ref, present, err := h.requestCaller(req); present {
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		caller, err := h.callerParticipant(sid)
+		caller, err := h.callerParticipant(ref)
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if caller.Persona == "" {
+			return mcplib.NewToolResultText(noIdentity(caller)), nil
 		}
 		id, err := h.loadCallerIdentity(caller.Persona, identity.Reference(boolArg(req, "reference", false)))
 		if err != nil {
@@ -319,7 +304,11 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		}
 		return jsonResult(id)
 	}
-	handle, err := resolve.Resolve(h.store, h.sessionStore, loc.Checkout)
+	caller := identity.ForCaller(h.store)
+	handle, err := h.noCallerHandle(caller, loc.Checkout)
+	if errors.Is(err, errNoCaller) {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
 	}
@@ -329,7 +318,7 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		opts = append(opts, identity.Reference(true))
 	}
 
-	id, loadErr := h.store.Load(handle, opts...)
+	id, loadErr := caller.Load(handle, opts...)
 	if loadErr != nil {
 		return identityLoadError(handle, loadErr), nil
 	}
@@ -551,12 +540,15 @@ func (h *Handler) sessionTool() mcplib.Tool {
 		mcplib.WithString("agent_type",
 			mcplib.Description("Agent type (e.g. code-reviewer, Explore). Optional for join."),
 		),
+		callerOption(),
 	)
 }
 
-// resolveSessionID discovers the session ID: the session_id arg, then the
-// shared harness-neutral chain (ETHOS_SESSION, then the Claude PID walk) —
-// parity with the CLI (DES-061 R4).
+// resolveSessionID discovers the session ID: a declared caller's session, the
+// session_id arg (an administrative target), then, for a call that declared no
+// caller, noCallerSessionID: errNoCaller under Claude Code, otherwise the shared
+// harness-neutral chain (ETHOS_SESSION, then the Claude PID walk), parity with
+// the CLI (DES-061 R4).
 //
 // Mission 005 finding A: this used to collapse resolve.SessionID's two
 // failure sentinels into one generic message, so a corrupt pointer file
@@ -567,27 +559,27 @@ func (h *Handler) sessionTool() mcplib.Tool {
 // cause for the former while keeping the plain, actionable message for
 // the latter, mirroring cmd/ethos/iam.go's split.
 func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
-	sid, present, metaErr := h.metadataSessionID(req)
+	ref, present, callerErr := h.requestCaller(req)
 	if present {
-		if metaErr != nil {
-			return "", metaErr
+		if callerErr != nil {
+			return "", callerErr
 		}
 		explicit, err := stringArgStrict(req, "session_id")
 		if err != nil {
 			return "", err
 		}
-		if stringArg(req, "method", "") == "iam" && explicit != "" && explicit != sid {
-			return "", fmt.Errorf("session_id must match the metadata caller for iam")
+		if stringArg(req, "method", "") == "iam" && explicit != "" && explicit != ref.sessionID {
+			return "", fmt.Errorf("session_id must match the declared caller for iam")
 		}
 		// Explicit roster/join/leave are administrative operations, not
 		// declarations about the caller. They may target another session.
 		if explicit != "" {
 			return explicit, nil
 		}
-		if _, err := h.callerParticipant(sid); err != nil {
+		if _, err := h.callerParticipant(ref); err != nil {
 			return "", err
 		}
-		return sid, nil
+		return ref.sessionID, nil
 	}
 	sessionID := stringArg(req, "session_id", "")
 	if sessionID != "" {
@@ -596,14 +588,35 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	if h.sessionStore == nil {
 		return "", fmt.Errorf("session store not configured")
 	}
-	sid, _, err := resolve.SessionID(h.sessionStore)
+	sid, err := h.noCallerSessionID()
 	if err == nil {
 		return sid, nil
+	}
+	if errors.Is(err, errNoCaller) {
+		return "", err
 	}
 	if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
 		return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")
 	}
 	return "", fmt.Errorf("no active session: %w", err)
+}
+
+// callerSessionID is the session of the caller a request declares, for the
+// operations that act on the caller's own session (mission binding). Without a
+// declared caller it is noCallerSessionID. A declared caller must be an exact
+// roster participant, and no other source answers for it.
+func (h *Handler) callerSessionID(req mcplib.CallToolRequest) (string, error) {
+	ref, present, err := h.requestCaller(req)
+	if !present {
+		return h.noCallerSessionID()
+	}
+	if err != nil {
+		return "", err
+	}
+	if _, err := h.callerParticipant(ref); err != nil {
+		return "", err
+	}
+	return ref.sessionID, nil
 }
 
 func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -662,12 +675,21 @@ func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest)
 func (h *Handler) doctorTool() mcplib.Tool {
 	return mcplib.NewTool("doctor",
 		mcplib.WithDescription("Check installation health: identity directory, human identity, default agent, duplicate fields."),
+		callerOption(),
 	)
 }
 
-func (h *Handler) handleDoctor(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleDoctor(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	loc := resolve.Roots()
-	results := doctor.RunAllFor(loc, h.store, h.sessionStore, h.teams)
+	// The Human identity row is the caller's: a declared caller is answered from
+	// its exact participant, a call with none from noCallerDoctor. No row is
+	// ever derived from the environment, PID, git or OS under Claude Code.
+	var results []doctor.Result
+	if ref, present, err := h.requestCaller(req); present {
+		results = doctor.RunAllForCaller(loc, h.store, h.sessionStore, h.teams, h.declaredCallerResult(ref, err))
+	} else {
+		results = h.noCallerDoctor(loc)
+	}
 
 	// Format as table text per DES-020.
 	headers := []string{"NAME", "STATUS", "DETAIL"}

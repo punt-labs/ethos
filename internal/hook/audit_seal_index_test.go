@@ -15,6 +15,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// breakAddFor makes `git add` fail on a session's chunk, after it has staged the
+// others: the session's sealed directory is a symlink to a directory outside
+// the repository, and git refuses a path beyond a symbolic link. (A gitignored
+// directory no longer does: the seal skips what the repo ignores.)
+func breakAddFor(t *testing.T, repo, sessionID string, now time.Time) {
+	t.Helper()
+	dir, err := resolveRepoSessionDir(repo, sessionID, now)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dir), 0o700))
+	require.NoError(t, os.Symlink(t.TempDir(), dir))
+}
+
 // A `git add` that stages some paths and then fails leaves the index changed.
 // The seal restores the index it snapshotted before the add, and removes the
 // chunks it wrote, so the tree and the index are as they were; and its error
@@ -24,11 +36,9 @@ func TestSealRestoresTheIndexWhenAddFailsAfterStagingSome(t *testing.T) {
 	require.NoError(t, err)
 	repo := t.TempDir()
 	initGitRepo(t, repo)
-	// The second session's sealed directory is ignored, so `git add` stages the
-	// first session's chunk, then refuses the ignored path and exits non-zero.
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/ethos/sessions/*sess-two\n"), 0o644))
 	writeLiveLines(t, repo, "sess-one", 100, 200)
 	writeLiveLines(t, repo, "sess-two", 300, 400)
+	breakAddFor(t, repo, "sess-two", time.Unix(0, 300))
 	index := filepath.Join(repo, ".git", "index")
 	indexBefore, err := os.ReadFile(index)
 	require.NoError(t, err)
@@ -105,9 +115,9 @@ func TestFailedSealLeavesNoDirectoriesOrSnapshot(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			real := t.TempDir()
 			initGitRepo(t, real)
-			require.NoError(t, os.WriteFile(filepath.Join(real, ".gitignore"), []byte(".punt-labs/ethos/sessions/*sess-two\n"), 0o644))
 			writeLiveLines(t, real, "sess-one", 100, 200)
 			writeLiveLines(t, real, "sess-two", 300, 400)
+			breakAddFor(t, real, "sess-two", time.Unix(0, 300))
 			repo := real
 			if viaLink {
 				repo = filepath.Join(t.TempDir(), "link")

@@ -396,10 +396,11 @@ func StageUntrackedChunks(repoRoot, dir string, ns Namespace, session string) (i
 	if len(pending) == 0 {
 		return 0, nil
 	}
-	if err := GitAdd(repoRoot, pending...); err != nil {
+	staged, err := GitAdd(repoRoot, pending...)
+	if err != nil {
 		return 0, err
 	}
-	return len(pending), nil
+	return len(staged), nil
 }
 
 // ChunkArtifacts lists every chunk-namespace artifact in dir — a valid chunk,

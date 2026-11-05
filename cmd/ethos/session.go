@@ -504,7 +504,7 @@ func runSessionStart(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("session start: %w", err)
 	}
-	human, err := resolve.Resolve(store, nil, checkout)
+	human, err := resolve.Resolve(identity.ForCaller(store), nil, checkout)
 	if err != nil {
 		return fmt.Errorf("session start: resolving identity: %w", err)
 	}

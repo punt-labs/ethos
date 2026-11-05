@@ -163,7 +163,7 @@ func TestMetadataCaller_InvalidRoster(t *testing.T) {
 }
 
 func TestMetadataCaller_InvalidPersona(t *testing.T) {
-	for _, persona := range []string{"", "missing", "../alice", "BadHandle"} {
+	for _, persona := range []string{"missing", "../alice", "BadHandle"} {
 		t.Run(persona, func(t *testing.T) {
 			h, _ := metadataHandler(t)
 			require.NoError(t, h.sessionStore.SetExistingPersona("ses_A", "ses_A", persona))
@@ -180,6 +180,17 @@ func TestMetadataCaller_InvalidPersona(t *testing.T) {
 			assertMetadataIdentity(t, h, "ses_B", "bob")
 		})
 	}
+}
+
+// A participant with no persona is DES-007's null persona, not a dangling
+// reference: whoami says it has no identity, and no other identity answers.
+func TestMetadataCaller_NoPersona(t *testing.T) {
+	h, _ := metadataHandler(t)
+	require.NoError(t, h.sessionStore.SetExistingPersona("ses_A", "ses_A", ""))
+	result, err := h.handleIdentity(context.Background(), metadataCall(t, "ses_A", map[string]any{"method": "whoami"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, resultText(t, result))
+	assert.Equal(t, "ses_A has no ethos identity", resultText(t, result))
 }
 
 func TestMetadataCaller_InvalidIdentity(t *testing.T) {

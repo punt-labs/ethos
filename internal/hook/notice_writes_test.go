@@ -81,7 +81,7 @@ func TestWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
 			cn, _ := audit.Classify(chunk, audit.SessionNS)
 			re := audit.ChunkName{Namespace: cn.Namespace, First: 100, Last: 100}
 			require.NoError(t, os.MkdirAll(filepath.Join(sealed, re.TempFile()), 0o700)) // the write fails
-			_, err := audit.Quarantine(repo, sealed, cn, live, "bad", redactReason, guardAuditLineNote, corruptRule)
+			_, err := audit.Quarantine(repo, sealed, cn, live, "bad", redactReason, guardAuditLineFull, corruptRule)
 			require.Error(t, err)
 		},
 	}
@@ -338,4 +338,62 @@ func TestQueryLegacyAudit_ReadsTheStagedFile(t *testing.T) {
 	got, err := queryLegacyAudit(dir, "d-1", nil)
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
+}
+
+// TestSeal_OneNoticePerKindNoMatterHowManyLines: a tail with many rewritten
+// lines and many loss markers prints two lines, with the counts and the rules,
+// and never the value.
+func TestSeal_OneNoticePerKindNoMatterHowManyLines(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	live := filepath.Join(repo, "live.jsonl")
+	var body strings.Builder
+	for i := int64(100); i < 105; i++ {
+		fmt.Fprintf(&body, `{"ts":"%s","session":"s","tool":"Read","cwd":"/home/bob/x"}`+"\n", audit.FormatLineTS(i))
+	}
+	for i := int64(105); i < 108; i++ {
+		fmt.Fprintf(&body, `{"ts":"%s","session":"s","cwd":"\ud800"}`+"\n", audit.FormatLineTS(i))
+	}
+	require.NoError(t, os.WriteFile(live, []byte(body.String()), 0o600))
+	var err error
+	notice := testhelpers.CaptureStderr(t, func() {
+		_, err = sealDirLocked(sealDirParams{
+			repoRoot: repo, ns: audit.SessionNS, sealedDir: filepath.Join(repo, "sealed"), livePath: live,
+			chunkName: func(f, l int64) string { return audit.SessionChunkFile(f, l) },
+			tempName:  func(f, l int64) string { return audit.SessionTempFile(f, l) },
+			label:     "session s",
+		}, time.Now(), SealOptions{})
+	})
+	require.NoError(t, err)
+	got := strings.Split(strings.TrimSpace(notice), "\n")
+	require.Len(t, got, 2, notice)
+	assert.Contains(t, got[0], "ethos: audit seal: session s: 5 lines rewritten before sealing (it ")
+	assert.Contains(t, got[1], "ethos: audit seal: session s: 3 lines replaced by a loss marker before sealing (it ")
+	assert.NotContains(t, notice, "/home/bob")
+}
+
+// TestQuarantine_OneNoticeForManyRewrittenLines: the lines a quarantine
+// re-seals are summarised, not announced one by one.
+func TestQuarantine_OneNoticeForManyRewrittenLines(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealed := filepath.Join(repo, "sealed")
+	require.NoError(t, os.MkdirAll(sealed, 0o700))
+	chunk := audit.SessionChunkFile(100, 104)
+	require.NoError(t, os.WriteFile(filepath.Join(sealed, chunk), []byte("\x00garbage\n"), 0o600))
+	var body strings.Builder
+	for i := int64(100); i < 105; i++ {
+		fmt.Fprintf(&body, `{"ts":"%s","session":"s","tool":"Read","cwd":"/home/bob/x"}`+"\n", audit.FormatLineTS(i))
+	}
+	live := filepath.Join(repo, "live.jsonl")
+	require.NoError(t, os.WriteFile(live, []byte(body.String()), 0o600))
+	cn, _ := audit.Classify(chunk, audit.SessionNS)
+	var err error
+	notice := testhelpers.CaptureStderr(t, func() {
+		_, err = audit.Quarantine(repo, sealed, cn, live, "bad", redactReason, guardAuditLineFull, corruptRule)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(notice, "5 lines rewritten before sealing"), notice)
+	assert.NotContains(t, notice, "a line was rewritten")
 }

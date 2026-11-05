@@ -1,0 +1,148 @@
+results:
+    - mission: m-2026-10-24-007
+      round: 1
+      created_at: "2026-10-24T05:29:51Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: internal/layout/layout.go
+          added: 190
+          removed: 0
+        - path: internal/layout/layout_test.go
+          added: 230
+          removed: 0
+        - path: internal/layout/writers_test.go
+          added: 230
+          removed: 0
+        - path: internal/doctor/unclassified.go
+          added: 105
+          removed: 0
+        - path: internal/doctor/unclassified_test.go
+          added: 105
+          removed: 0
+        - path: internal/doctor/doctor.go
+          added: 4
+          removed: 1
+        - path: internal/doctor/doctor_test.go
+          added: 3
+          removed: 3
+        - path: cmd/ethos/mission.go
+          added: 12
+          removed: 3
+        - path: cmd/ethos/mission_export_layout_test.go
+          added: 19
+          removed: 0
+        - path: cmd/ethos/handlers_test.go
+          added: 1
+          removed: 1
+      evidence:
+        - name: make check (each of 4 commits, full output read)
+          status: pass
+        - name: TestEveryWriterPathIsClassified fails on mutant A (results.yaml entry removed)
+          status: pass
+        - name: TestEntriesAreExclusive fails on mutant B (class-3 missions/*/*.yaml entry added)
+          status: pass
+        - name: ethos doctor on the real repo lists only the stray ethos.yaml (removed in this branch)
+          status: pass
+      open_questions:
+        - 'Write-set deviation: internal/mcp/tools_test.go (check count 14 to 15 and its comment) is outside the write set; make check required it. Committed in the doctor commit.'
+        - 'Write-set deviation: .punt-labs/ethos/ethos.yaml deleted in its own commit f03b561, as the contract allows.'
+      prose: |
+        Commits: f03b561 remove stray ethos.yaml (grep: no code reads or writes
+        .punt-labs/ethos/ethos.yaml; config is .punt-labs/ethos.yaml,
+        resolve.go:498). af79ba3 internal/layout table, Classify, coverage and
+        exclusivity tests. a1c1ad8 missionExportPaths/missionExportDefaultDir
+        refactor plus classification test. 1427e8b doctor check
+        CheckUnclassifiedFiles (WARN, lists up to ten files, scans checkout and
+        store).
+
+        Coverage test runs real writers in a temp git repo with core.hooksPath set
+        in-tree: enable.Enable, identity/ext/role/team/attribute/ADR stores, the
+        mission Store lifecycle with a session (Create, reflection, result,
+        delegation skeleton, Close), hook.SealRepo, audit path constructors and
+        chunk-name constructors, the agent generator, InstallAgentDefinitions, the
+        seeder, and vendor.ManifestPath. Mutant evidence: with the results.yaml
+        entry removed, TestEveryWriterPathIsClassified reports
+        ".punt-labs/ethos/missions/m-2026-10-24-901/results.yaml ... no entry
+        matches"; with a class-3 ".punt-labs/ethos/missions/*/*.yaml" entry added,
+        TestEntriesAreExclusive reports contract.yaml and results.yaml matching
+        blame and trace entries. The same two mutants are also asserted inside
+        TestCoverageDetectsUnmatchedWriter and TestExclusivityDetectsOverlap.
+
+        Table entries with no real writer today (future writers named by DES-079
+        or writers outside importable packages): corrections.yaml, adrs in the
+        default CLI store, trace archive, artifacts, export files (covered by the
+        cmd/ethos test), bundles, archetypes, pipelines, legacy config.yaml, and
+        the temp names of enable and githook.
+    - mission: m-2026-10-24-007
+      round: 2
+      created_at: "2026-10-24T05:51:58Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: internal/layout/layout.go
+          added: 207
+          removed: 0
+        - path: internal/layout/overlap.go
+          added: 84
+          removed: 0
+        - path: internal/layout/hooks.go
+          added: 67
+          removed: 0
+        - path: internal/layout/temp.go
+          added: 36
+          removed: 0
+        - path: internal/layout/layout_test.go
+          added: 404
+          removed: 0
+        - path: internal/layout/writers_test.go
+          added: 296
+          removed: 0
+        - path: internal/doctor/unclassified.go
+          added: 112
+          removed: 0
+        - path: internal/doctor/unclassified_test.go
+          added: 144
+          removed: 0
+        - path: cmd/ethos/layout_writers_test.go
+          added: 114
+          removed: 0
+        - path: cmd/ethos/bundle.go
+          added: 3
+          removed: 2
+      evidence:
+        - name: make check on each of 4 round-2 commits (full output read)
+          status: pass
+        - name: pairwise exclusivity finds **/pre-commit vs missions/*/artifacts/** (overlay mutant C and TestOverlap)
+          status: pass
+        - name: stale Temp entry fails TestTempEntriesAreFedByHelpers (overlay mutant D)
+          status: pass
+        - name: removing .gitmodules entry fails TestCmdWritersPathsAreClassified (overlay mutant E)
+          status: pass
+        - name: removing migrate staging entry fails TestMigrateStagingIsClassFour (overlay mutant F)
+          status: pass
+      open_questions:
+        - Ruling 4 required edits to writers outside the contract write set (identity, adr, mission, audit, seed, enable, claudemd, githook); name shapes unchanged except claudemd temp (.CLAUDE.md.<rand>, was .CLAUDE.md.tmp<rand>).
+        - 'Ruling 2 deviation: ClassifyHooks(repoRoot) is layout.HookEntries(repoRoot, hooksDir)/TableFor; the caller resolves hooksDir with githook.HooksDir, because githook now imports layout and layout importing githook would be a cycle.'
+        - 'Ruling 5 mechanism: a Fallback flag on Entry. Export-shape entries sit last and claim only paths nothing else matches; a plain class-2 entry would overlap identities/*.yaml, roles/*.yaml, ext files and artifacts/** and fail exclusivity. Fallback entries are exempt from the pairwise check; a test pins they come last. DES-079 text for rulings 2 and 5 should say so.'
+        - 'Ruling 3 ADR: the CLI store is global (~/.punt-labs/ethos/adrs, cmd/ethos/adr.go:16-21), so its files are outside the tree; the test asserts that, and classifies them if ethos-yjh0 moves the store inside.'
+      prose: |
+        Commits: 7024209 pairwise Overlap + HookEntries/TableFor (rulings 1, 2).
+        d8177bd export-shape fallback entries (5). 8ec036e temp helpers shared by
+        writers and Temp entries, migrate staging class-4 entry (4). f679918 coverage
+        writers: vendor copy, mission migrate (real, plus a crash-leftover staging
+        dir), audit migrate, mergeRepoConfig/setConfigKey/writeConfigFile, team
+        add-bundle via real git submodule add, ADR store at the CLI location;
+        .gitmodules class 1 (3).
+
+        Also fixed: the round-1 vendored-manifest temp entry lacked the leading dot of
+        the base name (the real temp is ..vendored-manifest.<rand>); building it from
+        the helper corrected it. The doctor check now uses TableFor so in-tree hook
+        files do not warn, and missions-closed/ exports pass while README.md and
+        unknown files still warn.
+
+        Known noise: writeMigrations runs after the hand-made quarantine fixtures, so
+        mission migrate prints one stderr warning about an orphan .corrupt; it does
+        not affect results.

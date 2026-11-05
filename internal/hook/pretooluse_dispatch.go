@@ -698,7 +698,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 			"ethos pre-tool-use: tier-A allocating delegation id: %v; allowing spawn without DELEGATION_ID\n",
 			err)
 		env := map[string]string{"PARENT_SESSION_ID": sessionID}
-		return json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env))
+		return json.NewEncoder(w).Encode(preToolUsePassWithEnv(env))
 	}
 	defer func() { release(success) }()
 
@@ -707,7 +707,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 		"PARENT_DELEGATION_ID": delegationID,
 		"PARENT_SESSION_ID":    sessionID,
 	}
-	if err := json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env)); err != nil {
+	if err := json.NewEncoder(w).Encode(preToolUsePassWithEnv(env)); err != nil {
 		// Response write failed — counter rolls back via the deferred
 		// release(false). Surface so the operator can correlate the
 		// missing audit entry.
@@ -916,7 +916,7 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 		"PARENT_SESSION_ID":     sessionID,
 		"MISSION_ARTIFACTS_DIR": mission.DelegationDir(repoRoot, missionID, delegationID),
 	}
-	if err := json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env)); err != nil {
+	if err := json.NewEncoder(w).Encode(preToolUsePassWithEnv(env)); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos pre-tool-use: tier-B response write: %v\n", err)
 		return err

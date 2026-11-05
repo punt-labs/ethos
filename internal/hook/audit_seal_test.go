@@ -3,6 +3,7 @@ package hook
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,5 +235,51 @@ func TestSealThenReadIdentical(t *testing.T) {
 	}
 	if err := auditEntriesEqual(before, after); err != nil {
 		t.Errorf("read differs across seal: %v", err)
+	}
+}
+
+// A repo that gitignores .punt-labs/ethos/sessions/ (biff, mcp-proxy, quarry)
+// has chosen not to track session audit: the seal writes its chunk locally,
+// stages nothing, and the commit lands.
+func TestSealRepoInRepoThatIgnoresSessions(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/ethos/sessions/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sid := "sess-ignored"
+	writeLiveLines(t, repo, sid, 100, 200, 300)
+
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	res, err := SealRepo(repo, now, SealOptions{})
+	if err != nil {
+		t.Fatalf("SealRepo in a repo that ignores sessions: %v", err)
+	}
+	if res.LinesSealed != 3 {
+		t.Errorf("res = %+v, want 3 lines sealed", res)
+	}
+	if res.ChunksStaged != 0 {
+		t.Errorf("ChunksStaged = %d, want 0: the chunk is ignored and stays local", res.ChunksStaged)
+	}
+	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
+	if _, err := os.Stat(filepath.Join(sealedDir, audit.SessionChunkFile(100, 300))); err != nil {
+		t.Errorf("chunk not written locally: %v", err)
+	}
+
+	for _, args := range [][]string{{"add", ".gitignore"}, {"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "land"}} {
+		cmd := testhelpers.GitCommand(args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	cmd := testhelpers.GitCommand("ls-files")
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "sessions") {
+		t.Errorf("ignored chunk is tracked: %q", out)
 	}
 }

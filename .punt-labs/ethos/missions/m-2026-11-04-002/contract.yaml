@@ -1,0 +1,36 @@
+mission_id: m-2026-11-04-002
+status: closed
+type: task
+created_at: "2026-11-04T01:51:28Z"
+updated_at: "2026-11-04T02:24:08Z"
+closed_at: "2026-11-04T02:24:08Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-11-04T01:51:28Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - internal/hook/
+    - internal/mcp/
+    - internal/doctor/
+    - plugin/hooks/
+    - docs/
+    - CHANGELOG.md
+success_criteria:
+    - 'Read FIRST in this worktree: DESIGN.md DES-007 (Null persona handling), DES-029 with its 2026-11-03 amendment, DES-054, DES-061 R4, DES-074 in full with both 2026-11-03 amendments. DES-074 rule: a mechanism is reliable or raises a named error, never a plausible wrong answer. If an item below conflicts with an ADR, stop and report with file:line.'
+    - 'F1 server fails closed under Claude Code: when resolve.UnderClaudeCode() is true and a caller-dependent MCP method (identity whoami; session roster/join/leave/iam without explicit session_id; mission bind on create and clear on close/abandon; doctor Human identity) receives neither _caller nor OpenCode _meta, return a named error ("Claude Code call arrived without _caller: the ethos PreToolUse hook did not declare the caller (is it installed, enabled, and not killed?)"). Do not call resolve.SessionID, resolve.Resolve, process.FindClaudePID or read ETHOS_* on that path. Explicit session_id admin targets (roster/join/leave) keep working. Non-Claude-Code clients keep the existing chain. Doctor: pass the declared caller into the Human identity check (or a shared constant for the row name) so no env-derived row can stand.'
+    - 'F2 hook fails closed for ethos MCP tools: when the payload tool_name matches ^mcp__plugin_ethos(-dev)?_self__ and ReadInput, routing, gate decode, or caller declaration errors, emit deny with a reason naming the cause, never an error-with-no-output. If the payload cannot be parsed at all, detect an ethos MCP tool_name in the raw bytes if possible and deny; otherwise keep current behaviour (F1 then refuses server-side). When agent_type is present but agent_id is absent, declare no caller (do not fall back to CLAUDE_PID). When no caller can be declared, strip any _caller (existing) and log the cause to stderr (hook-errors.log).'
+    - 'F3 ReadInput: return a distinct sentinel ErrInputTimeout when the deadline fires (with partial-bytes count), wrap non-EOF non-timeout read errors; fix the stale doc comment. Callers log it; PreToolUse applies F2.'
+    - 'F4 wrappers: capture the read status; when rc > 128 (timeout), append "ethos <hook>: stdin read timed out after 10s (N bytes)" to hook-errors.log, then forward as today. Keep DES-029 pattern, bypasses, shellcheck clean.'
+    - 'F5 mission close/abandon: a failure to clear the active-mission binding is a top-level error in the result, not a warning.'
+    - 'F6 structural guards: (a) the PreToolUse output type can only express deny or no decision (e.g. unexported bool marshalled to "deny"), so "allow" cannot be reintroduced; (b) a test over internal/mcp/*.go that fails if resolve.SessionID, resolve.Resolve, process.FindClaudePID, or ETHOS_SESSION/ETHOS_AGENT_ID reads appear outside the approved no-caller resolution function(s) — ideally route all caller resolution through one function; (c) the wrapper test list is derived from plugin/hooks/hooks.json command entries and asserted to match exactly; (d) doctor row name shared as a constant.'
+    - 'Tests for every item with fail-before evidence: kill-switch/bypass + model _caller → server refuses (F1); hook handler error on ethos tool → deny (F2); agent_type without agent_id → no caller; timeout sentinel; wrapper timeout log; mission close binding failure → error.'
+    - CHANGELOG and docs/claude-code-mcp-identity.md updated. Do not edit DESIGN.md; report text the leader should add.
+    - Commit per logical step by explicit path, each passing `make check` (read full output). Never --no-verify. Never print environment variables.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: Worktree <repo>/.claude/worktrees/mcp-caller, branch fix/mcp-caller-hook (HEAD 6dc5c72; missions m-2026-11-03-007 and m-2026-11-04-001 closed). Work only there; do not push or touch PRs. Findings come from local review (silent-failure-hunter, invariant-completeness-reviewer, code-reviewer) of the full branch diff; Qodo review is still running and its findings may follow as round 2.

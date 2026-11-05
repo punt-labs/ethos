@@ -50,8 +50,10 @@ an authorization boundary. Only use this opt-in with trusted local callers.
 Ethos does not register callers or auto-create rosters. A metadata caller
 with a missing, malformed, or mismatched roster, or no exact participant,
 receives an error. `whoami` loads that participant's persona through the
-effective layered identity store; an empty, invalid, missing, or corrupt
-identity is an error, never a reason to fall back to git or the OS user.
+effective layered identity store. An empty persona is a participant with no
+identity, per DES-007: `whoami` says so, and `iam` may declare one. An
+invalid, missing, or corrupt identity is an error. Nothing falls back to the
+git or OS user identity.
 The `reference` option retains its usual attribute-resolution behavior.
 
 `iam` validates the caller's current and requested identities and changes only the existing exact

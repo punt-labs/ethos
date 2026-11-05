@@ -61,6 +61,13 @@ jobs:
           path: .tmp/z-spec-installer
 
       - name: Install fuzz (Z spec type-checker)
+        # fuzz 1.2.1 declares `typedef int bool;` (fuzz.h:49), which is a
+        # hard error under C23, the GCC default on the Ubuntu 26.04
+        # runner. CFLAGS (not CC) is the knob: fuzz's src/Makefile.in
+        # hardcodes `CC=gcc`, which overrides an environment CC, but it
+        # expands $(CFLAGS) on every compile and link line and never sets it.
+        env:
+          CFLAGS: -std=gnu17
         run: |
           sudo apt-get update
           sudo apt-get install -y bison flex
@@ -72,6 +79,9 @@ jobs:
 
       - name: Validate content
         run: go run ./cmd/validate-content
+
+      - name: Offline OpenCode configuration and helper tests
+        run: make check-opencode
 
       - name: fuzz type-check (Z specs)
         run: make fuzz-check

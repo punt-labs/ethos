@@ -293,10 +293,14 @@ func IsNotARepo(stderr string) bool {
 }
 
 // IsUnacceptedDotGit reports whether git's stderr says it found no repository,
-// or that a .git is not a regular file (what git 2.4x and newer say of a FIFO
-// where older ones said "not a git repository").
+// or refused a .git it found: a FIFO ("not a regular file" in newer gits), or a
+// gitfile naming a missing directory ("gitfile does not point to a valid
+// repository" in newer gits; older ones say "not a git repository: <path>").
 func IsUnacceptedDotGit(stderr string) bool {
-	return IsNotARepo(stderr) || strings.Contains(stderr, "not a regular file")
+	return IsNotARepo(stderr) ||
+		strings.Contains(stderr, "not a git repository") ||
+		strings.Contains(stderr, "not a regular file") ||
+		strings.Contains(stderr, "gitfile does not point to a valid repository")
 }
 
 // Parsed returns the current environment with git's messages in the C locale

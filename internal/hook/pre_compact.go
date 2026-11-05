@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -35,7 +34,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		return fmt.Errorf("pre-compact: Identities and Sessions stores are required")
 	}
 
-	input, err := ReadInput(r, time.Second)
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("pre-compact: %w", err)
 	}

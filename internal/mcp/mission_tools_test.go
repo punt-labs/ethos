@@ -558,7 +558,7 @@ func TestBindDispatchedMission_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 	h := testHandlerWithSessions(t)
 
-	warnings := h.bindDispatchedMission("m-test-001", "bwk")
+	warnings := h.bindDispatchedMission(callTool(map[string]any{}), "m-test-001", "bwk")
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "resolving session")
 	assert.NotContains(t, warnings[0], "no session in context",
@@ -578,7 +578,7 @@ func TestClearClosedMissionBindings_ReportsRealCauseUnderClaudeCode(t *testing.T
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 	h := testHandlerWithSessions(t)
 
-	warnings := h.clearClosedMissionBindings("m-test-001")
+	warnings := h.clearClosedMissionBindings(callTool(map[string]any{}), "m-test-001")
 	require.Len(t, warnings, 1, "an unresolvable session must not silently skip with no signal")
 	assert.Contains(t, warnings[0], "resolving session")
 }
@@ -1015,11 +1015,13 @@ func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
 	assert.Equal(t, holding+"\n", string(data))
 }
 
-// TestHandleMission_CloseWarnsOnUnreadableSidecar asserts a genuine read
-// failure reaches the caller. The close succeeded, so it must not become
-// an error result — the warning rides in the payload's `warnings` array,
-// which is the key the hook formatter renders (DES-020).
-func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
+// TestHandleMission_CloseErrorsOnUnreadableSidecar asserts a genuine read
+// failure reaches the caller as an error result, not a warning inside a
+// successful one: the close is on disk and stands, but a sidecar left behind
+// keeps stamping the closed mission on later commits, and a warning in a
+// success is what a caller does not read. The result names the mission, its
+// status, and the cause.
+func TestHandleMission_CloseErrorsOnUnreadableSidecar(t *testing.T) {
 	const sess = "sess-mcp-warn"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1053,24 +1055,21 @@ func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
 		"mission_id": created.MissionID,
 	}))
 	require.NoError(t, err)
-	require.False(t, closeResult.IsError, "an advisory cleanup failure must not fail the close")
+	require.True(t, closeResult.IsError, "a binding that was not cleared is an error: %s", resultText(t, closeResult))
+	text := resultText(t, closeResult)
+	assert.Contains(t, text, created.MissionID)
+	assert.Contains(t, text, "is "+mission.StatusClosed)
+	assert.Contains(t, text, "not cleared")
+	assert.Contains(t, text, "reading active mission")
 
-	var payload map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
-	assert.Equal(t, mission.StatusClosed, payload["status"])
-	// A top-level array of strings, matching LogPayload.Warnings and the
-	// show path — that is the shape writeMissionWarnings iterates.
-	warnings, ok := payload["warnings"].([]any)
-	require.True(t, ok, "warnings must be a top-level array; got %#v", payload["warnings"])
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "reading active mission")
+	loaded, err := h.missionStore.Load(created.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusClosed, loaded.Status, "the close itself stands")
 }
 
-// TestHandleMission_CloseWarnsPerCause asserts one array entry per
-// failure. Both sidecars are independent, so both can fail at once, and
-// each must land on its own bullet rather than being mashed into one
-// string with a newline in it.
-func TestHandleMission_CloseWarnsPerCause(t *testing.T) {
+// TestHandleMission_CloseErrorNamesEveryCause asserts every failure is in the
+// error. Both sidecars are independent, so both can fail at once.
+func TestHandleMission_CloseErrorNamesEveryCause(t *testing.T) {
 	const sess = "sess-mcp-two-warns"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1102,16 +1101,52 @@ func TestHandleMission_CloseWarnsPerCause(t *testing.T) {
 		"mission_id": created.MissionID,
 	}))
 	require.NoError(t, err)
-	require.False(t, closeResult.IsError)
+	require.True(t, closeResult.IsError)
+	text := resultText(t, closeResult)
+	assert.Equal(t, 2, strings.Count(text, "clearing mission bindings:"), "one entry per cause: %s", text)
+	assert.Contains(t, text, "reading active mission")
+	assert.Contains(t, text, "reading delegation binding")
+}
 
-	var payload map[string]any
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
-	warnings, ok := payload["warnings"].([]any)
-	require.True(t, ok)
-	require.Len(t, warnings, 2, "one entry per cause")
-	for _, w := range warnings {
-		assert.NotContains(t, w, "\n", "each cause must be its own entry")
-	}
+// Abandon is the same case: the abandon stands, the failure to clear is an
+// error result.
+func TestHandleMission_AbandonErrorsWhenBindingsNotCleared(t *testing.T) {
+	const sess = "sess-mcp-abandon-warn"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	seedSessionRoster(t, h.sessionStore, sess)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	require.NoError(t, os.RemoveAll(mission.ActiveMissionPath(globalRoot, sess)))
+	require.NoError(t, os.MkdirAll(mission.ActiveMissionPath(globalRoot, sess), 0o700))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "never dispatched",
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError, resultText(t, result))
+	text := resultText(t, result)
+	assert.Contains(t, text, created.MissionID)
+	assert.Contains(t, text, "is "+mission.StatusAbandoned)
+	assert.Contains(t, text, "reading active mission")
+
+	loaded, err := h.missionStore.Load(created.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusAbandoned, loaded.Status, "the abandon itself stands")
 }
 
 func TestHandleMission_CloseFailedAndEscalated(t *testing.T) {

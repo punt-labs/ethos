@@ -3,6 +3,7 @@ package redact
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -644,10 +645,13 @@ func planKeysInput(n int) []string {
 	return keys
 }
 
-// bestPlanKeysTime returns the fastest of three runs of PlanKeys over keys.
+// bestPlanKeysTime returns the fastest of seven runs of PlanKeys over keys,
+// each starting from a collected heap. The minimum is the run least disturbed by
+// a neighbour on a shared runner or by a collection in the middle of it.
 func bestPlanKeysTime(keys []string) time.Duration {
 	best := time.Duration(math.MaxInt64)
-	for range 3 {
+	for range 7 {
+		runtime.GC()
 		start := time.Now()
 		PlanKeys(keys, func(string) string { return "x" }, true)
 		if d := time.Since(start); d < best {
@@ -657,22 +661,25 @@ func bestPlanKeysTime(keys []string) time.Duration {
 	return best
 }
 
-// TestPlanKeys_IsLinear: PlanKeys is linear, so quadrupling the keys
-// multiplies the time by about 4, where a quadratic one multiplies it by 16.
-// The bound is a ratio, so it does not depend on the machine or on -race. n
-// doubles until the small run is long enough to measure against the clock.
+// TestPlanKeys_IsLinear: PlanKeys is linear, so 8x the keys takes about 8x the
+// time, where a quadratic one takes 64x. The bound of 32 sits well clear of
+// both, which leaves room for the noise a wall-clock ratio has on a shared
+// runner; a ratio of 4x against a bound of 10 did not (it once read 10.2 with
+// the large run 10x slower than expected). The bound is a ratio, so it does not
+// depend on the machine or on -race. n doubles until the small run is long
+// enough to measure against the clock.
 func TestPlanKeys_IsLinear(t *testing.T) {
 	const minMeasurable = 5 * time.Millisecond
 	n := 2500
 	small := bestPlanKeysTime(planKeysInput(n))
-	for small < minMeasurable && n < 1<<20 {
+	for small < minMeasurable && n < 1<<18 {
 		n *= 2
 		small = bestPlanKeysTime(planKeysInput(n))
 	}
 	require.GreaterOrEqual(t, small, minMeasurable, "n=%d is still too fast to time", n)
-	large := bestPlanKeysTime(planKeysInput(4 * n))
-	assert.Less(t, float64(large)/float64(small), 10.0,
-		"4x the keys took %v against %v for n=%d: not linear", large, small, n)
+	large := bestPlanKeysTime(planKeysInput(8 * n))
+	assert.Less(t, float64(large)/float64(small), 32.0,
+		"8x the keys took %v against %v for n=%d: not linear", large, small, n)
 }
 
 // TestPlanKeys_GivesEveryKeyItsOwnName: thousands of keys that rename to one

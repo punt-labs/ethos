@@ -65,7 +65,7 @@ func TestGitAdd_SymlinkedRootStagesChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := GitAdd(link, chunk); err != nil {
+	if _, err := GitAdd(link, chunk); err != nil {
 		t.Fatalf("GitAdd under symlinked root: %v", err)
 	}
 

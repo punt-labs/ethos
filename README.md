@@ -21,7 +21,7 @@ telemetry, no cloud.
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/47397f8/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e3a246b/install.sh | sh
 ~/.local/bin/ethos setup
 ```
 
@@ -41,13 +41,13 @@ For a non-Claude harness, or a Claude install where org policy blocks
 plugins:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/47397f8/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e3a246b/install.sh | sh -s -- --no-plugin
 ```
 
 Where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/47397f8/install.sh | ETHOS_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e3a246b/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 `--no-plugin` skips only the marketplace-register and plugin-install
@@ -175,7 +175,7 @@ role + team data as `.claude/agents/*.md`.
 ## Commands
 
 Essentials below. Every command accepts `--json`. Full reference in
-[AGENTS.md](AGENTS.md#commands).
+[Agent Guide](docs/agent-guide.md#commands).
 
 | Command | What it does |
 |---------|--------------|
@@ -324,12 +324,19 @@ markdown cannot represent it).
 | [Traceability Use Cases](docs/traceability-use-cases.md) | 10 forensic/compliance scenarios with query paths |
 | [Archetypes and Pipelines](docs/archetypes-and-pipelines.md) | Mission templates and multi-stage workflows |
 | [Architecture](docs/architecture.tex) | System design (LaTeX) |
-| [Agent Guide](AGENTS.md) | CLI, MCP, hooks, storage layout |
+| [Agent Guide](docs/agent-guide.md) | CLI, MCP, hooks, storage layout |
+| [OpenCode Setup](docs/opencode-setup.md) | Native development agents, models, tools, and verification |
 | [Design Decisions](DESIGN.md) | ADRs with rationale and rejected alternatives |
 | [Changelog](CHANGELOG.md) | Release history |
 | [Roadmap](docs/ETHOS-ROADMAP.md) | What's shipped and what's next |
 
 ## Development
+
+Project instructions live in [AGENTS.md](AGENTS.md). Native OpenCode setup and
+the task/review workflow are documented in [OpenCode Setup](docs/opencode-setup.md)
+and [OpenCode Workflow](docs/opencode-workflow.md). `make check-opencode` validates
+the committed configuration offline; `make doctor-opencode` and
+`make smoke-opencode` verify the live workstation and actual tool execution.
 
 Run all quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests, Z-spec fuzz type-check):
 

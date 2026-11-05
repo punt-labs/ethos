@@ -99,7 +99,7 @@ func dropped(cause error, e auditEntry, sessionID string) error {
 // sessions are not visible to it. See resolveAuditWritePath and
 // resolveRepoSessionDir in audit_paths.go.
 func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
-	input, err := ReadInput(r, time.Second)
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: reading input: %v\n", err)
 		return fmt.Errorf("%w: reading input: %v", ErrAuditDropped, err)

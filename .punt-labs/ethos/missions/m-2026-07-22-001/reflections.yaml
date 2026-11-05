@@ -1,5 +1,6 @@
 reflections:
-    - round: 1
+    - mission: ""
+      round: 1
       created_at: "2026-07-22T08:08:22Z"
       author: claude
       converging: true
@@ -9,7 +10,8 @@ reflections:
         - two RECs (drop speculative settings.json plumbing; unified resolver keeps doctor's git-less fallback) and two NITs (close §2.6 scope affirmatively; note ethos.yaml current-vs-planned)
       recommendation: continue
       reason: 'REQ-1 is cheap to settle in design and expensive in implementation. Direction to worker: hooks gain the marker gate; the ethos SessionStart hook performs §2.12 first-run migration (chained-hooks-but-no-marker → write marker, converging interim repos before the gate can suppress); doctor warns on the gated-but-unenabled state. Apply both RECs and both NITs.'
-    - round: 2
+    - mission: ""
+      round: 2
       created_at: "2026-07-22T14:58:14Z"
       author: claude
       converging: true
