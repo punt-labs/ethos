@@ -13775,3 +13775,58 @@ at one company.
   description of the file layout until then.
 - Ethos 1.x completes DES-079 and DES-080 on the file layout first, so the
   2.0 migration starts from a small, documented tracked set.
+
+---
+
+## DES-082: Native OpenCode development workspace (SETTLED)
+
+**Status:** Accepted by the operator 2026-11-04 for the Ethos development
+repository. This is harness setup, not implementation of the DES-078 product
+adapter or the DES-079 storage repair.
+
+**Context.** OpenCode V2 discovers `AGENTS.md` and native configuration rather
+than interpreting Claude Code's `CLAUDE.md` imports. This repository's root
+`AGENTS.md` was the full consumer reference, while development policy was behind
+those imports. The active OpenCode location had no configured MCP servers and
+only built-in agents. Points provided useful working examples, but its project
+roles, model routing and historical OpenCode guidance were not this repository's
+contract.
+
+**Decision.** Keep one concise development entry point in `AGENTS.md`, load the
+native workflow explicitly through root `opencode.json`, and retain the consumer
+reference in `docs/agent-guide.md`. Keep the required deposited-tool imports in
+`CLAUDE.md` for compatibility. Native `.opencode/agents/` definitions carry
+explicit model variants and role permissions; on-demand skills and commands
+provide product, formal, knowledge, collaboration and release workflows.
+
+The leader uses GPT-6 Astra/high; implementation and executable QA use
+GPT-6.1 Sol/high; independent review, formal and product judgment use
+GPT-6 Astra/high; bounded research uses the available GPT-5.6 Terra/medium.
+All use the existing Bifrost Responses provider. Project model metadata and
+reasoning variants augment that provider without changing its endpoint or
+credential source. The gateway's live `model-provider list` catalog, not the
+unrelated native OpenAI catalog, determines available routes. An initial direct
+OpenAI pin sent the host's Bifrost virtual key to the wrong provider; the failed
+tool turn exposed it, and the configuration was corrected. Model credentials
+remain user-owned. An agent listed in a catalog is not verified until a real
+child session uses the intended model and completes its tool call.
+
+For the authorized repair, Ethos is the product under test and its mission
+orchestration is optional. Reusing specialist prompts does not require routing
+every task through the product being repaired. Native MCP connectivity does not
+claim Claude lifecycle-hook, automatic delegation-audit, or fork parity.
+Circuit is also optional and is not on this repair's critical path.
+
+**Verification.** An offline configuration gate runs in normal checks and CI.
+Separate live checks verify tool readiness and real child-session behavior;
+public CI does not require workstation credentials or model calls. Temporary
+verification evidence belongs in `.tmp/opencode/`. The existing product
+`make doctor` remains a product check. The storage repair retains its separate
+product, release and repository-rollout acceptance gates.
+
+**Alternatives considered.** Loading all consumer and design references on
+every turn obscures the development contract and adds context cost. Copying
+Points wholesale imports different models, workflow policies and stale runtime
+assumptions. Waiting for the full DES-078 adapter would make harness setup
+depend on another product feature. Native configuration plus measured smoke
+checks provides the required development capability directly.
