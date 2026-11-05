@@ -128,6 +128,8 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions.jsonl.lock", Class: Never},
 	{Pattern: ".punt-labs/ethos/identities/*.yaml.lock", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
+	// The sibling lock every punt-labs tool takes to edit .claude/settings.json.
+	{Pattern: ".claude/.settings.json.punt-import.lock", Class: Never},
 	// The original bytes of a retired chunk the redaction check withheld from
 	// the tracked tree: <stem>.<hash>.corrupt, kept in the machine-local zone.
 	{Pattern: ".punt-labs/local/ethos/quarantine/*.corrupt", Class: Never},
@@ -189,6 +191,7 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/pipelines/*.yaml", Class: Source},
 	{Pattern: ".punt-labs/ethos-bundles/**", Class: Source},
 	{Pattern: ".claude/agents/*.md", Class: Source},
+	{Pattern: ".claude/settings.json", Class: Source}, // ethos enable permission rules
 	{Pattern: ".gitignore", Class: Source},
 	{Pattern: ".gitmodules", Class: Source}, // written by git submodule add (team add-bundle)
 	{Pattern: "CLAUDE.md", Class: Source},
