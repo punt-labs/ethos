@@ -153,7 +153,7 @@ func (in reflectionIntent) validate(id string) error {
 }
 
 func readIntent(path, id string) (*reflectionIntent, error) {
-	if err := rejectSymlink(path); err != nil {
+	if err := validatePhysicalPath(path, false); err != nil {
 		return nil, err
 	}
 	b, err := os.ReadFile(path)
@@ -533,6 +533,11 @@ func (s *Store) deliverOperation(id, session string, event *Event, persist func(
 }
 
 func (s *Store) finishReflection(in reflectionIntent) error {
+	path := s.intentPath(in.Mission, in.Decision.Round)
+	// Refuse redirected recovery evidence before any optional materialization.
+	if _, err := ownedSyncRoot(s.policy, path); err != nil {
+		return err
+	}
 	if err := s.persistenceCheckpoint("reflect_archive"); err != nil {
 		return err
 	}
@@ -596,7 +601,10 @@ func (s *Store) finishReflection(in reflectionIntent) error {
 			return err
 		}
 	}
-	path := s.intentPath(in.Mission, in.Decision.Round)
+	// Validate the deletion precondition before removal, not only during sync.
+	if _, err := ownedSyncRoot(s.policy, path); err != nil {
+		return err
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
