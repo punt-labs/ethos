@@ -195,7 +195,11 @@ func SessionUnsealedCountAcross(trackedRoot, liveRoot, sessionID string) (int, e
 	if err != nil {
 		return 0, err
 	}
-	tail, err := LiveLinesPastWatermark(LiveAuditPath(liveRoot, sessionID), "", wm)
+	livePath := LiveAuditPath(liveRoot, sessionID)
+	if present, err := auditReadFilePresent(livePath); err != nil || !present {
+		return 0, err
+	}
+	tail, err := LiveLinesPastWatermark(livePath, "", wm)
 	if err != nil {
 		return 0, err
 	}
@@ -603,7 +607,11 @@ func MissionUnsealedCount(trackedRoot, liveRoot, missionID, sessionID string) (i
 	if err != nil {
 		return 0, err
 	}
-	tail, err := LiveLinesPastWatermark(LiveMissionLogPath(liveRoot, missionID, sessionID), sessionID, wm)
+	livePath := LiveMissionLogPath(liveRoot, missionID, sessionID)
+	if present, err := auditReadFilePresent(livePath); err != nil || !present {
+		return 0, err
+	}
+	tail, err := LiveLinesPastWatermark(livePath, sessionID, wm)
 	if err != nil {
 		return 0, err
 	}
@@ -614,21 +622,18 @@ func MissionUnsealedCount(trackedRoot, liveRoot, missionID, sessionID string) (i
 // (<session-id>.log.jsonl) exist in dir, sorted. A missing directory yields
 // nil.
 func ListLiveLogSessions(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+	entries, err := readDirIfPresent(dir)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	var ids []string
 	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
 		name := e.Name()
 		const suffix = ".log.jsonl"
 		if len(name) > len(suffix) && name[len(name)-len(suffix):] == suffix {
+			if _, err := auditReadFilePresent(filepath.Join(dir, name)); err != nil {
+				return nil, err
+			}
 			ids = append(ids, name[:len(name)-len(suffix)])
 		}
 	}

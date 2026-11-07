@@ -16,8 +16,8 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
-// missionWithLiveEvent creates a mission in a fresh repo and writes one older
-// live event for another session whose details hold another user's home. It
+// missionWithLiveEvent creates a mission in a fresh repo and writes one guarded
+// live event for another session. Its original details name another user's home. It
 // returns the repo, the mission store and the mission id.
 func missionWithLiveEvent(t *testing.T, id, session string, ts int64) (string, *mission.Store) {
 	t.Helper()
@@ -41,8 +41,18 @@ func missionWithLiveEvent(t *testing.T, id, session string, ts int64) (string, *
 	live := liveMissionLogPath(repo, id, session)
 	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 	line := `{"ts":"` + audit.FormatLineTS(ts) + `","event":"update","actor":"claude","details":{"note":"see /home/bob/x"}}` + "\n"
-	require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+	writeGuardedMissionFixture(t, repo, live, line)
 	return repo, s
+}
+
+// New events are redacted before append, not rewritten under an immutable
+// identity at archival. Keep the original leaking input in these fixtures to
+// exercise the guard, then persist exactly the bytes it approved.
+func writeGuardedMissionFixture(t *testing.T, repo, path, line string) {
+	t.Helper()
+	out, rule, _ := missionLineGuard(repo)(bytes.TrimSpace([]byte(line)))
+	require.NotEmpty(t, rule, "fixture must exercise the redactor")
+	require.NoError(t, os.WriteFile(path, append(out, '\n'), 0o600))
 }
 
 func requireUpdateEvent(t *testing.T, s *mission.Store, id string) {
@@ -60,9 +70,8 @@ func requireUpdateEvent(t *testing.T, s *mission.Store, id string) {
 	assert.True(t, found, "the sealed update event must load: %v", events)
 }
 
-// TestSealMission_SealedEventLoads: an older live mission event whose details
-// name another user's home is rewritten when sealed, in a form the strict
-// mission-event decoder accepts, so LoadEvents still returns it.
+// A pre-redacted live event archives unchanged in a form the strict mission
+// event decoder accepts, so LoadEvents still returns it.
 func TestSealMission_SealedEventLoads(t *testing.T) {
 	const id = "m-2026-07-21-020"
 	repo, s := missionWithLiveEvent(t, id, "sessX", 100)
@@ -76,9 +85,9 @@ func TestSealMission_SealedEventLoads(t *testing.T) {
 func TestQuarantineChunk_RecoveredMissionEventLoads(t *testing.T) {
 	const id = "m-2026-07-21-021"
 	repo, s := missionWithLiveEvent(t, id, "sessX", 100)
-	sealed := sealedMissionDir(repo, id)
+	sealed := archiveMissionDir(t, repo, id)
 	require.NoError(t, os.MkdirAll(sealed, 0o700))
-	chunk := audit.MissionChunkFile("sessX", 100, 300)
+	chunk := audit.MissionChunkFile("sessX", 100, 100)
 	require.NoError(t, os.WriteFile(filepath.Join(sealed, chunk), []byte("\x00garbage\n"), 0o600))
 	_, err := QuarantineChunk(repo, filepath.Join(sealed, chunk), "bad")
 	require.NoError(t, err)
@@ -212,11 +221,11 @@ func TestMissionLineGuard_FallbackRedactsCredentialsBeforeRenamingKeys(t *testin
 	assert.NotContains(t, m["_raw"], "bob")
 }
 
-// TestMissionLine_UnknownFieldEventIsRedactedWhenSealedAndRecovered: an event with
+// TestMissionLine_UnknownFieldEventIsRedactedBeforeSealAndRecovery: an event with
 // a top-level field the schema lacks fails the strict decode and takes the audit
 // guard's fallback, which is home-only; the credential and address passes run on
-// the whole payload first, in the seal and in quarantine's recovery.
-func TestMissionLine_UnknownFieldEventIsRedactedWhenSealedAndRecovered(t *testing.T) {
+// the whole payload before append. Seal and quarantine copy guarded bytes only.
+func TestMissionLine_UnknownFieldEventIsRedactedBeforeSealAndRecovery(t *testing.T) {
 	ts := audit.FormatLineTS(100)
 	line := `{"ts":"` + ts + `","event":"update","actor":"a","extra":"jane@example.com","details":{"password":"hunter2","ok":"fine"}}` + "\n"
 	assertClean := func(t *testing.T, lines []string) {
@@ -235,10 +244,10 @@ func TestMissionLine_UnknownFieldEventIsRedactedWhenSealedAndRecovered(t *testin
 		const mid, sid = "m-2026-07-21-050", "sessM"
 		live := liveMissionLogPath(repo, mid, sid)
 		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
-		require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+		writeGuardedMissionFixture(t, repo, live, line)
 		_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
 		require.NoError(t, err)
-		assertClean(t, chunkLines(t, sealedMissionDir(repo, mid)))
+		assertClean(t, chunkLines(t, archiveMissionDir(t, repo, mid)))
 	})
 
 	t.Run("quarantine", func(t *testing.T) {
@@ -246,13 +255,13 @@ func TestMissionLine_UnknownFieldEventIsRedactedWhenSealedAndRecovered(t *testin
 		repo := t.TempDir()
 		initGitRepo(t, repo)
 		const mid, sid = "m-2026-07-21-051", "sessM"
-		sealedDir := sealedMissionDir(repo, mid)
+		sealedDir := archiveMissionDir(t, repo, mid)
 		require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 		chunk := audit.MissionChunkFile(sid, 100, 300)
 		require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
 		live := liveMissionLogPath(repo, mid, sid)
 		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
-		require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+		writeGuardedMissionFixture(t, repo, live, line)
 		_, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 		require.NoError(t, err)
 		assertClean(t, chunkLines(t, sealedDir))
@@ -276,10 +285,10 @@ func TestMissionEvent_NameThatIsNotAnEventNameIsRedacted(t *testing.T) {
 	const mid, sid = "m-2026-07-21-060", "sessM"
 	live := liveMissionLogPath(repo, mid, sid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
-	require.NoError(t, os.WriteFile(live, []byte(`{"ts":"`+ts+`","event":"GITHUB_TOKEN=abc123","actor":"a"}`+"\n"), 0o600))
+	writeGuardedMissionFixture(t, repo, live, `{"ts":"`+ts+`","event":"GITHUB_TOKEN=abc123","actor":"a"}`+"\n")
 	_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
 	require.NoError(t, err)
-	lines := chunkLines(t, sealedMissionDir(repo, mid))
+	lines := chunkLines(t, archiveMissionDir(t, repo, mid))
 	require.NotEmpty(t, lines)
 	for _, l := range lines {
 		assert.NotContains(t, l, "abc123")
@@ -288,7 +297,7 @@ func TestMissionEvent_NameThatIsNotAnEventNameIsRedacted(t *testing.T) {
 
 // TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent: tool_input_preview and
 // tool_input_hash are audit-line fields; in a mission event they are unknown
-// fields like any other and are swept, sealed and recovered.
+// fields like any other and are guarded before append, sealed and recovered.
 func TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent(t *testing.T) {
 	ts := audit.FormatLineTS(100)
 	token := "ghp_" + strings.Repeat("aBcD1234", 4) + "aBcD"
@@ -312,26 +321,59 @@ func TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent(t *testing.T) {
 			const mid = "m-2026-07-21-070"
 			live := liveMissionLogPath(repo, mid, "sessM")
 			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
-			require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+			writeGuardedMissionFixture(t, repo, live, line)
 			_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
 			require.NoError(t, err)
-			check(t, chunkLines(t, sealedMissionDir(repo, mid)))
+			check(t, chunkLines(t, archiveMissionDir(t, repo, mid)))
 		})
 		t.Run(name+"/quarantine", func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			repo := t.TempDir()
 			initGitRepo(t, repo)
 			const mid = "m-2026-07-21-071"
-			sealedDir := sealedMissionDir(repo, mid)
+			sealedDir := archiveMissionDir(t, repo, mid)
 			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 			chunk := audit.MissionChunkFile("sessM", 100, 300)
 			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
 			live := liveMissionLogPath(repo, mid, "sessM")
 			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
-			require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+			writeGuardedMissionFixture(t, repo, live, line)
 			_, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 			require.NoError(t, err)
 			check(t, chunkLines(t, sealedDir))
+		})
+	}
+}
+
+func TestMissionLine_UnsafeLegacySourceIsRetainedOnSealAndRecovery(t *testing.T) {
+	for _, quarantine := range []bool{false, true} {
+		name := "seal"
+		if quarantine {
+			name = "quarantine"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repo := t.TempDir()
+			initGitRepo(t, repo)
+			const mid, sid = "m-2026-07-21-080", "sessM"
+			live := liveMissionLogPath(repo, mid, sid)
+			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+			line := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","event":"update","actor":"a","details":{"note":"see /home/bob/x"}}` + "\n")
+			require.NoError(t, os.WriteFile(live, line, 0o600))
+			var err error
+			if quarantine {
+				dir := archiveMissionDir(t, repo, mid)
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				path := filepath.Join(dir, audit.MissionChunkFile(sid, 100, 300))
+				require.NoError(t, os.WriteFile(path, []byte("corrupt\n"), 0o600))
+				_, err = QuarantineChunk(repo, path, "bad")
+			} else {
+				_, err = SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+			}
+			require.ErrorContains(t, err, "requires redacted migration")
+			after, err := os.ReadFile(live)
+			require.NoError(t, err)
+			assert.Equal(t, line, after, "refusal must preserve the original identity and source")
 		})
 	}
 }

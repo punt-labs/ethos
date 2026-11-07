@@ -802,6 +802,8 @@ func TestHandleSession_NoStore(t *testing.T) {
 func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 	// Isolate git config so resolve chain is deterministic.
 	tmp := t.TempDir()
+	t.Chdir(tmp)
+	t.Setenv("HOME", tmp)
 	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -813,17 +815,16 @@ func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 	assert.False(t, result.IsError)
 
 	text := resultText(t, result)
-	// Summary line should contain check count. ethos-bfml/ethos-hy40 added
-	// "Audit trailer hook", ethos-e05k added "Code archetype delegated-worker
-	// guard", and DES-079 added "Unclassified files", bumping the count from
-	// 12 to 15, and "Team members" made it 16.
-	assert.Contains(t, text, "16 checks")
+	// Isolated from optional checks enabled by the development checkout.
+	assert.Contains(t, text, "18 checks")
 	// Table should contain check names.
 	assert.Contains(t, text, "Identity directory")
 	assert.Contains(t, text, "Human identity")
 	assert.Contains(t, text, "Default agent")
 	assert.Contains(t, text, "Duplicate fields")
 	assert.Contains(t, text, "Repo-only completeness")
+	assert.Contains(t, text, "Physical storage placement")
+	assert.Contains(t, text, "Agent file currency")
 	// Table should contain status values.
 	assert.Contains(t, text, "PASS")
 }

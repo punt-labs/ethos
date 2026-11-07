@@ -105,7 +105,7 @@ func TestUpdate_LeavesAnUnchangedAmbiguousEntryAlone(t *testing.T) {
 
 	loaded, err := s.Load(c.MissionID)
 	require.NoError(t, err)
-	loaded.Budget.Rounds = 4
+	loaded.Context = "updated context"
 	require.NoError(t, s.Update(loaded), "the unchanged entry is not judged again")
 
 	loaded, err = s.Load(c.MissionID)
@@ -128,7 +128,7 @@ func TestUpdate_JudgesAnUnchangedTemplateWhoseInputChanged(t *testing.T) {
 
 	loaded, err := s.Load(c.MissionID)
 	require.NoError(t, err)
-	loaded.Budget.Rounds = 4
+	loaded.Context = "updated context"
 	require.NoError(t, s.Update(loaded), "nothing the entry names changed")
 
 	loaded, err = s.Load(c.MissionID)

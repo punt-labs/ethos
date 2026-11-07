@@ -152,6 +152,12 @@ capture or database switching. Native MCP permission IDs preserve hyphens.
 QA can run exact canonical `make build`, `make test`, `make check`, `make lint`
 and selected `./ethos` read/schema commands for assigned real-entry acceptance;
 installation, enablement, mission closure and publication remain ungranted.
+For assigned evidence-only audits, QA also has exact `git rev-parse HEAD` and
+the inspected `python3 -B scripts/opencode_evidence.py` helper with arguments.
+The helper hashes files, inventories directories and parses retained evidence;
+it does not execute that evidence or grant arbitrary Python. Inspect the helper
+before use, scope inputs to the assignment and return the report to the leader
+for persistence: QA still has no edit or delegation grant.
 These grants are useful host-authority operations, not containment. Inspect
 targets, scope fixtures and record actual tool results. The eleven-child smoke
 proves read/dispatch, not formal exploration or research retrieval. A meaningful

@@ -3,6 +3,70 @@
 **Status**: Draft. Bead `ethos-t5b6` (P1). Amends DES-054 v5 storage.
 Cross-repo request from the punt-kit agent (claude:tty16), 2026-07-20.
 
+## DES-079 supersession (acceptance pending)
+
+Explicit quarantine of a selected published corrupt chunk retains its raw bytes
+only at S and installs a redacted `.quarantine` availability marker beside that
+publication **before** removing its active pathname. The shared marker reports a
+conservative gap even if recovery succeeds locally: a local replacement is not
+proof of published availability. Quarantine does not change the index or retire
+other copies. It reports **SHARED REPAIR PENDING** and the exact deletion/marker
+staging set for an ordinary `git add` and commit. This manual retirement commit
+preserves the gap in a fresh clone; eligible recovered trace may be published
+separately by full sealing, but private recovery is never implicitly promoted.
+
+This is the historical DES-058 tracked-chunk design, not the current target
+storage contract. The following DES-079 requirements supersede conflicting
+clauses and pseudocode below; they still require final entry-point acceptance.
+DES-080 redaction shipped in v4.20.0, independently of this repair.
+
+- Resolve canonical store root **S** separately from checkout **C**. All
+  repository live streams, retained chunks, prompts/reflections, locks,
+  receipts, scratch and staging belong under `S/.punt-labs/local/ethos/`.
+  This replaces checkout-owned live files, source-tree or home-tree placement
+  of repository locks, and adjacent sealed-directory temporaries.
+- Both recording modes retain local history at S, including unsealed tails.
+  Removing a linked C distinct from S cannot remove its only copy, even
+  without SessionEnd. A courtesy teardown flush is not the durability basis.
+  Deleting S or its local data remains outside the guarantee.
+- Default `record: blame` sealing neither queries nor changes the index and
+  stages no trace. Full mode additionally publishes eligible copies into C,
+  sealed session audits included. Consent is captured per immutable entry;
+  sealing under full never promotes an old private prefix. Missing/legacy
+  consent is private, pending eligible copies remain retryable after a switch
+  back to blame, and published history is not deleted by a mode change.
+- A non-dry-run repository seal retries prompt copies whose full consent was
+  captured previously, even after switching back to blame. The retry runs after
+  audit locks are released and does not query or change the blame index. It does
+  not make private prompts eligible. Mission-only sealing/export does not retry
+  unrelated prompts. Prompt retry errors remain publication failures, distinct
+  from warn-only blame commit archival errors; completed local archives survive
+  them, and simultaneous archival/publication failures are reported together.
+- Archive completion and publication completion are separate. Readers union
+  local live/archive, published and supported legacy evidence in either mode;
+  compare overlapping payloads before watermark filtering, collapsing equal
+  identities and reporting conflicts. Preserve distinct legacy collision rules.
+  A branch-derived publication watermark is not the sole local archive watermark.
+- Repository staging uses the local zone with file/directory durability and
+  atomic rename/link semantics. `EXDEV` refuses with the previous target intact:
+  no adjacent temporary or copy-over fallback. Quiesce old lock holders before
+  relocating lock paths; preserve lock domains and order.
+- Audit-recording failure stays visible without blocking the tool invocation.
+  Manual archive failure is an error. Under blame, commit-context archival
+  failure reports retained data and permits unrelated source commits; invalid
+  config and required blame/full publication failures remain blocking. Mission
+  required-event rollback is a separate transactional domain. Reflect/correct
+  use durable intent and required event before shared authority installation;
+  raw prepared events do not establish accepted decisions or corrections.
+
+See [storage and publication contract](storage-layout.md) for strict request
+policy, shared round/correction authority, selected publication, squash and
+export, restartable migration and the pending acceptance matrix. The remaining
+sections preserve the original rationale and failure cases; their tracked-only
+staging, loss-window and lock-placement claims are historical, not new guidance.
+
+## Historical DES-058 design
+
 DES-054 made the session audit log both git-tracked and continuously
 appended. Those two properties cannot hold for one file. This design
 splits them: a live file in the repo's machine-local `.punt-labs/local/`

@@ -103,6 +103,26 @@
 </div>
 {{end}}
 
+{{if .ReflectionsError}}
+<div class="border border-red-900 text-red-400 text-xs p-3 mb-6">Reflections unreadable: {{.ReflectionsError}}</div>
+{{end}}
+{{if .Reflections}}
+<div class="border border-neutral-800 p-5 mb-6">
+  <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Reflections</h2>
+  {{range .Reflections}}
+  <div class="border border-neutral-800 p-4 mb-3 text-sm">
+    <div>Round {{.Round}}: decision={{.DecisionState}} detail={{.DetailState}}{{if .Pending}} — pending{{end}}</div>
+    {{if .Decision}}<div>{{.Decision.Recommendation}} by {{.Decision.Author}}</div>{{end}}
+    {{if .Reflection}}
+    <ul>{{range .Reflection.Signals}}<li>{{.}}</li>{{end}}</ul>
+    <div>{{.Reflection.Reason}}</div>
+    {{end}}
+    {{range .Diagnostics}}<div class="text-red-400">{{.}}</div>{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
 {{if .CorrectionsError}}
 <div class="border border-red-900 bg-red-950/30 text-red-400 text-xs p-3 mb-6">
   <span class="uppercase tracking-wider text-red-500">Warning:</span> could not load corrections — {{.CorrectionsError}}
@@ -165,6 +185,7 @@
       <span class="text-xs text-neutral-600 w-44 shrink-0">{{.TS}}</span>
       <span class="text-cyan-400 font-medium w-20">{{.Event}}</span>
       <span class="text-neutral-500">{{.Actor}}</span>
+      {{if .Acceptance}}<span class="text-neutral-500">{{.Acceptance}}</span>{{end}}
     </div>
     {{end}}
   </div>

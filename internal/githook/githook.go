@@ -52,6 +52,8 @@ type Result struct {
 	Path string
 	// Action is one of: installed, chained, refreshed, skipped-non-shell
 	// (Chain); removed, reduced, noop, absent (Unchain).
+	// A write action is also retained with *layout.InstallDurabilityError:
+	// the edit already applied, but crash durability is unconfirmed.
 	Action string
 	// Warnings holds advisory messages (symlink redirection, non-shell host,
 	// unconditional exit/exec tail).
@@ -72,7 +74,8 @@ type Result struct {
 // standalone (on line 2) and, immediately after BEGIN, the fingerprint that
 // guards stripSection. src is the hook script; its shebang is dropped when
 // emitted inside a section.
-func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
+func Chain(destPath string, src []byte, tag, ident string, opts ...Option) (Result, error) {
+	policies := repositoryPolicies(opts)
 	res := Result{Path: destPath}
 
 	target, warns, err := resolveHookSymlink(destPath)
@@ -86,10 +89,10 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 	data, err := os.ReadFile(destPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if err := writeExec(destPath, markerForm(tag, src)); err != nil {
-				return res, err
-			}
 			res.Action = "installed"
+			if err := writeExec(destPath, markerForm(tag, src), policies...); err != nil {
+				return hookWriteFailure(res, err)
+			}
 			return res, nil
 		}
 		return res, fmt.Errorf("reading %s: %w", destPath, err)
@@ -105,10 +108,10 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 
 	hadMarker := hasBegin(data, tag)
 	if !hadMarker && isOurStandalone(data, ident) {
-		if err := writeExec(destPath, markerForm(tag, src)); err != nil {
-			return res, err
-		}
 		res.Action = "refreshed"
+		if err := writeExec(destPath, markerForm(tag, src), policies...); err != nil {
+			return hookWriteFailure(res, err)
+		}
 		return res, nil
 	}
 
@@ -152,13 +155,13 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 		out = append(out, eol...)
 	}
 	out = append(out, section...)
-	if err := writeExec(destPath, out); err != nil {
-		return res, err
-	}
 	if hadMarker {
 		res.Action = "refreshed"
 	} else {
 		res.Action = "chained"
+	}
+	if err := writeExec(destPath, out, policies...); err != nil {
+		return hookWriteFailure(res, err)
 	}
 	return res, nil
 }
@@ -168,8 +171,11 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 // is removed; a hook with remaining host content is kept, reduced. A hook
 // without our section, or no hook at all, is a no-op. ident is the fingerprint
 // stripSection verifies before removing the region. This is the inverse of
-// Chain.
-func Unchain(destPath, tag, ident string) (Result, error) {
+// Chain. A repository no-op on an existing hook confirms directory durability
+// without rewriting; an unconfirmed earlier reduction returns action noop and
+// *layout.InstallDurabilityError rather than claiming another edit.
+func Unchain(destPath, tag, ident string, opts ...Option) (Result, error) {
+	policies := repositoryPolicies(opts)
 	res := Result{Path: destPath}
 
 	target, _, err := resolveHookSymlink(destPath)
@@ -196,7 +202,7 @@ func Unchain(destPath, tag, ident string) (Result, error) {
 
 	if !hasBegin(data, tag) {
 		res.Action = "noop"
-		return res, nil
+		return res, confirmHookInstall(destPath, policies...)
 	}
 	if !hasEnd(data, tag) {
 		return res, fmt.Errorf(
@@ -214,11 +220,22 @@ func Unchain(destPath, tag, ident string) (Result, error) {
 		res.Action = "removed"
 		return res, nil
 	}
-	if err := writeExec(destPath, stripped); err != nil {
-		return res, err
-	}
 	res.Action = "reduced"
+	if err := writeExec(destPath, stripped, policies...); err != nil {
+		return hookWriteFailure(res, err)
+	}
 	return res, nil
+}
+
+// Only post-install durability failures retain the action: the bytes already
+// changed, even though the operation returned an error. Pre-install errors keep
+// the historical empty action.
+func hookWriteFailure(res Result, err error) (Result, error) {
+	var applied *layout.InstallDurabilityError
+	if !errors.As(err, &applied) {
+		res.Action = ""
+	}
+	return res, err
 }
 
 // resolveHookSymlink follows one level of symlink so a rename does not
@@ -496,21 +513,20 @@ func warnTail(last string) string {
 	return ""
 }
 
-// writeExec writes data to a temp file in dest's own directory, renames it
+// writeExec writes data to a unique temp file (shared-local with a policy), renames it
 // over dest, and makes it executable. An existing hook's mode is preserved
 // (only the owner-exec bit is OR'd in if missing) so chaining never silently
 // widens a 0700 hook to 0755; a brand-new hook gets 0755. A temp-file failure
 // aborts loudly.
-func writeExec(dest string, data []byte) error {
-	dir := filepath.Dir(dest)
+func writeExec(dest string, data []byte, policies ...layout.Policy) error {
 	// Preserve an existing hook's mode; a new hook gets 0755.
 	mode := os.FileMode(0o755)
 	if fi, err := os.Stat(dest); err == nil {
 		mode = fi.Mode().Perm() | 0o100 // ensure owner-exec without widening
 	}
-	tmp, err := os.CreateTemp(dir, layout.DotTempPattern(filepath.Base(dest)))
+	tmp, err := createTemp(dest, policies...)
 	if err != nil {
-		return fmt.Errorf("cannot create a temp file next to %s — hook not installed: %w", dest, err)
+		return fmt.Errorf("cannot create a staging file for %s — hook not installed: %w", dest, err)
 	}
 	name := tmp.Name()
 	defer func() { _ = os.Remove(name) }()
@@ -518,16 +534,48 @@ func writeExec(dest string, data []byte) error {
 		_ = tmp.Close()
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
+	if len(policies) > 0 {
+		if err := tmp.Chmod(mode); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("setting mode on %s: %w", name, err)
+		}
+		if err := syncHookFile(tmp); err != nil {
+			return fmt.Errorf("syncing %s: %w", name, errors.Join(err, tmp.Close()))
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", name, err)
 	}
-	if err := os.Chmod(name, mode); err != nil {
-		return fmt.Errorf("setting mode on %s: %w", name, err)
+	if len(policies) == 0 {
+		if err := os.Chmod(name, mode); err != nil {
+			return fmt.Errorf("setting mode on %s: %w", name, err)
+		}
 	}
 	if err := os.Rename(name, dest); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", name, dest, err)
 	}
+	return confirmHookInstall(dest, policies...)
+}
+
+var syncHookFile = (*os.File).Sync
+var syncHookDestination = layout.SyncRepositoryDestination
+
+// Also used for no-op retries: marker absence alone cannot confirm an earlier
+// reduction's directory entry, and confirmation must not change the action.
+func confirmHookInstall(dest string, policies ...layout.Policy) error {
+	if len(policies) > 0 {
+		if err := syncHookDestination(policies[0], dest); err != nil {
+			return &layout.InstallDurabilityError{Path: dest, Err: err}
+		}
+	}
 	return nil
+}
+
+func createTemp(dest string, policies ...layout.Policy) (*os.File, error) {
+	if len(policies) > 0 {
+		return layout.CreateLocalTemp(policies[0], filepath.Base(dest), "")
+	}
+	return os.CreateTemp(filepath.Dir(dest), layout.DotTempPattern(filepath.Base(dest)))
 }
 
 // endsWithTerminator reports whether data's last byte is a line terminator.

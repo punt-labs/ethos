@@ -84,9 +84,9 @@ func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 		if herr == nil {
 			global = filepath.Join(home, ".punt-labs", "ethos")
 		}
-		issue = bundle.ConfigIssue(loc.Store, loc.Ethos, global)
+		issue = bundle.ConfigIssueFromConfig(loc.Store, loc.Ethos, global, loc.Config)
 	}
-	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, teams, human)
+	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, loc.Config, loc.ConfigErr, teams, human)
 	if issue != nil {
 		what, _, _ := resolve.Describe(issue)
 		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
@@ -99,9 +99,10 @@ func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 // repoRoot is the current work tree (LocateRepoRoot) — the checkout whose
 // .claude/agents and seal hook the checks inspect. storeRoot is the shared
 // mission/config store (StoreRootIfAny); it differs from repoRoot only inside
-// a linked worktree, and only the team-config read in CheckOrphanedAgentFiles
-// needs it (Bugbot #370 class: resolving the active team from the worktree
-// while activation wrote it to the store produced false orphan reports).
+// a linked worktree. Configuration is read once from storeRoot and shared by
+// every configuration-dependent row (Bugbot #370 class: resolving the active
+// team from the worktree while activation wrote it to the store produced false
+// orphan reports).
 //
 // rootErr is LocateRepoRoot's error. When repoRoot is empty because an
 // ETHOS_REPO_ROOT was refused, or the checkout could not be examined, the
@@ -113,15 +114,21 @@ func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 // non-exempt command refuses in that state — and the checks that read the
 // store are gated (gateStore).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr error, teams *team.LayeredStore) []Result {
-	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, teams, nil)
+	var cfg *resolve.RepoConfig
+	var configErr error
+	if repoRoot != "" && storeRoot != "" {
+		cfg, configErr = resolve.ConfigOf(storeRoot)
+	}
+	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, cfg, configErr, teams, nil)
 }
 
 // runAll is RunAll with the configuration issue that governs the store layers
 // (nil for none): every store check gates on it as it does on a store that was
 // not located. human, when not nil, is the "Human identity" row to report in
-// place of resolving one.
-func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, teams *team.LayeredStore, human *Result) []Result {
-	results := make([]Result, 0, 17) // matches today's check count; a stale hint just costs one reallocation, not correctness
+// place of resolving one. cfg/configErr are the request's single configuration
+// snapshot, including absence or failure; subordinate checks must not reread it.
+func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, cfg *resolve.RepoConfig, configErr error, teams *team.LayeredStore, human *Result) []Result {
+	results := make([]Result, 0, 19) // shared-store placement adds a row in linked worktrees
 
 	checkout := func(r Result) Result { return gateCheckout(r, repoRoot, rootErr) }
 	store := func(r Result) Result { return gateStore(r, storeRoot, storeErr) }
@@ -152,13 +159,18 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
 	// guard stays on the checkout (repoRoot) (#370).
-	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot))))
+	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot, cfg, configErr))))
 
 	results = append(results, store(duplicateFieldsResult(s, ss)))
 
-	results = append(results, checkout(store(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))))
+	results = append(results, checkout(store(checkOrphanedAgentFilesFromConfig(repoRoot, storeRoot, cfg, configErr, teams, s))))
+	if configErr != nil {
+		results = append(results, checkout(store(Result{Name: "Agent file currency", Status: "FAIL", Detail: configErr.Error()})))
+	} else {
+		results = append(results, checkout(store(CheckAgentCurrencyFromConfig(repoRoot, storeRoot, cfg, teams, s))))
+	}
 
-	results = append(results, store(CheckTeamMembers(storeRoot, teams, s)))
+	results = append(results, store(checkTeamMembersFromConfig(storeRoot, cfg, configErr, teams, s)))
 
 	// ethos-bfml/ethos-hy40: every hook gets the presence check the seal hook
 	// had first — gated on the enabled marker, active determined by execution
@@ -179,7 +191,7 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// matching every other resolution consumer; the git-boundary check
 	// reads the checkout (repoRoot), because the index and .gitignore
 	// belong to the tree being committed.
-	results = append(results, store(CheckRepoSetComplete(s, storeRoot)))
+	results = append(results, store(checkRepoSetCompleteFromConfig(s, storeRoot, cfg, configErr)))
 	results = append(results, checkout(CheckLocalExtNotTracked(repoRoot)))
 	results = append(results, store(CheckExtCredentialNames(s)))
 
@@ -196,6 +208,10 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 
 	// DES-079: every file ethos owns has a class in the path-class table.
 	results = append(results, checkout(CheckUnclassifiedFiles(repoRoot)))
+	results = append(results, checkout(CheckPhysicalPlacement(repoRoot)))
+	if storeRoot != "" && storeRoot != repoRoot {
+		results = append(results, store(CheckPhysicalPlacement(storeRoot)))
+	}
 	return results
 }
 
@@ -269,8 +285,8 @@ func duplicateFieldsResult(s identity.IdentityStore, ss *session.Store) Result {
 }
 
 // defaultAgentResult is CheckDefaultAgent as a Result.
-func defaultAgentResult(repoRoot, storeRoot string) Result {
-	detail, ok := CheckDefaultAgent(repoRoot, storeRoot)
+func defaultAgentResult(repoRoot, storeRoot string, cfg *resolve.RepoConfig, configErr error) Result {
+	detail, ok := checkDefaultAgentFromConfig(repoRoot, storeRoot, cfg, configErr)
 	return passFail("Default agent", detail, ok)
 }
 
@@ -346,6 +362,20 @@ func PassedCount(results []Result) int {
 // callers have no identity store in scope); the classification is then
 // skipped and every handle reads as an undifferentiated FAIL.
 func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStore, s identity.IdentityStore) Result {
+	var cfg *resolve.RepoConfig
+	var err error
+	if repoRoot != "" && storeRoot != "" {
+		cfg, err = resolve.ConfigOf(storeRoot)
+		if err != nil {
+			err = fmt.Errorf("resolve team: %w", err)
+		}
+	}
+	return checkOrphanedAgentFilesFromConfig(repoRoot, storeRoot, cfg, err, teams, s)
+}
+
+// checkOrphanedAgentFilesFromConfig shares the standalone check's policy, but
+// uses only the supplied configuration (including a captured read failure).
+func checkOrphanedAgentFilesFromConfig(repoRoot, storeRoot string, cfg *resolve.RepoConfig, configErr error, teams *team.LayeredStore, s identity.IdentityStore) Result {
 	name := "Orphaned agent files"
 
 	if repoRoot == "" {
@@ -366,12 +396,12 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 		return Result{Name: name, Status: "PASS", Detail: "no agent files"}
 	}
 
-	teamName, err := resolve.ResolveTeam(storeRoot)
-	if err != nil {
-		// ResolveTeam only errors when .punt-labs/ethos.yaml exists but is
-		// unreadable or malformed — a real misconfiguration the operator
-		// needs to see, not a "no team configured" no-op.
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", err)}
+	if configErr != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", configErr)}
+	}
+	teamName := ""
+	if storeRoot != "" && cfg != nil {
+		teamName = cfg.Team
 	}
 	if teamName == "" {
 		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
@@ -527,19 +557,35 @@ func classifyOrphans(orphaned []orphanFile, s identity.IdentityStore) (status, d
 // it defers to CheckRepoSetComplete, which already reports an incomplete
 // repo set; reporting it here would double-count.
 func CheckTeamMembers(storeRoot string, teams *team.LayeredStore, s identity.IdentityStore) Result {
+	var cfg *resolve.RepoConfig
+	var err error
+	if storeRoot != "" {
+		cfg, err = resolve.ConfigOf(storeRoot)
+		if err != nil {
+			err = fmt.Errorf("resolve team: %w", err)
+		}
+	}
+	return checkTeamMembersFromConfig(storeRoot, cfg, err, teams, s)
+}
+
+// checkTeamMembersFromConfig never resolves configuration or store layers again.
+func checkTeamMembersFromConfig(storeRoot string, cfg *resolve.RepoConfig, configErr error, teams *team.LayeredStore, s identity.IdentityStore) Result {
 	name := "Team members"
 
 	if storeRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
-	teamName, err := resolve.ResolveTeam(storeRoot)
-	if err != nil {
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", err)}
+	if configErr != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", configErr)}
+	}
+	teamName := ""
+	if cfg != nil {
+		teamName = cfg.Team
 	}
 	if teamName == "" {
 		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
 	}
-	mode, err := resolve.ResolveResolution(storeRoot)
+	mode, err := resolve.ResolutionFromConfig(cfg)
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
@@ -1234,7 +1280,8 @@ func inspectIdentitiesDir(dir string) (dirState, string) {
 // not none.
 func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout string) Result {
 	name := HumanIdentityRow
-	s = identity.ForCaller(s)
+	caller := identity.ForCaller(s)
+	s = references(caller)
 	handle, err := resolve.Resolve(s, ss, checkout)
 	if err != nil {
 		if list, listErr := s.List(); listErr == nil &&
@@ -1245,10 +1292,9 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout st
 	}
 	var id *identity.Identity
 	fromGlobal := false
-	if cs, ok := s.(*identity.CallerStore); ok {
-		id, fromGlobal, err = cs.LoadCaller(handle, identity.Reference(true))
-	} else {
-		id, err = s.Load(handle, identity.Reference(true))
+	id, err = s.Load(handle, identity.Reference(true))
+	if cs, ok := caller.(*identity.CallerStore); ok && err == nil {
+		fromGlobal = !cs.IdentityStore.Exists(handle)
 	}
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("handle %q not loadable: %v", handle, err)}
@@ -1276,23 +1322,41 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout st
 // from a worktree it would report a default agent that disagrees with the
 // one the session and dispatch actually use (Bugbot #370 class).
 func CheckDefaultAgent(repoRoot, storeRoot string) (string, bool) {
+	var cfg *resolve.RepoConfig
+	var err error
+	if repoRoot != "" && storeRoot != "" {
+		cfg, err = resolve.ConfigOf(storeRoot)
+		if err != nil {
+			err = fmt.Errorf("resolve agent: %w", err)
+		}
+	}
+	return checkDefaultAgentFromConfig(repoRoot, storeRoot, cfg, err)
+}
+
+// checkDefaultAgentFromConfig keeps the checkout guard separate from the shared
+// store: an unavailable store must not cause a read relative to the process cwd.
+func checkDefaultAgentFromConfig(repoRoot, storeRoot string, cfg *resolve.RepoConfig, configErr error) (string, bool) {
 	if repoRoot == "" {
 		return "not in a git repo", true
 	}
-	handle, err := resolve.ResolveAgent(storeRoot)
-	if err != nil {
-		return err.Error(), false
-	}
-	if handle == "" {
+	if storeRoot == "" {
+		// RunAllFor withheld an unusable store. Its gate reports the captured
+		// failure as "not checked", not a fresh answer from another config.
 		return "not configured", true
 	}
-	return handle, true
+	if configErr != nil {
+		return configErr.Error(), false
+	}
+	if cfg == nil || cfg.Agent == "" {
+		return "not configured", true
+	}
+	return cfg.Agent, true
 }
 
 // CheckDuplicateFields scans all identities for duplicate github or email
 // bindings.
 func CheckDuplicateFields(s identity.IdentityStore, _ *session.Store) (string, bool) {
-	result, err := s.List()
+	result, err := references(s).List()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), false
 	}

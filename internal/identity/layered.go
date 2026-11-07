@@ -86,7 +86,7 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 		o(&cfg)
 	}
 
-	id, source, err := ls.loadRaw(handle)
+	id, source, err := ls.loadRaw(handle, cfg.withoutMigration)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q: %w", handle, err)
 	}
@@ -97,7 +97,10 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 	// never bricks a running session; the completeness verdict is doctor's
 	// and vendor's to render.
 	extLayer := ls.extLayer(source)
-	extData, extWarnings := extLayer.loadExtensions(handle)
+	extData, extWarnings, err := extLayer.loadExtensions(handle)
+	if err != nil {
+		return nil, err
+	}
 	id.Ext = extData
 	// Live Load stays ADDITIVE on ext: a missing namespace never bricks a
 	// running session. It records the verdict instead, and the surfaces
@@ -127,12 +130,14 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 // Returns the identity, which store it came from ("repo", "bundle", or
 // "global"), and any error. Parse errors from any layer are surfaced
 // (not silently fallen through). File-not-found falls through.
-func (ls *LayeredStore) loadRaw(handle string) (*Identity, string, error) {
+func (ls *LayeredStore) loadRaw(handle string, withoutMigration bool) (*Identity, string, error) {
 	if ls.repo != nil {
 		id, err := ls.repo.loadNoMigrate(handle)
 		if err == nil {
-			if err := ls.relocateRepoVoice(handle); err != nil {
-				return nil, "", fmt.Errorf("relocating voice for %q: %w", handle, err)
+			if !withoutMigration {
+				if err := ls.relocateRepoVoice(handle); err != nil {
+					return nil, "", fmt.Errorf("relocating voice for %q: %w", handle, err)
+				}
 			}
 			return id, "repo", nil
 		}
@@ -154,7 +159,11 @@ func (ls *LayeredStore) loadRaw(handle string) (*Identity, string, error) {
 		return nil, "", fmt.Errorf("not found in %s (resolution: repo-only): %w",
 			ls.readRootsDesc(), os.ErrNotExist)
 	}
-	id, err := ls.global.Load(handle, Reference(true))
+	opts := []LoadOption{Reference(true)}
+	if withoutMigration {
+		opts = append(opts, WithoutMigration())
+	}
+	id, err := ls.global.Load(handle, opts...)
 	if err == nil {
 		return id, "global", nil
 	}
@@ -172,13 +181,32 @@ func (ls *LayeredStore) readRootsDesc() string {
 	return strings.Join(roots, ", ")
 }
 
-// relocateRepoVoice migrates a legacy voice field from a repo identity
-// into the global ext store and strips the field from the YAML. This
-// ensures extensions always live in global, never in repo.
+// relocateRepoVoice migrates a legacy voice field to the extension write layer
+// and strips it from the repo YAML: global in layered mode, repo in repo-only.
 // Returns an error if ext writes or YAML rewrite fails.
 func (ls *LayeredStore) relocateRepoVoice(handle string) error {
+	if ls.repo.config.repository {
+		data, err := ls.repo.readFile(ls.repo.Path(handle))
+		if err != nil {
+			return fmt.Errorf("reading repo identity %q: %w", handle, err)
+		}
+		var raw map[string]interface{}
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parsing repo identity %q: %w", handle, err)
+		}
+		if _, ok := raw["voice"]; !ok {
+			return nil
+		}
+		return ls.repo.withLock(handle, func() error {
+			return ls.relocateRepoVoiceUnlocked(handle)
+		})
+	}
+	return ls.relocateRepoVoiceUnlocked(handle)
+}
+
+func (ls *LayeredStore) relocateRepoVoiceUnlocked(handle string) error {
 	path := ls.repo.Path(handle)
-	data, err := os.ReadFile(path)
+	data, err := ls.repo.readFile(path)
 	if err != nil {
 		return fmt.Errorf("reading repo identity %q: %w", handle, err)
 	}
@@ -211,12 +239,12 @@ func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 	// Write ext data before stripping the voice key. If ext writes fail,
 	// the voice key remains in the YAML so no data is lost.
 	if provider != "" {
-		if err := ext.ExtSet(handle, "vox", "provider", provider); err != nil {
+		if err := ext.extSetUnlocked(handle, "vox", "provider", provider, extConfig{}); err != nil {
 			return fmt.Errorf("setting ext/vox/provider: %w", err)
 		}
 	}
 	if voiceID != "" {
-		if err := ext.ExtSet(handle, "vox", "voice_id", voiceID); err != nil {
+		if err := ext.extSetUnlocked(handle, "vox", "voice_id", voiceID, extConfig{}); err != nil {
 			return fmt.Errorf("setting ext/vox/voice_id: %w", err)
 		}
 	}
@@ -363,26 +391,6 @@ func (ls *LayeredStore) Save(id *Identity) error {
 	if err != nil {
 		return err
 	}
-	dir := s.IdentitiesDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("creating identity directory: %w", err)
-	}
-	data, err := yaml.Marshal(id)
-	if err != nil {
-		return fmt.Errorf("marshaling identity: %w", err)
-	}
-	path := s.Path(id.Handle)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("identity %q already exists — delete %q to recreate", id.Handle, path)
-		}
-		return fmt.Errorf("creating identity file: %w", err)
-	}
-	defer f.Close()
-	if _, err = f.Write(data); err != nil {
-		return err
-	}
 	// Extensions live in global, even when the identity is in repo — except
 	// under repo-only, where they live beside the identity in the layer
 	// that just received it (s).
@@ -390,7 +398,12 @@ func (ls *LayeredStore) Save(id *Identity) error {
 	if ls.repoAuthoritative {
 		extRoot = s
 	}
-	return os.MkdirAll(extRoot.ExtDir(id.Handle), 0o700)
+	// Prepare the secondary directory before creating the identity. Errors
+	// after publication must not misreport an already applied identity write.
+	if err := extRoot.ensureDir(extRoot.ExtDir(id.Handle)); err != nil {
+		return err
+	}
+	return s.saveNoValidate(id)
 }
 
 // List returns identities from all layers, deduplicated by handle.
@@ -499,10 +512,22 @@ func (ls *LayeredStore) Exists(handle string) bool {
 // attribute references in any store are accepted.
 func (ls *LayeredStore) Update(handle string, fn func(*Identity) error) error {
 	var owner *Store
+	for _, layer := range []*Store{ls.repo, ls.bundle} {
+		if layer == nil {
+			continue
+		}
+		exists, err := layer.existsChecked(handle)
+		if err != nil {
+			return fmt.Errorf("locating identity mutation owner: %w", err)
+		}
+		if exists {
+			owner = layer
+			break
+		}
+	}
 	switch {
-	case ls.repo != nil && ls.repo.Exists(handle):
-		owner = ls.repo
-	case ls.bundle != nil && ls.bundle.Exists(handle):
+	case owner != nil && owner == ls.repo:
+	case owner != nil && owner == ls.bundle:
 		// Reject even when a global copy exists: bundle shadows global on
 		// read, so editing global would be silently invisible.
 		return fmt.Errorf("identity %q is provided by the active bundle and cannot be modified via CLI; edit the bundle directly", handle)
@@ -689,19 +714,48 @@ func (ls *LayeredStore) missingExt(handle string, layer *Store) []repomiss.Missi
 	return out
 }
 
-// extStore returns the ext read layer for a handle whose source is not
-// already known, resolving the source by existence.
+// extensionOwner probes the identity chain without treating a rejected path as
+// absence. In particular, a refused repository identity must not select a bundle
+// copy of the same handle or authorize an otherwise invisible extension write.
+func (ls *LayeredStore) extensionOwner(handle string) (*Store, error) {
+	for _, layer := range ls.attrChain() {
+		exists, err := layer.store.existsChecked(handle)
+		if err != nil {
+			return nil, fmt.Errorf("locating extension owner for identity %q in %s layer: %w", handle, layer.name, err)
+		}
+		if exists {
+			return layer.store, nil
+		}
+	}
+	return nil, nil
+}
+
+// extStore is the compatibility path selector for errorless callers. Refusal
+// yields an unusable path, never a lower layer or a cwd-relative empty path.
+// Operations that can report errors must use extStoreChecked instead.
 func (ls *LayeredStore) extStore(handle string) *Store {
+	s, err := ls.extStoreChecked(handle)
+	if err != nil {
+		return noExtLayer()
+	}
+	return s
+}
+
+// extStoreChecked resolves the extension read layer when the source is unknown.
+// Layered mode deliberately reads global extensions without probing identity
+// ownership (DES-044). Repo-only mode must retain source-layer path refusals.
+func (ls *LayeredStore) extStoreChecked(handle string) (*Store, error) {
 	if !ls.repoAuthoritative {
-		return ls.global
+		return ls.global, nil
 	}
-	if ls.repo != nil && ls.repo.Exists(handle) {
-		return ls.repo
+	owner, err := ls.extensionOwner(handle)
+	if err != nil {
+		return nil, err
 	}
-	if ls.bundle != nil && ls.bundle.Exists(handle) {
-		return ls.bundle
+	if owner != nil {
+		return owner, nil
 	}
-	return ls.extLayer("")
+	return ls.extLayer(""), nil
 }
 
 // extWriteStore returns the layer an ext write targets, or an error when
@@ -713,24 +767,42 @@ func (ls *LayeredStore) extWriteStore(handle string) (*Store, error) {
 	if !ls.repoAuthoritative {
 		return ls.global, nil
 	}
-	if ls.repo != nil && ls.repo.Exists(handle) {
-		return ls.repo, nil
+	owner, err := ls.extensionOwner(handle)
+	if err != nil {
+		return nil, err
 	}
-	if ls.bundle != nil && ls.bundle.Exists(handle) {
+	if owner != nil && owner == ls.repo {
+		return owner, nil
+	}
+	if owner != nil && owner == ls.bundle {
 		return nil, fmt.Errorf("identity %q is provided by the active bundle and its extensions cannot be modified via CLI; edit the bundle directly", handle)
 	}
 	return nil, fmt.Errorf("handle %q does not exist", handle)
 }
 
 // ExtDir returns the extension directory from the layer that owns the
-// handle's extensions.
+// handle's extensions. A refused owner yields an unusable sentinel path;
+// callers needing the diagnostic should use ExtDirChecked.
 func (ls *LayeredStore) ExtDir(handle string) string {
 	return ls.extStore(handle).ExtDir(handle)
 }
 
+// ExtDirChecked returns the extension directory or the ownership refusal.
+func (ls *LayeredStore) ExtDirChecked(handle string) (string, error) {
+	s, err := ls.extStoreChecked(handle)
+	if err != nil {
+		return "", err
+	}
+	return s.ExtDir(handle), nil
+}
+
 // ExtGet reads from the layer that owns the handle's extensions.
 func (ls *LayeredStore) ExtGet(handle, namespace, key string) (map[string]string, error) {
-	return ls.extStore(handle).ExtGet(handle, namespace, key)
+	s, err := ls.extStoreChecked(handle)
+	if err != nil {
+		return nil, err
+	}
+	return s.ExtGet(handle, namespace, key)
 }
 
 // ExtSet writes to the global store after checking handle existence
@@ -738,8 +810,14 @@ func (ls *LayeredStore) ExtGet(handle, namespace, key string) (map[string]string
 // handle may exist only in repo. Under repo-only the write follows the
 // identity's source layer.
 func (ls *LayeredStore) ExtSet(handle, namespace, key, value string, opts ...ExtOption) error {
-	if !ls.Exists(handle) {
-		return fmt.Errorf("handle %q does not exist", handle)
+	if !ls.repoAuthoritative {
+		owner, err := ls.extensionOwner(handle)
+		if err != nil {
+			return err
+		}
+		if owner == nil {
+			return fmt.Errorf("handle %q does not exist", handle)
+		}
 	}
 	s, err := ls.extWriteStore(handle)
 	if err != nil {
@@ -760,7 +838,11 @@ func (ls *LayeredStore) ExtDel(handle, namespace, key string, opts ...ExtOption)
 // ExtList lists namespaces from the layer that owns the handle's
 // extensions.
 func (ls *LayeredStore) ExtList(handle string) ([]string, error) {
-	return ls.extStore(handle).ExtList(handle)
+	s, err := ls.extStoreChecked(handle)
+	if err != nil {
+		return nil, err
+	}
+	return s.ExtList(handle)
 }
 
 // writeStore returns the store to write to: repo if available, else

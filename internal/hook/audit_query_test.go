@@ -161,13 +161,15 @@ func TestQueryAuditByDelegation_EmptyDelegationID(t *testing.T) {
 }
 
 func TestQueryAuditByDelegation_MissingDirs(t *testing.T) {
-	// Neither repo nor global dir exist. Returns empty, nil.
-	repo := filepath.Join(t.TempDir(), "absent-repo")
+	// Missing data trees are empty, but a missing canonical root is an error.
+	repo := t.TempDir()
 	globalDir := filepath.Join(t.TempDir(), "absent-global")
 
 	got, err := QueryAuditByDelegation(repo, globalDir, "d-007")
 	require.NoError(t, err)
 	assert.Empty(t, got)
+	_, err = QueryAuditByDelegation(filepath.Join(repo, "absent-root"), globalDir, "d-007")
+	require.Error(t, err)
 }
 
 func TestQueryAuditByDelegation_RepoEmptyLegacyMatches(t *testing.T) {

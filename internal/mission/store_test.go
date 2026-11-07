@@ -1229,8 +1229,8 @@ func TestStore_Close_LockFailureFallsBackToUnlockedSweep(t *testing.T) {
 	// Occupy the lock file's path with a directory so
 	// AcquireMissionLockExclusive's os.OpenFile fails deterministically
 	// — a synthetic stand-in for any real lock-acquire failure.
-	missionDir := RepoStatePath(repoRoot, "missions", missionID)
-	require.NoError(t, os.MkdirAll(filepath.Join(missionDir, ".lock"), 0o700))
+	lockPath := delegationMissionLockForTest(t, repoRoot, missionID)
+	require.NoError(t, os.MkdirAll(lockPath, 0o700))
 
 	stderr := captureStderr(t, func() {
 		_, err = s.Close(missionID, StatusClosed)
@@ -5703,7 +5703,7 @@ func TestStore_ForceReleaseWriteSet_EventCarriesFullAuditTrail(t *testing.T) {
 	snapshot, ok := details["staleness_snapshot"].(map[string]any)
 	require.True(t, ok, "staleness_snapshot must be present")
 	assert.Equal(t, false, snapshot["has_results"])
-	assert.Equal(t, float64(1), snapshot["delegation_count"],
+	assert.Equal(t, json.Number("1"), snapshot["delegation_count"],
 		"a real delegation record must report a real count, not unknown")
 	assert.NotEmpty(t, snapshot["last_activity_at"])
 }
@@ -6066,7 +6066,7 @@ func TestStore_DisclaimDelegation_SerializesWithDelegationLockHolder(t *testing.
 	// exactly as closeSkeletonOnHashRefusal does for the same delegation
 	// ID -- the same lock class, same key, held on a separate goroutine
 	// standing in for the separate SubagentStart process invocation.
-	release, err := AcquireDelegationLock(globalRoot, delegationID)
+	release, err := s.AcquireDelegationLock(delegationID)
 	require.NoError(t, err)
 
 	disclaimDone := make(chan error, 1)

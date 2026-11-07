@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
@@ -20,47 +22,78 @@ import (
 // .punt-labs/ethos/sessions/<date>-<sid>/ or a mission chunk under
 // .punt-labs/ethos/missions/<id>/. Returns the marker's summary for the CLI.
 func QuarantineChunk(repoRoot, chunkPath, reason string) (audit.Marker, error) {
-	// Quarantine is an operator command: with no usable redactor it
-	// refuses rather than write a placeholder reason.
-	pr, err := mission.NewPathRedactor(repoRoot)
+	p, err := auditPolicy(repoRoot)
 	if err != nil {
-		return audit.Marker{}, fmt.Errorf("quarantine: building path redactor: %w", err)
+		return audit.Marker{}, err
 	}
-	sealedDir := filepath.Dir(chunkPath)
-	name := filepath.Base(chunkPath)
+	return QuarantineChunkWithPolicy(p, chunkPath, reason)
+}
 
-	if cn, kind := audit.Classify(name, audit.SessionNS); kind == audit.KindValid {
-		sessionID := sessionIDFromDir(filepath.Base(sealedDir))
-		if sessionID == "" {
-			return audit.Marker{}, fmt.Errorf(
-				"quarantine: cannot resolve session from directory %q", sealedDir)
+// QuarantineChunkWithPolicy is a local recovery operation in both modes. A
+// subsequent full seal publishes eligible recovered lines separately.
+func QuarantineChunkWithPolicy(p layout.Policy, chunkPath, reason string) (audit.Marker, error) {
+	chunkPath = filepath.Clean(chunkPath)
+	for _, ns := range []audit.Namespace{audit.SessionNS, audit.MissionNS} {
+		cn, kind := audit.Classify(filepath.Base(chunkPath), ns)
+		if kind != audit.KindValid {
+			continue
 		}
-		livePath := liveAuditPath(repoRoot, sessionID)
-		redactReason := quarantineReason(pr)
+		s := audit.Stream{Namespace: ns}
+		if ns == audit.SessionNS {
+			s.Session = sessionIDFromDir(filepath.Base(filepath.Dir(chunkPath)))
+		} else {
+			s.Mission, s.Session = filepath.Base(filepath.Dir(chunkPath)), cn.Session
+		}
+		dirs, err := audit.StreamDirs(p, s)
+		if err != nil {
+			return audit.Marker{}, err
+		}
+		allowed := false
+		for _, d := range dirs {
+			allowed = allowed || d == filepath.Dir(chunkPath)
+		}
+		if !allowed {
+			return audit.Marker{}, fmt.Errorf("quarantine path outside stream's archive and record trees: %s", chunkPath)
+		}
+		checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
+		pr, err := mission.NewPathRedactor(checkout)
+		if err != nil {
+			return audit.Marker{}, err
+		}
+		dir, err := audit.ArchiveDir(p, s, time.Now().UTC().Format(audit.SessionDateFormat))
+		if err != nil {
+			return audit.Marker{}, err
+		}
 		var marker audit.Marker
-		err := WithLiveAuditLock(repoRoot, sessionID, func() error {
-			var e error
-			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, sessionLineGuard(repoRoot), corruptRule)
-			return e
+		guard := sessionLineGuard(checkout)
+		if ns == audit.MissionNS {
+			guard = missionLineGuard(checkout)
+		}
+		err = audit.WithStreamLock(p, s, func() error {
+			var err error
+			marker, err = audit.QuarantineLocal(p, s, chunkPath, dir, cn, quarantineReason(pr)(reason), guard)
+			return err
 		})
+		if err == nil {
+			rel, relErr := filepath.Rel(audit.ArchiveRoot(p), chunkPath)
+			if relErr != nil || !filepath.IsLocal(rel) {
+				// Selection authorizes retirement, never hidden index mutation or
+				// promotion of a private local replacement. This two-path set is
+				// sufficient to commit the conservative published availability gap.
+				root := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
+				if r, e := filepath.Rel(p.RecordRoot(), chunkPath); e == nil && filepath.IsLocal(r) {
+					root = filepath.Dir(filepath.Dir(p.RecordRoot()))
+				}
+				selected, e := filepath.Rel(root, chunkPath)
+				if e != nil {
+					return marker, e
+				}
+				fmt.Fprintf(os.Stderr, "ethos: SHARED REPAIR PENDING; commit the retirement set: git -C %q add -- %q %q (then commit); recovered private lines remain local\n", root, selected, filepath.Join(filepath.Dir(selected), cn.MarkerFile()))
+			}
+		}
 		return marker, err
 	}
-
-	if cn, kind := audit.Classify(name, audit.MissionNS); kind == audit.KindValid {
-		missionID := filepath.Base(sealedDir)
-		livePath := liveMissionLogPath(repoRoot, missionID, cn.Session)
-		redactReason := quarantineReason(pr)
-		var marker audit.Marker
-		err := WithLiveMissionLock(repoRoot, missionID, cn.Session, func() error {
-			var e error
-			marker, e = audit.Quarantine(repoRoot, sealedDir, cn, livePath, reason, redactReason, missionLineGuard(repoRoot), corruptRule)
-			return e
-		})
-		return marker, err
-	}
-
-	return audit.Marker{}, fmt.Errorf(
-		"quarantine: %q is not a recognizable audit or mission chunk name", name)
+	return audit.Marker{}, fmt.Errorf("quarantine: unrecognizable chunk %q", chunkPath)
 }
 
 // quarantineReason is the redaction of a quarantine reason: the content pass,

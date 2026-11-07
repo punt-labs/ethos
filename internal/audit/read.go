@@ -49,6 +49,8 @@ type Line struct {
 	Session string
 	TS      int64
 	Raw     []byte
+	// Source is diagnostic context carried by policy union readers, not identity.
+	Source string
 }
 
 // DecodeChunkStrict parses every line of a sealed chunk, tolerating no torn

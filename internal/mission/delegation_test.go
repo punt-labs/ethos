@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -208,9 +209,10 @@ func TestWriteDelegationSkeleton_HappyPath(t *testing.T) {
 	assert.Equal(t, "deadbeef", d.PromptHash)
 	assert.Empty(t, d.ClosedAt, "fresh skeleton must not be closed")
 
-	promptPath := filepath.Join(filepath.Dir(recordPath), "prompt.md")
+	promptPath := filepath.Join(repoRoot, ".punt-labs", "local", "ethos", "trace", "missions", missionID, "delegations", delegationID, "prompt.md")
 	data, err := os.ReadFile(promptPath)
-	require.NoError(t, err, "prompt body must land next to record.yaml")
+	require.NoError(t, err, "prompt body must stay local")
+	assert.NoFileExists(t, filepath.Join(filepath.Dir(recordPath), "prompt.md"))
 	assert.Equal(t, "worker prompt body", string(data))
 }
 
@@ -292,7 +294,7 @@ func TestAcquireMissionLock_AcquireAndRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, release)
 
-	lockPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", missionID, ".lock")
+	lockPath := delegationMissionLockForTest(t, repoRoot, missionID)
 	info, statErr := os.Stat(lockPath)
 	require.NoError(t, statErr, "lock file must exist on disk after acquire")
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
@@ -345,9 +347,8 @@ func TestAcquireMissionLock_ExclusiveBlocks(t *testing.T) {
 	repoRoot := t.TempDir()
 	missionID := "m-2026-05-22-031"
 
-	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", missionID)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	lockPath := filepath.Join(dir, ".lock")
+	lockPath := delegationMissionLockForTest(t, repoRoot, missionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(lockPath), 0o700))
 
 	excl, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	require.NoError(t, err)
@@ -419,7 +420,7 @@ func TestAcquireMissionLockExclusive_AcquireAndRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, release)
 
-	lockPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", missionID, ".lock")
+	lockPath := delegationMissionLockForTest(t, repoRoot, missionID)
 	info, statErr := os.Stat(lockPath)
 	require.NoError(t, statErr, "lock file must exist on disk after acquire")
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
@@ -504,6 +505,15 @@ func TestAcquireMissionLockExclusive_WaitsForSharedHolder(t *testing.T) {
 	waited := tAcquired.Sub(tStart)
 	assert.GreaterOrEqual(t, waited, 40*time.Millisecond,
 		"exclusive acquire wait must reflect the shared hold (got %v)", waited)
+}
+
+func delegationMissionLockForTest(t *testing.T, root, id string) string {
+	t.Helper()
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	path, err := p.LockPath("mission-delegations", id)
+	require.NoError(t, err)
+	return path
 }
 
 // TestAcquireMissionLockExclusive_EmptyArgs mirrors

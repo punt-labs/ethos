@@ -1,5 +1,12 @@
 package layout
 
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
 // Temporary-file names. A writer that stages a file for an atomic rename, or a
 // staging directory, builds the name with one of these helpers. Every helper
 // puts TmpMarker in the name, and the table has one class-4 entry for the
@@ -46,3 +53,23 @@ func ScratchDirPattern(prefix string) string { return prefix + "-*" + TmpMarker 
 // MigrateStagingPrefix is the os.MkdirTemp prefix of the directory
 // `ethos mission migrate` stages mission id in before renaming it into place.
 func MigrateStagingPrefix(id string) string { return "." + id + ".migrate" + TmpMarker + "-" }
+
+// CreateLocalTemp creates a unique 0600 staging file in the policy's local
+// TempDir after refusing symlinked ancestors. The caller owns Close/Remove and
+// the eventual rename or no-clobber link; cross-device errors must not trigger
+// a source-tree staging fallback. Prefix and ext are filename parts, not paths.
+func CreateLocalTemp(p Policy, prefix, ext string) (*os.File, error) {
+	for _, part := range []string{prefix, ext} {
+		if strings.ContainsAny(part, `/\`+"\x00") || filepath.Base(part) != part && part != "" {
+			return nil, &ValidationError{"temporary filename", "parts must not contain separators or NUL bytes"}
+		}
+	}
+	if err := EnsureLocalDir(p, p.TempDir()); err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(p.TempDir(), TmpPattern(prefix, ext))
+	if err != nil {
+		return nil, fmt.Errorf("creating local staging file: %w", err)
+	}
+	return f, nil
+}

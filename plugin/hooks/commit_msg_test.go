@@ -7,11 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // sessionID names the session directory every trailer test writes its
@@ -433,4 +436,254 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
+}
+
+// enabledMessageRepo exercises the CLI's actual enable/chain entry point in an
+// isolated fixture, not a hand-written approximation of an installed hook.
+func enabledMessageRepo(t *testing.T, linked bool) (store, checkout, hooksDir string, env []string) {
+	t.Helper()
+	store, home := t.TempDir(), t.TempDir()
+	bin := ethosBinDir(t)
+	runGit(t, store, "init", "-q")
+	checkout = store
+	if linked {
+		// Git writes are confined to this disposable fixture, never the checkout
+		// under development. A linked worktree requires a base commit.
+		runGit(t, store, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "fixture")
+		checkout = filepath.Join(t.TempDir(), "feature")
+		runGit(t, store, "worktree", "add", "-q", "--detach", checkout)
+	}
+	env = append(hookEnv(home, bin, sessionID), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	stageSession(t, home, sessionID, "m-2026-11-04-043", "d-2026-11-04-043")
+	cmd := exec.Command(filepath.Join(bin, "ethos"), "enable")
+	cmd.Dir, cmd.Env = checkout, env
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "enable must really install the hooks: %s", out)
+	hooksDir = filepath.Join(store, ".git", "hooks")
+	for _, name := range []string{"pre-commit", "commit-msg"} {
+		data, err := os.ReadFile(filepath.Join(hooksDir, name))
+		require.NoError(t, err)
+		ident := SealIdent
+		if name == "commit-msg" {
+			ident = TrailerIdent
+		}
+		assert.Contains(t, string(data), ident, "installed ownership fingerprint is unchanged")
+	}
+	return store, checkout, hooksDir, env
+}
+
+func TestEnabledInstalledCommitMessageTrailersAndHostStatus(t *testing.T) {
+	for _, linked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("linked=%t", linked), func(t *testing.T) {
+			store, checkout, hooksDir, env := enabledMessageRepo(t, linked)
+			msg := filepath.Join(checkout, "MSG")
+			writeFile(t, msg, "subject\n")
+			for range 2 {
+				cmd := exec.Command(filepath.Join(hooksDir, "commit-msg"), msg)
+				cmd.Dir, cmd.Env = checkout, env
+				out, err := cmd.CombinedOutput()
+				require.NoError(t, err, string(out))
+				data, err := os.ReadFile(msg)
+				require.NoError(t, err)
+				assert.Equal(t, "subject\n\nMission: m-2026-11-04-043\nDelegation: d-2026-11-04-043\n", string(data))
+			}
+			assert.DirExists(t, filepath.Join(store, ".punt-labs", "local", "ethos", "tmp"))
+			if linked {
+				assert.NoDirExists(t, filepath.Join(checkout, ".punt-labs", "local"))
+			}
+			// Chaining a foreign fall-through status must remain transparent even
+			// when the helper succeeds. Its two trailer IDs are supplied via env.
+			body, err := os.ReadFile(filepath.Join(hooksDir, "commit-msg"))
+			require.NoError(t, err)
+			script := filepath.Join(t.TempDir(), "chained-commit-msg")
+			require.NoError(t, os.WriteFile(script, append([]byte("#!/bin/sh\n/bin/sh -c 'exit 7'\n"), body...), 0o700))
+			cmd := exec.Command(script, msg)
+			cmd.Dir = checkout
+			cmd.Env = append(env, "MISSION_ID=m-2026-11-04-043", "DELEGATION_ID=d-2026-11-04-043")
+			out, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			require.ErrorAs(t, err, &exit, string(out))
+			assert.Equal(t, 7, exit.ExitCode())
+		})
+	}
+}
+
+// Observe syscalls, including files removed before exit, rather than treating a
+// clean post-run directory listing as proof that temporary placement was safe.
+// The rename/fsync injections exercise the installed shell -> real CLI path.
+// Pre-commit is seeded with a real policy-aware audit append, so its successful
+// case observes archival too. Full publication and archival faults have their
+// own, less restrictive write assertions in pre_commit_archival_placement_test.go.
+func TestEnabledInstalledHooksTransientWrites(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("syscall tracing/injection acceptance is Linux-specific")
+	}
+	strace, err := exec.LookPath("strace")
+	if err != nil {
+		t.Skip("transient placement acceptance requires strace; not established on this host")
+	}
+	for _, linked := range []bool{false, true} {
+		for _, inside := range []bool{false, true} {
+			t.Run(fmt.Sprintf("linked=%t/TMPDIR-record=%t", linked, inside), func(t *testing.T) {
+				store, checkout, hooksDir, env := enabledMessageRepo(t, linked)
+				tmp := t.TempDir()
+				if inside {
+					tmp = filepath.Join(checkout, ".punt-labs", "ethos")
+				}
+				bin := t.TempDir()
+				// Fail immediately if either hook reintroduces shell temporary files.
+				mktempCall := filepath.Join(t.TempDir(), "mktemp-called")
+				writeFile(t, filepath.Join(bin, "mktemp"), "#!/bin/sh\ntouch '"+mktempCall+"'\nexit 99\n")
+				require.NoError(t, os.Chmod(filepath.Join(bin, "mktemp"), 0o700))
+				env = append(env, "TMPDIR="+tmp, "PATH="+bin+":"+ethosBinDir(t)+":"+os.Getenv("PATH"), "GIT_TRACE="+filepath.Join(tmp, "trace"), "GIT_TRACE2_EVENT="+filepath.Join(tmp, "trace-event"))
+				msg := filepath.Join(checkout, "MSG")
+				for _, tc := range []struct{ hook, inject, want string }{
+					{"pre-commit", "", ""},
+					{"commit-msg", "", ""},
+					{"commit-msg", "renameat:error=EXDEV", "cross-device"},
+					{"commit-msg", "fsync:error=EIO", "syncing commit message stage"},
+					{"commit-msg", "renameat:error=EINTR:signal=SIGKILL", "signal"},
+				} {
+					t.Run(tc.hook+"/"+tc.inject, func(t *testing.T) {
+						var live []byte
+						if tc.hook == "pre-commit" {
+							live = seedInstalledAudit(t, store, checkout, env)
+						}
+						writeFile(t, msg, "original\n")
+						trace := filepath.Join(t.TempDir(), "syscalls")
+						args := []string{"-f", "-s", "4096", "-o", trace, "-e", "trace=%file,fsync"}
+						if tc.inject != "" {
+							args = append(args, "-e", "inject="+tc.inject)
+						}
+						args = append(args, filepath.Join(hooksDir, tc.hook), msg)
+						cmd := exec.Command(strace, args...)
+						cmd.Dir, cmd.Env = checkout, env
+						out, err := cmd.CombinedOutput()
+						if tc.want == "" {
+							require.NoError(t, err, string(out))
+						} else {
+							require.Error(t, err, string(out))
+							if tc.want != "signal" {
+								assert.Contains(t, string(out), tc.want)
+							}
+						}
+						data, err := os.ReadFile(msg)
+						require.NoError(t, err)
+						if tc.want != "" || tc.hook == "pre-commit" {
+							assert.Equal(t, "original\n", string(data), "all pre-install failures preserve bytes")
+						} else {
+							assert.Contains(t, string(data), "Mission: m-2026-11-04-043\nDelegation: d-2026-11-04-043\n")
+						}
+						calls, err := os.ReadFile(trace)
+						require.NoError(t, err)
+						local := filepath.Join(store, ".punt-labs", "local", "ethos")
+						staged := false
+						for _, line := range strings.Split(string(calls), "\n") {
+							if strings.Contains(line, "O_CREAT") && !strings.Contains(line, `"/dev/null"`) {
+								assert.Contains(t, line, local+"/", "every transient created file must be S-local: %s", line)
+								t.Log(line)
+							}
+							if strings.Contains(line, "renameat(") && strings.Contains(line, "commit-message-") && strings.Contains(line, ".ethos-tmp") {
+								staged = true
+								assert.Contains(t, line, filepath.Join(local, "tmp")+"/")
+								t.Log(line)
+							}
+							assert.NotContains(t, line, "\""+msg+".", "never stage beside the message")
+						}
+						if tc.hook == "commit-msg" && !strings.HasPrefix(tc.inject, "fsync") {
+							assert.True(t, staged, "observe actual helper staging at rename, not just cleanup")
+						}
+						assert.NoFileExists(t, mktempCall)
+						assert.NoFileExists(t, filepath.Join(tmp, "trace"))
+						assert.NoFileExists(t, filepath.Join(tmp, "trace-event"))
+						if tc.hook == "pre-commit" {
+							assertInstalledArchive(t, store, live)
+							assert.Contains(t, string(calls), "linkat(", "archival installation actually executed")
+							assert.Contains(t, string(calls), "audit-", "trace reaches the audit chunk path")
+						}
+						if tc.want == "signal" {
+							// An uncatchable interruption can retain an S-local stage,
+							// but its lock must be released and a normal retry must work.
+							retry := exec.Command(filepath.Join(hooksDir, "commit-msg"), msg)
+							retry.Dir, retry.Env = checkout, env
+							out, err := retry.CombinedOutput()
+							require.NoError(t, err, string(out))
+							data, err := os.ReadFile(msg)
+							require.NoError(t, err)
+							assert.Equal(t, "original\n\nMission: m-2026-11-04-043\nDelegation: d-2026-11-04-043\n", string(data))
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
+func TestEnabledInstalledCommitMessageRenderWriteFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("syscall injection acceptance is Linux-specific")
+	}
+	strace, err := exec.LookPath("strace")
+	if err != nil {
+		t.Skip("failed-write acceptance requires strace; not established on this host")
+	}
+	_, checkout, hooksDir, env := enabledMessageRepo(t, false)
+	bin, trace := t.TempDir(), filepath.Join(t.TempDir(), "write-failure")
+	// Trace the helper and its threads, detaching children on exec. Its first
+	// write supplies the in-memory original to Git's stdin. A failed pipe write
+	// must be reported rather than installing partial output or plain-appending.
+	// Git's stdout, the shell root probe and session lookup are not faulted.
+	wrapper := "#!/bin/sh\nif [ \"$1 $2\" = 'hook commit-message' ]; then\nexec '" + strace + "' -f -b execve -o '" + trace + "' -e trace=write,fsync,renameat -e inject=write:error=ENOSPC:when=1 '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\nfi\nexec '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(wrapper), 0o700))
+	msg := filepath.Join(checkout, "MSG")
+	writeFile(t, msg, "original bytes\n")
+	cmd := exec.Command(filepath.Join(hooksDir, "commit-msg"), msg)
+	cmd.Dir = checkout
+	cmd.Env = append(env, "PATH="+bin+":"+os.Getenv("PATH"), "MISSION_ID=m-2026-11-04-043", "DELEGATION_ID=d-2026-11-04-043")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, string(out))
+	// Injection is per thread: it can also fault the error-report write on a
+	// different thread. The exit status, injected syscall and unchanged bytes
+	// are the evidence here; do not depend on faulted stderr being printable.
+	data, err := os.ReadFile(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "original bytes\n", string(data))
+	calls, err := os.ReadFile(trace)
+	require.NoError(t, err)
+	assert.Contains(t, string(calls), "ENOSPC")
+	assert.Contains(t, string(calls), "(INJECTED)")
+	assert.NotContains(t, string(calls), "renameat(")
+	t.Log(string(calls))
+}
+
+func TestEnabledInstalledHooksOrdinaryCommit(t *testing.T) {
+	_, checkout, _, env := enabledMessageRepo(t, false)
+	cmd := exec.Command("git", "-C", checkout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "ordinary commit")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "real Git must run the actual enabled hooks: %s", out)
+	cmd = exec.Command("git", "-C", checkout, "log", "-1", "--format=%B")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	assert.Equal(t, "ordinary commit\n\nMission: m-2026-11-04-043\nDelegation: d-2026-11-04-043\n\n", string(out))
+}
+
+func TestEnabledInstalledHooksIgnoreTraceConfigOnStdout(t *testing.T) {
+	_, checkout, hooksDir, env := enabledMessageRepo(t, false)
+	runGit(t, checkout, "config", "trace2.normalTarget", "/dev/stdout")
+	runGit(t, checkout, "config", "trace2.eventTarget", "/dev/stdout")
+	msg := filepath.Join(checkout, "MSG")
+	writeFile(t, msg, "subject\n")
+	for _, name := range []string{"pre-commit", "commit-msg"} {
+		cmd := exec.Command(filepath.Join(hooksDir, name), msg)
+		cmd.Dir, cmd.Env = checkout, env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		assert.NotContains(t, string(out), "built-in")
+		assert.NotContains(t, string(out), `"event":`)
+	}
+	data, err := os.ReadFile(msg)
+	require.NoError(t, err)
+	assert.Equal(t, "subject\n\nMission: m-2026-11-04-043\nDelegation: d-2026-11-04-043\n", string(data))
 }

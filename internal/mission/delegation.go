@@ -193,14 +193,37 @@ func MatchTemplate(templates []DelegationTemplate, agentType string) (*Delegatio
 	return nil, false
 }
 
-// DelegationLockPath returns the per-delegation flock path under
-// `~/.punt-labs/ethos/delegations/<delegation-id>.lock`. The lock
-// directory is always under the global tree per DES-054 concurrency
-// model: locks reference live inodes that must not move when the
-// delegation record itself migrates trees, and two checkouts of the
-// same repo must lock the same inode.
+// DelegationLockPath returns the canonical local per-delegation lock for
+// repository stores. Standalone stores keep the global lock. Linked checkouts
+// use the same canonical policy and therefore the same inode.
 func (s *Store) DelegationLockPath(delegationID string) string {
+	if s.twoTreeStorage && s.policyErr == nil {
+		path, err := s.policy.LockPath("delegation", filepath.Base(delegationID))
+		if err == nil {
+			return path
+		}
+	}
 	return filepath.Join(s.root, "delegations", filepath.Base(delegationID)+".lock")
+}
+
+// AcquireDelegationLock uses the same canonical repository-local inode for
+// writers and publication snapshots. Standalone stores keep their global lock.
+func (s *Store) AcquireDelegationLock(delegationID string) (func(), error) {
+	if s.policyErr != nil {
+		return nil, s.policyErr
+	}
+	if strings.TrimSpace(delegationID) == "" {
+		return nil, fmt.Errorf("delegationID is required for delegation lock")
+	}
+	path := s.DelegationLockPath(delegationID)
+	if s.twoTreeStorage {
+		if err := layout.EnsureLocalDir(s.policy, filepath.Dir(path)); err != nil {
+			return nil, err
+		}
+	} else if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	return acquireDelegationLockPath(path)
 }
 
 // AcquireDelegationLock opens (and creates if needed) the per-
@@ -209,17 +232,9 @@ func (s *Store) DelegationLockPath(delegationID string) string {
 // Windows — see flock_unix.go/flock_windows.go). The returned release
 // closure unlocks and closes exactly once; subsequent calls are no-ops.
 //
-// globalRoot is `~/.punt-labs/ethos` — locks must live in the global
-// tree per DES-054 v5 §"Storage Layout" so two checkouts of the same
-// repo lock the same inode. Storing the lock under the repo tree
-// would mean two checkouts cross-write delegations because each has
-// its own .punt-labs/ethos/delegations/ directory. The path matches the
-// (*Store).DelegationLockPath method on the same global root.
-//
-// Used by the PreToolUse-on-Agent dispatch path (DES-054 v5): the
-// hook allocates a delegation_id and holds this lock across the
-// skeleton write so the prompt.md and record.yaml writes appear
-// atomic to any reader.
+// This is the standalone/global compatibility API. Repository writers must use
+// (*Store).AcquireDelegationLock, which resolves shared local storage through
+// the request's canonical roots rather than through the caller's HOME.
 //
 // Acquisition failures surface with both the lock path and the
 // underlying syscall so an operator can locate the contended file.
@@ -243,6 +258,13 @@ func AcquireDelegationLock(globalRoot, delegationID string) (func(), error) {
 		return nil, fmt.Errorf("creating delegation lock directory %s: %w", dir, err)
 	}
 	lockPath := filepath.Join(dir, filepath.Base(delegationID)+".lock")
+	return acquireDelegationLockPath(lockPath)
+}
+
+func acquireDelegationLockPath(lockPath string) (func(), error) {
+	if err := rejectSymlink(lockPath); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("opening delegation lock %s: %w", lockPath, err)
@@ -318,6 +340,16 @@ func DelegationDir(repoRoot, missionID, delegationID string) string {
 	)
 }
 
+// DelegationArtifactsDir is deliberately outside the Git record tree. Workers
+// may write arbitrary artifacts here; Ethos never publishes them automatically.
+func DelegationArtifactsDir(repoRoot, missionID, delegationID string) string {
+	return filepath.Join(repoRoot, ".punt-labs", "local", "ethos", "artifacts", "missions", filepath.Base(missionID), "delegations", filepath.Base(delegationID))
+}
+
+func delegationPromptPath(p layout.Policy, missionID, delegationID string) string {
+	return filepath.Join(p.LocalRoot(), "trace", "missions", filepath.Base(missionID), "delegations", filepath.Base(delegationID), "prompt.md")
+}
+
 // WriteDelegationSkeleton writes a freshly-constructed Delegation
 // record to
 // <repoRoot>/.punt-labs/ethos/missions/<missionID>/delegations/<delegationID>/
@@ -350,6 +382,41 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	if strings.TrimSpace(repoRoot) == "" {
 		return "", fmt.Errorf("repoRoot is required for delegation skeleton")
 	}
+	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return "", err
+	}
+	return WriteDelegationSkeletonWithPolicy(p, missionID, delegationID, payload)
+}
+
+// DelegationReservedError reports a failed skeleton write whose immutable prompt
+// evidence or record may already exist. The caller must not recycle the identity.
+// Reservation does not mean the delegation was admitted or its record installed.
+type DelegationReservedError struct {
+	Err error
+}
+
+func (e *DelegationReservedError) Error() string {
+	return "delegation identity reserved: " + e.Err.Error()
+}
+
+func (e *DelegationReservedError) Unwrap() error { return e.Err }
+
+// WriteDelegationSkeletonWithPolicy retains prompt detail at the canonical
+// store and uses its local zone for all staging. The policy is the caller's
+// already-validated request snapshot. A DelegationReservedError forbids identity
+// reuse even when no record.yaml was installed.
+func WriteDelegationSkeletonWithPolicy(p layout.Policy, missionID, delegationID string, payload DelegationSkeleton) (_ string, retErr error) {
+	reserved := false
+	defer func() {
+		if retErr != nil && reserved {
+			retErr = &DelegationReservedError{Err: retErr}
+		}
+	}()
+	repoRoot := filepath.Dir(filepath.Dir(p.RecordRoot()))
+	if p.RecordRoot() == "" {
+		return "", fmt.Errorf("repoRoot is required for delegation skeleton")
+	}
 	if strings.TrimSpace(missionID) == "" {
 		return "", fmt.Errorf("missionID is required for delegation skeleton")
 	}
@@ -364,6 +431,18 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	// encoder: refused, as a record is.
 	if !utf8.Valid(payload.Prompt) {
 		return "", fmt.Errorf("delegation skeleton: the prompt is not valid UTF-8; remove or rephrase it")
+	}
+	body := redact.Body(payload.Prompt)
+	if len(payload.Prompt) > 0 {
+		body, err = guardWrite(delegationPromptPath(p, missionID, delegationID), body)
+		if err != nil {
+			return "", err
+		}
+		// Explicit caller hashes retain their existing meaning. New hook-created
+		// prompts still record expected presence when the caller has no hash.
+		if payload.PromptHash == "" {
+			payload.PromptHash = promptDigest(body)
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	// Every string field is redacted except the generated IDs, hashes,
@@ -389,8 +468,10 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	if err != nil {
 		return "", fmt.Errorf("delegation skeleton: %w", err)
 	}
-	body := redact.Body(payload.Prompt)
 	dir := DelegationDir(repoRoot, missionID, delegationID)
+	if err := validateRepositoryRecordPath(repoRoot, filepath.Join(dir, "record.yaml")); err != nil {
+		return "", fmt.Errorf("delegation skeleton: %w", err)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", ioErr("creating delegation directory", dir, err)
 	}
@@ -399,8 +480,10 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	// disk — readers branch on record.yaml's presence, so its absence
 	// signals "skeleton not yet committed" and avoids a torn read.
 	if len(payload.Prompt) > 0 {
-		if err := writeAtomicFile(dir, layout.TmpPattern("prompt", ".md"),
-			filepath.Join(dir, "prompt.md"), body); err != nil {
+		// Retention can leave only consent, or return an error after installing
+		// it. Even an unreadable existing artifact cannot prove this ID unused.
+		reserved = true
+		if err := retainDelegationPrompt(p, filepath.Base(missionID), filepath.Base(delegationID), body); err != nil {
 			return "", fmt.Errorf("writing delegation prompt: %w", err)
 		}
 		if !bytes.Equal(body, payload.Prompt) {
@@ -408,8 +491,15 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 		}
 	}
 	recordPath := filepath.Join(dir, "record.yaml")
-	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
+	data, err = guardWrite(recordPath, data)
+	if err != nil {
+		return "", err
+	}
+	reserved = true
+	if w, err := localReplace(p, recordPath, data); err != nil {
 		return "", fmt.Errorf("writing delegation record: %w", err)
+	} else if w.DurabilityError != nil {
+		fmt.Fprintf(os.Stderr, "ethos: delegation: record installed; durability unconfirmed: %v\n", w.DurabilityError)
 	}
 	sayRecord.Say()
 	return recordPath, nil
@@ -424,11 +514,25 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 // ".yaml"), "record-*.yaml.ethos-tmp"); the random component avoids a
 // predictable name that a second writer could trample.
 func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
+	return writeAtomicFileWithOutcome(dir, pattern, destPath, data, nil)
+}
+
+func writeAtomicFileWithOutcome(dir, pattern, destPath string, data []byte, out *MutationOutcome) error {
+	return writeAtomicFileWithWarning(dir, pattern, destPath, data, out, "delegation: update installed")
+}
+
+// writeAtomicFileWithWarning lets each caller name its operation and target.
+// Only post-install durability failures warn; pre-install failures remain errors.
+func writeAtomicFileWithWarning(dir, pattern, destPath string, data []byte, out *MutationOutcome, installedContext string) error {
 	var gErr error
 	if data, gErr = guardWrite(destPath, data); gErr != nil {
 		return gErr
 	}
-	return restoreAtomicFile(dir, pattern, destPath, data)
+	w, err := installAtomicFile(dir, pattern, destPath, data)
+	if err == nil && w.DurabilityError != nil {
+		out.warn(fmt.Sprintf("%s; durability unconfirmed: %v", installedContext, w.DurabilityError))
+	}
+	return err
 }
 
 // restoreAtomicFile writes data to destPath atomically, as writeAtomicFile
@@ -436,39 +540,66 @@ func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 // a rollback is not a new tracked write, and must not be refused because the
 // old bytes name a home.
 func restoreAtomicFile(dir, pattern, destPath string, data []byte) error {
+	w, err := installAtomicFile(dir, pattern, destPath, data)
+	if err != nil {
+		return err
+	}
+	if w.DurabilityError != nil {
+		return fmt.Errorf("restoring %s: durability unconfirmed: %w", destPath, w.DurabilityError)
+	}
+	return nil
+}
+
+// installAtomicFile reports installation separately from durability. Forward
+// mutations warn after installation; rollback must return a durability failure
+// rather than claim that the old state was durably restored. It has no guard:
+// forward callers guard first, whereas restore must preserve exact saved bytes.
+func installAtomicFile(dir, pattern, destPath string, data []byte) (installedWrite, error) {
+	// Delegation updates and their byte-preserving rollbacks share this sink.
+	// Their record-shaped path identifies S without consulting mutable config.
+	missionDir := filepath.Dir(filepath.Dir(filepath.Dir(dir)))
+	recordRoot := filepath.Dir(missionDir)
+	if filepath.Base(dir) != "." && filepath.Base(filepath.Dir(dir)) == "delegations" && filepath.Base(missionDir) == "missions" && filepath.Base(recordRoot) == "ethos" && filepath.Base(filepath.Dir(recordRoot)) == ".punt-labs" {
+		root := filepath.Dir(filepath.Dir(recordRoot))
+		p, err := layout.NewRepository(root, root, layout.RecordBlame)
+		if err != nil {
+			return installedWrite{}, err
+		}
+		return localReplace(p, destPath, data)
+	}
 	tmp, err := os.CreateTemp(dir, pattern)
 	if err != nil {
-		return ioErr("creating temp file in", dir, err)
+		return installedWrite{}, ioErr("creating temp file in", dir, err)
 	}
 	tmpPath := tmp.Name()
 	if n, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return ioErr("writing", tmpPath, err)
+		return installedWrite{}, ioErr("writing", tmpPath, err)
 	} else if n < len(data) {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("short write to %s: %d of %d bytes", filepath.Base(tmpPath), n, len(data))
+		return installedWrite{}, fmt.Errorf("short write to %s: %d of %d bytes", filepath.Base(tmpPath), n, len(data))
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return ioErr("chmod", tmpPath, err)
+		return installedWrite{}, ioErr("chmod", tmpPath, err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return ioErr("syncing", tmpPath, err)
+		return installedWrite{}, ioErr("syncing", tmpPath, err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return ioErr("closing", tmpPath, err)
+		return installedWrite{}, ioErr("closing", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return ioErr("renaming the temp file to", destPath, err)
+		return installedWrite{}, ioErr("renaming the temp file to", destPath, err)
 	}
-	return nil
+	return installedWrite{DurabilityError: syncDir(filepath.Dir(destPath))}, nil
 }
 
 // AcquireMissionLock opens (and creates if needed) the per-mission
@@ -529,11 +660,21 @@ func acquireMissionLock(repoRoot, missionID string, mode int, label string) (fun
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required for mission lock")
 	}
-	dir := RepoStatePath(repoRoot, "missions", filepath.Base(missionID))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return nil, err
+	}
+	lockPath, err := p.LockPath("mission-delegations", filepath.Base(missionID))
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(lockPath)
+	if err := layout.EnsureLocalDir(p, dir); err != nil {
 		return nil, fmt.Errorf("creating mission lock directory %s: %w", dir, err)
 	}
-	lockPath := filepath.Join(dir, ".lock")
+	if err := rejectSymlink(lockPath); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("opening mission lock %s: %w", lockPath, err)
@@ -571,6 +712,11 @@ func LoadDelegation(recordPath string) (*Delegation, error) {
 	if strings.TrimSpace(recordPath) == "" {
 		return nil, fmt.Errorf("recordPath is required")
 	}
+	validatedPath, err := validateRepositoryDelegationPath(recordPath)
+	if err != nil {
+		return nil, err
+	}
+	recordPath = validatedPath
 	if err := rejectSymlink(recordPath); err != nil {
 		return nil, err
 	}
@@ -684,6 +830,13 @@ func repoRootOfRecord(recordPath string) string {
 // written" case (the refusal fired before the skeleton write, which
 // is an order-of-operations bug in the caller — surface it loudly).
 func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedAt string) error {
+	return closeDelegationSkeletonWithOutcome(repoRoot, missionID, delegationID, verdict, closedAt, nil)
+}
+
+// closeDelegationSkeletonWithOutcome forwards installed-write diagnostics to
+// the caller's operation. A nil outcome preserves legacy stderr reporting.
+// The caller holds the same delegation lock as CloseDelegationSkeleton callers.
+func closeDelegationSkeletonWithOutcome(repoRoot, missionID, delegationID, verdict, closedAt string, out *MutationOutcome) error {
 	if strings.TrimSpace(repoRoot) == "" {
 		return fmt.Errorf("repoRoot is required for close delegation skeleton")
 	}
@@ -709,6 +862,9 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	}
 	dir := DelegationDir(repoRoot, missionID, delegationID)
 	recordPath := filepath.Join(dir, "record.yaml")
+	if err := validateRepositoryRecordPath(repoRoot, recordPath); err != nil {
+		return fmt.Errorf("close delegation skeleton: %w", err)
+	}
 	d, err := LoadDelegation(recordPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -722,7 +878,7 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	if err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
-	if err := writeAtomicFile(dir, layout.TmpPattern("record", ".yaml"), recordPath, data); err != nil {
+	if err := writeAtomicFileWithOutcome(dir, layout.TmpPattern("record", ".yaml"), recordPath, data, out); err != nil {
 		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
 	say.Say()
@@ -782,6 +938,9 @@ func DisclaimDelegationRecord(repoRoot, missionID, delegationID string, redact P
 	}
 	dir := DelegationDir(repoRoot, missionID, delegationID)
 	recordPath := filepath.Join(dir, "record.yaml")
+	if err := validateRepositoryRecordPath(repoRoot, recordPath); err != nil {
+		return nil, nil, fmt.Errorf("disclaim: %w", err)
+	}
 	d, err := LoadDelegation(recordPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

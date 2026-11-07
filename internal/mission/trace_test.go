@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 func TestBuildTraceSummary(t *testing.T) {
@@ -159,7 +161,7 @@ func TestAppendTraceSummary(t *testing.T) {
 
 // TestAppendTraceSummary_LocksSiblingFileNotDataFile pins the Bugbot
 // finding on the Windows locking work: appendTraceLine must lock a
-// dedicated missions.jsonl.lock file, not the append-only missions.jsonl
+// dedicated local lock file, not the append-only missions.jsonl
 // handle itself. On Windows, O_APPEND|O_WRONLY produces a handle with only
 // FILE_APPEND_DATA access (Go's syscall.Open clears GENERIC_WRITE for
 // O_APPEND) -- neither GENERIC_READ nor GENERIC_WRITE, which is what
@@ -167,9 +169,8 @@ func TestAppendTraceSummary(t *testing.T) {
 // there. This repo's CI is Linux-only, so the Windows failure mode itself
 // cannot be exercised here; this test instead pins the structural
 // invariant that IS verifiable everywhere: the lock file exists
-// afterward, sibling to the data file it protects, matching this
-// package's own convention (id.go, store.go, delegation.go all lock a
-// separate ".lock" file rather than the data file itself).
+// afterward, outside the record tree. The shared local inode also serializes
+// the scrub and publication snapshot paths.
 func TestAppendTraceSummary_LocksSiblingFileNotDataFile(t *testing.T) {
 	dir := t.TempDir()
 	s := &Store{repoRoot: dir}
@@ -181,8 +182,19 @@ func TestAppendTraceSummary_LocksSiblingFileNotDataFile(t *testing.T) {
 	}
 
 	ethosDir := filepath.Join(dir, ".punt-labs", "ethos")
-	if _, err := os.Stat(filepath.Join(ethosDir, "missions.jsonl.lock")); err != nil {
-		t.Fatalf("missions.jsonl.lock must exist alongside missions.jsonl: %v", err)
+	if _, err := os.Stat(filepath.Join(ethosDir, "missions.jsonl.lock")); !os.IsNotExist(err) {
+		t.Fatalf("record-tree summary lock must not be created: %v", err)
+	}
+	p, err := layout.NewRepository(dir, dir, layout.RecordBlame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := p.LockPath("mission-summary", "missions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lock); err != nil {
+		t.Fatalf("canonical local summary lock missing: %v", err)
 	}
 }
 

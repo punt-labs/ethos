@@ -83,6 +83,18 @@ jobs:
       - name: Offline OpenCode configuration and helper tests
         run: make check-opencode
 
+      - name: Offline storage-boundary acceptance (CLI, wrappers and real commits)
+        run: make check-storage
+
+      - name: Upload storage-boundary evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: storage-acceptance-evidence
+          path: .tmp/opencode/storage-acceptance/
+          include-hidden-files: true
+          retention-days: 7
+
       - name: fuzz type-check (Z specs)
         run: make fuzz-check
 

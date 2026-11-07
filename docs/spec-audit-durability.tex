@@ -2,6 +2,8 @@
 % spec-audit-durability.tex
 %
 % Audit Line Durability: A Z Specification
+% November 2026: canonical-store local ownership amendment. Historical
+% per-checkout counterexamples remain below; their counts are not new runs.
 % A formal model of the life of a sealed audit line across the actor set
 % that can touch a checkout's live audit zone: a commit in the writing
 % checkout, a commit in a sibling worktree, `git worktree remove`, session
@@ -20,16 +22,31 @@
 \usepackage{fuzz}
 \usepackage{booktabs}
 \usepackage{tabularx}
+\usepackage{longtable}
+\PassOptionsToPackage{obeyspaces}{url}
+\usepackage{xurl}
 \usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
 
-\newcommand{\fpath}[1]{\texttt{#1}}
-\newcommand{\field}[1]{\texttt{#1}}
+\newcommand{\fpath}[1]{\nolinkurl{#1}}
+% Break prose identifiers at word boundaries; mathematical fields stay boxed.
+\ExplSyntaxOn
+\NewDocumentCommand{\breakfield}{m}{
+  \group_begin:
+  \tl_set:Nn \l_tmpa_tl {#1}
+  \regex_replace_all:nnN {([a-z])([A-Z])} {\1\c{allowbreak}\2} \l_tmpa_tl
+  \tl_replace_all:Nnn \l_tmpa_tl {\_} {\_\allowbreak}
+  \texttt{\tl_use:N \l_tmpa_tl}
+  \group_end:
+}
+\ExplSyntaxOff
+\newcommand{\field}[1]{\ifmmode\texttt{#1}\else\texorpdfstring{\breakfield{#1}}{#1}\fi}
+\emergencystretch=2em
 
 \begin{document}
 
 \title{Audit Line Durability: A Z Specification}
 \author{Mike S, for Punt Labs}
-\date{September 2026}
+\date{November 2026 (canonical local ownership amendment)}
 \hypersetup{
   pdftitle={Audit Line Durability: A Z Specification},
   pdfauthor={Punt Labs},
@@ -45,7 +62,16 @@
 \label{sec:scope}
 % ===================================================================
 
-Every audit line an agent writes begins in a gitignored, per-checkout
+\textbf{Reading this revision.} Sections before
+\S\ref{sec:canonical} preserve the September per-checkout baseline,
+its counterexamples and its alternative-design experiments. References
+there to ``today'' or ``current design'' mean that historical baseline,
+not the DES-079 target. The new canonical-store schemas and refinement
+obligations in \S\ref{sec:canonical} supersede its ownership assumption.
+They are a maintained implementation contract, not a claim that the
+concurrent storage implementation or disk durability has been proved.
+
+In the historical baseline, every audit line begins in a gitignored, per-checkout
 live file, \fpath{<repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl}
 (docs/audit-seal.md \S Two zones, lines 65--73). \field{SealRepo}
 (internal/hook/audit\_seal.go:49) moves a checkout's pending tail into a
@@ -330,7 +356,7 @@ rosterKnown' = rosterKnown \\
 Models \field{HandleSessionEnd} (session\_end.go:46--67): it clears the
 session's roster entry via \field{ss.Delete} (session\_end.go:57), which in
 turn only removes the roster file and mission sidecars
-(internal/session/store.go:278--301, \field{deleteFiles}) --- no seal, and,
+(\fpath{internal/session/store.go}:278--301, \field{deleteFiles}) --- no seal, and,
 per \field{HandleSessionEnd}'s own doc comment, no unsealed-line probe,
 deliberately: ``\emph{failing the hook here would not improve on that
 guarantee... and would only make session end itself unreliable}''
@@ -436,8 +462,8 @@ against \field{Init} and the eight operations of \S\ref{sec:ops} explores
 17 states and 78 transitions, is deadlock-free, and raises no assertion
 violation --- expected, since \field{lostUnwarned} carries no invariant
 for probcli to check (\S\ref{sec:state}). Reachability is instead
-confirmed by a goal-directed search, \fpath{probcli ... -model\_check
--goal "lostUnwarned=ztrue" -check\_goal}, which finds
+confirmed by a goal-directed search, \fpath{probcli ... -model_check
+-goal "lostUnwarned=ztrue" -check_goal}, which finds
 \field{lostUnwarned = ztrue} by the shortest possible route --- no actor
 need do anything but remove the writer checkout while lines are still
 spooled. (The state/transition count this particular run explored is
@@ -577,7 +603,8 @@ where
 
 InitD2   -- identical in shape to Init (S:init)
 
-CommitInWritingCheckoutD2   -- identical to CommitInWritingCheckout (S:opcommitwriting)
+CommitInWritingCheckoutD2   -- identical to CommitInWritingCheckout
+                           -- (S:opcommitwriting)
 
 CommitInWritingCheckoutNoHookD2   -- identical to CommitInWritingCheckoutNoHook
 
@@ -674,16 +701,18 @@ where
 \end{verbatim}
 
 % ===================================================================
-\section{Tool Run}
+\section{Historical Tool Run}
 \label{sec:probrun}
 % ===================================================================
 
-\begin{center}
-\begin{tabularx}{\textwidth}{@{}lccX@{}}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\centering\arraybackslash}p{4em}>{\centering\arraybackslash}p{6em}>{\raggedright\arraybackslash}p{\dimexpr0.68\textwidth-10em-6\tabcolsep\relax}@{}}
 \toprule
 \textbf{Model} & \textbf{States} & \textbf{Transitions} &
   \textbf{Result} \\
 \midrule
+\endhead
+\bottomrule
+\endfoot
 Current design (\S\ref{sec:state}--\ref{sec:ops}), all 8 operations,
   full exploration &
   17 & 78 &
@@ -713,24 +742,22 @@ Design 3, goal search \field{lostUnwarned=ztrue} $\land$
   from \field{Init} in one step, with \field{SessionEndD3} never having
   fired: a spooled (gitignored) line is invisible to git's
   dirty-worktree guard, which only inspects \field{sealed} \\
-\bottomrule
-\end{tabularx}
-\end{center}
+\end{longtable}
 
 fuzz's \texttt{/z-spec:check} reports 0 errors on this document and on
 each of the three scratch variants. Every run in this table was executed
 directly with \fpath{probcli}: the four full-exploration rows via
-\fpath{-model\_check}, the three reachability rows via
-\fpath{-model\_check -goal "<predicate>" -check\_goal}, which halts and
+\fpath{-model_check}, the three reachability rows via
+\fpath{-model_check -goal "<predicate>" -check_goal}, which halts and
 prints a trace the first time it finds a state satisfying the goal (a
 smaller state/transition count than the corresponding full-exploration
 row is expected --- the goal search stops early).
 
-Full-exploration counts are deterministic --- re-running any of the four
-full-exploration rows reproduces the same state and transition count
-every time, on any probcli build, because exhaustive search visits every
-reachable state regardless of the order it visits them in. Goal-search
-counts are not: \fpath{-check\_goal} stops at the \emph{first} state it
+The counts above belong to the recorded models and tool settings, not
+to every future ProB build or translation. Complete exploration visits
+the same mathematical reachable graph only when the translated system
+and finite bounds are unchanged. Goal-search
+counts additionally depend on order: \fpath{-check_goal} stops at the \emph{first} state it
 happens to visit that satisfies the predicate, and re-running the exact
 same goal search against the exact same unmodified file has been
 observed to report a different intermediate state/transition count from
@@ -747,7 +774,7 @@ kind of mistake that produces a false-clean report with no error message
 at all).
 
 % ===================================================================
-\section{Verdict}
+\section{Historical Verdict}
 \label{sec:verdict}
 % ===================================================================
 
@@ -789,15 +816,346 @@ for the ordering it does close; Design~2 is not worth the
 made the underlying loss impossible.
 
 % ===================================================================
+\section{DES-079: canonical-store local ownership}
+\label{sec:canonical}
+% ===================================================================
+
+Let $S$ be the validated canonical store root from
+\field{resolve.Roots().Store}, $C$ the feature checkout, and $L$ be
+\fpath{S/.punt-labs/local/ethos}. Repository-local live files, retained
+archives, quarantine, reflection/correction receipts, and \emph{all}
+repo-local lock files belong to $L$. Global identity/session namespaces
+are not silently relocated. The historical implication
+\field{writerExists = zfalse} $\implies$ \field{spooled = sealed = 0}
+is no longer a state invariant: removing a feature checkout does not
+remove the canonical owner. A teardown hook or a last-minute transfer
+is not a prerequisite for retaining a new local write.
+
+Both \field{record: blame} and \field{record: full} retain the canonical
+local live/archive copy. Full mode additionally publishes selected,
+redacted immutable trace to a tracked destination; publication is not
+ownership transfer. Filesystem installation, staging in a checkout's
+index, and Git commit are three distinct facts. A failed publication
+must not discard the only locally retained copy. An ordinary blame
+seal must not change the Git index. Mission full export still excludes
+session audit chunks and agent-written artifacts.
+
+\subsection{State and initialization}
+
+Use sets of line identities rather than adding counts of copies: a line
+can exist in live, archive, published and Git history simultaneously.
+The two-element Line set is a finite abstraction, not a product limit.
+\field{lostLocal} is a witness, not a safety invariant; destruction of
+the owner below can set it, so a reachability query is non-vacuous.
+
+\begin{zed}
+Line ::= lineOne | lineTwo
+\end{zed}
+\begin{zed}
+RecordMode ::= recordBlame | recordFull
+\end{zed}
+\begin{schema}{CanonicalAudit}
+live, archive, published, inGit : \power Line \\
+storeExists, featureExists, lostLocal : ZBOOL \\
+recordMode : RecordMode
+\where
+storeExists = zfalse \implies
+  (live = \emptyset \land archive = \emptyset)
+\end{schema}
+
+\field{published} denotes copies in the selected publication checkout
+before or after staging; \field{inGit} denotes copies committed to
+retained repository history. This model does not treat a local seal
+watermark as a Git/publication watermark. Locks and their ordering are
+refinement obligations below, not an implicit process scheduler in
+this state. Only the owner implication is definitional; no equation
+requiring retention is baked into \field{CanonicalAudit}.
+
+\begin{schema}{InitCanonical}
+CanonicalAudit'
+\where
+live' = \{lineOne, lineTwo\} \\
+archive' = \emptyset \\
+published' = \emptyset \\
+inGit' = \emptyset \\
+storeExists' = ztrue \\
+featureExists' = ztrue \\
+lostLocal' = zfalse \\
+recordMode' = recordBlame
+\end{schema}
+
+The feature checkout in this component is distinct from the canonical
+store ($C \neq S$). \field{RemoveOwner} models deleting $S$ itself,
+including the $C=S$ case; do not apply RemoveFeature to that case.
+For bare common-directory layouts the established resolver can choose
+the worktree itself as store, so the conditional feature-removal
+guarantee does not apply. This is not historical Design~1's
+out-of-every-checkout machine store.
+
+\subsection{Operations and frames}
+
+\begin{schema}{SealLocal}
+\Delta CanonicalAudit
+\where
+storeExists = ztrue \\
+live' = live \\
+archive' = archive \cup live \\
+published' = published \\
+inGit' = inGit \\
+storeExists' = storeExists \\
+featureExists' = featureExists \\
+lostLocal' = lostLocal \\
+recordMode' = recordMode
+\end{schema}
+
+SealLocal represents \emph{confirmed durable} archive installation.
+A failed or interrupted seal is not assumed to have reached this
+boundary. Only after it is confirmed may covered live data be trimmed:
+
+\begin{schema}{TrimCoveredLive}
+\Delta CanonicalAudit \\
+trim? : \power Line
+\where
+storeExists = ztrue \\
+trim? \subseteq live \cap archive \\
+live' = live \setminus trim? \\
+archive' = archive \\
+published' = published \\
+inGit' = inGit \\
+storeExists' = storeExists \\
+featureExists' = featureExists \\
+lostLocal' = lostLocal \\
+recordMode' = recordMode
+\end{schema}
+
+\begin{schema}{PublishFull}
+\Delta CanonicalAudit \\
+selected? : \power Line \\
+consent? : ZBOOL
+\where
+storeExists = ztrue \\
+featureExists = ztrue \\
+consent? = ztrue \\
+selected? \subseteq archive \\
+live' = live \\
+archive' = archive \\
+published' = published \cup selected? \\
+inGit' = inGit \\
+storeExists' = storeExists \\
+featureExists' = featureExists \\
+lostLocal' = lostLocal \\
+recordMode' = recordMode
+\end{schema}
+
+The concrete selection additionally checks publication consent and
+redaction; the finite abstraction permits any selected archived lines,
+an overapproximation for retention safety, not a privacy proof. A
+full-mode write, replay of captured consent, or explicit full export
+supplies consent; the current mode alone need not be full when an
+already-authorized publication is retried. A
+publication retry must inspect pending archive selections even when
+the live tail is already covered by the \emph{local} watermark. Mode
+changes alone do not reset watermarks or delete history. Consent for a
+prepared reflection stays with its receipt; a later full-mode request
+does not silently opt older private reflection entries into a growing
+published reflections file.
+
+\begin{schema}{CommitPublication}
+\Delta CanonicalAudit
+\where
+featureExists = ztrue \\
+live' = live \\
+archive' = archive \\
+published' = published \\
+inGit' = inGit \cup published \\
+storeExists' = storeExists \\
+featureExists' = featureExists \\
+lostLocal' = lostLocal \\
+recordMode' = recordMode
+\end{schema}
+
+\begin{schema}{RemoveFeature}
+\Delta CanonicalAudit
+\where
+featureExists = ztrue \\
+featureExists' = zfalse \\
+live' = live \\
+archive' = archive \\
+published' = \emptyset \\
+inGit' = inGit \\
+storeExists' = storeExists \\
+lostLocal' = lostLocal \\
+recordMode' = recordMode
+\end{schema}
+
+RemoveFeature can discard uncommitted checkout publication but frames
+canonical live/archive data and the owner. It represents removal before
+or after SessionEnd, sealing, publication or disable. Reading/sealing
+from a surviving sibling uses $S$, not the deleted writer path; a new
+publication checkout can be chosen outside this one-checkout component.
+
+\begin{schema}{ChangeRecordMode}
+\Delta CanonicalAudit \\
+mode? : RecordMode
+\where
+recordMode' = mode? \\
+live' = live \\
+archive' = archive \\
+published' = published \\
+inGit' = inGit \\
+storeExists' = storeExists \\
+featureExists' = featureExists \\
+lostLocal' = lostLocal
+\end{schema}
+
+\begin{schema}{LocalRetentionStutter}
+\Xi CanonicalAudit
+\end{schema}
+
+SessionEnd, disable and roster-only purge retrieve to this stutter;
+they can change bookkeeping outside this component but not erase
+retained data. It also describes a process interruption \emph{between}
+confirmed durable boundaries, not power loss in the middle of one.
+An explicit destructive trace purge needs its own refuse-or-warned
+tombstone transition; an unreadable probe is never evidence of zero
+pending data. The stutter must not be used to assert deadlock freedom
+or eventual recovery.
+
+\begin{schema}{RemoveOwner}
+\Delta CanonicalAudit
+\where
+storeExists = ztrue \\
+storeExists' = zfalse \\
+live' = \emptyset \\
+archive' = \emptyset \\
+published' = published \\
+inGit' = inGit \\
+featureExists' = featureExists \\
+recordMode' = recordMode \\
+(live \cup archive \neq \emptyset) \implies lostLocal' = ztrue \\
+(live \cup archive = \emptyset) \implies lostLocal' = lostLocal
+\end{schema}
+
+RemoveOwner deliberately exposes the limit: local detail may disappear
+even if a published copy or Git history survives. This witness measures
+loss of local retention, not necessarily loss of every copy. Deleting
+$S$, storage failure and unsupported external destruction are not
+protected by relocating files within $S$.
+
+\subsection{Safety, availability and implementation obligations}
+
+For runs from InitCanonical \emph{excluding RemoveOwner and explicit
+destructive trace purge}, the target is
+$\{lineOne,lineTwo\} \subseteq live \cup archive$ and
+$lostLocal = zfalse$. These are external properties, not primed state
+constraints. SealLocal adds a copy; TrimCoveredLive removes only an
+already archived copy; publication/commit/mode/stutter do not consume
+local data; RemoveFeature frames it. This is an inductive inspection
+argument under the stated atomic-operation assumptions, not a ProB
+run or a proof of the disk implementation. Including RemoveOwner
+admits a direct loss trace from initialization. Historical baseline
+counterexamples above remain valid for per-checkout ownership.
+
+An isolated clone has only the shared records/chunks actually committed
+in its source snapshot; it does not inherit another machine's $L$.
+Local absence is therefore unavailable-here, not proof that no events
+occurred. Unreadable sources (I/O/permission, invalid data, conflicting
+identity, symlink refusal) remain distinct from absence. Union readers
+deduplicate equal copies by established stream/timestamp identity,
+report unequal duplicates, and preserve per-stream floors. The shared
+round-decision/correction acceptance join in the lifecycle companion
+spec prevents a sealed prepared event from being displayed as accepted.
+
+Every temporary, including failed rollback and publication staging,
+must be created in $L$, never adjacent to a tracked target. Preserve
+atomic same-filesystem rename; \texttt{EXDEV} refuses without a copy-over
+fallback. Complete-write checks, file fsync, destination-directory and
+new-ancestor durability must refine each successful installation.
+Source-staging cleanup is separate. A lock serializes cooperating
+actors; it is not a multi-file or power-loss transaction.
+
+Keep distinct stable lock roles for mission state, delegation directory,
+individual delegation and streams; every repository caller, including
+different HOME roots and sibling checkouts, resolves to the same $S$.
+Preserve the existing global-before-repo ordering where applicable and
+mission-before-stream nesting. A stream-locked seal must not reacquire
+mission state in reverse order. Lock errors refuse; never rename or
+unlink held locks to relocate them. Stop all old/new writers, hooks and
+MCP servers before the bounded \texttt{ethos repair} cleanup. It inventories
+known obsolete trace/runtime files, warns of permanent legacy-detail loss,
+and asks \texttt{Are you sure? [y/N]}; \texttt{--yes} is explicit automation
+consent. Empty input, no and EOF delete nothing; busy locks refuse. There is
+no lossless migration, backfill or copy-before-delete requirement. Shared
+identities, contracts, results, corrections, provenance and ADRs, private
+credentials/overlays, configuration, global data, arbitrary files and canonical
+local history are excluded. Current publications and flat current exports
+with their associated trace are retained. Destructive repair currently refuses
+on Windows; inventory remains available. Deletion is incremental without
+rollback: after interruption, inspect a fresh inventory and confirm again.
+Private legacy overlays require explicit operator-directed reconciliation
+preserving credentials, not repair or a nonexistent storage-upgrade command.
+Afterward run \texttt{ethos enable} and reconnect long-lived MCP servers.
+These legacy-cleanup limits do not weaken retention of new history across
+feature-worktree removal. Historical shipped migration commands are not expanded;
+no operation can recover an already deleted old spool. This prose describes
+implementation obligations outside the atomic-operation retention model above;
+it changes no formal state or predicate.
+
+Code obligations span \field{Store.auditRoot}/\field{WithCheckoutRoot},
+\fpath{internal/mission/live_log.go}, audit path/lock/union helpers,
+\field{SealRepo}, session purge/vacuum, publication and local staging
+helpers. Updating only a path constant leaves old checkout-root callers
+unsafe. Tests must cover removal without SessionEnd or sealing in both
+modes, publication failure after a local seal, mode changes, unreadable
+probes, lock contention across worktrees, and isolated-HOME squash/clone
+handoff. The historical numeric results are not evidence for these
+new code paths; no syscall fault injection or power-loss proof is
+claimed by this amendment.
+
+\subsection{Validation status of the amendment}
+
+Direct \texttt{fuzz docs/spec-audit-durability.tex} passed during this
+edit; it is type checking only. A separate two-line/two-mode canonical
+retention scratch model, \fpath{.tmp/opencode/formal-audit-retention.tex},
+also passed fuzz. Its external goal is a line missing from both live
+and archive after a permitted transition. A pre-state monitor freezes
+on the first such successor, making the goal a diagnostic deadlock;
+the State predicate contains no retention constraint. No unconditional
+idle loop masks loss. Owner deletion is excluded from this conditional
+test, explicitly unlike the maintained RemoveOwner operation.
+
+In the original author's context, the authorized scratch
+\texttt{z-spec model-check} invocation with
+\texttt{--setsize 2 --max-ops 1000 --timeout 30000} was permission-rejected
+before execution. That denial remains part of the history, not a run.
+The parent subsequently executed the separate two-line/two-mode scratch
+model: 108 states, 1109 transitions, exit 0, with initialization and
+operation coverage passed. The log is
+\fpath{.tmp/opencode/formal-audit-retention-prob.log}. Independent formal
+review by jra in round 23 accepted the models and parent evidence;
+jra also independently ran fuzz. The jms receipt extraction failed even
+after re-emission, so no correlated jms receipt is claimed.
+
+This is conditional bounded scratch-model evidence, not a disk-durability,
+liveness, privacy or full implementation-refinement proof. The historical
+table above cannot substitute for the parent run. The compound maintained
+file contains both historical and amended state components, so a naive
+whole-file ProB run must not silently certify only its old Init. PDF
+compilation, syscall interruption tests and code refinement remain
+separate obligations.
+
+% ===================================================================
 \section{Traceability}
 \label{sec:trace}
 % ===================================================================
 
-\begin{center}
-\begin{tabularx}{\textwidth}{@{}llX@{}}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}>{\raggedright\arraybackslash}p{\dimexpr0.34\textwidth-4\tabcolsep\relax}@{}}
 \toprule
 \textbf{Z construct} & \textbf{Go / doc source} & \textbf{Note} \\
 \midrule
+\endhead
+\bottomrule
+\endfoot
 \field{AuditLine} zone split &
   docs/audit-seal.md \S Two zones, lines 65--73 &
   live (gitignored) vs.\ sealed (tracked) paths \\
@@ -827,8 +1185,12 @@ Design 2 & \field{listRepoSessions} worktree-aware extension &
   partial, ordering-dependent \\
 Design 3 & \field{HandleSessionEnd} seal-on-end &
   partial, crash-ordering-dependent \\
-\bottomrule
-\end{tabularx}
-\end{center}
+Canonical local owner & \field{resolve.Roots().Store}, live/archive
+  path and lock callers & DES-079 refinement obligations in
+  \S\ref{sec:canonical}; feature removal is not owner removal \\
+Local seal/publication split & \field{SealRepo}, union readers and
+  publication writers & both modes retain local data; local and
+  publication watermarks are distinct \\
+\end{longtable}
 
 \end{document}

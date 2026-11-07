@@ -10,6 +10,7 @@ import (
 	"regexp"
 
 	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // ethosMCPTool matches ethos's own MCP tools, installed as the plugin
@@ -54,10 +55,10 @@ func denyEthosCall(w io.Writer, toolName string, cause error) error {
 // decision, so the user's permission rules apply as they would without a hook.
 // A failure of any step denies the call (refuseUnreadable says why): the server
 // would otherwise be called with a caller nobody declared.
-func handleEthosMCPCall(input map[string]any, w io.Writer) error {
+func handleEthosMCPCall(input map[string]any, w io.Writer, loc resolve.Located) error {
 	toolName, _ := input["tool_name"].(string)
 	var buf bytes.Buffer
-	if err := routePreToolUse(input, &buf); err != nil {
+	if err := routePreToolUse(input, &buf, loc); err != nil {
 		return denyEthosCall(w, toolName, fmt.Errorf("pre-tool-use: %w", err))
 	}
 	var gate PreToolUseResult

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,24 +42,27 @@ func TestCLI_HookAuditLogNoSessionIDIsADrop(t *testing.T) {
 	assert.Equal(t, system, context)
 }
 
-// When the session lock cannot be taken the entry is still written,
-// unlocked, and the session is told so.
-func TestCLI_HookAuditLogUnlockedWriteIsReported(t *testing.T) {
+// A repository append cannot bypass the shared stream lock. If it cannot be
+// taken, the tool still proceeds but the session is told its audit was dropped.
+func TestCLI_HookAuditLogStreamLockFailureIsReported(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
 	se := setupCLISubprocessEnv(t)
 	const sid = "unlocked1"
-	// A directory where the lock file goes: the lock cannot be opened, the
-	// live audit file beside it can.
-	require.NoError(t, os.MkdirAll(audit.LiveAuditLockPath(se.repo, sid), 0o700))
+	policy, err := layout.NewRepository(se.repo, se.repo, layout.RecordBlame)
+	require.NoError(t, err)
+	stream := audit.Stream{Namespace: audit.SessionNS, Session: sid}
+	lock, err := policy.LockPath("audit-stream", stream.Key())
+	require.NoError(t, err)
+	// A directory where the shared stream lock goes makes acquisition fail.
+	require.NoError(t, os.MkdirAll(lock, 0o700))
 	payload := `{"session_id":"` + sid + `","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`
 	stdout, stderr, code := runHookIn(t, se, se.repo, "audit-log", payload)
 	assert.Equal(t, 0, code, stderr)
 	system, context := auditNotice(t, stdout)
-	assert.Contains(t, system, "without the live lock")
+	assert.Contains(t, system, "audit entry not written")
+	assert.Contains(t, system, lock)
 	assert.Equal(t, system, context)
-	data, err := os.ReadFile(audit.LiveAuditPath(se.repo, sid))
-	require.NoError(t, err, "the entry is written")
-	assert.Contains(t, string(data), `"tool":"Bash"`)
+	assert.NoFileExists(t, stream.LivePath(policy), "no unlocked repository append")
 }

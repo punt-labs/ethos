@@ -436,6 +436,35 @@ func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissi
 	if id == "" || id == "." || id == ".." {
 		return "", fmt.Errorf("invalid mission id %q", missionID)
 	}
+	if dryRun {
+		// Informational only: preserve the existing no-write dry run, including
+		// no new lock files. A real move rechecks everything under both locks.
+		return migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id, repoMissions, true)
+	}
+	// Existing migration changes the selected authority layer. Coordinate with
+	// repository creates and both repository/global writers before inspecting
+	// either contract; never select a snapshot before acquiring these fences.
+	s := NewStoreWithRoots(repoRoot, filepath.Dir(legacyDir))
+	var decision string
+	err := s.withCreateLock(func() error {
+		return s.withGlobalAdmissionLock(func() error {
+			path, err := s.stateLockPath(id)
+			if err != nil {
+				return err
+			}
+			return s.withStateFileLock(path, true, func() error {
+				return s.withStateFileLock(s.globalLockPath(id), false, func() error {
+					var err error
+					decision, err = migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun)
+					return err
+				})
+			})
+		})
+	})
+	return decision, err
+}
+
+func migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id string, repoMissions map[string]struct{}, dryRun bool) (string, error) {
 
 	legacyContract := filepath.Join(legacyDir, id+".yaml")
 	if _, err := os.Stat(legacyContract); err != nil {

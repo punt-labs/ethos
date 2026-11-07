@@ -1,11 +1,12 @@
 #!/bin/sh
-# hooks/pre-commit.sh — Seal pending live audit lines into tracked chunks
-# (DES-058). Runs before git snapshots the index, so the freshly staged
-# chunks land in the SAME commit as the work they document.
+# hooks/pre-commit.sh — Seal pending live audit lines into the local archive. Under
+# record: full, publish eligible chunks before git snapshots the index.
 #
-# DES-055 shape: on a seal failure the underlying `ethos audit seal` prints
-# a self-contained remedy to stderr and exits 2; this hook propagates that
-# as a blocking exit 2.
+# --commit-context lets blame-mode archival errors warn while retaining live
+# data. Invalid configuration and full-mode failures still block with exit 2.
+# Manual audit seal/query/quarantine retain visible errors in every mode.
+# Newly staged provenance snapshots are verified after archival; incomplete
+# required publication is always blocking, never an advisory archive failure.
 #
 # Exit status on the non-failure paths (success, nothing-to-seal, gitlink
 # deferral) is the captured host status $_host_status:
@@ -43,7 +44,7 @@ _git() {
 }
 
 # Dormant fast path. git runs a hook at the top of the work tree, so the marker
-# is tested relative to the current directory first, before mktemp or git run:
+# is tested relative to the current directory first, before git runs:
 # a dormant repository is never blocked by a probe failure. The shortcut is
 # taken only when this directory has its own .git (it is a top level, so the
 # marker there is the marker that counts) and every path component is either
@@ -75,30 +76,13 @@ fi
 # A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
 # dormant": the hook prints git's own error and exits 1, so the commit is
 # blocked and the operator sees why, rather than skipping with the host status.
-# git's stderr goes to a file and is shown only on failure: a warning or
-# GIT_TRACE output on a rev-parse that succeeded must not become part of the
-# repository root, nor make the hook skip the seal.
-# A mktemp that fails does not block: rev-parse then runs without the capture
-# file, and is run again to show git's error only if it failed. A dormant
-# repository must not be blocked by a full or read-only temp directory.
-_revparse_err=$(mktemp 2>/dev/null) || _revparse_err=""
-if [ -n "$_revparse_err" ]; then
-  REPO_ROOT=$(_git rev-parse --show-toplevel 2>"$_revparse_err")
-else
-  REPO_ROOT=$(_git rev-parse --show-toplevel 2>/dev/null)
-fi
-_revparse_status=$?
-if [ "$_revparse_status" -ne 0 ]; then
-  if [ -n "$_revparse_err" ]; then
-    _revparse_msg=$(cat "$_revparse_err")
-    rm -f "$_revparse_err"
-  else
-    _revparse_msg=$(_git rev-parse --show-toplevel 2>&1 >/dev/null)
-  fi
-  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed: %s\n' "$_revparse_msg" >&2
+# Capture only stdout. Git's diagnostics remain directly visible, including
+# success warnings, without polluting the root or creating temporary files.
+# Probe once: a second lookup could answer for a different repository state.
+if ! REPO_ROOT=$(_git rev-parse --show-toplevel); then
+  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed\n' >&2
   exit 1
 fi
-[ -n "$_revparse_err" ] && rm -f "$_revparse_err"
 # The root must be one absolute line (a / path, or a Windows drive path under
 # MINGW, MSYS or CYGWIN) naming a
 # directory; anything else (a trace line that got through, a relative path) is
@@ -167,10 +151,14 @@ else
   exit 1
 fi
 
-# `ethos audit seal` is fail-closed: exit 2 on an I/O error, a malformed or
-# corrupt chunk, or a git-add failure. Propagate any nonzero as a blocking
-# exit 2 so a broken audit store cannot slip an unrecorded commit through.
-if ! "$ethos_bin" audit seal; then
+# The binary validates one canonical configuration snapshot and decides which
+# failures may warn. Do not infer recording mode from ignore rules in this hook.
+if ! "$ethos_bin" audit seal --commit-context; then
+  exit 2
+fi
+# Let the binary discover only new/modified manifests in the actual committing
+# index (including Git's partial-commit GIT_INDEX_FILE), not historical manifests.
+if ! "$ethos_bin" provenance verify-index --staged; then
   exit 2
 fi
 exit "$_host_status"

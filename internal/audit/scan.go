@@ -26,20 +26,19 @@ type ScannedDir struct {
 // A missing directory is not an error. A near-miss chunk name, or a .corrupt
 // with no covering marker, returns an error naming the offender.
 func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error) {
-	entries, err := os.ReadDir(dir)
+	entries, err := readAuditArtifactDir(dir, ns, session)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return ScannedDir{}, nil
-		}
-		return ScannedDir{}, fmt.Errorf("reading %s: %w", dir, err)
+		return ScannedDir{}, err
 	}
 	var sc ScannedDir
 	var corrupts []ChunkName
 	for _, e := range entries {
+		cn, kind := Classify(e.Name(), ns)
+		// Recognized file leaves were checked above, before this compatibility
+		// skip for unrelated directories (including malformed directory names).
 		if e.IsDir() {
 			continue
 		}
-		cn, kind := Classify(e.Name(), ns)
 		// In the mission namespace a non-empty session filters to one
 		// session's artifacts; an empty session means "every session"
 		// (the read unions all).
@@ -61,8 +60,34 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 			// silently dropping the marker's verified_last and gap.
 			if _, mErr := ReadMarker(filepath.Join(dir, cn.MarkerFile())); mErr == nil {
 				sc.Markers = append(sc.Markers, cn)
+			} else {
+				var pathErr *os.PathError
+				if !errors.Is(mErr, fs.ErrNotExist) && errors.As(mErr, &pathErr) {
+					return ScannedDir{}, mErr
+				}
 			}
 		case KindCorrupt:
+			// Local retirement metadata is replaced before its source is removed.
+			// An absent or mismatched completion digest cannot cover that pending
+			// retirement, even at the same range with identical evidence bytes.
+			// Legacy raw .corrupt files retain their range-based coverage below.
+			path := filepath.Join(dir, e.Name())
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return ScannedDir{}, fmt.Errorf("reading retired chunk %s: %w", path, err)
+			}
+			var rec localRetirement
+			if json.Unmarshal(b, &rec) == nil && rec.Withheld == localRetirementWithheld {
+				if err := rec.validate(); err != nil {
+					return ScannedDir{}, fmt.Errorf("local retirement %s: %w", path, err)
+				}
+				m, err := ReadMarker(filepath.Join(dir, cn.MarkerFile()))
+				if err != nil || m.Chunk != cn.Stem() || m.RetiredSHA256 != rec.SHA256 {
+					return ScannedDir{}, &OrphanCorruptError{
+						Chunk: filepath.Join(dir, cn.ChunkFile()), Dir: dir, First: cn.First, Last: cn.Last,
+					}
+				}
+			}
 			corrupts = append(corrupts, cn)
 		case KindNearMiss:
 			return ScannedDir{}, fmt.Errorf("malformed chunk name %q in %s", e.Name(), dir)
@@ -183,6 +208,9 @@ func MonotonicFloor(dir string, ns Namespace, session string, legacyPaths ...str
 // A missing file is not an error and contributes zero. An unparseable line
 // contributes nothing.
 func MaxLegacyTS(path string) (int64, error) {
+	if present, err := auditReadFilePresent(path); err != nil || !present {
+		return 0, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

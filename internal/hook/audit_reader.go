@@ -113,25 +113,6 @@ type migrateNote struct {
 	kinds []string
 }
 
-// readRawAuditLines walks an audit JSONL file returning each well-formed line's
-// raw bytes and dedupe key. Torn/undecodable lines are skipped with a warning,
-// matching readAuditEntries. Missing file → (nil, nil).
-func readRawAuditLines(path string) ([]rawAuditLine, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("opening %s: %w", path, err)
-	}
-	defer f.Close()
-	var out []rawAuditLine
-	err = walkAuditLines(f, path, func(raw []byte, e auditEntry) {
-		out = append(out, rawAuditLine{key: rawAuditLineKey(e, raw), raw: raw})
-	})
-	return out, err
-}
-
 // readLegacyAuditLines reads every non-blank physical line of a legacy audit
 // file, including one that does not decode as an entry and a torn trailing
 // fragment, so that migration can route each through the guard instead of

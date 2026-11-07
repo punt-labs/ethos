@@ -8,7 +8,7 @@ import (
 )
 
 func TestDepositBootstrapGrandfathersExistingGuide(t *testing.T) {
-	dir := t.TempDir()
+	dir := physicalTempDir(t)
 	// A guide already on disk from a prior non-manifest enable, no manifest.
 	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestDepositBootstrapGrandfathersExistingGuide(t *testing.T) {
 }
 
 func TestDepositBootstrapNoWarningWhenContentMatches(t *testing.T) {
-	dir := t.TempDir()
+	dir := physicalTempDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestDepositBootstrapNoWarningWhenContentMatches(t *testing.T) {
 }
 
 func TestDepositCollisionOnUnlistedExistingPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := physicalTempDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestDepositCollisionOnUnlistedExistingPath(t *testing.T) {
 }
 
 func TestDepositWritesGuideAndSetupWithRightContent(t *testing.T) {
-	dir := t.TempDir()
+	dir := physicalTempDir(t)
 	if _, err := deposit(dir, []byte("guide content\n"), []byte("setup content\n")); err != nil {
 		t.Fatalf("deposit: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestDepositWritesGuideAndSetupWithRightContent(t *testing.T) {
 }
 
 func TestDepositSetupCollisionOnUnlistedExistingPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := physicalTempDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestDepositSetupCollisionOnUnlistedExistingPath(t *testing.T) {
 }
 
 func TestDepositRecoversFromInterruptAfterManifestBeforeContent(t *testing.T) {
-	dir := t.TempDir()
+	dir := physicalTempDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {
 		t.Fatal(err)
 	}

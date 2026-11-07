@@ -46,11 +46,14 @@ const (
 //
 // Resolution selects the layer chain (DES-057). Unset means layered —
 // byte-identical to the behavior before the field existed.
+// Record selects new non-live trace placement (DES-079). Unset means blame.
+// Loading and marshaling reject unknown values and loading rejects wrong types.
 type RepoConfig struct {
 	Agent              string `yaml:"agent,omitempty"`                // default agent identity handle
 	Team               string `yaml:"team,omitempty"`                 // team that owns this repo
 	ActiveBundle       string `yaml:"active_bundle,omitempty"`        // currently active team bundle name
 	Resolution         string `yaml:"resolution,omitempty"`           // DES-057 layer policy; "" == layered
+	Record             string `yaml:"record,omitempty"`               // DES-079 trace placement; "" == blame
 	MaxDelegationDepth int    `yaml:"max_delegation_depth,omitempty"` // DES-054 v5 depth ceiling; 0 == default
 }
 
@@ -735,6 +738,12 @@ func ResolveResolution(repoRoot string) (string, error) {
 	if err != nil {
 		return ResolutionLayered, fmt.Errorf("resolve resolution: %w", err)
 	}
+	return ResolutionFromConfig(cfg)
+}
+
+// ResolutionFromConfig validates the layer policy in an already-read snapshot.
+// It does not discover the repository or reread its configuration.
+func ResolutionFromConfig(cfg *RepoConfig) (string, error) {
 	if cfg == nil || cfg.Resolution == "" {
 		return ResolutionLayered, nil
 	}
@@ -1321,14 +1330,9 @@ func configBare(git, common string) (bool, error) {
 		return handConfigBare(common)
 	}
 	cfg := filepath.Join(common, "config")
-	// In a neutral directory: `git config --file` reads no repository, and a
-	// broken .git in the working directory must not fail it.
-	dir, env, cleanup, nerr := gitenv.Neutral()
-	if nerr != nil {
-		return false, nerr
-	}
-	defer cleanup()
-	out, err := gitenv.Run(gitenv.Spec{Git: git, Dir: dir, Env: env, Args: []string{"config", "--file", cfg, "--bool", "core.bare"}})
+	// Disable discovery without creating scratch: the canonical store root is
+	// not known until this read classifies the common directory.
+	out, _, err := gitenv.ReadNeutralConfig(git, 0, "--file", cfg, "--bool", "core.bare")
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
@@ -1794,7 +1798,7 @@ func parseRepoName(url string) string {
 // GitConfig reads a single git config value as git would from checkout, the
 // work tree the resolver located (its own config, then global, then system).
 // With no checkout ("" — outside a repository, or one that could not be
-// located) git runs in a neutral directory outside any repository, so only the
+// located) git runs without repository discovery, so only the
 // user's config is read, never the working directory's repository: under
 // ETHOS_REPO_ROOT that is some other repository.
 // Returns ("", nil) when the key is unset, and when git is not installed:
@@ -1802,20 +1806,18 @@ func parseRepoName(url string) string {
 // read. Every other failure — a timeout, a corrupt config, dubious ownership —
 // is an error carrying git's message, never an unset key.
 func GitConfig(checkout, key string) (string, error) {
-	spec := gitenv.Spec{Git: "git", Dir: checkout, Args: []string{"config", key}, Env: gitenv.Parsed()}
 	where := checkout
+	var out []byte
+	var absent bool
+	var err error
 	if checkout == "" {
-		// A plain `git config` in a directory outside any repository: the whole
-		// user config ([include], GIT_CONFIG_COUNT, -c) and no repository's.
-		dir, env, cleanup, err := gitenv.Neutral()
-		if err != nil {
-			return "", err
-		}
-		defer cleanup()
-		spec.Dir, spec.Env = dir, env
+		// The whole user config ([include], GIT_CONFIG_COUNT, -c) and no
+		// repository's, without allocating a temporary under ambient TMPDIR.
+		out, absent, err = gitenv.ReadNeutralConfig("git", gitenv.AbsentUnset, key)
 		where = "the user's git config"
+	} else {
+		out, absent, err = gitenv.Read(gitenv.Spec{Git: "git", Dir: checkout, Args: []string{"config", key}, Env: gitenv.Parsed()}, gitenv.AbsentUnset)
 	}
-	out, absent, err := gitenv.Read(spec, gitenv.AbsentUnset)
 	switch {
 	case errors.Is(err, exec.ErrNotFound):
 		return "", nil

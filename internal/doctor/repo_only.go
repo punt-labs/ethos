@@ -10,6 +10,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/vendor"
 )
@@ -47,7 +48,27 @@ func CheckRepoSetComplete(s identity.IdentityStore, storeRoot string) Result {
 	if storeRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
-	mode, err := resolve.ResolveResolution(storeRoot)
+	cfg, err := resolve.ConfigOf(storeRoot)
+	return checkRepoSetCompleteFromConfig(s, storeRoot, cfg, err)
+}
+
+// checkRepoSetCompleteFromConfig preserves a failed snapshot instead of treating
+// its nil configuration as the default layered policy.
+func checkRepoSetCompleteFromConfig(s identity.IdentityStore, storeRoot string, cfg *resolve.RepoConfig, configErr error) Result {
+	if storeRoot != "" && configErr != nil {
+		return Result{Name: "Repo-only completeness", Status: "FAIL", Detail: configErr.Error()}
+	}
+	return CheckRepoOnlyFromConfig(s, storeRoot, cfg)
+}
+
+// CheckRepoOnlyFromConfig checks completeness using the request's validated
+// configuration snapshot. It performs no configuration or root rediscovery.
+func CheckRepoOnlyFromConfig(s identity.IdentityStore, storeRoot string, cfg *resolve.RepoConfig) Result {
+	name := "Repo-only completeness"
+	if storeRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+	mode, err := resolve.ResolutionFromConfig(cfg)
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
@@ -130,8 +151,8 @@ func repairCommand(rep *vendor.Report) string {
 }
 
 // CheckLocalExtNotTracked enforces DES-057 Part C's git boundary: the
-// machine-local half of a tool namespace — any `.local.*` file under
-// .punt-labs/, not just ethos's `.local.yaml` — must not reach git.
+// machine-local tree, as well as recognized misplaced legacy local files,
+// must not reach git. The sole recommended ignore rule is .punt-labs/local/.
 //
 // Two failures, in the order that matters. A tracked `.local.*` file is a
 // FAIL and says so first, because .gitignore does NOT untrack a file
@@ -155,8 +176,8 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	}
 	if len(tracked) > 0 {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s already tracked by git — gitignore does not untrack; run: git rm --cached %s",
-			strings.Join(tracked, ", "), strings.Join(tracked, " "))}
+			"%s already tracked by git — gitignore does not untrack; preserve/copy and verify local data first, then remove only these paths from the index with git rm --cached -- (not from disk); do not delete retained data or add source-tree ignore exceptions",
+			strings.Join(tracked, ", "))}
 	}
 
 	// One predicate, shared with enable/setup/vendor: doctor must not call a
@@ -176,21 +197,18 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 // trackedLocalExt lists the machine-local files under .punt-labs/ that git
 // has in its index.
 //
-// It scans the same canonical pattern the rule excludes, not ethos's old
-// `.punt-labs/ethos/**/*.local.yaml`: a tracked .punt-labs/vox/vox.local.md
-// is as much a secret in git as a tracked ethos one, and the narrow scan let
-// it through (djb, review of PR #423). The :(glob) pathspec magic makes git
-// read the pattern with .gitignore's own semantics, where `/**/` spans zero
-// or more directories — so a file directly under .punt-labs/ is caught too.
+// NUL-delimited Git paths preserve spaces, newlines and non-ASCII spellings.
+// Legacy .local.* paths remain faults, not reasons to widen the ignore rule.
 func trackedLocalExt(repoRoot string) ([]string, error) {
 	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "ls-files",
-		"--", ":(glob)"+GitignoreRule)
+		"-z", "--", ".punt-labs/")
 	if err != nil {
 		return nil, fmt.Errorf("could not ask git for tracked files: %v", err)
 	}
 	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
+	for _, line := range strings.Split(string(out), "\x00") {
+		class, _, ok := layout.Classify(line)
+		if line != "" && (strings.HasPrefix(line, ".punt-labs/local/") || ok && class == layout.Never || misplacedLocal(line)) {
 			files = append(files, line)
 		}
 	}
@@ -210,13 +228,14 @@ func CheckExtCredentialNames(s identity.IdentityStore) Result {
 	if s == nil {
 		return Result{Name: name, Status: "PASS", Detail: "no identity store"}
 	}
-	list, err := s.List()
+	list, err := references(s).List()
 	if err != nil {
 		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf("not checked: could not list identities: %v", err)}
 	}
 
 	// A file the check could not read is not a pass: each is reported.
-	var flagged, unread []string
+	var flagged []string
+	unread := append([]string(nil), list.Warnings...)
 	for _, id := range list.Identities {
 		namespaces, err := s.ExtList(id.Handle)
 		if err != nil {

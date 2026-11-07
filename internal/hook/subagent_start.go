@@ -880,8 +880,9 @@ func readGateContract(missions *mission.Store, id string) (*mission.Contract, []
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load mission %q: %w", id, err)
 	}
-	// Match Store.Load's default-fill for pre-3.4 contracts.
-	if c.CurrentRound == 0 {
+	// Match Store.Load's legacy-only default-fill for pre-3.4 contracts.
+	// A v1 decision block must not repair a missing or zero current_round.
+	if c.CurrentRound == 0 && c.RoundDecisions == nil {
 		c.CurrentRound = 1
 	}
 	if err := c.Validate(); err != nil {
@@ -1010,7 +1011,7 @@ func closeSkeletonOnHashRefusal(repoRoot string) {
 		return
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	release, err := mission.AcquireDelegationLock(globalRoot, delegationID)
+	release, err := mission.NewStoreWithRoots(repoRoot, globalRoot).AcquireDelegationLock(delegationID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: subagent-start: hash refusal: acquiring delegation lock for %q: %v\n",

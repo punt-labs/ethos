@@ -10,6 +10,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.
@@ -129,6 +130,12 @@ func preToolUseDeny(reason string) PreToolUseResult {
 // allowlist, so the hot path (verifier touching a declared file) is
 // unchanged.
 func HandlePreToolUse(r io.Reader, w io.Writer) error {
+	return HandlePreToolUseWithLocated(r, w, resolve.Roots())
+}
+
+// HandlePreToolUseWithLocated uses the caller's entry-time roots/config snapshot
+// throughout input, dispatch, precondition reads and depth enforcement.
+func HandlePreToolUseWithLocated(r io.Reader, w io.Writer, loc resolve.Located) error {
 	raw, err := readRaw(r, hookInputTimeout)
 	var input map[string]any
 	if err == nil {
@@ -140,20 +147,20 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 
 	toolName, _ := input["tool_name"].(string)
 	if ethosMCPTool.MatchString(toolName) {
-		return handleEthosMCPCall(input, w)
+		return handleEthosMCPCall(input, w, loc)
 	}
-	return routePreToolUse(input, w)
+	return routePreToolUse(input, w, loc)
 }
 
 // routePreToolUse is HandlePreToolUse after the payload is read: the Agent
 // dispatch, the preconditions gate and the verifier allowlist.
-func routePreToolUse(input map[string]any, w io.Writer) error {
+func routePreToolUse(input map[string]any, w io.Writer, loc resolve.Located) error {
 	toolName, _ := input["tool_name"].(string)
 	toolInput, _ := input["tool_input"].(map[string]any)
 	sessionID, _ := input["session_id"].(string)
 
 	if toolName == "Agent" {
-		return dispatchAgent(w, sessionID, toolInput)
+		return dispatchAgent(w, sessionID, toolInput, loc)
 	}
 
 	// DES-054 phase 3b: Tier B preconditions admission gate. Fires
@@ -162,7 +169,7 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 	// block reason rather than a generic "outside allowlist". Pure-
 	// read tools (Read, Grep, Glob) are skipped — they cannot
 	// violate a must-read-first contract.
-	if reason, blocked := evalContractPreconditions(toolName, toolInput, sessionID); blocked {
+	if reason, blocked := evalLocatedContractPreconditions(toolName, toolInput, sessionID, loc); blocked {
 		return json.NewEncoder(w).Encode(preToolUseDeny(reason))
 	}
 
@@ -181,7 +188,7 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 		return json.NewEncoder(w).Encode(preToolUsePass())
 	}
 
-	repoRoot, rootErr := tierBRepoRoot()
+	repoRoot, rootErr := loc.Checkout, loc.CheckoutErr
 	if rootErr != nil {
 		// The checkout cannot be located, so a repo-relative target cannot
 		// be resolved against it: deny, naming the cause, rather than fall
@@ -225,8 +232,8 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 
 // evalContractPreconditions runs the Tier B preconditions gate when
 // MISSION_ID is set in the environment. Returns (reason, true) when
-// the spawn must be blocked and ("", false) on every allow path —
-// the caller short-circuits the existing allowlist flow on the block
+// the spawn must be blocked; a non-strict warning may retain its reason with
+// false. The caller short-circuits the existing allowlist flow on the block
 // case. Pure-read tools (Read, Grep, Glob) and tools without an
 // active mission context are returned as ("", false) immediately.
 //
@@ -243,6 +250,10 @@ func routePreToolUse(input map[string]any, w io.Writer) error {
 // pointer; the safer side is to block, so a missing contract under a
 // non-empty MISSION_ID is always treated as fail-closed.
 func evalContractPreconditions(toolName string, toolInput map[string]any, sessionID string) (string, bool) {
+	return evalLocatedContractPreconditions(toolName, toolInput, sessionID, resolve.Roots())
+}
+
+func evalLocatedContractPreconditions(toolName string, toolInput map[string]any, sessionID string, loc resolve.Located) (string, bool) {
 	if toolName == "Read" || toolName == "Grep" || toolName == "Glob" {
 		return "", false
 	}
@@ -251,7 +262,7 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 		// Tier A spawn — no contract, no preconditions.
 		return "", false
 	}
-	roots, rootErr := locateTierBRoots()
+	roots, rootErr := tierBRootsFromLocated(loc)
 	if rootErr != nil {
 		return fmt.Sprintf("ethos pre-tool-use: %v", rootErr), true
 	}
@@ -265,7 +276,7 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 	if err != nil {
 		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err), true
 	}
-	return gateContract(contract, toolName, toolInput, sessionID, roots.store)
+	return gateLocatedContract(contract, toolName, toolInput, sessionID, loc)
 }
 
 // gateContract applies a loaded contract's preconditions to one tool call,
@@ -274,19 +285,29 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 // blocks under strict and warns under strict=false, and never reads audit
 // entries from the working directory instead.
 func gateContract(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID, storeRoot string) (string, bool) {
-	repoRoot, rootErr := tierBRepoRoot()
+	loc := resolve.Roots()
+	// A supplied store cannot repair a failed location/configuration snapshot.
+	// Preserve the original failure for the strict/non-strict gate below.
+	if loc.Err() == nil && storeRoot != "" {
+		loc.Store = storeRoot
+	}
+	return gateLocatedContract(contract, toolName, toolInput, sessionID, loc)
+}
+
+func gateLocatedContract(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID string, loc resolve.Located) (string, bool) {
+	if contract == nil || len(contract.Preconditions) == 0 {
+		return "", false
+	}
+	rootErr := loc.Err()
 	if rootErr != nil {
-		if len(contract.Preconditions) == 0 {
-			return "", false
-		}
 		reason := fmt.Sprintf("ethos pre-tool-use: preconditions cannot be evaluated: %v", rootErr)
 		if contract.EffectiveStrictPreconditions() {
 			return reason, true
 		}
 		fmt.Fprintf(os.Stderr, "%s; strict_preconditions=false, allowing\n", reason)
-		return "", false
+		return reason, false
 	}
-	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot, storeRoot)
+	reason, deny, evalErr := evaluateLocatedPreconditions(contract, toolName, toolInput, sessionID, loc)
 	if !deny {
 		return "", false
 	}

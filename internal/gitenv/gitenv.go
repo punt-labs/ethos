@@ -471,6 +471,10 @@ func Read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	if err := DanglingDotGitEnv(s.Dir, s.Env); err != nil { // Run checks only a non-empty Dir
 		return nil, false, err
 	}
+	return read(s, absent)
+}
+
+func read(s Spec, absent Absent) (out []byte, isAbsent bool, err error) {
 	out, err = Run(s)
 	if err == nil {
 		return out, false, nil
@@ -582,6 +586,22 @@ func UserConfigEnv() []string {
 	return append(stripTrace(env), "LC_ALL=C", "LANGUAGE=")
 }
 
+// ReadNeutralConfig reads git config without repository discovery or scratch.
+// An explicit GIT_DIR naming the null device makes git's optional repository
+// setup find no repository, even inside a checkout or beside a broken .git.
+// Git still reads system/global config, includes and command-scope settings;
+// --file retains git's own single-file semantics. No store root is needed.
+func ReadNeutralConfig(git string, absent Absent, args ...string) ([]byte, bool, error) {
+	// Keep Dir empty: there is no directory to validate with DanglingDotGit.
+	// That guard protects repository discovery, which this command disables.
+	// Use the same bounded runner and exit classification as Read.
+	return read(Spec{
+		Git:  git,
+		Env:  append(UserConfigEnv(), "GIT_DIR="+os.DevNull),
+		Args: append([]string{"config"}, args...),
+	}, absent)
+}
+
 // Neutral makes a fresh empty directory outside any repository and the Parsed
 // environment for running git there: GIT_CEILING_DIRECTORIES names its parent,
 // so git never walks up into a repository that encloses the temp directory. A
@@ -599,6 +619,28 @@ func Neutral() (dir string, env []string, cleanup func(), err error) {
 		dir = r
 	}
 	env = append(UserConfigEnv(), "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
+	return dir, env, func() { _ = os.RemoveAll(dir) }, nil
+}
+
+// NeutralInRepository is Neutral for a repository-owned diagnostic. The caller
+// supplies the already resolved roots/policy: this does not discover a store or
+// fall back to global/ambient temporary storage. The local-directory validator
+// refuses symlinked ancestors before creation. As with other local writers, it
+// is not a sandbox against an adversary concurrently replacing those ancestors.
+func NeutralInRepository(p layout.Policy) (dir string, env []string, cleanup func(), err error) {
+	// The ceiling is a path-list, not an opaque path. An unrepresentable entry
+	// could let Git discover S's repository config. Decline before allocation.
+	if strings.ContainsRune(p.TempDir(), os.PathListSeparator) {
+		return "", nil, nil, fmt.Errorf("preparing a repository neutral directory for git: temporary path contains path-list separator %q", os.PathListSeparator)
+	}
+	if err := layout.EnsureLocalDir(p, p.TempDir()); err != nil {
+		return "", nil, nil, fmt.Errorf("preparing a repository neutral directory for git: %w", err)
+	}
+	dir, err = os.MkdirTemp(p.TempDir(), layout.ScratchDirPattern("ethos-git"))
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("making a repository neutral directory for git: %w", err)
+	}
+	env = append(UserConfigEnv(), "GIT_CEILING_DIRECTORIES="+p.TempDir())
 	return dir, env, func() { _ = os.RemoveAll(dir) }, nil
 }
 

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // tryTierBByInheritance attempts to inherit a parent contract for an
@@ -43,7 +42,7 @@ func tryTierBByInheritance(roots tierBRoots, parentDelegation, childAgentType st
 		return "", false
 	}
 
-	limit, err := resolve.ResolveMaxDelegationDepth(repoRoot, mission.MaxDelegationDepthDefault)
+	limit, err := roots.maxDelegationDepth()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos: pre-tool-use: inheritance: resolving max_delegation_depth: %v; falling through to Tier A\n",
