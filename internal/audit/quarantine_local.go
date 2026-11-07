@@ -45,6 +45,11 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 	if guard == nil {
 		return Marker{}, errors.New("quarantine requires a recovered-line guard")
 	}
+	// Missing sources can resume a prior retirement. A symlink or special file
+	// is not missing or damaged evidence: refuse before preparing any recovery.
+	if _, err := auditReadFilePresent(source); err != nil {
+		return Marker{}, err
+	}
 	if err := layout.EnsureLocalDir(p, dir); err != nil {
 		return Marker{}, err
 	}

@@ -211,10 +211,11 @@ func (r Repository) verifyManifest(ctx context.Context, ref, name string, m *Man
 			return err
 		}
 		for _, row := range m.Summaries {
-			if Digest(rows[row.Mission]) != row.SHA256 {
+			summary, ok := rows[row.Mission]
+			if !ok || Digest(summary) != row.SHA256 {
 				return fmt.Errorf("selected summary missing or altered: %s", row.Mission)
 			}
-			snapshot.Summary = append(snapshot.Summary, rows[row.Mission]...)
+			snapshot.Summary = append(snapshot.Summary, summary...)
 			snapshot.Summary = append(snapshot.Summary, '\n')
 		}
 	}
