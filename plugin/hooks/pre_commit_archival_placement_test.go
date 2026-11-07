@@ -114,6 +114,10 @@ func traceInstalledArchive(t *testing.T, strace, hook, checkout string, env []st
 	t.Helper()
 	trace := filepath.Join(t.TempDir(), "syscalls")
 	args := []string{"-f", "-yy", "-s", "0", "-o", trace, "-e", "trace=%file,fsync,fchdir,clone,clone3,fork,vfork"}
+	// Let strace drain sibling syscall stops before exit_group destroys their
+	// register state. Keep every selected call, including interrupted installs;
+	// an undecodable record still fails the unchanged observer.
+	args = append(args, "-e", "inject=exit_group:delay_enter=100ms")
 	if inject != "" {
 		args = append(args, "-e", "inject="+inject)
 	}
