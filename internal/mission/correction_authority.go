@@ -261,7 +261,7 @@ func (in correctionIntent) validate(id string) error {
 
 func (s *Store) readCorrectionIntent(id string) (*correctionIntent, error) {
 	path := s.correctionIntentPath(id)
-	if err := rejectSymlink(path); err != nil {
+	if err := validatePhysicalPath(path, false); err != nil {
 		return nil, err
 	}
 	b, err := os.ReadFile(path)
@@ -374,6 +374,9 @@ func (s *Store) applySharedCorrection(c *Contract, correction Correction) error 
 
 func (s *Store) removeCorrectionIntent(id string) error {
 	path := s.correctionIntentPath(id)
+	if _, err := ownedSyncRoot(s.policy, path); err != nil {
+		return err
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
