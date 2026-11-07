@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // EvaluatePreconditions runs the admission gates on a contract's
@@ -53,10 +54,40 @@ func EvaluatePreconditions(
 	repoRoot string,
 	storeRoot string,
 ) (denyReason string, deny bool, err error) {
+	var p *layout.Policy
+	if repoRoot != "" {
+		if storeRoot == "" {
+			storeRoot = repoRoot
+		}
+		policy, err := layout.NewRepository(storeRoot, repoRoot, layout.RecordBlame)
+		if err != nil {
+			return "preconditions cannot be evaluated", true, err
+		}
+		p = &policy
+	}
+	return evaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot, storeRoot, p)
+}
+
+func evaluateLocatedPreconditions(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID string, loc resolve.Located) (string, bool, error) {
+	if err := loc.Err(); err != nil {
+		return "preconditions cannot be evaluated", true, err
+	}
+	var p *layout.Policy
+	if loc.Store != "" {
+		policy, err := loc.Layout()
+		if err != nil {
+			return "preconditions cannot be evaluated", true, err
+		}
+		p = &policy
+	}
+	return evaluatePreconditions(contract, toolName, toolInput, sessionID, loc.Checkout, loc.Store, p)
+}
+
+func evaluatePreconditions(contract *mission.Contract, toolName string, toolInput map[string]any, sessionID, repoRoot, storeRoot string, p *layout.Policy) (string, bool, error) {
 	if contract == nil || len(contract.Preconditions) == 0 {
 		return "", false, nil
 	}
-	reads, ignored, ambiguous, readErr := loadSessionReadsCounted(repoRoot, sessionID)
+	reads, ignored, ambiguous, readErr := loadSessionReadsWithPolicy(repoRoot, sessionID, p)
 	for i, p := range contract.Preconditions {
 		paths, ambiguousEntry, subErr := preconditionTargets(p, toolName, toolInput, contract, storeRoot, repoRoot)
 		if subErr != nil {
@@ -270,6 +301,18 @@ func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
 // loadSessionReadsCounted is loadSessionReads that also reports how many Reads
 // it ignored because their line predates the path format and holds a ~.
 func loadSessionReadsCounted(repoRoot, sessionID string) (reads map[string]struct{}, ignored, ambiguous int, err error) {
+	var p *layout.Policy
+	if repoRoot != "" {
+		policy, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		p = &policy
+	}
+	return loadSessionReadsWithPolicy(repoRoot, sessionID, p)
+}
+
+func loadSessionReadsWithPolicy(repoRoot, sessionID string, p *layout.Policy) (reads map[string]struct{}, ignored, ambiguous int, err error) {
 	if sessionID == "" {
 		return map[string]struct{}{}, 0, 0, nil
 	}
@@ -280,10 +323,10 @@ func loadSessionReadsCounted(repoRoot, sessionID string) (reads map[string]struc
 	// legacy global log (resolveAuditWritePath), so that is the log read
 	// here — never a path relative to the working directory.
 	var entries []auditEntry
-	if repoRoot == "" {
+	if p == nil {
 		entries, err = readGlobalSessionAudit(sessionID)
 	} else {
-		entries, err = readSessionAudit(repoRoot, sessionID, time.Now())
+		entries, err = readSessionAuditWithPolicy(*p, sessionID)
 	}
 	if err != nil {
 		return map[string]struct{}{}, 0, 0, fmt.Errorf("reading session audit: %w", err)

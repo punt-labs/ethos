@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -12,5 +13,24 @@ import (
 // directory may resolve to the checkout that holds TMPDIR.
 func TestMain(m *testing.M) {
 	testhelpers.MustIsolateGit()
-	os.Exit(m.Run())
+	// UI readers union repository records with global session history. Tests
+	// must never inspect the operator's real history through that fallback.
+	home, err := os.MkdirTemp("", "ethos-ui-home-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	for _, key := range []string{"HOME", "USERPROFILE"} {
+		if err := os.Setenv(key, home); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			_ = os.RemoveAll(home)
+			os.Exit(2)
+		}
+	}
+	code := m.Run()
+	if err := os.RemoveAll(home); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = 2
+	}
+	os.Exit(code)
 }

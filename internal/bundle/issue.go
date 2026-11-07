@@ -16,11 +16,24 @@ func ConfigIssue(storeRoot, ethosRoot, globalRoot string) error {
 	if storeRoot == "" {
 		return nil
 	}
-	bundleRoot, active, err := ResolveRoot(storeRoot, globalRoot)
+	cfg, err := resolve.ConfigOf(storeRoot)
 	if err != nil {
 		return issue(err)
 	}
-	mode, err := resolve.ResolveResolution(storeRoot)
+	return ConfigIssueFromConfig(storeRoot, ethosRoot, globalRoot, cfg)
+}
+
+// ConfigIssueFromConfig checks one operation's loaded configuration without
+// replacing its policy with a later on-disk value.
+func ConfigIssueFromConfig(storeRoot, ethosRoot, globalRoot string, cfg *resolve.RepoConfig) error {
+	if storeRoot == "" {
+		return nil
+	}
+	bundleRoot, active, err := ResolveRootFromConfig(storeRoot, globalRoot, cfg)
+	if err != nil {
+		return issue(err)
+	}
+	mode, err := resolve.ResolutionFromConfig(cfg)
 	if err != nil {
 		return issue(err)
 	}

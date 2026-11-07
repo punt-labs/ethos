@@ -47,15 +47,15 @@ var validCorrectionKinds = map[CorrectionKind]bool{
 	CorrectionDecision:    true,
 }
 
-// Correction is an additive-only annotation on a closed mission,
-// recorded as a "correct" event on the mission's existing append-only
-// event log — never a new file, never a rewrite of contract.yaml,
-// results.yaml, or reflections.yaml. See DES-072.
+// Correction is an additive-only annotation on a closed mission. Repository
+// storage installs it in shared corrections authority after its required event;
+// legacy storage records only the event. It never rewrites contract.yaml,
+// results.yaml, or reflections.yaml. See DES-072 and its DES-079 amendment.
 type Correction struct {
 	// Mission is the full mission ID the correction covers. Must
 	// match the missionID passed to Store.Correct — the same
 	// cross-check AppendResult runs for Result.Mission.
-	Mission string `yaml:"mission" json:"mission"`
+	Mission string `yaml:"mission" json:"mission" redact:"keep"`
 
 	// Round is the round being corrected. 0 is the whole-mission
 	// sentinel; any other value must be <= the mission's
@@ -63,13 +63,13 @@ type Correction struct {
 	Round int `yaml:"round" json:"round"`
 
 	// Kind is required and closed: factual, fabrication, or decision.
-	Kind CorrectionKind `yaml:"kind" json:"kind"`
+	Kind CorrectionKind `yaml:"kind" json:"kind" redact:"keep"`
 
 	// Author is the identity handle of whoever is filing the
 	// correction. Unlike Result.Author (a bookkeeping field), WHO
 	// says the record on file is wrong is load-bearing here — see
 	// ValidateCorrectionAuthor.
-	Author string `yaml:"author" json:"author"`
+	Author string `yaml:"author" json:"author" redact:"handle"`
 
 	// Claim quotes or closely paraphrases the thing being corrected.
 	// Required for factual and fabrication; empty for decision, which
@@ -160,15 +160,14 @@ func ValidateCorrectionAuthor(author string, loader IdentityLoader) error {
 	return nil
 }
 
-// Correct records a correction against a closed mission. The guard is
+// correct records a correction against a closed mission. The guard is
 // the inverse of every other write path in this package: Correct
 // refuses an OPEN mission (its story isn't finished — use
 // Update/Reflect instead) and accepts every terminal status. Correct
 // never touches contract.yaml, results.yaml, reflections.yaml, or any
-// of the Mission schema's fields — the operation's entire effect is
-// one appendEventLocked call with Event: "correct". This is why
-// Correct cannot falsify the TerminalIsFinal theorem: there is no
-// Mission value in scope for it to mutate.
+// lifecycle field. Repository corrections have separate shared authority;
+// legacy corrections append only an event. This unchanged lifecycle frame,
+// not an event-only implementation, preserves TerminalIsFinal.
 //
 // Layer-consistent or refused, never silently mismatched: when this
 // session writes to the per-repo two-tree layout, Correct refuses a
@@ -184,13 +183,18 @@ func ValidateCorrectionAuthor(author string, loader IdentityLoader) error {
 // immediately regardless of when the next seal runs — sealing only
 // affects whether the correction has reached git yet, not whether a
 // fresh Store can read it back.
-func (s *Store) Correct(missionID string, c Correction) error {
+func (s *Store) correct(missionID string, c Correction, out *MutationOutcome) error {
 	staged := c
 	staged.Author = strings.TrimSpace(staged.Author)
 	if err := staged.Validate(); err != nil {
 		return fmt.Errorf("invalid correction: %w", err)
 	}
-	return s.withLock(missionID, func() error {
+	return s.withMissionLock(missionID, true, func() error {
+		if s.twoTreeStorage {
+			if err := s.reconcileReflectionsExceptWithWarnings(missionID, 0, out.warn); err != nil {
+				return err
+			}
+		}
 		if s.twoTreeStorage && s.repoRoot != "" {
 			layer, err := s.resolveLayer(missionID)
 			if err != nil {
@@ -217,6 +221,16 @@ func (s *Store) Correct(missionID string, c Correction) error {
 			return fmt.Errorf(
 				"correction round %d exceeds mission %q current round %d",
 				staged.Round, missionID, mc.CurrentRound)
+		}
+		if s.twoTreeStorage {
+			redacted, _, err := RedactRecordNotify(s.repoRoot, staged)
+			if err != nil {
+				return err
+			}
+			if err := redacted.Validate(); err != nil {
+				return err
+			}
+			return s.applySharedCorrection(mc, redacted)
 		}
 		return s.appendEventLocked(missionID, Event{
 			TS:      time.Now().UTC().Format(time.RFC3339),
@@ -269,6 +283,30 @@ func correctionDetails(c Correction) map[string]any {
 // same reasoning LoadEvents itself already applies to every other
 // consumer of the mission log.
 func (s *Store) LoadCorrections(missionID string) ([]Correction, []string, error) {
+	if s.twoTreeStorage {
+		c, err := s.Load(missionID)
+		if err != nil {
+			return nil, nil, err
+		}
+		a, err := s.readCorrections(c)
+		if err != nil {
+			return nil, nil, err
+		}
+		if a == nil {
+			if c.RoundDecisions != nil {
+				return nil, nil, fmt.Errorf("corrections authority unavailable; missing is not an initialized empty history")
+			}
+			a, err = s.importLegacyCorrections(c)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		out := []Correction{}
+		for _, e := range a.Entries {
+			out = append(out, e.Correction)
+		}
+		return out, nil, nil
+	}
 	events, warnings, err := s.LoadEvents(missionID)
 	if err != nil {
 		return nil, nil, err

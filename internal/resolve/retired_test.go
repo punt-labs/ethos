@@ -441,11 +441,12 @@ func emptiesWithoutError(info *types.Info, body ast.Node, errorType types.Type) 
 
 // matchingErrors are the Located fields and methods that carry the error for
 // each part: using the part without looking at one of them ignores the error.
+// Layout checks Err before constructing a policy from the same snapshot.
 var matchingErrors = map[string][]string{
-	"Store":    {"StoreErr", "StoreFailure", "Err"},
-	"Ethos":    {"EthosErr", "StoreFailure", "Err"},
-	"Checkout": {"CheckoutErr", "Err"},
-	"Config":   {"ConfigErr", "StoreFailure", "Err"},
+	"Store":    {"StoreErr", "StoreFailure", "Err", "Layout"},
+	"Ethos":    {"EthosErr", "StoreFailure", "Err", "Layout"},
+	"Checkout": {"CheckoutErr", "Err", "Layout"},
+	"Config":   {"ConfigErr", "StoreFailure", "Err", "Layout"},
 }
 
 // scanLocatedUse flags a function that uses a located part (.Store, .Ethos,

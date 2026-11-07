@@ -9,9 +9,42 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/vendor"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVendorRunnerKeepsRequestSnapshot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	previous := cmdRoots.Load()
+	t.Cleanup(func() { cmdRoots.Store(previous) })
+	makeRepo := func(handle string) string {
+		r := realPath(t, t.TempDir())
+		runGit(t, r, "init", "-q")
+		ids := filepath.Join(r, ".punt-labs", "ethos", "identities")
+		require.NoError(t, os.MkdirAll(ids, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(ids, handle+".yaml"),
+			[]byte("name: "+handle+"\nhandle: "+handle+"\nkind: human\n"), 0o600))
+		return r
+	}
+	first, second := makeRepo("alpha"), makeRepo("beta")
+	t.Chdir(first)
+	cmdRoots.Store(locateRoots())
+	run := vendorRunner()
+
+	// Simulate another request rebuilding its handler while the first call is
+	// still in flight. Both the first source chain and destination stay pinned.
+	t.Chdir(second)
+	cmdRoots.Store(locateRoots())
+	plan, err := run(vendor.Options{Handles: []string{"alpha"}})
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(first, ".punt-labs", "ethos"), plan.Dest)
+	assert.Contains(t, plan.Identities, "alpha")
+	assert.NotContains(t, plan.Identities, "beta")
+}
 
 func runVendorCmd(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()

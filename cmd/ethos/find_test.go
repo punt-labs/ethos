@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -262,12 +263,8 @@ func TestFindMissions_InvalidFormat(t *testing.T) {
 }
 
 func TestFindMissions_OutsideRepo(t *testing.T) {
-	nonRepo, err := os.MkdirTemp("/tmp", "ethos-find-norepo-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(nonRepo) })
-	home, err := os.MkdirTemp("/tmp", "ethos-find-home-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(home) })
+	nonRepo := testhelpers.OutsideRepo(t)
+	home := t.TempDir()
 
 	t.Setenv("HOME", home)
 	t.Setenv("USER", "test-agent")

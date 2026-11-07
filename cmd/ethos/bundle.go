@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,11 @@ import (
 // running server must be able to report it instead of dying. A broken store
 // never reaches this far for them: storeRootForStores gives "" for it.
 func resolveBundle() (root string, active *bundle.Bundle, err error) {
-	return bundle.ResolveRoot(storeRootForStores(), defaultGlobalRoot())
+	r := currentRoots()
+	if err := r.StoreFailure(); err != nil {
+		return "", nil, err
+	}
+	return bundle.ResolveRootFromConfig(r.Store, defaultGlobalRoot(), r.Config)
 }
 
 // resolveBundleRoot returns the active bundle's root path for layered
@@ -74,6 +79,12 @@ func setConfigKey(repoRoot, key, value string) error {
 		return fmt.Errorf("not in a git repository")
 	}
 	path := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
+	// repoRoot is the already-resolved canonical store root, not a new
+	// repository lookup. Config staging is independent of recording mode.
+	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return fmt.Errorf("config layout: %w", err)
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -85,7 +96,7 @@ func setConfigKey(repoRoot, key, value string) error {
 		if value == "" {
 			return nil
 		}
-		return writeConfigFile(path, fmt.Sprintf("%s: %s\n", key, value))
+		return writeConfigFile(path, fmt.Sprintf("%s: %s\n", key, value), p)
 	}
 
 	var root yaml.Node
@@ -103,7 +114,7 @@ func setConfigKey(repoRoot, key, value string) error {
 		if value == "" {
 			return nil
 		}
-		return writeConfigFile(path, fmt.Sprintf("%s: %s\n", key, value))
+		return writeConfigFile(path, fmt.Sprintf("%s: %s\n", key, value), p)
 	}
 
 	if err := applyKey(mapping, key, value); err != nil {
@@ -119,7 +130,7 @@ func setConfigKey(repoRoot, key, value string) error {
 	if err := enc.Close(); err != nil {
 		return fmt.Errorf("encoding yaml: %w", err)
 	}
-	return writeConfigFile(path, buf.String())
+	return writeConfigFile(path, buf.String(), p)
 }
 
 // applyKey sets or removes key in mapping. Mapping content alternates
@@ -150,17 +161,43 @@ func applyKey(mapping *yaml.Node, key, value string) error {
 
 // writeConfigFile writes content to path atomically, creating parent
 // directories as needed.
-func writeConfigFile(path, content string) error {
+func writeConfigFile(path, content string, p layout.Policy) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
-	tmp := layout.TmpPath(path)
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	f, err := createConfigTemp(p)
+	if err != nil {
+		return fmt.Errorf("creating config staging file: %w", err)
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
 		return fmt.Errorf("writing config: %w", err)
 	}
+	if err := f.Chmod(0o644); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("setting config mode: %w", err)
+	}
+	if err := syncConfigFile(f); err != nil {
+		return fmt.Errorf("syncing config staging file: %w", errors.Join(err, f.Close()))
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing config staging file: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("renaming config: %w", err)
 	}
+	if err := syncConfigDestination(p, path); err != nil {
+		return &layout.InstallDurabilityError{Path: path, Err: err}
+	}
 	return nil
+}
+
+// Persistence seams allow deterministic fault injection before and after install.
+var syncConfigFile = (*os.File).Sync
+var syncConfigDestination = layout.SyncRepositoryDestination
+
+func createConfigTemp(p layout.Policy) (*os.File, error) {
+	return layout.CreateLocalTemp(p, "ethos-config", ".yaml")
 }

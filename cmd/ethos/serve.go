@@ -32,7 +32,7 @@ func runServeImpl(opencodeSessionMetadata bool) error {
 	}
 	loc := locateServeStore()
 	if loc.Err != nil {
-		fmt.Fprintf(os.Stderr, "ethos serve: %v; guarded tools refuse writes (and, for identity and a bundle or policy failure, reads) until it is repaired\n", loc.Err)
+		fmt.Fprintf(os.Stderr, "ethos serve: %v; guarded tools refuse writes (and, for identity, ADRs, and a bundle or policy failure, reads) until it is repaired\n", loc.Err)
 	}
 	metadata := mcp.WithOpenCodeSessionMetadata(opencodeSessionMetadata)
 	h := buildServeHandler(home, loc, metadata)
@@ -63,24 +63,34 @@ func locateServeStore() mcp.StoreLocation {
 		// carry its note, writes refuse (they would land in the wrong layer).
 		err = r.configIssue()
 	}
-	return mcp.StoreLocation{
+	loc := mcp.StoreLocation{
 		Root: r.Store, EthosRoot: r.Ethos, Checkout: r.Checkout,
 		Err: err,
 	}
+	if r.Config != nil {
+		loc.Config = *r.Config
+		loc.HasConfig = true
+	}
+	return loc
 }
 
 // buildServeHandler builds the MCP handler with every store built from loc,
 // the one location it was triggered with: nothing here locates again. A
 // non-nil loc.Err makes the guarded tools refuse writes; their reads carry a
-// note that they come from the global store only, except identity (every method
+// note that they come from the global store only, except identity and ADRs (every method
 // refuses) and a bundle or policy failure (every guarded read and write
-// refuses). Doctor, session and adr are unguarded; ethos serve is a command that handles the
+// refuses). Doctor and session are unguarded; ethos serve is a command that handles the
 // error itself, so its constructors take the global stores for it. extra options
 // (the OpenCode session metadata opt-in) are applied to every handler built, so a
 // relocated handler keeps them.
 func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) *mcp.Handler {
 	storeErr := loc.Err
-	located := resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, StoreErr: loc.Err}
+	var cfg *resolve.RepoConfig
+	if loc.HasConfig {
+		snapshot := loc.Config
+		cfg = &snapshot
+	}
+	located := resolve.Located{Store: loc.Root, Ethos: loc.EthosRoot, Checkout: loc.Checkout, Config: cfg, StoreErr: loc.Err}
 	var ce *resolve.ConfigError
 	if errors.As(loc.Err, &ce) && ce.Policy {
 		located.StoreErr = nil // the store was read: its layer is used, without the policy
@@ -90,6 +100,17 @@ func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) 
 	talents := layeredAttributeStore(is, attribute.Talents)
 	personalities := layeredAttributeStore(is, attribute.Personalities)
 	writingStyles := layeredAttributeStore(is, attribute.WritingStyles)
+	legacyADRDir := filepath.Join(home, ".punt-labs", "ethos", "adrs")
+	adrStore := adr.NewStore(legacyADRDir)
+	if storeErr == nil && located.Store != "" {
+		policy, err := located.Layout()
+		if err == nil {
+			adrStore, err = adr.NewRepositoryStore(policy, legacyADRDir)
+		}
+		if err != nil {
+			storeErr = fmt.Errorf("constructing repository ADR store: %w", err)
+		}
+	}
 	// MCP shares one Store instance across every mission tool method
 	// (create, list, show, close, reflect, advance, reflections). A
 	// `mission create` call made via MCP must see the same role-
@@ -101,7 +122,7 @@ func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) 
 		mcp.WithRoleStore(layeredRoleStore(is)),
 		mcp.WithTeamStore(layeredTeamStore(is)),
 		mcp.WithMissionStore(missionStoreForCreate()),
-		mcp.WithADRStore(adr.NewStore(filepath.Join(home, ".punt-labs", "ethos", "adrs"))),
+		mcp.WithADRStore(adrStore),
 		// Vendor gets its own full-chain stores for the same reason the
 		// CLI does: it copies from global into the repo layer.
 		mcp.WithVendorRunner(vendorRunner()),

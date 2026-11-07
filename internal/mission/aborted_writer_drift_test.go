@@ -1,10 +1,14 @@
 package mission
 
 import (
+	"bytes"
+	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,9 +30,11 @@ import (
 // own doc comment (store.go): two of the three sites
 // (pretooluse_dispatch.go's closeDelegationAborted,
 // subagent_start.go's hash-refusal cleanup) genuinely refuse before the
-// worker starts; the third (store.go's Close sweep) can fire against a
-// delegation whose worker ran, but ONLY as part of Close, which
-// requires the mission to already be non-open — and
+// worker starts; the third (store.go's close sweep) can fire against a
+// delegation whose worker ran, but ONLY after close has committed the terminal
+// contract and required event and returned successfully from its locked section.
+// Close and CloseWithOutcome delegate to this same guarded implementation;
+// TestCloseWrappersDelegateToGuardedWriter pins that chain separately. Meanwhile,
 // countBlockingDelegations is only ever reached from Abandon's gate 1,
 // which itself refuses unless the mission is StatusOpen. So no writer
 // this function ever actually sees can have stamped aborted on a
@@ -78,15 +84,20 @@ func TestAbortedVerdictWriteSites_MatchKnownThree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scanning for DelegationVerdictAborted write sites: %v", err)
 	}
-	sort.Strings(sites)
+	if err := knownAbortedWriteSitesError(sites); err != nil {
+		t.Fatal(err)
+	}
+}
 
+func knownAbortedWriteSitesError(sites []string) error {
+	sort.Strings(sites)
 	wantSites := []string{
 		"internal/hook/pretooluse_dispatch.go:closeDelegationAborted",
 		"internal/hook/subagent_start.go:closeSkeletonOnHashRefusal",
-		"internal/mission/store.go:Close",
+		"internal/mission/store.go:close",
 	}
 	if len(sites) != len(wantSites) {
-		t.Fatalf("DelegationVerdictAborted is written from %v (%d site(s)), want exactly %v (%d) — "+
+		return fmt.Errorf("DelegationVerdictAborted is written from %v (%d site(s)), want exactly %v (%d) — "+
 			"a new writer means countBlockingDelegations's unconditional aborted exclusion "+
 			"(store.go's own doc comment) needs re-justifying, not silently inheriting an "+
 			"exclusion built for a different set of callers",
@@ -94,10 +105,162 @@ func TestAbortedVerdictWriteSites_MatchKnownThree(t *testing.T) {
 	}
 	for i, got := range sites {
 		if got != wantSites[i] {
-			t.Fatalf("DelegationVerdictAborted write sites are %v, want %v — "+
+			return fmt.Errorf("DelegationVerdictAborted write sites are %v, want %v — "+
 				"a renamed or moved writer needs the same re-justification as a new one",
 				sites, wantSites)
 		}
+	}
+	return nil
+}
+
+func TestAbortedWriterGuardRejectsSourceMutations(t *testing.T) {
+	files := map[string]string{}
+	for _, path := range []string{
+		"internal/hook/pretooluse_dispatch.go",
+		"internal/hook/subagent_start.go",
+		"internal/mission/store.go",
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[path] = string(data)
+	}
+	const storePath = "internal/mission/store.go"
+	for _, tc := range []struct{ name, old, replacement, extraPath string }{
+		{"remove writer", "delegationVerdict = DelegationVerdictAborted", "delegationVerdict = DelegationVerdictPass", ""},
+		{"rename writer", "func (s *Store) close(", "func (s *Store) movedClose(", ""},
+		{"extra site in existing file", "", "", storePath},
+		{"extra site in new file", "", "", "cmd/new_writer.go"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			requireWrite := func(path, src string) {
+				t.Helper()
+				path = filepath.Join(root, filepath.FromSlash(path))
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for path, src := range files {
+				requireWrite(path, src)
+			}
+			if err := os.MkdirAll(filepath.Join(root, "cmd"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			sites, err := scanTreeForAbortedWriteSites(t, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := knownAbortedWriteSitesError(sites); err != nil {
+				t.Fatalf("unmutated actual-source fixture must pass: %v", err)
+			}
+			if tc.old != "" {
+				src := files[storePath]
+				if strings.Count(src, tc.old) != 1 {
+					t.Fatalf("mutation anchor %q must occur exactly once", tc.old)
+				}
+				requireWrite(storePath, strings.Replace(src, tc.old, tc.replacement, 1))
+			} else {
+				prefix := files[tc.extraPath]
+				if prefix == "" {
+					prefix = "package main\n"
+				}
+				requireWrite(tc.extraPath, prefix+"\nfunc extraAbortWriter() { closeDelegation(DelegationVerdictAborted) }\n")
+			}
+			sites, err = scanTreeForAbortedWriteSites(t, root)
+			if err != nil {
+				t.Fatalf("source mutation must remain parseable: %v", err)
+			}
+			if err := knownAbortedWriteSitesError(sites); err == nil {
+				t.Fatal("aborted writer guard accepted source mutation")
+			}
+		})
+	}
+}
+
+// Outcome reporting moved the implementation, not its permission guards. Pin
+// both public wrappers' one Store call and unchanged mission/status arguments.
+func closeWrapperDelegationError(src string) error {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "mutation_outcome.go", src, 0)
+	if err != nil {
+		return err
+	}
+	expected := map[string]string{
+		"Close":            "s.CloseWithOutcome(id, status)",
+		"CloseWithOutcome": "s.close(id, status, &out)",
+	}
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		want, ok := expected[fd.Name.Name]
+		if !ok {
+			continue
+		}
+		var calls []string
+		var printErr error
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			id, ok := sel.X.(*ast.Ident)
+			if !ok || id.Name != "s" {
+				return true
+			}
+			var buf bytes.Buffer
+			if err := format.Node(&buf, fset, call); err != nil {
+				printErr = err
+			}
+			calls = append(calls, buf.String())
+			return true
+		})
+		if printErr != nil {
+			return printErr
+		}
+		if len(calls) != 1 || calls[0] != want {
+			return fmt.Errorf("%s Store calls = %v, want exactly %s", fd.Name.Name, calls, want)
+		}
+		delete(expected, fd.Name.Name)
+	}
+	if len(expected) != 0 {
+		return fmt.Errorf("missing close wrappers: %v", expected)
+	}
+	return nil
+}
+
+func TestCloseWrappersDelegateToGuardedWriter(t *testing.T) {
+	data, err := os.ReadFile("mutation_outcome.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(data)
+	if err := closeWrapperDelegationError(src); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, old, replacement string }{
+		{"compatibility bypass", "s.CloseWithOutcome(id, status)", "s.close(id, status, nil)"},
+		{"changed status", "s.close(id, status, &out)", "s.close(id, StatusClosed, &out)"},
+		{"removed delegation", "s.close(id, status, &out)", "unrelated(id, status)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if strings.Count(src, tc.old) != 1 {
+				t.Fatalf("mutation anchor %q must occur exactly once", tc.old)
+			}
+			if err := closeWrapperDelegationError(strings.Replace(src, tc.old, tc.replacement, 1)); err == nil {
+				t.Fatal("wrapper delegation guard accepted source mutation")
+			}
+		})
 	}
 }
 
@@ -108,8 +271,7 @@ func TestAbortedVerdictWriteSites_MatchKnownThree(t *testing.T) {
 // function name, or "var <name>" for a package-level var/const
 // initializer outside any function. The result is in filepath.WalkDir
 // order (all of internal/ before all of cmd/, lexical within each) —
-// NOT sorted; TestAbortedVerdictWriteSites_MatchKnownThree, this
-// function's only caller, sorts before comparing against wantSites.
+// NOT sorted; knownAbortedWriteSitesError sorts before comparing against wantSites.
 func scanTreeForAbortedWriteSites(t *testing.T, root string) ([]string, error) {
 	t.Helper()
 	var sites []string

@@ -3,6 +3,7 @@ package resolve
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
@@ -142,4 +143,106 @@ func TestRootsUnreadableIntermediateDirectoryIsAnError(t *testing.T) {
 	_, err := EnabledMarker(root)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), punt)
+}
+
+func TestPhysicalRootPreservesAbsenceAndErrors(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "file")
+	require.NoError(t, os.WriteFile(file, []byte("not a directory"), 0o600))
+	for _, part := range []string{"store", "checkout"} {
+		t.Run(part, func(t *testing.T) {
+			got, err := physicalRoot("", part)
+			require.NoError(t, err)
+			assert.Empty(t, got)
+			for _, tt := range []struct {
+				name string
+				path string
+			}{
+				{"missing root", filepath.Join(root, "missing")},
+				{"NUL root", root + "\x00"},
+				{"non-directory ancestor", filepath.Join(file, "child")},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					got, err := physicalRoot(tt.path, part)
+					assert.Empty(t, got, "normalization failure must not return the logical path")
+					require.ErrorContains(t, err, "resolving physical "+part+" root")
+					if tt.name != "non-directory ancestor" {
+						var pathErr *os.PathError
+						require.ErrorAs(t, err, &pathErr)
+					}
+					if tt.name == "missing root" {
+						assert.ErrorIs(t, err, os.ErrNotExist)
+					}
+				})
+			}
+			t.Run("dangling root alias", func(t *testing.T) {
+				alias := filepath.Join(t.TempDir(), "alias")
+				if err := os.Symlink(filepath.Join(root, "missing"), alias); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				got, err := physicalRoot(alias, part)
+				assert.Empty(t, got)
+				assert.ErrorContains(t, err, "resolving physical "+part+" root")
+				assert.ErrorIs(t, err, os.ErrNotExist)
+			})
+		})
+	}
+}
+
+func TestRootsNormalizesSuccessfulPartsWithoutHidingErrors(t *testing.T) {
+	root := t.TempDir()
+	testhelpersGitDir(t, root)
+	t.Chdir(root)
+	t.Run("relative override without store", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", ".")
+		loc := Roots()
+		assert.ErrorIs(t, loc.StoreErr, ErrOverrideNoStore)
+		assert.Empty(t, loc.Store)
+		assert.Empty(t, loc.Ethos)
+		assert.Nil(t, loc.Config)
+		assert.NoError(t, loc.CheckoutErr)
+		assert.Equal(t, realpath(t, root), loc.Checkout)
+		_, err := loc.Layout()
+		assert.Same(t, loc.StoreErr, err)
+	})
+	t.Run("invalid override refuses both parts rather than rediscovering", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", filepath.Join(root, "missing"))
+		loc := Roots()
+		require.Error(t, loc.StoreErr)
+		require.Error(t, loc.CheckoutErr)
+		assert.Empty(t, loc.Store)
+		assert.Empty(t, loc.Checkout)
+		assert.Empty(t, loc.Ethos)
+		assert.Nil(t, loc.Config)
+		_, err := loc.Layout()
+		assert.Same(t, loc.StoreErr, err)
+	})
+}
+
+func TestPhysicalRootResolvesLinksBeforeParentComponents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix symlink/.. path semantics")
+	}
+	base := t.TempDir()
+	root := filepath.Join(base, "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o700))
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(filepath.Join("repo", "sub"), alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	for _, tt := range []struct {
+		name, cwd, path string
+	}{
+		{"logical cwd parent", alias, ".."},
+		{"absolute alias parent", base, alias + "/.."},
+		{"relative alias parent", base, "alias/.."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(tt.cwd)
+			t.Setenv("PWD", tt.cwd)
+			got, err := physicalRoot(tt.path, "store")
+			require.NoError(t, err)
+			assert.Equal(t, realpath(t, root), got)
+		})
+	}
 }

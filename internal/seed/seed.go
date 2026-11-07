@@ -18,6 +18,7 @@ import (
 const (
 	scopeEthos  = "ethos"
 	scopeSkills = "skills"
+	scopeAgents = "agents"
 )
 
 // repairCandidate/notRepairCandidate name the bool every seedFS/place/
@@ -31,7 +32,11 @@ const (
 	notRepairCandidate = false
 )
 
-// Result tracks what was seeded.
+// Result tracks what was seeded. Applied repository installs remain in their
+// deployed/updated/repaired bucket when directory durability is unconfirmed;
+// Errors then names the applied path and the failed durability confirmation.
+// Matching-file retries remain Unchanged (no new write), with Errors if their
+// directory durability still cannot be confirmed.
 type Result struct {
 	Deployed       []string // new files written (were absent)
 	Updated        []string // tracked shipped files upgraded to this release's content
@@ -52,15 +57,15 @@ type Result struct {
 // Seed deploys embedded sidecar content to the destination root, recording no
 // version provenance. It is SeedVersion with an empty version, kept so callers
 // without a version string need not supply one.
-func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
-	return SeedVersion(destRoot, skillsRoot, "", "", force)
+func Seed(destRoot, skillsRoot string, force bool, opts ...Option) (*Result, error) {
+	return SeedVersion(destRoot, skillsRoot, "", "", force, opts...)
 }
 
 // SeedVersion deploys embedded sidecar content with no active bundle. It is
 // SeedVersionWithBundle with an empty activeBundle, kept so existing callers
 // (and every test built against this signature) need not name a bundle.
-func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (*Result, error) {
-	return SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, "", version, force)
+func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool, opts ...Option) (*Result, error) {
+	return SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, "", version, force, opts...)
 }
 
 // SeedVersionWithBundle deploys embedded sidecar content with an active
@@ -68,8 +73,8 @@ func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (
 // SeedVersionWithBundleDir with an empty activeBundleDir, so a caller
 // that only knows the bundle's name (not where it resolves to on disk)
 // still gets the embedded skill content for that name.
-func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, version string, force bool) (*Result, error) {
-	return SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, "", version, force)
+func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, version string, force bool, opts ...Option) (*Result, error) {
+	return SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, "", version, force, opts...)
 }
 
 // SeedVersionWithBundleDir deploys embedded sidecar content to the
@@ -101,7 +106,7 @@ func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, versi
 // era is entered by the first seed that writes a file (or by a one-time
 // `--force`). If force is true, every differing file is overwritten with the
 // shipped content.
-func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, version string, force bool) (*Result, error) {
+func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, version string, force bool, opts ...Option) (*Result, error) {
 	mf, err := loadManifest(destRoot)
 	if err != nil {
 		// A present-but-unreadable or corrupt manifest must not be treated as a
@@ -120,6 +125,9 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 		force:           force,
 		mf:              mf,
 		r:               &Result{},
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	// Roles (skip README.md — handled separately)
@@ -153,7 +161,7 @@ func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, ac
 	// definitions, deployed to the caller's repo-local .claude/agents/
 	// rather than under destRoot — see SeedVersion's agentsRoot doc.
 	if s.agentsRoot != "" {
-		s.seedFS(Agents, "sidecar/agents", s.agentsRoot, ".md", notRepairCandidate)
+		s.seedAgents()
 	}
 
 	// Skills
@@ -198,9 +206,18 @@ type seeder struct {
 	force           bool
 	mf              *Manifest
 	r               *Result
+	agentPolicy     *layout.Policy
 }
 
 func (s *seeder) seedFS(fsys embed.FS, root, destDir, ext string, repairCandidate bool) {
+	s.seedScopedFS(fsys, root, destDir, ext, repairCandidate, scopeEthos)
+}
+
+func (s *seeder) seedAgents() {
+	s.seedScopedFS(Agents, "sidecar/agents", s.agentsRoot, ".md", notRepairCandidate, scopeAgents)
+}
+
+func (s *seeder) seedScopedFS(fsys embed.FS, root, destDir, ext string, repairCandidate bool, scope string) {
 	entries, err := fs.ReadDir(fsys, root)
 	if err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", root, err))
@@ -219,7 +236,7 @@ func (s *seeder) seedFS(fsys embed.FS, root, destDir, ext string, repairCandidat
 			s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", e.Name(), err))
 			continue
 		}
-		s.place(scopeEthos, filepath.Join(destDir, e.Name()), data, repairCandidate)
+		s.place(scope, filepath.Join(destDir, e.Name()), data, repairCandidate)
 	}
 }
 
@@ -431,10 +448,14 @@ func (s *seeder) place(scope, dest string, data []byte, repairCandidate bool) {
 
 	// dest was absent — create it atomically without clobbering a file that
 	// races in between the Stat above and this create.
-	switch err := linkInstall(dest, data); {
+	switch err := linkInstall(dest, data, s.policies(scope)...); {
 	case err == nil:
 		s.record(scope, dest, cur)
 		s.r.Deployed = append(s.r.Deployed, dest)
+	case installApplied(err):
+		s.record(scope, dest, cur)
+		s.r.Deployed = append(s.r.Deployed, dest)
+		s.r.Errors = append(s.r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
 	case errors.Is(err, os.ErrExist):
 		// A file appeared in the race window. Re-decide against it once.
 		if handled := s.classifyExisting(scope, dest, data, cur, repairCandidate); !handled {
@@ -464,9 +485,11 @@ func (s *seeder) classifyExisting(scope, dest string, data []byte, cur string, r
 		// Repair replaces it with the shipped content. The only writers to
 		// these paths are seed itself with deterministic embedded content, so
 		// a concurrent user hand-edit landing in this window is negligible.
-		if werr := atomicWrite(dest, data); werr != nil {
+		if werr := atomicWrite(dest, data, s.policies(scope)...); werr != nil {
 			s.r.Errors = append(s.r.Errors, fmt.Sprintf("repairing %s: %v", dest, werr))
-			return true
+			if !installApplied(werr) {
+				return true
+			}
 		}
 		s.record(scope, dest, cur)
 		s.r.Repaired = append(s.r.Repaired, dest)
@@ -508,6 +531,12 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string, repairCandi
 		// user edit, and silently drop the upgrade.
 		s.record(scope, dest, cur)
 		s.r.Unchanged = append(s.r.Unchanged, dest)
+		// Matching bytes may be from an applied install whose directory sync
+		// failed. Reconfirm repository agents without rewriting or claiming a
+		// new deploy/update. Global content retains its existing behavior.
+		if err := confirmSeedInstall(dest, s.policies(scope)...); err != nil {
+			s.r.Errors = append(s.r.Errors, fmt.Sprintf("confirming %s: %v", dest, err))
+		}
 		return
 	}
 
@@ -616,9 +645,11 @@ func (s *seeder) repairAdditive(dest string, onDisk, data []byte) (handled bool,
 // write overwrites dest with data, records the manifest entry, and appends dest
 // to the given Result bucket.
 func (s *seeder) write(scope, dest string, data []byte, cur string, bucket *[]string) {
-	if err := atomicWrite(dest, data); err != nil {
+	if err := atomicWrite(dest, data, s.policies(scope)...); err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
-		return
+		if !installApplied(err) {
+			return
+		}
 	}
 	s.record(scope, dest, cur)
 	*bucket = append(*bucket, dest)
@@ -626,8 +657,14 @@ func (s *seeder) write(scope, dest string, data []byte, cur string, bucket *[]st
 
 // record sets the manifest entry for dest to the given content hash.
 func (s *seeder) record(scope, dest, cur string) {
+	// Keep the existing manifest representation for agents. Staging scope
+	// must not make an edited file appear to be untracked after an upgrade.
+	manifestScope := scope
+	if scope == scopeAgents {
+		manifestScope = scopeEthos
+	}
 	s.mf.Entries[s.key(scope, dest)] = Entry{
-		Scope:   scope,
+		Scope:   manifestScope,
 		Hash:    cur,
 		Version: s.version,
 		Written: time.Now().UTC().Format(time.RFC3339),
@@ -659,11 +696,11 @@ func escapes(rel string) bool {
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// linkInstall writes data to a temp file in dest's directory, then hard-links
+// linkInstall stages locally with a policy (adjacent for global callers), then hard-links
 // it to dest. os.Link fails with os.ErrExist if dest already exists, giving
 // an atomic no-clobber create. The temp file is always removed.
-func linkInstall(dest string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dest), layout.SeedTmpPattern(filepath.Base(dest)))
+func linkInstall(dest string, data []byte, policies ...layout.Policy) error {
+	tmp, err := createTemp(dest, policies...)
 	if err != nil {
 		return err
 	}
@@ -673,48 +710,94 @@ func linkInstall(dest string, data []byte) error {
 		tmp.Close()
 		return err
 	}
+	if len(policies) > 0 {
+		if err := tmp.Chmod(0o644); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := syncSeedFile(tmp); err != nil {
+			return fmt.Errorf("syncing seed staging file: %w", errors.Join(err, tmp.Close()))
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
+	if len(policies) == 0 {
+		if err := os.Chmod(tmpPath, 0o644); err != nil {
+			return err
+		}
+	}
+	if err := os.Link(tmpPath, dest); err != nil {
 		return err
 	}
-	return os.Link(tmpPath, dest)
+	return confirmSeedInstall(dest, policies...)
 }
 
-// atomicWrite writes data to a temp file in dest's directory, then renames
+// atomicWrite stages locally with a policy (adjacent for global callers), then renames
 // it over dest. A kill at any point leaves either the old file or the new
 // complete one — never a partial file at dest. The new file gets mode
 // 0644, the default for every seed-managed file.
-func atomicWrite(dest string, data []byte) error {
-	return atomicWriteMode(dest, data, 0o644)
+func atomicWrite(dest string, data []byte, policies ...layout.Policy) error {
+	return atomicWriteMode(dest, data, 0o644, policies...)
 }
 
 // atomicWriteMode is atomicWrite with an explicit mode for the new file,
 // for the one caller (repairAdditive) that must not silently overwrite
 // dest's existing permissions with the 0644 default — see its call site.
-func atomicWriteMode(dest string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dest), layout.SeedTmpPattern(filepath.Base(dest)))
+func atomicWriteMode(dest string, data []byte, mode os.FileMode, policies ...layout.Policy) error {
+	tmp, err := createTemp(dest, policies...)
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		os.Remove(tmpPath)
 		return err
+	}
+	if len(policies) > 0 {
+		if err := tmp.Chmod(mode); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := syncSeedFile(tmp); err != nil {
+			return fmt.Errorf("syncing seed staging file: %w", errors.Join(err, tmp.Close()))
+		}
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Chmod(tmpPath, mode); err != nil {
-		os.Remove(tmpPath)
-		return err
+	if len(policies) == 0 {
+		if err := os.Chmod(tmpPath, mode); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(tmpPath, dest); err != nil {
-		os.Remove(tmpPath)
 		return err
 	}
+	return confirmSeedInstall(dest, policies...)
+}
+
+var syncSeedFile = (*os.File).Sync
+var syncSeedDestination = layout.SyncRepositoryDestination
+
+func confirmSeedInstall(dest string, policies ...layout.Policy) error {
+	if len(policies) > 0 {
+		if err := syncSeedDestination(policies[0], dest); err != nil {
+			return &layout.InstallDurabilityError{Path: dest, Err: err}
+		}
+	}
 	return nil
+}
+
+func installApplied(err error) bool {
+	var applied *layout.InstallDurabilityError
+	return errors.As(err, &applied)
+}
+
+func createTemp(dest string, policies ...layout.Policy) (*os.File, error) {
+	if len(policies) > 0 {
+		return layout.CreateLocalTemp(policies[0], filepath.Base(dest)+".seed", "")
+	}
+	return os.CreateTemp(filepath.Dir(dest), layout.SeedTmpPattern(filepath.Base(dest)))
 }

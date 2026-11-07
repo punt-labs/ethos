@@ -33,6 +33,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 )
@@ -41,6 +43,11 @@ import (
 // entry was not written. The tool call still proceeds; the caller puts the
 // loss in front of the session (WriteAuditNotice).
 var ErrAuditDropped = errors.New("audit entry not written")
+
+// ErrAuditDurabilityUnconfirmed means the payload was appended and synced, but
+// the live name's directory sync failed. Do not describe it as a rolled-back
+// write or emit a second synthetic loss for a line that is already retained.
+var ErrAuditDurabilityUnconfirmed = errors.New("audit entry retained; directory durability unconfirmed")
 
 // WriteAuditNotice writes the PostToolUse hook output that tells the
 // session about an audit entry that was dropped, or written without its
@@ -99,6 +106,25 @@ func dropped(cause error, e auditEntry, sessionID string) error {
 // sessions are not visible to it. See resolveAuditWritePath and
 // resolveRepoSessionDir in audit_paths.go.
 func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
+	if repoRoot != "" {
+		p, err := auditPolicy(repoRoot)
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrAuditDropped, err)
+		}
+		return HandleAuditLogWithPolicy(r, p, globalSessionsDir)
+	}
+	return handleAuditLog(r, repoRoot, globalSessionsDir, nil)
+}
+
+// HandleAuditLogWithPolicy captures eligibility after redaction and timestamp
+// allocation, in the same append as the payload. It takes the shared stream
+// lock itself; callers must not already hold that lock.
+func HandleAuditLogWithPolicy(r io.Reader, p layout.Policy, globalSessionsDir string) error {
+	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
+	return handleAuditLog(r, checkout, globalSessionsDir, &p)
+}
+
+func handleAuditLog(r io.Reader, repoRoot, globalSessionsDir string, policy *layout.Policy) error {
 	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: reading input: %v\n", err)
@@ -113,6 +139,17 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 
 	now := time.Now().UTC()
 	entry, rewritten := buildAuditEntryNote(input, sessionID, repoRoot, now)
+	if policy != nil {
+		stored, report, err := appendPolicyAudit(*policy, entry, now)
+		if err != nil {
+			if errors.Is(err, ErrAuditDurabilityUnconfirmed) {
+				return err
+			}
+			return dropped(err, entry, sessionID)
+		}
+		noticeStoredLine(stored.Tool, rewritten, report)
+		return nil
+	}
 
 	// DES-058: inside a repo, appends target the machine-local live file
 	// and carry a strictly-monotonic per-session ts allocated under the
@@ -170,6 +207,39 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 		return lost
 	}
 	return nil
+}
+
+func appendPolicyAudit(p layout.Policy, entry auditEntry, now time.Time) (auditEntry, guardReport, error) {
+	s := audit.Stream{Namespace: audit.SessionNS, Session: entry.Session}
+	var report guardReport
+	err := audit.WithStreamLock(p, s, func() error {
+		if err := layout.EnsureLocalDir(p, filepath.Dir(s.LivePath(p))); err != nil {
+			return err
+		}
+		data, err := audit.ReadStream(p, s)
+		if err != nil {
+			return err
+		}
+		floor := data.Floor
+		_, err = audit.AppendMonotonic(s.LivePath(p), floor, now, func(ts int64) ([]byte, error) {
+			entry.Ts = audit.FormatLineTS(ts)
+			raw, err := json.Marshal(entry)
+			if err != nil {
+				return nil, err
+			}
+			out, rule, marker := guardAuditLineFull(raw)
+			report = guardReport{rule: rule, marker: marker}
+			return audit.StampEligibility(p, s, ts, out)
+		})
+		if err != nil {
+			return err
+		}
+		if err := audit.ConfirmStreamDurability(p, s); err != nil {
+			return fmt.Errorf("%w: %v", ErrAuditDurabilityUnconfirmed, err)
+		}
+		return nil
+	})
+	return entry, report, err
 }
 
 // buildAuditEntry assembles the enriched auditEntry from the hook

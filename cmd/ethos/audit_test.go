@@ -84,7 +84,7 @@ func TestAuditMigrate_NoLegacyFiles_Verbose(t *testing.T) {
 	assert.Contains(t, stdout, "nothing to migrate")
 }
 
-func TestAuditMigrate_CopiesAndDeletesLegacy(t *testing.T) {
+func TestAuditMigrate_CopiesLocallyAndRetainsLegacy(t *testing.T) {
 	_, repo, globalDir := auditMigrateEnv(t)
 
 	sessID := "sess-mig"
@@ -98,13 +98,15 @@ func TestAuditMigrate_CopiesAndDeletesLegacy(t *testing.T) {
 	assert.Contains(t, stdout, "migrate sess-mig")
 	assert.Contains(t, stdout, "2 new entries")
 
-	// Legacy file gone.
+	// The original remains safe for a late older writer.
 	_, statErr := os.Stat(legacyPath)
-	assert.True(t, os.IsNotExist(statErr))
+	assert.NoError(t, statErr)
 
-	// Repo audit file populated.
-	data, err := os.ReadFile(filepath.Join(repoSessDir, "audit.jsonl"))
+	// Only the shared local archive is populated, never the record tree.
+	local := filepath.Join(repo, ".punt-labs", "local", "ethos", "trace", "sessions", filepath.Base(repoSessDir), "audit.jsonl")
+	data, err := os.ReadFile(local)
 	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(repoSessDir, "audit.jsonl"))
 	assert.Contains(t, string(data), `"tool":"Bash"`)
 	assert.Contains(t, string(data), `"tool":"Read"`)
 }
@@ -159,16 +161,14 @@ func TestAuditMigrate_IdempotentSecondRun(t *testing.T) {
 	_, _, err := execHandler(t, "audit", "migrate")
 	require.NoError(t, err)
 
-	// Stage a duplicate legacy file (same ts + tool) — simulates a
-	// re-run with stale state.
-	writeLegacyLine(t, globalDir, sessID, "2026-05-22T10:00:00Z", "Bash")
+	// Retry against the same retained legacy source.
 
 	stdout, _, err := execHandler(t, "audit", "migrate", "--verbose")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "noop sess-idem")
 
 	// Repo audit file still has exactly one line.
-	data, err := os.ReadFile(filepath.Join(repoSessDir, "audit.jsonl"))
+	data, err := os.ReadFile(filepath.Join(repo, ".punt-labs", "local", "ethos", "trace", "sessions", filepath.Base(repoSessDir), "audit.jsonl"))
 	require.NoError(t, err)
 	count := 0
 	for _, b := range data {
@@ -180,16 +180,8 @@ func TestAuditMigrate_IdempotentSecondRun(t *testing.T) {
 }
 
 func TestAuditMigrate_OutsideRepo_ExitsUsage(t *testing.T) {
-	// t.TempDir uses TMPDIR which under .envrc points into the
-	// project's .tmp/, so CheckoutRootIfAny would walk up and find the
-	// project's own .git. Allocate under /tmp explicitly so the walk
-	// returns empty.
-	nonRepo, err := os.MkdirTemp("/tmp", "ethos-audit-norepo-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(nonRepo) })
-	home, err := os.MkdirTemp("/tmp", "ethos-audit-home-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(home) })
+	// The suite's Git ceiling isolates approved scratch from the real checkout.
+	nonRepo, home := t.TempDir(), t.TempDir()
 
 	t.Setenv("HOME", home)
 	t.Setenv("USER", "test-agent")
@@ -386,13 +378,7 @@ func TestAuditShow_InvalidFormat(t *testing.T) {
 }
 
 func TestAuditShow_OutsideRepo_ExitsUsage(t *testing.T) {
-	// Like the migrate variant: use /tmp so CheckoutRootIfAny returns empty.
-	nonRepo, err := os.MkdirTemp("/tmp", "ethos-audit-show-norepo-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(nonRepo) })
-	home, err := os.MkdirTemp("/tmp", "ethos-audit-show-home-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(home) })
+	nonRepo, home := t.TempDir(), t.TempDir()
 
 	t.Setenv("HOME", home)
 	t.Setenv("USER", "test-agent")
@@ -483,16 +469,25 @@ func quarantineOutput(t *testing.T, ignore string, track trackMode) string {
 	livePath := audit.LiveAuditPath(repo, "sq")
 	require.NoError(t, os.MkdirAll(filepath.Dir(livePath), 0o700))
 	require.NoError(t, os.WriteFile(livePath, []byte(live.String()), 0o600))
+	index := filepath.Join(repo, ".git", "index")
+	before, err := os.ReadFile(index)
+	if err != nil {
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
 
 	stdout, _, err := execHandler(t, "audit", "quarantine", chunk)
 	require.NoError(t, err)
+	after, err := os.ReadFile(index)
+	if err != nil {
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
+	assert.Equal(t, before, after, "quarantine preserves the actual index in every tracking/ignore state")
 	return stdout
 }
 
-func TestAuditQuarantine_SaysKeptLocalWhenTheRepoIgnoresTheSession(t *testing.T) {
+func TestAuditQuarantine_IgnoredSessionRemainsLocal(t *testing.T) {
 	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n", trackNothing)
-	assert.Contains(t, out, "kept local (this repo gitignores it)")
-	assert.NotContains(t, out, "staged")
+	assert.Contains(t, out, "retained in the shared local archive; nothing staged")
 }
 
 // quarantineStderr is quarantineOutput returning the notices on stderr.
@@ -501,57 +496,42 @@ func quarantineStderr(t *testing.T, ignore string, track trackMode) string {
 	return testhelpers.CaptureStderr(t, func() { quarantineOutput(t, ignore, track) })
 }
 
-func TestAuditQuarantine_WithheldNoticeInIgnoringRepoSaysKeptLocal(t *testing.T) {
+func TestAuditQuarantine_IgnoredSessionDoesNotClaimTrackedRetirement(t *testing.T) {
 	notice := quarantineStderr(t, ".punt-labs/ethos/sessions/\n", trackNothing)
-	assert.Contains(t, notice, "kept local (this repo gitignores it); the original is in")
 	assert.NotContains(t, notice, "withheld from the tracked tree")
 }
 
-func TestAuditQuarantine_WithheldNoticeInTrackedRepoIsUnchanged(t *testing.T) {
+func TestAuditQuarantine_UnignoredSessionDoesNotClaimTrackedRetirement(t *testing.T) {
 	notice := quarantineStderr(t, "unrelated/\n", trackNothing)
-	assert.Contains(t, notice, "was withheld from the tracked tree (retired chunk withheld); the original is in")
-	assert.NotContains(t, notice, "kept local")
+	assert.NotContains(t, notice, "withheld from the tracked tree")
 }
 
-func TestAuditQuarantine_SaysStagedWhenItStaged(t *testing.T) {
+func TestAuditQuarantine_UnignoredSessionRemainsLocal(t *testing.T) {
 	out := quarantineOutput(t, "unrelated/\n", trackNothing)
-	assert.Contains(t, out, "staged, commit to record")
-	assert.NotContains(t, out, "kept local")
+	assert.Contains(t, out, "retained in the shared local archive; nothing staged")
 }
 
-// A chunk tracked before the repo began to ignore its directory: the
-// quarantine stages the chunk's removal, but the marker and record are ignored
-// and are not staged. The summary says exactly that.
-func TestAuditQuarantine_TrackedChunkInIgnoredDirSaysTheMarkerIsNotStaged(t *testing.T) {
+// Historical tracking state never turns local quarantine into publication.
+func TestAuditQuarantine_TrackedChunkInIgnoredDirDoesNotStage(t *testing.T) {
 	var out string
 	notice := testhelpers.CaptureStderr(t, func() {
 		out = quarantineOutput(t, ".punt-labs/ethos/sessions/\n", trackChunk)
 	})
-	assert.Contains(t, out, "changes under the chunk's directory are staged but its marker is gitignored and was not; record it with `git add -f ")
-	assert.NotContains(t, out, "staged, commit to record")
-	assert.NotContains(t, out, "kept local")
-	assert.Contains(t, notice, "was withheld from the tracked tree")
-	assert.NotContains(t, notice, "kept local")
+	assert.Contains(t, out, "retained in the shared local archive; nothing staged")
+	assert.NotContains(t, out, "git add -f")
+	assert.NotContains(t, notice, "withheld from the tracked tree")
 }
 
-// An older sibling chunk is tracked, the damaged one is not: GitAdd drops the
-// ignored marker and record, so nothing was staged and the summary says kept
-// local, though something under the directory is tracked.
-func TestAuditQuarantine_TrackedSiblingDoesNotMakeItStaged(t *testing.T) {
+func TestAuditQuarantine_TrackedSiblingDoesNotStageLocalRecovery(t *testing.T) {
 	out := quarantineOutput(t, ".punt-labs/ethos/sessions/\n", trackSibling)
-	assert.Contains(t, out, "kept local (this repo gitignores it)")
-	assert.NotContains(t, out, "staged")
-}
-
-func TestQuarantineFate_SaysWhenGitCannotTell(t *testing.T) {
-	got := quarantineFate(t.TempDir(), "d/audit-1-2.jsonl", audit.Marker{Chunk: "audit-1-2"})
-	assert.Contains(t, got, "staging status unknown:")
+	assert.Contains(t, out, "retained in the shared local archive; nothing staged")
 }
 
 // requarantineOutput quarantines a corrupt chunk (its lines still live), then
 // damages the re-sealed chunk that now stands at the same name and quarantines
-// again under the existing marker, which retires it as a new .corrupt-<hash>.
-// commitBetween commits the first run's artifacts before the second.
+// again under the existing marker. Both damaged originals must survive under
+// distinct digests, with published-availability diagnostics kept visible.
+// commitBetween commits only unrelated source.
 func requarantineOutput(t *testing.T, commitBetween bool) string {
 	t.Helper()
 	_, repo, _ := auditMigrateEnv(t)
@@ -570,7 +550,8 @@ func requarantineOutput(t *testing.T, commitBetween bool) string {
 	_, _, err := execHandler(t, "audit", "quarantine", chunk)
 	require.NoError(t, err)
 	if commitBetween {
-		for _, args := range [][]string{{"add", "-A"}, {"-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "first"}} {
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "source"), []byte("fixture\n"), 0o600))
+		for _, args := range [][]string{{"add", "--", "source"}, {"-c", "user.email=t@e.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "first"}} {
 			cmd := testhelpers.GitCommand(args...)
 			cmd.Dir = repo
 			out, err := cmd.CombinedOutput()
@@ -578,32 +559,44 @@ func requarantineOutput(t *testing.T, commitBetween bool) string {
 		}
 	}
 	require.NoError(t, os.WriteFile(chunk, []byte("damaged again\n"), 0o600))
-	stdout, _, err := execHandler(t, "audit", "quarantine", chunk)
+	var stderr string
+	notice := testhelpers.CaptureStderr(t, func() {
+		_, stderr, err = execHandler(t, "audit", "quarantine", chunk)
+	})
 	require.NoError(t, err)
-	return stdout
+	assert.NoFileExists(t, chunk, "the explicitly selected publication is retired")
+	files, err := filepath.Glob(filepath.Join(repo, ".punt-labs", "local", "ethos", "quarantine", "*", "*.corrupt"))
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	seen := map[string]bool{}
+	for _, path := range files {
+		body, err := os.ReadFile(path)
+		require.NoError(t, err)
+		seen[string(body)] = true
+	}
+	assert.True(t, seen["not json\n"])
+	assert.True(t, seen["damaged again\n"])
+	marker, err := audit.ReadMarker(strings.TrimSuffix(chunk, ".jsonl") + ".quarantine")
+	require.NoError(t, err)
+	assert.True(t, marker.HasGap(), "local recovery does not prove published availability")
+	assert.Equal(t, int64(100), marker.UnrecoveredFirst)
+	assert.Equal(t, int64(200), marker.UnrecoveredLast)
+	return stderr + notice
 }
 
-// Case A: the marker and the chunk are committed; the second quarantine stages
-// a rename and an addition but leaves the marker alone.
-func TestAuditQuarantine_RerunOverCommittedMarkerSaysStaged(t *testing.T) {
+func TestAuditQuarantine_RerunAfterSourceCommitReportsFreshDamage(t *testing.T) {
 	out := requarantineOutput(t, true)
-	assert.Contains(t, out, "staged, commit to record")
-	assert.NotContains(t, out, "nothing new")
+	assert.Contains(t, out, "SHARED REPAIR PENDING")
 }
 
-// Case B: nothing is committed; the second run's git mv moves the staged chunk
-// entry, so the chunk's own path shows no change, but the new artifacts are
-// staged.
-func TestAuditQuarantine_RerunOverStagedMarkerSaysStaged(t *testing.T) {
+func TestAuditQuarantine_RerunWithoutCommitReportsFreshDamage(t *testing.T) {
 	out := requarantineOutput(t, false)
-	assert.Contains(t, out, "staged, commit to record")
-	assert.NotContains(t, out, "nothing new")
+	assert.Contains(t, out, "SHARED REPAIR PENDING")
 }
 
-// A sub-range chunk other than the one named is retired under the existing
-// marker in an ignored directory: its rename is staged, the ignored marker is
-// not, and the summary says so.
-func TestAuditQuarantine_OtherChunkRetiredInIgnoredDirNamesTheMarker(t *testing.T) {
+// Quarantining one chunk does not hide independent damage in another, even
+// inside its nominal range. Manual sealing still reports that damaged source.
+func TestAuditQuarantine_DoesNotHideOtherDamagedChunk(t *testing.T) {
 	_, repo, _ := auditMigrateEnv(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/ethos/sessions/\n"), 0o600))
 	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-01-01-sq")
@@ -635,26 +628,8 @@ func TestAuditQuarantine_OtherChunkRetiredInIgnoredDirNamesTheMarker(t *testing.
 
 	stdout, _, err := execHandler(t, "audit", "quarantine", chunk)
 	require.NoError(t, err)
-	assert.Contains(t, stdout, "record it with `git add -f ")
-	assert.NotContains(t, stdout, "staged, commit to record")
-}
-
-func TestQuarantineFate_QuotesTheMarkerPathInTheRecoveryCommand(t *testing.T) {
-	_, repo, _ := auditMigrateEnv(t)
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("sessions-x/\n"), 0o600))
-	// A tracked file beside the marker makes a staged change under the
-	// directory while the ignored marker stays unstaged.
-	d := filepath.Join(repo, "sessions-x", "it's here")
-	require.NoError(t, os.MkdirAll(d, 0o700))
-	tracked := filepath.Join(d, "audit-1-2.jsonl")
-	require.NoError(t, os.WriteFile(tracked, []byte("x\n"), 0o600))
-	cmd := testhelpers.GitCommand("add", "-f", tracked)
-	cmd.Dir = repo
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "%s", out)
-
-	got := quarantineFate(repo, tracked, audit.Marker{Chunk: "audit-1-2"})
-	want := audit.ShellQuote(filepath.Join(d, "audit-1-2.quarantine"))
-	assert.Contains(t, got, "git add -f "+want)
-	assert.Contains(t, got, `'\''`)
+	assert.Contains(t, stdout, "retained in the shared local archive; nothing staged")
+	_, stderr, err := execHandler(t, "audit", "seal")
+	require.Error(t, err)
+	assert.Contains(t, stderr, other)
 }

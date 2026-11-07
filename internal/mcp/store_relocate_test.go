@@ -7,6 +7,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -108,6 +109,8 @@ func TestStoreRelocatedOnLocationChange(t *testing.T) {
 		{Root: "/r"}, // not in a repository → in one, no store yet
 		{Root: "/r", EthosRoot: "/r/.punt-labs/ethos"}, // enable or setup created the store
 		{Root: "/s", EthosRoot: "/s/.punt-labs/ethos"}, // another repository
+		{Root: "/s", EthosRoot: "/s/.punt-labs/ethos", HasConfig: true, Config: resolve.RepoConfig{Record: "full"}},
+		{Root: "/s", EthosRoot: "/s/.punt-labs/ethos", HasConfig: true, Config: resolve.RepoConfig{Record: "blame"}},
 		{}, // outside any repository again
 	}
 	for i, step := range steps {

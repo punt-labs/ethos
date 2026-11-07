@@ -308,11 +308,22 @@ func FuzzWritersRecords(f *testing.F) {
 				Tier: TierB, AgentType: "bwk", Session: string(data), Prompt: data,
 			})
 			if err == nil {
-				prompt, _ := os.ReadFile(filepath.Join(filepath.Dir(rec), "prompt.md"))
-				if LeakRule(string(prompt)) != "" {
-					t.Fatalf("delegation: (a) prompt.md leaks (home %s) for %q: %q", home, data, prompt)
+				// Prompt detail is local; reading a missing shared sibling would
+				// turn this leak assertion into a vacuous empty-byte check.
+				if len(data) > 0 {
+					promptPath := filepath.Join(repo, ".punt-labs", "local", "ethos", "trace", "missions", "m-2026-01-01-001", "delegations", "d-2026-01-01-001", "prompt.md")
+					prompt, err := os.ReadFile(promptPath)
+					if err != nil {
+						t.Fatalf("delegation: reading local prompt: %v", err)
+					}
+					if LeakRule(string(prompt)) != "" {
+						t.Fatalf("delegation: (a) prompt.md leaks (home %s) for %q: %q", home, data, prompt)
+					}
 				}
-				body, _ := os.ReadFile(rec)
+				body, err := os.ReadFile(rec)
+				if err != nil {
+					t.Fatalf("delegation: reading shared record: %v", err)
+				}
 				for _, st := range stringsOfFile("record.yaml", body) {
 					if st.holds(home) {
 						t.Fatalf("delegation: (a) %q in record.yaml (home %s) for %q", st.v, home, data)

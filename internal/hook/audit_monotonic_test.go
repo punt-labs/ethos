@@ -3,6 +3,7 @@ package hook
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,7 +131,7 @@ func TestReadSessionAuditUnion(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"ts":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n" +
+	body := `{"ts":"` + audit.FormatLineTS(200) + `","session":"s","tool":"Bash"}` + "\n" +
 		`{"ts":"` + audit.FormatLineTS(300) + `","session":"` + sid + `","tool":"Bash"}` + "\n"
 	if err := os.WriteFile(live, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -139,8 +140,7 @@ func TestReadSessionAuditUnion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readSessionAudit: %v", err)
 	}
-	// Sealed 100,200 + live tail past watermark 200 → only ts 300 added.
-	// The live line at ts 200 is at the watermark, not past it.
+	// Equal copies at ts 200 collapse only after canonical payload comparison.
 	if len(entries) != 3 {
 		t.Fatalf("union entries = %d, want 3 (100,200 sealed + 300 live): %+v", len(entries), entries)
 	}
@@ -151,6 +151,12 @@ func TestReadSessionAuditUnion(t *testing.T) {
 			t.Errorf("entries not ordered by ts: %d after %d", ts, last)
 		}
 		last = ts
+	}
+	if err := os.WriteFile(live, []byte(strings.Replace(body, `"session":"s","tool":"Bash"`, `"session":"s","tool":"Read"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSessionAudit(repo, sid, time.Now()); err == nil || !strings.Contains(err.Error(), "identity conflict") {
+		t.Fatalf("covered live conflict hidden: %v", err)
 	}
 }
 

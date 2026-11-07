@@ -27,6 +27,12 @@ type Marker struct {
 	UnrecoveredLast  int64 `json:"unrecovered_last,omitempty"`
 	// Reason names the corruption class.
 	Reason string `json:"reason"`
+	// RetiredSHA256 binds local completion to the latest retained original.
+	// Repeated retirement durably clears it before source removal and restores
+	// it only after recovery. Empty is not proof of local completion.
+	// Published gap markers omit it: their availability does not prove local
+	// recovery completed, and they have no local retirement pointer to cover.
+	RetiredSHA256 string `json:"retired_sha256,omitempty"`
 }
 
 // HasGap reports whether the marker records an unrecovered sub-range.

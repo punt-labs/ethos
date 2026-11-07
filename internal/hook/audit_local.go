@@ -15,8 +15,6 @@ func liveAuditLockPath(repoRoot, sessionID string) string {
 	return audit.LiveAuditLockPath(repoRoot, sessionID)
 }
 
-func liveMissionsDir(repoRoot string) string { return audit.LiveMissionsDir(repoRoot) }
-
 func liveMissionLogPath(repoRoot, missionID, sessionID string) string {
 	return audit.LiveMissionLogPath(repoRoot, missionID, sessionID)
 }
@@ -26,8 +24,6 @@ func liveMissionLockPath(repoRoot, missionID, sessionID string) string {
 }
 
 func sealedSessionsBase(repoRoot string) string { return audit.SealedSessionsBase(repoRoot) }
-
-func sealedMissionsBase(repoRoot string) string { return audit.SealedMissionsBase(repoRoot) }
 
 func sealedMissionDir(repoRoot, missionID string) string {
 	return audit.SealedMissionDir(repoRoot, missionID)

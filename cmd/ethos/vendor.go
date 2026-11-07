@@ -82,6 +82,13 @@ func runVendor(cmd *cobra.Command, args []string) error {
 		return usageError{"--all is not supported with explicit handles: --all already selects every readable identity"}
 	}
 
+	// Pin ignore maintenance to the same request roots as the source stores,
+	// before running vendor; never consult a later request's roots on apply.
+	loc := currentRoots().Located
+	if err := loc.Err(); err != nil {
+		return fmt.Errorf("locating vendor repository: %w", err)
+	}
+
 	// The FULL chain, not identityStore(): vendor copies from global into
 	// the repo layer, so it must see global even in a repo that has
 	// already set `resolution: repo-only`.
@@ -114,15 +121,10 @@ func runVendor(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Vendor just put extension files into git-tracked space, so this is
-	// the moment the .local rule must exist — before the operator's first
-	// `ethos ext set --local` has anywhere to leak to.
+	// Applied vendor protects both the shared local owner and the checkout,
+	// without installing hooks or changing any other enablement state.
 	if plan.Applied {
-		loc := currentRoots()
-		if loc.CheckoutErr != nil {
-			return fmt.Errorf("locating the checkout for the .local ignore rule: %w", loc.CheckoutErr)
-		}
-		added, ignoreErr := ensureLocalExtIgnored(loc.Checkout)
+		added, ignoreErr := ensureLocalZonesIgnored(loc)
 		if ignoreErr != nil {
 			return ignoreErr
 		}
@@ -147,21 +149,27 @@ func runVendor(cmd *cobra.Command, args []string) error {
 // .local gitignore rule after a successful apply — the two surfaces must
 // leave the repo in the same state.
 func vendorRunner() mcp.VendorRunner {
+	// Capture the full source chain and roots when the request handler is built.
+	// Another MCP request can rebuild cmdRoots while this closure is in flight.
+	is := vendorSourceStore()
+	sources := vendor.Sources{
+		Roots: vendorRoots(is), Identities: is,
+		Roles: layeredRoleStore(is), Teams: layeredTeamStore(is),
+	}
+	loc := currentRoots().Located
+	locationErr := loc.Err()
+	defaultDest, destinationErr := vendorDest(is)
 	return func(opts vendor.Options) (*vendor.Plan, error) {
-		is := vendorSourceStore()
-		if opts.Dest == "" {
-			dest, err := vendorDest(is)
-			if err != nil {
-				return nil, err
-			}
-			opts.Dest = dest
+		if locationErr != nil {
+			return nil, fmt.Errorf("locating vendor repository: %w", locationErr)
 		}
-		v, err := vendor.New(vendor.Sources{
-			Roots:      vendorRoots(is),
-			Identities: is,
-			Roles:      layeredRoleStore(is),
-			Teams:      layeredTeamStore(is),
-		}, opts)
+		if opts.Dest == "" {
+			if destinationErr != nil {
+				return nil, destinationErr
+			}
+			opts.Dest = defaultDest
+		}
+		v, err := vendor.New(sources, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -170,11 +178,7 @@ func vendorRunner() mcp.VendorRunner {
 			return nil, err
 		}
 		if plan.Applied {
-			loc := currentRoots()
-			if loc.CheckoutErr != nil {
-				return nil, fmt.Errorf("locating the checkout for the .local ignore rule: %w", loc.CheckoutErr)
-			}
-			if _, err := ensureLocalExtIgnored(loc.Checkout); err != nil {
+			if _, err := ensureLocalZonesIgnored(loc); err != nil {
 				return nil, err
 			}
 		}

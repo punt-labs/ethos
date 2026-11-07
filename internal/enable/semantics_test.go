@@ -7,23 +7,6 @@ import (
 	"testing"
 )
 
-// tmpGitRepo creates a git repo under /tmp, never under this repo's TMPDIR
-// (which .envrc points inside the working tree). Enable resolves the repo root
-// and deposits into it; a fixture inside this repo risks contaminating it if
-// resolution ever escapes, so the enable-path fixtures stay in /tmp.
-func tmpGitRepo(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "ethos-enable-sem-*")
-	if err != nil {
-		t.Skipf("cannot create an outside-repo temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	gitRun(t, dir, "init", "-q")
-	gitRun(t, dir, "config", "user.email", "test@example.com")
-	gitRun(t, dir, "config", "user.name", "test")
-	return dir
-}
-
 // TestEnableCreatesMissingHostFile pins the no-host-file semantics: a repo with
 // no CLAUDE.md at all gets one created at mode 0644 whose sole content is the
 // canonical import line plus a newline. The standard's write rule is append to
@@ -32,7 +15,7 @@ func tmpGitRepo(t *testing.T) string {
 // enable never refuses for a missing host, and never writes anything but the
 // one import line.
 func TestEnableCreatesMissingHostFile(t *testing.T) {
-	dir := tmpGitRepo(t)
+	dir := gitRepo(t)
 	claudePath := filepath.Join(dir, "CLAUDE.md")
 	if exists(claudePath) {
 		t.Fatal("fixture unexpectedly has a CLAUDE.md")
@@ -59,7 +42,7 @@ func TestEnableCreatesMissingHostFile(t *testing.T) {
 // surfaces the "run ethos setup" hint. enable owns the Vendored and Marker
 // zones only; setup owns the Config zone. Neither calls the other.
 func TestEnableDoesNotWriteConfigZone(t *testing.T) {
-	dir := tmpGitRepo(t)
+	dir := gitRepo(t)
 	rep, err := Enable(dir)
 	if err != nil {
 		t.Fatalf("Enable: %v", err)

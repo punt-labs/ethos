@@ -31,6 +31,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 // file they leave inside the working tree must have a class.
 func TestCmdWritersPathsAreClassified(t *testing.T) {
 	root := t.TempDir()
+	root = realPath(t, root)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	runGit(t, root, "init", "-q")
@@ -87,28 +88,28 @@ func TestCmdWritersPathsAreClassified(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// The CLI's ADR store is global today (ethos-yjh0 moves it into the
-	// repository). Where it sits inside the tree its files need a class;
-	// where it sits outside, none of them may appear in the walk.
+	// The CLI must select the repository ADR store; merely accepting either a
+	// global or repository result would miss a constructor regression.
 	adrRel, err := filepath.Rel(root, store.Dir())
 	require.NoError(t, err)
-	if strings.HasPrefix(adrRel, "..") {
-		require.FileExists(t, filepath.Join(store.Dir(), a.ID+".yaml"))
-		for _, p := range paths {
-			require.NotContains(t, p, a.ID)
-		}
-	} else {
-		require.Contains(t, paths, filepath.ToSlash(filepath.Join(adrRel, a.ID+".yaml")))
-	}
+	require.Equal(t, filepath.Join(".punt-labs", "ethos", "adrs"), adrRel)
+	require.Contains(t, paths, filepath.ToSlash(filepath.Join(adrRel, a.ID+".yaml")))
 
 	for _, want := range []string{".gitmodules", ".punt-labs/ethos.yaml", ".punt-labs/ethos-bundles/b/bundle.yaml"} {
 		require.Contains(t, paths, want)
 	}
 	for _, p := range paths {
+		want := layout.Source
+		switch {
+		case strings.HasPrefix(p, ".punt-labs/local/ethos/"):
+			want = layout.Never
+		case strings.HasPrefix(p, ".punt-labs/ethos/adrs/"):
+			want = layout.Blame
+		}
 		if c, e, ok := layout.Classify(p); !ok {
 			t.Errorf("writer created %s, which no entry of layout.Table matches", p)
-		} else if c != layout.Source {
-			t.Errorf("%s classified %v by %q, want source", p, c, e.Pattern)
+		} else if c != want {
+			t.Errorf("%s classified %v by %q, want %v", p, c, e.Pattern, want)
 		}
 	}
 }

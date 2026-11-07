@@ -34,7 +34,17 @@ func runDisable(cmd *cobra.Command) error {
 	if repoRoot == "" {
 		return failClosed{}
 	}
-	rep, err := enable.Disable(repoRoot, disableForce)
+	storeRoot, err := enableStoreRoot(repoRoot, func() (string, error) {
+		r := currentRoots()
+		if r.StoreErr != nil {
+			return "", r.StoreErr
+		}
+		return r.Store, r.EthosErr
+	})
+	if err != nil {
+		return err
+	}
+	rep, err := enable.DisableTo(repoRoot, storeRoot, disableForce)
 	if err != nil {
 		emitPartialReport(cmd, rep)
 		return err

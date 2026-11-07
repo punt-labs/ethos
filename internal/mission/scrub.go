@@ -101,10 +101,28 @@ type ScrubResult struct {
 // delegation record the shared repo mission lock, then the delegation lock),
 // so a concurrent close or update is not lost to the rewrite. A dry run and a
 // record whose mission directory is gone take no lock: nothing is written.
-// globalRoot is the shared store root those locks live under. A symlinked
-// artifact or containing directory is refused, as every loader here refuses it.
+// This single-root convenience API treats repoRoot as both store and checkout.
+// Linked-checkout callers must use ScrubFilesWithPolicy. globalRoot is the
+// separate global fallback store, not the repository staging or trace root.
+// A symlinked artifact or containing directory is refused.
 func ScrubFiles(repoRoot, globalRoot string, rels []string, dryRun bool) (ScrubResult, error) {
+	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return ScrubResult{}, fmt.Errorf("scrubbing %s: %w", repoRoot, err)
+	}
+	return ScrubFilesWithPolicy(p, globalRoot, rels, dryRun)
+}
+
+// ScrubFilesWithPolicy scrubs tracked files in the policy's checkout, staging
+// every rewrite in the canonical store's local zone. It consumes a validated
+// request snapshot; it does not discover roots or reread configuration. Locks
+// retain their authority-owner, shared trace and delegation identities at S.
+func ScrubFilesWithPolicy(p layout.Policy, globalRoot string, rels []string, dryRun bool) (ScrubResult, error) {
 	var res ScrubResult
+	if _, err := p.LockPath("mission-summary", "missions"); err != nil {
+		return res, fmt.Errorf("scrubbing: %w", err)
+	}
+	repoRoot := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
 	r, err := NewPathRedactor(repoRoot)
 	if err != nil {
 		return res, fmt.Errorf("scrubbing %s: %w", repoRoot, err)
@@ -112,7 +130,7 @@ func ScrubFiles(repoRoot, globalRoot string, rels []string, dryRun bool) (ScrubR
 	if strings.TrimSpace(globalRoot) == "" {
 		return res, fmt.Errorf("scrubbing %s: the global store root is required for the record locks", repoRoot)
 	}
-	s := NewStoreWithRoots(repoRoot, globalRoot)
+	s := NewRepositoryStore(p, globalRoot)
 	sorted := append([]string(nil), rels...)
 	sort.Strings(sorted)
 	var failed []error
@@ -147,12 +165,14 @@ var errScrubMissing = errors.New("file does not exist")
 
 // scrubWrite is the write step of scrubFile; tests replace it to inject
 // write-time failures that a real filesystem cannot produce on demand.
-var scrubWrite = writeAtomicFile
+var scrubWrite = func(dir, pattern, dest string, data []byte) error {
+	return writeAtomicFileWithWarning(dir, pattern, dest, data, nil, "mission scrub: "+dest+": rewrite installed")
+}
 
 // scrubFileLocked is scrubFile under the locks the file's writers take,
 // after refusing a symlinked path.
 func (s *Store) scrubFileLocked(r PathRedactor, rel string, dryRun bool) (bool, error) {
-	if err := rejectSymlinkedPath(s.repoRoot, rel); err != nil {
+	if err := rejectSymlinkedPath(s.checkoutRoot, rel); err != nil {
 		return false, err
 	}
 	// A dry run writes nothing, and a record whose mission directory is gone
@@ -160,12 +180,12 @@ func (s *Store) scrubFileLocked(r PathRedactor, rel string, dryRun bool) (bool, 
 	// directory) for a scrub that changes nothing, as Close avoids by
 	// statting the directory first.
 	if dryRun || s.missionDirAbsent(rel) {
-		return scrubFile(r, s.repoRoot, rel, dryRun)
+		return scrubFileWithPolicy(r, s.policy, rel, dryRun)
 	}
 	var did bool
 	err := s.withRecordLocks(rel, func() error {
 		var err error
-		did, err = scrubFile(r, s.repoRoot, rel, dryRun)
+		did, err = scrubFileWithPolicy(r, s.policy, rel, dryRun)
 		return err
 	})
 	return did, err
@@ -178,7 +198,7 @@ func (s *Store) missionDirAbsent(rel string) bool {
 	if len(parts) < 5 {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(s.repoRoot, filepath.Join(parts[:4]...)))
+	_, err := os.Stat(filepath.Join(s.checkoutRoot, filepath.Join(parts[:4]...)))
 	return missingRepoTreeDir(err)
 }
 
@@ -204,7 +224,7 @@ func (s *Store) withRecordLocks(rel string, fn func() error) error {
 			return err
 		}
 		defer releaseMission()
-		release, err := AcquireDelegationLock(s.root, parts[5])
+		release, err := s.AcquireDelegationLock(parts[5])
 		if err != nil {
 			return err
 		}
@@ -247,6 +267,18 @@ func artifactType(name string) reflect.Type {
 
 // scrubFile redacts one file in place and reports whether it changed.
 func scrubFile(r PathRedactor, repoRoot, rel string, dryRun bool) (bool, error) {
+	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return false, err
+	}
+	return scrubFileWithPolicy(r, p, rel, dryRun)
+}
+
+func scrubFileWithPolicy(r PathRedactor, p layout.Policy, rel string, dryRun bool) (bool, error) {
+	if _, err := p.LockPath("mission-summary", "missions"); err != nil {
+		return false, err
+	}
+	repoRoot := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
 	dest := filepath.Join(repoRoot, filepath.FromSlash(rel))
 	data, err := os.ReadFile(dest)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -286,7 +318,10 @@ func scrubFile(r PathRedactor, repoRoot, rel string, dryRun bool) (bool, error) 
 	if !changed || dryRun {
 		return changed, nil
 	}
-	if err := scrubWrite(filepath.Dir(dest), layout.TmpPattern(".scrub", ""), dest, canon); err != nil {
+	if err := layout.EnsureLocalDir(p, p.TempDir()); err != nil {
+		return false, err
+	}
+	if err := scrubWrite(p.TempDir(), layout.TmpPattern(".scrub", ""), dest, canon); err != nil {
 		return false, err
 	}
 	return true, nil

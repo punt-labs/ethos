@@ -83,7 +83,7 @@ func TestBrowseFileShowsNoNoticeWhenGitAnswers(t *testing.T) {
 	sha := strings.Repeat("b", 40)
 	fakeGitBody(t, `case "$1" in
 blame) printf '`+sha+` 1 1 1\nauthor A\n\tone\n' ;;
-log) echo '' ;;
+log) printf '\n\n\n' ;;
 esac
 `)
 	srv := uiServer(t, repo, repo)

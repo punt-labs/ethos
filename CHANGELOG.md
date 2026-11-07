@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ethos mission publish` snapshots complete selected blame records into the
+  invoking checkout and its actual Git index. Immutable provenance manifests,
+  `ethos provenance message` and `ethos provenance verify` preserve source
+  associations through squash merges and fresh clones. The installed pre-commit
+  hook verifies newly staged manifests against the committing index.
+- `ethos mission export --full` explicitly exports retained mission prompts,
+  reflections and event history, including unsealed tails. It reports missing
+  expected history and excludes session audits, private overlays and agent
+  scratch. Plain export remains contract plus final result; neither export stages
+  files.
+- `ethos repair` inventories and permanently deletes a bounded set of obsolete
+  repository trace/runtime files after default-no terminal confirmation or
+  explicit `--yes`. It preserves shared authority, credentials, current local
+  data, current publications/exports and arbitrary files. It performs no backup,
+  migration, authority backfill or Git-index changes. Windows supports inventory
+  but refuses destructive repair.
+
+### Changed
+
+- Repository runtime data now belongs under the canonical shared store's
+  `.punt-labs/local/ethos/`: live streams, retained archives, private identity
+  overlays, locks, receipts, scratch and atomic staging. Linked worktrees retain
+  their source deposits and publication/index effects without owning the only
+  copy of local history.
+- Default `record: blame` sealing retains trace locally without querying or
+  changing the index. `record: full` adds publication copies according to each
+  entry's captured consent; switching modes does not promote older private
+  history. Invalid recording policy refuses repository operations instead of
+  falling back to global storage.
+- Mandatory reflection decisions and correction authority are shared records.
+  Required events persist before acceptance; optional prose/archive failures do
+  not revoke an accepted decision or block otherwise permitted lifecycle progress.
+  Readers distinguish unavailable detail from an unsubmitted decision.
+- Repository ADR commands use repository-owned records with repo-first reads,
+  redaction and supported global fallback. Repository-local extension overlays
+  use the canonical local tree; legacy siblings remain read-only and require
+  explicit credential-preserving operator reconciliation.
+
+### Fixed
+
+- Commands and MCP requests retain one configuration/root snapshot through
+  subordinate operations, including setup, team selection, agent generation,
+  lifecycle sealing and content validation.
+- Agent generation and doctor share deterministic output plans. Doctor reports
+  exact generated/installed drift and misplaced runtime files; multiple roles
+  for one identity no longer produce an impossible currency check.
+- Git hooks create no discovery temporary files. Commit-message updates render
+  trailers through Git and stage under the shared local root before atomic
+  installation, preserving quoted body text and existing trailers without an
+  append or cross-device copy fallback.
+- Plugin release preparation handles quoted paths, and development restoration
+  finds the correct pre-release snapshot after a squash merge.
+
 ## [4.20.4] - 2026-11-03
 
 ### Security

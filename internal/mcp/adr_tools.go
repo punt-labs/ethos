@@ -65,9 +65,8 @@ func (h *Handler) handleADR(_ context.Context, req mcplib.CallToolRequest) (*mcp
 }
 
 func (h *Handler) handleCreateADR(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	// The ADR tool is unguarded (its reads use only the global store), but a
-	// create is a write the CLI refuses when the store or its configuration
-	// cannot be used, and so does this.
+	// Retain the write refusal for direct handler callers as well as registered
+	// calls guarded by addTool: repository failures must never redirect writes.
 	if h.storeErr != nil {
 		what, _, _ := resolve.Describe(h.storeErr)
 		return mcplib.NewToolResultError(fmt.Sprintf(
@@ -120,7 +119,7 @@ func (h *Handler) handleListADRs(req mcplib.CallToolRequest) (*mcplib.CallToolRe
 	for _, id := range ids {
 		a, err := h.adrStore.Load(id)
 		if err != nil {
-			continue
+			return mcplib.NewToolResultError(fmt.Sprintf("failed to read ADR %s: %v", id, err)), nil
 		}
 		if statusFilter != "all" && a.Status != statusFilter {
 			continue

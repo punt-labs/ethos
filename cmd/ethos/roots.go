@@ -57,17 +57,6 @@ func (r *repoRoots) err() error { return r.Located.Err() }
 // establishRoots and by ethos serve for each handler it builds.
 var cmdRoots atomic.Pointer[repoRoots]
 
-// refreshRoots locates the repository again, for a command that has just
-// created what it located (setup writes the repo config and the store, enable
-// deposits it): the stores built after that point must see it. It is the one
-// deliberate second lookup, made by the command that changed the answer.
-func refreshRoots() {
-	old := cmdRoots.Load()
-	r := locateRoots()
-	r.Global = old == nil || old.Global
-	cmdRoots.Store(r)
-}
-
 func init() {
 	// The located repository belongs to one command: forget it when the
 	// command finishes, so the next one (in a test, or a second Execute in the
@@ -144,7 +133,7 @@ func (r *repoRoots) configIssue() error {
 	if r.StoreFailure() != nil {
 		return nil
 	}
-	return bundle.ConfigIssue(r.Store, r.Ethos, defaultGlobalRoot())
+	return bundle.ConfigIssueFromConfig(r.Store, r.Ethos, defaultGlobalRoot(), r.Config)
 }
 
 // hookIssue is why a hook that injects a persona must refuse: the store or its
