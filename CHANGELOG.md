@@ -562,7 +562,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them under `forced_unresolved` in `--json`.
 - **`ethos mission dispatch`, `scaffold` and `correct` refuse a malformed
   `.punt-labs/ethos.yaml`** instead of recording `claude` as the leader.
-
+- The seeded `silent-failure-hunter` and `invariant-completeness-reviewer`
+  review agents are pinned to `model: opus` instead of `model: inherit`.
+  Both run on every full diff and every 20+ line fix diff, and their work —
+  finding swallowed errors and verifying a claimed invariant actually holds —
+  is reasoning-heavy; `inherit` floated their model and cost with the invoking
+  session. Matches `code-reviewer`, already pinned to `opus`.
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
   workflow_dispatch runs, never for runs triggered by pull requests, which
