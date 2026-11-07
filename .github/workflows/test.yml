@@ -74,6 +74,11 @@ jobs:
           .tmp/z-spec-installer/install.sh --fuzz-only
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Archival observer toolchain
+        run: |
+          uname -sr
+          strace --version
+
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
