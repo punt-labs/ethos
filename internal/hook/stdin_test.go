@@ -311,9 +311,11 @@ func writeThenHold(t *testing.T, b []byte) *os.File {
 func TestReadInput_TruncatedPayloadIsNeverComplete(t *testing.T) {
 	payload := `{"tool_name":"mcp__plugin_ethos_self__identity","tool_input":{"a":[1,2,{"b":"c"}]},"n":12}`
 	for i := 1; i < len(payload); i++ {
-		assert.False(t, completeObject([]byte(payload[:i])), "prefix of %d bytes", i)
+		var f objectFrame
+		assert.False(t, f.feed([]byte(payload[:i])), "prefix of %d bytes", i)
 	}
-	assert.True(t, completeObject([]byte(payload+"\n")))
+	var whole objectFrame
+	assert.True(t, whole.feed([]byte(payload+"\n")))
 	for _, name := range []string{"pollable pipe", "blocking inherited fd"} {
 		t.Run(name, func(t *testing.T) {
 			r := writeThenHold(t, []byte(payload[:len(payload)-1]))
@@ -350,6 +352,108 @@ func TestReadInput_TrailingBytesAndScalarsAreRefused(t *testing.T) {
 			data, err := ReadInput(writeThenHold(t, []byte(in)), 150*time.Millisecond)
 			require.Error(t, err)
 			assert.Empty(t, data)
+		})
+	}
+}
+
+// Braces and escaped quotes inside string values do not move the frame, and a
+// payload split at arbitrary points across writes on an open pipe completes
+// only when the closing brace arrives.
+func TestReadFromFile_BracesAndEscapesInStrings(t *testing.T) {
+	payload := `{"a":"}}]]\\\"}{","b":{"c":["\\\\","\"{"]}}`
+	require.True(t, json.Valid([]byte(payload)))
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	defer wFd.Close()
+	go func() {
+		for i := 0; i < len(payload); i += 7 {
+			_, _ = wFd.Write([]byte(payload[i:min(i+7, len(payload))]))
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	const timeout = 10 * time.Second
+	start := time.Now()
+	data, err := ReadFromFile(rFd, timeout)
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(data))
+	assert.Less(t, time.Since(start), timeout/2)
+}
+
+// A first non-space byte other than '{' never completes the frame: the read
+// ends at EOF with everything that was written.
+func TestReadFromFile_NonObjectPrefixReadsToEOF(t *testing.T) {
+	for _, in := range []string{`  [1,2]`, `12`, `"s"`, "\n 7 "} {
+		t.Run(in, func(t *testing.T) {
+			rFd, wFd, err := os.Pipe()
+			require.NoError(t, err)
+			defer rFd.Close()
+			go func() {
+				_, _ = wFd.Write([]byte(in))
+				time.Sleep(50 * time.Millisecond)
+				wFd.Close()
+			}()
+			data, err := ReadFromFile(rFd, 10*time.Second)
+			require.NoError(t, err)
+			assert.Equal(t, in, string(data))
+		})
+	}
+}
+
+// An object followed by garbage in the same write is read to EOF in full and
+// then refused by the parse. The pipe stays open past the write, so only the
+// frame, not EOF, could have ended the read early.
+func TestReadFromFile_TrailingGarbageReadsToEOF(t *testing.T) {
+	in := `{"a":1}` + "\n" + `garbage`
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	_, err = wFd.Write([]byte(in))
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wFd.Close()
+	}()
+	start := time.Now()
+	data, err := ReadFromFile(rFd, 10*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, in, string(data))
+	assert.GreaterOrEqual(t, time.Since(start), 40*time.Millisecond, "waited for EOF")
+	_, err = parseJSON(data)
+	require.Error(t, err)
+}
+
+// A writer that streams past the bound is cut off with ErrInputTooLarge and the
+// bytes read before the limit, on both read paths.
+func TestRead_InputBound(t *testing.T) {
+	old := maxHookInput
+	maxHookInput = 200_000
+	t.Cleanup(func() { maxHookInput = old })
+
+	for name, read := range map[string]func(*os.File) ([]byte, error){
+		"deadline path":  func(f *os.File) ([]byte, error) { return ReadFromFile(f, 10*time.Second) },
+		"goroutine path": func(f *os.File) ([]byte, error) { return readWithTimeout(f, 10*time.Second) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rFd, wFd, err := os.Pipe()
+			require.NoError(t, err)
+			defer rFd.Close()
+			defer wFd.Close()
+			go func() {
+				_, _ = wFd.Write([]byte(`{"x":"`))
+				block := bytes.Repeat([]byte("a"), 30_000)
+				for range 20 {
+					if _, err := wFd.Write(block); err != nil {
+						return
+					}
+				}
+			}()
+			data, err := read(rFd)
+			require.ErrorIs(t, err, ErrInputTooLarge)
+			assert.NotErrorIs(t, err, ErrInputTimeout)
+			assert.LessOrEqual(t, len(data), maxHookInput)
+			assert.NotEmpty(t, data)
 		})
 	}
 }

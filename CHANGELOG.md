@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Hook stdin is framed incrementally instead of re-validated after every read, and input past 64 MiB is refused with `ErrInputTooLarge`.
+
 ### Fixed
 
 - `ethos find missions --format paths` omits missions whose directory was purged and reports each on stderr; `json` and `table` still list them.
