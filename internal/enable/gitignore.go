@@ -233,6 +233,11 @@ func removeLegacyManagedRules(data []byte) ([]byte, []string) {
 	return []byte(out.String()), retired
 }
 
+// errRetirementRefused marks the refusal to retire legacy ignore rules while
+// protected data still depends on them. It needs operator cleanup, so enable
+// refreshes the git hooks before returning it.
+var errRetirementRefused = errors.New("refusing to retire legacy ignore rules")
+
 // preflightLegacyIgnores checks each host before EnableTo changes either ignore
 // file. A linked checkout must not be updated before the shared store refuses.
 func preflightLegacyIgnores(repoRoot string) error {
@@ -307,7 +312,7 @@ func preflightIgnoreRetirement(repoRoot string, retired []string) error {
 		return nil
 	}
 	sort.Strings(paths)
-	return fmt.Errorf("refusing to retire legacy ignore rules: existing protected paths require migration or operator cleanup (quiesce old writers, copy and verify before removal): %s; ignore files unchanged", strings.Join(paths, ", "))
+	return fmt.Errorf("%w: existing protected paths require migration or operator cleanup (quiesce old writers, copy and verify before removal): %s; ignore files unchanged", errRetirementRefused, strings.Join(paths, ", "))
 }
 
 // unnegatedLocalIgnore proves the replacement directory rule is sufficient for
