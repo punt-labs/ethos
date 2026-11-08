@@ -60,6 +60,11 @@ var writeFile = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
 // the truncate too and reports a second failure distinctly; see that
 // function for the rationale.
 func AppendMonotonic(livePath string, watermark int64, now time.Time, line func(ts int64) ([]byte, error)) (int64, error) {
+	if info, err := os.Lstat(livePath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return 0, fmt.Errorf("live audit file %s is a symlink", livePath)
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return 0, err
+	}
 	if err := os.MkdirAll(filepath.Dir(livePath), 0o700); err != nil {
 		return 0, fmt.Errorf("creating live dir: %w", err)
 	}
@@ -396,10 +401,11 @@ func StageUntrackedChunks(repoRoot, dir string, ns Namespace, session string) (i
 	if len(pending) == 0 {
 		return 0, nil
 	}
-	if err := GitAdd(repoRoot, pending...); err != nil {
+	staged, err := GitAdd(repoRoot, pending...)
+	if err != nil {
 		return 0, err
 	}
-	return len(pending), nil
+	return len(staged), nil
 }
 
 // ChunkArtifacts lists every chunk-namespace artifact in dir — a valid chunk,

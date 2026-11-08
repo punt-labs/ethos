@@ -78,13 +78,25 @@ func Enable(repoRoot string) (*Report, error) {
 
 // EnableTo is Enable with the checkout root (repoRoot: the per-checkout
 // deposit — vendored guide, marker, @-import, hooks) split from the store
-// root (storeRoot: the "has setup been run?" config-existence read). They
+// root (storeRoot: shared-local locks/staging and the config-existence read). They
 // differ only in a linked worktree: setup writes .punt-labs/ethos.yaml to the
 // store, so configStatus must read it there or it spuriously hints "run
 // setup" (#370 reader-side). Enable(repoRoot) passes repoRoot for both, so
 // existing callers and the single-tree case are unchanged.
 func EnableTo(repoRoot, storeRoot string) (*Report, error) {
+	return enableTo(repoRoot, storeRoot, defaultGitignoreIO())
+}
+
+// enableTo carries per-request ignore I/O so persistence failures can be tested
+// through the orchestration boundary without replacing process-wide hooks.
+func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
+	// Host staging does not depend on the recording mode. These roots are
+	// supplied by the caller's resolver, never independently rediscovered here.
+	p, err := layout.NewRepository(storeRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return rep, fmt.Errorf("enable layout: %w", err)
+	}
 
 	// Refuse before writing anything: a root with no .git of its own would
 	// get hook files git never runs.
@@ -112,7 +124,19 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 		return rep, fmt.Errorf("enable: %w; remove it and re-run", err)
 	}
 
-	depositWarns, err := deposit(repoRoot, Guide, Setup)
+	// Preflight both hosts before any ignore mutation (or deposit). Old rules
+	// may be the only protection for private overlays or another tool's data;
+	// enable is not permission to move or expose those files.
+	if err := preflightLegacyIgnores(repoRoot); err != nil {
+		return rep, err
+	}
+	if !textscan.SamePath(repoRoot, storeRoot) {
+		if err := preflightLegacyIgnores(storeRoot); err != nil {
+			return rep, err
+		}
+	}
+
+	depositWarns, err := deposit(repoRoot, Guide, Setup, p)
 	if err != nil {
 		return rep, err
 	}
@@ -122,11 +146,25 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	// Protect before marking enabled, so "enabled implies protected" holds: a
 	// rare .gitignore write error must not leave an enabled-but-unprotected
 	// checkout.
-	action, detail, err := ensureGitignore(repoRoot)
+	action, detail, err := ensureGitignoreWithIO(repoRoot, p, io)
+	if action != "" {
+		rep.step("gitignore", action, detail)
+	}
 	if err != nil {
 		return rep, err
 	}
-	rep.step("gitignore", action, detail)
+	if !textscan.SamePath(repoRoot, storeRoot) {
+		// The checkout's ignore file travels with its next commit, but it does
+		// not exclude runtime we just created in the canonical store checkout.
+		// Maintain that owner's shared-local exclusion as well.
+		action, detail, err := ensureGitignoreWithIO(storeRoot, p, io)
+		if action != "" {
+			rep.step("gitignore:store", action, detail)
+		}
+		if err != nil {
+			return rep, fmt.Errorf("protecting shared store local zone: %w", err)
+		}
+	}
 
 	// The .gitignore only stops future tracking; warn (loudly) when runtime
 	// files are already committed — the exact state this guard targets.
@@ -137,15 +175,26 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 		rep.Warnings = append(rep.Warnings, trackedRuntimeWarning(tracked))
 	}
 
-	// Marker-last: written only after the deposit and protection complete, so a
-	// marker present always implies a complete vendored zone and a protected
-	// checkout.
+	// Marker-last: install a new marker only after deposit and protection
+	// complete. A preexisting marker is not proof of protection and is not
+	// removed on failure; re-enable must still fail visibly if rules changed.
+	// Recheck C after maintaining S too; success at one host is not proof about
+	// the other. Like other host edits this does not fence concurrent user edits.
+	protectionRoots := []string{repoRoot}
+	if !textscan.SamePath(repoRoot, storeRoot) {
+		protectionRoots = append(protectionRoots, storeRoot)
+	}
+	for _, root := range protectionRoots {
+		if err := verifyLocalProtection(root, p, io); err != nil {
+			return rep, err
+		}
+	}
 	if err := writeMarker(repoRoot); err != nil {
 		return rep, err
 	}
 	rep.step("marker", "done", markerRel)
 
-	added, err := claudemd.Register(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport)
+	added, err := claudemd.Register(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
 		return rep, fmt.Errorf("adding import line: %w", err)
 	}
@@ -155,7 +204,7 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 		rep.step("import", "already", CanonicalImport+" already present")
 	}
 
-	if err := chainHooks(lk, hooksDir, rep); err != nil {
+	if err := chainHooks(lk, hooksDir, rep, p); err != nil {
 		return rep, err
 	}
 
@@ -173,7 +222,17 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 // unchains both hooks; it leaves the vendored guide and all config/seal data
 // dormant on disk and does not run a final seal.
 func Disable(repoRoot string, force bool) (*Report, error) {
+	return DisableTo(repoRoot, repoRoot, force)
+}
+
+// DisableTo is Disable with explicit checkout and canonical shared-store roots.
+// Linked-worktree callers must use this form so host locks match EnableTo.
+func DisableTo(repoRoot, storeRoot string, force bool) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
+	p, err := layout.NewRepository(storeRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return rep, fmt.Errorf("disable layout: %w", err)
+	}
 
 	// Resolve the hooks directory before the sibling probe and before changing
 	// anything, so a refusal leaves the repo enabled rather than half disabled,
@@ -199,7 +258,7 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 		}
 	}
 
-	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport)
+	removed, err := claudemd.Deregister(filepath.Join(repoRoot, "CLAUDE.md"), CanonicalImport, claudemd.WithRepository(p))
 	if err != nil {
 		return rep, fmt.Errorf("removing import line: %w", err)
 	}
@@ -219,7 +278,7 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 		rep.step("marker", "already", "no marker present")
 	}
 
-	if err := unchainHooks(lk, hooksDir, rep); err != nil {
+	if err := unchainHooks(lk, hooksDir, rep, p); err != nil {
 		return rep, err
 	}
 
@@ -283,7 +342,7 @@ func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 
 // chainHooks chains the seal and trailer sections into pre-commit and
 // commit-msg in dir, the hooks directory hooksTarget verified.
-func chainHooks(l githook.Lookup, dir string, rep *Report) error {
+func chainHooks(l githook.Lookup, dir string, rep *Report, p layout.Policy) error {
 	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating hooks dir %s: %w", dir, err)
@@ -293,7 +352,7 @@ func chainHooks(l githook.Lookup, dir string, rep *Report) error {
 		if !ok {
 			return fmt.Errorf("no hook template for %s", name)
 		}
-		res, err := githook.Chain(filepath.Join(dir, name), s.src, s.tag, s.ident)
+		res, err := githook.Chain(filepath.Join(dir, name), s.src, s.tag, s.ident, githook.WithRepository(p))
 		if err != nil {
 			return fmt.Errorf("chaining %s: %w", name, err)
 		}
@@ -337,7 +396,7 @@ func unchainTarget(repoRoot string, force bool) (githook.Lookup, string, error) 
 
 // unchainHooks strips the seal and trailer sections from the hooks in dir. An
 // empty dir means unchainTarget found none it could verify.
-func unchainHooks(l githook.Lookup, dir string, rep *Report) error {
+func unchainHooks(l githook.Lookup, dir string, rep *Report, p layout.Policy) error {
 	rep.Warnings = append(rep.Warnings, l.Warnings...)
 	if dir == "" {
 		rep.step("hook:*", "skipped", fmt.Sprintf(
@@ -349,7 +408,7 @@ func unchainHooks(l githook.Lookup, dir string, rep *Report) error {
 		if !ok {
 			return fmt.Errorf("no hook template for %s", name)
 		}
-		res, err := githook.Unchain(filepath.Join(dir, name), s.tag, s.ident)
+		res, err := githook.Unchain(filepath.Join(dir, name), s.tag, s.ident, githook.WithRepository(p))
 		if err != nil {
 			return fmt.Errorf("unchaining %s: %w", name, err)
 		}

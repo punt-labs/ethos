@@ -86,7 +86,7 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck(t *testing.T) {
 
 			var r PreToolUseResult
 			require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-			assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+			assert.Equal(t, "", r.HookSpecificOutput.Decision(),
 				"a MISSION_ID naming a %s mission must not block the spawn", status)
 			assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 				"a %s mission must not take a new delegation", status)
@@ -218,7 +218,7 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+	assert.Equal(t, "", r.HookSpecificOutput.Decision(),
 		"a mission that closed while dispatch was blocked must not refuse the spawn")
 	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"the TOCTOU re-check must catch the close and fall through to Tier A")
@@ -315,7 +315,7 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_LoadErrorFallsThrough(t *testin
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+	assert.Equal(t, "", r.HookSpecificOutput.Decision(),
 		"a re-check Load failure must not block the spawn")
 	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"a re-check Load failure must fall through to Tier A rather than trust the write")

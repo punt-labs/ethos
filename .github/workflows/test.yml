@@ -14,7 +14,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
@@ -61,17 +61,44 @@ jobs:
           path: .tmp/z-spec-installer
 
       - name: Install fuzz (Z spec type-checker)
+        # fuzz 1.2.1 declares `typedef int bool;` (fuzz.h:49), which is a
+        # hard error under C23, the GCC default on the Ubuntu 26.04
+        # runner. CFLAGS (not CC) is the knob: fuzz's src/Makefile.in
+        # hardcodes `CC=gcc`, which overrides an environment CC, but it
+        # expands $(CFLAGS) on every compile and link line and never sets it.
+        env:
+          CFLAGS: -std=gnu17
         run: |
           sudo apt-get update
           sudo apt-get install -y bison flex
           .tmp/z-spec-installer/install.sh --fuzz-only
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Archival observer toolchain
+        run: |
+          uname -sr
+          strace --version
+
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
       - name: Validate content
         run: go run ./cmd/validate-content
+
+      - name: Offline OpenCode configuration and helper tests
+        run: make check-opencode
+
+      - name: Offline storage-boundary acceptance (CLI, wrappers and real commits)
+        run: make check-storage
+
+      - name: Upload storage-boundary evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: storage-acceptance-evidence
+          path: .tmp/opencode/storage-acceptance/
+          include-hidden-files: true
+          retention-days: 7
 
       - name: fuzz type-check (Z specs)
         run: make fuzz-check

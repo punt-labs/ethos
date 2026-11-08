@@ -64,3 +64,17 @@ func TestStaleGitfileNamesTheGitdirInAnyGitWording(t *testing.T) {
 		})
 	}
 }
+
+// A gitfile naming a gitdir that is gone is refused with that gitdir named,
+// when git says "gitfile does not point to a valid repository" (newer gits).
+func TestStaleGitfileNamedWhenGitSaysGitfileInvalid(t *testing.T) {
+	dir := t.TempDir()
+	gitdir := filepath.Join(t.TempDir(), "gone")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644))
+	failingGit(t, "fatal: gitfile does not point to a valid repository: "+dir+"/.git")
+	t.Chdir(dir)
+	_, err := locateRepoRoot()
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrNotInRepo)
+	assert.Contains(t, err.Error(), gitdir)
+}

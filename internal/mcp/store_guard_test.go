@@ -261,8 +261,8 @@ func TestRefusalWordingFollowsTheKindOfFailure(t *testing.T) {
 	assert.Contains(t, resultText(t, write), "the repository configuration could not be read")
 }
 
-// adr create refuses while the store or its configuration cannot be used, as the
-// CLI's does; the ADR reads stay unguarded.
+// Every ADR method needs a complete repo-first view; a broken repository must
+// not masquerade as an empty repository with only the global fallback visible.
 func TestADRCreateRefusesWhenStoreUnlocatable(t *testing.T) {
 	for name, storeErr := range map[string]error{
 		"store":  errNoStore,
@@ -284,7 +284,8 @@ func TestADRCreateRefusesWhenStoreUnlocatable(t *testing.T) {
 			assert.Contains(t, resultText(t, create), storeErr.Error())
 
 			list := call("list", map[string]any{})
-			assert.False(t, list.IsError, "reads stay unguarded: %s", resultText(t, list))
+			assert.True(t, list.IsError)
+			assert.Contains(t, resultText(t, list), storeErr.Error())
 		})
 	}
 }

@@ -7,21 +7,17 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
-// importTestDir creates a temp directory under /tmp (not TMPDIR) so the
-// subprocess does not inherit the git repo tree. CheckoutRootIfAny walks
-// up from cwd; if TMPDIR is inside the repo, cmd.Dir = t.TempDir()
-// still resolves the repo's .punt-labs/ethos. Using /tmp avoids this.
+// importTestDir isolates discovery at a test-owned ceiling, which the
+// subprocess inherits through os.Environ even when TMPDIR is inside a repo.
 func importTestDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "ethos-import-test-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return dir
+	return testhelpers.OutsideRepo(t)
 }
 
 func TestImportSoulSpecFull(t *testing.T) {

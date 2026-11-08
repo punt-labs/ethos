@@ -322,7 +322,7 @@ func TestQuarantineMarkerReasonRedacted(t *testing.T) {
 }
 
 // keepLine is the identity guard: these tests do not exercise it.
-func keepLine(l []byte) ([]byte, string) { return l, "" }
+func keepLine(l []byte) ([]byte, string, bool) { return l, "", false }
 
 func noRule([]byte) string { return "" }
 

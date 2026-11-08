@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/team"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
@@ -112,7 +113,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up a fake repo root with .git marker.
-			repoRoot := t.TempDir()
+			repoRoot := physicalAgentTempDir(t)
 			testhelpers.MakeGitDir(t, repoRoot)
 
 			// Chdir to the repo root so CheckoutRootIfAny works.
@@ -163,7 +164,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 // rather than into the real checkout. Returns the repo root.
 func setupStubRepo(t *testing.T, stub string) string {
 	t.Helper()
-	repoRoot := t.TempDir()
+	repoRoot := physicalAgentTempDir(t)
 	testhelpers.MakeGitDir(t, repoRoot)
 
 	orig, err := os.Getwd()
@@ -264,4 +265,26 @@ func TestInstallStubAgentDefs_SkipsOwnedHandle(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))
 	assert.True(t, os.IsNotExist(statErr),
 		"a stub for a generator-owned handle must not be copied; got %v", statErr)
+}
+
+// TestInstallAgentDefinitions_ProvenanceMarker pins that an installed stub
+// carries the ethos marker and that a second install is a no-op.
+func TestInstallAgentDefinitions_ProvenanceMarker(t *testing.T) {
+	repoRoot := setupStubRepo(t, "bwk")
+	ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
+	stub := "---\nname: bwk\n---\nbody\n"
+	require.NoError(t, os.WriteFile(filepath.Join(ethosRoot, "agents", "bwk.md"), []byte(stub), 0o644))
+
+	deployed, err := InstallAgentDefinitions(ethosRoot, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bwk.md"}, deployed)
+
+	got, err := os.ReadFile(filepath.Join(repoRoot, ".claude", "agents", "bwk.md"))
+	require.NoError(t, err)
+	assert.Equal(t, agentmark.Add(stub), string(got))
+	assert.True(t, agentmark.Has(string(got)))
+
+	deployed, err = InstallAgentDefinitions(ethosRoot, nil)
+	require.NoError(t, err)
+	assert.Empty(t, deployed, "reinstalling the same stub must not rewrite it")
 }

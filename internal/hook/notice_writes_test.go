@@ -20,11 +20,13 @@ import (
 // rewriteNotices are the phrases of a notice that something stored was changed.
 var rewriteNotices = []string{"was rewritten", "loss marker", "was withheld", "rewritten before"}
 
-// TestWriters_FailingWritesPrintNoRewriteNotice drives every audit writer that
-// can rewrite a line through a write that fails, with content the guard
-// rewrites, and asserts that no notice says a rewrite happened: nothing was
-// stored.
-func TestWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
+// These historical/global writer checks do not establish acceptance for the
+// current repository policy path. See repository_notice_writes_test.go for
+// HandleAuditLogWithPolicy and SealRepoWithPolicy coverage.
+// TestLegacyWriters_FailingWritesPrintNoRewriteNotice retains the legacy sink
+// failures, including the non-repository HandleAuditLog branch and the old
+// sealDirLocked helper. Some failures precede guarding, not just persistence.
+func TestLegacyWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	ts := audit.FormatLineTS(100)
@@ -47,7 +49,7 @@ func TestWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
 		"emitLegacySentinel": func(t *testing.T) {
 			require.Error(t, emitLegacySentinel(filepath.Join(missing, "a.jsonl"), "/home/bob/s", ts, "boom"))
 		},
-		"HandleAuditLog": func(t *testing.T) {
+		"HandleAuditLog global fallback": func(t *testing.T) {
 			blocked := filepath.Join(t.TempDir(), "sessions")
 			require.NoError(t, os.Mkdir(blocked, 0o000))
 			defer func() { _ = os.Chmod(blocked, 0o700) }()
@@ -55,7 +57,7 @@ func TestWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
 				"tool_input": map[string]any{"file_path": filepath.Join(home, "x")}})
 			require.ErrorIs(t, HandleAuditLog(bytes.NewReader(b), "", blocked), ErrAuditDropped)
 		},
-		"seal": func(t *testing.T) {
+		"historical sealDirLocked": func(t *testing.T) {
 			repo := t.TempDir()
 			live := filepath.Join(repo, "live.jsonl")
 			require.NoError(t, os.WriteFile(live, []byte(leaky+"\n"), 0o600))
@@ -81,7 +83,7 @@ func TestWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
 			cn, _ := audit.Classify(chunk, audit.SessionNS)
 			re := audit.ChunkName{Namespace: cn.Namespace, First: 100, Last: 100}
 			require.NoError(t, os.MkdirAll(filepath.Join(sealed, re.TempFile()), 0o700)) // the write fails
-			_, err := audit.Quarantine(repo, sealed, cn, live, "bad", redactReason, guardAuditLineNote, corruptRule)
+			_, err := audit.Quarantine(repo, sealed, cn, live, "bad", redactReason, guardAuditLineFull, corruptRule)
 			require.Error(t, err)
 		},
 	}
@@ -105,9 +107,10 @@ func TestWriters_FailingWritesPrintNoRewriteNotice(t *testing.T) {
 	}
 }
 
-// TestSeal_PrintsTheGuardNoticesAfterTheChunkIsWritten: a seal that rewrites
-// a line says so once the chunk is on disk.
-func TestSeal_PrintsTheGuardNoticesAfterTheChunkIsWritten(t *testing.T) {
+// TestLegacySeal_PrintsTheGuardNoticesAfterTheChunkIsWritten exercises the old
+// rewrite-on-seal helper, not current immutable repository archival, which
+// refuses a payload that would require rewriting.
+func TestLegacySeal_PrintsTheGuardNoticesAfterTheChunkIsWritten(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ts := audit.FormatLineTS(100)
 	repo := t.TempDir()
@@ -165,14 +168,14 @@ func TestMigrate_NoticesOnlyForLinesAppended(t *testing.T) {
 
 // TestMigrate_NoLegacyLineVanishes: a legacy line that does not decode as an
 // entry (a string tool_input, junk, a torn tail) is routed through the guard
-// and written, as a coerced line or a loss marker, and the legacy file goes
-// only after every line was written. Notices name the FILE line. A dry run
-// reports the same lines and writes nothing.
+// and imported, as a coerced line or a loss marker. The global source remains
+// intact after import. Notices name the FILE line. A dry run reports the same
+// lines and writes nothing.
 func TestMigrate_NoLegacyLineVanishes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
-	sessionDir := repoSessionDir(t, repoRoot, "2026-05-22", "sess-d")
+	sessionDir := migrationSessionDir(t, repoRoot, "2026-05-22", "sess-d")
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	legacy := filepath.Join(globalDir, "sess-d.audit.jsonl")
 
@@ -215,22 +218,23 @@ func TestMigrate_NoLegacyLineVanishes(t *testing.T) {
 	assert.Contains(t, notice, "3 of 13 line(s) rewritten")
 	assert.Contains(t, notice, "loss marker 2 (lines 8, 13)")
 	assert.Equal(t, 1, strings.Count(notice, "audit migrate"), notice)
-	assert.NoFileExists(t, legacy)
+	retained, err := os.ReadFile(legacy)
+	require.NoError(t, err)
+	assert.Equal(t, body, retained, "repository import must preserve the global source")
 	data, err := os.ReadFile(filepath.Join(sessionDir, "audit.jsonl"))
 	require.NoError(t, err)
 	assert.Equal(t, 13, bytes.Count(data, []byte("\n")), string(data))
 }
 
 // TestMigrate_NoLineLostToALiveAppender: a writer appends to the legacy file
-// while MigrateAudit runs again and again. The migration takes the file by
-// renaming it to a staging name, so an append that arrives meanwhile creates a
-// fresh legacy file for the next run; every appended line ends up in the repo
-// file, the remaining legacy file or a staged leftover, and none is lost.
+// while MigrateAudit runs again and again. Each import retains the global
+// source and deduplicates its snapshot against the local archive. Every
+// appended line remains available and the final import includes the full tail.
 func TestMigrate_NoLineLostToALiveAppender(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
-	sessionDir := repoSessionDir(t, repoRoot, "2026-05-22", "sess-r")
+	sessionDir := migrationSessionDir(t, repoRoot, "2026-05-22", "sess-r")
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	legacy := filepath.Join(globalDir, "sess-r.audit.jsonl")
 
@@ -278,23 +282,16 @@ func TestMigrate_NoLineLostToALiveAppender(t *testing.T) {
 	run()
 
 	seen := map[string]bool{}
-	collect := func(path string) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return
-		}
-		for _, l := range bytes.Split(data, []byte("\n")) {
-			var e auditEntry
-			if json.Unmarshal(l, &e) == nil {
-				if c, ok := e.ToolInput["command"].(string); ok {
-					seen[c] = true
-				}
-			}
+	data, err := os.ReadFile(filepath.Join(sessionDir, "audit.jsonl"))
+	require.NoError(t, err)
+	for _, l := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var e auditEntry
+		require.NoError(t, json.Unmarshal(l, &e))
+		if c, ok := e.ToolInput["command"].(string); ok {
+			seen[c] = true
 		}
 	}
-	collect(filepath.Join(sessionDir, "audit.jsonl"))
-	collect(legacy)
-	collect(legacy + ".ethos-tmp")
+	assert.FileExists(t, legacy)
 	for i := 0; i < n; i++ {
 		assert.True(t, seen[fmt.Sprintf("echo %d", i)], "line %d was lost", i)
 	}
@@ -338,4 +335,62 @@ func TestQueryLegacyAudit_ReadsTheStagedFile(t *testing.T) {
 	got, err := queryLegacyAudit(dir, "d-1", nil)
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
+}
+
+// TestLegacySeal_OneNoticePerKindNoMatterHowManyLines: a tail with many rewritten
+// lines and many loss markers prints two lines, with the counts and the rules,
+// and never the value.
+func TestLegacySeal_OneNoticePerKindNoMatterHowManyLines(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	live := filepath.Join(repo, "live.jsonl")
+	var body strings.Builder
+	for i := int64(100); i < 105; i++ {
+		fmt.Fprintf(&body, `{"ts":"%s","session":"s","tool":"Read","cwd":"/home/bob/x"}`+"\n", audit.FormatLineTS(i))
+	}
+	for i := int64(105); i < 108; i++ {
+		fmt.Fprintf(&body, `{"ts":"%s","session":"s","cwd":"\ud800"}`+"\n", audit.FormatLineTS(i))
+	}
+	require.NoError(t, os.WriteFile(live, []byte(body.String()), 0o600))
+	var err error
+	notice := testhelpers.CaptureStderr(t, func() {
+		_, err = sealDirLocked(sealDirParams{
+			repoRoot: repo, ns: audit.SessionNS, sealedDir: filepath.Join(repo, "sealed"), livePath: live,
+			chunkName: func(f, l int64) string { return audit.SessionChunkFile(f, l) },
+			tempName:  func(f, l int64) string { return audit.SessionTempFile(f, l) },
+			label:     "session s",
+		}, time.Now(), SealOptions{})
+	})
+	require.NoError(t, err)
+	got := strings.Split(strings.TrimSpace(notice), "\n")
+	require.Len(t, got, 2, notice)
+	assert.Contains(t, got[0], "ethos: audit seal: session s: 5 lines rewritten before sealing (it ")
+	assert.Contains(t, got[1], "ethos: audit seal: session s: 3 lines replaced by a loss marker before sealing (it ")
+	assert.NotContains(t, notice, "/home/bob")
+}
+
+// TestLegacyQuarantine_OneNoticeForManyRewrittenLines retains the old quarantine
+// helper's rewrite-on-reseal behavior, not current policy-aware archival.
+func TestLegacyQuarantine_OneNoticeForManyRewrittenLines(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealed := filepath.Join(repo, "sealed")
+	require.NoError(t, os.MkdirAll(sealed, 0o700))
+	chunk := audit.SessionChunkFile(100, 104)
+	require.NoError(t, os.WriteFile(filepath.Join(sealed, chunk), []byte("\x00garbage\n"), 0o600))
+	var body strings.Builder
+	for i := int64(100); i < 105; i++ {
+		fmt.Fprintf(&body, `{"ts":"%s","session":"s","tool":"Read","cwd":"/home/bob/x"}`+"\n", audit.FormatLineTS(i))
+	}
+	live := filepath.Join(repo, "live.jsonl")
+	require.NoError(t, os.WriteFile(live, []byte(body.String()), 0o600))
+	cn, _ := audit.Classify(chunk, audit.SessionNS)
+	var err error
+	notice := testhelpers.CaptureStderr(t, func() {
+		_, err = audit.Quarantine(repo, sealed, cn, live, "bad", redactReason, guardAuditLineFull, corruptRule)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(notice, "5 lines rewritten before sealing"), notice)
+	assert.NotContains(t, notice, "a line was rewritten")
 }

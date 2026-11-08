@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -47,11 +48,29 @@ func (r Result) Passed() bool {
 	return r.Status == "PASS" || r.Status == "WARN"
 }
 
+// HumanIdentityRow is the name of doctor's human-identity row. Everything that
+// reports or replaces that row uses it, so the row cannot be told apart by a
+// string that has drifted.
+const HumanIdentityRow = "Human identity"
+
 // RunAllFor is RunAll for a located repository: a store ethos cannot use
 // (StoreFailure) is passed as no store root, so no check reads a broken store
 // as if it were usable, and the "Repository store" row fails. The CLI and the
 // MCP doctor tool both go through it.
 func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore) []Result {
+	return runAllFor(loc, s, ss, teams, nil)
+}
+
+// RunAllForCaller is RunAllFor with the "Human identity" row supplied by the
+// caller instead of resolved here. A caller that already knows who is calling
+// (the MCP server, answering from a declared participant) passes its answer, so
+// the row can never be one derived from the environment, the process tree, git
+// or the OS user. The row's Name must be HumanIdentityRow.
+func RunAllForCaller(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore, human Result) []Result {
+	return runAllFor(loc, s, ss, teams, &human)
+}
+
+func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store, teams *team.LayeredStore, human *Result) []Result {
 	storeRoot, storeErr := loc.Store, loc.StoreFailure()
 	if storeErr != nil {
 		storeRoot = ""
@@ -65,9 +84,9 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 		if herr == nil {
 			global = filepath.Join(home, ".punt-labs", "ethos")
 		}
-		issue = bundle.ConfigIssue(loc.Store, loc.Ethos, global)
+		issue = bundle.ConfigIssueFromConfig(loc.Store, loc.Ethos, global, loc.Config)
 	}
-	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, teams)
+	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, loc.Config, loc.ConfigErr, teams, human)
 	if issue != nil {
 		what, _, _ := resolve.Describe(issue)
 		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)
@@ -80,9 +99,10 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 // repoRoot is the current work tree (LocateRepoRoot) — the checkout whose
 // .claude/agents and seal hook the checks inspect. storeRoot is the shared
 // mission/config store (StoreRootIfAny); it differs from repoRoot only inside
-// a linked worktree, and only the team-config read in CheckOrphanedAgentFiles
-// needs it (Bugbot #370 class: resolving the active team from the worktree
-// while activation wrote it to the store produced false orphan reports).
+// a linked worktree. Configuration is read once from storeRoot and shared by
+// every configuration-dependent row (Bugbot #370 class: resolving the active
+// team from the worktree while activation wrote it to the store produced false
+// orphan reports).
 //
 // rootErr is LocateRepoRoot's error. When repoRoot is empty because an
 // ETHOS_REPO_ROOT was refused, or the checkout could not be examined, the
@@ -94,14 +114,21 @@ func RunAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 // non-exempt command refuses in that state — and the checks that read the
 // store are gated (gateStore).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr error, teams *team.LayeredStore) []Result {
-	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, teams)
+	var cfg *resolve.RepoConfig
+	var configErr error
+	if repoRoot != "" && storeRoot != "" {
+		cfg, configErr = resolve.ConfigOf(storeRoot)
+	}
+	return runAll(s, ss, repoRoot, rootErr, storeRoot, storeErr, nil, cfg, configErr, teams, nil)
 }
 
 // runAll is RunAll with the configuration issue that governs the store layers
 // (nil for none): every store check gates on it as it does on a store that was
-// not located.
-func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, teams *team.LayeredStore) []Result {
-	results := make([]Result, 0, 16) // matches today's check count; a stale hint just costs one reallocation, not correctness
+// not located. human, when not nil, is the "Human identity" row to report in
+// place of resolving one. cfg/configErr are the request's single configuration
+// snapshot, including absence or failure; subordinate checks must not reread it.
+func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootErr error, storeRoot string, storeErr, policy error, cfg *resolve.RepoConfig, configErr error, teams *team.LayeredStore, human *Result) []Result {
+	results := make([]Result, 0, 19) // shared-store placement adds a row in linked worktrees
 
 	checkout := func(r Result) Result { return gateCheckout(r, repoRoot, rootErr) }
 	store := func(r Result) Result { return gateStore(r, storeRoot, storeErr) }
@@ -119,20 +146,31 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 
 	// The identity store, like the team store, is layered over the repository
 	// store, so these checks read it and are gated with it.
-	results = append(results, store(identityDirResult(s, ss, storeRoot)))
+	results = append(results, store(identityDirResult(s, ss)))
 
 	// Human identity carries its own status: a fresh install (no identity
 	// yet) is a WARN pointing at `ethos setup`, not a FAIL.
-	results = append(results, checkout(store(CheckHumanIdentity(s, ss, repoRoot))))
+	if human != nil {
+		results = append(results, checkout(store(*human)))
+	} else {
+		results = append(results, checkout(store(CheckHumanIdentity(s, ss, repoRoot))))
+	}
 
 	// Default agent reads the agent: key from the shared store (storeRoot),
 	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
 	// guard stays on the checkout (repoRoot) (#370).
-	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot))))
+	results = append(results, checkout(store(defaultAgentResult(repoRoot, storeRoot, cfg, configErr))))
 
 	results = append(results, store(duplicateFieldsResult(s, ss)))
 
-	results = append(results, checkout(store(CheckOrphanedAgentFiles(repoRoot, storeRoot, teams, s))))
+	results = append(results, checkout(store(checkOrphanedAgentFilesFromConfig(repoRoot, storeRoot, cfg, configErr, teams, s))))
+	if configErr != nil {
+		results = append(results, checkout(store(Result{Name: "Agent file currency", Status: "FAIL", Detail: configErr.Error()})))
+	} else {
+		results = append(results, checkout(store(CheckAgentCurrencyFromConfig(repoRoot, storeRoot, cfg, teams, s))))
+	}
+
+	results = append(results, store(checkTeamMembersFromConfig(storeRoot, cfg, configErr, teams, s)))
 
 	// ethos-bfml/ethos-hy40: every hook gets the presence check the seal hook
 	// had first — gated on the enabled marker, active determined by execution
@@ -153,7 +191,7 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	// matching every other resolution consumer; the git-boundary check
 	// reads the checkout (repoRoot), because the index and .gitignore
 	// belong to the tree being committed.
-	results = append(results, store(CheckRepoSetComplete(s, storeRoot)))
+	results = append(results, store(checkRepoSetCompleteFromConfig(s, storeRoot, cfg, configErr)))
 	results = append(results, checkout(CheckLocalExtNotTracked(repoRoot)))
 	results = append(results, store(CheckExtCredentialNames(s)))
 
@@ -170,6 +208,10 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 
 	// DES-079: every file ethos owns has a class in the path-class table.
 	results = append(results, checkout(CheckUnclassifiedFiles(repoRoot)))
+	results = append(results, checkout(CheckPhysicalPlacement(repoRoot)))
+	if storeRoot != "" && storeRoot != repoRoot {
+		results = append(results, store(CheckPhysicalPlacement(storeRoot)))
+	}
 	return results
 }
 
@@ -231,9 +273,9 @@ func passFail(name, detail string, ok bool) Result {
 }
 
 // identityDirResult is CheckIdentityDir as a Result.
-func identityDirResult(s identity.IdentityStore, ss *session.Store, storeRoot string) Result {
-	detail, ok := CheckIdentityDir(s, ss, hasRepoLocalTeam(storeRoot))
-	return passFail("Identity directory", detail, ok)
+func identityDirResult(s identity.IdentityStore, _ *session.Store) Result {
+	detail, status := identityDirStatus(s)
+	return Result{Name: "Identity directory", Status: status, Detail: detail}
 }
 
 // duplicateFieldsResult is CheckDuplicateFields as a Result.
@@ -243,8 +285,8 @@ func duplicateFieldsResult(s identity.IdentityStore, ss *session.Store) Result {
 }
 
 // defaultAgentResult is CheckDefaultAgent as a Result.
-func defaultAgentResult(repoRoot, storeRoot string) Result {
-	detail, ok := CheckDefaultAgent(repoRoot, storeRoot)
+func defaultAgentResult(repoRoot, storeRoot string, cfg *resolve.RepoConfig, configErr error) Result {
+	detail, ok := checkDefaultAgentFromConfig(repoRoot, storeRoot, cfg, configErr)
 	return passFail("Default agent", detail, ok)
 }
 
@@ -313,12 +355,27 @@ func PassedCount(results []Result) int {
 // s classifies each flagged handle for the FAIL detail (ethos-jw1z): a
 // handle that resolves to a real identity somewhere in s is a STALE
 // generated file — the common case, left behind by a team-scope change,
-// safe to delete or regenerate — while a handle matching no identity at
-// all is a genuine orphan the operator should look at before deleting. s
-// may be nil (some callers have no identity store in scope); the
-// classification is then skipped and every handle reads as an
-// undifferentiated orphan, same as before this distinction existed.
+// safe to delete or regenerate. A handle matching no identity fails only if
+// the file carries the ethos provenance marker (generated for an identity
+// since removed); without it the file is hand-authored, reported as ignored,
+// and does not fail the check. s may be nil (some
+// callers have no identity store in scope); the classification is then
+// skipped and every handle reads as an undifferentiated FAIL.
 func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStore, s identity.IdentityStore) Result {
+	var cfg *resolve.RepoConfig
+	var err error
+	if repoRoot != "" && storeRoot != "" {
+		cfg, err = resolve.ConfigOf(storeRoot)
+		if err != nil {
+			err = fmt.Errorf("resolve team: %w", err)
+		}
+	}
+	return checkOrphanedAgentFilesFromConfig(repoRoot, storeRoot, cfg, err, teams, s)
+}
+
+// checkOrphanedAgentFilesFromConfig shares the standalone check's policy, but
+// uses only the supplied configuration (including a captured read failure).
+func checkOrphanedAgentFilesFromConfig(repoRoot, storeRoot string, cfg *resolve.RepoConfig, configErr error, teams *team.LayeredStore, s identity.IdentityStore) Result {
 	name := "Orphaned agent files"
 
 	if repoRoot == "" {
@@ -339,12 +396,12 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 		return Result{Name: name, Status: "PASS", Detail: "no agent files"}
 	}
 
-	teamName, err := resolve.ResolveTeam(storeRoot)
-	if err != nil {
-		// ResolveTeam only errors when .punt-labs/ethos.yaml exists but is
-		// unreadable or malformed — a real misconfiguration the operator
-		// needs to see, not a "no team configured" no-op.
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", err)}
+	if configErr != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", configErr)}
+	}
+	teamName := ""
+	if storeRoot != "" && cfg != nil {
+		teamName = cfg.Team
 	}
 	if teamName == "" {
 		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
@@ -374,69 +431,251 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not read seeded agent list: %s", err)}
 	}
 
-	var orphaned []string
+	var orphaned []orphanFile
 	for _, path := range matches {
 		handle := strings.TrimSuffix(filepath.Base(path), ".md")
 		if members[handle] || checklist[handle] {
 			continue
 		}
-		orphaned = append(orphaned, handle)
+		// The installer copies <store>/.punt-labs/ethos/agents/<handle>.md
+		// into .claude/agents/ every SessionStart, so deleting such a file
+		// is undone. It is not an orphan whatever its identity state.
+		srcPath := filepath.Join(storeRoot, ".punt-labs", "ethos", "agents", handle+".md")
+		if _, err := os.Stat(srcPath); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			// Classifying on a guess would call an installer-owned file
+			// "safe to delete", and the next SessionStart would undo it.
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not stat agent source %s: %s", srcPath, err)}
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not read agent file %s: %s", path, err)}
+		}
+		orphaned = append(orphaned, orphanFile{handle: handle, marked: agentmark.Has(string(data))})
 	}
 
 	if len(orphaned) == 0 {
 		return Result{Name: name, Status: "PASS", Detail: "no orphaned agent files"}
 	}
-	sort.Strings(orphaned)
-	return Result{Name: name, Status: "FAIL", Detail: classifyOrphans(orphaned, s)}
+	sort.Slice(orphaned, func(i, j int) bool { return orphaned[i].handle < orphaned[j].handle })
+	status, detail := classifyOrphans(orphaned, s)
+	return Result{Name: name, Status: status, Detail: detail}
 }
 
-// classifyOrphans builds the FAIL detail for CheckOrphanedAgentFiles,
-// splitting handle by whether an identity file exists anywhere in s
-// (ethos-jw1z). A handle with a file on disk is not on the active team
-// right now but was clearly generated for some team at some point —
-// "stale", safe to delete or fixed by re-running `ethos session start`
-// once the identity is back on a team. A handle with no file anywhere did
-// not come from a team-scope change this store can see; it is a genuine
-// orphan, worth looking at before deleting. s may be nil, in which case the
-// distinction cannot be made honestly and every handle reads as a plain,
-// undifferentiated orphan rather than guessing.
+// orphanFile is an agent file whose handle is on no team. marked reports
+// whether it carries the ethos provenance marker (internal/agentmark).
+type orphanFile struct {
+	handle string
+	marked bool
+}
+
+// classifyOrphans returns the status and detail for CheckOrphanedAgentFiles.
+// Each orphan falls in one of three classes:
 //
-// This checks existence (s.Exists, a bare os.Stat), not Load (N1): Load
+//   - stale: an identity file exists anywhere in s. The agent was generated
+//     for some team and is not on the active one; safe to delete or fixed by
+//     re-running `ethos session start` once the identity is back on a team.
+//     FAIL.
+//   - removed: no identity, but the file carries the provenance marker, so
+//     ethos wrote it for an identity that has since been removed (the
+//     generator never deletes its output). FAIL.
+//   - hand-authored: no identity and no marker. Ethos writes agent files only
+//     from identities and always marks them, so this is not ethos's file.
+//     Reported as ignored; it does not fail the check. Files generated before
+//     the marker existed read this way.
+//
+// s may be nil, in which case the classes cannot be told apart honestly and
+// every handle reads as a plain, undifferentiated FAIL rather than a guess.
+//
+// Staleness checks existence (s.Exists, a bare os.Stat), not Load (N1): Load
 // resolves attribute content and, for a legacy identity carrying a
 // pre-ext-migration `voice:` key, RE-SAVES the file to relocate it — a
 // mutation an operator running a read-only health check does not expect
-// and would not consent to. Existence alone already answers the question
-// this function needs answered; a malformed or unreadable file at the
-// handle's path still counts as "a file is there" (stale), which is both
-// the more useful signal for an operator (something WAS generated for this
-// handle) and avoids misattributing a real I/O or parse error to "no
-// identity anywhere", which Load's error alone cannot cleanly distinguish
-// from a genuine absence without deeper inspection this check does not
-// need.
-func classifyOrphans(orphaned []string, s identity.IdentityStore) string {
+// and would not consent to. A malformed or unreadable file at the handle's
+// path still counts as "a file is there" (stale), which is the more useful
+// signal and avoids misattributing an I/O or parse error to absence.
+func classifyOrphans(orphaned []orphanFile, s identity.IdentityStore) (status, detail string) {
 	if s == nil {
-		return "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")
+		handles := make([]string, len(orphaned))
+		for i, o := range orphaned {
+			handles[i] = o.handle
+		}
+		return "FAIL", "orphaned agent files (not on any team): " + strings.Join(handles, ", ")
 	}
-	var stale, unresolved []string
-	for _, handle := range orphaned {
-		if s.Exists(handle) {
-			stale = append(stale, handle)
-		} else {
-			unresolved = append(unresolved, handle)
+	var stale, removed, unresolved, unvendored, unknown []string
+	for _, o := range orphaned {
+		p, err := identityPresence(s, o.handle)
+		switch {
+		case err != nil:
+			unknown = append(unknown, fmt.Sprintf("%s (%v)", o.handle, err))
+		case p == idPresent:
+			stale = append(stale, o.handle)
+		case p == idGlobalOnly && o.marked:
+			unvendored = append(unvendored, o.handle)
+		case o.marked:
+			removed = append(removed, o.handle)
+		default:
+			unresolved = append(unresolved, o.handle)
 		}
 	}
 	var parts []string
+	if len(unknown) > 0 {
+		parts = append(parts, "cannot tell whether an identity exists: "+strings.Join(unknown, ", "))
+	}
+	if len(unvendored) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"not vendored (exists in the global store) — run ethos vendor: %s",
+			strings.Join(unvendored, ", ")))
+	}
 	if len(stale) > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"stale (known identity, not on the active team — generated for a previous team scope, safe to delete): %s",
 			strings.Join(stale, ", ")))
 	}
-	if len(unresolved) > 0 {
+	if len(removed) > 0 {
 		parts = append(parts, fmt.Sprintf(
-			"unresolved (no matching identity anywhere — investigate before deleting): %s",
-			strings.Join(unresolved, ", ")))
+			"generated by ethos for an identity that no longer exists — safe to delete: %s",
+			strings.Join(removed, ", ")))
 	}
-	return "orphaned agent files — " + strings.Join(parts, "; ")
+	note := ""
+	if len(unresolved) > 0 {
+		note = "not ethos-generated, ignored: " + strings.Join(unresolved, ", ")
+	}
+	if len(parts) == 0 {
+		return "PASS", "no orphaned agent files (" + note + ")"
+	}
+	detail = "orphaned agent files — " + strings.Join(parts, "; ")
+	if note != "" {
+		detail += " (" + note + ")"
+	}
+	return "FAIL", detail
+}
+
+// CheckTeamMembers fails when a member of the active team has no identity
+// in any layer s reads (repo, bundle, global). Under `resolution: repo-only`
+// it defers to CheckRepoSetComplete, which already reports an incomplete
+// repo set; reporting it here would double-count.
+func CheckTeamMembers(storeRoot string, teams *team.LayeredStore, s identity.IdentityStore) Result {
+	var cfg *resolve.RepoConfig
+	var err error
+	if storeRoot != "" {
+		cfg, err = resolve.ConfigOf(storeRoot)
+		if err != nil {
+			err = fmt.Errorf("resolve team: %w", err)
+		}
+	}
+	return checkTeamMembersFromConfig(storeRoot, cfg, err, teams, s)
+}
+
+// checkTeamMembersFromConfig never resolves configuration or store layers again.
+func checkTeamMembersFromConfig(storeRoot string, cfg *resolve.RepoConfig, configErr error, teams *team.LayeredStore, s identity.IdentityStore) Result {
+	name := "Team members"
+
+	if storeRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+	if configErr != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load repo config: %s", configErr)}
+	}
+	teamName := ""
+	if cfg != nil {
+		teamName = cfg.Team
+	}
+	if teamName == "" {
+		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
+	}
+	mode, err := resolve.ResolutionFromConfig(cfg)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
+	}
+	if mode == resolve.ResolutionRepoOnly {
+		return Result{Name: name, Status: "PASS", Detail: "resolution: repo-only — see Repo-only completeness"}
+	}
+	if teams == nil || s == nil {
+		return Result{Name: name, Status: "FAIL", Detail: "no team or identity store available to verify members against"}
+	}
+	t, err := teams.Load(teamName)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not load team %q: %s", teamName, err)}
+	}
+	var missing []string
+	for _, m := range t.Members {
+		p, err := identityPresence(s, m.Identity)
+		switch {
+		case err != nil:
+			missing = append(missing, fmt.Sprintf("%s (%v)", m.Identity, err))
+		case p == idAbsent:
+			missing = append(missing, m.Identity)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+			"team %q members with no identity in the repo, bundle, or global store: %s",
+			teamName, strings.Join(missing, ", "))}
+	}
+	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("%d members resolve", len(t.Members))}
+}
+
+type presence int
+
+const (
+	idAbsent     presence = iota
+	idPresent             // resolvable through s
+	idGlobalOnly          // only in the global store, which repo-only never reads
+)
+
+// identityPresence reports where handle's identity file is, stat-ing each
+// layer s resolves from (repo, bundle, and global unless repo-only). Unlike
+// IdentityStore.Exists it distinguishes absence from a stat error such as
+// EACCES, and it finds a global-only identity under repo-only.
+func identityPresence(s identity.IdentityStore, handle string) (presence, error) {
+	roots := []string{s.Root()}
+	global := ""
+	if ls, ok := s.(*identity.LayeredStore); ok {
+		roots = nil
+		for _, r := range []string{ls.RepoRoot(), ls.BundleRoot()} {
+			if r != "" {
+				roots = append(roots, r)
+			}
+		}
+		if ls.RepoAuthoritative() {
+			global = ls.GlobalRoot()
+		} else {
+			roots = append(roots, ls.GlobalRoot())
+		}
+	}
+	for _, r := range roots {
+		found, err := identityFileExists(r, handle)
+		if err != nil {
+			return idAbsent, err
+		}
+		if found {
+			return idPresent, nil
+		}
+	}
+	if global != "" {
+		found, err := identityFileExists(global, handle)
+		if err != nil {
+			return idAbsent, err
+		}
+		if found {
+			return idGlobalOnly, nil
+		}
+	}
+	return idAbsent, nil
+}
+
+func identityFileExists(root, handle string) (bool, error) {
+	_, err := os.Stat(identity.NewStore(root).Path(handle))
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // checklistAgentNames returns the handles this check exempts as seeded
@@ -927,46 +1166,92 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 }
 
-// CheckIdentityDir verifies the identity directory exists.
+// CheckIdentityDir verifies the identity directory exists, is a readable
+// directory, and holds at least one identity file (*.yaml).
 //
 // A layered store reports its repo-local identities dir as primary. That
-// dir is legitimately absent when a repo carries a repo-local team under
-// .punt-labs/ethos/ and its identities live in the active bundle or the
-// global store — the default shape after `ethos setup`. Only in that case
-// does the check fall back to the global identities dir. The fallback is
-// gated on hasRepoTeam so a repo missing its identities with NO repo-local
-// team — for example an uninitialized submodule checkout with an empty
-// .punt-labs/ethos/identities/ — still FAILs loudly with the correct
-// "not found" signal instead of being masked by a populated global store.
-func CheckIdentityDir(s identity.IdentityStore, _ *session.Store, hasRepoTeam bool) (string, bool) {
-	dir := s.IdentitiesDir()
-	if _, err := os.Stat(dir); err == nil {
-		return dir, true
-	} else if !os.IsNotExist(err) {
-		return fmt.Sprintf("error: %v", err), false
-	}
-	if hasRepoTeam {
-		if ls, ok := s.(*identity.LayeredStore); ok {
-			gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
-			if _, err := os.Stat(gdir); err == nil {
-				return gdir, true
-			}
-		}
-	}
-	return fmt.Sprintf("not found: %s", dir), false
+// dir is legitimately absent or empty when a repo keeps its identities in the
+// active bundle or the global store — a repo with only an ethos.yaml, or only
+// missions/ under .punt-labs/ethos/. Layered resolution reads the global
+// store, so then the check passes when the global identities dir is usable
+// and names it. Under `resolution: repo-only` nothing else can resolve an
+// identity, so a missing or empty repo dir stays a FAIL. A dir that is not a
+// directory or cannot be read fails in every mode, naming the cause.
+func CheckIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool) {
+	detail, status := identityDirStatus(s)
+	return detail, status != "FAIL"
 }
 
-// hasRepoLocalTeam reports whether the repo carries at least one team file
-// under <storeRoot>/.punt-labs/ethos/teams/. This is the signal that a repo
-// is legitimately teams-only: the team is repo-tracked while identities
-// resolve from the active bundle or the global store.
-func hasRepoLocalTeam(storeRoot string) bool {
-	if storeRoot == "" {
-		return false
+// identityDirStatus is CheckIdentityDir with the advisory state: under
+// layered resolution, no usable identities in the repo or the global store is
+// a fresh install, a WARN pointing at `ethos setup` that matches
+// CheckHumanIdentity's first-run WARN, not a FAIL.
+func identityDirStatus(s identity.IdentityStore) (detail, status string) {
+	dir := s.IdentitiesDir()
+	state, why := inspectIdentitiesDir(dir)
+	switch state {
+	case dirUsable:
+		return dir, "PASS"
+	case dirBroken:
+		return "error: " + why, "FAIL"
 	}
-	ethosRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
-	names, err := team.NewStore(ethosRoot).List()
-	return err == nil && len(names) > 0
+	ls, layered := s.(*identity.LayeredStore)
+	if layered && ls.BundleRoot() != "" {
+		// The active bundle supplies identities in both modes, so a repo dir
+		// that is missing or empty is fine when the bundle's is usable.
+		bdir := identity.NewStore(ls.BundleRoot()).IdentitiesDir()
+		bstate, bwhy := inspectIdentitiesDir(bdir)
+		switch bstate {
+		case dirUsable:
+			return bdir + " (repo has none; resolved from the active bundle)", "PASS"
+		case dirBroken:
+			return fmt.Sprintf("error: bundle identities dir %s: %s", bdir, bwhy), "FAIL"
+		}
+	}
+	if layered && !ls.RepoAuthoritative() {
+		gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
+		gstate, gwhy := inspectIdentitiesDir(gdir)
+		switch gstate {
+		case dirUsable:
+			return gdir + " (repo has none; layered resolution reads the global store)", "PASS"
+		case dirBroken:
+			return fmt.Sprintf("error: global identities dir %s: %s", gdir, gwhy), "FAIL"
+		}
+		return "no identities yet — run `ethos setup` to create yours", "WARN"
+	}
+	return why, "FAIL"
+}
+
+type dirState int
+
+const (
+	dirUsable  dirState = iota // a readable directory with at least one *.yaml
+	dirMissing                 // absent or empty: layered resolution may fall back
+	dirBroken                  // exists but cannot serve as an identities dir
+)
+
+// inspectIdentitiesDir classifies dir and returns the reason it is not usable.
+func inspectIdentitiesDir(dir string) (dirState, string) {
+	info, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		return dirMissing, "not found: " + dir
+	}
+	if err != nil {
+		return dirBroken, err.Error()
+	}
+	if !info.IsDir() {
+		return dirBroken, "not a directory: " + dir
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return dirBroken, err.Error()
+	}
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".yaml" {
+			return dirUsable, ""
+		}
+	}
+	return dirMissing, "no identity files (*.yaml) in " + dir
 }
 
 // CheckHumanIdentity resolves and loads the current human identity. When
@@ -983,13 +1268,20 @@ func hasRepoLocalTeam(storeRoot string) bool {
 // broken file is a misconfiguration, so it FAILs rather than masquerading as a
 // clean first run.
 //
+// Under repo-only resolution the caller is looked up in the repo's store and
+// then the global store (identity.ForCaller): the repo commits its team and
+// agents, not the person running ethos. A caller found only in the global store
+// is a PASS that says so. A caller in neither is a FAIL.
+//
 // The failure detail is the resolver's own error, with no prefix. Every error
 // it returns already says what went wrong — "no identity matches git user ..."
 // or "ambiguous identity: 2 matches for email ...". The old "no match — "
 // prefix contradicted the second one: an ambiguous store has too many matches,
 // not none.
 func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout string) Result {
-	name := "Human identity"
+	name := HumanIdentityRow
+	caller := identity.ForCaller(s)
+	s = references(caller)
 	handle, err := resolve.Resolve(s, ss, checkout)
 	if err != nil {
 		if list, listErr := s.List(); listErr == nil &&
@@ -998,11 +1290,20 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout st
 		}
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
-	id, err := s.Load(handle, identity.Reference(true))
+	var id *identity.Identity
+	fromGlobal := false
+	id, err = s.Load(handle, identity.Reference(true))
+	if cs, ok := caller.(*identity.CallerStore); ok && err == nil {
+		fromGlobal = !cs.IdentityStore.Exists(handle)
+	}
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("handle %q not loadable: %v", handle, err)}
 	}
-	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("%s (%s)", id.Name, id.Handle)}
+	detail := fmt.Sprintf("%s (%s)", id.Name, id.Handle)
+	if fromGlobal {
+		detail += " — resolved from the global store"
+	}
+	return Result{Name: name, Status: "PASS", Detail: detail}
 }
 
 // CheckDefaultAgent checks whether a default agent is configured for the
@@ -1021,23 +1322,41 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store, checkout st
 // from a worktree it would report a default agent that disagrees with the
 // one the session and dispatch actually use (Bugbot #370 class).
 func CheckDefaultAgent(repoRoot, storeRoot string) (string, bool) {
+	var cfg *resolve.RepoConfig
+	var err error
+	if repoRoot != "" && storeRoot != "" {
+		cfg, err = resolve.ConfigOf(storeRoot)
+		if err != nil {
+			err = fmt.Errorf("resolve agent: %w", err)
+		}
+	}
+	return checkDefaultAgentFromConfig(repoRoot, storeRoot, cfg, err)
+}
+
+// checkDefaultAgentFromConfig keeps the checkout guard separate from the shared
+// store: an unavailable store must not cause a read relative to the process cwd.
+func checkDefaultAgentFromConfig(repoRoot, storeRoot string, cfg *resolve.RepoConfig, configErr error) (string, bool) {
 	if repoRoot == "" {
 		return "not in a git repo", true
 	}
-	handle, err := resolve.ResolveAgent(storeRoot)
-	if err != nil {
-		return err.Error(), false
-	}
-	if handle == "" {
+	if storeRoot == "" {
+		// RunAllFor withheld an unusable store. Its gate reports the captured
+		// failure as "not checked", not a fresh answer from another config.
 		return "not configured", true
 	}
-	return handle, true
+	if configErr != nil {
+		return configErr.Error(), false
+	}
+	if cfg == nil || cfg.Agent == "" {
+		return "not configured", true
+	}
+	return cfg.Agent, true
 }
 
 // CheckDuplicateFields scans all identities for duplicate github or email
 // bindings.
 func CheckDuplicateFields(s identity.IdentityStore, _ *session.Store) (string, bool) {
-	result, err := s.List()
+	result, err := references(s).List()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), false
 	}

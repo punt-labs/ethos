@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,6 +59,7 @@ func newFixture(t *testing.T) (*identity.Store, *session.Store, string) {
 	t.Helper()
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "identities", "seed.yaml"), []byte("name: Seed\nhandle: seed\nkind: agent\n"), 0o600))
 	return identity.NewStore(root), session.NewStore(root), root
 }
 
@@ -118,7 +121,7 @@ func TestPassedCountExcludesWarn(t *testing.T) {
 func TestCheckIdentityDir(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
 		s, ss, _ := newFixture(t)
-		detail, ok := CheckIdentityDir(s, ss, false)
+		detail, ok := CheckIdentityDir(s, ss)
 		assert.True(t, ok)
 		assert.Equal(t, s.IdentitiesDir(), detail)
 	})
@@ -126,59 +129,240 @@ func TestCheckIdentityDir(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		s, ss, root := newFixture(t)
 		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-		detail, ok := CheckIdentityDir(s, ss, false)
+		detail, ok := CheckIdentityDir(s, ss)
 		assert.False(t, ok)
 		assert.Contains(t, detail, "not found")
 	})
 
-	// A layered repo whose repo-local identities dir is absent is healthy
-	// ONLY when the repo is teams-only (hasRepoTeam) and the global store
-	// holds identities: the fallback resolves to the global dir. With no
-	// repo-local team the same absent dir must still FAIL, so an
-	// uninitialized submodule checkout is not masked by a populated global
-	// store.
-	t.Run("layered teams-only falls back to global", func(t *testing.T) {
+	// A layered repo with no repo-local identities dir resolves from the global
+	// store, so it passes when the global dir exists. Under repo-only nothing
+	// else resolves, so it fails.
+	layered := func(t *testing.T, globalHasIdentities, repoOnly bool) (identity.IdentityStore, *session.Store, string) {
+		t.Helper()
 		repoRoot := t.TempDir()   // no identities/ subdir
-		globalRoot := t.TempDir() // has identities/
-		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
-		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
-		ss := session.NewStore(globalRoot)
+		globalRoot := t.TempDir() // identities/ only if asked
+		if globalHasIdentities {
+			require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities", "g.yaml"), []byte("handle: g\n"), 0o600))
+		}
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
+		return ls, session.NewStore(globalRoot), globalRoot
+	}
 
-		detail, ok := CheckIdentityDir(ls, ss, true)
-		assert.True(t, ok, "teams-only repo should pass via the global fallback")
-		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir(), detail)
+	t.Run("layered, no repo dir, global dir passes naming it", func(t *testing.T) {
+		ls, ss, globalRoot := layered(t, true, false)
+		detail, ok := CheckIdentityDir(ls, ss)
+		assert.True(t, ok)
+		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir()+
+			" (repo has none; layered resolution reads the global store)", detail)
 	})
 
-	t.Run("layered no repo team still fails", func(t *testing.T) {
-		repoRoot := t.TempDir()   // no identities/ subdir
-		globalRoot := t.TempDir() // has identities/
-		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
-		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
-		ss := session.NewStore(globalRoot)
+	t.Run("layered, neither dir is a fresh-install WARN", func(t *testing.T) {
+		ls, _, _ := layered(t, false, false)
+		res := identityDirResult(ls, nil)
+		assert.Equal(t, "WARN", res.Status)
+		assert.Contains(t, res.Detail, "ethos setup")
+		assert.True(t, res.Passed(), "a fresh install must not gate doctor's exit")
+	})
 
-		detail, ok := CheckIdentityDir(ls, ss, false)
-		assert.False(t, ok, "no repo-local team: absent identities must FAIL, not fall back")
+	t.Run("layered, empty repo and empty global dirs are a WARN", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), false)
+		assert.Equal(t, "WARN", identityDirResult(ls, nil).Status)
+	})
+
+	t.Run("repo-only fresh install stays FAIL", func(t *testing.T) {
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(t.TempDir()), nil, identity.NewStore(t.TempDir()), true)
+		assert.Equal(t, "FAIL", identityDirResult(ls, nil).Status)
+	})
+
+	t.Run("repo-only, no repo dir fails", func(t *testing.T) {
+		ls, ss, _ := layered(t, true, true)
+		detail, ok := CheckIdentityDir(ls, ss)
+		assert.False(t, ok, "repo-only never reads the global store")
 		assert.Contains(t, detail, "not found")
+	})
+
+	t.Run("layered, repo dir present is unchanged", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "identities", "r.yaml"), []byte("handle: r\n"), 0o600))
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(t.TempDir()))
+		detail, ok := CheckIdentityDir(ls, session.NewStore(repoRoot))
+		assert.True(t, ok)
+		assert.Equal(t, identity.NewStore(repoRoot).IdentitiesDir(), detail)
 	})
 }
 
-func TestHasRepoLocalTeam(t *testing.T) {
-	t.Run("empty storeRoot", func(t *testing.T) {
-		assert.False(t, hasRepoLocalTeam(""))
+func TestCheckIdentityDir_Hardening(t *testing.T) {
+	notRoot := os.Geteuid() != 0 && runtime.GOOS != "windows"
+	layered := func(repoRoot, globalRoot string, repoOnly bool) identity.IdentityStore {
+		return identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), repoOnly)
+	}
+	populated := func(t *testing.T) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "identities", "g.yaml"), []byte("handle: g\n"), 0o600))
+		return root
+	}
+
+	t.Run("regular file is not a directory", func(t *testing.T) {
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "identities"), []byte("x"), 0o600))
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "not a directory")
 	})
 
-	t.Run("no team dir", func(t *testing.T) {
-		assert.False(t, hasRepoLocalTeam(t.TempDir()))
+	t.Run("empty dir fails with the reason", func(t *testing.T) {
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.Remove(filepath.Join(root, "identities", "seed.yaml")))
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "no identity files")
 	})
 
-	t.Run("repo-local team present", func(t *testing.T) {
-		storeRoot := t.TempDir()
-		teamsDir := filepath.Join(storeRoot, ".punt-labs", "ethos", "teams")
-		require.NoError(t, os.MkdirAll(teamsDir, 0o700))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(teamsDir, "foundation.yaml"),
-			[]byte("name: foundation\n"), 0o600))
-		assert.True(t, hasRepoLocalTeam(storeRoot))
+	t.Run("layered empty repo dir falls back to global", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		_, ok := CheckIdentityDir(layered(repoRoot, populated(t), false), nil)
+		assert.True(t, ok)
+	})
+
+	t.Run("repo-only empty repo dir fails", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "identities"), 0o700))
+		detail, ok := CheckIdentityDir(layered(repoRoot, populated(t), true), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "no identity files")
+	})
+
+	t.Run("unreadable repo dir fails", func(t *testing.T) {
+		if !notRoot {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		s, ss, root := newFixture(t)
+		dir := filepath.Join(root, "identities")
+		require.NoError(t, os.Chmod(dir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		detail, ok := CheckIdentityDir(s, ss)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "permission denied")
+	})
+
+	t.Run("global stat error is not blamed on the repo", func(t *testing.T) {
+		if !notRoot {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		globalRoot := populated(t)
+		require.NoError(t, os.Chmod(globalRoot, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(globalRoot, 0o700) })
+		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "error: global identities dir")
+		assert.NotContains(t, detail, "not found")
+	})
+
+	t.Run("global dir that is a file fails naming the global dir", func(t *testing.T) {
+		globalRoot := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(globalRoot, "identities"), []byte("x"), 0o600))
+		detail, ok := CheckIdentityDir(layered(t.TempDir(), globalRoot, false), nil)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "error: global identities dir")
+	})
+}
+
+func TestCheckIdentityDir_Bundle(t *testing.T) {
+	bundleWith := func(t *testing.T, files ...string) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		for _, f := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(root, "identities", f), []byte("handle: b\n"), 0o600))
+		}
+		return root
+	}
+	store := func(repoRoot, bundleRoot string, repoOnly bool) identity.IdentityStore {
+		return identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot),
+			identity.NewStore(bundleRoot), identity.NewStore(t.TempDir()), repoOnly)
+	}
+	emptyRepo := func(t *testing.T) string {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+		return root
+	}
+
+	t.Run("repo-only, bundle holds identities, empty repo dir passes", func(t *testing.T) {
+		b := bundleWith(t, "b.yaml")
+		res := identityDirResult(store(emptyRepo(t), b, true), nil)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+		assert.Contains(t, res.Detail, identity.NewStore(b).IdentitiesDir())
+	})
+
+	t.Run("layered, bundle only, no repo dir, no global passes", func(t *testing.T) {
+		b := bundleWith(t, "b.yaml")
+		res := identityDirResult(store(t.TempDir(), b, false), nil)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+	})
+
+	t.Run("broken bundle dir fails", func(t *testing.T) {
+		b := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(b, "identities"), []byte("x"), 0o600))
+		for _, repoOnly := range []bool{true, false} {
+			res := identityDirResult(store(emptyRepo(t), b, repoOnly), nil)
+			assert.Equal(t, "FAIL", res.Status)
+			assert.Contains(t, res.Detail, "bundle identities dir")
+		}
+	})
+
+	t.Run("empty bundle dir does not mask a repo-only failure", func(t *testing.T) {
+		res := identityDirResult(store(emptyRepo(t), bundleWith(t), true), nil)
+		assert.Equal(t, "FAIL", res.Status)
+	})
+}
+
+func TestClassifyOrphans_IdentityPresence(t *testing.T) {
+	marked := func(h string) []orphanFile { return []orphanFile{{handle: h, marked: true}} }
+
+	t.Run("stat error is reported, not classified", func(t *testing.T) {
+		if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+			t.Skip("permission bits do not bind root or windows")
+		}
+		root := t.TempDir()
+		dir := filepath.Join(root, "identities")
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		require.NoError(t, os.Chmod(dir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		status, detail := classifyOrphans(marked("x"), identity.NewStore(root))
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "cannot tell whether an identity exists: x")
+		assert.NotContains(t, detail, "safe to delete")
+	})
+
+	t.Run("repo-only global-only identity is unvendored, not removed", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		writeIdentity(t, globalRoot, "gonly", "name: G\nhandle: gonly\nkind: agent\n")
+		ls := identity.NewLayeredStoreWithBundle(identity.NewStore(repoRoot), nil, identity.NewStore(globalRoot), true)
+		status, detail := classifyOrphans(marked("gonly"), ls)
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "not vendored (exists in the global store) — run ethos vendor: gonly")
+		assert.NotContains(t, detail, "no longer exists")
+
+		// A truly absent identity is still "removed".
+		_, detail = classifyOrphans(marked("nowhere"), ls)
+		assert.Contains(t, detail, "no longer exists")
+	})
+
+	t.Run("layered global identity is stale", func(t *testing.T) {
+		repoRoot, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		writeIdentity(t, globalRoot, "gonly", "name: G\nhandle: gonly\nkind: agent\n")
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
+		_, detail := classifyOrphans(marked("gonly"), ls)
+		assert.Contains(t, detail, "stale")
 	})
 }
 
@@ -202,7 +386,8 @@ func TestCheckHumanIdentity(t *testing.T) {
 	t.Run("fresh install — no identities", func(t *testing.T) {
 		// An empty store is the expected first-run state, not a fault: WARN
 		// and point the user at `ethos setup`.
-		s, ss, _ := newFixture(t)
+		s, ss, root := newFixture(t)
+		require.NoError(t, os.Remove(filepath.Join(root, "identities", "seed.yaml")))
 		t.Setenv("USER", "ghost")
 		r := CheckHumanIdentity(s, ss, "")
 		assert.Equal(t, "WARN", r.Status)
@@ -1530,7 +1715,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", nil, "", nil, nil)
-	require.Len(t, results, 15)
+	require.Len(t, results, 18)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1542,6 +1727,8 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Default agent",
 		"Duplicate fields",
 		"Orphaned agent files",
+		"Agent file currency",
+		"Team members",
 		"Audit seal hook",
 		"Audit trailer hook",
 		"Seal hook currency",
@@ -1552,17 +1739,18 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Mission file hand-edits",
 		"Code archetype delegated-worker guard",
 		"Unclassified files",
+		"Physical storage placement",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 15, PassedCount(results))
+	assert.Equal(t, 18, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", nil, "", nil, nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 14)
+	assert.Less(t, PassedCount(results), 17)
 
 	// At least one result should name the identity directory failure.
 	var found bool
@@ -1728,22 +1916,21 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
 	teams := team.NewLayeredStore(ethosDir, ethosDir)
 
-	t.Run("with an identity store, stale and unresolved are distinguished", func(t *testing.T) {
+	t.Run("with an identity store, stale fails and unresolved is ignored", func(t *testing.T) {
 		res := CheckOrphanedAgentFiles(root, root, teams, s)
 		assert.Equal(t, "FAIL", res.Status)
 		assert.Contains(t, res.Detail, "stale", "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, "retired", "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, "safe to delete", "detail: %s", res.Detail)
-		assert.Contains(t, res.Detail, "unresolved", "detail: %s", res.Detail)
-		assert.Contains(t, res.Detail, "phantom", "detail: %s", res.Detail)
-		assert.Contains(t, res.Detail, "investigate", "detail: %s", res.Detail)
+		assert.Contains(t, res.Detail, "not ethos-generated, ignored: phantom", "detail: %s", res.Detail)
+		assert.NotContains(t, res.Detail, "investigate", "detail: %s", res.Detail)
 		if haveWounded {
 			// N1: an unreadable-but-present identity file still classifies
 			// as stale (a file IS there), never crashing into an error path
 			// and never landing in the genuine-absence bucket.
 			assert.Contains(t, res.Detail, "stale (known identity, not on the active team", "detail: %s", res.Detail)
 			assert.Contains(t, res.Detail, "wounded", "detail: %s", res.Detail)
-			assert.NotContains(t, res.Detail, "unresolved (no matching identity anywhere — investigate before deleting): wounded",
+			assert.NotContains(t, res.Detail, "ignored: wounded",
 				"an unreadable-but-present identity file must not be folded into the genuine-absence bucket: %s", res.Detail)
 			woundedPath := filepath.Join(root, "identities", "wounded.yaml")
 			info, statErr := os.Stat(woundedPath)
@@ -1787,6 +1974,73 @@ func TestCheckOrphanedAgentFiles_Classification(t *testing.T) {
 		_, extErr := os.Stat(filepath.Join(legacyRoot, "identities", "legacy.ext", "vox.yaml"))
 		assert.True(t, os.IsNotExist(extErr),
 			"classification must not trigger the voice-to-ext migration as a side effect")
+	})
+
+	// A handle matching no identity cannot have been generated by ethos: a
+	// hand-authored agent (biff alex-chen) must not fail doctor.
+	t.Run("only unresolved handles pass with a note", func(t *testing.T) {
+		r := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(r, "identities"), 0o700))
+		a := filepath.Join(r, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(a, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "alex-chen.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(r, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(r, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		ed := filepath.Join(r, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ed, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ed, "teams", "solo.yaml"),
+			[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+
+		res := CheckOrphanedAgentFiles(r, r, team.NewLayeredStore(ed, ed), identity.NewStore(r))
+		assert.Equal(t, "PASS", res.Status, "detail: %s", res.Detail)
+		assert.Equal(t, "no orphaned agent files (not ethos-generated, ignored: alex-chen)", res.Detail)
+	})
+
+	t.Run("only stale handles fail with no ignored note", func(t *testing.T) {
+		status, detail := classifyOrphans([]orphanFile{{handle: "retired"}}, s)
+		assert.Equal(t, "FAIL", status)
+		assert.Equal(t, "orphaned agent files — stale (known identity, not on the active team — generated for a previous team scope, safe to delete): retired", detail)
+	})
+
+	// ethos never deletes agent files it wrote, and `vendor --prune` removes
+	// identities, so a marked file with no identity is a leftover of ours.
+	t.Run("marked unresolved fails, unmarked unresolved is ignored", func(t *testing.T) {
+		r := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(r, "identities"), 0o700))
+		a := filepath.Join(r, ".claude", "agents")
+		require.NoError(t, os.MkdirAll(a, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "gone.md"), []byte(agentmark.Add("---\nname: gone\n---\nbody\n")), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "alex-chen.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(r, ".punt-labs"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(r, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+		ed := filepath.Join(r, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ed, "teams"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ed, "teams", "solo.yaml"),
+			[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+		tm := team.NewLayeredStore(ed, ed)
+
+		res := CheckOrphanedAgentFiles(r, r, tm, identity.NewStore(r))
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Equal(t, "orphaned agent files — generated by ethos for an identity that no longer exists — safe to delete: gone (not ethos-generated, ignored: alex-chen)", res.Detail)
+
+		// Only a marked leftover, no hand-authored file.
+		require.NoError(t, os.Remove(filepath.Join(a, "alex-chen.md")))
+		res = CheckOrphanedAgentFiles(r, r, tm, identity.NewStore(r))
+		assert.Equal(t, "FAIL", res.Status)
+		assert.NotContains(t, res.Detail, "ignored")
+
+		// Only the hand-authored file.
+		require.NoError(t, os.Remove(filepath.Join(a, "gone.md")))
+		require.NoError(t, os.WriteFile(filepath.Join(a, "alex-chen.md"), []byte("---\nname: x\n---\nbody\n"), 0o644))
+		res = CheckOrphanedAgentFiles(r, r, tm, identity.NewStore(r))
+		assert.Equal(t, "PASS", res.Status)
+	})
+
+	t.Run("a marked file with a known identity is stale, not removed", func(t *testing.T) {
+		status, detail := classifyOrphans([]orphanFile{{handle: "retired", marked: true}}, s)
+		assert.Equal(t, "FAIL", status)
+		assert.Contains(t, detail, "stale")
+		assert.NotContains(t, detail, "no longer exists")
 	})
 
 	t.Run("without an identity store, the distinction is not guessed", func(t *testing.T) {
@@ -1862,6 +2116,60 @@ func TestCheckOrphanedAgentFiles_ErrorPathsFail(t *testing.T) {
 		assert.Equal(t, "FAIL", res.Status, "detail: %s", res.Detail)
 		assert.Contains(t, res.Detail, `could not load team "solo"`)
 	})
+}
+
+// TestCheckOrphanedAgentFiles_InstallerOwned: a handle with a source file in
+// .punt-labs/ethos/agents/ is re-copied every SessionStart, so deleting it is
+// undone; it must never FAIL, whether it has no identity (utility agent) or
+// an off-team one.
+func TestCheckOrphanedAgentFiles_InstallerOwned(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	writeIdentity(t, root, "offteam", "name: Off\nhandle: offteam\nkind: agent\n")
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	out := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(out, 0o755))
+	for _, h := range []string{"utility", "offteam"} {
+		src := "---\nname: " + h + "\n---\nbody\n"
+		require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "agents", h+".md"), []byte(src), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(out, h+".md"), []byte(agentmark.Add(src)), 0o644))
+	}
+	res := CheckOrphanedAgentFiles(root, root, team.NewLayeredStore(ethosDir, ethosDir), identity.NewStore(root))
+	assert.Equal(t, "PASS", res.Status, "detail: %s", res.Detail)
+	assert.Equal(t, "no orphaned agent files", res.Detail)
+}
+
+// An agents source dir that cannot be searched leaves ownership unknown; the
+// check must say so rather than classify the file.
+func TestCheckOrphanedAgentFiles_SourceStatError(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission bits do not bind root or windows")
+	}
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "identities"), 0o700))
+	writeIdentity(t, root, "offteam", "name: Off\nhandle: offteam\nkind: agent\n")
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	agentsSrc := filepath.Join(ethosDir, "agents")
+	require.NoError(t, os.MkdirAll(agentsSrc, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+		[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+	out := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(out, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(out, "offteam.md"), []byte(agentmark.Add("---\nname: offteam\n---\n")), 0o644))
+	require.NoError(t, os.Chmod(agentsSrc, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(agentsSrc, 0o755) })
+
+	res := CheckOrphanedAgentFiles(root, root, team.NewLayeredStore(ethosDir, ethosDir), identity.NewStore(root))
+	assert.Equal(t, "FAIL", res.Status)
+	assert.Contains(t, res.Detail, "could not stat agent source")
+	assert.NotContains(t, res.Detail, "safe to delete")
 }
 
 // brokenFS.ReadDir always fails, simulating a build-broken embed.
@@ -2080,16 +2388,12 @@ func TestRunAllGateKeepsFail(t *testing.T) {
 	assert.Equal(t, "FAIL", got.Status)
 }
 
-// TestRunAllGatesEveryLocatedCheck: every check runAll (the body of RunAll) hands a located input
-// goes through checkout (repoRoot) or store (storeRoot, the identity store s,
-// the team store teams). A located input is one of those names, a value
-// derived from one (an alias, or hasRepoLocalTeam's result), however it
-// reaches the call. A call outside both gates also fails when the function it
-// calls locates a repository itself — calls resolve.*Repo* or resolve.Locate*,
-// directly or through any function in internal/doctor or internal/githook —
-// since its result would then bypass the gates. The calls are found in the
-// source, so a check added later without the gate fails here instead of
-// reading PASS for a tree it never examined.
+// TestRunAllGatesEveryLocatedCheck audits the current runAll call structure.
+// It follows its named root/store parameters through local aliases and common
+// path expressions, and direct calls through doctor/githook to resolve.Roots or
+// resolve.CheckoutOf. This is a bounded syntax tripwire, not a proof for arbitrary
+// future Go code; gateAudit and locatingFuncs document its limits. Runtime gate
+// tests above remain necessary to check the gates' behavior.
 func TestRunAllGatesEveryLocatedCheck(t *testing.T) {
 	runAll := parseRunAll(t, "doctor.go")
 	locating := locatingFuncs(t, map[string]string{"doctor": ".", "githook": filepath.Join("..", "githook")})
@@ -2109,6 +2413,7 @@ func TestGateAuditCatchesTransitiveLocator(t *testing.T) {
 		require.NoError(t, os.WriteFile(p, []byte(src), 0o644))
 	}
 	write("doctor/doctor.go", `package doctor
+import "github.com/punt-labs/ethos/v4/internal/githook"
 
 func runAll(repoRoot string) []Result {
 	var results []Result
@@ -2126,8 +2431,9 @@ func helper() Result { githook.Find(); return Result{} }
 func quiet() Result { return Result{} }
 `)
 	write("githook/githook.go", `package githook
+import "github.com/punt-labs/ethos/v4/internal/resolve"
 
-func Find() { _, _ = resolve.LocateRepoRoot() }
+func Find() { _ = resolve.Roots() }
 `)
 	runAll := parseRunAll(t, filepath.Join(dir, "doctor", "doctor.go"))
 	locating := locatingFuncs(t, map[string]string{
@@ -2140,36 +2446,78 @@ func Find() { _, _ = resolve.LocateRepoRoot() }
 	assert.Equal(t, []string{"sneaky"}, ungated)
 }
 
-// parseRunAll returns the RunAll declaration in file.
-func parseRunAll(t *testing.T, file string) *ast.FuncDecl {
+type gateFunction struct {
+	*ast.FuncDecl
+	imports map[string]string // local import name → full path
+}
+
+// parseRunAll retains file import bindings as well as the runAll declaration.
+func parseRunAll(t *testing.T, file string) gateFunction {
 	t.Helper()
 	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 	require.NoError(t, err)
 	for _, d := range f.Decls {
 		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "runAll" {
-			return fn
+			return gateFunction{fn, gateImports(t, f)}
 		}
 	}
 	t.Fatalf("no runAll in %s", file)
-	return nil
+	return gateFunction{}
 }
 
-// locatorCall reports whether call is resolve.X for a repository locator: X
-// contains "Repo" or starts with "Locate".
-func locatorCall(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
+const gateInternalPath = "github.com/punt-labs/ethos/v4/internal/"
+
+func gateImports(t *testing.T, f *ast.File) map[string]string {
+	t.Helper()
+	imports := map[string]string{}
+	for _, spec := range f.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		require.NoError(t, err)
+		name := filepath.Base(path)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		// These packages are inspected by this audit. A dot import needs new
+		// binding analysis, not silently missing all calls through that import.
+		if path == gateInternalPath+"resolve" || path == gateInternalPath+"githook" || path == "path/filepath" {
+			require.NotEqual(t, ".", name, "gate audit does not support dot import of %s", path)
+		}
+		imports[name] = path
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	name := sel.Sel.Name
-	return ok && pkg.Name == "resolve" && (strings.Contains(name, "Repo") || strings.HasPrefix(name, "Locate"))
+	return imports
+}
+
+// importedCall binds a package selector by its import path, including renamed
+// imports. The parser's local objects distinguish a shadowing local variable
+// from the imported package. This does not resolve function-value aliases.
+func importedCall(call *ast.CallExpr, imports map[string]string) (path, name string) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return "", ""
+	}
+	pkg, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok || pkg.Obj != nil {
+		return "", ""
+	}
+	return imports[pkg.Name], sel.Sel.Name
+}
+
+// These are the current exported repository locators, not a naming heuristic.
+// ConfigOf reads an explicit store's config; IsWorkingTree classifies a given
+// directory. Neither locates the request's repository. New locator APIs require
+// extending this list and the negative fixtures.
+func locatorCall(call *ast.CallExpr, imports map[string]string) bool {
+	path, name := importedCall(call, imports)
+	return path == gateInternalPath+"resolve" && (name == "Roots" || name == "CheckoutOf")
 }
 
 // locatingFuncs returns the functions and methods ("pkg.Name") in the
 // non-test files of the packages named by dirs (package name → directory)
 // that call a repository locator, directly or through other functions in
-// those packages. A method call is matched by name, over-approximating.
+// those packages. Imports bind by path, not spelling. Methods are conservatively
+// matched by name within the current package (receiver types are not resolved).
+// All non-test files are scanned, including other platforms. Calls hidden by
+// function values, interfaces or packages outside dirs are not followed.
 func locatingFuncs(t *testing.T, dirs map[string]string) map[string]bool {
 	t.Helper()
 	locating := map[string]bool{}
@@ -2184,6 +2532,7 @@ func locatingFuncs(t *testing.T, dirs map[string]string) map[string]bool {
 			}
 			f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 			require.NoError(t, err)
+			imports := gateImports(t, f)
 			for _, d := range f.Decls {
 				fn, ok := d.(*ast.FuncDecl)
 				if !ok || fn.Body == nil {
@@ -2195,9 +2544,9 @@ func locatingFuncs(t *testing.T, dirs map[string]string) map[string]bool {
 					if !ok {
 						return true
 					}
-					if locatorCall(call) {
+					if locatorCall(call, imports) {
 						locating[key] = true
-					} else if c := calleeKey(pkg, call, dirs); c != "" {
+					} else if c := calleeKey(pkg, call, imports, dirs); c != "" {
 						calls[key] = append(calls[key], c)
 					}
 					return true
@@ -2224,66 +2573,147 @@ func locatingFuncs(t *testing.T, dirs map[string]string) map[string]bool {
 
 // calleeKey names the function a call in package pkg invokes, as "pkg.Name",
 // when it can be in one of dirs' packages; "" otherwise.
-func calleeKey(pkg string, call *ast.CallExpr, dirs map[string]string) string {
-	switch f := call.Fun.(type) {
+func calleeKey(pkg string, call *ast.CallExpr, imports, dirs map[string]string) string {
+	switch f := ast.Unparen(call.Fun).(type) {
 	case *ast.Ident:
+		if f.Obj != nil {
+			if _, isFunc := f.Obj.Decl.(*ast.FuncDecl); !isFunc {
+				return "" // local function values are not package functions
+			}
+		}
 		return pkg + "." + f.Name
 	case *ast.SelectorExpr:
-		if x, ok := f.X.(*ast.Ident); ok {
-			if _, isPkg := dirs[x.Name]; isPkg {
-				return x.Name + "." + f.Sel.Name
+		if path, name := importedCall(call, imports); path != "" {
+			for p := range dirs {
+				if path == gateInternalPath+p {
+					return p + "." + name
+				}
 			}
+			return ""
 		}
 		return pkg + "." + f.Sel.Name // a method call, matched by name
 	}
 	return ""
 }
 
-// gateAudit walks RunAll and returns the checks called inside a gate and those
-// called outside one with a located input or a locating callee.
-func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated []string) {
+// gateDerivation recognizes only conversions and the listed path derivations.
+// Their results carry input provenance; unlike checks, they do not emit rows.
+func gateDerivation(call *ast.CallExpr, imports map[string]string) bool {
+	switch f := ast.Unparen(call.Fun).(type) {
+	case *ast.ArrayType:
+		return true // syntactic slice/array conversion
+	case *ast.Ident:
+		if f.Obj != nil {
+			return f.Obj.Kind == ast.Typ
+		}
+		return f.Name == "string" // the predeclared conversion used for paths
+	}
+	path, name := importedCall(call, imports)
+	if path == "path/filepath" {
+		switch name {
+		case "Join", "Clean", "Dir", "Abs", "EvalSymlinks":
+			return true
+		}
+	}
+	return false
+}
+
+// gateAudit follows runAll's repoRoot, storeRoot, s and teams parameters by
+// parser object, so local shadowing does not inherit their provenance. Local
+// assignments/declarations propagate monotonically through non-call expressions
+// and gateDerivation calls; tuple results conservatively taint all targets.
+// Other calls are judged separately, not assumed to return a root (a Result
+// must not taint results/append). This is flow-insensitive and field-insensitive:
+// it may over-report after reassignment or extraction from an aggregate. It
+// does not follow heap writes, arbitrary helper return values, function aliases,
+// or delayed closure execution. The top-level checkout/store locals are trusted
+// gate bindings; the runtime tests verify their implementation. New forms need
+// explicit audit/fixture changes, not a claim that this proves all future checks.
+func gateAudit(runAll gateFunction, locating map[string]bool) (gated, ungated []string) {
 	const kindCheckout, kindStore = 1, 2
-	located := map[string]int{
+	inputKinds := map[string]int{
 		"repoRoot": kindCheckout, "storeRoot": kindStore, "s": kindStore, "teams": kindStore,
 	}
-	// hasRepoLocalTeam only chooses a message and reports false for "";
-	// gateCheckout, gateStore and unlocated are the gates themselves.
-	pure := map[string]int{"hasRepoLocalTeam": kindStore, "gateCheckout": 0, "gateStore": 0, "unlocated": 0}
-
-	// kindOf is the located kinds an expression carries: a located name, or a
-	// call to a pure derivation, directly. A nested check call is judged on its
-	// own when the walk reaches it.
-	kindOf := func(e ast.Expr) int {
-		switch x := e.(type) {
-		case *ast.Ident:
-			return located[x.Name]
-		case *ast.CallExpr:
-			return pure[types.ExprString(x.Fun)]
+	// Parser objects suffice for the local lexical bindings this syntax audit
+	// follows. They deliberately do not stand in for type/receiver resolution.
+	located := map[*ast.Object]int{} //nolint:staticcheck // SA1019: bounded local syntax analysis, not general object resolution.
+	for _, field := range runAll.Type.Params.List {
+		for _, id := range field.Names {
+			located[id.Obj] = inputKinds[id.Name]
 		}
-		return 0
 	}
-	// An assignment from a located value makes its targets located: aliases.
-	for changed := true; changed; {
-		changed = false
-		ast.Inspect(runAll.Body, func(n ast.Node) bool {
-			as, ok := n.(*ast.AssignStmt)
-			if !ok {
-				return true
-			}
-			kind := 0
-			for _, r := range as.Rhs {
-				kind |= kindOf(r)
-				if call, ok := r.(*ast.CallExpr); ok && pure[types.ExprString(call.Fun)] != 0 {
-					for _, a := range call.Args {
-						kind |= kindOf(a)
+	gates := map[*ast.Object]int{} //nolint:staticcheck // SA1019: only the parser-local checkout/store bindings are trusted.
+	for _, stmt := range runAll.Body.List {
+		if as, ok := stmt.(*ast.AssignStmt); ok && as.Tok == token.DEFINE {
+			for _, e := range as.Lhs {
+				if id, ok := e.(*ast.Ident); ok {
+					switch id.Name {
+					case "checkout":
+						gates[id.Obj] = kindCheckout
+					case "store":
+						gates[id.Obj] = kindStore
 					}
 				}
 			}
-			for _, l := range as.Lhs {
-				if id, ok := l.(*ast.Ident); ok && kind != 0 && located[id.Name]|kind != located[id.Name] {
-					located[id.Name] |= kind
-					changed = true
+		}
+	}
+	var kindOf func(ast.Expr) int
+	kindOf = func(e ast.Expr) int {
+		kind := 0
+		ast.Inspect(e, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.Ident:
+				if x.Obj != nil {
+					kind |= located[x.Obj]
 				}
+			case *ast.FuncLit:
+				return false
+			case *ast.CallExpr:
+				if gateDerivation(x, runAll.imports) {
+					for _, a := range x.Args {
+						kind |= kindOf(a)
+					}
+				}
+				return false
+			}
+			return true
+		})
+		return kind
+	}
+	propagate := func(lhs, rhs []ast.Expr) bool {
+		changed := false
+		for i, l := range lhs {
+			id, ok := l.(*ast.Ident)
+			if !ok || id.Obj == nil || id.Name == "_" {
+				continue
+			}
+			kind := 0
+			if len(lhs) == len(rhs) {
+				kind = kindOf(rhs[i])
+			} else {
+				for _, r := range rhs {
+					kind |= kindOf(r)
+				}
+			}
+			if located[id.Obj]|kind != located[id.Obj] {
+				located[id.Obj] |= kind
+				changed = true
+			}
+		}
+		return changed
+	}
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(runAll.Body, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.AssignStmt:
+				changed = propagate(x.Lhs, x.Rhs) || changed
+			case *ast.ValueSpec:
+				var lhs []ast.Expr
+				for _, id := range x.Names {
+					lhs = append(lhs, id)
+				}
+				changed = propagate(lhs, x.Values) || changed
 			}
 			return true
 		})
@@ -2296,23 +2726,34 @@ func gateAudit(runAll *ast.FuncDecl, locating map[string]bool) (gated, ungated [
 			if !ok {
 				return true
 			}
-			if id, ok := call.Fun.(*ast.Ident); ok && (id.Name == "checkout" || id.Name == "store") {
+			if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok && id.Obj != nil && gates[id.Obj] != 0 {
 				for _, a := range call.Args {
-					walk(a, inCheckout || id.Name == "checkout", inStore || id.Name == "store")
+					walk(a, inCheckout || gates[id.Obj] == kindCheckout, inStore || gates[id.Obj] == kindStore)
 				}
 				return false
 			}
 			name := types.ExprString(call.Fun)
-			if _, isPure := pure[name]; isPure {
+			if gateDerivation(call, runAll.imports) {
 				return true
 			}
-			if !inCheckout && !inStore && locating[calleeKey("doctor", call, map[string]string{"doctor": "", "githook": ""})] {
+			if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok && (id.Name == "gateCheckout" || id.Name == "gateStore" || id.Name == "unlocated") {
+				if id.Obj == nil {
+					return true // package-level gate implementation, in another file
+				}
+				if _, isFunc := id.Obj.Decl.(*ast.FuncDecl); isFunc {
+					return true
+				}
+			}
+			if !inCheckout && !inStore && (locatorCall(call, runAll.imports) || locating[calleeKey("doctor", call, runAll.imports, map[string]string{"doctor": "", "githook": ""})]) {
 				ungated = append(ungated, name)
 				return true
 			}
 			kind := 0
 			for _, a := range call.Args {
 				kind |= kindOf(a)
+			}
+			if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+				kind |= kindOf(sel.X) // a method on a located store alias
 			}
 			if kind == 0 {
 				return true
@@ -2367,14 +2808,15 @@ func TestGateStoreNoteFollowsTheFailure(t *testing.T) {
 	assert.Contains(t, g.Detail, "repo store not located: git refused")
 }
 
-// Under a policy issue every row RunAll classes as a store check is gated, not
-// only the identity rows: a PASS becomes "not checked" with the issue's wording,
-// a FAIL stays FAIL with the note. The store rows are those a store that was not
-// located gates, so a row added to RunAll is covered without this test naming it.
+// Under a policy issue rows that RunAll gates as store checks must keep the same
+// behavior: a PASS becomes "not checked" with the issue's wording, a FAIL stays
+// FAIL with the note. This comparison observes rows changed by the existing
+// store gate; it does not independently discover an ungated store reader. The
+// bounded source audit above supplies a separate tripwire for such omissions.
 func TestRunAllForPolicyIssueGatesEveryStoreRow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USER", "mal")
-	repo := t.TempDir()
+	repo := physicalAgentRoot(t, t.TempDir())
 	ethosDir := filepath.Join(repo, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "identities"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), []byte("active_bundle: nosuchbundle\n"), 0o644))
@@ -2394,7 +2836,9 @@ func TestRunAllForPolicyIssueGatesEveryStoreRow(t *testing.T) {
 	}
 	baseRows := byName(base)
 
-	loc := resolve.Located{Store: repo, Ethos: ethosDir, Checkout: repo}
+	repoConfig, err := resolve.ConfigOf(repo)
+	require.NoError(t, err)
+	loc := resolve.Located{Store: repo, Ethos: ethosDir, Checkout: repo, Config: repoConfig}
 	got := byName(RunAllFor(loc, s, ss, nil))
 	cfg, ok := got["Repository configuration"]
 	require.True(t, ok, "the failing configuration row")
@@ -2418,4 +2862,59 @@ func TestRunAllForPolicyIssueGatesEveryStoreRow(t *testing.T) {
 		assert.Contains(t, r.Detail, b.Detail, g.Name)
 	}
 	assert.GreaterOrEqual(t, storeRows, 6, "the comparison found too few store rows")
+}
+
+func TestCheckTeamMembers(t *testing.T) {
+	// setup builds a repo whose team lists the given members, plus a global
+	// store holding identities in global.
+	setup := func(t *testing.T, config string, members, global []string) (string, *team.LayeredStore, identity.IdentityStore) {
+		t.Helper()
+		root, globalRoot := t.TempDir(), t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		for _, h := range global {
+			writeIdentity(t, globalRoot, h, "name: "+h+"\nhandle: "+h+"\nkind: agent\n")
+		}
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs"), 0o755))
+		if config != "" {
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte(config), 0o644))
+		}
+		ed := filepath.Join(root, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(filepath.Join(ed, "teams"), 0o755))
+		y := "name: solo\nmembers:\n"
+		for _, m := range members {
+			y += "  - identity: " + m + "\n    role: r\n"
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(ed, "teams", "solo.yaml"), []byte(y), 0o644))
+		return root, team.NewLayeredStore(ed, ed),
+			identity.NewLayeredStore(identity.NewStore(root), identity.NewStore(globalRoot))
+	}
+
+	t.Run("all resolve", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\n", []string{"a", "b"}, []string{"a", "b"})
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status, res.Detail)
+		assert.Equal(t, "2 members resolve", res.Detail)
+	})
+
+	t.Run("unresolved members are all listed", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\n", []string{"a", "zed", "ghost"}, []string{"a"})
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "FAIL", res.Status)
+		assert.Contains(t, res.Detail, "ghost, zed")
+		assert.NotContains(t, res.Detail, ": a")
+	})
+
+	t.Run("no team configured", func(t *testing.T) {
+		root, teams, s := setup(t, "", []string{"ghost"}, nil)
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status)
+		assert.Equal(t, "no team configured", res.Detail)
+	})
+
+	t.Run("repo-only defers to the repo-set check", func(t *testing.T) {
+		root, teams, s := setup(t, "team: solo\nresolution: repo-only\n", []string{"ghost"}, nil)
+		res := CheckTeamMembers(root, teams, s)
+		assert.Equal(t, "PASS", res.Status)
+		assert.Contains(t, res.Detail, "Repo-only completeness")
+	})
 }

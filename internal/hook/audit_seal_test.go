@@ -3,6 +3,7 @@ package hook
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,19 @@ func writeLiveLines(t *testing.T, repo, sessionID string, tss ...int64) {
 	}
 }
 
+func archiveSessionDir(t *testing.T, repo, sessionID, date string) string {
+	t.Helper()
+	p, err := auditPolicy(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := audit.ArchiveDir(p, audit.Stream{Namespace: audit.SessionNS, Session: sessionID}, date)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestSealRepoDatesDirBySessionStart(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)
@@ -39,9 +53,9 @@ func TestSealRepoDatesDirBySessionStart(t *testing.T) {
 	if _, err := SealRepo(repo, sealNow, SealOptions{}); err != nil {
 		t.Fatalf("SealRepo: %v", err)
 	}
-	dir, err := audit.FindSealedSessionDir(repo, sid)
-	if err != nil || dir == "" {
-		t.Fatalf("no sealed dir: %v", err)
+	dir := archiveSessionDir(t, repo, sid, "2026-07-15")
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("no local sealed dir: %v", err)
 	}
 	if got := filepath.Base(dir); got != "2026-07-15-"+sid {
 		t.Errorf("sealed dir = %q, want 2026-07-15-%s (first-line date, not seal date)", got, sid)
@@ -59,7 +73,10 @@ func TestSealRepoStartDateOverridesLiveDate(t *testing.T) {
 	if _, err := SealRepo(repo, time.Now().UTC(), opts); err != nil {
 		t.Fatalf("SealRepo: %v", err)
 	}
-	dir, _ := audit.FindSealedSessionDir(repo, sid)
+	dir := archiveSessionDir(t, repo, sid, "2026-07-10")
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("no local sealed dir: %v", err)
+	}
 	if got := filepath.Base(dir); got != "2026-07-10-"+sid {
 		t.Errorf("sealed dir = %q, want 2026-07-10-%s (roster start date)", got, sid)
 	}
@@ -80,7 +97,7 @@ func TestSealRepoWritesChunk(t *testing.T) {
 		t.Errorf("res = %+v, want 3 lines / 1 session", res)
 	}
 	// The chunk exists and is named for the range.
-	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
+	sealedDir := archiveSessionDir(t, repo, sid, "1970-01-01")
 	chunk := filepath.Join(sealedDir, audit.SessionChunkFile(100, 300))
 	if _, err := os.Stat(chunk); err != nil {
 		t.Fatalf("expected chunk %s: %v", chunk, err)
@@ -124,13 +141,13 @@ func TestSealRepoIncrementalTail(t *testing.T) {
 	if res.LinesSealed != 2 {
 		t.Errorf("incremental seal = %d lines, want 2 (300,400)", res.LinesSealed)
 	}
-	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
+	sealedDir := archiveSessionDir(t, repo, sid, "1970-01-01")
 	if _, err := os.Stat(filepath.Join(sealedDir, audit.SessionChunkFile(300, 400))); err != nil {
 		t.Errorf("expected second chunk 300-400: %v", err)
 	}
 }
 
-func TestSealRepoStagesOrphanChunk(t *testing.T) {
+func TestSealRepoArchivesLegacyOrphanWithoutStaging(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)
 	sid := "sess-orphan"
@@ -144,15 +161,20 @@ func TestSealRepoStagesOrphanChunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SealRepo: %v", err)
 	}
-	if res.ChunksStaged < 1 {
-		t.Errorf("orphan chunk not staged: %+v", res)
+	if res.ChunksStaged != 0 || res.LinesSealed != 2 {
+		t.Errorf("legacy orphan must be archived privately: %+v", res)
 	}
-	// The chunk is now tracked (git status shows it staged, not untracked).
+	// Missing prospective consent is private even if an older binary left the
+	// chunk in the record tree. The original is retained, not auto-staged.
 	cmd := testhelpers.GitCommand("status", "--porcelain", "--", filepath.Join(sealedDir, audit.SessionChunkFile(100, 200)))
 	cmd.Dir = repo
 	out, _ := cmd.Output()
-	if len(out) > 0 && out[0] == '?' {
-		t.Errorf("chunk still untracked after seal: %s", out)
+	if len(out) == 0 || out[0] != '?' {
+		t.Errorf("legacy orphan unexpectedly staged: %s", out)
+	}
+	local := archiveSessionDir(t, repo, sid, now.UTC().Format(audit.SessionDateFormat))
+	if _, err := os.Stat(filepath.Join(local, audit.SessionChunkFile(100, 200))); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -191,7 +213,7 @@ func TestSealRepoCorruptChunkFailsClosed(t *testing.T) {
 	}
 }
 
-func TestSealRepoSweepsStaleTemp(t *testing.T) {
+func TestSealRepoLeavesHistoricalRecordTempAndUsesLocalStaging(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)
 	sid := "sess-temp"
@@ -209,8 +231,12 @@ func TestSealRepoSweepsStaleTemp(t *testing.T) {
 	if _, err := SealRepo(repo, now, SealOptions{}); err != nil {
 		t.Fatalf("SealRepo: %v", err)
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Errorf("stale temp not swept: %v", err)
+	if _, err := os.Stat(stale); err != nil {
+		t.Errorf("unrelated historical record residue removed: %v", err)
+	}
+	local := archiveSessionDir(t, repo, sid, now.UTC().Format(audit.SessionDateFormat))
+	if _, err := os.Stat(filepath.Join(local, audit.SessionChunkFile(100, 200))); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -234,5 +260,51 @@ func TestSealThenReadIdentical(t *testing.T) {
 	}
 	if err := auditEntriesEqual(before, after); err != nil {
 		t.Errorf("read differs across seal: %v", err)
+	}
+}
+
+// A repo that gitignores .punt-labs/ethos/sessions/ (biff, mcp-proxy, quarry)
+// has chosen not to track session audit: the seal writes its chunk locally,
+// stages nothing, and the commit lands.
+func TestSealRepoInRepoThatIgnoresSessions(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".punt-labs/ethos/sessions/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sid := "sess-ignored"
+	writeLiveLines(t, repo, sid, 100, 200, 300)
+
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	res, err := SealRepo(repo, now, SealOptions{})
+	if err != nil {
+		t.Fatalf("SealRepo in a repo that ignores sessions: %v", err)
+	}
+	if res.LinesSealed != 3 {
+		t.Errorf("res = %+v, want 3 lines sealed", res)
+	}
+	if res.ChunksStaged != 0 {
+		t.Errorf("ChunksStaged = %d, want 0: the chunk is ignored and stays local", res.ChunksStaged)
+	}
+	sealedDir := archiveSessionDir(t, repo, sid, "1970-01-01")
+	if _, err := os.Stat(filepath.Join(sealedDir, audit.SessionChunkFile(100, 300))); err != nil {
+		t.Errorf("chunk not written locally: %v", err)
+	}
+
+	for _, args := range [][]string{{"add", ".gitignore"}, {"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-m", "land"}} {
+		cmd := testhelpers.GitCommand(args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	cmd := testhelpers.GitCommand("ls-files")
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "sessions") {
+		t.Errorf("ignored chunk is tracked: %q", out)
 	}
 }

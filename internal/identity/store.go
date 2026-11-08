@@ -8,19 +8,28 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
-	"github.com/punt-labs/ethos/v4/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
 // Store provides CRUD operations for identities on the filesystem.
 // Identities are stored as YAML files in the identities subdirectory.
 type Store struct {
-	root string // e.g. ~/.punt-labs/ethos
+	root   string // e.g. ~/.punt-labs/ethos
+	config storeConfig
+	// rename is an optional per-store fault-injection seam for atomic replacement.
+	rename func(string, string) error
+	// Sync seams are per-store so fault tests never mutate shared package state.
+	syncFile func(*os.File) error
+	syncDir  func(string) error
 }
 
 // NewStore creates a Store rooted at the given directory.
-func NewStore(root string) *Store {
-	return &Store{root: root}
+func NewStore(root string, opts ...StoreOption) *Store {
+	s := &Store{root: root}
+	for _, opt := range opts {
+		opt(&s.config)
+	}
+	return s
 }
 
 // DefaultStore returns a Store using the default global directory (~/.punt-labs/ethos).
@@ -51,7 +60,8 @@ func (s *Store) Path(handle string) string {
 type LoadOption func(*loadConfig)
 
 type loadConfig struct {
-	reference bool
+	reference        bool
+	withoutMigration bool
 }
 
 // Reference returns a LoadOption that skips attribute content resolution.
@@ -61,17 +71,27 @@ func Reference(v bool) LoadOption {
 	return func(c *loadConfig) { c.reference = v }
 }
 
+// WithoutMigration keeps a diagnostic or verification read from rewriting a
+// legacy identity. Attribute and extension resolution otherwise stay unchanged.
+func WithoutMigration() LoadOption {
+	return func(c *loadConfig) { c.withoutMigration = true }
+}
+
 // Load reads an identity YAML file by handle. By default, it resolves
 // attribute references (personality, writing_style, talents) to their
 // markdown content. Pass Reference(true) to return slugs only.
+// A legacy migration may return *PublicationError after applying a change.
 func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
+	if err := s.validatePolicy(); err != nil {
+		return nil, err
+	}
 	var cfg loadConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
 
 	path := s.Path(handle)
-	data, err := os.ReadFile(path)
+	data, err := s.readFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q not found: %w", handle, err)
 	}
@@ -80,11 +100,16 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 		return nil, fmt.Errorf("invalid identity file %s: %w", path, err)
 	}
 	// Migrate legacy voice field to ext/vox.
-	if err := s.migrateVoice(handle, path, data); err != nil {
-		return nil, fmt.Errorf("migrating voice for %q: %w", handle, err)
+	if !cfg.withoutMigration {
+		if err := s.migrateVoice(handle, path, data); err != nil {
+			return nil, fmt.Errorf("migrating voice for %q: %w", handle, err)
+		}
 	}
 	// Assemble extension data from <handle>.ext/ directory.
-	extData, extWarnings := s.loadExtensions(handle)
+	extData, extWarnings, err := s.loadExtensions(handle)
+	if err != nil {
+		return nil, err
+	}
 	id.Ext = extData
 
 	// Resolve attribute content unless reference-only mode.
@@ -99,6 +124,28 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 // migrateVoice checks raw YAML for a legacy voice field and moves it to
 // ext/vox. Re-saves the identity without the voice key.
 func (s *Store) migrateVoice(handle, path string, data []byte) error {
+	if !s.config.repository {
+		return s.migrateVoiceUnlocked(handle, path, data)
+	}
+	// Ordinary reads do not create locks. Re-read legacy data under the same
+	// handle lock used by updates before performing its compatibility migration.
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["voice"]; !ok {
+		return nil
+	}
+	return s.withLock(handle, func() error {
+		current, err := s.readFile(path)
+		if err != nil {
+			return fmt.Errorf("reading legacy identity: %w", err)
+		}
+		return s.migrateVoiceUnlocked(handle, path, current)
+	})
+}
+
+func (s *Store) migrateVoiceUnlocked(handle, path string, data []byte) error {
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil // already validated above; skip migration
@@ -127,12 +174,12 @@ func (s *Store) migrateVoice(handle, path string, data []byte) error {
 
 	// Write to ext/vox.
 	if provider != "" {
-		if err := s.ExtSet(handle, "vox", "provider", provider); err != nil {
+		if err := s.extSetUnlocked(handle, "vox", "provider", provider, extConfig{}); err != nil {
 			return fmt.Errorf("setting ext/vox/provider: %w", err)
 		}
 	}
 	if voiceID != "" {
-		if err := s.ExtSet(handle, "vox", "voice_id", voiceID); err != nil {
+		if err := s.extSetUnlocked(handle, "vox", "voice_id", voiceID, extConfig{}); err != nil {
 			return fmt.Errorf("setting ext/vox/voice_id: %w", err)
 		}
 	}
@@ -148,7 +195,7 @@ func (s *Store) rewriteRaw(path string, raw map[string]interface{}) error {
 	if err != nil {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
-	return os.WriteFile(path, out, 0o600)
+	return s.writeFile(path, out, false)
 }
 
 // resolveAttributes reads .md files for personality, writing_style, and
@@ -256,8 +303,11 @@ func (s *Store) listNoMigrate() (*ListResult, error) {
 
 // list is the shared implementation for List and listNoMigrate.
 func (s *Store) list(skipMigrate bool) (*ListResult, error) {
+	if err := s.validatePolicy(); err != nil {
+		return nil, err
+	}
 	dir := s.identitiesDir()
-	entries, err := os.ReadDir(dir)
+	entries, err := s.readDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &ListResult{}, nil
@@ -357,21 +407,51 @@ func ambiguousError(field, value string, matches []*Identity) error {
 		len(matches), field, value, strings.Join(handles, ", "))
 }
 
-// Exists checks whether an identity file exists for the given handle.
+// Exists checks whether an identity file exists for the given handle. It cannot
+// report a path refusal; ownership-sensitive operations must use existsChecked.
 func (s *Store) Exists(handle string) bool {
+	exists, _ := s.existsChecked(handle)
+	return exists
+}
+
+// existsChecked is the ownership probe for reads and mutations: rejection is not
+// absence and must never redirect an operation to a lower-precedence layer.
+func (s *Store) existsChecked(handle string) (bool, error) {
+	if err := s.checkPath(s.Path(handle), false); err != nil {
+		return false, err
+	}
 	_, err := os.Stat(s.Path(handle))
-	return err == nil
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // Save writes an identity YAML file. Returns an error if an identity
 // with the same handle already exists or if attribute references are
-// invalid. Uses O_EXCL for atomic create.
+// invalid. Global creates use O_EXCL; repository creates publish staged bytes
+// with a no-clobber link.
+// A *PublicationError means creation applied but crash durability is unconfirmed.
 func (s *Store) Save(id *Identity) error {
 	if err := s.ValidateRefs(id); err != nil {
 		return err
 	}
+	return s.saveNoValidate(id)
+}
+
+func (s *Store) saveNoValidate(id *Identity) error {
+	if err := s.validatePolicy(); err != nil {
+		return err
+	}
+	if s.config.repository {
+		return s.withLock(id.Handle, func() error { return s.createIdentity(id) })
+	}
+	return s.createIdentity(id)
+}
+
+func (s *Store) createIdentity(id *Identity) error {
 	dir := s.identitiesDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := s.ensureDir(dir); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
 	}
 	data, err := yaml.Marshal(id)
@@ -379,6 +459,20 @@ func (s *Store) Save(id *Identity) error {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
 	path := s.Path(id.Handle)
+	if s.config.repository {
+		if err := s.ensureDir(s.ExtDir(id.Handle)); err != nil {
+			return fmt.Errorf("creating extension directory: %w", err)
+		}
+		// This empty sibling is not on the file's ancestor chain below.
+		// Establish it before publication, so a failure has not created an id.
+		if err := s.syncAncestors(s.ExtDir(id.Handle)); err != nil {
+			return fmt.Errorf("persisting extension directory before identity creation: %w", err)
+		}
+		if err := s.writeFile(path, data, true); err != nil {
+			return fmt.Errorf("creating identity %q: %w", id.Handle, err)
+		}
+		return nil
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
@@ -397,51 +491,24 @@ func (s *Store) Save(id *Identity) error {
 // Update reads an existing identity, applies a mutation function, validates
 // the result, and writes it back. Uses flock for concurrency safety.
 // Used by attribute binding operations (set_personality, add_talent, etc.).
+// A *PublicationError identifies an applied change; it does not imply rollback.
 func (s *Store) Update(handle string, mutate func(*Identity) error) error {
-	path := s.Path(handle)
-	lockPath := path + ".lock"
-
-	// Acquire exclusive lock.
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating lock file: %w", err)
-	}
-	defer lockFile.Close()
-	if err := flock(lockFile); err != nil {
-		return fmt.Errorf("acquiring lock: %w", err)
-	}
-	defer funlock(lockFile)
-
-	id, err := s.Load(handle, Reference(true))
-	if err != nil {
-		return err
-	}
-	if err := mutate(id); err != nil {
-		return err
-	}
-	if err := s.ValidateRefs(id); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(id)
-	if err != nil {
-		return fmt.Errorf("marshaling identity: %w", err)
-	}
-	tmpPath := layout.TmpPath(path)
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return fmt.Errorf("writing identity: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("renaming identity: %w", err)
-	}
-	return nil
+	return s.update(handle, true, func(id *Identity) error {
+		if err := mutate(id); err != nil {
+			return err
+		}
+		return s.ValidateRefs(id)
+	})
 }
 
 // loadNoMigrate reads an identity YAML without running voice migration.
 // Used by LayeredStore.loadRaw to avoid writing ext to the wrong store.
 func (s *Store) loadNoMigrate(handle string) (*Identity, error) {
+	if err := s.validatePolicy(); err != nil {
+		return nil, err
+	}
 	path := s.Path(handle)
-	data, err := os.ReadFile(path)
+	data, err := s.readFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q not found: %w", handle, err)
 	}
@@ -455,43 +522,41 @@ func (s *Store) loadNoMigrate(handle string) (*Identity, error) {
 // updateNoValidate is like Update but skips ValidateRefs. Used by
 // LayeredStore which runs its own cross-layer validation.
 func (s *Store) updateNoValidate(handle string, mutate func(*Identity) error) error {
-	path := s.Path(handle)
-	lockPath := path + ".lock"
+	return s.update(handle, false, mutate)
+}
 
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating lock file: %w", err)
-	}
-	defer lockFile.Close()
-	if err := flock(lockFile); err != nil {
-		return fmt.Errorf("acquiring lock: %w", err)
-	}
-	defer funlock(lockFile)
-
-	// Use loadNoMigrate to avoid triggering voice migration as a side
-	// effect. LayeredStore.loadRaw handles migration through its own
-	// relocateRepoVoice path which writes ext to the correct (global)
-	// store.
-	id, err := s.loadNoMigrate(handle)
-	if err != nil {
-		return err
-	}
-	if err := mutate(id); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(id)
-	if err != nil {
-		return fmt.Errorf("marshaling identity: %w", err)
-	}
-	tmpPath := layout.TmpPath(path)
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return fmt.Errorf("writing identity: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("renaming identity: %w", err)
-	}
-	return nil
+func (s *Store) update(handle string, migrate bool, mutate func(*Identity) error) error {
+	return s.withLock(handle, func() error {
+		// No merged extensions are serialized, and layered callers retain
+		// control of legacy voice migration and cross-layer validation.
+		var id *Identity
+		var err error
+		if migrate {
+			if s.config.repository {
+				data, readErr := s.readFile(s.Path(handle))
+				if readErr != nil {
+					return fmt.Errorf("reading identity %q: %w", handle, readErr)
+				}
+				if err := s.migrateVoiceUnlocked(handle, s.Path(handle), data); err != nil {
+					return err
+				}
+			}
+			id, err = s.Load(handle, Reference(true))
+		} else {
+			id, err = s.loadNoMigrate(handle)
+		}
+		if err != nil {
+			return err
+		}
+		if err := mutate(id); err != nil {
+			return err
+		}
+		data, err := yaml.Marshal(id)
+		if err != nil {
+			return fmt.Errorf("marshaling identity: %w", err)
+		}
+		return s.writeReplacement(s.Path(handle), data)
+	})
 }
 
 // IdentitiesDir returns the path to the identities subdirectory.

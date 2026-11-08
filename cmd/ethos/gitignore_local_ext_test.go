@@ -10,19 +10,20 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
-// A repo that already excludes machine-local files must come back from setup
-// and vendor --apply untouched, whatever spelling it uses. String-matching one
-// blessed rule re-appended a narrower near-duplicate on every run and dirtied
-// the tree (Bugbot, PR #422). "Already excludes" means all of them: a rule that
-// covers only part of the namespace is not on this list — see
-// TestEnsureLocalExtIgnoredUpgradesNarrowRule.
+// A proven directory/ancestor exclusion must remain untouched on setup/vendor.
+// String-matching one blessed rule dirtied covered repos (Bugbot, PR #422), but
+// wildcard contents matches alone cannot establish directory exclusion. Preserve
+// those user rules while conservatively adding one canonical rule, then leave
+// the repaired file untouched on retry.
 func TestEnsureLocalExtIgnoredLeavesCoveredRepoAlone(t *testing.T) {
 	cases := []struct {
 		name      string
 		gitignore string
+		wantAdded bool
 	}{
-		{"canonical rule", enable.LocalIgnoreRule + "\n"},
-		{"whole subtree", ".punt-labs/**\n"},
+		{"canonical rule", enable.LocalIgnoreRule + "\n", false},
+		{"literal ancestor directory", ".punt-labs/\n", false},
+		{"ambiguous whole subtree requires canonical repair", ".punt-labs/**\n", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -35,15 +36,38 @@ func TestEnsureLocalExtIgnoredLeavesCoveredRepoAlone(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ensureLocalExtIgnored: %v", err)
 			}
-			if added {
-				t.Error("added a rule to a repo that already excludes .local files")
+			if added != c.wantAdded {
+				t.Errorf("added = %v, want %v", added, c.wantAdded)
 			}
 			got, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != c.gitignore {
-				t.Errorf(".gitignore rewritten:\nwant:\n%s\ngot:\n%s", c.gitignore, got)
+			want := c.gitignore
+			if c.wantAdded {
+				want += "\n" + enable.LocalIgnoreNote + "\n" + enable.LocalIgnoreRule + "\n"
+				if n := strings.Count("\n"+string(got), "\n"+enable.LocalIgnoreRule+"\n"); n != 1 {
+					t.Errorf("canonical rule appears %d times, want 1", n)
+				}
+			}
+			if string(got) != want {
+				t.Errorf(".gitignore bytes:\nwant:\n%s\ngot:\n%s", want, got)
+			}
+			added, err = ensureLocalExtIgnored(dir)
+			if err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			if added {
+				t.Error("retry appended another rule")
+			}
+			if again := readGitignore(t, path); again != string(got) {
+				t.Errorf("retry changed user policy or duplicated repair:\nwant:\n%s\ngot:\n%s", got, again)
+			}
+			writeRepoFile(t, dir, ".punt-labs/local/unforeseen", "synthetic private data\n")
+			for _, staged := range gitAddAll(t, dir) {
+				if strings.HasPrefix(staged, enable.LocalIgnoreRule) {
+					t.Errorf("ordinary add staged private path %q", staged)
+				}
 			}
 		})
 	}
@@ -87,12 +111,9 @@ func TestEnsureLocalExtIgnoredAddsCanonicalRuleOnce(t *testing.T) {
 	}
 }
 
-// The narrow rule every shipped `ethos doctor` told operators to add,
-// `.punt-labs/ethos/**/*.local.yaml`, covers one corner of the namespace and
-// leaves `.punt-labs/vox/`, `.punt-labs/beadle/`, and every non-yaml variant
-// stageable. One probe under .punt-labs/ethos/ read it as coverage, so ethos
-// wrote nothing and `git add -A` staged the secret (djb, review of PR #423).
-// It must now read as uncovered and get the canonical rule alongside it.
+// A legacy source-tree rule does not cover the shared local zone. Keep that
+// protection while adding the canonical local rule; this helper does not move
+// another product's credentials or retire its existing ignore protection.
 func TestEnsureLocalExtIgnoredUpgradesNarrowRule(t *testing.T) {
 	const narrow = ".punt-labs/ethos/**/*.local.yaml\n"
 	dir := enableGitRepo(t)
@@ -123,8 +144,8 @@ func TestEnsureLocalExtIgnoredUpgradesNarrowRule(t *testing.T) {
 		t.Errorf("repo still uncovered after writing the rule; .gitignore:\n%s", got)
 	}
 
-	// djb's repro. The secrets the narrow rule missed must not reach the index.
-	for _, f := range []string{".punt-labs/vox/vox.local.md", ".punt-labs/beadle/creds.local.json"} {
+	// The shared local zone protects every product and file extension.
+	for _, f := range []string{".punt-labs/local/vox/vox.local.md", ".punt-labs/local/beadle/creds.local.json"} {
 		writeRepoFile(t, dir, f, "secret\n")
 	}
 	if staged := gitAddAll(t, dir); len(staged) != 1 || staged[0] != ".gitignore" {

@@ -715,14 +715,11 @@ func TestResolveSessionID_NeverReturnsEmptySidWithNilErr(t *testing.T) {
 	assert.Empty(t, sid)
 }
 
-// TestResolveSessionID_ReportsRealCauseUnderClaudeCode pins mission 005
-// finding A at this site: before this fix, resolveSessionID's loud
-// branch was reachable in shape but untested, and the sibling
-// silent-path message ("no active session; run `ethos session start`
-// or pass session_id") is generic enough that a caller reading it for
-// a genuine resolution failure (session expected, pointer file
-// corrupt or missing under Claude Code) would have no way to tell that
-// apart from the ordinary "nothing is running" case.
+// TestResolveSessionID_ReportsRealCauseUnderClaudeCode: under Claude Code a
+// call that declared no caller is refused with the named error that says why
+// (the hook did not declare one), not the generic absent-session text and not
+// an answer from the pointer file: the MCP server has no CLAUDE_PID, so any
+// session the chain found would be a guess (DES-074, amendment 2026-11-03).
 func TestResolveSessionID_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	h := testHandlerWithSession(t)
 	t.Setenv("ETHOS_SESSION", "")
@@ -731,10 +728,9 @@ func TestResolveSessionID_ReportsRealCauseUnderClaudeCode(t *testing.T) {
 	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 
 	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
-	require.Error(t, err)
+	require.ErrorIs(t, err, errNoCaller)
 	assert.Empty(t, sid)
-	assert.Contains(t, err.Error(), "cannot identify the calling session",
-		"a session that was expected but unresolvable must name the real cause, not the generic absent-session text")
+	assert.Contains(t, err.Error(), "without _caller")
 }
 
 // TestHandleIam_HonorsAgentID pins DES-061 R4: the MCP iam handler keys the
@@ -806,6 +802,8 @@ func TestHandleSession_NoStore(t *testing.T) {
 func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 	// Isolate git config so resolve chain is deterministic.
 	tmp := t.TempDir()
+	t.Chdir(tmp)
+	t.Setenv("HOME", tmp)
 	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -817,17 +815,16 @@ func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 	assert.False(t, result.IsError)
 
 	text := resultText(t, result)
-	// Summary line should contain check count. ethos-bfml/ethos-hy40 added
-	// "Audit trailer hook", ethos-e05k added "Code archetype delegated-worker
-	// guard", and DES-079 added "Unclassified files", bumping the count from
-	// 12 to 15.
-	assert.Contains(t, text, "15 checks")
+	// Isolated from optional checks enabled by the development checkout.
+	assert.Contains(t, text, "18 checks")
 	// Table should contain check names.
 	assert.Contains(t, text, "Identity directory")
 	assert.Contains(t, text, "Human identity")
 	assert.Contains(t, text, "Default agent")
 	assert.Contains(t, text, "Duplicate fields")
 	assert.Contains(t, text, "Repo-only completeness")
+	assert.Contains(t, text, "Physical storage placement")
+	assert.Contains(t, text, "Agent file currency")
 	// Table should contain status values.
 	assert.Contains(t, text, "PASS")
 }

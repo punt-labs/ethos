@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -20,10 +22,10 @@ const (
 	MaxNamespacesPerID = 32
 )
 
-// ExtLocalSuffix is the filename suffix of a namespace's .local companion
-// file: <handle>.ext/<ns>.local.yaml holds secret or machine-specific
-// values and is never git-tracked, mirroring .envrc/.envrc.local (DES-057
-// Part C). Vendor always skips it; the file layout is the boundary.
+// ExtLocalSuffix marks secret or machine-specific namespace overlays. An
+// explicit repository policy places them under LocalRoot/identities; global
+// and bundle reads retain the sibling layout from DES-057 Part C. Source-side
+// repository siblings are compatibility reads only. Vendor always skips them.
 const ExtLocalSuffix = ".local.yaml"
 
 var (
@@ -45,9 +47,85 @@ func (s *Store) extPath(handle, namespace string) string {
 	return filepath.Join(s.ExtDir(handle), filepath.Base(namespace)+".yaml")
 }
 
-// extLocalPath returns the path to a namespace's .local companion file.
+// extLocalPath returns the write destination for a namespace's local overlay,
+// not its legacy repository compatibility location.
 func (s *Store) extLocalPath(handle, namespace string) string {
+	if s.config.repository {
+		return filepath.Join(s.config.policy.LocalRoot(), "identities", filepath.Base(handle)+".ext", filepath.Base(namespace)+ExtLocalSuffix)
+	}
+	return s.legacyExtLocalPath(handle, namespace)
+}
+
+func (s *Store) legacyExtLocalPath(handle, namespace string) string {
 	return filepath.Join(s.ExtDir(handle), filepath.Base(namespace)+ExtLocalSuffix)
+}
+
+// OverlayConflictError means two supported locations contain different local
+// data. Its diagnostic names paths only, never keys or secret values.
+type OverlayConflictError struct {
+	Legacy string
+	Local  string
+}
+
+func (e *OverlayConflictError) Error() string {
+	return fmt.Sprintf("divergent local extension overlays at %s and %s; stop writers and reconcile them into the local destination, preserving all credentials, before removing the legacy copy; ethos repair does not change overlays", e.Legacy, e.Local)
+}
+
+// readLocalNamespace permits compatibility reads only. New writers never copy
+// or delete the legacy source-side overlay; the operator controls that move.
+func (s *Store) readLocalNamespace(handle, namespace string) (map[string]string, error) {
+	if err := s.validatePolicy(); err != nil {
+		return nil, err
+	}
+	local, err := s.readExtFile(s.extLocalPath(handle, namespace))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if !s.config.repository {
+		return local, err
+	}
+	legacy, legacyErr := s.readExtFile(s.legacyExtLocalPath(handle, namespace))
+	if legacyErr != nil && !errors.Is(legacyErr, os.ErrNotExist) {
+		return nil, legacyErr
+	}
+	if local != nil && legacy != nil && !reflect.DeepEqual(local, legacy) {
+		return nil, &OverlayConflictError{Legacy: s.legacyExtLocalPath(handle, namespace), Local: s.extLocalPath(handle, namespace)}
+	}
+	if local != nil {
+		return local, nil
+	}
+	return legacy, legacyErr
+}
+
+func (s *Store) prepareExtWrite(handle, namespace string, local bool) error {
+	if err := s.validatePolicy(); err != nil {
+		return err
+	}
+	if !s.config.repository {
+		return os.MkdirAll(s.ExtDir(handle), 0o700)
+	}
+	if err := s.checkPath(s.extPath(handle, namespace), false); err != nil {
+		return err
+	}
+	if _, err := s.readLocalNamespace(handle, namespace); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if local {
+		// Editing only the new file while a compatibility copy remains would
+		// create divergence or resurrect deleted keys on the next read.
+		legacy := s.legacyExtLocalPath(handle, namespace)
+		if _, err := os.Lstat(legacy); err == nil {
+			return fmt.Errorf("legacy local overlay at %s is read-only; stop writers and move it to %s, preserving all credentials and resolving any existing destination, before modifying it; ethos repair does not change overlays", legacy, s.extLocalPath(handle, namespace))
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("examining legacy local overlay: %w", err)
+		}
+		path, err := s.config.policy.LocalExtensionPath(filepath.Base(handle), namespace)
+		if err != nil {
+			return err
+		}
+		return s.ensureDir(filepath.Dir(path))
+	}
+	return s.ensureDir(s.ExtDir(handle))
 }
 
 // extWritePath returns the file an ext write targets: the .local companion
@@ -66,8 +144,8 @@ type extConfig struct {
 	local bool
 }
 
-// Local returns an ExtOption selecting the <ns>.local.yaml companion
-// instead of the base <ns>.yaml file.
+// Local returns an ExtOption selecting the <ns>.local.yaml overlay instead of
+// the base <ns>.yaml file. Repository overlays live in the policy's local tree.
 func Local(v bool) ExtOption {
 	return func(c *extConfig) { c.local = v }
 }
@@ -93,11 +171,14 @@ func extOpts(opts []ExtOption) extConfig {
 // Returns an error satisfying errors.Is(err, os.ErrNotExist) when neither
 // file exists. A namespace with only a .local file exists.
 func (s *Store) readNamespace(handle, namespace string) (map[string]string, error) {
-	base, baseErr := readExtFile(s.extPath(handle, namespace))
+	if err := s.validatePolicy(); err != nil {
+		return nil, err
+	}
+	base, baseErr := s.readExtFile(s.extPath(handle, namespace))
 	if baseErr != nil && !errors.Is(baseErr, os.ErrNotExist) {
 		return nil, baseErr
 	}
-	local, localErr := readExtFile(s.extLocalPath(handle, namespace))
+	local, localErr := s.readLocalNamespace(handle, namespace)
 	if localErr != nil && !errors.Is(localErr, os.ErrNotExist) {
 		return nil, localErr
 	}
@@ -117,8 +198,8 @@ func (s *Store) readNamespace(handle, namespace string) (map[string]string, erro
 // readExtFile reads one namespace file. A present-but-empty file yields
 // an empty (non-nil) map, so callers distinguish "exists, no keys" from
 // "absent" by the nil map alone.
-func readExtFile(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path)
+func (s *Store) readExtFile(path string) (map[string]string, error) {
+	data, err := s.readFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -165,9 +246,13 @@ func (s *Store) ExtGet(handle, namespace, key string) (map[string]string, error)
 
 // ExtSet writes a key-value pair to a namespace. Local(true) targets the
 // <ns>.local.yaml companion; the default targets the base file.
+// A *PublicationError means the write applied but crash durability is unconfirmed.
 func (s *Store) ExtSet(handle, namespace, key, value string, opts ...ExtOption) error {
 	if handle == "" {
 		return fmt.Errorf("handle is required")
+	}
+	if err := s.checkPath(s.Path(handle), false); err != nil {
+		return err
 	}
 	// Ensure the handle exists in this store.
 	if !s.Exists(handle) {
@@ -184,6 +269,18 @@ func (s *Store) ExtSet(handle, namespace, key, value string, opts ...ExtOption) 
 // base write cannot fold a .local value into the committable file.
 func (s *Store) extSetDirect(handle, namespace, key, value string, opts ...ExtOption) error {
 	cfg := extOpts(opts)
+	if err := validateExtWrite(namespace, key, value); err != nil {
+		return err
+	}
+	if s.config.repository {
+		return s.withLock(handle, func() error {
+			return s.extSetUnlocked(handle, namespace, key, value, cfg)
+		})
+	}
+	return s.extSetUnlocked(handle, namespace, key, value, cfg)
+}
+
+func validateExtWrite(namespace, key, value string) error {
 	if err := validateNamespace(namespace); err != nil {
 		return err
 	}
@@ -193,17 +290,23 @@ func (s *Store) extSetDirect(handle, namespace, key, value string, opts ...ExtOp
 	if len(value) > MaxValueLen {
 		return fmt.Errorf("value exceeds maximum length of %d bytes", MaxValueLen)
 	}
+	return nil
+}
 
+func (s *Store) extSetUnlocked(handle, namespace, key, value string, cfg extConfig) error {
+	// Legacy voice migration shares this path while already holding the lock.
+	if err := validateExtWrite(namespace, key, value); err != nil {
+		return err
+	}
 	// Check namespace count limit.
-	dir := s.ExtDir(handle)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := s.prepareExtWrite(handle, namespace, cfg.local); err != nil {
 		return fmt.Errorf("creating extension directory: %w", err)
 	}
 
 	// Load existing namespace data.
 	path := s.extWritePath(handle, namespace, cfg.local)
 	var m map[string]string
-	if data, err := os.ReadFile(path); err == nil {
+	if data, err := s.readFile(path); err == nil {
 		if err := yaml.Unmarshal(data, &m); err != nil {
 			return fmt.Errorf("corrupt extension file %s: %w", path, err)
 		}
@@ -216,9 +319,12 @@ func (s *Store) extSetDirect(handle, namespace, key, value string, opts ...ExtOp
 		// to an existing base (or a base to a .local-only namespace)
 		// creates no namespace, and charging it against the limit would
 		// refuse the Part C secret split exactly when an identity is at
-		// capacity (Bugbot, PR #410). Best-effort: concurrent writers may
-		// briefly exceed the limit.
-		if !s.namespaceExists(handle, namespace) {
+		// capacity (Bugbot, PR #410). Repository writers hold the handle lock.
+		exists, err := s.namespaceExists(handle, namespace)
+		if err != nil {
+			return err
+		}
+		if !exists {
 			if err := s.checkNamespaceLimit(handle); err != nil {
 				return err
 			}
@@ -238,13 +344,14 @@ func (s *Store) extSetDirect(handle, namespace, key, value string, opts ...ExtOp
 	if err != nil {
 		return fmt.Errorf("marshaling extension: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600)
+	return s.writeFile(path, data, false)
 }
 
 // ExtDel deletes a key from a namespace, or the entire namespace if key
 // is empty. It targets ONE file — the base by default, the .local
 // companion under Local(true) — not the merged view, so deleting a base
 // key never silently removes the .local value shadowing it.
+// A *PublicationError means deletion applied but crash durability is unconfirmed.
 func (s *Store) ExtDel(handle, namespace, key string, opts ...ExtOption) error {
 	cfg := extOpts(opts)
 	if handle == "" {
@@ -258,10 +365,24 @@ func (s *Store) ExtDel(handle, namespace, key string, opts ...ExtOption) error {
 			return err
 		}
 	}
+	if s.config.repository {
+		return s.withLock(handle, func() error {
+			return s.extDelUnlocked(handle, namespace, key, cfg)
+		})
+	}
+	return s.extDelUnlocked(handle, namespace, key, cfg)
+}
+
+func (s *Store) extDelUnlocked(handle, namespace, key string, cfg extConfig) error {
+	if s.config.repository {
+		if err := s.prepareExtWrite(handle, namespace, cfg.local); err != nil {
+			return err
+		}
+	}
 	path := s.extWritePath(handle, namespace, cfg.local)
 	if key == "" {
 		// Delete entire namespace file.
-		if err := os.Remove(path); err != nil {
+		if err := s.removeFile(path); err != nil {
 			if os.IsNotExist(err) {
 				return fmt.Errorf("namespace %q not found for %q", namespace, handle)
 			}
@@ -271,7 +392,7 @@ func (s *Store) ExtDel(handle, namespace, key string, opts ...ExtOption) error {
 	}
 
 	// Delete single key.
-	data, err := os.ReadFile(path)
+	data, err := s.readFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("namespace %q not found for %q", namespace, handle)
@@ -287,13 +408,13 @@ func (s *Store) ExtDel(handle, namespace, key string, opts ...ExtOption) error {
 	}
 	delete(m, key)
 	if len(m) == 0 {
-		return os.Remove(path)
+		return s.removeFile(path)
 	}
 	out, err := yaml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshaling extension: %w", err)
 	}
-	return os.WriteFile(path, out, 0o600)
+	return s.writeFile(path, out, false)
 }
 
 // ExtList returns all namespace names for a handle: the union of those
@@ -306,34 +427,56 @@ func (s *Store) ExtList(handle string) ([]string, error) {
 	if handle == "" {
 		return nil, fmt.Errorf("handle is required")
 	}
-	dir := s.ExtDir(handle)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading extension directory: %w", err)
+	if err := s.validatePolicy(); err != nil {
+		return nil, err
 	}
 	var namespaces []string
-	seen := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
+	seen := make(map[string]bool)
+	dirs := []string{s.ExtDir(handle)}
+	if s.config.repository {
+		dirs = append(dirs, filepath.Dir(s.extLocalPath(handle, "unused")))
+	}
+	for i, dir := range dirs {
+		entries, err := s.readDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		var ns string
-		switch {
-		case strings.HasSuffix(e.Name(), ExtLocalSuffix):
-			ns = strings.TrimSuffix(e.Name(), ExtLocalSuffix)
-		case strings.HasSuffix(e.Name(), ".yaml"):
-			ns = strings.TrimSuffix(e.Name(), ".yaml")
-		default:
-			continue
+		if err != nil {
+			return nil, fmt.Errorf("reading extension directory: %w", err)
 		}
-		if ns == "" || seen[ns] {
-			continue
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			var ns string
+			switch {
+			case strings.HasSuffix(e.Name(), ExtLocalSuffix):
+				ns = strings.TrimSuffix(e.Name(), ExtLocalSuffix)
+			case strings.HasSuffix(e.Name(), ".yaml"):
+				if i > 0 {
+					continue // the local tree supplies overlays only, never bases
+				}
+				ns = strings.TrimSuffix(e.Name(), ".yaml")
+			default:
+				continue
+			}
+			if err := s.checkPath(filepath.Join(dir, e.Name()), false); err != nil {
+				return nil, err
+			}
+			if ns == "" || seen[ns] {
+				continue
+			}
+			seen[ns] = true
+			namespaces = append(namespaces, ns)
 		}
-		seen[ns] = true
-		namespaces = append(namespaces, ns)
+	}
+	sort.Strings(namespaces)
+	if s.config.repository {
+		for _, ns := range namespaces {
+			if _, err := s.readLocalNamespace(handle, ns); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+		}
 	}
 	return namespaces, nil
 }
@@ -341,45 +484,61 @@ func (s *Store) ExtList(handle string) ([]string, error) {
 // loadExtensions reads all extension namespaces for a handle and returns
 // the merged map and any warnings for unreadable/corrupt files.
 // Called by Store.Load to assemble the full identity view.
-func (s *Store) loadExtensions(handle string) (map[string]map[string]string, []string) {
+func (s *Store) loadExtensions(handle string) (map[string]map[string]string, []string, error) {
 	namespaces, err := s.ExtList(handle)
 	if err != nil {
 		// ExtList handles os.IsNotExist internally (returns nil, nil),
 		// so any error here is a real failure worth surfacing.
+		var conflict *OverlayConflictError
+		var boundary *repositoryPathError
+		if errors.As(err, &conflict) || errors.As(err, &boundary) {
+			return nil, nil, err
+		}
 		return map[string]map[string]string{}, []string{
 			fmt.Sprintf("extensions %s: %v", handle, err),
-		}
+		}, nil
 	}
 	if len(namespaces) == 0 {
-		return map[string]map[string]string{}, nil
+		return map[string]map[string]string{}, nil, nil
 	}
 	ext := make(map[string]map[string]string, len(namespaces))
 	var warnings []string
 	for _, ns := range namespaces {
 		m, err := s.readNamespace(handle, ns)
 		if err != nil {
+			var conflict *OverlayConflictError
+			var boundary *repositoryPathError
+			if errors.As(err, &conflict) || errors.As(err, &boundary) {
+				return nil, nil, err
+			}
 			warnings = append(warnings, fmt.Sprintf("extension %s/%s: %v", handle, ns, err))
 			continue
 		}
 		ext[ns] = m
 	}
-	return ext, warnings
+	return ext, warnings, nil
 }
 
 // namespaceExists reports whether either half of a namespace is already
 // on disk. It is the counterpart of ExtList's union: both must agree on
 // what "a namespace" is, or the limit and the listing disagree about how
 // many there are.
-func (s *Store) namespaceExists(handle, namespace string) bool {
+func (s *Store) namespaceExists(handle, namespace string) (bool, error) {
 	for _, p := range []string{
 		s.extPath(handle, namespace),
 		s.extLocalPath(handle, namespace),
+		s.legacyExtLocalPath(handle, namespace),
 	} {
+		if err := s.checkPath(p, false); err != nil {
+			return false, err
+		}
 		if _, err := os.Stat(p); err == nil {
-			return true
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (s *Store) checkNamespaceLimit(handle string) error {

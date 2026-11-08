@@ -126,14 +126,7 @@ func TestEnableSurfacesWarningsOnErrorPath(t *testing.T) {
 }
 
 func TestEnableNotInRepoExits2(t *testing.T) {
-	// TMPDIR points inside this repo (per .envrc), so t.TempDir would have a
-	// .git ancestor. Use /tmp to land genuinely outside any git work tree —
-	// the same escape the doctor tests use.
-	dir, err := os.MkdirTemp("/tmp", "ethos-enable-*")
-	if err != nil {
-		t.Skipf("cannot create an outside-repo temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := testhelpers.OutsideRepo(t)
 	t.Chdir(dir)
 	_, errOut, err := runEnableCmd(t, "enable")
 	if err == nil {
@@ -144,6 +137,53 @@ func TestEnableNotInRepoExits2(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "not in a git repository") {
 		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+func TestOutsideRepoFixtureWithBrokenAncestor(t *testing.T) {
+	for _, withGit := range []bool{true, false} {
+		name := "git"
+		if !withGit {
+			name = "no-git"
+		}
+		t.Run(name, func(t *testing.T) {
+			if withGit {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("git not available")
+				}
+			} else {
+				t.Setenv("PATH", t.TempDir())
+			}
+			t.Setenv("ETHOS_REPO_ROOT", "")
+			dir := testhelpers.OutsideRepo(t)
+			ceiling := filepath.Dir(dir)
+			broken := filepath.Join(ceiling, ".git")
+			require.NoError(t, os.Mkdir(broken, 0o700))
+			t.Chdir(dir)
+			loc := resolve.Roots()
+			require.NoError(t, loc.Err(), "the fixture must not discover its broken ancestor")
+			assert.Empty(t, loc.Checkout)
+			assert.Empty(t, loc.Store)
+
+			// The same ancestor is a real resolution failure if discovery can
+			// reach it; isolation must not turn that refusal into global fallback.
+			t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(ceiling))
+			loc = resolve.Roots()
+			require.Error(t, loc.CheckoutErr)
+			assert.NotErrorIs(t, loc.CheckoutErr, resolve.ErrNotInRepo)
+			assert.Contains(t, loc.CheckoutErr.Error(), broken)
+			require.Error(t, loc.StoreErr)
+
+			// A broken repository inside the isolated fixture still fails closed.
+			t.Setenv("GIT_CEILING_DIRECTORIES", ceiling)
+			inside := filepath.Join(dir, ".git")
+			require.NoError(t, os.WriteFile(inside, nil, 0o600))
+			loc = resolve.Roots()
+			require.Error(t, loc.CheckoutErr)
+			assert.NotErrorIs(t, loc.CheckoutErr, resolve.ErrNotInRepo)
+			assert.Contains(t, loc.CheckoutErr.Error(), inside)
+			require.Error(t, loc.StoreErr)
+		})
 	}
 }
 

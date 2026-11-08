@@ -31,10 +31,14 @@ const maxLogSize = 16 * 1024 * 1024
 // open: Details is a free-form map so future event types do not require
 // a schema migration.
 type Event struct {
-	TS      string         `json:"ts" redact:"keep"`      // RFC3339
-	Event   string         `json:"event" redact:"event"`  // create|update|close|...
-	Actor   string         `json:"actor" redact:"handle"` // identity handle
-	Details map[string]any `json:"details,omitempty"`
+	TS          string         `json:"ts" redact:"keep"`      // RFC3339
+	Event       string         `json:"event" redact:"event"`  // create|update|close|...
+	Actor       string         `json:"actor" redact:"handle"` // identity handle
+	Details     map[string]any `json:"details,omitempty"`
+	Record      string         `json:"record,omitempty" redact:"keep"`
+	OperationID string         `json:"operation_id,omitempty" redact:"keep"`
+	// Acceptance is derived by readers, never trusted as workflow authority.
+	Acceptance string `json:"acceptance,omitempty" redact:"keep"`
 }
 
 // EventWriteSetReleased is the event type Store.ForceReleaseWriteSet
@@ -98,7 +102,13 @@ func (s *Store) appendEventLocked(missionID string, e Event) (retErr error) {
 	// violate the sealed-record invariant. Outside a repo (legacy single-tree
 	// under the untracked global root) the tracked-log append below is unchanged.
 	if s.twoTreeStorage && s.repoRoot != "" {
-		return s.appendLiveEventLocked(missionID, e)
+		layer, err := s.resolveLayer(missionID)
+		if err != nil {
+			return err
+		}
+		if layer == layerRepo || layer == layerUnset {
+			return s.appendRepositoryEvent(missionID, e)
+		}
 	}
 
 	data, err := json.Marshal(e)
@@ -259,7 +269,7 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 			return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, lErr)
 		}
 		if layer == layerRepo {
-			return s.loadLiveUnionEvents(missionID)
+			return s.loadRepositoryEvents(missionID)
 		}
 	}
 	// Reject symlinks before opening. A symlink pointing outside the
@@ -482,6 +492,19 @@ func sanitizeWarning(s string) string {
 // is free-form: any shape the writer chose is preserved as-is.
 func decodeEventLine(raw []byte) (Event, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
+	return decodeEventJSON(dec)
+}
+
+// decodeRepositoryEventLine preserves numeric tokens for authority joins and
+// export. A float64 round trip can turn a fractional round into an accepted
+// integer. Keep the legacy standalone reader's numeric representation unchanged.
+func decodeRepositoryEventLine(raw []byte) (Event, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	return decodeEventJSON(dec)
+}
+
+func decodeEventJSON(dec *json.Decoder) (Event, error) {
 	dec.DisallowUnknownFields()
 	var e Event
 	if err := dec.Decode(&e); err != nil {
@@ -508,6 +531,12 @@ func decodeEventLine(raw []byte) (Event, error) {
 	if strings.TrimSpace(e.Actor) == "" {
 		return Event{}, fmt.Errorf("event missing actor")
 	}
+	if e.Record != "" && e.Record != "blame" && e.Record != "full" {
+		return Event{}, fmt.Errorf("invalid event record mode")
+	}
+	if e.OperationID != "" && !operationIDPattern.MatchString(e.OperationID) {
+		return Event{}, fmt.Errorf("invalid event operation_id")
+	}
 	return e, nil
 }
 
@@ -521,9 +550,15 @@ func decodeEventLine(raw []byte) (Event, error) {
 // checks still apply, so a genuinely malformed residue line surfaces as a
 // warning at the call site rather than a silent drop.
 func decodeResidueEventLine(raw []byte) (Event, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var e Event
-	if err := json.Unmarshal(raw, &e); err != nil {
+	if err := dec.Decode(&e); err != nil {
 		return Event{}, fmt.Errorf("decoding residue event: %w", err)
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return Event{}, fmt.Errorf("decoding residue event: trailing JSON content")
 	}
 	if strings.TrimSpace(e.TS) == "" {
 		return Event{}, fmt.Errorf("residue event missing ts")

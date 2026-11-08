@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -16,6 +15,9 @@ import (
 
 // PreCompactDeps holds the stores needed by the PreCompact hook.
 type PreCompactDeps struct {
+	// Located is captured before stdin can block. Nil lets direct callers
+	// capture at handler entry rather than rediscover after input arrives.
+	Located    *resolve.Located
 	Identities identity.IdentityStore
 	Sessions   *session.Store
 	Teams      *team.LayeredStore
@@ -35,7 +37,17 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		return fmt.Errorf("pre-compact: Identities and Sessions stores are required")
 	}
 
-	input, err := ReadInput(r, time.Second)
+	loc := resolve.Located{}
+	if deps.Located == nil {
+		loc = resolve.Roots()
+	} else {
+		loc = *deps.Located
+	}
+	deps.Located = &loc
+	if deps.Issue == nil {
+		deps.Issue = loc.StoreFailure()
+	}
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("pre-compact: %w", err)
 	}
@@ -77,7 +89,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: no agent persona found in session %q roster\n", sessionID)
 		// A session that started with the store unlocatable has no persona
 		// because of that; say so rather than compact in silence.
-		if note := storeUnlocatedNote(resolve.Roots().Err()); note != "" {
+		if note := storeUnlocatedNote(loc.Err()); note != "" {
 			_, err = fmt.Fprint(os.Stdout, note)
 			return err
 		}
@@ -117,10 +129,10 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	return err
 }
 
-// buildTeamSection resolves the team from repo config and builds
-// the team context block. Returns empty string on any error.
+// buildTeamSection builds context from the handler's captured team selection,
+// preserving visible warnings from BuildTeamSectionFor.
 func buildTeamSection(deps PreCompactDeps, selfHandle string) string {
-	return BuildTeamSection(deps.Teams, deps.Roles, deps.Identities, selfHandle)
+	return BuildTeamSectionFor(*deps.Located, deps.Teams, deps.Roles, deps.Identities, selfHandle)
 }
 
 // BuildTeamSection resolves the team from repo config and builds the team
@@ -129,19 +141,23 @@ func buildTeamSection(deps PreCompactDeps, selfHandle string) string {
 // loading fails, so operators see why team context is missing instead
 // of getting silent absence.
 func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identities identity.IdentityStore, selfHandle string) string {
+	return BuildTeamSectionFor(resolve.Roots(), teams, roles, identities, selfHandle)
+}
+
+// BuildTeamSectionFor uses only the captured roots and team selection. The
+// stores must have been assembled from the same snapshot by the caller.
+func BuildTeamSectionFor(loc resolve.Located, teams *team.LayeredStore, roles *role.LayeredStore, identities identity.IdentityStore, selfHandle string) string {
 	if teams == nil {
 		return ""
 	}
 
-	loc := resolve.Roots()
 	if note := storeUnlocatedNote(loc.Err()); note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %s\n", note)
 		return "## Team\n\n(" + note + ")"
 	}
-	teamName, err := resolve.ResolveTeam(loc.Store)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %v\n", err)
-		return fmt.Sprintf("## Team\n\n(team resolution failed: %v)", err)
+	teamName := ""
+	if loc.Config != nil {
+		teamName = loc.Config.Team
 	}
 	if teamName == "" {
 		return ""

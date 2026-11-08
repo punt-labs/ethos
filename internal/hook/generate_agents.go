@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
@@ -60,52 +62,141 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 // InstallAgentDefinitions writes (Bugbot HIGH on PR #370). They coincide
 // outside a linked worktree.
 func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) error {
-	if teams == nil || roles == nil {
-		return nil // not configured — nothing to generate
+	plan, planErr := PlanGeneratedAgentFiles(configRoot, destRoot, identities, teams, roles)
+	reportAgentPlanProblems(plan)
+	var failed []string
+	for _, file := range plan.Files {
+		path := filepath.Join(destRoot, ".claude", "agents", filepath.Base(file.Handle)+".md")
+		if err := CheckAgentPath(destRoot, path); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: generate-agents: %s: writing agent file: %v\n", file.Handle, err)
+			failed = append(failed, file.Handle)
+			continue
+		}
+		existing, readErr := os.ReadFile(path)
+		changed, err := writeAgentFile(configRoot, destRoot, path, file.Content)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: generate-agents: %s: writing agent file: %v\n", file.Handle, err)
+			failed = append(failed, file.Handle)
+			continue
+		}
+		if changed {
+			if readErr == nil {
+				oldLines := strings.Count(string(existing), "\n") + 1
+				newLines := strings.Count(file.Content, "\n") + 1
+				fmt.Fprintf(os.Stderr, "ethos: generate-agents: updated %s (net %+d lines, %d → %d)\n", filepath.Base(path), newLines-oldLines, oldLines, newLines)
+			} else {
+				fmt.Fprintf(os.Stderr, "ethos: generate-agents: wrote %s\n", filepath.Base(path))
+			}
+		}
 	}
+	if len(failed) > 0 {
+		return errors.Join(planErr, fmt.Errorf("generated %d of %d expected agent files (failed: %s)", len(plan.Files)-len(failed), len(plan.Files), strings.Join(failed, ", ")))
+	}
+	return planErr
+}
 
+// AgentFile is the exact output of one agent writer, before installation.
+type AgentFile struct {
+	Handle  string
+	Content string
+}
+
+// AgentPlan separates generator ownership from successfully rendered files.
+// Files contains one effective output per handle; the last rendered membership wins.
+// A failed or intentionally skipped generator member must not fall back to a stub.
+// Owned is complete only when planning returns no error.
+type AgentPlan struct {
+	Files    []AgentFile
+	Owned    map[string]bool
+	Problems []string
+}
+
+// PlanGeneratedAgentFiles reads configuration and rendering inputs without
+// writing agent files or migrating legacy identity fields.
+func PlanGeneratedAgentFiles(configRoot, destRoot string, identities identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) (AgentPlan, error) {
+	if teams == nil || roles == nil {
+		return AgentPlan{}, nil
+	}
 	cfg, err := resolve.ConfigOf(configRoot)
 	if err != nil {
-		return fmt.Errorf("generate agents: %w", err)
+		return AgentPlan{}, fmt.Errorf("generate agents: %w", err)
 	}
+	return PlanGeneratedAgentFilesFromConfig(cfg, projectFilePatterns(destRoot), activeBundleDefaultSkills(configRoot), AgentIdentities(identities), teams, roles)
+}
+
+// AgentIdentityReader separates resolved rendering inputs from reference reads.
+// Doctor can supply a nonmigrating reader without implementing identity writes.
+type AgentIdentityReader interface {
+	LoadAgentIdentity(string) (*identity.Identity, error)
+	LoadAgentReference(string) (*identity.Identity, error)
+}
+
+type agentIdentities struct{ store identity.IdentityStore }
+
+var _ AgentIdentityReader = agentIdentities{}
+
+// AgentIdentities adapts an ordinary identity store for read-only planning.
+// Attribute and extension resolution remain unchanged; legacy voice migration
+// is a mutation and must not occur while computing a plan.
+func AgentIdentities(s identity.IdentityStore) AgentIdentityReader {
+	if s == nil {
+		return nil
+	}
+	return agentIdentities{s}
+}
+
+func (s agentIdentities) LoadAgentIdentity(handle string) (*identity.Identity, error) {
+	return s.store.Load(handle, identity.WithoutMigration())
+}
+
+func (s agentIdentities) LoadAgentReference(handle string) (*identity.Identity, error) {
+	return s.store.Load(handle, identity.Reference(true), identity.WithoutMigration())
+}
+
+// PlanGeneratedAgentFilesFromConfig uses the caller's configuration snapshot,
+// project patterns and bundle skills; it does not rediscover roots or reread
+// configuration. Rendering is shared with generation, not a metadata approximation.
+func PlanGeneratedAgentFilesFromConfig(cfg *resolve.RepoConfig, filePatterns string, bundleSkills []string, identities AgentIdentityReader, teams *team.LayeredStore, roles *role.LayeredStore) (AgentPlan, error) {
+	plan := AgentPlan{Owned: make(map[string]bool)}
 	if cfg == nil {
-		return nil // neither .punt-labs/ethos.yaml nor the legacy path exists
+		return plan, nil // neither .punt-labs/ethos.yaml nor the legacy path exists
 	}
 
 	mainAgent := cfg.Agent
 	teamName := cfg.Team
 	if teamName == "" {
-		return nil // no team configured — nothing to generate
+		return plan, nil // no team configured — nothing to generate
+	}
+	if teams == nil || roles == nil || identities == nil {
+		return plan, fmt.Errorf("team %q is configured but agent rendering stores are unavailable", teamName)
 	}
 
 	t, err := teams.Load(teamName)
 	if err != nil {
-		return fmt.Errorf("loading team %q: %w", teamName, err)
+		return plan, fmt.Errorf("loading team %q: %w", teamName, err)
 	}
 
-	bundleSkills := activeBundleDefaultSkills(configRoot)
-
-	destDir := filepath.Join(destRoot, ".claude", "agents")
-
-	var expected, generated int
-	// failedMembers records identity handles whose write path failed
-	// after they passed every preflight check (identity, role, kind,
-	// tools, personality) and incremented expected. The final error
-	// names them so a caller reading only the returned error can
-	// identify which members failed without cross-referencing stderr.
-	// Pre-expected skips (identity-load, role-load, empty tools, empty
-	// personality) deliberately do not contribute — they are not
-	// partial failures but by-design conditions.
-	var failedMembers []string
-
+	expected := make(map[string]bool)
+	fileIndex := make(map[string]int)
+	// Incomplete repository references count toward expected output even
+	// though rendering cannot finish. Other skips remain in Problems for
+	// diagnostics, preserving the generator's existing skip behavior.
 	for _, m := range t.Members {
 		if m.Identity == mainAgent {
 			continue
 		}
-
-		id, err := identities.Load(m.Identity)
+		agent, err := isAgentKindReader(identities, m.Identity)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: %v\n", m.Identity, err)
+			return plan, err
+		}
+		if !agent {
+			continue
+		}
+		plan.Owned[m.Identity] = true
+
+		id, err := identities.LoadAgentIdentity(m.Identity)
+		if err != nil {
+			plan.Problems = append(plan.Problems, fmt.Sprintf("%s: %v", m.Identity, err))
 			// An incomplete repo-authoritative set is a fault, not a
 			// by-design skip: the member IS on the team and DOES have a
 			// personality, the repo just did not vendor everything it
@@ -113,17 +204,11 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 			// run does not report success while silently producing fewer
 			// agents than the team has (DES-057 Part A).
 			//
-			// Only for members that would have produced an agent, though.
-			// This runs before the kind filter — it has to, the load
-			// failed — so counting every incomplete member would fail the
-			// run over a HUMAN's missing attributes, and humans never get
-			// agent files (Bugbot, PR #410). Reference mode skips
-			// attribute resolution, so it answers even when the full load
-			// could not.
+			// Reference mode already established that this is an agent;
+			// a human's missing attributes must not count as failed output.
 			var incomplete *repomiss.ErrIncompleteRepoSet
-			if errors.As(err, &incomplete) && isAgentKind(identities, m.Identity) {
-				expected++
-				failedMembers = append(failedMembers, m.Identity)
+			if errors.As(err, &incomplete) {
+				expected[m.Identity] = true
 			}
 			continue
 		}
@@ -135,78 +220,55 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 		// on it: an agent written without its memory wiring looks correct
 		// and behaves as if it had amnesia (DES-057 Part A).
 		if len(id.MissingExt) > 0 {
-			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: %v\n",
-				m.Identity, repomiss.New(m.Identity, id.MissingExt))
-			expected++
-			failedMembers = append(failedMembers, m.Identity)
+			plan.Problems = append(plan.Problems, fmt.Sprintf("%s: %v", m.Identity, repomiss.New(m.Identity, id.MissingExt)))
+			expected[m.Identity] = true
 			continue
 		}
 
 		r, err := roles.Load(m.Role)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: role %q: %v\n", m.Identity, m.Role, err)
+			plan.Problems = append(plan.Problems, fmt.Sprintf("%s: role %s: %v", m.Identity, m.Role, err))
 			continue
 		}
-		if len(r.Tools) == 0 {
+		if len(normalizedAgentTools(r.Tools)) == 0 {
 			continue
 		}
 
 		if id.PersonalityContent == "" {
-			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: no personality content\n", m.Identity)
+			plan.Problems = append(plan.Problems, m.Identity+": no personality content")
 			continue
 		}
 
-		expected++
+		expected[id.Handle] = true
 
 		antiResps := deriveAntiResponsibilities(m.Role, t.Collaborations, roles)
-		reportsTo := deriveReportsToTargets(m.Role, t.Members, t.Collaborations, identities)
-		filePatterns := projectFilePatterns(destRoot)
+		reportsTo := deriveReportsToTargetsReader(m.Role, t.Members, t.Collaborations, identities)
 		skills := mergeSkills(id.Skills, bundleSkills)
 		content := buildAgentFile(id, r, antiResps, reportsTo, filePatterns, skills)
-
-		destPath := filepath.Join(destDir, id.Handle+".md")
-
-		existing, readErr := os.ReadFile(destPath)
-		if readErr == nil && string(existing) == content {
-			generated++
-			continue
-		}
-
-		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: creating agents dir: %v\n", m.Identity, err)
-			failedMembers = append(failedMembers, m.Identity)
-			continue
-		}
-		if err := os.WriteFile(destPath, []byte(content), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: writing agent file: %v\n", m.Identity, err)
-			failedMembers = append(failedMembers, m.Identity)
-			continue
-		}
-		if readErr == nil {
-			// Existing file was different — report a net line delta.
-			oldLines := strings.Count(string(existing), "\n") + 1
-			newLines := strings.Count(content, "\n") + 1
-			delta := newLines - oldLines
-			if delta >= 0 {
-				fmt.Fprintf(os.Stderr, "ethos: generate-agents: updated %s (net +%d lines, %d → %d)\n",
-					filepath.Base(destPath), delta, oldLines, newLines)
-			} else {
-				fmt.Fprintf(os.Stderr, "ethos: generate-agents: updated %s (net %d lines, %d → %d)\n",
-					filepath.Base(destPath), delta, oldLines, newLines)
-			}
+		file := AgentFile{Handle: id.Handle, Content: content}
+		if index, exists := fileIndex[id.Handle]; exists {
+			// The old writer overwrote this destination for each supported
+			// membership. Keep only its final bytes for both writers and doctor.
+			plan.Files[index] = file
 		} else {
-			fmt.Fprintf(os.Stderr, "ethos: generate-agents: wrote %s\n",
-				filepath.Base(destPath))
+			fileIndex[id.Handle] = len(plan.Files)
+			plan.Files = append(plan.Files, file)
 		}
-		generated++
 	}
 
-	if generated < expected {
-		return fmt.Errorf("generated %d of %d expected agent files (failed: %s)",
-			generated, expected, strings.Join(failedMembers, ", "))
+	if len(plan.Files) < len(expected) {
+		var failedMembers []string
+		for handle := range expected {
+			if _, exists := fileIndex[handle]; !exists {
+				failedMembers = append(failedMembers, handle)
+			}
+		}
+		sort.Strings(failedMembers)
+		return plan, fmt.Errorf("generated %d of %d expected agent files (failed: %s)",
+			len(plan.Files), len(expected), strings.Join(failedMembers, ", "))
 	}
 
-	return nil
+	return plan, nil
 }
 
 // GeneratedAgentHandles returns the set of identity handles the
@@ -238,25 +300,36 @@ func GeneratedAgentHandles(configRoot string, identities identity.IdentityStore,
 		return nil, fmt.Errorf("loading team %q: %w", cfg.Team, err)
 	}
 	owned := make(map[string]bool)
+	reader := AgentIdentities(identities)
 	for _, m := range t.Members {
 		if m.Identity == cfg.Agent {
 			continue
 		}
-		if isAgentKind(identities, m.Identity) {
+		agent, err := isAgentKindReader(reader, m.Identity)
+		if err != nil {
+			return nil, err
+		}
+		if agent {
 			owned[m.Identity] = true
 		}
 	}
 	return owned, nil
 }
 
-// isAgentKind reports whether a handle names an agent, reading only the
+// isAgentKindReader reports whether a handle names an agent, reading only the
 // identity record. Reference mode skips attribute resolution, so it
 // answers for an identity whose full load failed on missing references.
-// An unreadable record answers false: a member we cannot classify is not
-// counted as a failed agent.
-func isAgentKind(identities identity.IdentityStore, handle string) bool {
-	id, err := identities.Load(handle, identity.Reference(true))
-	return err == nil && id.Kind == "agent"
+// An unreadable record is an ownership error, not a rendering skip: callers
+// must refuse stub installation rather than treat the member as unowned.
+func isAgentKindReader(identities AgentIdentityReader, handle string) (bool, error) {
+	if identities == nil {
+		return false, fmt.Errorf("classifying team member %q for generated agent ownership: identity store is unavailable", handle)
+	}
+	id, err := identities.LoadAgentReference(handle)
+	if err != nil {
+		return false, fmt.Errorf("classifying team member %q for generated agent ownership: %w", handle, err)
+	}
+	return id.Kind == "agent", nil
 }
 
 // antiResponsibility is a responsibility belonging to a role the agent
@@ -388,6 +461,10 @@ type reportsToTarget struct {
 // team shape. All occupants of a matched role are appended, in the
 // order they appear in members.
 func deriveReportsToTargets(roleName string, members []team.Member, collabs []team.Collaboration, identities identity.IdentityStore) []reportsToTarget {
+	return deriveReportsToTargetsReader(roleName, members, collabs, AgentIdentities(identities))
+}
+
+func deriveReportsToTargetsReader(roleName string, members []team.Member, collabs []team.Collaboration, identities AgentIdentityReader) []reportsToTarget {
 	var out []reportsToTarget
 	for _, c := range collabs {
 		if c.From != roleName {
@@ -415,7 +492,7 @@ func deriveReportsToTargets(roleName string, members []team.Member, collabs []te
 			continue
 		}
 		for _, handle := range handles {
-			occ, err := identities.Load(handle, identity.Reference(true))
+			occ, err := identities.LoadAgentReference(handle)
 			if err != nil {
 				fmt.Fprintf(os.Stderr,
 					"ethos: generate-agents: reports-to: edge from %q to %q: loading identity %q: %v\n",
@@ -552,7 +629,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	fmt.Fprintf(&b, "name: %s\n", id.Handle)
 	fmt.Fprintf(&b, "description: %s\n", yamlQuote(desc))
 	b.WriteString("tools:\n")
-	for _, t := range r.Tools {
+	for _, t := range normalizedAgentTools(r.Tools) {
 		fmt.Fprintf(&b, "  - %s\n", t)
 	}
 	if r.Model != "" {
@@ -562,14 +639,14 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	for _, s := range skills {
 		fmt.Fprintf(&b, "  - %s\n", yamlQuote(s))
 	}
-	if hasWriteTool(r.Tools) {
+	if hasWriteTool(normalizedAgentTools(r.Tools)) {
 		b.WriteString("hooks:\n")
 		b.WriteString("  PostToolUse:\n")
 		b.WriteString("    - matcher: \"Write|Edit\"\n")
 		b.WriteString("      hooks:\n")
 		b.WriteString("        - type: command\n")
 		// Path-filtered make check. Reviewer-style agents emit 20KB+
-		// markdown over many Write calls into .tmp/ and .punt-labs/ethos/ to
+		// markdown over many Write calls into .tmp/ and .punt-labs/local/ethos/ to
 		// stage results and traces; running `make check` after each
 		// of those writes serializes lint+test across the agent's
 		// stream and trips the 600s Claude Code watchdog (bug
@@ -584,9 +661,9 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		//      a path is "unknown", which must trigger the gate, not
 		//      skip it (Copilot reviews on PR #326).
 		//
-		//   2. Paths under .tmp/ or .punt-labs/ethos/ — bypass (exit 0). These
-		//      are scratch and trace dirs; nothing under them is
-		//      production source. Patterns cover both leading and
+		//   2. Paths under .tmp/ or .punt-labs/local/ethos/ — bypass (exit 0).
+		//      These are scratch and local trace dirs. The .punt-labs/ethos/
+		//      source/record tree is NOT exempt. Patterns cover leading and
 		//      embedded segments so worktree layouts (`*/.tmp/*`) and
 		//      cwd-relative writes (`.tmp/*`) both match.
 		//
@@ -646,7 +723,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// under /bin/sh, which is dash on Debian/Ubuntu): no `set -o
 		// pipefail`, no process substitution, no bash-isms in the case
 		// patterns.
-		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
+		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; %s) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
 	}
 	b.WriteString("---\n")
 
@@ -768,7 +845,23 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		b.WriteString("\n")
 	}
 
-	return b.String()
+	return agentmark.Add(b.String())
+}
+
+// Tool grants are a set. Normalize only this catalog, without mutating the role
+// or reordering prose, skills, talents or team collaboration edges.
+func normalizedAgentTools(tools []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, tool := range tools {
+		tool = strings.TrimSpace(tool)
+		if tool != "" && !seen[tool] {
+			seen[tool] = true
+			out = append(out, tool)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // extractDescription returns the first prose sentence from markdown

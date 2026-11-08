@@ -12,6 +12,7 @@ package claudemd
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,12 @@ import (
 // terminator-insensitive match is already present, and returns whether it
 // wrote. A missing file is created (mode 0644). Every byte outside the
 // appended line is preserved; the appended line uses the host's EOL.
-func Register(path, line string) (bool, error) {
+// A repository directory-sync failure returns true and an
+// *layout.InstallDurabilityError: the edit applied, but durability is unconfirmed.
+// A matching-file retry also confirms directory durability; it returns false
+// (no new write), with the same error type if confirmation still fails.
+func Register(path, line string, opts ...Option) (bool, error) {
+	policies := repositoryPolicies(opts)
 	real, mode, err := resolveTarget(path)
 	if err != nil {
 		return false, err
@@ -45,7 +51,7 @@ func Register(path, line string) (bool, error) {
 			return fmt.Errorf("%s ends inside an unterminated code fence — close the fence and re-run", real)
 		}
 		if len(matchIndices(data, line)) > 0 {
-			return nil
+			return confirmUnchangedHost(real, policies...)
 		}
 		eol := textscan.DetectEOL(data)
 		out := make([]byte, 0, len(data)+len(line)+2*len(eol))
@@ -55,12 +61,14 @@ func Register(path, line string) (bool, error) {
 		}
 		out = append(out, line...)
 		out = append(out, eol...)
-		if err := writeAtomic(real, path, out, mode); err != nil {
+		if err := writeAtomic(real, path, out, mode, policies...); err != nil {
+			var applied *layout.InstallDurabilityError
+			wrote = errors.As(err, &applied)
 			return err
 		}
 		wrote = true
 		return nil
-	})
+	}, policies...)
 	return wrote, err
 }
 
@@ -68,7 +76,10 @@ func Register(path, line string) (bool, error) {
 // from the CLAUDE.md at path, collapsing an accidental duplicate to zero,
 // and returns whether it wrote. A missing file is a no-op. Every byte
 // outside the removed lines is preserved.
-func Deregister(path, line string) (bool, error) {
+// As with Register, a post-install durability failure returns true and an error.
+// A no-op retry returns false but still confirms an existing repository host.
+func Deregister(path, line string, opts ...Option) (bool, error) {
+	policies := repositoryPolicies(opts)
 	real, mode, err := resolveTarget(path)
 	if err != nil {
 		return false, err
@@ -89,7 +100,7 @@ func Deregister(path, line string) (bool, error) {
 		}
 		idx := matchIndices(data, line)
 		if len(idx) == 0 {
-			return nil
+			return confirmUnchangedHost(real, policies...)
 		}
 		drop := make(map[int]bool, len(idx))
 		for _, i := range idx {
@@ -103,12 +114,14 @@ func Deregister(path, line string) (bool, error) {
 			}
 			out = append(out, l...)
 		}
-		if err := writeAtomic(real, path, out, mode); err != nil {
+		if err := writeAtomic(real, path, out, mode, policies...); err != nil {
+			var applied *layout.InstallDurabilityError
+			wrote = errors.As(err, &applied)
 			return err
 		}
 		wrote = true
 		return nil
-	})
+	}, policies...)
 	return wrote, err
 }
 
@@ -153,8 +166,9 @@ func readIfExists(real string) ([]byte, error) {
 	return data, nil
 }
 
-// lockPathFor returns the lock file for real: a per-user file named by the
-// SHA-256 of the resolved target path, under ~/.punt-labs/ethos/locks/.
+// lockPathFor returns a domain-qualified shared-local repository lock when a
+// policy is supplied. Otherwise it preserves the global caller's per-user file
+// named by SHA-256 of the target, under ~/.punt-labs/ethos/locks/.
 //
 // It is deliberately NOT under os.TempDir() (this org sets TMPDIR per-repo via
 // direnv, so a temp-dir lock would put a direnv-shell writer and an env-less
@@ -167,7 +181,10 @@ func readIfExists(real string) ([]byte, error) {
 // Scope: same-user exclusion. Two different users sharing one checkout are out
 // of scope — they already collide on file permissions and are not a case §2.4
 // targets.
-func lockPathFor(real string) (string, error) {
+func lockPathFor(real string, policies ...layout.Policy) (string, error) {
+	if len(policies) > 0 {
+		return policies[0].LockPath("claudemd", real)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolving home dir for the lock: %w", err)
@@ -177,16 +194,21 @@ func lockPathFor(real string) (string, error) {
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".lock"), nil
 }
 
-// withLock runs fn while holding an exclusive lock on the per-user lock file
-// for real, so two concurrent Register/Deregister calls (in-process
-// goroutines or separate processes, same user) coordinate regardless of
-// TMPDIR — without leaving a lock file in the work tree.
-func withLock(real string, fn func() error) error {
-	lockPath, err := lockPathFor(real)
+// withLock runs fn while holding the repository-local or per-user lock for
+// real. Cooperating Register/Deregister calls coordinate independently of
+// TMPDIR. Repository callers must supply the same shared-store policy.
+func withLock(real string, fn func() error, policies ...layout.Policy) error {
+	lockPath, err := lockPathFor(real, policies...)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+	var dirErr error
+	if len(policies) > 0 {
+		dirErr = layout.EnsureLocalDir(policies[0], filepath.Dir(lockPath))
+	} else {
+		dirErr = os.MkdirAll(filepath.Dir(lockPath), 0o700)
+	}
+	if err := dirErr; err != nil {
 		return fmt.Errorf("creating lock dir %s: %w", filepath.Dir(lockPath), err)
 	}
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
@@ -201,22 +223,26 @@ func withLock(real string, fn func() error) error {
 	return fn()
 }
 
-// createTemp creates the staging file for an atomic write to real, in real's
-// own directory. Its name comes from logical, the path the caller asked to
+// createTemp uses shared-local repository staging when a policy is supplied,
+// otherwise the existing global caller's adjacent staging. Its name comes from
+// logical, the path the caller asked to
 // write, not from real: when CLAUDE.md is a link to AGENTS.md the file is still
 // classified as CLAUDE.md's staging file (DES-079).
-func createTemp(real, logical string) (*os.File, error) {
+func createTemp(real, logical string, policies ...layout.Policy) (*os.File, error) {
+	if len(policies) > 0 {
+		return layout.CreateLocalTemp(policies[0], filepath.Base(logical), "")
+	}
 	return os.CreateTemp(filepath.Dir(real), layout.DotTempPattern(filepath.Base(logical)))
 }
 
-// writeAtomic writes data to a temp file in real's own directory, then
+// writeAtomic writes data to a unique temp file, then
 // renames it over real. The rename is atomic on POSIX, so no reader ever
-// sees a torn file. logical is the path the caller named; see createTemp.
-func writeAtomic(real, logical string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(real)
-	tmp, err := createTemp(real, logical)
+// sees a torn file. Cross-device rename is a pre-commit error, never a reason
+// to fall back beside the host. logical is the caller's path; see createTemp.
+func writeAtomic(real, logical string, data []byte, mode os.FileMode, policies ...layout.Policy) error {
+	tmp, err := createTemp(real, logical, policies...)
 	if err != nil {
-		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+		return fmt.Errorf("creating staging file for %s: %w", logical, err)
 	}
 	name := tmp.Name()
 	defer func() { _ = os.Remove(name) }()
@@ -224,14 +250,52 @@ func writeAtomic(real, logical string, data []byte, mode os.FileMode) error {
 		_ = tmp.Close()
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
+	if len(policies) > 0 {
+		if err := tmp.Chmod(mode); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("setting mode on %s: %w", name, err)
+		}
+		if err := syncHostFile(tmp); err != nil {
+			return fmt.Errorf("syncing %s: %w", name, errors.Join(err, tmp.Close()))
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", name, err)
 	}
-	if err := os.Chmod(name, mode); err != nil {
-		return fmt.Errorf("setting mode on %s: %w", name, err)
+	if len(policies) == 0 {
+		if err := os.Chmod(name, mode); err != nil {
+			return fmt.Errorf("setting mode on %s: %w", name, err)
+		}
 	}
 	if err := os.Rename(name, real); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", name, real, err)
+	}
+	if len(policies) > 0 {
+		if err := syncHostDestination(policies[0], real); err != nil {
+			return &layout.InstallDurabilityError{Path: real, Err: err}
+		}
+	}
+	return nil
+}
+
+var syncHostFile = (*os.File).Sync
+var syncHostDestination = layout.SyncRepositoryDestination
+
+// Matching bytes do not prove that an earlier rename's directory sync completed.
+// Confirm under the same host lock, without rewriting the file. A missing host
+// has no installed replacement to confirm and remains Deregister's no-op.
+func confirmUnchangedHost(real string, policies ...layout.Policy) error {
+	if len(policies) == 0 {
+		return nil
+	}
+	if _, err := os.Stat(real); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", real, err)
+	}
+	if err := syncHostDestination(policies[0], real); err != nil {
+		return &layout.InstallDurabilityError{Path: real, Err: err}
 	}
 	return nil
 }

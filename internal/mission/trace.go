@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // TraceSummary is one JSONL line appended to <repoRoot>/.punt-labs/ethos/missions.jsonl
@@ -103,10 +105,25 @@ func (s *Store) appendTraceLine(data []byte) error {
 		return nil
 	}
 	dir := RepoStatePath(s.repoRoot)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return ioErr("creating", dir, err)
-	}
 	return withTraceLock(dir, func() error {
+		dest := filepath.Join(dir, "missions.jsonl")
+		// Check the complete destination chain under the summary lock, before
+		// either directory creation or append. This refuses stable redirects;
+		// it is not a sandbox against concurrent ancestor replacement.
+		if err := validateRepositoryRecordPath(s.repoRoot, dest); err != nil {
+			return err
+		}
+		info, err := os.Lstat(dest)
+		if err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("trace summary destination is not a regular file: %s", dest)
+			}
+		} else if !os.IsNotExist(err) {
+			return ioErr("examining", dest, err)
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return ioErr("creating", dir, err)
+		}
 		var gErr error
 		if data, gErr = guardWrite("missions.jsonl", data); gErr != nil {
 			return gErr
@@ -138,20 +155,34 @@ func (s *Store) appendTraceLine(data []byte) error {
 // writer of the missions.jsonl in dir: the Close-time append and the
 // scrub's rewrite.
 func withTraceLock(dir string, fn func() error) error {
-	// Lock a dedicated sibling lock file, not missions.jsonl itself
+	// Lock a dedicated local lock file, not missions.jsonl itself
 	// (Bugbot finding on the Windows locking work): the append-only
 	// handle needed to write missions.jsonl (O_APPEND|O_WRONLY) is opened
 	// on Windows with FILE_APPEND_DATA access only — Go's syscall.Open
 	// clears GENERIC_WRITE when O_APPEND is set — never GENERIC_READ or
 	// GENERIC_WRITE, which is exactly what LockFileEx requires of its
-	// handle. Locking that handle directly fails there. missions.jsonl.lock,
-	// opened O_RDWR, sidesteps the requirement entirely and matches this
-	// package's own convention elsewhere (id.go, store.go, delegation.go
-	// all lock a sibling ".lock" file rather than the data file it
-	// protects) — also preserves the data file's O_APPEND atomicity, which
+	// handle. Locking that handle directly fails there. A separate lock
+	// opened O_RDWR sidesteps the requirement and preserves O_APPEND atomicity, which
 	// switching it to O_RDWR to satisfy LockFileEx would have cost on
 	// every platform, not just Windows.
 	lockPath := filepath.Join(dir, "missions.jsonl.lock")
+	if filepath.Base(dir) == "ethos" && filepath.Base(filepath.Dir(dir)) == ".punt-labs" {
+		root := filepath.Dir(filepath.Dir(dir))
+		p, err := layout.NewRepository(root, root, layout.RecordBlame)
+		if err != nil {
+			return err
+		}
+		lockPath, err = p.LockPath("mission-summary", "missions")
+		if err != nil {
+			return err
+		}
+		if err := layout.EnsureLocalDir(p, filepath.Dir(lockPath)); err != nil {
+			return err
+		}
+	}
+	if err := rejectSymlink(lockPath); err != nil {
+		return err
+	}
 	lf, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return err

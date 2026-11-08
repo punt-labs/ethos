@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -82,7 +83,7 @@ func captureStderr(t *testing.T, fn func()) (out string) {
 func setupTestRepo(t *testing.T) (string, identity.IdentityStore, *team.LayeredStore, *role.LayeredStore) {
 	t.Helper()
 
-	root := t.TempDir()
+	root := physicalAgentTempDir(t)
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
 
 	// Repo config.
@@ -301,7 +302,7 @@ func writeFile(t *testing.T, path, content string) {
 // two: configRoot reads the config + team data, destRoot receives the files.
 func TestGenerateAgentFilesTo_WritesToDestRootNotConfigRoot(t *testing.T) {
 	configRoot, ids, teams, roles := setupTestRepo(t)
-	destRoot := t.TempDir() // a separate tree, standing in for the worktree
+	destRoot := physicalAgentTempDir(t) // a separate tree, standing in for the worktree
 	writeFile(t, filepath.Join(destRoot, "go.mod"), "module example.com/wt\n")
 
 	require.NoError(t, GenerateAgentFilesTo(configRoot, destRoot, ids, teams, roles))
@@ -348,7 +349,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n"+
+						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n"+
 						"---\n")
 
 				// Body checks.
@@ -603,7 +604,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n")
+						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n")
 
 				// Log the generated file so binary verification is visible
 				// in -v test output (spec success criterion 5).
@@ -632,7 +633,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -942,7 +943,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/local/ethos/*|.tmp/*|.punt-labs/local/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -1070,9 +1071,10 @@ func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
 // also happen to exercise it.
 func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
 	tests := []struct {
-		name   string
-		setup  func(t *testing.T, root string)
-		assert func(t *testing.T, content string, stderr string)
+		name    string
+		wantErr string
+		setup   func(t *testing.T, root string)
+		assert  func(t *testing.T, content string, stderr string)
 	}{
 		{
 			// No collaborations in the fixture => no outgoing reports_to
@@ -1128,8 +1130,10 @@ func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
 			// inside deriveReportsToTargets. Mirrors the "ghost"
 			// technique TestDeriveAntiResponsibilities_MissingTarget
 			// uses to defeat ValidateStructural, applied to the
-			// identity rather than the role.
-			name: "missing identity — warned and dropped, other target survives",
+			// identity rather than the role. The known target still renders,
+			// but unclassified ownership must not report overall success.
+			name:    "missing identity — warned and dropped, other target survives",
+			wantErr: `classifying team member "ghost-agent" for generated agent ownership`,
 			setup: func(t *testing.T, root string) {
 				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
 				writeYAML(t, filepath.Join(ethosDir, "roles", "advisor.yaml"), map[string]interface{}{
@@ -1256,7 +1260,12 @@ func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
 			var content, stderr string
 			stderr = captureStderr(t, func() {
 				err := GenerateAgentFiles(root, ids, teams, roles)
-				require.NoError(t, err)
+				if tt.wantErr != "" {
+					require.ErrorContains(t, err, tt.wantErr)
+					require.ErrorIs(t, err, os.ErrNotExist)
+				} else {
+					require.NoError(t, err)
+				}
 
 				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
 				data, readErr := os.ReadFile(agentPath)
@@ -2018,7 +2027,7 @@ func TestGenerateAgentFiles_WorktreeResolution(t *testing.T) {
 // swallowed and the generator returned nil — the user had no signal
 // that their config was broken.
 func TestGenerateAgentFiles_MalformedConfig(t *testing.T) {
-	root := t.TempDir()
+	root := physicalAgentTempDir(t)
 	cfgDir := filepath.Join(root, ".punt-labs")
 	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
 	// Unclosed bracket — yaml.Unmarshal fails. The file exists and is
@@ -2084,7 +2093,7 @@ func TestGenerateAgentFiles_UnreadableConfig(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permission-denied test is meaningless as root")
 	}
-	root := t.TempDir()
+	root := physicalAgentTempDir(t)
 	cfgDir := filepath.Join(root, ".punt-labs")
 	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
 	cfgPath := filepath.Join(cfgDir, "ethos.yaml")
@@ -2124,7 +2133,7 @@ func TestGenerateAgentFiles_UnreadableConfig(t *testing.T) {
 // silent. The test is explicit rather than implicit so a future change
 // that breaks the cfg == nil branch cannot hide behind other tests.
 func TestGenerateAgentFiles_NoConfigFile(t *testing.T) {
-	root := t.TempDir()
+	root := physicalAgentTempDir(t)
 	// Intentionally do NOT create .punt-labs/ethos.yaml or
 	// .punt-labs/ethos/config.yaml. LoadRepoConfig must return
 	// (nil, nil) for this case.
@@ -2331,7 +2340,7 @@ func TestProjectFilePatterns(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := physicalAgentTempDir(t)
 			for _, m := range tt.markers {
 				writeFile(t, filepath.Join(root, m), "")
 			}
@@ -2390,7 +2399,7 @@ func TestGenerateAgentFiles_ProjectPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := physicalAgentTempDir(t)
 			ethosDir := filepath.Join(root, ".punt-labs", "ethos")
 
 			// Repo config.
@@ -2462,4 +2471,34 @@ func TestGenerateAgentFiles_ProjectPatterns(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGenerateAgentFiles_ProvenanceMarker pins that every generated file
+// carries the ethos marker (doctor's only basis for telling a leftover from
+// a hand-authored agent), that the frontmatter still parses, and that a
+// second run rewrites nothing.
+func TestGenerateAgentFiles_ProvenanceMarker(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+	require.NoError(t, GenerateAgentFilesTo(root, root, ids, teams, roles))
+
+	path := filepath.Join(root, ".claude", "agents", "bwk.md")
+	first, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.True(t, agentmark.Has(string(first)), "generated file must carry the marker")
+
+	parts := strings.SplitN(string(first), "---", 3)
+	require.Len(t, parts, 3)
+	var fm struct {
+		Name string `yaml:"name"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(parts[1]), &fm), "frontmatter must remain valid YAML")
+	assert.Equal(t, "bwk", fm.Name)
+
+	stderr := captureStderr(t, func() {
+		require.NoError(t, GenerateAgentFilesTo(root, root, ids, teams, roles))
+	})
+	assert.NotContains(t, stderr, "updated", "regeneration must be idempotent")
+	second, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(first), string(second))
 }

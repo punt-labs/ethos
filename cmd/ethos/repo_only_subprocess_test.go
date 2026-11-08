@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -155,4 +156,62 @@ func TestCLI_ExtLocalSplit(t *testing.T) {
 	require.Equal(t, 0, exit)
 	assert.Contains(t, stdout, "quarry")
 	assert.NotContains(t, stdout, "quarry.local", "no phantom namespace")
+}
+
+// repoOnlyWithOtherTeam is a repo-only repo that vendors only someone else's
+// identity: the caller (test-agent, from $USER) lives only in the global store.
+func repoOnlyWithOtherTeam(t *testing.T) *cliSubprocessEnv {
+	t.Helper()
+	se := setupCLISubprocessEnv(t)
+	setResolution(t, se, "repo-only")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "gstack-impl.yaml"),
+		[]byte("name: Impl\nhandle: gstack-impl\nkind: agent\n"), 0o644))
+	return se
+}
+
+// repo-only governs the team and agents a repo commits, not the person running
+// ethos: a caller the repo does not hold resolves from the global store.
+func TestCLI_RepoOnlyCallerResolvesFromGlobal(t *testing.T) {
+	se := repoOnlyWithOtherTeam(t)
+
+	stdout, stderr, exit := runCLI(t, se, "whoami")
+	require.Equal(t, 0, exit, "whoami: stderr=%s", stderr)
+	assert.Contains(t, stdout, "Test Agent (test-agent)")
+
+	stdout, _, _ = runCLI(t, se, "doctor")
+	row := lineWith(stdout, "Human identity")
+	assert.Contains(t, row, "PASS")
+	assert.Contains(t, row, "resolved from the global store")
+
+	// The team and agent identities still do not read the global store.
+	_, _, exit = runCLI(t, se, "show", "test-agent")
+	assert.Equal(t, 1, exit)
+}
+
+// A caller in neither the repo nor the global store is still a failure.
+func TestCLI_RepoOnlyCallerInNeitherStoreFails(t *testing.T) {
+	se := repoOnlyWithOtherTeam(t)
+	for i, kv := range se.env {
+		if kv == "USER=test-agent" {
+			se.env[i] = "USER=nobody"
+		}
+	}
+
+	_, stderr, exit := runCLI(t, se, "whoami")
+	assert.Equal(t, 1, exit)
+	assert.Contains(t, stderr, "no identity matches")
+
+	stdout, _, _ := runCLI(t, se, "doctor")
+	assert.Contains(t, lineWith(stdout, "Human identity"), "FAIL")
+}
+
+// lineWith returns the first line of s containing sub, or "".
+func lineWith(s, sub string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, sub) {
+			return l
+		}
+	}
+	return ""
 }

@@ -192,7 +192,37 @@ baseline-tokens: ## Recapture E2E token baselines (operator-invoked)
 calibrate-tokens: ## Calibrate the offline tokenizer against Anthropic's API (operator-invoked)
 	@echo "not yet implemented in initial land"
 
-check: lint docs test validate-content fuzz-check ## Run all quality gates
+.PHONY: check-opencode doctor-opencode smoke-opencode smoke-opencode-children smoke-opencode-discovery smoke-opencode-health smoke-opencode-formatter
+
+check-opencode: ## Check native OpenCode configuration offline (CI-safe)
+	python3 -B scripts/opencode.py check
+	python3 -B -m unittest discover -s scripts -p 'opencode_test.py'
+
+doctor-opencode: ## Check live OpenCode discovery and six MCP connections
+	python3 -B scripts/opencode.py doctor
+
+smoke-opencode: ## Exercise real native child/tool execution (uses model credits)
+	python3 -B scripts/opencode.py smoke
+
+smoke-opencode-children: ## Smoke all specialist child reads only (uses model credits)
+	python3 -B scripts/opencode.py smoke --stage children
+
+smoke-opencode-discovery: ## Smoke maintained procedure discovery only (uses model credits)
+	python3 -B scripts/opencode.py smoke --stage discovery
+
+smoke-opencode-health: ## Smoke root Code Mode health calls only (uses model credits)
+	python3 -B scripts/opencode.py smoke --stage health
+
+smoke-opencode-formatter: ## Smoke formatter byte preservation only (uses model credits)
+	python3 -B scripts/opencode.py smoke --stage formatter
+
+.PHONY: check-storage
+
+check-storage: ## Exercise offline storage boundaries through the real CLI, wrappers and Git hooks
+	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
+	python3 -B scripts/storage_acceptance.py
+
+check: lint docs test validate-content fuzz-check check-opencode check-storage ## Run all quality gates
 
 format: ## Format code (applies the formatters golangci-lint gates)
 	$(GOLANGCI_LINT) fmt

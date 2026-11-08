@@ -735,5 +735,5 @@ error path.
 - `CHANGELOG.md` `## [Unreleased]` — every shipped change, by phase
 - `DESIGN.md` (DES-054) — the design rationale and invariants
 - `docs/architecture.tex` — the architecture diagram
-- `AGENTS.md` `## Missions` — mission contract overview
+- [Agent guide: Missions](agent-guide.md#missions) — mission contract overview
 - `docs/mission-archetypes.md` — archetype constraints

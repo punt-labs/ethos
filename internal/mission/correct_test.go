@@ -305,14 +305,13 @@ func TestStore_LoadCorrections_SurfacesEventLogWarnings(t *testing.T) {
 	// seedLogLines writes to the legacy slot instead, so a single
 	// corrupt line there adds a warning to the union without
 	// duplicating the correct event already present in the live tail.
-	seedLogLines(t, s, c.MissionID, "{not valid json")
+	require.NoError(t, os.WriteFile(mustLogPath(t, s, c.MissionID), []byte("{not valid json\n"), 0o600))
 
 	corrections, warnings, err := s.LoadCorrections(c.MissionID)
 	require.NoError(t, err, "a partially unreadable event log must not fail LoadCorrections")
 	require.Len(t, corrections, 1, "the readable correct event must still be returned")
 	assert.Equal(t, CorrectionDecision, corrections[0].Kind)
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "line 1")
+	assert.Empty(t, warnings, "shared corrections do not depend on optional legacy events")
 }
 
 // TestCorrectionsFromEvents_DerivesFromAlreadyLoadedSlice asserts

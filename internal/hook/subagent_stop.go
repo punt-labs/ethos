@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/session"
 )
@@ -12,7 +11,7 @@ import (
 // HandleSubagentStop reads the SubagentStop hook payload from stdin
 // and removes the subagent from the session roster.
 func HandleSubagentStop(r io.Reader, ss *session.Store) error {
-	input, err := ReadInput(r, time.Second)
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("subagent-stop: %w", err)
 	}

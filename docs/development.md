@@ -13,7 +13,7 @@ Before specifying work, check the relevant standard:
 - **New MCP tool** → DES-020: every tool needs a formatter in `format_output.go` before shipping
 - **New CLI command** → [cli standard](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md)
 - **New hook** → [hooks standard](https://github.com/punt-labs/punt-kit/blob/main/standards/hooks.md)
-- **New slash command** → existing command files for pattern; both `name.md` and `name-dev.md` required
+- **New Claude plugin slash command** → existing plugin command files for pattern; both `name.md` and `name-dev.md` required. Native `.opencode/` commands use their native Markdown or JSON forms, without `-dev` duplicates.
 - **Any Go code** → [go standard](https://github.com/punt-labs/punt-kit/blob/main/standards/go.md)
 - **Release work** → [release-process standard](https://github.com/punt-labs/punt-kit/blob/main/standards/release-process.md)
 - **`internal/mission` lifecycle logic** (status or recommendation values, guards on `Create`/`Update`/`AppendResult`/`AppendReflection`/`AdvanceRound`/`Close`/`Abandon`/`DisclaimDelegation`, or a new status-machine operation) → amend `docs/spec-mission-lifecycle.tex` in the same PR, or state in the PR description why the change does not affect it
@@ -49,6 +49,11 @@ make check                              # All quality gates (vet, staticcheck, s
 ```
 
 Use `.tmp/` for scratch files — `TMPDIR` is set via `.envrc` so subprocesses use it automatically.
+
+For native OpenCode, see [setup](opencode-setup.md) and the
+[focused workflow](opencode-workflow.md). The latter defines the operator's
+task-based orchestration exception for the authorized DES-079 repair; existing
+quality and PR review standards still apply.
 
 ## Use Ethos to Build Ethos
 
@@ -130,7 +135,7 @@ The Makefile is the source of truth (`make help`).
 make check                             # All gates: lint + docs + test + validate-content + fuzz-check
 ```
 
-Expands to `make lint docs test validate-content fuzz-check`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI).
+Expands to `make lint docs test validate-content fuzz-check check-opencode check-storage`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`, plus `fuzz` type-checking of every Z-specification `.tex` under `docs/` (content-detected; loud skip locally when `fuzz` is absent, hard failure in CI), offline native OpenCode configuration tests, and the real CLI/MCP/Git-hook storage acceptance gate. The storage gate requires every case to execute and records binary/source fingerprints; it is final-placement evidence, not proof of transient placement or crash durability. Live workstation checks are separate: `make doctor-opencode` and `make smoke-opencode`; product `make doctor` is unchanged.
 
 ## Architecture
 
@@ -188,11 +193,19 @@ and are inert there; Claude Code ignores files it does not recognize.
 | `internal/bundle/` | Team bundle discovery, resolution, validation (three-layer: repo → bundle → global) |
 | `internal/seed/` | Embedded starter content (roles, talents, archetypes, pipelines, bundles) deployed by `ethos seed` |
 | `internal/adr/` | ADR model and storage backing the `adr` MCP tool |
-| `internal/ui/` | Localhost web UI for traceability data (`ethos ui`). Embedded Go HTTP server + html/template + Tailwind CDN. Reads missions, delegations, audit trails from `.punt-labs/ethos/`. |
+| `internal/ui/` | Localhost web UI for traceability data (`ethos ui`). Embedded Go HTTP server + html/template + Tailwind CDN. DES-079 requires shared authority plus local/published/legacy trace reads; acceptance pending. |
 | `internal/mcp/` | MCP tool definitions and handlers (12 tools) |
 | `internal/mcpclass/` | MCP tool-name classification (read-only / writes-outside-repo / writes-in-repo); single source of truth shared by the DES-069 verifier deny (`internal/hook`) and the build-time grant check (`cmd/validate-content`) |
 
 ### Storage Layout
+
+DES-079 requires the following repository boundary; final entry-point acceptance
+is pending. Resolve canonical store root **S** through Git's common directory
+separately from invoking checkout **C**. Repository paths below are relative to S
+unless marked C. "Yes" means intended for Git, not automatically staged/committed.
+See [storage and publication contract](storage-layout.md) for the full roots,
+authority, recovery, reader, publication/export and acceptance mapping.
+DES-080 redaction shipped in v4.20.0; it does not prove the new destinations safe.
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
@@ -212,11 +225,26 @@ and are inert there; Claude Code ignores files it does not recognize.
 | Global roles | `~/.punt-labs/ethos/roles/<name>.yaml` | No |
 | Global teams | `~/.punt-labs/ethos/teams/<name>.yaml` | No |
 | Global bundles | `~/.punt-labs/ethos/bundles/<name>/` | No |
-| ADRs | `~/.punt-labs/ethos/adrs/<id>.yaml` | No |
+| Repo ADRs | `.punt-labs/ethos/adrs/<id>.yaml` | Yes; repo-first read, legacy global fallback |
+| Global ADRs / legacy fallback | `~/.punt-labs/ethos/adrs/<id>.yaml` | No |
 | Repo bundles | `.punt-labs/ethos-bundles/<name>/` | Yes |
-| Missions | `<repo>/.punt-labs/ethos/missions/<id>/` | Yes |
-| Mission traces | `<repo>/.punt-labs/ethos/missions.jsonl` | Yes |
+| Contracts with inline decisions, all results, delegation records, corrections | `.punt-labs/ethos/missions/<id>/` selected blame records | Yes |
+| Mission summaries | `.punt-labs/ethos/missions.jsonl` | Yes |
+| Prompts, full reflections and sealed mission/session chunks | `.punt-labs/local/ethos/trace/` plus record-relative path | No; retained in both modes |
+| Audit live / mission live | `.punt-labs/local/ethos/{sessions/<sid>.audit.jsonl,missions/<id>/<sid>.log.jsonl}` | No |
+| Repository extension overlays | `.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml` | No |
+| Repository locks, receipts, scratch and all temporary staging | `.punt-labs/local/ethos/` | No |
+| Publication copies / manifests | `C/.punt-labs/ethos/` selected paths / `provenance/` | Yes; actual C index |
+| Generated agents / enablement deposits | C's `.claude/agents/` and documented guide/marker/import paths | Yes |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
+
+Validate `record` once per request: omitted is `blame`, `full` opts in
+prospectively, invalid fails visibly. Both retain local history at S; default
+sealing performs no index access, full adds per-entry eligible copies into C.
+No source-tree ignore workaround, adjacent staging or `EXDEV` copy-over fallback.
+Retained history is not scratch: removal of linked C distinct from S must retain
+even unsealed tails without SessionEnd; deleting S is outside that guarantee.
+Use `.tmp/opencode/` for development reports/checks, not product-owned history.
 
 ### Identity Schema
 
@@ -242,7 +270,7 @@ talents:                               # slugs → talents/<slug>.md
 - **No consumer-specific fields.** Never add fields for a specific consumer (Beadle, Biff, Vox). Use the generic extension mechanism — any tool can read/write arbitrary key-value pairs scoped to a namespace. Ethos validates constraints but does not know what the keys mean.
 - **Preserve identity content.** Source `.md` files are the authority on personality, writing style, and talent content. Hooks and persona blocks may restructure (strip leading headings, fold the first paragraph into the opening line, list talents as slugs) but must not discard or summarize the underlying meaning.
 - **Three-layer resolution.** All layered stores resolve repo-local → active bundle → global. Bundle layer is read-only. `active_bundle` in `.punt-labs/ethos.yaml` selects the bundle; when unset and `.punt-labs/ethos/` exists as a directory, legacy two-layer behavior is preserved (DES-051).
-- **This repo runs resolution: repo-only.** The `engineering` closure is vendored under `.punt-labs/ethos/`, with `.vendor.yaml` as the manifest recording which identities, roles, teams, and other attributes were pulled in and from where. The global store (`~/.punt-labs/ethos/`) is not consulted during resolution here — everything this repo needs to build itself with ethos lives in the vendored tree. To refresh the vendored set after upstream `team` changes, run `ethos vendor --team engineering --apply --prune`.
+- **This repo runs resolution: repo-only.** The `engineering` closure is vendored under `.punt-labs/ethos/`, with `.vendor.yaml` as the manifest recording which identities, roles, teams, and other attributes were pulled in and from where. The global store (`~/.punt-labs/ethos/`) is not consulted during resolution here, except to find the caller's own identity — everything else this repo needs to build itself with ethos lives in the vendored tree. To refresh the vendored set after upstream `team` changes, run `ethos vendor --team engineering --apply --prune`.
 - **Pipeline instantiation validates before creation.** If any stage fails validation (missing worker, evaluator, or archetype), zero missions are created. During Create, missions are persisted sequentially; if a later stage fails, earlier stages remain and must be cleaned up manually before retrying.
 
 ## Go Standards

@@ -143,7 +143,8 @@ func TestRollback_ResultAndReflectionRestoreTheirBytes(t *testing.T) {
 	notice = captureStderr(t, func() {
 		err = s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 2, RecommendationContinue))
 	})
-	assertRolledBack(t, err, notice, flPath, flBytes)
+	assertReflectionNotInstalled(t, err, flPath, flBytes)
+	assert.NotContains(t, notice, "redacted credential-like content")
 }
 
 // TestRollback_AnEmptyListFileIsRestoredNotDeleted: a results or reflections
@@ -183,7 +184,19 @@ func TestRollback_AnEmptyListFileIsRestoredNotDeleted(t *testing.T) {
 			require.NoError(t, os.Mkdir(logPath, 0o700))
 			var err error
 			notice := captureStderr(t, func() { err = c.do(s, ct) })
-			assertRolledBack(t, err, notice, path, []byte(c.body))
+			if name == "reflections" || name == "reflections, null list" {
+				assertReflectionNotInstalled(t, err, path, []byte(c.body))
+			} else {
+				assertRolledBack(t, err, notice, path, []byte(c.body))
+			}
 		})
 	}
+}
+
+func assertReflectionNotInstalled(t *testing.T, err error, path string, want []byte) {
+	t.Helper()
+	require.ErrorContains(t, err, "decision not installed")
+	got, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, want, got, "event-first failure must not touch existing reflection detail")
 }

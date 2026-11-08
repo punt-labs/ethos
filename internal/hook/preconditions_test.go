@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -620,6 +621,9 @@ func TestGateContractUnlocatedCheckout(t *testing.T) {
 	reason, deny := gateContract(makeContractWithPreconditions(pre, mission.Inputs{}, nil), "Edit", input, "s1", "")
 	assert.True(t, deny)
 	assert.Contains(t, reason, filepath.Join(dir, ".git"))
+	reason, deny = gateContract(makeContractWithPreconditions(pre, mission.Inputs{}, nil), "Edit", input, "s1", t.TempDir())
+	assert.True(t, deny, "a supplied store cannot replace a failed Located snapshot")
+	assert.Contains(t, reason, filepath.Join(dir, ".git"))
 
 	reason, deny = gateContract(makeContractWithPreconditions(pre, mission.Inputs{}, boolPtr(false)), "Edit", input, "s1", "")
 	assert.False(t, deny, reason)
@@ -629,20 +633,18 @@ func TestGateContractUnlocatedCheckout(t *testing.T) {
 }
 
 // TestEvaluatePreconditions_SessionIDLooksLikePath defends against a
-// SessionID that contains slashes — filepath.Base in audit_paths.go
-// normalizes the suffix so the directory lookup stays sane. The
-// evaluator must produce a useful result either way (no panic, no
-// path-traversal escape from the repo root).
+// SessionID that contains slashes: the stream boundary refuses the malformed
+// identity instead of reading a different session with its basename.
 func TestEvaluatePreconditions_SessionIDLooksLikePath(t *testing.T) {
 	dir := t.TempDir()
 	c := makeContractWithPreconditions(
 		[]mission.Precondition{{Form: mission.PreconditionFormImplicit, Message: "x"}},
 		mission.Inputs{}, nil,
 	)
-	// No panic and a clean deny — no audit log exists for this session.
+	// No panic and an explicit unevaluable denial; no traversal is attempted.
 	_, deny, err := EvaluatePreconditions(c, "Write",
 		map[string]any{"file_path": "x.go"}, "../escape/sess", dir, dir)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "invalid audit stream component")
 	assert.True(t, deny)
 	// Sanity: the session dir we resolved is under dir, not escaped.
 	resolved, _ := resolveRepoSessionDir(dir, "../escape/sess", time.Now().UTC())
@@ -805,7 +807,7 @@ func TestEvaluatePreconditions_StoredRepoPlaceholderMatchesRelativeRead(t *testi
 }
 
 // auditRead records a Read of path through the real audit writer.
-func auditRead(t *testing.T, repo, global, sess, path string) {
+func auditRead(t *testing.T, repo, global, sess, path string, policies ...layout.Policy) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]any{
 		"session_id": sess,
@@ -813,6 +815,10 @@ func auditRead(t *testing.T, repo, global, sess, path string) {
 		"tool_input": map[string]any{"file_path": path},
 	})
 	require.NoError(t, err)
+	if len(policies) != 0 {
+		require.NoError(t, HandleAuditLogWithPolicy(bytes.NewReader(payload), policies[0], global))
+		return
+	}
 	require.NoError(t, HandleAuditLog(bytes.NewReader(payload), repo, global))
 }
 
@@ -1065,7 +1071,10 @@ func TestEvaluatePreconditions_LinkedWorktreeEntryExpandsAgainstTheStoreRoot(t *
 
 	c := redactedRequireRead(t, store, file)
 	assert.Equal(t, "<repo>/.claude/worktrees/w/cfg/config.yaml", c.Preconditions[0].RequireRead[0])
-	auditRead(t, wt, global, "sess-wt", file)
+	p := hookPolicy(t, store, wt, layout.RecordBlame)
+	payload, err := json.Marshal(map[string]any{"session_id": "sess-wt", "tool_name": "Read", "tool_input": map[string]any{"file_path": file}})
+	require.NoError(t, err)
+	require.NoError(t, HandleAuditLogWithPolicy(bytes.NewReader(payload), p, global))
 
 	write := map[string]any{"file_path": "x.go"}
 	reason, deny, err := EvaluatePreconditions(c, "Write", write, "sess-wt", wt, store)
@@ -1170,13 +1179,14 @@ func TestEvalContractPreconditions_LinkedWorktreeWithoutOverride(t *testing.T) {
 	t.Setenv("MISSION_ID", "m-2026-07-21-041")
 	t.Chdir(wt)
 	createRepoRelativeContract(t, main, global, "m-2026-07-21-041")
+	p := hookPolicy(t, main, wt, layout.RecordBlame)
 
 	write := map[string]any{"file_path": "x.go"}
-	auditRead(t, wt, global, "sess-nw", filepath.Join(wt, "cfg", "config.yaml"))
+	auditRead(t, wt, global, "sess-nw", filepath.Join(wt, "cfg", "config.yaml"), p)
 	_, blocked := evalContractPreconditions("Write", write, "sess-nw")
 	require.True(t, blocked, "the worktree copy is not the file the contract names")
 
-	auditRead(t, wt, global, "sess-nw", filepath.Join(main, "cfg", "config.yaml"))
+	auditRead(t, wt, global, "sess-nw", filepath.Join(main, "cfg", "config.yaml"), p)
 	reason, blocked := evalContractPreconditions("Write", write, "sess-nw")
 	assert.False(t, blocked, "the store-root copy satisfies the entry: %s", reason)
 }

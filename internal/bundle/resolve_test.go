@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +56,29 @@ func mkLegacyDir(t *testing.T, repoRoot string) string {
 }
 
 // --- ResolveActive tests ---
+
+func TestBundlePolicyUsesCapturedConfiguration(t *testing.T) {
+	repo, global := t.TempDir(), t.TempDir()
+	ethosRoot := mkLegacyDir(t, repo)
+	want := mkRepoBundle(t, repo, "team", "name: team\nversion: 1\n")
+	writeRepoConfig(t, repo, "active_bundle: team\nresolution: repo-only\nrecord: blame\n")
+	cfg, err := resolve.ConfigOf(repo)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	// An in-flight operation retains its validated policy even if the file
+	// changes before its stores are constructed. The next operation sees the
+	// invalid configuration and refuses it.
+	writeRepoConfig(t, repo, "active_bundle: missing\nrecord: invalid\n")
+	root, active, err := ResolveRootFromConfig(repo, global, cfg)
+	require.NoError(t, err)
+	assert.Equal(t, want, root)
+	require.NotNil(t, active)
+	assert.Equal(t, SourceRepo, active.Source)
+	require.NoError(t, ConfigIssueFromConfig(repo, ethosRoot, global, cfg))
+	assert.Equal(t, "blame", cfg.Record)
+	require.Error(t, ConfigIssue(repo, ethosRoot, global))
+}
 
 func TestResolveActive_Empty(t *testing.T) {
 	repo := t.TempDir()

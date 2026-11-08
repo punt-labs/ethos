@@ -110,6 +110,9 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
+	if err := c.validateDecisions(); err != nil {
+		return err
+	}
 
 	// mission_id
 	if !missionIDPattern.MatchString(c.MissionID) {

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -27,7 +27,41 @@ import (
 // pre-DES-026 clobber. Callers fail closed instead and install nothing;
 // see installStubAgentDefs.
 func InstallAgentDefinitions(ethosRoot string, generated map[string]bool) ([]string, error) {
+	files, err := PlanInstalledAgentDefinitions(ethosRoot, generated)
+	if err != nil || len(files) == 0 {
+		return nil, err
+	}
+	loc := resolve.Roots()
+	if loc.CheckoutErr != nil {
+		return nil, fmt.Errorf("locating the checkout for agent installation: %w", loc.CheckoutErr)
+	}
+	if err := loc.StoreFailure(); err != nil {
+		return nil, fmt.Errorf("locating the store for agent staging: %w", err)
+	}
+	if loc.Checkout == "" || loc.Store == "" {
+		return nil, fmt.Errorf("no git repo found for agent installation")
+	}
+	var deployed []string
+	for _, file := range files {
+		path := filepath.Join(loc.Checkout, ".claude", "agents", filepath.Base(file.Handle)+".md")
+		changed, err := writeAgentFile(loc.Store, loc.Checkout, path, file.Content)
+		if err != nil {
+			return deployed, err
+		}
+		if changed {
+			deployed = append(deployed, file.Handle+".md")
+		}
+	}
+	return deployed, nil
+}
+
+// PlanInstalledAgentDefinitions returns the exact source-copy bytes, including
+// the shared provenance marker, without resolving a checkout or writing files.
+func PlanInstalledAgentDefinitions(ethosRoot string, generated map[string]bool) ([]AgentFile, error) {
 	srcDir := filepath.Join(ethosRoot, "agents")
+	if err := CheckAgentPath(ethosRoot, srcDir); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(srcDir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -36,17 +70,7 @@ func InstallAgentDefinitions(ethosRoot string, generated map[string]bool) ([]str
 		return nil, fmt.Errorf("reading agents dir %s: %w", srcDir, err)
 	}
 
-	loc := resolve.Roots()
-	if loc.CheckoutErr != nil {
-		return nil, fmt.Errorf("locating the checkout for agent installation: %w", loc.CheckoutErr)
-	}
-	repoRoot := loc.Checkout
-	if repoRoot == "" {
-		return nil, fmt.Errorf("no git repo found for agent installation")
-	}
-	destDir := filepath.Join(repoRoot, ".claude", "agents")
-
-	var deployed []string
+	var files []AgentFile
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
 			continue
@@ -59,27 +83,17 @@ func InstallAgentDefinitions(ethosRoot string, generated map[string]bool) ([]str
 		}
 
 		srcPath := filepath.Join(srcDir, e.Name())
-		srcData, err := os.ReadFile(srcPath)
+		if err := CheckAgentPath(ethosRoot, srcPath); err != nil {
+			return nil, err
+		}
+		raw, err := os.ReadFile(srcPath)
 		if err != nil {
-			return deployed, fmt.Errorf("reading agent file %s: %w", srcPath, err)
+			return nil, fmt.Errorf("reading agent file %s: %w", srcPath, err)
 		}
-
-		destPath := filepath.Join(destDir, e.Name())
-		destData, err := os.ReadFile(destPath)
-		if err == nil && string(destData) == string(srcData) {
-			continue // identical, skip
-		}
-
-		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			return deployed, fmt.Errorf("creating agents dir %s: %w", destDir, err)
-		}
-
-		if err := os.WriteFile(destPath, srcData, 0o644); err != nil {
-			return deployed, fmt.Errorf("writing agent file %s: %w", destPath, err)
-		}
-		deployed = append(deployed, e.Name())
+		// The marker lets doctor tell this copy from a hand-authored file
+		// if its identity is later removed.
+		files = append(files, AgentFile{Handle: strings.TrimSuffix(e.Name(), ".md"), Content: agentmark.Add(string(raw))})
 	}
 
-	sort.Strings(deployed)
-	return deployed, nil
+	return files, nil
 }

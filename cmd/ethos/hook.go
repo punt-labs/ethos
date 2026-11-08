@@ -136,8 +136,10 @@ func init() {
 }
 
 func runHookSessionStart() error {
+	loc := currentRoots().Located
 	is := identityStore()
 	deps := hook.SessionStartDeps{
+		Located:  &loc,
 		Store:    is,
 		Sessions: sessionStore(),
 		Teams:    layeredTeamStore(is),
@@ -212,8 +214,10 @@ func runHookSubagentStop() error {
 }
 
 func runHookPreCompact() error {
+	loc := currentRoots().Located
 	is := identityStore()
 	deps := hook.PreCompactDeps{
+		Located:    &loc,
 		Identities: is,
 		Sessions:   sessionStore(),
 		Teams:      layeredTeamStore(is),
@@ -227,7 +231,8 @@ func runHookPreCompact() error {
 }
 
 func runHookPreToolUse() error {
-	if err := hook.HandlePreToolUse(os.Stdin, os.Stdout); err != nil {
+	loc := currentRoots().Located
+	if err := hook.HandlePreToolUseWithLocated(os.Stdin, os.Stdout, loc); err != nil {
 		return fmt.Errorf("hook pre-tool-use: %w", err)
 	}
 	return nil
@@ -296,9 +301,8 @@ func runHookAuditLog() error {
 // an error naming the lock when the entry was written without it; either
 // is shown in the session. nil means the entry was written under its lock.
 //
-// DES-054 phase 1: prefer the date-keyed repo-tree layout when the hook
-// fires inside a repo; fall back to the legacy global sessions directory
-// outside one.
+// Repository writes use the captured shared-store policy; only an operation
+// captured outside a repository uses the legacy global sessions directory.
 //
 // Unified session flock — DES-054 v5 §"Storage Layout": one lock covers
 // roster + audit log, eliminating the prior two-lock acquisition order.
@@ -311,25 +315,30 @@ func runHookAuditLog() error {
 // path so an unparseable input still surfaces through HandleAuditLog's
 // diagnostic rather than failing silently here.
 func writeAuditLog(sessionsDir string) error {
+	// Capture before stdin can block. A linked checkout is the redaction base,
+	// not the owner of live files, archive records, or stream locks.
+	loc := currentRoots().Located
+	if err := loc.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v; audit entry not written rather than written to the global store\n", err)
+		return fmt.Errorf("%w: %w; not written rather than written to the global store", hook.ErrAuditDropped, err)
+	}
+	if loc.Store != "" {
+		policy, err := loc.Layout()
+		if err != nil {
+			return fmt.Errorf("%w: %w", hook.ErrAuditDropped, err)
+		}
+		data := drainAuditStdin()
+		// The policy-aware handler owns the shared stream lock. An outer
+		// WithLiveAuditLock would both rediscover policy and take it twice.
+		return hook.HandleAuditLogWithPolicy(bytes.NewReader(data), policy, sessionsDir)
+	}
 	data := drainAuditStdin()
 	sessionID := peekSessionID(data)
-	// LocateRepoRoot is the checkout CheckoutRootIfAny resolves — ETHOS_REPO_ROOT
-	// first, then git — with the reason it found none, so the audit-write
-	// path picks the same repo as preconditions, dispatch, inheritance, and
-	// the migrate/show CLI commands. Outside a repository the legacy global
-	// path is right; any other failure would put the entry in the wrong
-	// tree, so the entry is not written.
-	loc := currentRoots()
-	repoRoot := loc.Checkout
-	if err := loc.CheckoutErr; err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v; audit entry not written rather than written to the global store\n", err)
-		return fmt.Errorf("%w: %v; not written rather than written to the global store", hook.ErrAuditDropped, err)
-	}
-	record := func() error { return hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir) }
+	record := func() error { return hook.HandleAuditLog(bytes.NewReader(data), "", sessionsDir) }
 	if sessionID == "" {
 		return record()
 	}
-	// WithLiveAuditLock and WithSessionLock return errors from BOTH lock
+	// WithSessionLock returns errors from BOTH lock
 	// acquisition AND the callback. handlerRan tells them apart, so a lost
 	// entry is not written twice: an error with handlerRan=false means the
 	// lock was not acquired and the unlocked fall-through is safe (a lost
@@ -341,18 +350,10 @@ func writeAuditLog(sessionsDir string) error {
 		handlerRan = true
 		return dropErr
 	}
-	// DES-058: inside a repo, appends target the machine-local live file
-	// and serialize on the live-zone flock beside it — the same lock a
-	// seal takes. Outside a repo there is no local zone, so the legacy
-	// global session lock covers the single-tree fallback write.
-	var lockErr error
-	lockName := "live lock"
-	if repoRoot != "" {
-		lockErr = hook.WithLiveAuditLock(repoRoot, sessionID, run)
-	} else {
-		lockName = "session lock"
-		lockErr = sessionStore().WithSessionLock(sessionID, run)
-	}
+	// Outside a repo there is no local zone. The legacy global session
+	// lock covers the single-tree fallback write.
+	lockName := "session lock"
+	lockErr := sessionStore().WithSessionLock(sessionID, run)
 	if lockErr != nil && !handlerRan {
 		fmt.Fprintf(os.Stderr,
 			"ethos: audit-log: acquiring %s %s: %v; falling through unlocked\n",

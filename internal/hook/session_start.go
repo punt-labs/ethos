@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/repomiss"
@@ -32,6 +33,9 @@ type SessionStartResult struct {
 
 // SessionStartDeps holds the stores needed by the SessionStart hook.
 type SessionStartDeps struct {
+	// Located is the command's entry snapshot. Nil preserves direct callers:
+	// the handler captures one before reading potentially blocked stdin.
+	Located  *resolve.Located
 	Store    identity.IdentityStore
 	Sessions *session.Store
 	Teams    *team.LayeredStore
@@ -50,7 +54,14 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 
 	store := deps.Store
 	ss := deps.Sessions
-	input, err := ReadInput(r, time.Second)
+	loc := resolve.Located{}
+	if deps.Located == nil {
+		loc = resolve.Roots()
+	} else {
+		loc = *deps.Located
+	}
+	deps.Located = &loc
+	input, err := ReadInput(r, hookInputTimeout)
 	if err != nil {
 		return fmt.Errorf("session-start: %w", err)
 	}
@@ -62,7 +73,6 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// repo's agent persona and team are not loaded; the session is told, no
 	// persona is taken from the global store in its place, and the roster
 	// records repo_unresolved.
-	loc := resolve.Roots()
 	storeFailure := loc.StoreFailure()
 	// A bundle or policy that cannot be honoured refuses the persona as a broken
 	// store does, as the CLI and the MCP do: answering from the layers left
@@ -147,8 +157,6 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 			repomiss.New(agentPersona, agentID.MissingExt))
 	}
 
-	installStubAgentDefs(repoRoot, loc.Ethos, store, deps.Teams)
-
 	// Generate .claude/agents/<handle>.md from ethos identity data.
 	// Propagates: the returned error is the single authoritative
 	// signal the CLI can gate on. The shell wrapper's `|| true` keeps
@@ -167,13 +175,57 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		return fmt.Errorf("locating the checkout for agent generation: %w", loc.CheckoutErr)
 	}
 	checkoutRoot := loc.Checkout
-	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
-		if genErr := GenerateAgentFilesTo(repoRoot, checkoutRoot, store, deps.Teams, deps.Roles); genErr != nil {
-			return fmt.Errorf("generating agents: %w", genErr)
+	plan := AgentPlan{}
+	var planErr error
+	if deps.Teams != nil && deps.Roles != nil {
+		plan, planErr = planSessionAgents(loc, store, deps.Teams, deps.Roles)
+		if planErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: session-start: resolving generated agents: %v; installing no stubs\n", planErr)
 		}
+	}
+	var installErr error
+	if deps.Teams != nil && deps.Roles == nil {
+		// A partial dependency set cannot render a plan and establish its
+		// ownership. Never pass nil as if the generator owned nothing.
+		fmt.Fprintln(os.Stderr, "ethos: session-start: Roles store missing; installing no stubs because generator ownership is unavailable")
+	} else if planErr == nil {
+		installErr = installAgentDefsFor(loc, plan.Owned)
+	}
+	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
+		policy, err := loc.Layout()
+		if err != nil {
+			return fmt.Errorf("constructing agent storage: %w", err)
+		}
+		if genErr := errors.Join(planErr, ApplyAgentPlan(policy, plan)); genErr != nil {
+			return fmt.Errorf("generating agents: %w", errors.Join(installErr, genErr))
+		}
+	}
+	if installErr != nil {
+		return fmt.Errorf("installing agent definitions: %w", installErr)
 	}
 
 	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
+}
+
+// planSessionAgents resolves bundle skills using the same config that selected
+// the persona, team and stores. Neither planning nor applying rereads config.
+func planSessionAgents(loc resolve.Located, identities identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) (AgentPlan, error) {
+	if err := loc.Err(); err != nil {
+		return AgentPlan{}, fmt.Errorf("locating agent generation inputs: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return AgentPlan{}, fmt.Errorf("locating global bundle root: %w", err)
+	}
+	_, active, err := bundle.ResolveRootFromConfig(loc.Store, filepath.Join(home, ".punt-labs", "ethos"), loc.Config)
+	if err != nil {
+		return AgentPlan{}, err
+	}
+	var skills []string
+	if active != nil {
+		skills = active.Manifest.DefaultSkills
+	}
+	return PlanGeneratedAgentFilesFromConfig(loc.Config, AgentProjectPatterns(loc.Checkout), skills, AgentIdentities(identities), teams, roles)
 }
 
 // resolveHumanIdentity loads the human caller's identity from git config
@@ -199,6 +251,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 // observable behavior (git/OS, immediately, no retry) without weakening
 // DES-074 anywhere a session COULD exist.
 func resolveHumanIdentity(store identity.IdentityStore, checkout string) (*identity.Identity, error) {
+	store = identity.ForCaller(store)
 	handle, err := resolve.Resolve(store, nil, checkout)
 	if errors.Is(err, resolve.ErrNoIdentityMatch) {
 		fmt.Fprintf(os.Stderr, "ethos: identity resolution: %v (using OS username)\n", err)
@@ -374,6 +427,29 @@ func installAgentDefs(ethosRoot string, generated map[string]bool) {
 	}
 }
 
+// installAgentDefsFor retains the source and destination selected at entry.
+// Unlike the direct-call compatibility wrapper, it never rediscovers a root.
+func installAgentDefsFor(loc resolve.Located, generated map[string]bool) error {
+	if err := loc.Err(); err != nil {
+		return fmt.Errorf("locating agent installation paths: %w", err)
+	}
+	if loc.Ethos == "" {
+		return nil
+	}
+	files, err := PlanInstalledAgentDefinitions(loc.Ethos, generated)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	policy, err := loc.Layout()
+	if err != nil {
+		return err
+	}
+	return ApplyAgentPlan(policy, AgentPlan{Files: files})
+}
+
 // emitAgentContext builds and emits the full agent persona block with
 // extensions, team context, and working context.
 func emitAgentContext(agentID *identity.Identity, agentPersona string, store identity.IdentityStore, deps SessionStartDeps, checkout, notice string) error {
@@ -386,7 +462,7 @@ func emitAgentContext(agentID *identity.Identity, agentPersona string, store ide
 	if extCtx := BuildExtensionContext(agentID.Ext); extCtx != "" {
 		sections = append(sections, extCtx)
 	}
-	if teamCtx := BuildTeamSection(deps.Teams, deps.Roles, store, agentPersona); teamCtx != "" {
+	if teamCtx := BuildTeamSectionFor(*deps.Located, deps.Teams, deps.Roles, store, agentPersona); teamCtx != "" {
 		sections = append(sections, teamCtx)
 	}
 	if workCtx := BuildWorkingContext(checkout); workCtx != "" {

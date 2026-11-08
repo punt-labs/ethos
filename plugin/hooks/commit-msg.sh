@@ -16,8 +16,9 @@
 # session lookup finds nothing to add.
 #
 # Idempotency: re-running on a message already carrying the trailer leaves
-# it unchanged. Uses git-interpret-trailers when available; falls back to
-# a plain append with a blank-line separator.
+# it unchanged. The CLI renders with git-interpret-trailers in memory, then
+# atomically installs from canonical store-local staging. Any failure blocks;
+# there is no adjacent staging or plain-append fallback.
 #
 # Preserve a chained host hook's fall-through status: when install.sh appends
 # this script after a foreign commit-msg hook, $? here is that hook's last
@@ -42,7 +43,7 @@ _git() {
 }
 
 # Dormant fast path. git runs a hook at the top of the work tree, so the marker
-# is tested relative to the current directory first, before mktemp or git run:
+# is tested relative to the current directory first, before git runs:
 # a dormant repository is never blocked by a probe failure. The shortcut is
 # taken only when this directory has its own .git (it is a top level, so the
 # marker there is the marker that counts) and every path component is either
@@ -72,30 +73,13 @@ fi
 # A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
 # dormant": the hook prints git's own error and exits 1, so the commit is
 # blocked and the operator sees why, rather than skipping with the host status.
-# git's stderr goes to a file and is shown only on failure: a warning or
-# GIT_TRACE output on a rev-parse that succeeded must not become part of the
-# repository root, nor make the hook skip the seal.
-# A mktemp that fails does not block: rev-parse then runs without the capture
-# file, and is run again to show git's error only if it failed. A dormant
-# repository must not be blocked by a full or read-only temp directory.
-_revparse_err=$(mktemp 2>/dev/null) || _revparse_err=""
-if [ -n "$_revparse_err" ]; then
-  REPO_ROOT=$(_git rev-parse --show-toplevel 2>"$_revparse_err")
-else
-  REPO_ROOT=$(_git rev-parse --show-toplevel 2>/dev/null)
-fi
-_revparse_status=$?
-if [ "$_revparse_status" -ne 0 ]; then
-  if [ -n "$_revparse_err" ]; then
-    _revparse_msg=$(cat "$_revparse_err")
-    rm -f "$_revparse_err"
-  else
-    _revparse_msg=$(_git rev-parse --show-toplevel 2>&1 >/dev/null)
-  fi
-  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed: %s\n' "$_revparse_msg" >&2
+# Capture only stdout. Git's diagnostics remain directly visible, including
+# success warnings, without polluting the root or creating temporary files.
+# Probe once: a second lookup could answer for a different repository state.
+if ! REPO_ROOT=$(_git rev-parse --show-toplevel); then
+  printf 'ethos: commit-msg: git rev-parse --show-toplevel failed\n' >&2
   exit 1
 fi
-[ -n "$_revparse_err" ] && rm -f "$_revparse_err"
 # The root must be one absolute line (a / path, or a Windows drive path under
 # MINGW, MSYS or CYGWIN) naming a
 # directory; anything else (a trace line that got through, a relative path) is
@@ -212,87 +196,12 @@ if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
   fi
 fi
 [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ] && exit "$_host_status"
-add_trailer() {
-  key=$1
-  val=$2
-  # Idempotency check: scan only the trailer block (everything
-  # after the last blank line) so a commit message body that
-  # quotes a previous "Mission: " line cannot trigger a false
-  # positive (Bugbot LOW on PR #328). awk emits the paragraph
-  # following the last blank line; if no blank line exists, the
-  # whole message is one paragraph and we scan all of it.
-  trailer_block=$(awk '
-    /^[[:space:]]*$/ { block = ""; next }
-    { block = block ? block ORS $0 : $0 }
-    END { print block }
-  ' "$msg_file")
-  if printf '%s\n' "$trailer_block" | grep -q "^${key}: "; then
-    return 0
-  fi
-  if command -v git >/dev/null 2>&1; then
-    # mktemp failure (no write perm on .git dir, /tmp full, etc.)
-    # falls through to the plain-append path rather than dropping
-    # the trailer — the trailer must land even when the git path
-    # is unavailable (Bugbot LOW on PR #328: previously
-    # `|| return 1` exited early with no fallback).
-    tmp=$(mktemp "${msg_file}.XXXXXX" 2>/dev/null)
-    if [ -z "$tmp" ]; then
-      printf 'ethos: commit-msg: mktemp failed; using plain append\n' >&2
-    # The error file is made first, so a redirect that fails is reported as
-    # one and not as git interpret-trailers failing with no message. (`true`,
-    # not `:`: a failed redirect on a special builtin ends a POSIX shell.)
-    elif ! { true > "$tmp.err"; } 2>/dev/null; then
-      printf 'ethos: commit-msg: cannot create %s.err; using plain append\n' "$tmp" >&2
-      rm -f "$tmp"
-    # git interpret-trailers is not bounded here: it runs inside git's own
-    # commit, on the message file only, never on the repository.
-    elif _git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp" 2>"$tmp.err"; then
-      # mv can fail on permissions, cross-filesystem, or
-      # disk-full. If it does, the temp file is stale and the
-      # commit message is untouched — fall through to the plain
-      # append path so the trailer still lands (Copilot on PR
-      # #328: previously returned 0 after a silent mv failure).
-      rm -f "$tmp.err"
-      if mv "$tmp" "$msg_file"; then
-        return 0
-      fi
-      rm -f "$tmp"
-      printf 'ethos: commit-msg: mv onto %s failed; using plain append\n' "$msg_file" >&2
-    else
-      # A failing git is not "git is unavailable": print its error and block
-      # the commit, never fall back to a plain append behind its back.
-      printf 'ethos: commit-msg: git interpret-trailers failed: %s\n' "$(cat "$tmp.err")" >&2
-      rm -f "$tmp" "$tmp.err"
-      exit 1
-    fi
-  fi
-  # Plain-append fallback. Ensure the file ends with a blank line
-  # separating the body from the trailer block, then append the
-  # trailer without a leading newline. Multiple back-to-back
-  # add_trailer calls then form one contiguous trailer block —
-  # putting `\n` before each entry would interleave blank lines
-  # and break git's trailer parser (Bugbot MED on PR #328).
-  if [ -s "$msg_file" ]; then
-    last_char=$(tail -c1 "$msg_file" 2>/dev/null || true)
-    if [ "$last_char" != "" ] && [ "$last_char" != "$(printf '\n')" ]; then
-      printf '\n' >> "$msg_file"
-    fi
-    last_line=$(tail -n1 "$msg_file" 2>/dev/null || true)
-    # An empty last line means there's already a paragraph break.
-    # A trailer-shaped last line (Key: Value) means the previous
-    # add_trailer call planted one — continue the block, no extra
-    # blank. Anything else is body text — insert a blank line so
-    # git's trailer parser sees a separate paragraph.
-    if [ -z "$last_line" ]; then
-      :
-    elif printf '%s\n' "$last_line" | grep -Eq '^[A-Za-z][A-Za-z0-9-]*: '; then
-      :
-    else
-      printf '\n' >> "$msg_file"
-    fi
-  fi
-  printf '%s: %s\n' "$key" "$val" >> "$msg_file"
-}
-[ -n "${MISSION_ID:-}" ] && add_trailer Mission "$MISSION_ID"
-[ -n "${DELEGATION_ID:-}" ] && add_trailer Delegation "$DELEGATION_ID"
+# The helper validates IDs, renders every missing trailer before any write,
+# and stages only under S's local root, independently of the caller's TMPDIR.
+# Successful helpers are silent; reject help from an obsolete binary too.
+message_result=$("$ethos_bin" hook commit-message "$msg_file") || exit 1
+if [ -n "$message_result" ]; then
+  printf 'ethos: commit-msg: unexpected output from "hook commit-message"; upgrade ethos\n' >&2
+  exit 1
+fi
 exit "$_host_status"

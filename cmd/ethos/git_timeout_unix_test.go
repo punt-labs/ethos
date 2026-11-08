@@ -138,10 +138,9 @@ func TestSessionPurgeGitTimeout(t *testing.T) {
 	require.ErrorIs(t, err, gitenv.ErrTimeout)
 }
 
-// audit seal fails closed when git does not answer, and says the seal could
-// not run, where, and that nothing was sealed or staged and the commit is
-// blocked with the tree unchanged.
-func TestAuditSealGitTimeoutFailsClosed(t *testing.T) {
+// An explicit override with no store is refused before any Git work. It must
+// not become an empty-success seal, even if Git would also hang.
+func TestAuditSealInvalidRootFailsClosedBeforeGit(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	t.Setenv("ETHOS_REPO_ROOT", repo)
@@ -150,10 +149,10 @@ func TestAuditSealGitTimeoutFailsClosed(t *testing.T) {
 	err := runAuditSeal(&out, &errb)
 	assert.ErrorIs(t, err, failClosed{})
 	msg := errb.String()
-	assert.Contains(t, msg, "the seal could not run because git did not answer")
+	assert.Contains(t, msg, "invalid repository policy")
 	assert.Contains(t, msg, repo)
-	assert.Contains(t, msg, "nothing was sealed or staged")
-	assert.Contains(t, msg, "the commit is blocked and the tree is unchanged")
+	assert.Contains(t, msg, "no ethos store at the overridden root")
+	assert.NoDirExists(t, filepath.Join(repo, ".punt-labs"))
 }
 
 // The vacuum cross-check never matches a roster whose repository identity was

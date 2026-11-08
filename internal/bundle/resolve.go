@@ -37,7 +37,20 @@ func ResolveActive(repoRoot, globalRoot string) (*Bundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolving active bundle: %w", err)
 	}
+	return resolveActiveName(repoRoot, globalRoot, name)
+}
 
+// ResolveActiveFromConfig uses the caller's configuration snapshot. Bundle
+// content is still read from its source layer; the configuration is not reread.
+func ResolveActiveFromConfig(repoRoot, globalRoot string, cfg *resolve.RepoConfig) (*Bundle, error) {
+	name := ""
+	if cfg != nil {
+		name = cfg.ActiveBundle
+	}
+	return resolveActiveName(repoRoot, globalRoot, name)
+}
+
+func resolveActiveName(repoRoot, globalRoot, name string) (*Bundle, error) {
 	if name != "" {
 		if err := validateName(name); err != nil {
 			return nil, fmt.Errorf("bundle: invalid active_bundle name %q: %w", name, err)
@@ -214,6 +227,16 @@ func scanBundles(dir string, src Source) ([]Bundle, error) {
 // repo-only check in VerifyRepoOnly — does not resolve it a second time.
 func ResolveRoot(repoRoot, globalRoot string) (root string, active *Bundle, err error) {
 	b, err := ResolveActive(repoRoot, globalRoot)
+	return resolvedRoot(b, err)
+}
+
+// ResolveRootFromConfig is ResolveRoot using an already-read configuration.
+func ResolveRootFromConfig(repoRoot, globalRoot string, cfg *resolve.RepoConfig) (string, *Bundle, error) {
+	b, err := ResolveActiveFromConfig(repoRoot, globalRoot, cfg)
+	return resolvedRoot(b, err)
+}
+
+func resolvedRoot(b *Bundle, err error) (string, *Bundle, error) {
 	if err != nil {
 		return "", nil, err
 	}

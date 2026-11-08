@@ -5,23 +5,21 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks verifies the
 // exclusive-side of the lock contract: a sibling holder of LOCK_EX
-// on the per-mission .lock file must block the Tier B dispatch until
-// it releases. The test holds LOCK_EX in a goroutine for 80ms, fires
-// the dispatch in another goroutine, and asserts the dispatch's wait
-// time reflects the hold.
+// on the canonical-local per-mission lock must block Tier B dispatch until
+// it releases. Dispatch signals its lock boundary before the test observes
+// that it remains blocked for 80ms; the old tracked .lock is not involved.
 func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -35,14 +33,18 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 	t.Setenv("ETHOS_QUIET_ADVICE", "")
 	t.Setenv("PARENT_SESSION_ID", "")
 
-	// Stage the per-mission dir + .lock so we can hold LOCK_EX on the
-	// same path the dispatch will try to share-lock.
-	dir := filepath.Join(repo, ".punt-labs", "ethos", "missions", missionID)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	lockPath := filepath.Join(dir, ".lock")
-	excl, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	// Hold the established canonical-local lock, not the old tracked pathname.
+	release, err := mission.AcquireMissionLockExclusive(repo, missionID)
 	require.NoError(t, err)
-	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_EX))
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	trying := make(chan struct{})
+	old := dispatchTierBConfirmedOpen
+	dispatchTierBConfirmedOpen = func() { close(trying) }
+	t.Cleanup(func() { dispatchTierBConfirmedOpen = old })
 
 	type result struct {
 		decision string
@@ -64,18 +66,26 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 			done <- result{err: err}
 			return
 		}
-		done <- result{decision: r.HookSpecificOutput.PermissionDecision, waited: waited}
+		done <- result{decision: r.HookSpecificOutput.Decision(), waited: waited}
 	}()
 
-	hold := 80 * time.Millisecond
-	time.Sleep(hold)
-	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_UN))
-	require.NoError(t, excl.Close())
+	select {
+	case <-trying:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatch did not reach mission lock boundary")
+	}
+	select {
+	case <-done:
+		t.Fatal("dispatch completed while exclusive lock was still held")
+	case <-time.After(80 * time.Millisecond):
+	}
+	release()
+	release = nil
 
 	select {
 	case r := <-done:
 		require.NoError(t, r.err)
-		assert.Equal(t, "allow", r.decision,
+		assert.Equal(t, "", r.decision,
 			"dispatch must allow after exclusive holder releases")
 		assert.GreaterOrEqual(t, r.waited, 60*time.Millisecond,
 			"dispatch wait must reflect the exclusive hold (got %v)", r.waited)

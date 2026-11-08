@@ -19,7 +19,9 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
 )
 
@@ -120,7 +122,7 @@ func runTeamAvailable(cmd *cobra.Command) error {
 	// not every bundle whose name matches.
 	var activePath string
 	if repoRoot != "" {
-		if active, err := bundle.ResolveActive(repoRoot, globalRoot); err == nil &&
+		if active, err := bundle.ResolveActiveFromConfig(repoRoot, globalRoot, loc.Config); err == nil &&
 			active != nil && active.Source != bundle.SourceLegacy {
 			activePath = active.Path
 		}
@@ -202,7 +204,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	// is written: under `resolution: repo-only` a global bundle does not travel
 	// with the checkout and is refused, with the reason. (An unreadable or
 	// unknown policy cannot be checked; that is the repair path below.)
-	mode, modeErr := resolve.ResolveResolution(repoRoot)
+	mode, modeErr := resolve.ResolutionFromConfig(loc.Config)
 	if modeErr == nil && mode == resolve.ResolutionRepoOnly {
 		if err := bundle.VerifyRepoOnly(loc.Ethos, match.Path, match); err != nil {
 			return fmt.Errorf("team activate: %w; nothing was written", err)
@@ -238,10 +240,25 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return nil
 	}
 
-	current, err := resolve.ResolveActiveBundle(repoRoot)
-	if err != nil {
-		return fmt.Errorf("reading active bundle: %w", err)
+	current, teamName := "", ""
+	intendedConfig := resolve.RepoConfig{}
+	if loc.Config != nil {
+		intendedConfig = *loc.Config
+		current, teamName = loc.Config.ActiveBundle, loc.Config.Team
 	}
+	intendedConfig.ActiveBundle = name
+	intendedConfig.Team = name
+	intended := loc.Located
+	if err := intended.StoreFailure(); err != nil {
+		return fmt.Errorf("team activate: locating the selected store: %w", err)
+	}
+	intended.Config = &intendedConfig
+	intended.Ethos = filepath.Join(repoRoot, ".punt-labs", "ethos")
+	is, err := selectionIdentityStore(intended, match)
+	if err != nil {
+		return fmt.Errorf("team activate: constructing selected stores: %w", err)
+	}
+	rs := layeredRoleStore(is)
 
 	// Resolve the human CEO to bind BEFORE any config write, so a caller who
 	// cannot supply one (an agent persona such as claude, or no resolvable
@@ -249,19 +266,15 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	// has already persisted. The ceo seat is the human; an agent caller can't
 	// determine the human, so leadership from the human's earlier `ethos
 	// setup` is left intact.
-	ceoHandle, bindCEO := resolveActivateCEO(cmd.ErrOrStderr())
+	ceoHandle, bindCEO := resolveActivateCEO(cmd.ErrOrStderr(), intended, is)
 
 	if current == name {
 		// Explicitly running activate commands convergence. If the team key
 		// diverged (or is absent), repair it here — otherwise the remedy
 		// setup suggests ("run ethos team activate <bundle>") is a no-op in
 		// exactly the state where it is suggested.
-		team, err := resolve.ResolveTeam(repoRoot)
-		if err != nil {
-			return fmt.Errorf("reading team: %w", err)
-		}
-		if team != name {
-			if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
+		if teamName != name {
+			if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO, is, rs); err != nil {
 				return err
 			}
 			if err := setConfigKey(repoRoot, "team", name); err != nil {
@@ -273,7 +286,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			fmt.Fprintf(out, "team repaired to %q\n", name)
 			return nil
 		}
-		if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
+		if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO, is, rs); err != nil {
 			return err
 		}
 		if jsonOutput {
@@ -286,10 +299,8 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	// Validate the leadership rebind against the target bundle's team BEFORE
 	// touching config, so a malformed team or illegal rebind fails with no
 	// bundle switch persisted. The actual write happens after activation
-	// (below): the repo-team Save validates member existence against the
-	// ACTIVE bundle, so the new bundle's specialists only resolve once
-	// active_bundle points at it. This split leaves only a genuine I/O Save
-	// error as a post-switch failure.
+	// (below), using validation callbacks built from the intended selection,
+	// not the stale entry config or a fresh read of another writer's config.
 	if err := precheckActivateLeadership(match.Path, name, ceoHandle, bindCEO); err != nil {
 		return err
 	}
@@ -305,7 +316,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
+	if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO, is, rs); err != nil {
 		return err
 	}
 
@@ -328,9 +339,9 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 // the leadership from the human's earlier `ethos setup` stays intact. This
 // runs before any config write so the skip decision never leaves a persisted
 // switch reported as a failure.
-func resolveActivateCEO(errw io.Writer) (handle string, ok bool) {
-	is := identityStore()
-	checkout, err := currentRoots().checkoutForGit()
+func resolveActivateCEO(errw io.Writer, loc resolve.Located, selected identity.IdentityStore) (handle string, ok bool) {
+	is := identity.ForCaller(selected)
+	checkout, err := (&repoRoots{Located: loc}).checkoutForGit()
 	var h string
 	if err == nil {
 		h, err = resolve.Resolve(is, sessionStore(), checkout)
@@ -355,14 +366,14 @@ func resolveActivateCEO(errw io.Writer) (handle string, ok bool) {
 // resolved human and claude, so `ethos team activate` yields the same default
 // org shape as `ethos setup` (shared assignLeadershipTeam logic). bundleRoot
 // is the target bundle's path (match.Path), so this resolves the correct team
-// even before active_bundle is written — callers invoke it before the config
-// write to keep activation atomic. bindCEO gates the rebind: when false (agent
+// whether invoked before a team-key repair or after a bundle switch. Its
+// stores represent that intended selection. bindCEO gates the rebind: when false (agent
 // or no human caller) it is a no-op — resolveActivateCEO explained the skip.
-func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleRoot, bundleName, ceoHandle string, bindCEO bool) error {
+func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleRoot, bundleName, ceoHandle string, bindCEO bool, identities identity.IdentityStore, roles *role.LayeredStore) error {
 	if !bindCEO {
 		return nil
 	}
-	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleRoot, bundleName, ceoHandle)
+	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleRoot, bundleName, ceoHandle, identities, roles)
 }
 
 // precheckActivateLeadership validates the target bundle's leadership rebind
@@ -413,7 +424,7 @@ func runTeamActive(cmd *cobra.Command) error {
 	repoRoot := loc.Store
 	globalRoot := defaultGlobalRoot()
 
-	b, err := bundle.ResolveActive(repoRoot, globalRoot)
+	b, err := bundle.ResolveActiveFromConfig(repoRoot, globalRoot, loc.Config)
 	if err != nil {
 		return err
 	}
@@ -455,9 +466,9 @@ func runTeamDeactivate(cmd *cobra.Command) error {
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
-	current, err := resolve.ResolveActiveBundle(repoRoot)
-	if err != nil {
-		return fmt.Errorf("reading active bundle: %w", err)
+	current := ""
+	if loc.Config != nil {
+		current = loc.Config.ActiveBundle
 	}
 	out := cmd.OutOrStdout()
 	if current == "" {
@@ -517,7 +528,8 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	var gitArgs []string
 	var targetDir string
 	var gitDir string
-	var relTarget string // the submodule path, relative to the repo root
+	var relTarget string           // the submodule path, relative to the repo root
+	var hintRoots *resolve.Located // nil only for the explicit global operation
 	if addBundleGlobal {
 		globalRoot := defaultGlobalRoot()
 		if globalRoot == "" {
@@ -534,6 +546,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		if repoRoot == "" {
 			return fmt.Errorf("not in a git repository (use --global to install without a repo)")
 		}
+		hintRoots = &loc.Located // reuse this snapshot; never rediscover roots after Git fails
 		targetDir = filepath.Join(repoRoot, ".punt-labs", "ethos-bundles", name)
 		// git submodule add expects a path relative to the repo root.
 		// Absolute paths produce "outside repository" errors and
@@ -579,7 +592,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	if err != nil {
 		wrapped := fmt.Errorf("running %s: %w", strings.Join(gitArgs, " "), err)
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && sshHint(url) {
+		if errors.As(err, &ee) && sshHint(url, hintRoots) {
 			wrapped = fmt.Errorf("%w; add-bundle runs ssh without a terminal; load the key with ssh-add, or connect once with ssh to accept the host key", wrapped)
 		}
 		return wrapped
@@ -742,13 +755,37 @@ func isOwnGitRepo(dir string) (bool, string, error) {
 		return false, "", err
 	}
 	stderr := strings.TrimSpace(string(ee.Stderr))
-	if strings.Contains(stderr, "not a gitdir") || strings.Contains(stderr, "not a git repository") {
+	if strings.Contains(stderr, "not a gitdir") || gitenv.IsUnacceptedDotGit(stderr) {
+		// Newer gits do not name a missing gitdir, and older ones word it
+		// differently: name it from the gitfile itself.
+		if target, ok := gitfileTarget(dot); ok {
+			if _, serr := os.Stat(target); errors.Is(serr, fs.ErrNotExist) {
+				stderr = "not a git repository: " + target
+			}
+		}
 		return false, "", &dotRefusedError{dir: dir, stderr: stderr}
 	}
 	if stderr == "" {
 		return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w", err)
 	}
 	return false, "", fmt.Errorf("git rev-parse --resolve-git-dir: %w: %s", err, stderr)
+}
+
+// gitfileTarget is the directory the gitfile dot names on its "gitdir:" line,
+// made absolute against the gitfile's directory.
+func gitfileTarget(dot string) (string, bool) {
+	data, err := os.ReadFile(dot)
+	if err != nil {
+		return "", false
+	}
+	target, ok := strings.CutPrefix(strings.TrimRight(string(data), "\r\n"), "gitdir: ")
+	if !ok || target == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(dot), target)
+	}
+	return target, true
 }
 
 // checkGitConfigReadable names every git config file that cannot be read. An
@@ -774,19 +811,34 @@ func checkGitConfigReadable(w io.Writer) error {
 // answered. It looks again, only after a failure, with `git ls-remote` bounded
 // at hintLimit and run as the clone ran (no terminal, no prompts), and reads
 // what git says. A relative URL (submodule add) cannot be looked at this way.
-func sshHint(url string) bool {
+func sshHint(url string, roots *resolve.Located) bool {
 	if strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../") {
 		return false
 	}
-	// In a neutral directory: the user's own config applies, and no repository's
-	// (a submodule clone does not apply its superproject's insteadOf either).
-	ndir, nenv, cleanup, nerr := gitenv.Neutral()
-	if nerr != nil {
+	// Keep the fresh empty cwd: repository config and relative SSH executables
+	// in the invoking checkout must not affect this diagnostic. Only explicit
+	// global operations may use the standalone neutral directory. A repository
+	// diagnostic uses its captured S-local policy or safely declines the hint;
+	// failure here must never mask the original clone/submodule error.
+	var dir string
+	var env []string
+	var cleanup func()
+	var err error
+	if roots == nil {
+		dir, env, cleanup, err = gitenv.Neutral()
+	} else {
+		policy, policyErr := roots.Layout()
+		if policyErr != nil {
+			return false
+		}
+		dir, env, cleanup, err = gitenv.NeutralInRepository(policy)
+	}
+	if err != nil {
 		return false
 	}
 	defer cleanup()
-	_, err := gitenv.Run(gitenv.Spec{
-		Git: "git", Dir: ndir, Env: nenv, Network: true, Limit: hintLimit,
+	_, err = gitenv.Run(gitenv.Spec{
+		Git: "git", Dir: dir, Env: env, Network: true, Limit: hintLimit,
 		Args: []string{"ls-remote", "--exit-code", url, "HEAD"},
 	})
 	var ee *exec.ExitError

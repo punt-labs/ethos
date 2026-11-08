@@ -367,9 +367,13 @@ participants:
 
 **Null persona handling:** When `persona` is `~`, the participant has no
 ethos identity. Query tools return the `agent_type` as a display name.
-A default persona can be configured in repo config for common agent types
-(e.g., map all `code-reviewer` subagents to a shared persona with a
-defined writing style and personality).
+*(Corrected 2026-11-03: no repo-config mapping from agent type to persona
+exists; the only default is the same-name convention in "Resolved: Persona
+Default by Agent Type" below. MCP `identity whoami` and `doctor`'s Human
+identity row answer a persona-less caller with "`<agent_type>` has no ethos
+identity" (the `agent_id` when no `agent_type` was recorded), never an
+error and never another participant's identity; such a caller may declare
+a persona with `iam`. See DES-074's 2026-11-03 amendment.)*
 
 **Primary agent identification:** The SessionStart hook resolves the
 primary agent's `agent_id` by walking the process tree to the topmost
@@ -2004,6 +2008,29 @@ workarounds (`SetReadDeadline`, `readWithTimeout`) fail on Linux
 inherited pipe fds in production, and the bash `read -t` approach
 is the only reliable solution across platforms.
 
+### Amendment 2026-11-03: read the whole payload
+
+The decision stands: bash reads the inherited fd and forwards over a fresh
+pipe. The read changes from `IFS= read -r -t 1` to
+`IFS= read -r -d "" -t 10`. The one-line, one-second read truncated real
+payloads: it stopped at the first newline, and it returned exactly 8192
+bytes when Claude Code paused for more than a second after writing the first
+8 KiB of a large Edit (measured in production: "invalid JSON input (8192
+bytes)" in `hook-errors.log`). `-d ""` reads to EOF; at EOF `read` returns
+non-zero and keeps the data, which is why `HOOK_INPUT=""` stays before the
+read and `|| true` after it. Go's `ReadInput` now waits up to 10 seconds with
+one overall deadline and returns as soon as the buffer is a complete JSON
+value, so the shell and Go bounds agree. A test proves each wrapper hands Go a
+fresh pipe, not the inherited fd (`TestWrappersGiveEthosAFreshPipe`). Each
+wrapper captures `read`'s status and, on a timeout (status above 128), appends
+`ethos <hook>: stdin read timed out after 10s (N bytes)` to `hook-errors.log`
+before forwarding what arrived. The wrapper list under test is read from
+`hooks.json`. A
+round of this fix briefly passed stdin straight to Go, which is this
+decision's first rejected alternative; that was reverted before merge, and
+the branch was verified in a real Claude Code session on Linux with only the
+branch's own wrappers loaded.
+
 ## DES-030: Subprocess integration tests for hooks (SETTLED)
 
 **Status**: Settled. Implemented 2026-04-04.
@@ -2792,7 +2819,7 @@ an open mission's, since handle overlap is the precondition for this
 misbinding class — advisory only, because handle reuse across missions is a
 legitimate pattern.
 
-## DES-034: Bounded rounds with mandatory reflection (SETTLED)
+## DES-034: Bounded rounds with mandatory reflection (SETTLED; AMENDED by DES-079)
 
 **Status**: Settled. Implemented 2026-04-08 as `ethos-07m.8` — the
 Phase 3.4 primitive that makes DES-031's `Budget.Rounds` field
@@ -2824,62 +2851,110 @@ Phase 3.3's frozen evaluator stops evaluator drift. Phase 3.4 stops
 round drift. Together they close the two "silent drift" failure
 modes the architecture docs named.
 
-### Decision
+### Decision (DES-079 amendment; acceptance pending)
 
-A new typed `Reflection` artifact sits between round N and round
-N+1. The round-advance gate in `Store.AdvanceRound` refuses to
-begin round N+1 until the reflection for round N is on disk AND
-its recommendation is non-terminal (continue or pivot) AND the
-budget isn't exhausted.
+A complete typed `Reflection` remains mandatory between round N and N+1.
+For new repository contracts its **accepted decision** is shared inline;
+full reflective detail is retained locally under the canonical store root S.
+Advance uses shared authority, not the availability of prose on this machine.
+The DES-079 repair is not shipped/verified by this ADR's settled status; see
+[storage contract and acceptance mapping](docs/storage-layout.md).
 
 **Reflection schema** (`internal/mission/reflection.go`, typed not
 prose):
 
 - `round` — integer, the round just ended
-- `created_at` — RFC3339 server-filled at append time
-- `author` — leader handle recording the reflection
+- `created_at` — validated RFC3339 when supplied; filled once when omitted,
+  then reused on retry
+- `author` — validated supplied handle; this is not authenticated leader equality
 - `converging` — bool, whether the work appears to be approaching
   success
 - `signals` — list of observations (at least one, each non-empty,
   no control characters)
-- `recommendation` — enum: `continue` | `pivot` | `stop` | `escalate`
+- `recommendation` — enum: `continue` | `advance` | `pivot` | `stop` | `escalate`
 - `reason` — prose, required when recommendation is terminal
 
 **Recommendation semantics:**
 
-- `continue` — advance permitted, same approach
+- `continue` (also shipped synonym `advance`) — advance permitted, same approach
 - `pivot` — advance permitted, worker takes a different approach
   in round N+1
 - `stop` — advance refused, mission must close
 - `escalate` — advance refused, mission must be re-scoped or
   escalated to a human
 
-**Storage — sibling file, not inline.** Reflections live in
-`<missionsDir>/<id>.reflections.yaml`, a sibling to the contract,
-NOT inside the contract. Two reasons:
+**Storage — bounded inline authority, separate full detail.** New contracts
+initialize a non-null block; caller-supplied decisions cannot seed permission:
 
-1. The contract is pinned at launch per DES-031. An unbounded
-   reflection slice inside it would force every `Store.Update` to
-   rewrite an unbounded history, and any Update failure would risk
-   losing prior reflections.
-2. The reflections file grows as rounds happen; the contract file
-   stays structurally stable. Separating them keeps each file's
-   lifecycle clean.
+```yaml
+round_decisions:
+  version: 1
+  entries:
+    - id: "0123456789abcdef0123456789abcdef"
+      round: 1
+      created_at: "2026-11-04T12:00:00Z"
+      author: claude
+      recommendation: continue
+```
 
-Both files are serialized through the same per-mission flock
-(`withLock(missionID, ...)`), so contract+reflection operations
-for the same mission are atomic with respect to concurrent
-readers. KnownFields(true) strict decode applies to both, keeping
-the trust boundary symmetric with DES-031's contract trust
-boundary.
+Create uses `entries: []`; the example above shows an accepted entry. Entries
+contain exactly these five fields, at most ten, with unique 32-lowercase-hex IDs
+and strictly increasing unique rounds. Require
+`1 <= entry.round <= current_round <= budget.rounds <= 10`; every crossed round
+has exactly one nonterminal decision and the current round zero or one. No
+signals, reason, prose digest, budget copy or evaluator copy is shared here.
+Missing block means legacy authority, not empty initialized permission. Explicit
+null, malformed/unknown version, duplicate YAML keys, missing/null entries and
+multiple documents refuse; legacy defaults cannot repair malformed v1 authority.
+
+Full detail lives in per-round
+`S/.punt-labs/local/ethos/trace/missions/<id>/reflection-<round>.yaml` envelopes
+in both modes. Pending receipts use
+`S/.punt-labs/local/ethos/missions/<id>/reflection-intents/<round>.yaml` and may
+remain after acceptance until optional work completes. Both are single-document
+YAML mappings with `version: 1`, `kind: reflect`, `mission`, `decision`,
+`reflection`, `event`, `event_session` (original stream) and `publish` (captured
+consent). The YAML event's `operationid` is the JSONL event's `operation_id`.
+Join all five decision fields against shared `round_decisions`; the full
+reflection's mission/round/timestamp/author/recommendation must agree, and equal
+copies collapse while unequal copies conflict. A receipt/event without a shared
+decision is preparation only. A shared decision without admissible detail means
+submitted/detail unavailable here, not unsubmitted. Eligible full-mode publication
+and full export use `missions/<id>/reflections.yaml` with `reflections: [...]`,
+not the local envelope. Supported legacy aggregates are compatibility inputs,
+not new local write targets. Strict decoding and per-mission locking apply;
+unlocked filesystem readers reread around concurrent writes and never infer
+acceptance from a local file or raw event. See the
+[exact filesystem shapes and join](docs/storage-layout.md#reflection-files-and-the-authority-join).
+
+**Acceptance and recovery.** Under the canonical mission lock, reconcile pending
+reflection receipts before later mission events can overtake them. Persist a
+durable local intent containing the normalized/redacted full Reflection, compact
+decision, exact required event, original stream identity, stable operation ID,
+allocated timestamp and captured publication consent. Acquire stream locks in
+mission→stream order. Durably append the required event, including required
+directory entries, **before** installing the shared decision via contract rename.
+The rename is the sole acceptance point; stage only in S's local zone, never
+adjacent to the contract. `EXDEV` preserves the old target and refuses.
+
+Event failure prevents acceptance. Exact retry reuses ID/timestamp/original
+stream/consent and checks original live/archive/published sources for delivery;
+same ID/different content is corruption. Recovery never commits a decision on
+its own. Matching accepted decision/receipt permits archive/publication/cleanup
+only. No matching local full payload means already decided, not equal prose or
+permission to replace it. Unreadable authority permits no recovery mutation.
+After rename, sync failure is applied/durability unconfirmed; ancillary archive
+or publication failure is applied/trace pending, with machine-visible diagnostics
+and retained receipt. Ordinary result/advance/close/abandon/Update required-event
+failure rollback is unchanged, not converted to post-commit replay.
 
 **Append-only invariant.** `AppendReflection` refuses to overwrite
-an existing round's reflection. The reflections file is
+an existing round's accepted decision. Available full detail is
 monotone-sorted by round number at decode time; a hand-edited or
 corrupt out-of-order file is rejected before any caller acts on
 it. This preserves the round history for later post-mortem —
 memory and beads are derived summaries, but the append-only log
-is the source of truth.
+is retained evidence; the inline decision is workflow authority.
 
 **Round tracking — new `Contract.CurrentRound` field.** Chosen
 over "derive from event log" because:
@@ -2890,26 +2965,36 @@ over "derive from event log" because:
 2. The field is a small integer; the contract write is cheap.
 3. Phase 3.7's event log reader API will still be able to derive
    the round history from events if an audit needs it. The
-   `CurrentRound` field is a cache of state, not a source of
-   truth.
+   shared contract's `CurrentRound` and inline decisions are the authority
+   snapshot; event existence alone grants no permission.
 
-Default-filled to 1 on Create and Load, so pre-3.4 contracts
-upgrade cleanly. Rule 13 of `Contract.Validate` enforces
+Initialized to 1 on Create; default-filling on Load is legacy-only, so it
+cannot silently repair malformed v1 authority. `Contract.Validate` enforces
 `CurrentRound in [1, Budget.Rounds]`.
 
 **Round-advance gate logic** (`Store.AdvanceRound`):
 
 1. Acquire per-mission flock
-2. Load contract + reflections inside the lock
+2. Load strict contract authority inside the lock; reconcile pending preparation
 3. Refuse if `Status != StatusOpen`
 4. Refuse if `CurrentRound >= Budget.Rounds` (budget exhausted,
    re-scope or close)
-5. Refuse if no reflection exists for `CurrentRound`
-6. Refuse if the reflection's recommendation is terminal (stop,
-   escalate) — surface the reflection's `Reason` verbatim so the
-   operator sees the leader's own words
+5. Refuse if no accepted decision exists for `CurrentRound`
+6. Refuse if its recommendation is terminal (stop, escalate) — surface the
+   original `Reason` when available; otherwise identify the accepted decision
+   and say that its reason is unavailable here, never infer non-submission
 7. Bump `CurrentRound`, validate, write contract, append event,
    roll back on log failure
+
+Generic Update rejects stale or changed decisions, current round, status/closed-at,
+budget and the complete evaluator tuple against the latest locked contract.
+CLI/MCP/UI reads distinguish decision present/absent/legacy-unknown/unreadable
+from detail present/absent/unavailable-here/unreadable, with pending preparation
+and diagnostics separate. Corrupt optional prose cannot erase a valid decision;
+unreadable authority cannot grant advancement. Equal detail copies deduplicate;
+unequal copies conflict. An operation-ID-bearing reflect event is accepted only
+when joined to a matching shared decision; without one it is preparation/attempt,
+and with unreadable authority its acceptance is unknown, sealed or not.
 
 The ORDER of 4, 5, 6 is load-bearing: the operator sees "close and
 re-scope" on budget exhaustion, not "submit one more reflection"
@@ -2920,8 +3005,9 @@ on the last round.
 - `ethos mission reflect <id> --file <reflection.yaml>` — submit
   the current round's reflection
 - `ethos mission advance <id>` — attempt to begin the next round
-- `ethos mission reflections <id>` — print the round-by-round
-  reflection log (`--json` emits a single JSON array)
+- `ethos mission reflections <id>` — print round decisions and available detail;
+  machine output must expose unavailable/unreadable/pending states, not silently
+  substitute an empty reflection array
 - `ethos mission show <id>` — now displays `Round: N of M` and
   includes the reflection log as a secondary block
 
@@ -2977,14 +3063,12 @@ dotfiles. A regression test exercises all three failure modes
 ### Rejected Alternatives
 
 - **Derive CurrentRound from the event log.** Cleaner
-  conceptually — the event log is the source of truth — but
-  expensive: every `mission show` would walk the log. The
-  CurrentRound field is a cache of derivable state, not a source
-  of truth; Phase 3.7's log reader can reconstruct it for audit.
-- **Store reflections inside the Contract struct.** Rejected
-  because the contract is pinned at launch. Unbounded growth
-  would force Update to rewrite an unbounded slice on every
-  transition. A sibling file decouples the lifecycles.
+  conceptually, but expensive: every `mission show` would walk the log.
+  DES-079 now makes CurrentRound and inline decisions the shared authority;
+  Phase 3.7's log reader remains useful for audit, not permission.
+- **Store full reflections inside the Contract struct.** Still rejected for
+  unbounded prose growth. DES-079 accepts only the bounded ten-entry inline
+  decision block, not full reflections, a sidecar decision authority or a prose hash.
 - **Hard-refuse reflections for any round other than the current
   one.** The implementation does refuse reflections for past or
   future rounds, but the strictness was briefly questioned:
@@ -5470,7 +5554,8 @@ Three coordinated parts, shipped together in v1.
 A string enum `resolution: layered | repo-only` in `.punt-labs/ethos.yaml`,
 sibling to `active_bundle`. Unset ⇒ `layered` ⇒ byte-identical to today.
 `repo-only` disables the **global read** across all four layered stores,
-keeping repo → bundle and dropping the global tail.
+keeping repo → bundle and dropping the global tail. The one exception is the
+caller (see "Caller carve-out" below).
 
 - **One policy** (`repoAuthoritative bool`) threaded into every
   `NewLayeredStoreWithBundle`, read once through `identityStore()`. It gates
@@ -5495,6 +5580,13 @@ keeping repo → bundle and dropping the global tail.
 - **`resolution: repo-only` with no repo layer** (no `.punt-labs/ethos/`
   directory and no repo-local/legacy bundle) is a **hard startup error**, not
   a silent fall-through to global.
+- **Caller carve-out.** Repo-only governs the team and agent identities a repo
+  commits. The caller — the human or the leader running ethos — is a person, not
+  repo data, so a caller the repo does not hold is looked up in the global store
+  (`identity.ForCaller`). It applies where the CLI resolves the caller: `doctor`'s
+  Human identity check (PASS, noting "resolved from the global store"),
+  `whoami` (CLI and MCP), and session start. A caller in neither store is
+  still a FAIL. Team, agent, role, attribute and ext reads are unchanged.
 - **active_bundle**: keep repo → bundle for `SourceRepo`/`SourceLegacy` (both
   travel with the checkout); reject a `SourceGlobal` bundle under repo-only at
   startup.
@@ -5584,9 +5676,11 @@ export`. Snapshots a complete, resolvable identity set into
 
 #### Part C — ext `.local` split (amends DES-008)
 
-Each ext namespace file `<handle>.ext/<ns>.yaml` gains an optional companion
-`<handle>.ext/<ns>.local.yaml` for secret/machine-specific values, mirroring
-the org's `.envrc`/`.envrc.local` and `vox.md`/`vox.local.md` convention.
+**DES-079 amendment (acceptance pending):** the repository-owned overlay for
+`identities/<handle>.ext/<ns>.yaml` moves physically to
+`S/.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml`, where S is
+the canonical store root. Global overlays retain their existing sibling layout.
+Legacy repository siblings are migration/read inputs, never new write targets.
 
 - **Read/merge**: one `readNamespace(handle, ns)` helper reads base then
   overlays `.local` per key (`.local` wins), `os.IsNotExist`-guarded.
@@ -5595,16 +5689,16 @@ the org's `.envrc`/`.envrc.local` and `vox.md`/`vox.local.md` convention.
   `readNamespace` is a **read-only merged view — its result is never marshalled
   back to a file** (a tested invariant: prevents a base write from folding
   `.local` secrets into the committable file). `ExtDel` targets one file
-  (base or, with `--local`, the companion), not the merged view.
-- **Write targeting**: `ethos ext set --local` writes the companion; default
+  (base or, with `--local`, the overlay), not the merged view.
+- **Write targeting**: `ethos ext set --local` writes the local overlay; default
   writes base. `ExtList` strips `.local.yaml` **as a unit before** the `.yaml`
   case (so no phantom `<ns>.local` namespace) and reports the union.
-- **Boundary**: vendor copies `<ns>.yaml`, **always** skips `<ns>.local.yaml` —
-  the file layout *is* the boundary, no value redaction. Gitignore
-  `.punt-labs/ethos/**/*.local.yaml`, emitted by `vendor`/`setup`; `doctor`
-  asserts the rule is present and **errors if any `*.local.yaml` under
-  `.punt-labs/ethos/` is already git-tracked** (gitignore does not untrack).
-- **Scope, stated explicitly**: `.local` is a **git-exclusion** mechanism, not
+- **Boundary**: vendor copies base `<ns>.yaml`, never the local overlay or legacy
+  `<ns>.local.yaml`. All new repository overlays, locks and staging belong in S's
+  local zone. No new `.local` ignore exception inside `.punt-labs/ethos/` is a
+  substitute. Doctor reports legacy misplaced/tracked overlays; migration
+  copy-verifies, refuses divergent values and reports exact operator cleanup.
+- **Scope, stated explicitly**: `.local` is a **local-storage** mechanism, not
   a secrets vault — the merged view still flows to the model and to quarry
   transcript capture at runtime. And `.local` is visible only to
   ethos-mediated reads; a tool exercising DES-008's direct-read blessing sees
@@ -5690,7 +5784,11 @@ the org's `.envrc`/`.envrc.local` and `vox.md`/`vox.local.md` convention.
 - DES-008 is amended by reference (this record), matching how DES-022 and
   DES-044 extend it.
 
-### Implementation note (`ethos-8s2z`) — semantic, fail-closed `.local` coverage
+### Historical implementation note (`ethos-8s2z`) — semantic, fail-closed `.local` coverage
+
+The following describes shipped v4.10.0 ignore coverage, not the DES-079 write
+contract. The amendment above replaces repository sibling overlays with physical
+local-zone placement; old broad protections do not authorize new in-tree writes.
 
 The "`.gitignore` covers it" guarantee above was first enforced by an
 exact-string match, which failed two ways: `setup`/`vendor` re-appended a narrow
@@ -5743,7 +5841,41 @@ session has a permanently dirty tree, observed blocking `punt release`
 preflight. `missions/<id>/log.jsonl` and the tracked `.create.lock` share
 the disease.
 
-### Design
+### DES-079 amendment — canonical local retention (acceptance pending)
+
+S is the canonical store root; C is the invoking/committing checkout. S owns
+all new repository live streams, archives, locks, quarantine evidence, scratch
+and staging under `S/.punt-labs/local/ethos/`. Linked C removal must not remove
+their sole copy. SessionEnd is a courtesy flush, not the retention guarantee.
+Deleting S or its local tree remains outside that guarantee, including S = C.
+
+Retain trace locally in both modes. Default blame sealing creates immutable
+archive chunks under `S/.punt-labs/local/ethos/trace/`, with **no index queries or
+mutation**. Full mode adds eligible copies into C's record tree/actual index;
+consent is captured per immutable entry, never inferred from seal-time mode.
+Archive completion is separate from publication completion. Readers union
+live/archive/published/supported legacy sources regardless of current mode;
+compare overlapping canonical payloads before filtering, collapsing equal copies
+and reporting divergent identities. Existing legacy timestamp rules remain.
+
+All temporary files, including rollback/publication staging, belong under S's
+local zone. Preserve atomic rename/link behavior, fsync and destination-directory
+durability. `EXDEV` refuses with the prior target intact; no adjacent fallback.
+Repository locks retain distinct domains/order and common-store coordination;
+quiesce old writers before relocation, never split a held inode by renaming it.
+
+Audit write failure stays visible and does not block a tool invocation. Manual
+seal/query errors remain errors. Default-blame commit-context archival failure
+reports retained state and permits unrelated source commits; invalid config and
+required blame/full publication failures block. Required mission-event failures
+retain rollback semantics, not best-effort acceptance (DES-034/075).
+
+The [storage contract](docs/storage-layout.md) defines paths, reader outcomes,
+publication/export selectors and pending acceptance. The following v4.8.0 design
+is historical: its checkout-owned live files, tracked-only chunks, unconditional
+`git add`, adjacent temporaries and source-tree locks are superseded above.
+
+### Historical v4.8.0 design
 
 Split the append-heavy files across two zones in the same checkout: the
 gitignored `.punt-labs/local/` zone is the live write path; the tracked
@@ -6485,17 +6617,18 @@ resolves each operation against the correct one.
   resolver already use).
 - **Checkout root (`resolve.FindRepoRoot` / `EnvRepoRoot`).** Stays
   worktree-local for genuine per-checkout state: the enable/disable marker,
-  the DES-058 audit live-zone and its pre-commit seal, generated
+  generated
   `.claude/agents/` files, the write-set verifier walk, and any git-index
   mutation (which must land in the committing checkout).
 - **A consumer that does both a store op and a per-checkout op carries both
   roots** — the field is split, not reclassified. The mission `Store` routes
-  records to the store root and its audit zone to the checkout root;
+  records and repository-local trace to the store root; publication copies and
+  index effects target the checkout root;
   `session start` reads config from the store and writes agent files to the
   checkout; `doctor` reads team/agent config from the store while globbing
   `.claude/agents` and checking the seal hook on the checkout; the traceability
-  UI reads missions/delegations from the store and audit/file-browse from the
-  checkout; SubagentStart closes the delegation skeleton on the store while
+  UI reads missions/delegations and local audit from the store, published trace
+  and file-browse from the checkout; SubagentStart closes the skeleton on the store while
   walking the write-set on the checkout.
 - **`ETHOS_REPO_ROOT` override.** Forces the store root when auto-resolution
   is wrong or absent, reaching every store call site. It is validated: a
@@ -6516,10 +6649,11 @@ resolves each operation against the correct one.
   a worktree does not silently no-op. The consequence — a worktree uses the
   main checkout's active bundle, not its own — is consistent with the store
   itself living in main, and is accepted, not a defect.
-- **The DES-058 audit live-zone stays per-checkout.** Live-append, close-time
-  seal, and the pre-commit `audit seal` all resolve the checkout root, so a
-  mission's events land where the seal that commits them runs; only the
-  contract/results/reflections record resolves the store root.
+- **DES-079 amends the DES-058 audit ownership (acceptance pending).** All new
+  live streams and retained archives belong to S's local zone in both modes.
+  Full recording publishes eligible copies into C, never moves the only archive
+  there. Feature C removal without SessionEnd preserves even unsealed tails when
+  C differs from S. Global rosters/counters retain their existing locations.
 - **`enable`'s deposit stays per-checkout.** The vendored guide, `enabled`
   marker, `@`-import line, and chained hooks are one cohesive unit: Claude
   Code resolves the `@.punt-labs/ethos/CLAUDE.md` import relative to the
@@ -6531,7 +6665,10 @@ resolves each operation against the correct one.
   set but store-root empty ⇒ refused ⇒ hard error; override unset ⇒ genuine
   no-repo ⇒ warn and use global.
 
-### Rejected alternatives
+### Rejected alternatives (historical rationale, before DES-079 local ownership)
+
+The old audit-specific arguments below are superseded by canonical local
+retention. Checkout source/generated/index effects still require separate roots.
 
 - **Change `FindRepoRoot` wholesale to follow the common dir.** Reintroduces
   the bug from the other side: the enable/disable marker and the audit
@@ -7520,6 +7657,35 @@ file, never rewrites an existing one. `results.yaml`/`contract.yaml` are
 the outliers — mutable files rewritten via whole-value `yaml.Marshal` on
 every write — which is *why* the hand-edit was fragile: it added content
 to a file whose own write path doesn't know that content exists.
+
+### DES-079 amendment — shared correction authority (acceptance pending)
+
+For repository missions, `corrections.yaml` is strict shared authority, not a
+projection recoverable solely from optional local trace. Its envelope is
+`{version: 1, mission, entries: [{id, created_at, correction}]}`, with the existing
+validated/redacted Correction value. Initialized empty and missing/unmigrated
+are different states. Backfill only from validated complete evidence, never a
+tolerant partial decode of an event log.
+
+Under the canonical mission lock, persist durable local intent and durably append
+the required correction event **before** installing shared authority. Installation
+is acceptance; exact receipt recovery completes only the already-accepted work.
+Retain conflict/interruption evidence. Do not deduplicate legitimate identical
+annotations by prose or promise exactly-once arbitrary repeated requests.
+Preserve author resolution, terminal-state and round guards, and layer refusal.
+Correct changes no lifecycle field: that frame argument, not “one event append
+only,” preserves `TerminalIsFinal`.
+
+CLI, MCP, UI, publication and export read shared corrections; local events remain
+forensic detail. Default sealing is local; full-mode eligible copies are additional
+publication, not the authority. All repository locks, intents and staging belong
+under `S/.punt-labs/local/ethos/`; see [storage contract](docs/storage-layout.md).
+
+The following original event-only decision and its reasoning are historical.
+The claims “not a new file format,” “entire effect is one append,” log-only
+rendering, and self-sealing into Git are superseded above.
+
+### Historical event-only decision
 
 **Decision.** A correction is a new **event on the existing mission event
 log**, not a new file format and not a new field on `results.yaml`. The
@@ -8891,7 +9057,227 @@ directly above, and exists so a future, well-intentioned fallback
 cannot reintroduce the collision this ruling explicitly rejected without
 first deleting or rewriting this test.
 
+### Amendment 2026-11-03: MCP servers never receive `CLAUDE_PID`; a PreToolUse hook declares the caller
+
+**The gap.** The Decision's item 1 says Claude Code sets `CLAUDE_PID` "on
+every spawned subprocess." That is true for hooks and Bash tool shells and
+false for MCP servers. Measured on pembroke, Claude Code 2.1.309: none of six
+live `ethos serve` processes (the oldest started 2026-10-26) had `CLAUDE_PID`
+in its environment; each had `CLAUDECODE=1`. Under the PR #502 amendment's
+no-fallback rule, every MCP call that needs the caller therefore returns
+`ErrNoSession`: `identity whoami`, implicit `session roster`, `session iam`,
+mission binding, and `doctor`'s Human identity check. The CLI is unaffected.
+This is the harness gap in anthropics/claude-code#41836: an MCP request
+carries no session or agent identity.
+
+**A second, silent case.** A `claude -p` started from inside a session's Bash
+shell inherits that session's `CLAUDE_PID`, and so does the nested session's
+MCP server. Corroboration passes, because the outer `claude` is a live
+ancestor. Measured: the nested session's MCP `session roster` returned the
+OUTER session's roster (837b52b4) instead of its own (2c031a42), with no
+error. Item 1's "a nested `claude` process gets its own `CLAUDE_PID`" holds
+for the nested session's Bash commands, not for its MCP server.
+
+**Decision.** The caller is declared per call by ethos's own PreToolUse hook,
+which Claude Code invokes before every MCP tool call with the harness's
+`session_id`, plus `agent_id` when a subagent is calling (hooks reference,
+code.claude.com/docs/en/hooks). For calls to ethos's own MCP tools
+(`mcp__plugin_ethos(-dev)?_self__*`), the hook returns `updatedInput`: the
+original arguments plus one reserved argument, `_caller`, holding
+`{session_id, agent_id}`. `agent_id` is the payload's `agent_id` when present,
+otherwise the hook's own corroborated `CLAUDE_PID` (DES-061 R4's key order).
+When the hook runs, it always overwrites or strips `_caller`, so a
+model-supplied value does not survive a hook that ran. *(Corrected
+2026-11-03: a model value does survive when the hook does not run — kill
+switch, missing binary, a server registered outside the plugin — which is
+why the server fails closed; see "Fail closed on both sides of the hook"
+below.)* The MCP server resolves `_caller` through the same exact-participant
+path as the OpenCode `_meta` pilot (`internal/mcp/caller.go`,
+`docs/opencode-mcp-identity.md`): an exact roster and participant, or an
+error; never a fallback. Without `_caller` (a client that is not Claude Code,
+or the hook absent), behavior is unchanged.
+
+Why this satisfies this decision's principles:
+
+- Identity is declared by the harness, per call. No process-tree walk, no
+  PID inference in the server.
+- The hook reads `session_id` at the moment of the call, so `/clear` cannot
+  leave it stale — the reason `CLAUDE_CODE_SESSION_ID` was rejected above.
+- Subagents get their own key from the payload's `agent_id`, which neither
+  `CLAUDE_PID` nor any server-side PID can provide (item 1's correction).
+- MCP and CLI resolve the same caller (DES-061 R4, punt-kit `plugins.md`
+  surface parity).
+- It survives DES-081: hooks remain the channel through which Claude Code
+  declares session and agent identity, whichever storage backend is active.
+
+**Rejected: a separate `session_id` argument.** `session_id` on `roster`,
+`join`, and `leave` is an administrative target and may name another session
+(`docs/opencode-mcp-identity.md`). A hook that overwrote it would remove that
+capability; a hook that filled it only when empty would let a model-supplied
+value stand in for the caller.
+
+**Rejected: parse the PID from `CLAUDE_CODE_MESSAGING_SOCKET`.** The variable
+does reach MCP servers, and its file name is `<claude pid>.sock`. It is
+undocumented (anthropics/claude-code#103048), it identifies the session's
+`claude` process and so cannot tell a subagent from its leader, and it keeps
+the pointer-file mechanism DES-081 replaces.
+
+**Rejected: tell MCP callers to use the CLI.** Violates DES-061 R4 and
+`plugins.md`'s MCP/CLI equivalence.
+
+**Permissions are unchanged.** Measured with a probe hook that returns
+`updatedInput` and no `permissionDecision`: the injected argument reaches the
+server, and an explicit `ask` rule for the tool still refuses the call in
+`claude -p`, with the hook and without it. The hook never returns a
+permission decision for this purpose.
+
+**No caller, no `_caller`.** When the hook cannot determine a caller (no
+`session_id`; no `agent_id` and no corroborated `CLAUDE_PID`), it removes any
+model-supplied `_caller` from the input. The server cannot tell a
+hook-written `_caller` from a model-written one, so the hook is the only place
+this can be enforced.
+
+**Routing, not authentication.** Like the OpenCode `_meta` key, `_caller`
+routes a call to a roster participant. A client that does not run ethos's
+hook can supply any `_caller`. The server trusts it because the MCP server is
+a local, per-session process; it is not an authorization boundary.
+
+**Persona-less callers.** A caller whose roster participant has no persona (a
+`general-purpose` or `Explore` subagent) is a valid caller with no identity,
+per DES-007's null-persona rule: `whoami` answers "`<agent_type>` has no ethos
+identity", `iam` may declare a persona, and nothing falls back to the leader
+or to env, PID, git, or OS identity. The OpenCode `_meta` path follows the same
+rule.
+
+**Sessions started before the upgrade.** A leader participant keyed on the
+legacy walk PID does not match the exact `_caller` key and gets a named
+"participant not found" error until the session restarts — the same one-time,
+loud, self-healing cost the upgrade-migration amendment above accepts for the
+pointer lookup.
+
+**Measured end to end** (2026-11-03, Claude Code 2.1.309, Linux, only the
+branch's plugin, wrappers, and binary loaded, in a nested `claude -p`):
+leader `whoami` returned `claude`; a `bwk` subagent returned `bwk`; a
+`general-purpose` subagent returned "General-purpose has no ethos identity";
+`session roster` returned the nested session's own roster.
+
+### Amendment 2026-11-03: fail closed on both sides of the hook
+
+**The gap.** The amendment above made the PreToolUse hook the only declarer of
+the caller but left the server's old chain in place for a call that arrives
+without `_caller`. With the hook missing, killed (`~/.punt-hooks-kill`),
+crashed, or unable to declare a caller, a Claude Code call fell through to
+`ETHOS_SESSION`, `ETHOS_AGENT_ID`, and the process tree — in an MCP server that
+has no `CLAUDE_PID` and may have inherited another session's. That chain can
+answer with another session's identity at exit 0, the wrong answer this
+decision exists to close. Found by local review (silent-failure-hunter and
+invariant-completeness-reviewer) before the PR opened.
+
+**Decision.**
+
+1. **Server.** Under Claude Code (`resolve.UnderClaudeCode()`), a
+   caller-dependent method that receives neither `_caller` nor OpenCode `_meta`
+   returns the named error "Claude Code call arrived without _caller: the ethos
+   PreToolUse hook did not declare the caller (is it installed, enabled, and not
+   killed?)", before consulting `resolve.SessionID`, `resolve.Resolve`,
+   `process.FindClaudePID`, or `ETHOS_*`. All such resolution lives in
+   `internal/mcp/nocaller.go`; `TestNoCallerResolutionLivesInOneFile` fails if
+   it appears elsewhere in the package. An explicit `session_id` on `roster`,
+   `join`, and `leave` is an administrative target and still works. `mission
+   create` reports the error as a warning (the mission is created);
+   `mission close` and `abandon` return an error result for any failure to
+   clear the active-mission bindings. Doctor's Human identity row is supplied
+   by the caller (`doctor.RunAllForCaller`, `doctor.HumanIdentityRow`). Clients
+   that are not Claude Code keep the existing chain.
+2. **Hook.** For ethos MCP tools the hook denies, naming the cause, when it
+   cannot read or parse the payload (a payload too broken to parse is still
+   denied if its raw bytes name an ethos MCP `tool_name`) or when routing or
+   gate decoding fails — never an error with no output, which Claude Code reads
+   as "proceed". When it cannot declare a caller it strips any `_caller`, logs
+   the cause, and the server refuses the call. `agent_id` presence is the
+   subagent signal; `agent_type` alone appears on the main thread of a
+   `claude --agent` session (measured), which keys on the corroborated
+   `CLAUDE_PID`.
+3. **Input.** `ReadInput` returns `ErrInputTimeout`, with the byte count,
+   instead of an empty map, wraps other read errors, and ends a read early only
+   on a complete JSON object.
+
+**Residual risks, accepted.** A Claude Code version whose subagent payloads
+lack `agent_id` would key a subagent on the leader's `CLAUDE_PID`; the hooks
+reference documents `agent_id` inside subagents, and 2.1.309 sends it. A
+non-Claude MCP client started from a Claude Code shell inherits `CLAUDECODE=1`
+and is refused unless it sends `_meta` — failing closed. `_caller` remains
+routing, not authentication: a well-formed `_caller` naming a real participant
+is routed whoever wrote it, which matters only when the hook does not run.
+
+**Rejected:** keep the environment chain for a caller-less Claude Code call and
+log it (a log is not a refusal); deny every ethos MCP call when the hook cannot
+declare a caller (the server refuses the ones that need a caller; the rest need
+none); gate the plugin hooks on the per-repo enabled marker (Qodo finding) —
+DES-059 scopes that gate to the git hooks, and gating would skip `_caller`
+injection and the verifier fence.
+
+**Measured end to end** (2026-11-03, Claude Code 2.1.309, Linux, branch plugin,
+wrappers, and binary only): leader `claude`; `bwk` subagent `bwk`;
+`general-purpose` subagent "general-purpose has no ethos identity"; `--agent
+bwk` main thread `claude` (DES-011's repo agent; whether `--agent` should set
+the primary persona is bead ethos-eqnd); nested session its own roster. A
+probe hook confirmed Claude Code replaces the tool input with `updatedInput`
+(a removed field does not reach the server), so stripping works.
+
+### Amendment 2026-11-03: PreToolUse never decides "allow" (amends DES-054)
+
+DES-054's pseudocode writes "allow" for "not a verifier spawn" and for an
+in-allowlist write. Its intent is pass-through. In Claude Code's hook protocol,
+`permissionDecision: "allow"` means approve without prompting, and ethos's
+PreToolUse hook matches every tool, so ethos was auto-approving every tool
+call in every repository with the plugin installed. Measured: a Bash command
+that Claude Code's permission checker refuses ran without a prompt with ethos
+hooks enabled and was refused with hooks disabled; an explicit `ask` rule was
+still honored. Ruling: ethos's PreToolUse hook emits `deny` or no permission
+decision. Pass-through emits only `hookEventName` (plus `updatedInput` or the
+delegation env block where those apply). "Allow" in DES-054's pseudocode reads
+as "do not block". The output field is `permissionDecision`, an unexported
+bool type that marshals only to `"deny"` and is omitted otherwise, so `allow`
+cannot be written.
+
 ## DES-075: Mission storage layer model — what the repo tree, the global tree, and their locks are each authoritative for (AMENDED 2026-09-08; 2026-10-24 by DES-079)
+
+### DES-079 amendment — physical placement and authority (acceptance pending)
+
+S is the canonical store root; C is the invoking/committing checkout. The repo
+tree at S owns shared contracts, inline round decisions (DES-034), all accepted
+results, delegation records, corrections (DES-072), summaries and repo ADRs.
+Repository live streams, retained trace, overlays, receipts, locks and **all**
+temporary staging live under `S/.punt-labs/local/ethos/`, in both recording modes.
+Source-tree lock paths and adjacent staging described below are historical,
+not approved destinations. Quiesce old writers before lock relocation; preserve
+distinct lock domains and acquisition order, not just their names.
+
+C's record tree may hold immutable publication snapshots; it is not inert for
+publication, but is never a second mutable mission authority. Git effects use C's
+actual index, including `GIT_INDEX_FILE`. Local retention does not depend on C
+surviving or SessionEnd running when C differs from S. Legitimate global stores,
+rosters and counters keep their existing locations.
+
+Reflect acceptance requires durable local intent and required event before shared
+decision installation. Generic Update cannot change/stale-overwrite decisions,
+round, status/closed-at, budget or the evaluator tuple. Ordinary result, advance,
+close, abandon and Update required-event failures retain rollback semantics;
+post-acceptance archive/publication completion is a separate outcome. Directory
+sync failure after rename means applied/durability unconfirmed, not rolled back.
+Every repository temporary, including restore and publication, stages locally;
+`EXDEV` refuses with the old target intact, never adjacent or copy-over fallback.
+
+Repo-first/global-fallback reads and scoped admission-control ownership remain.
+Trace readers union local live/archive, published and supported legacy sources
+independent of mode, comparing payloads before watermark filtering and refusing
+conflicts. Missing optional prose cannot erase shared authority. See the
+[storage contract](docs/storage-layout.md) for strict read states, migration and
+pending acceptance. The remaining text records the original layer/lock rationale;
+its physical paths and “inert” checkout description are superseded as above.
+
+### Historical layer and lock rationale
 
 **Context.** `internal/mission` (DES-054 phase 1) stores a mission in one
 of two trees and locks it through one of two lock files, and different call
@@ -12694,10 +13080,23 @@ Full writeups, including two historical exploit traces, are in
 **Status**: Settled 2026-10-23 by operator ruling; ADRs added to the blame
 tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
 store in the repository) and `ethos-3e3f` (redaction, DES-080).
-Implementation in progress: the DES-080 redaction is under way (PR #539); slice 1 of bead `ethos-g3g3` (the path-class table and the doctor check) is implemented; its later slices and bead `ethos-yjh0` are not started.
+DES-080 redaction shipped in v4.20.0 (see `CHANGELOG.md`). DES-079's storage,
+authority, publication and upgrade repair is in progress, **not release-accepted**.
+Earlier path-class/doctor work is not proof of physical-boundary compliance.
+The [storage contract](docs/storage-layout.md) maps promises to implementation
+surfaces and still-pending executable acceptance.
+
+Here **S** is the canonical store root resolved through Git's common directory;
+**C** is the invoking/committing checkout. They coincide in an ordinary checkout
+but usually differ in a linked feature worktree. Shared authority and local
+retention belong to S; checkout deposits and Git publication/index effects to C.
 
 ### What this amends
 
+- **DES-034** retains mandatory full Reflection submission while sharing bounded
+  inline round decisions; optional local prose availability cannot alter permission.
+- **DES-057** moves repository extension overlays physically into S's local zone,
+  preserving base-only writes and local precedence; global layout is unchanged.
 - **DES-026** generates `.claude/agents/<handle>.md` at SessionStart and
   compares content before writing. DES-079 adds three requirements: the
   output is committed, it is deterministic, and `ethos doctor` fails on
@@ -12705,13 +13104,16 @@ Implementation in progress: the DES-080 redaction is under way (PR #539); slice 
 - **DES-054** made the whole mission tree git-tracked. Under DES-079 only
   the class-2 files are tracked by default; delegation prompts,
   reflections and event-log chunks move to the class-3 archive, and
-  agent-written artifacts are ignored.
+  new agent-written artifacts target local scratch; legacy misplaced artifacts
+  require operator-directed cleanup, not record-tree ignore exceptions.
 - **DES-058** seals live files into the tracked tree. Under `record: blame`
   the seal writes into the archive `.punt-labs/local/ethos/trace/`. The
-  byte copy, the chunk naming and immutability are unchanged.
+  byte copy, chunk naming and immutability remain. S retains local trace in
+  **both** modes; full adds eligible published copies into C.
 - **DES-070** writes the seeded review agents into `.claude/agents/`.
   DES-079 states that they are committed and that `ethos doctor` compares
-  them with the content embedded in the binary.
+  them with the content embedded in the binary. Seeded edits warn; generated
+  or installed drift fails, as distinguished below.
 - **DES-072**: two clauses, named under class 2 below.
 - **DES-075** describes the repository mission tree as git-tracked as a
   whole (its section "The two trees"). Under DES-079 that holds for class-2
@@ -12747,16 +13149,17 @@ Three problems followed:
 
 ### What blame needs
 
-The traceability UI (`internal/ui`) answers "who changed this line, under
-which mission, by which agent, asked to do what, with what verdict" from:
+The traceability UI (`internal/ui`) must answer "who changed this line, under
+which mission, by which agent, asked to do what, with what verdict" from the
+following evidence, preserving genuine ambiguity (acceptance pending):
 
 | Need | Source |
 |---|---|
-| line → commit → mission, delegation | `git blame` plus the `Mission:` / `Delegation:` commit trailers; fallback: bead ID in the subject → `missions.jsonl` |
+| line → commit → mission, delegation | Immutable provenance manifest in the blamed commit; explicit association/blob/range evidence, not first-ticket/delegation guessing; trailers record associations, not authenticated authorship |
 | agent | `missions/<id>/delegations/<d>/record.yaml` (`agent_type`) |
 | intent | `missions/<id>/contract.yaml` |
 | outcome | `missions/<id>/results.yaml` |
-| corrections to a closed mission's outcome (DES-072) | correction events in the mission event log (`internal/ui/handlers.go:162-168`) |
+| workflow decisions and corrections (DES-034/072) | Inline `round_decisions` in the contract; shared `corrections.yaml`; local prose/events are optional forensic detail |
 | index, dashboard | `missions.jsonl` |
 
 The prompt, reflections, event timeline and per-tool-call audit answer a
@@ -12772,6 +13175,8 @@ one exception: mission records written by `ethos mission export --dir`
 under `.punt-labs/ethos/` are class 2 (the fallback entry below) unless
 another entry claims the path, as `identities/` or a mission's
 `artifacts/` does.
+“Tracked” below means intended for ordinary Git staging and commits, not
+automatically added to the index merely because a writer created the file.
 `ethos export --to` (an identity in another format: `SOUL.md`,
 `IDENTITY.md`, `STYLE.md`) writes to the directory its `--dir` names,
 the current directory by default, and is outside the classification
@@ -12779,10 +13184,13 @@ wherever it lands. Without `--dir`, `ethos mission export` writes to
 `.punt-labs/ethos/missions/` under the repository root, whatever the
 working directory. A writer that follows a symlink (a `CLAUDE.md` linked
 to `AGENTS.md`, a linked `.gitignore`) is classified by the name it was
-asked to write. A class says what a file is; where a
-class-3 file is written depends on the `record` setting (below). The lists
-in this ADR name the paths known on 2026-10-24 and are not the authority.
-The authority is one ordered table in code that maps every path pattern
+asked to write. A class says what a file is, not permission to place runtime
+state anywhere a classification pattern happens to match. The physical boundary
+is mandatory, including transient writes: source/blame under S's record tree;
+all new repository-local state and staging under `S/.punt-labs/local/ethos/`.
+Full mode adds eligible copies in C, never moves the sole local archive there.
+The lists in this ADR name the paths known on 2026-10-24 and are not exhaustive.
+Classification uses one ordered table in code that maps every path pattern
 ethos writes to its class (bead `ethos-g3g3`). The first matching entry
 gives a path's class, and class-4 entries (locks, temporary files,
 `*.local.*`) come first, so a lock inside a mission directory or an
@@ -12799,8 +13207,11 @@ case is a fallback entry: the exported-record shape
 no other entry matches, so an agent artifact named `m-1.contract.yaml`
 stays class 3. Every temporary file or staging directory ethos creates in
 the tree carries one marker, `.ethos-tmp`, in its name, wherever it is
-created (a symlinked `CLAUDE.md`'s temporary file sits beside the link
-target), and two class-4 entries match that marker in any directory. A
+created; even staging for a symlink-resolved host target stays in S's local
+zone. Class-4 patterns identify the marker but do not legalize misplaced
+staging. Atomic rename/link semantics and destination-directory sync remain;
+`EXDEV` refuses with the previous target intact, never an adjacent-temp or
+copy-over fallback. A
 mission staging directory left by an earlier version
 (`.punt-labs/ethos/missions/.<id>.migrate-*/`) has its own class-4
 entry, so its copied `contract.yaml` is never taken for a record. The
@@ -12813,11 +13224,9 @@ not built by a layout helper, or when a string literal looks like a
 staging name (`.tmp`, `tmp-`); a staging name built another way (for
 example `dest + ".new"`) is not caught by the scan and is reported by
 `ethos doctor` only if it is left under `.punt-labs/ethos/`. Writes
-under the system temporary directory (`TMPDIR`) are out of scope even
-when `TMPDIR` lies inside the working tree, as it does in this
-organization; such writes (doctor's hook sandbox, the attribute editor's
-scratch file) still carry the marker and are removed before the command
-returns. An `ethos doctor`
+for repository-owned scratch (including a hook sandbox or attribute editor)
+must also use S's local zone, not an arbitrary `TMPDIR` exemption. Legitimate
+standalone/global operations retain their separate layout. An `ethos doctor`
 check reports files under `.punt-labs/ethos/` and `.punt-labs/local/ethos/`
 of the working tree it runs in that no entry matches. It reports, without
 scanning past it, any symlink on the path from the repository root to
@@ -12886,9 +13295,12 @@ assigned to `_` inside `internal/resolve`. The shell hooks
 `git interpret-trailers` unbounded, with git tracing switched off, and
 exit 1 with git's error when either fails or when the repository root
 is not a single absolute directory path (`/…`, or a drive path `C:/…`
-when `uname -s` reports MINGW, MSYS or CYGWIN). A merge commit (`git merge --no-ff`) is not sealed: git
-writes its tree before any hook can stage a chunk, so its live lines are
-sealed by the next ordinary commit and nothing is lost. In an enabled repository they also block
+when `uname -s` reports MINGW, MSYS or CYGWIN). Historically, a merge commit
+(`git merge --no-ff`) skipped the tracked-chunk seal because Git writes its tree
+before a hook can stage a chunk. Under the amended contract, local archival
+completion and Git publication are separate; this hook-order fact neither
+prevents local retention nor proves required publication reached the merge.
+In an enabled repository they also block
 the commit when the `ethos` binary is missing, when a component of the
 `.punt-labs/ethos` path is a dangling link, a non-directory or
 unreadable, or when the `enabled` marker exists but is not a regular
@@ -13024,7 +13436,10 @@ empty repository; purge and the vacuum cross-check skip such rosters
 and say so (`--json` lists them as skipped), and
 `ethos session purge --force` removes them, live or stale (`--json`
 lists them as `forced_unresolved` with a warning that their unsealed
-state was not verified). The pre-commit seal runs its read-only git
+state was not verified).
+
+**Historical staging implementation, superseded by the DES-079 publication
+transaction below:** the pre-commit seal runs its read-only git
 queries before writing any chunk, then writes every chunk, snapshots
 the index (keeping its mode) and stages the chunks in one `git add`.
 If `git add` failed because another process held `index.lock`, nothing
@@ -13045,7 +13460,12 @@ directories it created and blocks the commit; the error names the
 failed step and states whether the tree is as it was or what is left.
 Removing leftover temporary files from earlier runs is not undone, and
 the live-zone directories and per-session lock files it created (both
-never tracked) remain. Tests compare every `.git` shape in
+never tracked) remain. This is not the default-blame seal contract: that seal
+performs no index queries or mutation. Publication instead prepares a private
+candidate index and installs it only if the captured starting index still
+matches under Git's lock; never restore a stale whole index over another writer.
+
+Tests compare every `.git` shape in
 the shape table (the Unix run adds the shapes only Unix can make) with `git rev-parse` and run the same
 shapes with git hidden. On a refusal, or a refused `ETHOS_REPO_ROOT`,
 `ethos doctor` reports the store as one failing row; a check that reads
@@ -13066,7 +13486,7 @@ the failure and the fix: repair or remove the `.git` named, or set
 consults the global mission store instead. Every CLI command is classified in
 one table, which a test checks against the full command tree: commands
 that touch only global stores (session roster commands, `iam`,
-`adr list`/`show`/`settle`) and commands that handle the error
+legacy standalone ADR operations) and commands that handle the error
 themselves (`doctor`, `setup`, `seed`, `enable`, `disable`, `hook`,
 `serve`, `audit` and a few utilities) run; every other command,
 including `whoami`, `session start` and `adr create`, refuses rather
@@ -13082,8 +13502,9 @@ that hook sections may remain. Output a user directs into
 not ethos's to classify. A prose list cannot stay complete as writers are
 added; a failing test can.
 
-Files ethos writes outside the working tree are out of scope: git hooks
-in `.git/hooks/`, and everything under `~/.punt-labs/ethos/`. When
+Global stores under `~/.punt-labs/ethos/` retain their existing layout. Git hooks
+in `.git/hooks/` keep their documented destination, but their repository-owned
+temporary staging still belongs in S's local zone. When
 `core.hooksPath` places the hooks directory inside the working tree,
 `ethos enable` writes `pre-commit` and `commit-msg` there
 (`chainHooks` in `internal/enable`, the location found by
@@ -13136,11 +13557,12 @@ submodule writes
 **2. Blame tier — tracked by default.** The record `git blame` provenance
 needs:
 
-- Per mission: `contract.yaml`, `results.yaml`,
-  `delegations/<d>/record.yaml`, and `corrections.yaml` — a projection of
-  the mission's DES-072 correction events, written by the same operation
-  that appends the event, so a correction to a closed mission's outcome
-  reaches every clone. This supersedes two DES-072 clauses: that a
+- Per mission: `contract.yaml` including bounded inline `round_decisions`
+  (DES-034), **all accepted results** in `results.yaml`,
+  `delegations/<d>/record.yaml`, and strict shared `corrections.yaml` authority
+  (DES-072), so decisions and corrections reach every clone. Reflection and
+  correction acceptance persist durable local intent and required event before
+  installing shared authority. This supersedes two DES-072 clauses: that a
   correction is "not a new file format" (it now also writes
   `corrections.yaml`), and that `Correct` seals its own write into the
   tracked tree (under `record: blame` that seal goes to the archive, and
@@ -13155,15 +13577,16 @@ needs:
   under `.punt-labs/ethos/` unless another entry claims the path, and
   outside this classification elsewhere.
 - ADRs, as `.punt-labs/ethos/adrs/<id>.yaml` (operator ruling 2026-10-24).
-  A design decision is part of the provenance of the code it shaped. Today
-  `ethos adr` stores ADRs in `~/.punt-labs/ethos/adrs` (`cmd/ethos/adr.go`,
-  `serve.go`), global and untracked; bead `ethos-yjh0` moves the store into
-  the repository with the repo-first, global-fallback resolution missions
-  use (DES-075), and its writer goes through the DES-080 redactor.
+  A design decision is part of the provenance of the code it shaped. Repository
+  writes and repo-first/legacy-global-fallback reads, including CLI and MCP,
+  are DES-079 acceptance obligations; legitimate standalone global storage
+  remains. Repo ADR writers/publication go through DES-080 redaction.
 
 **3. Trace tier — machine-local by default.**
 
-- Per mission: `delegations/<d>/prompt.md`, `reflections.yaml`, the live
+- Per mission: `delegations/<d>/prompt.md`, per-round local
+  `reflection-<round>.yaml` envelopes (aggregate `reflections.yaml` for
+  publication/export), the live
   event log, sealed event-log chunks `log-<sid>-<t0>-<t1>.jsonl`, the
   legacy pre-DES-058 `log.jsonl` (appended to only by
   `ethos mission migrate`), and event-log quarantine artifacts
@@ -13173,93 +13596,139 @@ needs:
   `audit.jsonl` (appended to only by the legacy-audit migration), and
   audit quarantine artifacts.
 
-**Agent-written files in the mission tree.** Agents write
-`missions/<id>/artifacts/*.md` with their own file tools. No ethos code
-writes, moves, exports or redacts them. The class table has an entry for
-the path, class 3, so `ethos doctor` does not report them, and in both
-`record` modes `ethos enable` writes an ignore rule for
-`.punt-labs/ethos/missions/*/artifacts/`. Neither `export --full` nor
-`record: full` changes this. An artifact a person wants in git is moved
-to a path of their choosing and committed by them; ethos makes no
-redaction claim about it. An artifact already tracked stays tracked
-despite the rule, and `ethos doctor` lists it with the `git rm --cached`
-command below.
+**Agent-written artifacts.** `MISSION_ARTIFACTS_DIR` must name local scratch
+under `S/.punt-labs/local/ethos/`, not the tracked delegation directory. Ethos
+does not silently move, export or redact agent-owned files. Legacy misplaced
+`missions/<id>/artifacts/` requires explicit operator cleanup; no ignore exception
+under the record tree is permitted. Sharing an artifact is the operator's choice
+of source destination and ordinary staging; no automatic redaction is promised.
 
-The live event log and live audit file stay in the machine-local zone
-`.punt-labs/local/ethos/` in every mode (`internal/audit/paths.go:26`).
-Where every other class-3 file that ethos writes is written is set by
-`record` in `.punt-labs/ethos.yaml`:
+The live event log and live audit file stay in S's machine-local zone
+`.punt-labs/local/ethos/` in every mode. S also retains every other local trace
+payload in both modes; `record` in S's `.punt-labs/ethos.yaml` controls additional
+publication eligibility, not the existence or ownership of that local copy:
 
 - `record: blame` (the default): under the machine-local archive
-  `.punt-labs/local/ethos/trace/`, keeping each file's path relative to
-  `.punt-labs/ethos/`. The pre-commit seal keeps its DES-058 role (live
+  `.punt-labs/local/ethos/trace/`, mirroring prompt/chunk paths relative to
+  `.punt-labs/ethos/`. Reflections use per-round
+  `missions/<id>/reflection-<round>.yaml` envelopes, with pending receipts at
+  local `missions/<id>/reflection-intents/<round>.yaml` (DES-034 above).
+  The pre-commit seal keeps its DES-058 role (live
   file to immutable chunk) but seals into the archive. The ignore rule
   `.punt-labs/**/local/**` is what keeps the archive untracked; the
   archive's files are still class 3.
-- `record: full`: at their paths under `.punt-labs/ethos/`, tracked, as
-  sealed chunks are today.
+- `record: full`: retain the same local payload and add eligible copies under
+  `C/.punt-labs/ethos/`. Each immutable entry captures consent with its payload
+  atomically/recoverably; absent or legacy consent is private. Collection rewrites
+  and full-mode seals cannot promote older private entries. Pending eligible
+  copies remain retryable after switching to blame, but switching alone publishes
+  nothing. Published collections union eligible and already published entries.
 
-Today every class-3 file except the live files is written into the tracked
+The pre-repair baseline writes every class-3 file except the live files into the tracked
 tree; `delegations/<d>/prompt.md` and `reflections.yaml` are committed in
 this repository, not only sealed chunks, and so are agent-written
 `artifacts/`. The commit-msg
 trailer hook is unchanged.
 
-**4. Never tracked, in any mode.** Files that are transient or specific to
-one machine: `.punt-labs/**/*.local.*`, every lock file ethos creates
-(`.punt-labs/ethos/missions/**/*.lock`, which also matches
-`missions/.create.lock`; `.punt-labs/ethos/missions.jsonl.lock`;
-`.punt-labs/ethos/identities/*.yaml.lock`; and `*.lock` anywhere under
-`.punt-labs/local/ethos/`, such as the live-file locks at
-`internal/audit/paths.go:43,63`), and the temporary files
-writers create for an atomic rename. The ignore rule
-`.punt-labs/**/local/**` also covers the `record: blame` trace archive.
-`ethos enable`'s rules (`internal/enable/gitignore.go:68-93`) cover only
-`missions/**/*.lock`; this repository ignores `missions.jsonl.lock` by a
-hand-written `.gitignore` line and the identity locks not at all, so a
-consumer repository can commit both. `ethos enable` must write a rule for
-every class-4 pattern, each with a probe.
+**4. Never tracked, in any mode.** Repository locks, overlays, receipts,
+eligibility metadata, quarantine originals, scratch and temporaries physically
+belong under `S/.punt-labs/local/ethos/`. The shared local-zone exclusion covers
+both modes; `enable` maintains it, not source-tree lock/trace ignore exceptions.
+Preserve lock domains/order and quiesce old writers before relocating paths.
+The repository overlay is `local/ethos/identities/<handle>.ext/<ns>.local.yaml`
+under S's `.punt-labs/`; global overlay layout is unchanged (DES-057).
 
 **Opting in to the trace tier.** `ethos mission export <id> --full` writes
 one mission's per-mission class-3 files (delegation prompts,
-`reflections.yaml` and event-log chunks) from the archive to their
-tracked paths, through the redactor (DES-080). Audit chunks are per
+an aggregate `reflections.yaml` assembled from accepted per-round detail,
+and event-log chunks) to their tracked paths, through the redactor (DES-080).
+Audit chunks are per
 session, not per mission, and `--full` does not export them. `record:
-full` writes the class-3 files ethos writes to their tracked paths as
-they are written, audit chunks included, so audit chunks reach git only
-under `record: full`. Neither covers the live files or agent-written
-artifacts (above). The ignore rules follow the mode:
+full` adds eligible published copies, session audit chunks included. Neither
+covers live files as files, scratch, overlays, raw quarantine, agent artifacts or
+conversation transcripts. Full export explicitly promotes the selected mission's
+retained history regardless of its original mode, first sealing/snapshotting its
+unsealed tail locally. Missing expected history reports incompleteness. Existing
+immutable chunks are never rewritten. Export does not stage; use ordinary
+`git add`, never force-add. There are no mode-specific record-tree ignores.
 
-- Under `record: blame`, `ethos enable` writes ignore rules for the
-  tracked class-3 paths, so a file written there by an older binary is
-  not committed by accident. `export --full` still writes to those paths,
-  so its output is ignored; the command prints the `git add -f <paths>`
-  line that stages it. Export does not stage its output; only the pre-commit seal runs `git add` (`internal/audit/seal.go:411`). Once added, git tracks
-  the files despite the rules.
-- Under `record: full`, `ethos enable` omits those rules (except the
-  artifacts rule above). Changing `record` takes effect for the ignore
-  rules when `ethos enable` is re-run, which rewrites its block in
-  `.gitignore`; `ethos doctor` fails while the block does not match the
-  mode.
+Validate `record` once per request (each MCP call included), defaulting omitted
+values to `blame`. Invalid values fail visibly on CLI, hooks and MCP. Pass one
+immutable roots/policy snapshot through subordinate operations; never reread it
+mid-call or mutate a shared store's mode during concurrent requests. Mode changes
+are prospective, not consent to publish private history or change workflow guards.
 
 Plain `ethos mission export <id> [--dir]` keeps its current output
 (the contract and the final result) for publishing a mission elsewhere, and
-now goes through the redactor; existing callers, such as a workspace that
+uses the shipped DES-080 redactor; existing callers, such as a workspace that
 exports closed missions with `--dir`, are unaffected. For a repository that
-already tracks trace-tier files, `ethos doctor` prints the one-time
-`git rm --cached` command and does not run it.
+still tracks recognized legacy local state, diagnostics must distinguish it
+from intentionally published trace and report exact operator cleanup paths.
+Do not indiscriminately remove valid full-mode copies, explicit exports or
+past history.
+
+**Operator amendment: bounded legacy repair.** Restoring working code takes
+priority over lossless preservation of obsolete trace/runtime files. Legacy
+migration infrastructure is not required, and lossless legacy trace preservation
+is not a release guarantee or prerequisite for ordinary commits. The small
+`ethos repair` contract shows known obsolete files and a permanent legacy-detail
+deletion warning, then asks `Are you sure? [y/N]`; `--yes` explicitly confirms
+automation. This is an acceptance target, not a shipped-command claim. An
+operator may explicitly select cleanup after
+being warned that deleting the named obsolete paths can permanently lose old
+prompts, reflections, events and audit history. Blanket cleanup excludes shared
+identities, contracts, results, corrections, provenance and ADRs, private
+credentials, configuration, global data and arbitrary files; none may be silently
+erased. The existing shipped mission-migrate command is not expanded;
+intentional published copies and exports need explicit selection too. An optional
+cleanup must not invent decisions or corrections from partial evidence. This
+relaxes the earlier lossless-legacy-
+trace requirement only: essential new records and authority, new correct placement,
+ordinary commits and new-history retention across feature-worktree removal remain
+required. Quiesce writers before moving lock paths. No new storage-upgrade
+command, backfill guarantee or migration framework is required by this amendment.
 
 **The product says so.** The deposited guide (`internal/enable/guide/
-CLAUDE.md`) gains a "What ethos puts in git" section stating the four
-classes, that a regenerated `.claude/agents/` file is an expected change,
+CLAUDE.md`) states the storage/sharing contract and four classes,
+that a regenerated `.claude/agents/` file is an expected change,
 and that contracts and commands must not carry credentials (the redactor
 is a backstop). `prfaq.tex` is corrected to match.
+
+### Selected publication and squash provenance (acceptance pending)
+
+`ethos mission publish <ids>...` snapshots selected complete blame records under
+their locks in S, then installs immutable copies and a versioned manifest in C
+and C's actual index. Snapshot cuts are per mission, not repository-wide. Include
+all results, decisions, delegations, corrections, selected summary rows and ADRs
+linked by mission plus explicitly selected additional IDs. Inventory required and
+optional records; repair/refuse missing required summaries and refuse unknown
+kinds or conflicting identities. Preserve unrelated checkout/index content and
+rows. Use a private candidate index, verify it, then install under the actual
+index lock only if its captured starting state still matches. Report partial
+checkout installation separately. Revalidate at commit against the actual index,
+including alternate indices and partial-commit forms.
+
+Manifest associations are explicit mission/delegation tuples with path, source
+blob and ranges plus sufficient branch-derived evidence to survive branch-object
+deletion. Historical reads use the manifest-bearing commit. Blame lookup keeps
+the original filename/line from that blamed commit. Preserve ambiguous candidates;
+never choose the first ticket/delegation/write-set overlap. Candidate squash blobs
+must match the source snapshot or refuse and regenerate. Trailers are recorded
+associations, not authenticated authorship.
+
+The pending remote route is `ethos provenance message <ref>` to generate a squash
+body, then `gh pr merge --squash --match-head-commit SHA --body-file GENERATED`,
+followed by fetch and `ethos provenance verify <ref>` against the actual merge
+SHA. Local hooks do not execute on GitHub's squash server. A verification failure
+is failed provenance, not a hidden-warning success; see
+[merge example](docs/example/07-pr-and-merge.md). These command contracts are not
+release claims until real entry-point acceptance passes.
 
 ### Consequences
 
 - Under `record: blame`, class-2 files change only at mission, delegation
   and ADR lifecycle operations, never per tool call: mission create and
-  update, round advance (`contract.yaml`), result (`results.yaml`), close
+  update, accepted compact reflection decision and round advance (`contract.yaml`), result (`results.yaml`), close
   and abandon (`contract.yaml`, `missions.jsonl`), delegation spawn and
   stop, disclaim, write-set force-release (`record.yaml`,
   `contract.yaml`), correction (`corrections.yaml`), plain export, ADR
@@ -13268,17 +13737,20 @@ is a backstop). `prfaq.tex` is corrected to match.
   Class-1 files change when a person edits the identity graph or
   configuration, when `ethos enable` or `ethos seed` runs, or when the
   agent generator's input or the binary changes.
-- A teammate's clone shows blame, intent, outcome and corrections for every
-  mission, but not another developer's prompts, reflections, timeline or
-  tool-call trail. Shared forensics across machines is the job of a central
-  store (DES-081), not git.
+- A teammate's clone shows blame, intent, outcome and corrections for each
+  published and committed mission, but not another developer's prompts, reflections, timeline or
+  tool-call trail unless explicitly shared. A central store (DES-081) is proposed,
+  not required for explicit full sharing. An accepted
+  inline decision with unavailable prose must render “submitted, detail unavailable
+  here,” not an empty reflection list; malformed authority is an error/unknown.
 - Existing committed chunks stay in history (operator ruling 2026-10-23: no
-  history rewrite); new ones stop arriving.
+  history rewrite); default blame stops automatic trace commits, while explicit
+  sharing can add new published copies.
 - In the UI, the Corrections section reads `corrections.yaml`. The
-  timeline and delegation-prompt views read the local archive and show data
-  only on the machine that did the work, unless the mission was exported
-  with `--full` or the repository uses `record: full`. The audit view shows
-  data from other machines only under `record: full`.
+  timeline, prompt and audit views union local, published and supported legacy
+  sources independent of current mode. Another machine's detail is available
+  when previously shared; full mission export excludes session audits, while
+  eligible full-mode publication includes them. Unavailable detail must be explicit.
 
 ### Rejected alternatives
 
@@ -13298,7 +13770,9 @@ is a backstop). `prfaq.tex` is corrected to match.
 
 **Status**: Settled 2026-10-23, scope corrected 2026-10-24 after review.
 Bead `ethos-3e3f` (P1, security), mission `m-2026-10-23-025`.
-Implementation in progress.
+Shipped in v4.20.0 (`CHANGELOG.md`). DES-079's new destinations, repo ADRs,
+publication/export sinks and legacy-tail handling still require final acceptance;
+the shipped redactor is not evidence those repair obligations passed.
 
 ### Context
 
@@ -13556,3 +14030,58 @@ at one company.
   description of the file layout until then.
 - Ethos 1.x completes DES-079 and DES-080 on the file layout first, so the
   2.0 migration starts from a small, documented tracked set.
+
+---
+
+## DES-082: Native OpenCode development workspace (SETTLED)
+
+**Status:** Accepted by the operator 2026-11-04 for the Ethos development
+repository. This is harness setup, not implementation of the DES-078 product
+adapter or the DES-079 storage repair.
+
+**Context.** OpenCode V2 discovers `AGENTS.md` and native configuration rather
+than interpreting Claude Code's `CLAUDE.md` imports. This repository's root
+`AGENTS.md` was the full consumer reference, while development policy was behind
+those imports. The active OpenCode location had no configured MCP servers and
+only built-in agents. Points provided useful working examples, but its project
+roles, model routing and historical OpenCode guidance were not this repository's
+contract.
+
+**Decision.** Keep one concise development entry point in `AGENTS.md`, load the
+native workflow explicitly through root `opencode.json`, and retain the consumer
+reference in `docs/agent-guide.md`. Keep the required deposited-tool imports in
+`CLAUDE.md` for compatibility. Native `.opencode/agents/` definitions carry
+explicit model variants and role permissions; on-demand skills and commands
+provide product, formal, knowledge, collaboration and release workflows.
+
+The leader uses GPT-6 Astra/high; implementation and executable QA use
+GPT-6.1 Sol/high; independent review, formal and product judgment use
+GPT-6 Astra/high; bounded research uses the available GPT-5.6 Terra/medium.
+All use the existing Bifrost Responses provider. Project model metadata and
+reasoning variants augment that provider without changing its endpoint or
+credential source. The gateway's live `model-provider list` catalog, not the
+unrelated native OpenAI catalog, determines available routes. An initial direct
+OpenAI pin sent the host's Bifrost virtual key to the wrong provider; the failed
+tool turn exposed it, and the configuration was corrected. Model credentials
+remain user-owned. An agent listed in a catalog is not verified until a real
+child session uses the intended model and completes its tool call.
+
+For the authorized repair, Ethos is the product under test and its mission
+orchestration is optional. Reusing specialist prompts does not require routing
+every task through the product being repaired. Native MCP connectivity does not
+claim Claude lifecycle-hook, automatic delegation-audit, or fork parity.
+Circuit is also optional and is not on this repair's critical path.
+
+**Verification.** An offline configuration gate runs in normal checks and CI.
+Separate live checks verify tool readiness and real child-session behavior;
+public CI does not require workstation credentials or model calls. Temporary
+verification evidence belongs in `.tmp/opencode/`. The existing product
+`make doctor` remains a product check. The storage repair retains its separate
+product, release and repository-rollout acceptance gates.
+
+**Alternatives considered.** Loading all consumer and design references on
+every turn obscures the development contract and adds context cost. Copying
+Points wholesale imports different models, workflow policies and stale runtime
+assumptions. Waiting for the full DES-078 adapter would make harness setup
+depend on another product feature. Native configuration plus measured smoke
+checks provides the required development capability directly.

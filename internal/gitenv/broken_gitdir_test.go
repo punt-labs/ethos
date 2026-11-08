@@ -56,3 +56,18 @@ func TestTraceVariablesDoNotTurnUnsetIntoFailure(t *testing.T) {
 		})
 	}
 }
+
+// IsUnacceptedDotGit recognizes a .git git refused, in every wording.
+func TestIsUnacceptedDotGitAnyWording(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"fatal: not a git repository (or any of the parent directories): .git": true,
+		"fatal: not a git repository: /nonexistent":                            true,
+		"fatal: not a git repository: (null)":                                  true,
+		"fatal: gitfile does not point to a valid repository: /x/.git":         true,
+		"fatal: not a regular file: '/x/.git'":                                 true,
+		"fatal: detected dubious ownership in repository at '/x'":              false,
+		"": false,
+	} {
+		assert.Equal(t, want, gitenv.IsUnacceptedDotGit(msg), msg)
+	}
+}

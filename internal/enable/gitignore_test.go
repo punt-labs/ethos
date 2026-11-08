@@ -1,11 +1,14 @@
 package enable
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
@@ -13,7 +16,7 @@ import (
 // DES-058 live-session zone, the mission runtime locks and the staging names a
 // killed writer leaves.
 const (
-	liveZonePattern = ".punt-labs/**/local/**"
+	liveZonePattern = LocalIgnoreRule
 	missionLockPat  = ".punt-labs/ethos/missions/**/*.lock"
 	stagingPat      = ".punt-labs/**/*.ethos-tmp*"
 )
@@ -27,7 +30,7 @@ func TestEnableAppendsGitignoreRuntimeZones(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 	got := readFile(t, filepath.Join(dir, ".gitignore"))
-	for _, want := range []string{liveZonePattern, missionLockPat} {
+	for _, want := range []string{liveZonePattern} {
 		if !strings.Contains(got, want) {
 			t.Errorf(".gitignore missing runtime pattern %q; got:\n%s", want, got)
 		}
@@ -49,8 +52,8 @@ func TestEnableGitignoreIdempotent(t *testing.T) {
 	if n := strings.Count(got, liveZonePattern); n != 1 {
 		t.Errorf("live-zone pattern appears %d times, want 1; got:\n%s", n, got)
 	}
-	if n := strings.Count(got, missionLockPat); n != 1 {
-		t.Errorf("mission-lock pattern appears %d times, want 1; got:\n%s", n, got)
+	if n := strings.Count(got, missionLockPat); n != 0 {
+		t.Errorf("mission-lock pattern appears %d times, want 0; got:\n%s", n, got)
 	}
 }
 
@@ -67,7 +70,7 @@ func TestEnableGitignoreIndentedNearDuplicateNotCoverage(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 	got := readFile(t, filepath.Join(dir, ".gitignore"))
-	for _, want := range []string{liveZonePattern, missionLockPat} {
+	for _, want := range []string{liveZonePattern} {
 		if !hasExactLine(got, want) {
 			t.Errorf("unindented runtime pattern %q not appended; got:\n%s", want, got)
 		}
@@ -105,8 +108,8 @@ func TestEnableProtectsNonEthosSecretsUnderLegacyNarrowRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	secrets := []string{
-		".punt-labs/vox/vox.local.md",
-		".punt-labs/beadle/creds.local.json",
+		".punt-labs/local/vox/vox.local.md",
+		".punt-labs/local/beadle/creds.local.json",
 	}
 	for _, rel := range secrets {
 		p := filepath.Join(dir, rel)
@@ -176,10 +179,9 @@ func TestEnableCoversTopLevelLiveZone(t *testing.T) {
 
 func TestEnableGitignoreBroaderRulesAreCoverage(t *testing.T) {
 	dir := gitRepo(t)
-	// None of these is a pattern enable writes, but each excludes the paths
-	// enable cares about. Asking git rather than string-matching one blessed
-	// spelling is what keeps enable from appending a redundant near-duplicate.
-	initial := ".punt-labs/**/local/**\n.punt-labs/**/*.lock\n.punt-labs/**/*.ethos-tmp*\n.punt-labs/**/*.local.*\n"
+	// This alternate directory rule excludes local itself, not just its contents.
+	// Asking Git keeps enable from appending a redundant near-duplicate.
+	initial := ".punt-labs/**/local/\n.punt-labs/**/*.lock\n.punt-labs/**/*.ethos-tmp*\n.punt-labs/**/*.local.*\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
@@ -211,7 +213,7 @@ func TestLocalIgnored(t *testing.T) {
 		{"empty repo", "", false},
 		{"unrelated rules", "*.log\nbuild/\n", false},
 		{"canonical rule", LocalIgnoreRule + "\n", true},
-		{"broader subtree rule", ".punt-labs/**\n", true},
+		{"ambiguous broader subtree needs canonical rule", ".punt-labs/**\n", false},
 		{"indented rule is a different pattern", "  " + LocalIgnoreRule + "\n", false},
 
 		// Each of these excludes part of what the canonical rule excludes and
@@ -219,10 +221,10 @@ func TestLocalIgnored(t *testing.T) {
 		{"legacy narrow rule covers only ethos yaml", ".punt-labs/ethos/**/*.local.yaml\n", false},
 		{"yaml-only rule leaves other extensions", ".punt-labs/**/*.local.yaml\n", false},
 		{"ethos-only rule leaves other tools", ".punt-labs/ethos/**/*.local.*\n", false},
-		{"nested-only rule leaves the top level", ".punt-labs/*/**/*.local.*\n", false},
+		{"nested-only rule leaves the top level", ".punt-labs/local/*/**\n", false},
 
 		// A pattern that matches but is negated afterwards excludes nothing.
-		{"negation defeats the canonical rule", LocalIgnoreRule + "\n!.punt-labs/vox/**\n", false},
+		{"negation defeats the canonical rule", ".punt-labs/local/**\n!.punt-labs/local/probe.env\n", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -248,15 +250,17 @@ func TestLocalIgnored(t *testing.T) {
 // there. It must say so rather than append a second copy on every run.
 func TestEnableReportsDefeatedRule(t *testing.T) {
 	dir := gitRepo(t)
-	initial := ".punt-labs/**/local/**\n" + missionLockPat + "\n" + stagingPat + "\n" +
-		LocalIgnoreRule + "\n!.punt-labs/vox/**\n"
+	initial := LocalIgnoreRule + "\n!.punt-labs/local/\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := Enable(dir)
-	if err != nil {
-		t.Fatalf("Enable: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "still stageable") {
+		t.Fatalf("Enable = %v; want defeated-protection error", err)
+	}
+	if exists(filepath.Join(dir, markerRel)) {
+		t.Error("marker written despite defeated protection")
 	}
 	if got := readFile(t, path); got != initial {
 		t.Errorf(".gitignore rewritten with a duplicate line:\nwant:\n%s\ngot:\n%s", initial, got)
@@ -321,36 +325,63 @@ func TestLocalIgnoredRejectsUntravelingSources(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, ".punt-labs", ".gitignore"),
-			[]byte("*.local.*\n"), 0o644); err != nil {
+			[]byte("local/\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		assertLocalIgnored(t, dir, true)
 	})
 }
 
-// With no git to ask, the literal canonical line in the file is all there is
-// to go on — and nothing else counts, so ethos writes the rule rather than
-// guessing that some other spelling covers it.
+// With no Git to ask, a literal line cannot prove effective protection. Both
+// readers and maintainers fail closed without changing or creating ignore files.
 func TestLocalIgnoredFallsBackWhenGitCannotAnswer(t *testing.T) {
 	cases := []struct {
 		name      string
 		gitignore string
-		want      bool
 	}{
-		{"canonical line present", LocalIgnoreRule + "\n", true},
-		{"another spelling", ".punt-labs/**\n", false},
-		{"nothing", "*.log\n", false},
+		{"canonical line present", LocalIgnoreRule + "\n"},
+		{"defeated canonical line", LocalIgnoreRule + "\n!.punt-labs/local/\n"},
+		{"another spelling", ".punt-labs/**\n"},
+		{"no canonical line", "*.log\n"},
+		{"absent ignore file", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dir := gitRepo(t)
-			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(c.gitignore), 0o644); err != nil {
+			path := filepath.Join(dir, ".gitignore")
+			if c.gitignore != "" {
+				if err := os.WriteFile(path, []byte(c.gitignore), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p, err := layout.NewRepository(dir, dir, layout.RecordBlame)
+			if err != nil {
 				t.Fatal(err)
 			}
 			// No git on PATH: exec cannot resolve the binary, so check-ignore
 			// never runs.
 			t.Setenv("PATH", filepath.Join(t.TempDir(), "empty"))
-			assertLocalIgnored(t, dir, c.want)
+			covered, err := LocalIgnored(dir)
+			if covered || !errors.Is(err, exec.ErrNotFound) {
+				t.Errorf("LocalIgnored = %v, %v; want false and missing-Git error", covered, err)
+			}
+			added, err := EnsureLocalIgnored(dir, p)
+			if added || !errors.Is(err, exec.ErrNotFound) {
+				t.Errorf("EnsureLocalIgnored = %v, %v; want no write and missing-Git error", added, err)
+			}
+			if _, _, err := ensureGitignore(dir, p); !errors.Is(err, exec.ErrNotFound) {
+				t.Errorf("ensureGitignore = %v; want missing-Git error", err)
+			}
+			if c.gitignore == "" {
+				if exists(path) {
+					t.Error("missing-Git refusal created .gitignore")
+				}
+			} else if got := readFile(t, path); got != c.gitignore {
+				t.Errorf("missing-Git refusal changed bytes: got %q, want %q", got, c.gitignore)
+			}
+			if exists(filepath.Join(dir, markerRel)) {
+				t.Error("missing-Git refusal created a marker")
+			}
 		})
 	}
 }
@@ -467,7 +498,7 @@ func TestEnableGitignorePreservesMode(t *testing.T) {
 	if !strings.HasPrefix(got, "*.log\n") {
 		t.Errorf("existing content not preserved; got:\n%s", got)
 	}
-	if !strings.Contains(got, liveZonePattern) || !strings.Contains(got, missionLockPat) {
+	if !strings.Contains(got, liveZonePattern) || strings.Contains(got, missionLockPat) {
 		t.Errorf("runtime patterns not appended; got:\n%s", got)
 	}
 }
@@ -504,7 +535,7 @@ func TestEnableCreatesGitignoreWhenMissing(t *testing.T) {
 		t.Fatal(".gitignore not created when absent")
 	}
 	got := readFile(t, filepath.Join(dir, ".gitignore"))
-	for _, want := range []string{liveZonePattern, missionLockPat} {
+	for _, want := range []string{liveZonePattern} {
 		if !strings.Contains(got, want) {
 			t.Errorf("created .gitignore missing runtime pattern %q; got:\n%s", want, got)
 		}
@@ -513,8 +544,9 @@ func TestEnableCreatesGitignoreWhenMissing(t *testing.T) {
 
 func TestEnableGitignoreSymlinkPreserved(t *testing.T) {
 	dir := gitRepo(t)
-	// A dotfile manager symlinks .gitignore to a file it owns elsewhere. enable
-	// must update the real target and leave the symlink in place.
+	// The writer supports symlink targets, but Git rejects a symlinked ignore
+	// source. Enable must refuse before reading it, preserving both link and
+	// target, without a marker.
 	realDir := t.TempDir()
 	realPath := filepath.Join(realDir, "shared.gitignore")
 	if err := os.WriteFile(realPath, []byte("*.log\n"), 0o644); err != nil {
@@ -524,8 +556,11 @@ func TestEnableGitignoreSymlinkPreserved(t *testing.T) {
 	if err := os.Symlink(realPath, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := Enable(dir); err != nil {
-		t.Fatalf("Enable: %v", err)
+	if _, err := Enable(dir); err == nil || !strings.Contains(err.Error(), "is not a regular file (symlinks are not allowed); refusing to read") {
+		t.Fatalf("Enable = %v; want early symlinked-ignore refusal", err)
+	}
+	if exists(filepath.Join(dir, markerRel)) {
+		t.Error("marker written despite Git-rejected ignore source")
 	}
 	fi, err := os.Lstat(link)
 	if err != nil {
@@ -534,12 +569,12 @@ func TestEnableGitignoreSymlinkPreserved(t *testing.T) {
 	if fi.Mode()&os.ModeSymlink == 0 {
 		t.Error(".gitignore symlink was replaced with a regular file")
 	}
-	got := readFile(t, realPath)
-	if !strings.HasPrefix(got, "*.log\n") {
-		t.Errorf("real target content not preserved; got:\n%s", got)
+	if target, err := os.Readlink(link); err != nil || target != realPath {
+		t.Errorf("symlink target = %q, %v; want %q", target, err, realPath)
 	}
-	if !hasExactLine(got, liveZonePattern) || !hasExactLine(got, missionLockPat) {
-		t.Errorf("runtime patterns not written to the real target; got:\n%s", got)
+	got := readFile(t, realPath)
+	if got != "*.log\n" {
+		t.Errorf("real target bytes changed despite refusal; got:\n%s", got)
 	}
 }
 
@@ -547,7 +582,7 @@ func TestEnableGitignoreCRLFIdempotent(t *testing.T) {
 	dir := gitRepo(t)
 	// A CRLF .gitignore already covering the zones must be a no-op on enable —
 	// the trailing \r must not defeat the presence check and cause a duplicate.
-	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n" + stagingPat + "\r\n" + LocalIgnoreRule + "\r\n"
+	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + LocalIgnoreRule + "\r\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
@@ -572,7 +607,7 @@ func TestEnableGitignoreCRLFAppendsCRLF(t *testing.T) {
 	}
 	got := readFile(t, path)
 	// The appended block must use the file's CRLF endings, not bare LF.
-	for _, want := range []string{gitignoreMarker + "\r\n", liveZonePattern + "\r\n", missionLockPat + "\r\n"} {
+	for _, want := range []string{gitignoreMarker + "\r\n", liveZonePattern + "\r\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("appended block not CRLF-terminated (%q missing); got:\n%q", want, got)
 		}
@@ -590,9 +625,9 @@ func TestEnableIgnoresLeftoverStagingNames(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 	for _, rel := range []string{
-		".punt-labs/ethos/identities/x.yaml.ethos-tmp",
-		".punt-labs/ethos/.ethos-tmp",
-		".punt-labs/ethos/missions/.m-1.migrate.ethos-tmp-123/m.yaml",
+		".punt-labs/local/ethos/tmp/x.yaml.ethos-tmp",
+		".punt-labs/local/ethos/tmp/.ethos-tmp",
+		".punt-labs/local/ethos/tmp/.m-1.migrate.ethos-tmp-123/m.yaml",
 	} {
 		p := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

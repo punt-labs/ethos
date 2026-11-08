@@ -68,6 +68,7 @@ func (h *Handler) missionTool() mcplib.Tool {
 		mcplib.WithString("since",
 			mcplib.Description("Optional RFC3339 timestamp for log; events on or after the cutoff are included."),
 		),
+		callerOption(),
 	)
 }
 
@@ -175,7 +176,7 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	// DES-076 round 3 keys this per mission (review finding C1,
 	// m-2026-09-08-004 round 2) — it no longer overwrites a DIFFERENT
 	// mission's own pending dispatch the way the old single slot did.
-	if warnings := h.bindDispatchedMission(c.MissionID, c.Worker); len(warnings) > 0 {
+	if warnings := h.bindDispatchedMission(req, c.MissionID, c.Worker); len(warnings) > 0 {
 		return jsonResult(createMissionResponse{Contract: &c, Warnings: warnings})
 	}
 	return jsonResult(&c)
@@ -229,14 +230,14 @@ type createMissionResponse struct {
 // into the result's warnings array -- MCP has no stderr channel to
 // print the CLI's line to, so this is the only signal an MCP-driven
 // leader gets that the binding exists and which worker it is scoped to.
-func (h *Handler) bindDispatchedMission(missionID, worker string) []string {
+func (h *Handler) bindDispatchedMission(req mcplib.CallToolRequest, missionID, worker string) []string {
 	if h.sessionStore == nil {
 		return []string{
 			"binding mission: no session store wired -- pending-dispatch entry not written; " +
 				"the worker's matching Agent() spawn will not be attributed to this mission",
 		}
 	}
-	sessionID, _, err := resolve.SessionID(h.sessionStore)
+	sessionID, err := h.callerSessionID(req)
 	if err != nil {
 		// Mission 005 finding A: distinguish the ordinary "no session was
 		// ever expected" case (resolve.ErrNotUnderClaudeCode) from a
@@ -426,9 +427,9 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
-	result, err := h.missionStore.Close(id, status)
+	result, outcome, err := h.missionStore.CloseWithOutcome(id, status)
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to close mission: %v", err)), nil
+		return missionMutationError(fmt.Sprintf("failed to close mission: %v", err), outcome, nil)
 	}
 	payload := map[string]any{
 		"mission_id": id,
@@ -436,13 +437,16 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 		"round":      result.Round,
 		"verdict":    result.Verdict,
 	}
+	if len(outcome.Warnings) > 0 {
+		payload["warnings"] = outcome.Warnings
+	}
 	// Parity with the CLI close: a terminal transition ends this
 	// session's work on the mission, so clear its sidecars. Closing via
 	// MCP used to skip this, leaving the active-mission sidecar in place
 	// and the commit-msg hook tagging later missionless commits with the
 	// closed mission (ethos-jawp).
-	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
-		payload["warnings"] = warnings
+	if problems := h.clearClosedMissionBindings(req, id); len(problems) > 0 {
+		return bindingsNotCleared(id, status, problems, outcome)
 	}
 	return jsonResult(payload)
 }
@@ -496,14 +500,14 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 		}
 		disclaimed = append(disclaimed, delegationID)
 	}
-	c, err := h.missionStore.Abandon(id, reason)
+	c, outcome, err := h.missionStore.AbandonWithOutcome(id, reason)
 	if err != nil {
 		if len(disclaimed) > 0 {
-			return mcplib.NewToolResultError(fmt.Sprintf(
+			return missionMutationError(fmt.Sprintf(
 				"failed to abandon mission: %v (disclaimed and cannot be undone despite the failed abandon: %s)",
-				err, strings.Join(disclaimed, ", "))), nil
+				err, strings.Join(disclaimed, ", ")), outcome, nil)
 		}
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to abandon mission: %v", err)), nil
+		return missionMutationError(fmt.Sprintf("failed to abandon mission: %v", err), outcome, nil)
 	}
 	payload := map[string]any{
 		"mission_id": id,
@@ -511,23 +515,62 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 		"reason":     reason,
 		"disclaimed": disclaim,
 	}
+	if len(outcome.Warnings) > 0 {
+		payload["warnings"] = outcome.Warnings
+	}
 	// Parity with close: a terminal transition ends this session's work
 	// on the mission, so clear its sidecars.
-	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
-		payload["warnings"] = warnings
+	if problems := h.clearClosedMissionBindings(req, id); len(problems) > 0 {
+		return bindingsNotCleared(id, c.Status, problems, outcome)
 	}
 	return jsonResult(payload)
 }
 
+// bindingsNotCleared is the error result for a mission that reached a terminal
+// status but whose session bindings could not be cleared. The status change is
+// on disk and stands; the result says so and is an error, because a sidecar
+// left behind keeps stamping the closed mission on later commits, which a
+// warning in a successful result does not stop anyone from missing.
+func bindingsNotCleared(missionID, status string, problems []string, outcome mission.MutationOutcome) (*mcplib.CallToolResult, error) {
+	return missionMutationError(fmt.Sprintf(
+		"mission %s is %s, but its session bindings were not cleared and it may still stamp commit trailers: %s",
+		missionID, status, strings.Join(problems, "; ")), outcome, map[string]any{
+		"mission_id": missionID,
+		"status":     status,
+	})
+}
+
+// missionMutationError keeps ordinary errors unchanged unless there is accepted
+// state or prior accepted-recovery work to report. JSON diagnostics never turn
+// the tool error into success; a refused mutation supplies no terminal status.
+func missionMutationError(message string, outcome mission.MutationOutcome, payload map[string]any) (*mcplib.CallToolResult, error) {
+	if payload == nil && len(outcome.Warnings) == 0 {
+		return mcplib.NewToolResultError(message), nil
+	}
+	if payload == nil {
+		payload = make(map[string]any)
+	}
+	payload["error"] = message
+	if len(outcome.Warnings) > 0 {
+		payload["warnings"] = outcome.Warnings
+	}
+	result, err := jsonResult(payload)
+	if err != nil {
+		return nil, err
+	}
+	result.IsError = true
+	return result, nil
+}
+
 // clearClosedMissionBindings clears the calling session's mission
-// sidecars for a mission that just closed, and returns one warning per
+// sidecars for a mission that just closed, and returns one problem per
 // genuine failure — nil when there was nothing to do.
 //
-// The close is already on disk and cannot be undone, so a cleanup
-// failure must not turn the call into an error result. It rides back in
-// the successful result's `warnings` array instead, which the formatter
-// renders under a Warnings header: the mission closed, but a sidecar may
-// still be tagging commits.
+// The close is already on disk and cannot be undone, but a cleanup failure
+// is not advisory: a sidecar left behind keeps tagging commits with a
+// closed mission. The caller turns any problem into an error result
+// (bindingsNotCleared), including a Claude Code call that declared no
+// caller (errNoCaller), whose session cannot be known.
 //
 // No session in context means no sidecars to clear, which is ordinary
 // and silent. A session that WAS expected but could not be resolved
@@ -536,11 +579,11 @@ func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.Call
 // on a mission that is no longer open, with no signal to the caller at
 // all -- collapsing both sentinels the same way bindDispatchedMission
 // used to.
-func (h *Handler) clearClosedMissionBindings(missionID string) []string {
+func (h *Handler) clearClosedMissionBindings(req mcplib.CallToolRequest, missionID string) []string {
 	if h.sessionStore == nil {
 		return nil
 	}
-	sessionID, _, err := resolve.SessionID(h.sessionStore)
+	sessionID, err := h.callerSessionID(req)
 	if err != nil {
 		if errors.Is(err, resolve.ErrNotUnderClaudeCode) {
 			return nil
@@ -599,15 +642,31 @@ func (h *Handler) handleReflectMission(req mcplib.CallToolRequest) (*mcplib.Call
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
-	if err := h.missionStore.AppendReflection(id, r); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to record reflection: %v", err)), nil
+	var outcome mission.OperationResult
+	if _, repository := h.missionStore.RepositoryPolicy(); repository {
+		outcome, err = h.missionStore.ApplyReflection(id, r)
+	} else {
+		err = h.missionStore.AppendReflection(id, r)
 	}
-	return jsonResult(map[string]any{
+	warnings := mission.MutationOutcome{Warnings: outcome.Diagnostics}
+	if err != nil {
+		var payload map[string]any
+		if len(warnings.Warnings) > 0 {
+			payload = map[string]any{"mission_id": id, "outcome": outcome}
+		}
+		return missionMutationError(fmt.Sprintf("failed to record reflection: %v", err), warnings, payload)
+	}
+	payload := map[string]any{
 		"mission_id":     id,
 		"round":          r.Round,
 		"recommendation": r.Recommendation,
 		"created_at":     r.CreatedAt,
-	})
+		"outcome":        outcome,
+	}
+	if len(warnings.Warnings) > 0 {
+		payload["warnings"] = warnings.Warnings
+	}
+	return jsonResult(payload)
 }
 
 // handleReflectionsMission returns the round-by-round reflection
@@ -622,12 +681,9 @@ func (h *Handler) handleReflectionsMission(req mcplib.CallToolRequest) (*mcplib.
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
-	rs, err := h.missionStore.LoadReflections(id)
+	rs, err := h.missionStore.ReadReflections(id)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to load reflections: %v", err)), nil
-	}
-	if rs == nil {
-		rs = []mission.Reflection{}
 	}
 	return jsonResult(rs)
 }
@@ -657,14 +713,18 @@ func (h *Handler) handleAdvanceMission(req mcplib.CallToolRequest) (*mcplib.Call
 		}
 		actor = c.Leader
 	}
-	newRound, err := h.missionStore.AdvanceRound(id, actor)
+	newRound, outcome, err := h.missionStore.AdvanceRoundWithOutcome(id, actor)
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to advance mission: %v", err)), nil
+		return missionMutationError(fmt.Sprintf("failed to advance mission: %v", err), outcome, nil)
 	}
-	return jsonResult(map[string]any{
+	payload := map[string]any{
 		"mission_id":    id,
 		"current_round": newRound,
-	})
+	}
+	if len(outcome.Warnings) > 0 {
+		payload["warnings"] = outcome.Warnings
+	}
+	return jsonResult(payload)
 }
 
 // handleResultMission parses the result YAML and appends it to the
@@ -693,16 +753,21 @@ func (h *Handler) handleResultMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
-	if err := h.missionStore.AppendResult(id, r); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to record result: %v", err)), nil
+	outcome, err := h.missionStore.AppendResultWithOutcome(id, r)
+	if err != nil {
+		return missionMutationError(fmt.Sprintf("failed to record result: %v", err), outcome, nil)
 	}
-	return jsonResult(map[string]any{
+	payload := map[string]any{
 		"mission_id": id,
 		"round":      r.Round,
 		"verdict":    r.Verdict,
 		"confidence": r.Confidence,
 		"created_at": r.CreatedAt,
-	})
+	}
+	if len(outcome.Warnings) > 0 {
+		payload["warnings"] = outcome.Warnings
+	}
+	return jsonResult(payload)
 }
 
 // handleResultsMission returns the round-by-round result log for a
@@ -793,19 +858,19 @@ func (h *Handler) handleCorrectMission(req mcplib.CallToolRequest) (*mcplib.Call
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
 
-	if err := h.missionStore.Correct(id, *c); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to record correction: %v", err)), nil
+	outcome, err := h.missionStore.CorrectWithOutcome(id, *c)
+	if err != nil {
+		return missionMutationError(fmt.Sprintf("failed to record correction: %v", err), outcome, nil)
 	}
-	// Parity with the CLI: seal the checkout's mission-log tail so the
+	// Parity with the CLI: seal the canonical store's mission-log tail so the
 	// correction is durable on disk even if no commit immediately
 	// follows. Best-effort — the correction is already recorded.
-	var warnings []string
-	if loc := resolve.Roots(); loc.CheckoutErr != nil {
-		warnings = append(warnings, fmt.Sprintf("sealing mission log: locating the checkout: %v", loc.CheckoutErr))
-	} else if repoRoot := loc.Checkout; repoRoot != "" {
-		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
-			warnings = append(warnings, fmt.Sprintf("sealing mission log: %v", sErr))
+	if p, ok := h.missionStore.RepositoryPolicy(); ok {
+		if _, sErr := hook.SealMissionWithPolicy(p, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
+			outcome.Warnings = append(outcome.Warnings, fmt.Sprintf("sealing mission log: %v", sErr))
 		}
+	} else {
+		outcome.Warnings = append(outcome.Warnings, "sealing mission log: repository policy unavailable")
 	}
 	payload := map[string]any{
 		"mission_id": id,
@@ -813,8 +878,8 @@ func (h *Handler) handleCorrectMission(req mcplib.CallToolRequest) (*mcplib.Call
 		"round":      c.Round,
 		"author":     c.Author,
 	}
-	if len(warnings) > 0 {
-		payload["warnings"] = warnings
+	if len(outcome.Warnings) > 0 {
+		payload["warnings"] = outcome.Warnings
 	}
 	return jsonResult(payload)
 }

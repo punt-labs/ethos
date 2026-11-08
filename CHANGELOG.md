@@ -7,6 +7,257 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.21.0] - 2026-11-07
+
+### Added
+
+- `ethos mission publish` snapshots complete selected blame records into the
+  invoking checkout and its actual Git index. Immutable provenance manifests,
+  `ethos provenance message` and `ethos provenance verify` preserve source
+  associations through squash merges and fresh clones. The installed pre-commit
+  hook verifies newly staged manifests against the committing index.
+- `ethos mission export --full` explicitly exports retained mission prompts,
+  reflections and event history, including unsealed tails. It reports missing
+  expected history and excludes session audits, private overlays and agent
+  scratch. Plain export remains contract plus final result; neither export stages
+  files.
+- `ethos repair` inventories and permanently deletes a bounded set of obsolete
+  repository trace/runtime files after default-no terminal confirmation or
+  explicit `--yes`. It preserves shared authority, credentials, current local
+  data, current publications/exports and arbitrary files. It performs no backup,
+  migration, authority backfill or Git-index changes. Windows supports inventory
+  but refuses destructive repair.
+
+### Changed
+
+- Repository runtime data now belongs under the canonical shared store's
+  `.punt-labs/local/ethos/`: live streams, retained archives, private identity
+  overlays, locks, receipts, scratch and atomic staging. Linked worktrees retain
+  their source deposits and publication/index effects without owning the only
+  copy of local history.
+- Default `record: blame` sealing retains trace locally without querying or
+  changing the index. `record: full` adds publication copies according to each
+  entry's captured consent; switching modes does not promote older private
+  history. Invalid recording policy refuses repository operations instead of
+  falling back to global storage.
+- Mandatory reflection decisions and correction authority are shared records.
+  Required events persist before acceptance; optional prose/archive failures do
+  not revoke an accepted decision or block otherwise permitted lifecycle progress.
+  Readers distinguish unavailable detail from an unsubmitted decision.
+- Repository ADR commands use repository-owned records with repo-first reads,
+  redaction and supported global fallback. Repository-local extension overlays
+  use the canonical local tree; legacy siblings remain read-only and require
+  explicit credential-preserving operator reconciliation.
+
+### Fixed
+
+- Commands and MCP requests retain one configuration/root snapshot through
+  subordinate operations, including setup, team selection, agent generation,
+  lifecycle sealing and content validation.
+- Agent generation and doctor share deterministic output plans. Doctor reports
+  exact generated/installed drift and misplaced runtime files; multiple roles
+  for one identity no longer produce an impossible currency check.
+- Git hooks create no discovery temporary files. Commit-message updates render
+  trailers through Git and stage under the shared local root before atomic
+  installation, preserving quoted body text and existing trailers without an
+  append or cross-device copy fallback.
+- Plugin release preparation handles quoted paths, and development restoration
+  finds the correct pre-release snapshot after a squash merge.
+
+## [4.20.4] - 2026-11-03
+
+### Security
+
+- Ethos no longer auto-approves tool calls. The PreToolUse hook answered
+  `permissionDecision: "allow"` for every call it did not deny, and in Claude
+  Code "allow" approves a call without asking, past the user's own permission
+  checks, in every repo with ethos hooks installed (a Bash command Claude Code
+  refused ran with the hooks on). A pass-through now carries no
+  `permissionDecision`, so Claude Code's own rules decide. `deny` is unchanged:
+  verifier allowlists and mission preconditions still refuse.
+
+- The MCP server no longer answers a Claude Code call whose caller nobody
+  declared. With the PreToolUse hook missing, disabled, killed
+  (`~/.punt-hooks-kill`) or unable to declare a caller, `identity whoami`,
+  `session roster`, `join`, `leave` and `iam` without a `session_id`, mission
+  binding, and the `doctor` Human identity row fell back to the environment and
+  the process tree, which the server shares with every session it outlives, and
+  could answer with another session's identity and no error. They now return
+  "Claude Code call arrived without _caller: the ethos PreToolUse hook did not
+  declare the caller (is it installed, enabled, and not killed?)". An explicit
+  `session_id` on `roster`, `join` and `leave` still works, and a client that is
+  not Claude Code keeps the old chain.
+- The PreToolUse hook denies a call to an ethos MCP tool when it cannot read or
+  parse the payload or a step fails, naming the cause, instead of exiting with
+  an error and no output (which let the call through with no caller declared).
+
+### Fixed
+
+- Closing or abandoning a mission over MCP returns an error result, not a
+  warning in a successful one, when its session bindings could not be cleared
+  (including a Claude Code call with no declared caller). The status change
+  stands; the result says so, and that the closed mission may still stamp commit
+  trailers.
+- A hook that stalled or failed while reading its payload was indistinguishable
+  from one given no input. `ReadInput` now returns an error wrapping
+  `ErrInputTimeout` (with the bytes read) when the deadline fires, and an error
+  for a read failure other than end of input, and treats only a complete JSON
+  object as a whole payload. The hook wrappers append
+  `ethos session-start: stdin read timed out after 10s (N bytes)` (with their
+  own hook's name) to `hook-errors.log` when their own read times out.
+- Hooks wait up to 10 seconds, as one overall deadline, for Claude Code's
+  payload instead of one second with a tenth-of-that gap between chunks, so a
+  writer that pauses mid-payload no longer truncates a large Edit.
+
+- The MCP identity and session tools work under Claude Code. Claude Code gives
+  MCP servers no `CLAUDE_PID`, so `identity whoami`, `session roster` and `iam`
+  without a `session_id`, mission binding, and the `doctor` Human identity row
+  failed with "cannot identify the calling session". The PreToolUse hook now
+  declares the caller on every ethos MCP call (`_caller`: the payload's
+  `session_id`, and its `agent_id` for a subagent or the leader's corroborated
+  `CLAUDE_PID`), and the server resolves it from the exact roster participant,
+  never from the environment. A subagent resolves to its own persona. See
+  `docs/claude-code-mcp-identity.md`.
+- MCP calls from a nested `claude -p` resolved the outer session. The nested
+  session's MCP server inherited the outer `CLAUDE_PID`, corroborated it, and
+  returned the outer roster with no error. The caller now comes from the hook
+  payload's own `session_id`.
+- Hook wrappers truncated payloads over 8 KiB. A writer that paused after its
+  first 8 KiB left `read -r -t 1` with a partial line, and `hook-errors.log`
+  filled with `invalid JSON input (8192 bytes)`; a multi-line payload was cut at
+  its first newline. The wrappers still read stdin in bash and hand ethos a
+  fresh pipe (DES-029: Go hung on the fd Claude Code's `/bin/sh` passes down,
+  on Linux), but now read the whole payload, waiting up to 10 seconds.
+- A subagent with no ethos persona (general-purpose, Explore) made every MCP
+  call that resolves the caller fail with `invalid caller persona ""`. Per
+  DES-007, `identity whoami` now answers that the caller has no ethos identity,
+  naming its `agent_type` (or its `agent_id` when none was recorded); `iam`
+  lets such a caller declare a persona; `doctor` reports it on the Human
+  identity row. No other identity answers for it.
+
+## [4.20.3] - 2026-11-03
+
+### Fixed
+
+- `ethos doctor` no longer fails "Orphaned agent files" for a hand-authored
+  agent. Every agent file ethos writes (the SessionStart generator and the
+  legacy-stub installer) now starts its frontmatter with the YAML comment
+  `# generated by ethos — edit .punt-labs/ethos, not this file`. A
+  `.claude/agents/<handle>.md` whose handle matches no identity and has no
+  marker is not ethos's, so doctor passes and lists it as "not ethos-generated,
+  ignored". With the marker it is a leftover for an identity since removed
+  (for example by `ethos vendor --prune`), and doctor fails it as safe to
+  delete. A handle that matches a known identity but is not on the active team
+  still fails as stale. Files generated before this release carry no marker and
+  read as hand-authored until the next SessionStart rewrites them; a leftover
+  whose identity is already gone is not rewritten, so delete it once by hand.
+  An agent with a source file in `.punt-labs/ethos/agents/` is never reported:
+  the installer re-copies it every SessionStart. If doctor cannot stat that source
+  file, it fails with the error instead of classifying the agent. The marker follows the file's
+  line ending, so a CRLF stub is marked too.
+- `ethos doctor` no longer fails "Identity directory" for a repo that has no
+  `.punt-labs/ethos/identities/` of its own. Under layered resolution identities
+  resolve from the global store, so doctor passes when the global identities
+  directory exists and names it. Previously this passed only if the repo also
+  held a repo-local team, which failed repos with only an `ethos.yaml` or only
+  `missions/`. Under `resolution: repo-only` a missing repo identities
+  directory still fails. The check now also fails an identities path that is
+  not a directory, cannot be read, or holds no `*.yaml` file, and a global
+  directory that cannot be read is named instead of blamed on the repo. Under
+  layered resolution a fresh install, with no identities in the repo or the
+  global store, is a WARN pointing at `ethos setup`, as for "Human identity";
+  under repo-only it fails. Identities supplied by the active bundle satisfy
+  the check in both modes.
+- `ethos doctor` no longer reports an agent file as "safe to delete" when it
+  cannot tell whether its identity exists. A stat error (for example EACCES on
+  the identities directory) fails with the error. Under `resolution: repo-only`
+  an identity that exists only in the global store reads "not vendored — run
+  ethos vendor" instead of "no longer exists".
+- `ethos doctor` has a new "Team members" check. Under layered resolution it
+  fails, listing every member of the active team whose identity is in none of
+  the repo, bundle, or global stores. Under `resolution: repo-only` it defers
+  to "Repo-only completeness".
+
+## [4.20.2] - 2026-11-03
+
+### Fixed
+
+- The recovery commands `ethos audit seal` and `ethos audit quarantine` print
+  (`ethos audit quarantine <path>`, `git add -f <marker>`) now quote the path,
+  so a checkout path with spaces or quotes can be copied into a shell as is.
+- Under `resolution: repo-only`, a caller found in the global store no longer
+  becomes someone else when the repo or the active bundle holds an identity with
+  the same handle but another email or GitHub name than the global one (both
+  set, and not equal).
+  `whoami` and session start reported the local identity. They now fail with an
+  error naming both files; rename one, or correct the field in one of them. A
+  local copy that lacks a field, or spells an email in another case, is the
+  same person and still resolves.
+- The audit hook no longer loses the entry for a large tool call. A hook payload
+  bigger than one pipe write, such as an Edit of a large file, was parsed after
+  the first read and rejected as "invalid JSON input". The hook now keeps
+  reading until the payload parses as one JSON value, or the pipe closes, or the
+  timeout passes.
+- Under `resolution: repo-only`, the caller lookup no longer hides damage. A repo
+  identity file ethos cannot load now fails the lookup with the file named,
+  instead of falling through to a match in the global store. A global store
+  that fails for any reason but a missing file now reports that failure instead
+  of the repo's miss.
+- A damaged chunk, or an interrupted quarantine, in a session directory the repo
+  gitignores no longer blocks every commit. Such a chunk is local only and
+  cannot reach the tracked tree, so the seal skips that session, prints one line
+  naming the chunk and `ethos audit quarantine <path>`, and seals the others.
+  The seal skips only when the session directory is ignored and the index
+  holds nothing under it; if any chunk there is tracked or staged, the same
+  damage still blocks the commit.
+- An audit notice that a line was rewritten no longer ends in a dangling
+  "; it ". It did whenever a credential or address rewrite was the only rule
+  that applied.
+- `ethos audit seal` and `ethos audit quarantine` no longer print one notice per
+  rewritten line. A commit that rewrote 130 lines printed 130 lines. Each run
+  now prints one line per session for the rewritten lines and one for the loss
+  markers, with the count and the distinct rules, never a value.
+- `ethos audit quarantine` said "staged, commit to record" in a repo that
+  gitignores the session, where nothing was staged. It now says "kept local
+  (this repo gitignores it)" then, and keeps the old wording when it staged.
+  The wording comes from what the index holds after the run, not from the
+  ignore rules: a chunk tracked before the repo began to ignore its directory
+  has its removal staged, and when changes are staged under the directory but
+  the ignored marker is not, the line says so, with the `git add -f` to record
+  it. When git cannot say, the line says the status
+  is unknown.
+- The quarantine notice `retired chunk NAME was withheld from the tracked tree`
+  no longer prints in a repo that gitignores the session directory, where
+  nothing was tracked. It says `retired chunk NAME kept local (this repo
+  gitignores it); the original is in ...` there. It keeps the location of the
+  original, so the notice is reworded, not dropped. Tracked repos see the old
+  text.
+
+## [4.20.1] - 2026-11-03
+
+### Fixed
+
+- In a repo that sets `resolution: repo-only` and vendors a team that does not
+  include the person running ethos, `ethos doctor` no longer fails the Human
+  identity check, and `whoami` and session start no longer fail to find the
+  caller. The caller is a person, not repo data, so ethos now looks for them in
+  `~/.punt-labs/ethos/identities` when the repo does not hold them, and doctor
+  reports PASS with "resolved from the global store". A caller found in neither
+  place still fails. Team and agent identities still resolve from the repo only.
+- Commits are no longer blocked in a repo that gitignores
+  `.punt-labs/ethos/sessions/` (biff, mcp-proxy and quarry do). The pre-commit
+  audit seal and `ethos audit quarantine` now skip staging any path the repo
+  ignores, print one note saying so, and keep the audit files locally. Before,
+  `git add` refused the ignored path, the seal rolled back, and every commit
+  failed. A failure of the ignore check itself is still an error.
+- The setup guide no longer tells agents to run `ethos disable --purge`, a flag
+  that does not exist. It now says what `ethos disable` does (it keeps the
+  guide, config and audit data on disk) and what `--force` is for, and it
+  describes the git hooks `ethos enable` chains. A test fails if the guide
+  names an `ethos` command or flag the CLI does not define.
+
+## [4.20.0] - 2026-11-03
+
 ### Security
 
 - Clear 1 open Dependabot alert (high, GHSA-7hp6-4w63-5g45) by bumping the
@@ -372,7 +623,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them under `forced_unresolved` in `--json`.
 - **`ethos mission dispatch`, `scaffold` and `correct` refuse a malformed
   `.punt-labs/ethos.yaml`** instead of recording `claude` as the leader.
-
+- The seeded `silent-failure-hunter` and `invariant-completeness-reviewer`
+  review agents are pinned to `model: opus` instead of `model: inherit`.
+  Both run on every full diff and every 20+ line fix diff, and their work —
+  finding swallowed errors and verifying a claimed invariant actually holds —
+  is reasoning-heavy; `inherit` floated their model and cost with the invoking
+  session. Matches `code-reviewer`, already pinned to `opus`.
 - **`biff-notify` CI workflow adopts `biff enable`'s hardened template.**
   Notifications fire only for failures of push, schedule and
   workflow_dispatch runs, never for runs triggered by pull requests, which

@@ -150,10 +150,9 @@ func TestGuardAuditLine_MarksRewrittenLines(t *testing.T) {
 	require.NoError(t, err, string(cleaned))
 }
 
-// TestSealRepo_RewritesLeakingLiveLines: a live line an older binary appended
-// without the guard is rewritten before it reaches the tracked chunk, keeping
-// its ts so the chunk still verifies. This closes DES-080's upgrade exception.
-func TestSealRepo_RewritesLeakingLiveLines(t *testing.T) {
+// Immutable identities cannot be rewritten during seal. An older unguarded
+// source stays available for explicit redacted migration, never publication.
+func TestSealRepo_RefusesRewritingLeakingLiveLines(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	initGitRepo(t, repo)
@@ -164,17 +163,7 @@ func TestSealRepo_RewritesLeakingLiveLines(t *testing.T) {
 		`{"ts":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n"
 	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
 
-	_, err := SealRepo(repo, time.Now().UTC(), SealOptions{})
-	require.NoError(t, err)
-	dir, err := audit.FindSealedSessionDir(repo, sid)
-	require.NoError(t, err)
-	chunk := filepath.Join(dir, audit.SessionChunkFile(100, 200))
-	data, err := os.ReadFile(chunk)
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "alice")
-	lines, err := audit.ReadChunkVerified(chunk, 200)
-	require.NoError(t, err)
-	assert.Len(t, lines, 2)
+	assertImmutableSealRefuses(t, repo, sid, []byte(body))
 }
 
 // TestGuardAuditLine_CaseCollidingKeys: keys that differ only in case would
@@ -194,9 +183,8 @@ func TestGuardAuditLine_CaseCollidingKeys(t *testing.T) {
 	assert.Contains(t, string(out), "audit_error")
 }
 
-// TestSealRepo_CaseCollidingTsVerifies: the probe line goes through seal and
-// the sealed chunk verifies against its name.
-func TestSealRepo_CaseCollidingTsVerifies(t *testing.T) {
+// Ambiguous old identities are refused rather than assigned a rewritten ts.
+func TestSealRepo_RefusesCaseCollidingTs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	initGitRepo(t, repo)
@@ -207,12 +195,7 @@ func TestSealRepo_CaseCollidingTsVerifies(t *testing.T) {
 		`{"ts":"` + audit.FormatLineTS(150) + `","TS":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n"
 	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
 
-	_, err := SealRepo(repo, time.Now().UTC(), SealOptions{})
-	require.NoError(t, err)
-	dir, err := audit.FindSealedSessionDir(repo, sid)
-	require.NoError(t, err)
-	_, err = audit.ReadChunkVerified(filepath.Join(dir, audit.SessionChunkFile(100, 200)), 200)
-	require.NoError(t, err)
+	assertImmutableSealRefuses(t, repo, sid, []byte(body))
 }
 
 // TestGuardAuditLine_KeepsCaseVariantKeysInsideToolInput: tool_input is a map,
@@ -761,11 +744,9 @@ func assertRedactedWithMatchingHash(t *testing.T, line []byte) {
 	assert.Equal(t, toolInputPreview(env), e.Preview, "the preview is of the stored input")
 }
 
-// TestSealRepo_RedactsACredentialInAnOlderLiveLine: the guard is home-only, so a
-// live tail written before the credential pass existed gets the audit content
-// pass first, as migrate gives a legacy line; a clean line is unchanged byte for
-// byte.
-func TestSealRepo_RedactsACredentialInAnOlderLiveLine(t *testing.T) {
+// A credential-bearing older immutable live line cannot be auto-published or
+// silently rewritten; its source is retained and the manual operation fails.
+func TestSealRepo_RefusesACredentialInAnOlderLiveLine(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	initGitRepo(t, repo)
@@ -781,23 +762,7 @@ func TestSealRepo_RedactsACredentialInAnOlderLiveLine(t *testing.T) {
 	body := credentialLiveLine(100, sid) + string(cleanLine) + "\n"
 	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
 
-	_, err = SealRepo(repo, time.Now().UTC(), SealOptions{})
-	require.NoError(t, err)
-	dir, err := audit.FindSealedSessionDir(repo, sid)
-	require.NoError(t, err)
-	ents, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	var chunk []byte
-	for _, e := range ents {
-		if strings.HasSuffix(e.Name(), ".jsonl") {
-			chunk, err = os.ReadFile(filepath.Join(dir, e.Name()))
-			require.NoError(t, err)
-		}
-	}
-	lines := strings.Split(strings.TrimSpace(string(chunk)), "\n")
-	require.Len(t, lines, 2)
-	assertRedactedWithMatchingHash(t, []byte(lines[0]))
-	assert.Equal(t, string(cleanLine), lines[1], "a clean line is unchanged byte for byte")
+	assertImmutableSealRefuses(t, repo, sid, []byte(body))
 }
 
 // TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine: the live lines
@@ -817,21 +782,12 @@ func TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine(t *testing.T) {
 	require.NoError(t, os.WriteFile(live, []byte(credentialLiveLine(150, sid)), 0o600))
 
 	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+	require.ErrorContains(t, err, "requires redacted migration")
+	b, err := os.ReadFile(live)
 	require.NoError(t, err)
-	ents, err := os.ReadDir(sealedDir)
-	require.NoError(t, err)
-	found := 0
-	for _, e := range ents {
-		if strings.HasSuffix(e.Name(), ".jsonl") {
-			b, err := os.ReadFile(filepath.Join(sealedDir, e.Name()))
-			require.NoError(t, err)
-			for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-				assertRedactedWithMatchingHash(t, []byte(l))
-				found++
-			}
-		}
-	}
-	assert.Equal(t, 1, found, "the recovered line is in a sealed chunk")
+	assert.Equal(t, credentialLiveLine(150, sid), string(b), "recovery cannot rewrite a retained identity")
+	out, _, _ := sessionLineGuard(repo)(bytes.TrimSpace(b))
+	assertRedactedWithMatchingHash(t, out)
 }
 
 // olderLiveLine is a live line an older binary wrote with extra top-level fields.
@@ -844,13 +800,37 @@ func olderLiveLine(ts int64, sid string, extra map[string]any) string {
 	return string(b) + "\n"
 }
 
-// sealedLines seals the repo and returns every line of every sealed chunk of sid.
-func sealedLines(t *testing.T, repo, sid string) []string {
+func assertImmutableSealRefuses(t *testing.T, repo, sid string, original []byte) {
 	t.Helper()
 	_, err := SealRepo(repo, time.Now().UTC(), SealOptions{})
+	require.ErrorContains(t, err, "requires redacted migration")
+	retained, err := os.ReadFile(liveAuditPath(repo, sid))
 	require.NoError(t, err)
-	dir, err := audit.FindSealedSessionDir(repo, sid)
+	assert.Equal(t, original, retained, "manual failure retains the original live source")
+	dir := archiveSessionDir(t, repo, sid, "1970-01-01")
+	chunks, err := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
 	require.NoError(t, err)
+	assert.Empty(t, chunks, "unsafe immutable history was not archived or published")
+}
+
+// sealedLines first verifies refusal of the unguarded old fixture, then passes
+// it through the writer's guard explicitly. The newly guarded fixture must seal
+// unchanged. This tests the guard without treating seal as an identity rewrite.
+func sealedLines(t *testing.T, repo, sid string) []string {
+	t.Helper()
+	original, err := os.ReadFile(liveAuditPath(repo, sid))
+	require.NoError(t, err)
+	assertImmutableSealRefuses(t, repo, sid, original)
+	var body []byte
+	for _, raw := range audit.SplitLines(original) {
+		out, _, _ := sessionLineGuard(repo)(raw)
+		body = append(body, out...)
+		body = append(body, '\n')
+	}
+	require.NoError(t, os.WriteFile(liveAuditPath(repo, sid), body, 0o600))
+	_, err = SealRepo(repo, time.Now().UTC(), SealOptions{})
+	require.NoError(t, err)
+	dir := archiveSessionDir(t, repo, sid, "1970-01-01")
 	return chunkLines(t, dir)
 }
 
@@ -932,8 +912,9 @@ func TestSessionLineGuard_RedactsHeadersAndUnknownFields(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 		require.NoError(t, os.WriteFile(live, []byte(olderLiveLine(150, sid, extra)), 0o600))
 		_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
-		require.NoError(t, err)
-		check(t, chunkLines(t, sealedDir))
+		require.ErrorContains(t, err, "requires redacted migration")
+		out, _, _ := sessionLineGuard(repo)([]byte(olderLiveLine(150, sid, extra)))
+		check(t, []string{string(out)})
 	})
 }
 

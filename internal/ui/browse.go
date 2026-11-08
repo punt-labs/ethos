@@ -2,9 +2,9 @@ package ui
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/provenance"
 )
 
 type browseData struct {
@@ -31,13 +32,16 @@ type dirEntry struct {
 }
 
 type blameLine struct {
-	Num        int
-	Text       string
-	Author     string
-	Commit     string
-	Mission    string
-	Delegation string
-	Agent      string
+	Num          int
+	Text         string
+	Author       string
+	Commit       string
+	Mission      string
+	Delegation   string
+	Agent        string
+	OriginalPath string
+	OriginalLine int
+	Candidates   []provenance.Association
 }
 
 func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
@@ -177,41 +181,14 @@ var errGitDown = errors.New("git did not answer earlier in this request")
 // that failed (nil lines, so the caller shows the file without attribution),
 // or commits whose lookup failed (their lines are shown unattributed).
 func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
-	out, err := s.git("blame", "--porcelain", relPath)
+	out, err := s.git("blame", "--line-porcelain", "--", relPath)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("git blame failed, so the file is shown without attribution: %v", err)}
 	}
 
-	// Parse porcelain blame output.
-	// Each hunk starts with: <sha> <orig-line> <final-line> [<num-lines>]
-	// Followed by header lines, then a tab-prefixed content line.
-	type hunk struct {
-		commit string
-		author string
-		line   int
-		text   string
-	}
-
-	var hunks []hunk
-	var cur hunk
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		line := sc.Text()
-		if len(line) >= 40 && line[0] != '\t' {
-			parts := strings.Fields(line)
-			if len(parts) >= 3 && len(parts[0]) == 40 {
-				var lineNum int
-				fmt.Sscanf(parts[2], "%d", &lineNum)
-				cur = hunk{commit: parts[0], line: lineNum}
-			}
-		}
-		if strings.HasPrefix(line, "author ") {
-			cur.author = strings.TrimPrefix(line, "author ")
-		}
-		if strings.HasPrefix(line, "\t") {
-			cur.text = line[1:]
-			hunks = append(hunks, cur)
-		}
+	hunks, err := provenance.ParseBlame(out)
+	if err != nil {
+		return nil, []string{fmt.Sprintf("malformed git blame: %v", err)}
 	}
 
 	// down is set by the first timeout: a git that hangs costs one timeout per
@@ -232,7 +209,10 @@ func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
 	type commitInfo struct {
 		mission    string
 		delegation string
+		manifests  []*provenance.Manifest
 	}
+	repository := provenance.Repository{Root: s.repoRoot, Env: gitenv.Parsed()}
+	ctx := context.Background()
 	commitCache := map[string]*commitInfo{}
 	failedLookups := 0
 	var firstLookupErr error
@@ -243,25 +223,7 @@ func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
 		failedLookups++
 	}
 
-	// ticketToMission maps bead/ticket IDs (e.g., "ethos-ozrb") to
-	// mission IDs by scanning missions.jsonl. Built lazily on first
-	// fallback hit.
-	var ticketMap map[string]string
-
 	var notices []string
-	buildTicketMap := func() {
-		if ticketMap != nil {
-			return
-		}
-		ticketMap = map[string]string{}
-		rows, ns := s.readMissionsJSONL()
-		notices = append(notices, ns...)
-		for _, row := range rows {
-			if row.Ticket != "" {
-				ticketMap[row.Ticket] = row.ID
-			}
-		}
-	}
 
 	lookupCommit := func(sha string) *commitInfo {
 		if c, ok := commitCache[sha]; ok {
@@ -271,41 +233,33 @@ func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
 
 		// Try trailers first.
 		var lookupErr error // the first git failure for this commit
-		out, err := ask("log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
+		out, err := ask("log", "--no-show-signature", "--format=%(trailers:key=Mission,valueonly,separator=%x1f)%n%(trailers:key=Delegation,valueonly,separator=%x1f)%n%(trailers:key=Ethos-Provenance,valueonly,separator=%x1f)", "-1", sha)
 		if err != nil {
 			lookupErr = err
 		} else {
-			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-			if len(lines) >= 1 {
-				c.mission = strings.TrimSpace(lines[0])
-			}
-			if len(lines) >= 2 {
-				c.delegation = strings.TrimSpace(lines[1])
-			}
-		}
-
-		// Fallback: parse bead/ticket ID from commit subject, look
-		// up the mission in missions.jsonl.
-		if c.mission == "" {
-			subj, err := ask("log", "--format=%s", "-1", sha)
-			if err != nil {
-				if lookupErr == nil {
-					lookupErr = err
-				}
+			lines := strings.Split(string(out), "\n")
+			// Git emits three fields and a final newline even when no trailers
+			// exist. Extra or missing lines are a failed lookup, not absence.
+			if len(lines) != 4 || lines[3] != "" {
+				lookupErr = fmt.Errorf("malformed git trailer response: expected three newline-terminated fields")
 			} else {
-				subject := string(subj)
-				// Match ethos-XXXX or punt-labs-XXXX in parens at end of subject.
-				for _, candidate := range extractTicketIDs(subject) {
-					buildTicketMap()
-					if mid, ok := ticketMap[candidate]; ok {
-						c.mission = mid
-						// Find the first delegation under this mission.
-						var derr error
-						c.delegation, derr = s.firstDelegation(mid)
-						if derr != nil && lookupErr == nil {
-							lookupErr = derr
+				if !strings.Contains(lines[0], "\x1f") && !strings.Contains(lines[1], "\x1f") {
+					c.mission = strings.TrimSpace(lines[0])
+					c.delegation = strings.TrimSpace(lines[1])
+				}
+				if strings.TrimSpace(lines[2]) != "" {
+					c.mission = ""
+					c.delegation = ""
+					for _, name := range strings.Split(strings.TrimSpace(lines[2]), "\x1f") {
+						m, err := repository.VerifiedManifest(ctx, sha, name)
+						if err != nil {
+							lookupErr = err
+							if errors.Is(err, gitenv.ErrTimeout) {
+								down = true
+							}
+							break
 						}
-						break
+						c.manifests = append(c.manifests, m)
 					}
 				}
 			}
@@ -313,6 +267,7 @@ func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
 
 		if lookupErr != nil {
 			fail(lookupErr)
+			c = &commitInfo{}
 		}
 
 		// Cached even when git failed: for the rest of this request (this call)
@@ -325,28 +280,83 @@ func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
 	badAgents := 0
 	var firstAgentErr error
 	var result []blameLine
+	type agentKey struct{ commit, mission, delegation string }
+	type agentResult struct {
+		agent string
+		err   error
+	}
+	agents := map[agentKey]agentResult{}
+	blobs := map[string]string{}
 	for _, h := range hunks {
 		bl := blameLine{
-			Num:    h.line,
-			Text:   h.text,
-			Author: h.author,
-			Commit: h.commit,
+			Num:          h.Final,
+			Text:         h.Text,
+			Author:       h.Author,
+			Commit:       h.Commit,
+			OriginalPath: h.Path,
+			OriginalLine: h.Original,
 		}
-		ci := lookupCommit(h.commit)
-		if ci.delegation != "" {
+		ci := lookupCommit(h.Commit)
+		if len(ci.manifests) > 0 && !down {
+			key := h.Commit + ":" + h.Path
+			blob, ok := blobs[key]
+			var err error
+			if !ok {
+				var out []byte
+				out, err = ask("rev-parse", key)
+				blob = strings.TrimSpace(string(out))
+				if err == nil {
+					blobs[key] = blob
+				}
+			}
+			if err != nil {
+				fail(err)
+			} else {
+				seen := map[provenance.Association]bool{}
+				for _, m := range ci.manifests {
+					pairs, err := m.Lookup(h.Path, blob, h.Original)
+					if err != nil {
+						fail(err)
+						bl.Candidates = nil
+						break
+					}
+					for _, a := range pairs {
+						if !seen[a] {
+							seen[a] = true
+							bl.Candidates = append(bl.Candidates, a)
+						}
+					}
+				}
+				if len(bl.Candidates) == 1 {
+					ci = &commitInfo{mission: bl.Candidates[0].Mission, delegation: bl.Candidates[0].Delegation}
+				} else if len(bl.Candidates) > 1 {
+					bl.Agent = "candidates"
+					notices = append(notices, fmt.Sprintf("line %d has overlapping mission/delegation candidates: %v", h.Final, bl.Candidates))
+				} else {
+					notices = append(notices, fmt.Sprintf("line %d has no unambiguous recorded mission/delegation association", h.Final))
+				}
+			}
+		}
+		if ci.mission != "" && ci.delegation != "" && !down {
 			bl.Mission = ci.mission
 			bl.Delegation = ci.delegation
-			agent, aerr := s.delegationAgent(ci.mission, ci.delegation)
+			key := agentKey{h.Commit, ci.mission, ci.delegation}
+			cached, ok := agents[key]
+			if !ok {
+				cached.agent, cached.err = repository.AgentAt(ctx, h.Commit, provenance.Association{Mission: ci.mission, Delegation: ci.delegation})
+				agents[key] = cached
+			}
+			agent, aerr := cached.agent, cached.err
 			if aerr != nil {
+				if errors.Is(aerr, gitenv.ErrTimeout) {
+					down = true
+				}
 				if badAgents == 0 {
 					firstAgentErr = aerr
 				}
 				badAgents++
 			}
 			bl.Agent = agent
-		} else if ci.mission != "" {
-			bl.Mission = ci.mission
-			bl.Agent = "mission"
 		}
 		result = append(result, bl)
 	}
@@ -357,69 +367,4 @@ func (s *Server) gitBlameWithTrailers(relPath string) ([]blameLine, []string) {
 		notices = append(notices, fmt.Sprintf("%d delegation record(s) could not be read, so those lines show no agent: %v", badAgents, firstAgentErr))
 	}
 	return result, notices
-}
-
-// delegationAgent reads the agent_type from a delegation record.
-func (s *Server) delegationAgent(missionID, delegationID string) (string, error) {
-	if missionID == "" || delegationID == "" {
-		return "", nil
-	}
-	recordPath := filepath.Join(
-		s.storeRoot, ".punt-labs", "ethos", "missions",
-		missionID, "delegations", delegationID, "record.yaml",
-	)
-	d, err := loadDelegationYAML(recordPath)
-	if err != nil {
-		return "", fmt.Errorf("delegation %s of %s: %w", delegationID, missionID, err)
-	}
-	return d, nil
-}
-
-// extractTicketIDs finds bead-shaped IDs in a commit subject.
-// Patterns: "ethos-ozrb", "punt-labs-tzi", "(ethos-ozrb)" at end.
-func extractTicketIDs(subject string) []string {
-	var ids []string
-	// Split on non-alphanumeric-dash chars and check each token.
-	for _, word := range strings.FieldsFunc(subject, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-')
-	}) {
-		// Match patterns like "ethos-XXXX" or "punt-labs-XXXX".
-		if strings.Contains(word, "-") && len(word) >= 6 {
-			ids = append(ids, word)
-		}
-	}
-	return ids
-}
-
-// firstDelegation returns the first delegation ID under a mission dir.
-func (s *Server) firstDelegation(missionID string) (string, error) {
-	dir := filepath.Join(s.storeRoot, ".punt-labs", "ethos", "missions", missionID, "delegations")
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil // a mission with no delegations yet
-	}
-	if err != nil {
-		return "", fmt.Errorf("reading the delegations of %s: %w", missionID, err)
-	}
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			return e.Name(), nil
-		}
-	}
-	return "", nil
-}
-
-// loadDelegationYAML reads just the agent_type from record.yaml
-// without importing the mission package (avoids circular deps).
-func loadDelegationYAML(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "agent_type:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "agent_type:")), nil
-		}
-	}
-	return "", nil
 }

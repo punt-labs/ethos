@@ -1,12 +1,20 @@
 package resolve
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
+)
 
 // Located is where the repository is, found once by Roots: the store root, its
 // .punt-labs/ethos, the checkout and the repo config, each with the error that
 // says why it could not be found. A part is "" with a nil error only when it is
 // genuinely absent (outside a repository, no store yet, no config yet); every
-// other failure is its error.
+// other failure is its error. Store and Checkout are absolute physical paths,
+// so a root alias never redirects the local paths derived from this snapshot.
 type Located struct {
 	Store    string // the repository whose .punt-labs/ethos is the store; "" outside a repository
 	Ethos    string // <Store>/.punt-labs/ethos; "" when there is no store yet
@@ -20,7 +28,8 @@ type Located struct {
 }
 
 // Roots is the one place ethos finds the repository. It locates the store and
-// the checkout (git is the authority; ETHOS_REPO_ROOT overrides), validates the
+// the checkout (git is the authority; ETHOS_REPO_ROOT overrides), resolves both
+// to absolute physical roots before deriving paths or loading config, validates the
 // whole .punt-labs/ethos path (a dangling symlink at any level, a
 // non-directory or a permission error is an error; only an absent component is
 // "no store yet"), and reads the repo config (a dangling ethos.yaml is an
@@ -31,18 +40,59 @@ type Located struct {
 func Roots() Located {
 	var l Located
 	l.Store, l.StoreErr = storeRootIfAny()
+	if l.StoreErr == nil {
+		l.Store, l.StoreErr = physicalRoot(l.Store, "store")
+	}
+	l.Checkout, l.CheckoutErr = checkoutRootIfAny()
+	if l.CheckoutErr == nil {
+		l.Checkout, l.CheckoutErr = physicalRoot(l.Checkout, "checkout")
+	}
 	if l.StoreErr == nil && l.Store != "" {
 		l.Ethos, l.EthosErr = ethosRootOf(l.Store)
 		if l.EthosErr == nil {
 			var cerr error
 			l.Config, cerr = loadRepoConfig(l.Store)
 			if cerr != nil {
-				l.ConfigErr = &ConfigError{Err: cerr, What: "the repository configuration could not be read", Effect: defaultEffect, Answer: defaultAnswer}
+				var field *layout.ValidationError
+				invalidRecord := errors.As(cerr, &field) && field.Field == "record"
+				l.ConfigErr = &ConfigError{Err: cerr, What: "the repository configuration could not be read", Effect: defaultEffect, Answer: defaultAnswer, Policy: invalidRecord}
 			}
 		}
 	}
-	l.Checkout, l.CheckoutErr = checkoutRootIfAny()
 	return l
+}
+
+// physicalRoot normalizes a located root, not its descendants. An absent root
+// remains absent; any normalization failure refuses that part of the snapshot.
+func physicalRoot(root, part string) (string, error) {
+	if root == "" {
+		return "", nil
+	}
+	abs := root
+	if !filepath.IsAbs(root) {
+		var err error
+		if filepath.VolumeName(root) != "" || os.IsPathSeparator(root[0]) {
+			// Windows drive-relative and rooted paths need the OS's drive context.
+			abs, err = filepath.Abs(root)
+		} else {
+			var cwd string
+			cwd, err = os.Getwd()
+			if err == nil {
+				cwd, err = filepath.EvalSymlinks(cwd)
+			}
+			// Do not clean before resolving links: link/.. and a logical PWD
+			// can otherwise select a different directory from os.Stat(root).
+			abs = cwd + string(filepath.Separator) + root
+		}
+		if err != nil {
+			return "", fmt.Errorf("making %s root %q absolute: %w", part, root, err)
+		}
+	}
+	physical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolving physical %s root %q: %w", part, root, err)
+	}
+	return physical, nil
 }
 
 // StoreFailure is the first failure to find the store itself: the store root,
@@ -66,6 +116,27 @@ func (l Located) Err() error {
 		}
 	}
 	return nil
+}
+
+// Layout consumes this already-loaded location/configuration snapshot, without
+// discovering roots or rereading configuration. A missing store directory is
+// fine, but an absent repository is not: callers choose global storage explicitly.
+func (l Located) Layout() (layout.Policy, error) {
+	if err := l.Err(); err != nil {
+		return layout.Policy{}, err
+	}
+	if l.Store == "" {
+		return layout.Policy{}, ErrNotInRepo
+	}
+	mode := layout.RecordBlame
+	if l.Config != nil {
+		var err error
+		mode, err = l.Config.RecordingMode()
+		if err != nil {
+			return layout.Policy{}, err
+		}
+	}
+	return layout.NewRepository(l.Store, l.Checkout, mode)
 }
 
 const (

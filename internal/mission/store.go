@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -32,9 +33,8 @@ var ErrEvaluatorNotFound = errors.New("evaluator not found")
 // the missions subdirectory; write operations use flock for concurrency
 // safety; writes are atomic via temp file + rename.
 //
-// Unlike the session store, mission Store is intentionally global-only —
-// contracts are not git-tracked and not layered. Phase 3.2+ may revisit if
-// repo-scoped missions become necessary.
+// Repository contracts are shared records; legacy global contracts remain a
+// separate writable fallback layer, including for repository callers.
 type Store struct {
 	root       string          // e.g. ~/.punt-labs/ethos
 	roles      RoleLister      // optional; wires the Phase 3.5 role-overlap check
@@ -68,6 +68,12 @@ type Store struct {
 	// existing callers that wired a trace destination keep the legacy
 	// flat <root>/missions/<id>.yaml shape.
 	twoTreeStorage bool
+	policy         layout.Policy
+	policyErr      error
+	explicitPolicy bool
+	// persistenceCheck is a per-store fault seam for interruption tests. It is
+	// unset in production and configured before any concurrent use in tests.
+	persistenceCheck func(string) error
 
 	// sessionID, when set alongside repoRoot, routes mission event
 	// appends to the DES-058 per-(mission, session) live log under
@@ -113,17 +119,19 @@ func NewStore(root string) *Store {
 // <globalRoot>/missions/<mission-id>.{yaml,jsonl,...}. This is the
 // shape NewStore(root) preserves.
 //
-// Per-mission and per-create flocks always live under globalRoot —
-// the DES-054 concurrency model pins them to a stable per-machine
-// location so two checkouts of the same repo never lock different
-// inodes for the same mission. Counter files (DES-054 sibling
-// per-namespace per-date) also live under globalRoot.
+// Repository state and create locks live in the canonical repository-local
+// tree. Global fallback mutations additionally hold the standalone global
+// mission lock. Counter files remain under globalRoot.
 func NewStoreWithRoots(repoRoot, globalRoot string) *Store {
-	return &Store{
+	s := &Store{
 		root:           globalRoot,
 		repoRoot:       repoRoot,
 		twoTreeStorage: repoRoot != "",
 	}
+	if repoRoot != "" {
+		s.policy, s.policyErr = layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+	}
+	return s
 }
 
 // WithRoleLister wires a RoleLister for the Phase 3.5 role-overlap
@@ -231,7 +239,17 @@ func (s *Store) WithRepoRoot(root string) *Store {
 //
 //	ms := mission.NewStoreWithRoots(storeRoot, global).WithCheckoutRoot(wt)
 func (s *Store) WithCheckoutRoot(root string) *Store {
+	if s.explicitPolicy {
+		return s // A supplied immutable policy cannot be changed by a builder.
+	}
 	s.checkoutRoot = root
+	if s.twoTreeStorage {
+		checkout := root
+		if checkout == "" {
+			checkout = s.repoRoot
+		}
+		s.policy, s.policyErr = layout.NewRepository(s.repoRoot, checkout, layout.RecordBlame)
+	}
 	return s
 }
 
@@ -425,12 +443,31 @@ func (s *Store) contractPath(missionID string) (string, error) {
 	return path, nil
 }
 
-// lockPath returns the per-mission flock path. Always under the
-// global tree per DES-054 concurrency model: locks reference live
-// inodes that must not move when a mission migrates between layers
-// or when two checkouts of the same repo coexist.
+// lockPath names the stable state/selection fence, not necessarily the only
+// lock needed by a mutation. Repository callers hold this S-local fence before
+// resolving the layer, then additionally lock G for global fallback authority.
+// The compatibility path-only API returns empty on an invalid policy; internal
+// acquisitions use stateLockPath and propagate the error, never fall back to G.
 func (s *Store) lockPath(missionID string) string {
-	return filepath.Join(s.globalMissionsDir(), filepath.Base(missionID)+".lock")
+	path, _ := s.stateLockPath(missionID)
+	return path
+}
+
+func (s *Store) stateLockPath(missionID string) (string, error) {
+	if s.policyErr != nil {
+		return "", s.policyErr
+	}
+	if s.twoTreeStorage {
+		if !missionIDPattern.MatchString(missionID) {
+			return "", fmt.Errorf("invalid mission id")
+		}
+		return s.policy.LockPath("mission-state", missionID)
+	}
+	return s.globalLockPath(missionID), nil
+}
+
+func (s *Store) globalLockPath(missionID string) string {
+	return s.pathSetFor(missionID, layerGlobal).lock
 }
 
 // createLockPath returns the directory-level lock file used by
@@ -438,11 +475,20 @@ func (s *Store) lockPath(missionID string) string {
 // Stable filename, never renamed or unlinked, so the flock inode does
 // not race with concurrent acquirers.
 //
-// Lives under the global tree alongside per-mission locks. v3.12.0
-// also acquires a repo-tree create lock during the transition window
-// — see Store.Create.
+// Repository creates use S-local storage; standalone creates use G.
 func (s *Store) createLockPath() string {
-	return filepath.Join(s.globalMissionsDir(), ".create.lock")
+	path, _ := s.checkedCreateLockPath()
+	return path
+}
+
+func (s *Store) checkedCreateLockPath() (string, error) {
+	if s.policyErr != nil {
+		return "", s.policyErr
+	}
+	if s.twoTreeStorage {
+		return s.policy.LockPath("mission-create", "missions")
+	}
+	return filepath.Join(s.globalMissionsDir(), ".create.lock"), nil
 }
 
 // repoCreateLockPath is the per-repo create lock acquired alongside
@@ -457,6 +503,9 @@ func (s *Store) createLockPath() string {
 // used to join it anyway, collapsing to a bare relative ".create.lock"
 // resolved against the caller's CWD instead of a real path (ethos-qs0v).
 func (s *Store) repoCreateLockPath() string {
+	if s.twoTreeStorage {
+		return ""
+	}
 	dir := s.repoMissionsDir()
 	if dir == "" {
 		return ""
@@ -579,6 +628,9 @@ func (s *Store) ensureMissionDir(missionID string) error {
 		return nil
 	}
 	ps := s.pathSetFor(missionID, layerRepo)
+	if err := validatePhysicalPath(ps.dir, true); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(ps.dir, 0o700); err != nil {
 		return fmt.Errorf("creating mission dir %s: %w", ps.dir, err)
 	}
@@ -620,6 +672,10 @@ func (s *Store) Create(c *Contract) error {
 	// UpdatedAt default-fill below and Validate() both touch only this
 	// copy, never c.
 	staged := *c
+	if s.twoTreeStorage {
+		staged.CurrentRound = 1
+		staged.RoundDecisions = &RoundDecisions{Version: 1, Entries: []RoundDecision{}}
+	}
 	if staged.UpdatedAt == "" {
 		staged.UpdatedAt = staged.CreatedAt
 	}
@@ -678,11 +734,18 @@ func (s *Store) Create(c *Contract) error {
 		return err
 	}
 
-	err := s.withCreateLock(func() error {
-		return s.withLock(staged.MissionID, func() error {
-			dest, err := s.contractPath(staged.MissionID)
-			if err != nil {
+	err := s.withAdmissionLock("", func(scanIDs []string) error {
+		return s.withAuthorityLock(staged.MissionID, true, false, nil, func() error {
+			// New records always belong to the explicit write layer. Presence
+			// checks may inspect G, but must never choose the installation owner.
+			dest := s.pathSetFor(staged.MissionID, s.writeLayer()).contract
+			if err := s.persistenceCheckpoint("mission_create_destination"); err != nil {
 				return err
+			}
+			if layer, err := s.resolveLayer(staged.MissionID); err != nil {
+				return err
+			} else if layer != layerUnset {
+				return fmt.Errorf("mission %q already exists", staged.MissionID)
 			}
 			// Refuse to follow a symlink planted at the destination —
 			// uniform symlink policy (see paths.go). The follow-on
@@ -706,7 +769,7 @@ func (s *Store) Create(c *Contract) error {
 			// other concurrent Creates: no other Create can pass its
 			// own scan after this Create writes its file but before
 			// the create lock is released.
-			if err := s.checkWriteSetConflicts(&staged); err != nil {
+			if err := s.checkWriteSetConflicts(&staged, scanIDs); err != nil {
 				return err
 			}
 			// Phase 3.5: role-overlap check. Runs only when a RoleLister
@@ -724,7 +787,15 @@ func (s *Store) Create(c *Contract) error {
 			if err := refuseAmbiguousRequireRead(s.repoRoot, &staged, nil); err != nil {
 				return fmt.Errorf("writing contract %s: %w", staged.MissionID, err)
 			}
-			sayContract, wErr := s.writeContractNote(&staged)
+			if s.twoTreeStorage {
+				if err := s.initializeCorrections(staged.MissionID); err != nil {
+					return err
+				}
+			}
+			// Pin the destination checked above. A standalone Create can add a
+			// global mission with the same ID after our absence check; it must
+			// not redirect this new repository record into an unlocked G file.
+			sayContract, wErr := s.writeContractNoteAt(&staged, dest, nil)
 			if wErr != nil {
 				return wErr
 			}
@@ -782,6 +853,7 @@ func (s *Store) Create(c *Contract) error {
 	c.UpdatedAt = staged.UpdatedAt
 	c.CurrentRound = staged.CurrentRound
 	c.Type = staged.Type
+	c.RoundDecisions = staged.RoundDecisions
 	return nil
 }
 
@@ -795,6 +867,9 @@ func (s *Store) Create(c *Contract) error {
 // I/O failure) so operators get an accurate diagnostic instead of a
 // misleading "not found" for a file that exists but can't be read.
 func (s *Store) Load(missionID string) (*Contract, error) {
+	if s.policyErr != nil {
+		return nil, s.policyErr
+	}
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
@@ -855,7 +930,7 @@ func (s *Store) decodeAndValidate(data []byte, missionID string) (*Contract, err
 	// 3.4 — and the in-memory invariant (1 ≤ CurrentRound ≤
 	// Budget.Rounds) is enforced by the Validate call below for
 	// every other failure mode.
-	if c.CurrentRound == 0 {
+	if c.CurrentRound == 0 && c.RoundDecisions == nil {
 		c.CurrentRound = 1
 	}
 	// Defense in depth: even on read, run Validate. A corrupt or
@@ -900,11 +975,11 @@ func (s *Store) decodeAndValidate(data []byte, missionID string) (*Contract, err
 // appended. If the event append fails, the original contract is
 // restored and the caller's struct is NOT mutated — the method's
 // failure semantics match "operation did not happen."
-func (s *Store) Update(c *Contract) error {
+func (s *Store) update(c *Contract, out *MutationOutcome) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
-	return s.withLock(c.MissionID, func() error {
+	return s.withLockWithOutcome(c.MissionID, out, func() error {
 		dest, err := s.contractPath(c.MissionID)
 		if err != nil {
 			return err
@@ -926,7 +1001,7 @@ func (s *Store) Update(c *Contract) error {
 		// admission control be bypassed silently under a generic
 		// "update" event, undermining the recovery-only semantics
 		// ForceReleaseWriteSet exists to enforce.
-		onDisk, err := DecodeContractStrict(oldData, c.MissionID)
+		onDisk, err := s.decodeAndValidate(oldData, c.MissionID)
 		if err != nil {
 			return fmt.Errorf("reading mission %q: %w", c.MissionID, err)
 		}
@@ -939,7 +1014,17 @@ func (s *Store) Update(c *Contract) error {
 		if onDisk.Status != StatusOpen {
 			return fmt.Errorf("mission %q is in terminal state %q; updates are accepted only on open missions", c.MissionID, onDisk.Status)
 		}
+		proposedRound := c.CurrentRound
+		if proposedRound == 0 && c.RoundDecisions == nil {
+			proposedRound = 1
+		}
+		if !reflect.DeepEqual(c.RoundDecisions, onDisk.RoundDecisions) ||
+			proposedRound != onDisk.CurrentRound || c.Status != onDisk.Status ||
+			c.ClosedAt != onDisk.ClosedAt || c.Budget != onDisk.Budget || c.Evaluator != onDisk.Evaluator {
+			return fmt.Errorf("update: stale or changed lifecycle authority (round decisions, current round, status, budget or evaluator); reload the mission")
+		}
 		updated := *c
+		updated.CurrentRound = proposedRound
 		updated.WriteSetReleasedAt = onDisk.WriteSetReleasedAt
 		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := s.validateContract(&updated); err != nil {
@@ -951,7 +1036,8 @@ func (s *Store) Update(c *Contract) error {
 		if err := refuseAmbiguousRequireRead(s.repoRoot, &updated, onDisk); err != nil {
 			return fmt.Errorf("writing contract %s: %w", updated.MissionID, err)
 		}
-		sayContract, wErr := s.writeContractNote(&updated)
+		var writeOutcome MutationOutcome
+		sayContract, wErr := s.writeContractNoteWithOutcome(&updated, &writeOutcome)
 		if wErr != nil {
 			return wErr
 		}
@@ -965,6 +1051,7 @@ func (s *Store) Update(c *Contract) error {
 			}
 			return fmt.Errorf("update: event append failed, contract rolled back: %w", err)
 		}
+		out.include(writeOutcome)
 		sayContract.Say()
 		// Success: reflect server-owned fields back to the caller --
 		// this mutation happens only after the event log commits, so
@@ -1000,7 +1087,7 @@ func (s *Store) Update(c *Contract) error {
 // Atomicity: the new closed state is written, then the close event is
 // appended. If the event append fails, the original contract bytes
 // are restored — a failed Close leaves the on-disk state unchanged.
-func (s *Store) Close(missionID, status string) (*Result, error) {
+func (s *Store) close(missionID, status string, out *MutationOutcome) (*Result, error) {
 	// StatusAbandoned is excluded here on purpose: it is not a status a
 	// caller can request through Close. Abandon is a separate, more
 	// narrowly gated operation (see Store.Abandon below) — routing
@@ -1022,7 +1109,7 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	var satisfying *Result
 	var traceLine []byte
 	var traceSay Announcement
-	err := s.withLock(missionID, func() error {
+	err := s.withLockWithOutcome(missionID, out, func() error {
 		dest, err := s.contractPath(missionID)
 		if err != nil {
 			return err
@@ -1070,7 +1157,8 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		if traceLine, traceSay, err = s.prepareTraceSummary(c, gated); err != nil {
 			return fmt.Errorf("close: %w", err)
 		}
-		sayContract, wErr := s.writeContractNote(c)
+		var writeOutcome MutationOutcome
+		sayContract, wErr := s.writeContractNoteWithOutcome(c, &writeOutcome)
 		if wErr != nil {
 			return wErr
 		}
@@ -1090,6 +1178,7 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 			}
 			return fmt.Errorf("close: event append failed, contract rolled back: %w", err)
 		}
+		out.include(writeOutcome)
 		sayContract.Say()
 		// Publish the satisfying result only after the close event
 		// commits. A mid-method failure leaves satisfying nil, matching
@@ -1102,7 +1191,7 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		return nil, err
 	}
 	// Close open delegation skeletons. Non-fatal — the mission is
-	// already closed; a delegation-close failure writes stderr but
+	// already closed; a delegation-close failure becomes a warning and
 	// does not roll back the mission close. The verdict maps from the
 	// mission's result verdict (pass/fail/escalate) to the
 	// delegation-level vocabulary (pass/fail/aborted): fail maps to
@@ -1147,23 +1236,22 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		_, statErr := os.Stat(missionDir)
 		switch {
 		case missingRepoTreeDir(statErr):
-			closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
+			closeDelegationSkeletonsWithOutcome(s.repoRoot, missionID, delegationVerdict, closedAt, out)
 		default:
 			if statErr != nil {
-				fmt.Fprintf(os.Stderr,
-					"ethos: mission %s: stat %s failed, treating directory as present: %v\n",
-					missionID, missionDir, statErr)
+				out.warn(fmt.Sprintf("mission %s: stat %s failed, treating directory as present: %v",
+					missionID, missionDir, statErr))
 			}
 			if releaseExcl, lockErr := AcquireMissionLockExclusive(s.repoRoot, missionID); lockErr != nil {
-				fmt.Fprintf(os.Stderr,
-					"ethos: mission %s: acquiring exclusive lock for delegation sweep: %v — "+
+				out.warn(fmt.Sprintf(
+					"mission %s: acquiring exclusive lock for delegation sweep: %v — "+
 						"falling back to unlocked sweep — a concurrent dispatchTierB may still "+
 						"race in a late delegation write; open delegations WILL be closed, but "+
-						"a narrow TOCTOU window remains\n",
-					missionID, lockErr)
-				closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
+						"a narrow TOCTOU window remains",
+					missionID, lockErr))
+				closeDelegationSkeletonsWithOutcome(s.repoRoot, missionID, delegationVerdict, closedAt, out)
 			} else {
-				closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
+				closeDelegationSkeletonsWithOutcome(s.repoRoot, missionID, delegationVerdict, closedAt, out)
 				releaseExcl()
 			}
 		}
@@ -1173,7 +1261,7 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	// content was checked before the close committed; an I/O failure here is
 	// non-fatal — the mission is already closed and must not roll back.
 	if err := s.appendTraceLine(traceLine); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
+		out.warn(fmt.Sprintf("mission %s: trace write failed: %v", missionID, err))
 	} else {
 		traceSay.Say()
 	}
@@ -1267,14 +1355,22 @@ func (s *Store) withAbandonDelegationLock(missionID string, fn func() error) err
 // closeDelegationSkeletons walks delegations/ under the per-mission
 // directory and closes any skeleton whose verdict is still "open".
 func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
+	closeDelegationSkeletonsWithOutcome(repoRoot, missionID, verdict, closedAt, nil)
+}
+
+func closeDelegationSkeletonsWithOutcome(repoRoot, missionID, verdict, closedAt string, out *MutationOutcome) {
 	delegationsDir := filepath.Join(
 		RepoStatePath(repoRoot, "missions"),
 		filepath.Base(missionID), "delegations",
 	)
+	if err := validatePhysicalPath(delegationsDir, true); err != nil {
+		out.warn(fmt.Sprintf("mission %s: reading delegations dir: %v", missionID, err))
+		return
+	}
 	entries, err := os.ReadDir(delegationsDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "ethos: mission %s: reading delegations dir: %v\n", missionID, err)
+			out.warn(fmt.Sprintf("mission %s: reading delegations dir: %v", missionID, err))
 		}
 		return
 	}
@@ -1283,16 +1379,20 @@ func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
 			continue
 		}
 		recordPath := filepath.Join(delegationsDir, e.Name(), "record.yaml")
+		if err := validateRepositoryRecordPath(repoRoot, recordPath); err != nil {
+			out.warn(fmt.Sprintf("mission %s: loading delegation %s for close: %v", missionID, e.Name(), err))
+			continue
+		}
 		d, loadErr := LoadDelegation(recordPath)
 		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission %s: loading delegation %s for close: %v\n", missionID, e.Name(), loadErr)
+			out.warn(fmt.Sprintf("mission %s: loading delegation %s for close: %v", missionID, e.Name(), loadErr))
 			continue
 		}
 		if d.Verdict != "open" {
 			continue
 		}
-		if closeErr := CloseDelegationSkeleton(repoRoot, missionID, e.Name(), verdict, closedAt); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission %s: closing delegation %s: %v\n", missionID, e.Name(), closeErr)
+		if closeErr := closeDelegationSkeletonWithOutcome(repoRoot, missionID, e.Name(), verdict, closedAt, out); closeErr != nil {
+			out.warn(fmt.Sprintf("mission %s: closing delegation %s: %v", missionID, e.Name(), closeErr))
 		}
 	}
 }
@@ -1353,7 +1453,7 @@ func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
 // reason is required (non-empty after trimming) and is recorded on
 // the abandon event's Details map so the audit trail records why the
 // mission was retired, not just that it was.
-func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
+func (s *Store) abandon(missionID, reason string, out *MutationOutcome) (*Contract, error) {
 	if strings.TrimSpace(reason) == "" {
 		return nil, fmt.Errorf("abandon: reason is required")
 	}
@@ -1382,7 +1482,7 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 	var abandoned *Contract
 	var traceLine []byte
 	var traceSay Announcement
-	err = s.withLock(missionID, func() error {
+	err = s.withLockWithOutcome(missionID, out, func() error {
 		dest, err := s.contractPath(missionID)
 		if err != nil {
 			return err
@@ -1507,7 +1607,8 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 			if traceLine, traceSay, err = s.prepareTraceSummary(c, &Result{Verdict: StatusAbandoned}); err != nil {
 				return fmt.Errorf("abandon: %w", err)
 			}
-			sayContract, wErr := s.writeContractNote(c)
+			var writeOutcome MutationOutcome
+			sayContract, wErr := s.writeContractNoteWithOutcome(c, &writeOutcome)
 			if wErr != nil {
 				return wErr
 			}
@@ -1527,6 +1628,7 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 				}
 				return fmt.Errorf("abandon: event append failed, contract rolled back: %w", err)
 			}
+			out.include(writeOutcome)
 			sayContract.Say()
 			abandoned = c
 			return nil
@@ -1543,7 +1645,7 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 	// trace log's benefit; buildTraceSummary otherwise reads the
 	// abandoned contract's own fields.
 	if err := s.appendTraceLine(traceLine); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
+		out.warn(fmt.Sprintf("mission %s: trace write failed: %v", missionID, err))
 	} else {
 		traceSay.Say()
 	}
@@ -1636,7 +1738,7 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 			// nesting the delegation lock INSIDE the mission-exclusive
 			// lock already held here is one-directional (never reversed
 			// elsewhere) and introduces no new deadlock risk.
-			releaseDelegation, dlErr := AcquireDelegationLock(s.root, delegationID)
+			releaseDelegation, dlErr := s.AcquireDelegationLock(delegationID)
 			if dlErr != nil {
 				return fmt.Errorf("disclaim: acquiring delegation lock for %q: %w", delegationID, dlErr)
 			}
@@ -1652,6 +1754,9 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 			// nil, and the rollback branch is skipped in that case
 			// (nothing to roll back to).
 			recordPath := filepath.Join(DelegationDir(s.repoRoot, missionID, delegationID), "record.yaml")
+			if err := validateRepositoryRecordPath(s.repoRoot, recordPath); err != nil {
+				return err
+			}
 			oldData, _ := os.ReadFile(recordPath)
 
 			now := time.Now().UTC().Format(time.RFC3339)
@@ -1763,7 +1868,7 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 	// intersecting write_sets on disk -- exactly what admission
 	// control exists to prevent.
 	var released *Contract
-	err = s.withCreateLock(func() error {
+	err = s.withAdmissionLock(missionID, func(_ []string) error {
 		return s.withLock(missionID, func() error {
 			dest, err := s.contractPath(missionID)
 			if err != nil {
@@ -1928,6 +2033,9 @@ func countDelegations(repoRoot, missionID string) (int, error) {
 		RepoStatePath(repoRoot, "missions"),
 		filepath.Base(missionID), "delegations",
 	)
+	if err := validatePhysicalPath(delegationsDir, true); err != nil {
+		return 0, err
+	}
 	entries, err := os.ReadDir(delegationsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -2031,6 +2139,9 @@ func countBlockingDelegations(repoRoot, missionID string) (int, error) {
 		RepoStatePath(repoRoot, "missions"),
 		filepath.Base(missionID), "delegations",
 	)
+	if err := validatePhysicalPath(delegationsDir, true); err != nil {
+		return 0, err
+	}
 	entries, err := os.ReadDir(delegationsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -2040,11 +2151,17 @@ func countBlockingDelegations(repoRoot, missionID string) (int, error) {
 	}
 	n := 0
 	for _, e := range entries {
+		if e.Type()&os.ModeSymlink != 0 {
+			return 0, fmt.Errorf("refusing to follow symlink: %s", filepath.Join(delegationsDir, e.Name()))
+		}
 		if !e.IsDir() {
 			continue
 		}
 		recordDir := filepath.Join(delegationsDir, e.Name())
 		recordPath := filepath.Join(recordDir, "record.yaml")
+		if err := validateRepositoryRecordPath(repoRoot, recordPath); err != nil {
+			return 0, err
+		}
 		d, lErr := LoadDelegation(recordPath)
 		if lErr != nil {
 			if errors.Is(lErr, fs.ErrNotExist) {
@@ -2118,6 +2235,9 @@ func (s *Store) loadLocked(missionID string) (*Contract, []byte, error) {
 // file path) used in error messages to help operators locate the
 // source of a parse failure.
 func DecodeContractStrict(data []byte, label string) (*Contract, error) {
+	if err := validateAuthorityYAML(data); err != nil {
+		return nil, fmt.Errorf("invalid contract %s: %w", label, err)
+	}
 	var c Contract
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -2193,6 +2313,9 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 		return nil, nil
 	}
 	var ids []string
+	if err := validatePhysicalPath(s.repoMissionsDir(), true); err != nil {
+		return nil, err
+	}
 	repoEntries, err := os.ReadDir(s.repoMissionsDir())
 	switch {
 	case err == nil:
@@ -2211,6 +2334,9 @@ func (s *Store) listRepoTree(seen map[string]struct{}) ([]string, error) {
 			continue
 		}
 		contractFile := filepath.Join(s.repoMissionsDir(), name, "contract.yaml")
+		if err := validateRepositoryRecordPath(s.repoRoot, contractFile); err != nil {
+			return nil, err
+		}
 		if _, statErr := os.Stat(contractFile); statErr != nil {
 			continue
 		}
@@ -2424,6 +2550,18 @@ func (s *Store) writeContract(c *Contract) error {
 // append says it only once that append succeeds, so a rolled-back write
 // announces nothing.
 func (s *Store) writeContractNote(c *Contract) (Announcement, error) {
+	return s.writeContractNoteWithOutcome(c, nil)
+}
+
+func (s *Store) writeContractNoteWithOutcome(c *Contract, out *MutationOutcome) (Announcement, error) {
+	dest, err := s.contractPath(c.MissionID)
+	if err != nil {
+		return nil, err
+	}
+	return s.writeContractNoteAt(c, dest, out)
+}
+
+func (s *Store) writeContractNoteAt(c *Contract, dest string, out *MutationOutcome) (Announcement, error) {
 	// A contract that validates but whose redacted form does not would
 	// land on disk unloadable. Judge only a contract that was valid to
 	// begin with: an archetype may relax rules Validate applies without one.
@@ -2442,14 +2580,7 @@ func (s *Store) writeContractNote(c *Contract) (Announcement, error) {
 	if err != nil {
 		return nil, fmt.Errorf("writing contract %s: %w", c.MissionID, err)
 	}
-	if err := s.ensureMissionDir(c.MissionID); err != nil {
-		return nil, err
-	}
-	dest, err := s.contractPath(c.MissionID)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeContractFile(dest, data); err != nil {
+	if err := s.writeBytesWithOutcome(dest, data, true, out); err != nil {
 		return nil, err
 	}
 	return say, nil
@@ -2481,6 +2612,10 @@ func writeContractFile(dest string, data []byte) error {
 // writeContractBytes is writeContractFile's temp, fsync and rename, for bytes
 // already checked or already on disk.
 func writeContractBytes(dest string, data []byte) error {
+	return writeContractBytesWithOutcome(dest, data, nil)
+}
+
+func writeContractBytesWithOutcome(dest string, data []byte, out *MutationOutcome) error {
 	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
 	// at the temp path. os.WriteFile would follow a symlink at tmp,
@@ -2547,11 +2682,11 @@ func writeContractBytes(dest string, data []byte) error {
 	// Store.Close already gives its own post-commit, non-essential
 	// failures (the trace-summary write).
 	if err := syncDir(filepath.Dir(dest)); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"ethos: mission: syncing directory %s after renaming contract %s: %v — "+
+		out.warn(fmt.Sprintf(
+			"mission: syncing directory %s after renaming contract %s: %v — "+
 				"the contract itself is written and correct; only its durability against "+
-				"a crash before the next filesystem sync is unconfirmed\n",
-			filepath.Dir(dest), dest, err)
+				"a crash before the next filesystem sync is unconfirmed",
+			filepath.Dir(dest), dest, err))
 	}
 	return nil
 }
@@ -2567,20 +2702,91 @@ func writeContractBytes(dest string, data []byte) error {
 // (ethos-ouy9) — a rollback that itself lands half-written is exactly
 // as unacceptable as the forward write it is undoing.
 func (s *Store) restoreContract(dest string, oldData []byte) error {
-	return writeContractBytes(dest, oldData)
+	return s.restoreBytes(dest, oldData)
 }
 
 // withLock executes fn while holding an exclusive lock (flock on Unix,
 // LockFileEx on Windows — see flock_unix.go/flock_windows.go) on the
 // mission's lock file. Mirrors session.Store.withLock.
 func (s *Store) withLock(missionID string, fn func() error) error {
+	return s.withMissionLock(missionID, false, fn)
+}
+
+func (s *Store) withMissionLock(missionID string, allowPreparation bool, fn func() error) error {
+	return s.withMissionLockWithOutcome(missionID, allowPreparation, nil, fn)
+}
+
+func (s *Store) withLockWithOutcome(missionID string, out *MutationOutcome, fn func() error) error {
+	return s.withMissionLockWithOutcome(missionID, false, out, fn)
+}
+
+func (s *Store) withMissionLockWithOutcome(missionID string, allowPreparation bool, out *MutationOutcome, fn func() error) error {
+	return s.withAuthorityLock(missionID, false, allowPreparation, out, fn)
+}
+
+// Lock order is S create (if any) -> G admission (when needed) -> S
+// state/selection -> G authority (when needed) -> recovery/event stream.
+// Migration uses the same order. Callbacks
+// may additionally take the mission-delegation fence, then individual delegation
+// locks, then an event stream; recovery releases its stream locks first. Close's
+// post-commit sweep takes its delegation fence after releasing state. No stream
+// holder acquires state while keeping a stream lock.
+func (s *Store) withAuthorityLock(missionID string, creating, allowPreparation bool, out *MutationOutcome, fn func() error) error {
+	if s.policyErr != nil {
+		return s.policyErr
+	}
 	if strings.TrimSpace(missionID) == "" {
 		return fmt.Errorf("missionID is required")
 	}
-	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
-		return fmt.Errorf("creating missions directory: %w", err)
+	path, err := s.stateLockPath(missionID)
+	if err != nil {
+		return err
 	}
-	lockFile := s.lockPath(missionID)
+	return s.withStateFileLock(path, s.twoTreeStorage, func() error {
+		run := func() error {
+			if s.twoTreeStorage && !allowPreparation {
+				if err := s.reconcileReflectionsExceptWithWarnings(missionID, 0, out.warn); err != nil {
+					return err
+				}
+				if err := s.reconcileCorrection(missionID); err != nil {
+					return err
+				}
+			}
+			return fn()
+		}
+		if !s.twoTreeStorage {
+			return run()
+		}
+		layer, err := s.resolveLayer(missionID)
+		if err != nil {
+			return err
+		}
+		if err := s.persistenceCheckpoint("mission_authority_selected"); err != nil {
+			return err
+		}
+		if layer == layerRepo || (creating && layer == layerUnset) {
+			return run()
+		}
+		return s.withStateFileLock(s.globalLockPath(missionID), false, func() error {
+			// A different repository can migrate/remove G while we wait. S
+			// protects our repo selection, G protects the fallback snapshot;
+			// resolve again under both before any recovery or caller reads.
+			if _, err := s.resolveLayer(missionID); err != nil {
+				return err
+			}
+			return run()
+		})
+	})
+}
+
+func (s *Store) withStateFileLock(lockFile string, repository bool, fn func() error) error {
+	if repository {
+		if err := layout.EnsureLocalDir(s.policy, filepath.Dir(lockFile)); err != nil {
+			return err
+		}
+	} else if err := os.MkdirAll(filepath.Dir(lockFile), 0o700); err != nil {
+		return fmt.Errorf("creating missions lock directory: %w", err)
+	}
 	// Uniform symlink policy (paths.go): a symlink at the lock path
 	// would redirect the lock onto an unrelated file, defeating the
 	// per-mission serialization invariant. Reject before OpenFile,
@@ -2594,12 +2800,65 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 	}
 	defer f.Close()
 
+	if err := s.persistenceCheckpoint("mission_lock_wait:" + lockFile); err != nil {
+		return err
+	}
 	if err := flock(f, lockExclusive); err != nil {
 		return fmt.Errorf("acquiring lock: %w", err)
 	}
 	defer func() { _ = funlock(f) }()
 
 	return fn()
+}
+
+// withAdmissionLock composes the cross-mission scan/release transaction with
+// standalone G users. A repository-only operation must not need G's filesystem
+// or lock. Determine G participation under S's create fence, before any state
+// lock: taking G admission while holding state would invert Create's order.
+// An empty missionID denotes Create; otherwise this is ForceReleaseWriteSet.
+func (s *Store) withAdmissionLock(missionID string, fn func([]string) error) error {
+	return s.withCreateLock(func() error {
+		var scanIDs []string
+		if missionID == "" {
+			var err error
+			scanIDs, err = s.conflictScanIDs()
+			if err != nil {
+				return fmt.Errorf("create: listing existing missions: %w", err)
+			}
+		}
+		if !s.twoTreeStorage {
+			return fn(scanIDs) // withCreateLock already holds G's admission fence.
+		}
+		needsGlobal := false
+		if missionID != "" {
+			layer, err := s.resolveLayer(missionID)
+			if err != nil {
+				return err
+			}
+			needsGlobal = layer != layerRepo
+		} else {
+			// Freeze the exact scan set used by Create. Re-reading ownership
+			// later could add a G mission after we chose not to fence G.
+			for _, id := range scanIDs {
+				layer, err := s.resolveLayer(id)
+				if err != nil {
+					return err
+				}
+				if layer != layerRepo {
+					needsGlobal = true
+					break
+				}
+			}
+		}
+		if needsGlobal {
+			return s.withGlobalAdmissionLock(func() error { return fn(scanIDs) })
+		}
+		return fn(scanIDs)
+	})
+}
+
+func (s *Store) withGlobalAdmissionLock(fn func() error) error {
+	return s.withStateFileLock(filepath.Join(s.globalMissionsDir(), ".create.lock"), false, fn)
 }
 
 // withCreateLock executes fn while holding an exclusive lock (flock on
@@ -2609,16 +2868,30 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 // scan and the new mission's write happen atomically with respect to
 // other concurrent Creates.
 //
+// ForceReleaseWriteSet holds this fence through its required event or rollback.
 // Update and Close do NOT acquire this lock — they mutate an existing
 // mission's status, which is unrelated to Create-vs-Create
 // serialization. The lock file is a stable filename that is never
 // renamed or unlinked, so concurrent acquirers always lock the same
 // inode.
 func (s *Store) withCreateLock(fn func() error) error {
-	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
-		return fmt.Errorf("creating missions directory: %w", err)
+	if s.policyErr != nil {
+		return s.policyErr
 	}
-	createLock := s.createLockPath()
+	if !s.twoTreeStorage {
+		if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
+			return fmt.Errorf("creating missions directory: %w", err)
+		}
+	}
+	createLock, err := s.checkedCreateLockPath()
+	if err != nil {
+		return err
+	}
+	if s.twoTreeStorage {
+		if err := layout.EnsureLocalDir(s.policy, filepath.Dir(createLock)); err != nil {
+			return err
+		}
+	}
 	// Uniform symlink policy (paths.go): a symlink at the directory-
 	// level create lock would let an attacker redirect every Create's
 	// lock onto an attacker-chosen file, collapsing the cross-
@@ -2632,6 +2905,9 @@ func (s *Store) withCreateLock(fn func() error) error {
 	}
 	defer f.Close()
 
+	if err := s.persistenceCheckpoint("mission_create_lock_wait:" + createLock); err != nil {
+		return err
+	}
 	if err := flock(f, lockExclusive); err != nil {
 		return fmt.Errorf("acquiring create lock: %w", err)
 	}
@@ -2719,6 +2995,9 @@ type reflectionsFile struct {
 // A reflection with no mission: field is legacy data; decode fills it
 // from missionID. See decodeReflectionsFile.
 func (s *Store) LoadReflections(missionID string) ([]Reflection, error) {
+	if s.twoTreeStorage {
+		return s.acceptedReflections(missionID)
+	}
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
@@ -2754,6 +3033,13 @@ func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) 
 		return nil, nil
 	}
 	var wrapper reflectionsFile
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
+		return nil, err
+	}
+	if err := rejectDuplicateYAMLKeys(&node); err != nil {
+		return nil, err
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&wrapper); err != nil {
@@ -2822,6 +3108,13 @@ func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) 
 // Atomic from the caller's view: a write failure leaves the on-disk
 // reflections file unchanged.
 func (s *Store) AppendReflection(missionID string, r *Reflection) error {
+	if s.twoTreeStorage {
+		outcome, err := s.ApplyReflection(missionID, r)
+		for _, d := range outcome.Diagnostics {
+			fmt.Fprintf(os.Stderr, "ethos: reflect: %s\n", d)
+		}
+		return err
+	}
 	if r == nil {
 		return fmt.Errorf("reflection is nil")
 	}
@@ -2985,6 +3278,9 @@ func (s *Store) writeReflectionsLockedNote(missionID string, rs []Reflection) (A
 	if err != nil {
 		return nil, err
 	}
+	if s.twoTreeStorage {
+		return say, s.writeBytes(dest, data, true)
+	}
 	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and
 	// tmp before WriteFile would follow them.
@@ -3029,7 +3325,7 @@ func (s *Store) writeReflectionsLockedNote(missionID string, rs []Reflection) (A
 // same mission via the per-mission flock.
 //
 // Returns the new round number on success.
-func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
+func (s *Store) advanceRound(missionID, actor string, out *MutationOutcome) (int, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return 0, fmt.Errorf("missionID is required")
 	}
@@ -3037,7 +3333,7 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 		return 0, fmt.Errorf("actor is required")
 	}
 	var newRound int
-	err := s.withLock(missionID, func() error {
+	err := s.withLockWithOutcome(missionID, out, func() error {
 		c, oldData, err := s.loadLocked(missionID)
 		if err != nil {
 			return err
@@ -3056,15 +3352,34 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 				missionID, c.CurrentRound, c.Budget.Rounds,
 			)
 		}
-		reflections, err := s.loadReflectionsLocked(missionID)
-		if err != nil {
-			return err
-		}
 		var current *Reflection
-		for i := range reflections {
-			if reflections[i].Round == c.CurrentRound {
-				current = &reflections[i]
-				break
+		if s.twoTreeStorage {
+			if c.RoundDecisions == nil {
+				if err := s.importLegacyDecisions(c); err != nil {
+					return err
+				}
+			}
+			if d := c.decision(c.CurrentRound); d != nil {
+				current = &Reflection{Round: d.Round, Recommendation: d.Recommendation, Reason: "reflection detail unavailable here"}
+				// Prose availability may improve the diagnostic, never the gate.
+				if states, err := s.ReadReflections(missionID); err == nil {
+					for _, state := range states {
+						if state.Round == d.Round && state.Reflection != nil {
+							current.Reason = state.Reflection.Reason
+						}
+					}
+				}
+			}
+		} else {
+			reflections, err := s.loadReflectionsLocked(missionID)
+			if err != nil {
+				return err
+			}
+			for i := range reflections {
+				if reflections[i].Round == c.CurrentRound {
+					current = &reflections[i]
+					break
+				}
 			}
 		}
 		if current == nil {
@@ -3089,7 +3404,8 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 		if err := s.validateContract(c); err != nil {
 			return fmt.Errorf("invalid contract after advance: %w", err)
 		}
-		sayContract, wErr := s.writeContractNote(c)
+		var writeOutcome MutationOutcome
+		sayContract, wErr := s.writeContractNoteWithOutcome(c, &writeOutcome)
 		if wErr != nil {
 			return wErr
 		}
@@ -3108,6 +3424,7 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 			}
 			return fmt.Errorf("advance: event append failed, contract rolled back: %w", err)
 		}
+		out.include(writeOutcome)
 		sayContract.Say()
 		newRound = c.CurrentRound
 		return nil
@@ -3292,11 +3609,7 @@ func canonicalRoleSlug(name string) string {
 // A mission that fails to load is skipped with a stderr warning.
 // Unloadable missions cannot conflict — the safe default is skip,
 // not block all future creates.
-func (s *Store) checkWriteSetConflicts(c *Contract) error {
-	ids, err := s.conflictScanIDs()
-	if err != nil {
-		return fmt.Errorf("create: listing existing missions: %w", err)
-	}
+func (s *Store) checkWriteSetConflicts(c *Contract, ids []string) error {
 	var openContracts []*Contract
 	for _, id := range ids {
 		// Skip self defensively. The Create caller has already
@@ -3487,7 +3800,7 @@ func decodeResultsFile(data []byte, missionID string) ([]Result, error) {
 //
 // Atomic from the caller's view: a write failure leaves the on-disk
 // results file unchanged.
-func (s *Store) AppendResult(missionID string, r *Result) error {
+func (s *Store) appendResult(missionID string, r *Result, out *MutationOutcome) error {
 	if r == nil {
 		return fmt.Errorf("result is nil")
 	}
@@ -3505,7 +3818,7 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 	if err := staged.Validate(); err != nil {
 		return fmt.Errorf("invalid result: %w", err)
 	}
-	return s.withLock(missionID, func() error {
+	return s.withLockWithOutcome(missionID, out, func() error {
 		c, _, err := s.loadLocked(missionID)
 		if err != nil {
 			return err
@@ -3559,7 +3872,8 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 		if perr != nil {
 			return perr
 		}
-		sayWrite, err := s.writeResultsLockedNote(missionID, updated)
+		var writeOutcome MutationOutcome
+		sayWrite, err := s.writeResultsLockedNoteWithOutcome(missionID, updated, &writeOutcome)
 		if err != nil {
 			return err
 		}
@@ -3589,14 +3903,15 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 				if pErr != nil {
 					return fmt.Errorf("result: event append failed: %w; rollback path failed: %v", err, pErr)
 				}
-				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
-					return fmt.Errorf("result: event append failed: %w; rollback remove failed: %v", err, rbErr)
+				if rbErr := s.removeBytes(rbPath); rbErr != nil {
+					return fmt.Errorf("result: event append failed: %w; rollback failed: removing result: %v", err, rbErr)
 				}
-			} else if rbErr := restoreAtomicFile(filepath.Dir(prevPath), layout.TmpPattern("results", ".yaml"), prevPath, prev); rbErr != nil {
+			} else if rbErr := s.restoreBytes(prevPath, prev); rbErr != nil {
 				return fmt.Errorf("result: event append failed: %w; rollback failed: %v", err, rbErr)
 			}
 			return fmt.Errorf("result: event append failed, result rolled back: %w", err)
 		}
+		out.include(writeOutcome)
 		sayWrite.Say()
 		// Reflect CreatedAt back to the caller — the one field
 		// AppendResult is contracted to set. Every other field came
@@ -3652,6 +3967,10 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 // writeResultsLockedNote is writeResultsLocked returning the Announcement of a rewrite
 // instead of saying it, for a writer that says it after a follow-on event append.
 func (s *Store) writeResultsLockedNote(missionID string, rs []Result) (Announcement, error) {
+	return s.writeResultsLockedNoteWithOutcome(missionID, rs, nil)
+}
+
+func (s *Store) writeResultsLockedNoteWithOutcome(missionID string, rs []Result, out *MutationOutcome) (Announcement, error) {
 	data, say, err := RedactedYAMLNotify(s.repoRoot, resultsFile{Results: rs})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling results: %w", err)
@@ -3662,6 +3981,9 @@ func (s *Store) writeResultsLockedNote(missionID string, rs []Result) (Announcem
 	dest, err := s.resultsPath(missionID)
 	if err != nil {
 		return nil, err
+	}
+	if s.twoTreeStorage {
+		return say, s.writeBytesWithOutcome(dest, data, true, out)
 	}
 	tmp := layout.TmpPath(dest)
 	// Uniform symlink policy (paths.go): refuse symlinks at dest and

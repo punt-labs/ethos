@@ -3,13 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -383,19 +383,7 @@ func TestHandleTeam_ForRepo_NoMatch(t *testing.T) {
 
 func TestHandleTeam_ForRepo_NoRepoArg(t *testing.T) {
 	// Outside any git repo, for_repo with no repo arg should fail gracefully.
-	// Use the system temp dir (not TMPDIR which may point inside a repo).
-	t.Setenv("TMPDIR", "")
-	tmp, err := os.MkdirTemp("", "ethos-no-git-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(tmp) })
-
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmp))
-
-	// Prevent git from finding a repo above the temp dir.
-	t.Setenv("GIT_CEILING_DIRECTORIES", tmp)
+	t.Chdir(testhelpers.OutsideRepo(t))
 
 	h := testHandlerWithTeams(t)
 	result, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{

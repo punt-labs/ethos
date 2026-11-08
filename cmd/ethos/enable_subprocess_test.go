@@ -179,16 +179,18 @@ func TestCLI_EnableNotInRepoExit2(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
-	dir, err := os.MkdirTemp("/tmp", "ethos-en-norepo-*")
-	if err != nil {
-		t.Skipf("cannot create an outside-repo temp dir: %v", err)
+	dir := testhelpers.OutsideRepo(t)
+	// Exercise the child environment too: omitting its ceiling would expose
+	// this test-owned broken ancestor rather than the intended outside state.
+	if err := os.Mkdir(filepath.Join(filepath.Dir(dir), ".git"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	se := &cliSubprocessEnv{
 		home: dir,
 		repo: dir,
 		env: []string{
 			"HOME=" + dir,
+			"GIT_CEILING_DIRECTORIES=" + os.Getenv("GIT_CEILING_DIRECTORIES"),
 			"GIT_CONFIG_GLOBAL=/dev/null",
 			"GIT_CONFIG_SYSTEM=/dev/null",
 			"PATH=" + os.Getenv("PATH"),

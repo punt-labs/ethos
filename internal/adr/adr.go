@@ -45,17 +45,17 @@ var idPattern = regexp.MustCompile(`^DES-\d{3}$`)
 
 // ADR is a typed Architecture Decision Record.
 type ADR struct {
-	ID           string   `yaml:"id" json:"id"`
+	ID           string   `yaml:"id" json:"id" redact:"keep"`
 	Title        string   `yaml:"title" json:"title"`
-	Status       string   `yaml:"status" json:"status"`
-	CreatedAt    string   `yaml:"created_at" json:"created_at"`
-	UpdatedAt    string   `yaml:"updated_at" json:"updated_at"`
-	Author       string   `yaml:"author" json:"author"`
+	Status       string   `yaml:"status" json:"status" redact:"keep"`
+	CreatedAt    string   `yaml:"created_at" json:"created_at" redact:"keep"`
+	UpdatedAt    string   `yaml:"updated_at" json:"updated_at" redact:"keep"`
+	Author       string   `yaml:"author" json:"author" redact:"keep"`
 	Context      string   `yaml:"context" json:"context"`
 	Decision     string   `yaml:"decision" json:"decision"`
 	Alternatives []string `yaml:"alternatives,omitempty" json:"alternatives,omitempty"`
-	MissionID    string   `yaml:"mission_id,omitempty" json:"mission_id,omitempty"`
-	BeadID       string   `yaml:"bead_id,omitempty" json:"bead_id,omitempty"`
+	MissionID    string   `yaml:"mission_id,omitempty" json:"mission_id,omitempty" redact:"keep"`
+	BeadID       string   `yaml:"bead_id,omitempty" json:"bead_id,omitempty" redact:"keep"`
 }
 
 // Validate checks that an ADR is well-formed.

@@ -3,7 +3,9 @@
 package process
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,36 +170,66 @@ func TestReadProc_CommWithParentheses(t *testing.T) {
 		"comm with parentheses should be parsed correctly")
 }
 
-func TestReadProc_VersionNamedBinary(t *testing.T) {
-	// Simulate Claude Code's version-named binary pattern:
-	// /home/user/.local/share/claude/versions/2.1.91
-	// The comm in /proc/pid/stat will be "2.1.91".
-	// readProc should normalize this to "claude" via /proc/pid/exe.
-	//
-	// On Linux, /proc/pid/exe resolves symlinks to the real binary,
-	// so we must copy the binary — a symlink would resolve to the
-	// original path (e.g. /usr/bin/sleep) and miss the /claude/versions/ match.
-	tmpDir := t.TempDir()
-	versionsDir := filepath.Join(tmpDir, ".local", "share", "claude", "versions")
+// helperEnv makes TestVersionNamedHelper act as a child that announces itself
+// and then waits, instead of running as a test.
+const helperEnv = "ETHOS_PROCESS_TEST_HELPER"
+
+// TestVersionNamedHelper is the body of the child startVersionNamedChild runs
+// from a version-named path: it says it is up, then blocks until its stdin
+// closes. It is a no-op in an ordinary run.
+func TestVersionNamedHelper(t *testing.T) {
+	if os.Getenv(helperEnv) != "1" {
+		t.Skip("helper process only")
+	}
+	fmt.Println("ready")
+	_, _ = io.Copy(io.Discard, os.Stdin)
+}
+
+// startVersionNamedChild runs this test binary from <tmp>/.local/share/claude/
+// versions/2.1.91, as a copy or as a symlink, and returns its pid once it has
+// said it is running. A child of the test's own binary, not of a system tool,
+// so what /proc shows for it does not depend on what the machine installs, and
+// the child is known to be alive and past exec before it is read.
+func startVersionNamedChild(t *testing.T, symlink bool) int {
+	t.Helper()
+	versionsDir := filepath.Join(t.TempDir(), ".local", "share", "claude", "versions")
 	require.NoError(t, os.MkdirAll(versionsDir, 0o755))
-
 	versionBin := filepath.Join(versionsDir, "2.1.91")
-	sleepPath, err := exec.LookPath("sleep")
+	self, err := os.Executable()
 	require.NoError(t, err)
+	if symlink {
+		require.NoError(t, os.Symlink(self, versionBin))
+	} else {
+		// A copy: /proc/pid/exe resolves symlinks, so only a real file at the
+		// versions path shows that path.
+		src, err := os.ReadFile(self)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(versionBin, src, 0o755))
+	}
 
-	// Copy the binary so /proc/pid/exe points to the copy's path.
-	src, err := os.ReadFile(sleepPath)
+	cmd := exec.Command(versionBin, "-test.run=^TestVersionNamedHelper$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	stdin, err := cmd.StdinPipe()
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(versionBin, src, 0o755))
-
-	cmd := exec.Command(versionBin, "60")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
-	defer func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-	}()
+	t.Cleanup(func() {
+		stdin.Close()
+		cmd.Wait() //nolint:errcheck
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err, "helper child did not come up")
+	require.Equal(t, "ready\n", line)
+	return cmd.Process.Pid
+}
 
-	childPID := cmd.Process.Pid
+func TestReadProc_VersionNamedBinary(t *testing.T) {
+	// Claude Code's version-named binary pattern:
+	// /home/user/.local/share/claude/versions/2.1.91
+	// The comm in /proc/pid/stat is "2.1.91"; readProc normalizes it to
+	// "claude" via /proc/pid/exe.
+	childPID := startVersionNamedChild(t, false)
 	ppid, comm, err := readProc(childPID)
 	require.NoError(t, err)
 
@@ -209,32 +241,15 @@ func TestReadProc_VersionNamedBinary(t *testing.T) {
 func TestReadProc_SymlinkedVersionBinary(t *testing.T) {
 	// When a version-named binary is a symlink (not a copy), Linux
 	// /proc/pid/exe resolves to the symlink target. The comm field
-	// shows the symlink name but exe points elsewhere — normalization
+	// shows the symlink name but exe points elsewhere, so normalization
 	// fails because the resolved path lacks /claude/versions/.
 	//
 	// This documents the Linux behavior: symlinked binaries are NOT
 	// normalized to "claude". Only real files at /claude/versions/ work.
-	tmpDir := t.TempDir()
-	versionsDir := filepath.Join(tmpDir, ".local", "share", "claude", "versions")
-	require.NoError(t, os.MkdirAll(versionsDir, 0o755))
-
-	versionBin := filepath.Join(versionsDir, "2.1.91")
-	sleepPath, err := exec.LookPath("sleep")
-	require.NoError(t, err)
-	require.NoError(t, os.Symlink(sleepPath, versionBin))
-
-	cmd := exec.Command(versionBin, "60")
-	require.NoError(t, cmd.Start())
-	defer func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-	}()
-
-	childPID := cmd.Process.Pid
+	childPID := startVersionNamedChild(t, true)
 	_, comm, err := readProc(childPID)
 	require.NoError(t, err)
 
-	// Symlink resolves to /usr/bin/sleep — no /claude/versions/ in path.
 	assert.Equal(t, "2.1.91", comm,
 		"symlinked version binary should NOT normalize on Linux (exe resolves through symlink)")
 }
