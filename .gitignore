@@ -100,8 +100,8 @@ ethos-*.jsonl
 # Generated research cache
 research/
 
-# ethos runtime (never track) — DES-058 live zone + mission locks
-.punt-labs/ethos/missions/**/*.lock
+# ethos: shared machine-local zone (never track)
+.punt-labs/local/
 
 # Staging files and directories a killed writer leaves under .punt-labs/
 # (layout.TmpMarker): git add -A must not commit a half-written file.

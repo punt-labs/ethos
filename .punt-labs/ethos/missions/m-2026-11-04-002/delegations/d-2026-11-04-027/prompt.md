@@ -1,5 +1,0 @@
-You are the worker for ethos mission m-2026-11-04-002. Read the contract: `ethos mission show m-2026-11-04-002` (draft: <repo>/.tmp/missions/mcp-caller-failclosed.yaml). Worktree <repo>/.claude/worktrees/mcp-caller, branch fix/mcp-caller-hook — work only there.
-
-Before any code, read the ADRs the contract lists, in the worktree's DESIGN.md, using Bash (sed/grep) if the Grep tool fails — the last task skipped this when Grep failed; do not skip it. If an item conflicts with an ADR, stop and report with file:line.
-
-Commit per logical step by explicit path, each passing `make check` (read full output). Do not push or touch PRs. Never print environment variables. Submit with `ethos mission result m-2026-11-04-002 --file <path>` (round 1), then report commits, tests with fail-before evidence, make check summary, and DESIGN.md text for the leader.
