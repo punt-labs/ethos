@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
@@ -702,11 +703,11 @@ func TestHandlePreToolUse_RepoRootValidation(t *testing.T) {
 	})
 }
 
-// TestHandlePreToolUse_EnvVarFromSubagentStart verifies end-to-end
-// that the env var format produced by buildVerifierAllowlistEnv is
-// correctly consumed by HandlePreToolUse.
+// TestHandlePreToolUse_EnvVarFromSubagentStart is a consumer-only check
+// of a literal allowlist. It does not exercise SubagentStart or its env
+// producer; TestVerifierEnvironmentComposition covers that seam.
 func TestHandlePreToolUse_EnvVarFromSubagentStart(t *testing.T) {
-	// Simulate the env var that SubagentStart would set.
+	// Handwritten consumer fixture, not producer output.
 	allowlist := "internal/hook/pretooluse.go:internal/hook/pretooluse_test.go:/home/user/missions/m-001.yaml"
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", allowlist)
 
@@ -1192,11 +1193,13 @@ func TestHandlePreToolUse_TierBDispatch(t *testing.T) {
 	artifactsDir := r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
 	require.NotEmpty(t, artifactsDir,
 		"Tier B response must include MISSION_ARTIFACTS_DIR")
-	want := mission.DelegationDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
+	want := mission.DelegationArtifactsDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
 	assert.Equal(t, want, artifactsDir,
 		"MISSION_ARTIFACTS_DIR must point at the per-delegation dir")
 
-	recordPath := filepath.Join(artifactsDir, "record.yaml")
+	recordPath := filepath.Join(mission.DelegationDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"]), "record.yaml")
+	assert.DirExists(t, artifactsDir)
+	assert.NoFileExists(t, filepath.Join(artifactsDir, "record.yaml"))
 	info, err := os.Stat(recordPath)
 	require.NoError(t, err, "record.yaml must exist at the per-delegation path")
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
@@ -1295,7 +1298,7 @@ func TestTierBDispatch_FromWorktreeResolvesMainStore(t *testing.T) {
 	// reads — not in the worktree's own tree.
 	artifactsDir := r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
 	require.NotEmpty(t, artifactsDir)
-	_, err = os.Stat(filepath.Join(artifactsDir, "record.yaml"))
+	_, err = os.Stat(filepath.Join(mission.DelegationDir(main, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"]), "record.yaml"))
 	require.NoError(t, err, "delegation skeleton must exist under the resolved store")
 
 	evalSym := func(p string) string {
@@ -1397,13 +1400,12 @@ func TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree(t *testing.T) {
 		"dispatch must not create a mission tree in the worktree under a bad override")
 }
 
-// TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock asserts the
-// shared mission lock contract: two Tier B spawns under the same
-// mission must both succeed without blocking each other and write
-// distinct per-delegation directories. If this test deadlocks or
-// reports both spawns writing the same delegation dir, the mission
-// lock has been silently promoted to exclusive or the delegation ID
-// allocator has lost its uniqueness.
+// TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock checks that
+// two same-session spawns produce distinct delegation directories.
+// The session's exclusive pending-dispatch lock serializes these calls,
+// so this does not distinguish shared from exclusive mission locking.
+// TestDispatchMissionSharedLockEnforcement holds an independent shared
+// mission lock while actual dispatches from distinct sessions finish.
 func TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1526,8 +1528,11 @@ func TestDispatchTierB_LockAcquireFailureRollsBackCounter(t *testing.T) {
 	// os.OpenFile call fails with EISDIR. The mission directory itself
 	// must exist; the .lock entry must be a directory rather than a
 	// regular file.
-	missionDir := filepath.Join(repo, ".punt-labs", "ethos", "missions", missionID)
-	require.NoError(t, os.MkdirAll(filepath.Join(missionDir, ".lock"), 0o700))
+	p, err := layout.NewRepository(repo, repo, layout.RecordBlame)
+	require.NoError(t, err)
+	lockPath, err := p.LockPath("mission-delegations", missionID)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(lockPath, 0o700))
 
 	// Snapshot the counter before dispatch. The counter file lives at
 	// <home>/.punt-labs/ethos/counters/delegations-YYYY-MM-DD. We have
@@ -1838,7 +1843,7 @@ func TestDispatchAgent_InheritanceHit(t *testing.T) {
 		"inheritance match must promote the child to Tier B with the parent missionID")
 	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
 	assert.True(t, strings.HasPrefix(r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
-		filepath.Join(repo, ".punt-labs", "ethos", "missions", parentMission)),
+		filepath.Join(repo, ".punt-labs", "local", "ethos", "artifacts", "missions", parentMission)),
 		"artifacts dir must nest under the inherited mission")
 }
 
@@ -2326,7 +2331,7 @@ func TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees(t *testing.T) {
 		"inheritance must promote the child to the ancestor missionID")
 	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
 	assert.True(t, strings.HasPrefix(r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
-		filepath.Join(repo, ".punt-labs", "ethos", "missions", ancMission)),
+		filepath.Join(repo, ".punt-labs", "local", "ethos", "artifacts", "missions", ancMission)),
 		"artifacts dir must nest under the inherited mission")
 }
 
@@ -2376,10 +2381,10 @@ func TestDispatchAgent_ActiveMissionSidecar(t *testing.T) {
 	artifactsDir := r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
 	require.NotEmpty(t, artifactsDir,
 		"Tier B response must include MISSION_ARTIFACTS_DIR")
-	want := mission.DelegationDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
+	want := mission.DelegationArtifactsDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
 	assert.Equal(t, want, artifactsDir)
 
-	recordPath := filepath.Join(artifactsDir, "record.yaml")
+	recordPath := filepath.Join(mission.DelegationDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"]), "record.yaml")
 	info, err := os.Stat(recordPath)
 	require.NoError(t, err,
 		"sidecar dispatch must write the per-delegation skeleton — this is the audit-show binding")
@@ -3067,16 +3072,11 @@ func TestDispatchAgent_ActiveMissionSidecarDispatchOrigin_UnloadableMissionNames
 		"a pending-dispatch block must not read as a MISSION_ID environment-variable problem")
 }
 
-// TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch closes a
-// second gap a local review probe found: two concurrent calls to
-// matchDispatchPending (standing in for two Agent() tool calls the
-// leader batched in one turn — an explicitly encouraged pattern in
-// this org's own conventions) could both read the pending store before
-// either consumed its match, resolving to the SAME oldest entry twice.
-// dispatchAgent now holds AcquireDispatchPendingLock across the whole
-// match-through-admit sequence; this test exercises matchDispatchPending
-// directly under that same lock discipline to prove two serialized
-// callers never collide.
+// TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch exercises
+// the matcher twice sequentially under a lock owned by this test.
+// It checks FIFO consumption, not dispatchAgent's production lock hold
+// or concurrent HandlePreToolUse calls. TestDispatchPendingLockEnforcement
+// exercises those entry points and probes the actual lock before consume.
 func TestMatchDispatchPending_ConcurrentCallsNeverDoubleMatch(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

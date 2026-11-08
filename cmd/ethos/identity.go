@@ -32,9 +32,10 @@ func globalStore() *identity.Store {
 // role, team, and attribute stores are derived from the returned store,
 // so every layer answers from the same reading of the repo config.
 func identityStore() identity.IdentityStore {
-	repoRoot := ethosRootForStores()
+	r := currentRoots()
+	repoRoot := r.ethosRoot()
 	bundleRoot := resolveBundleRoot()
-	return newIdentityStore(repoRoot, bundleRoot, repoAuthoritativeMode(repoRoot, bundleRoot))
+	return identityStoreForSnapshot(r, repoRoot, bundleRoot, repoAuthoritativeMode(repoRoot, bundleRoot))
 }
 
 // vendorSourceStore returns a store that reads the FULL chain — repo,
@@ -51,24 +52,43 @@ func identityStore() identity.IdentityStore {
 // Everything vendor WRITES is still verified under repo-only, by the
 // completeness check it runs on its own output.
 func vendorSourceStore() identity.IdentityStore {
-	repoRoot := ethosRootForStores()
+	r := currentRoots()
+	repoRoot := r.ethosRoot()
 	bundleRoot := resolveBundleRoot()
 	// Resolve the mode anyway, so a misconfigured repo-only repo still
 	// fails at startup rather than silently vendoring under a config
 	// ethos has rejected.
 	repoAuthoritativeMode(repoRoot, bundleRoot)
-	return newIdentityStore(repoRoot, bundleRoot, false)
+	return identityStoreForSnapshot(r, repoRoot, bundleRoot, false)
 }
 
-// newIdentityStore assembles the layered store for a given policy.
-func newIdentityStore(repoRoot, bundleRoot string, repoAuthoritative bool) identity.IdentityStore {
+func identityStoreForSnapshot(r *repoRoots, repoRoot, bundleRoot string, repoAuthoritative bool) identity.IdentityStore {
+	s, err := newIdentityStore(repoRoot, bundleRoot, repoAuthoritative, r.Located)
+	if err != nil {
+		r.mustBeUsable(err)
+		// Only a command explicitly classified Global may reach this return.
+		// In particular a running MCP handler must report, not exit on, a
+		// failed location/policy snapshot.
+		fmt.Fprintf(os.Stderr, "ethos: %v; identity storage uses the global store only\n", err)
+		return globalStore()
+	}
+	return s
+}
+
+// newIdentityStore assembles a new store from the already-resolved snapshot.
+// No reused store is mutated when the recording policy changes.
+func newIdentityStore(repoRoot, bundleRoot string, repoAuthoritative bool, located resolve.Located) (identity.IdentityStore, error) {
 	g := globalStore()
 	if repoRoot == "" && bundleRoot == "" {
-		return g
+		return g, nil
 	}
 	var repo *identity.Store
 	if repoRoot != "" {
-		repo = identity.NewStore(repoRoot)
+		policy, err := located.Layout()
+		if err != nil {
+			return nil, fmt.Errorf("constructing identity storage policy: %w", err)
+		}
+		repo = identity.NewStore(repoRoot, identity.RepositoryPolicy(policy))
 	}
 	var bundleStore *identity.Store
 	if bundleRoot != "" {
@@ -78,7 +98,7 @@ func newIdentityStore(repoRoot, bundleRoot string, repoAuthoritative bool) ident
 	if repoAuthoritative {
 		ls.WithRequiredExt(requiredExt(repoRoot, bundleRoot))
 	}
-	return ls
+	return ls, nil
 }
 
 // requiredExt reads the vendored set's .vendor.yaml and returns the ext
@@ -117,7 +137,11 @@ func requiredExt(repoRoot, bundleRoot string) map[string][]string {
 // and runs on the global stores, so a misconfiguration is reported, not
 // worked around.
 func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
-	mode, err := resolve.ResolveResolution(resolutionConfigRoot())
+	r := currentRoots()
+	if err := r.StoreFailure(); err != nil {
+		return unusableRepoOnly(err)
+	}
+	mode, err := resolve.ResolutionFromConfig(r.Config)
 	if err != nil {
 		return unusableRepoOnly(err)
 	}
@@ -139,24 +163,6 @@ func unusableRepoOnly(err error) bool {
 	currentRoots().configFatal(err)
 	fmt.Fprintf(os.Stderr, "ethos: %v; this command does not apply the policy\n", err)
 	return false
-}
-
-// resolutionConfigRoot returns the tree whose .punt-labs/ethos.yaml
-// carries the resolution policy.
-//
-// It is StoreRootIfAny, except when a set ETHOS_REPO_ROOT was REFUSED —
-// StoreRootIfAny returns "" for a refused override, which would leave the
-// repo's own config unread and let a repo-only repo fall back to global
-// on a warning alone. Reading the mode from the override path directly
-// means the refusal cannot launder itself into the silent fallback
-// repo-only exists to forbid; the missing store then trips the
-// no-repo-layer error above.
-func resolutionConfigRoot() string {
-	if r := currentRoots(); r.StoreFailure() == nil && r.Store != "" {
-		return r.Store
-	}
-	root, _ := resolve.RepoRootOverride()
-	return root
 }
 
 // sessionStore returns the default session store rooted at the same

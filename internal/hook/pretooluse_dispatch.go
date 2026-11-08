@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -77,14 +78,14 @@ import (
 // fresh dispatch always took precedence over an existing claim
 // (previously by overwriting the shared slot; now via separate,
 // non-destructive storage that lets both coexist).
-func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
+func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any, loc resolve.Located) error {
 	// Locate the mission store ONCE, before any branch: every path below
 	// (the pending-dispatch lock failure, an empty session_id, MISSION_ID,
 	// the sidecar claim, inheritance, Tier A) runs against this one answer.
 	// A store that cannot be located denies the spawn with the cause; no path
 	// reads the global store in its place, and none locates it a second time
 	// and could disagree.
-	roots, rootErr := locateTierBRoots()
+	roots, rootErr := tierBRootsFromLocated(loc)
 	if rootErr != nil {
 		return writeAgentBlock(w, "ethos pre-tool-use: "+rootErr.Error())
 	}
@@ -798,14 +799,11 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: allocating delegation id: %v", err))
 	}
-	// Deferred rollback: every dispatch failure between NewID and the
-	// successful skeleton write must return the counter to its pre-call
-	// value so the allocated ID is not burned. success flips to true
-	// only after WriteDelegationSkeleton returns nil — every earlier
-	// failure path leaves success=false and the deferred release(false)
-	// decrements the counter.
-	success := false
-	defer func() { releaseID(success) }()
+	// Roll back only before persistence can reserve the identity. A failed
+	// skeleton write may retain immutable consent without a record or payload;
+	// that ID must remain consumed even though this spawn is denied.
+	keepID := false
+	defer func() { releaseID(keepID) }()
 
 	repoRoot := roots.store
 	dispatchTierBConfirmedOpen()
@@ -816,12 +814,7 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 	}
 	defer releaseMission()
 
-	globalRoot, err := tierBGlobalRoot()
-	if err != nil {
-		return writeAgentBlock(w,
-			fmt.Sprintf("ethos pre-tool-use: resolving global root for delegation lock: %v", err))
-	}
-	releaseDelegation, err := mission.AcquireDelegationLock(globalRoot, delegationID)
+	releaseDelegation, err := store.AcquireDelegationLock(delegationID)
 	if err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: acquiring delegation lock for %q: %v", delegationID, err))
@@ -860,7 +853,15 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
 	promptBody, _ := toolInput["prompt"].(string)
-	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
+	policy, repository := store.RepositoryPolicy()
+	if !repository {
+		return writeAgentBlock(w, "ethos pre-tool-use: Tier B skeleton requires a validated repository policy")
+	}
+	artifacts := mission.DelegationArtifactsDir(repoRoot, missionID, delegationID)
+	if err := layout.EnsureLocalDir(policy, artifacts); err != nil {
+		return writeAgentBlock(w, fmt.Sprintf("ethos pre-tool-use: preparing artifacts: %v", err))
+	}
+	if _, err := mission.WriteDelegationSkeletonWithPolicy(policy, missionID, delegationID, mission.DelegationSkeleton{
 		Tier:             mission.TierB,
 		ParentDelegation: parentDelegation,
 		ParentSession:    sessionID,
@@ -868,6 +869,10 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 		Prompt:           []byte(promptBody),
 		BoundVia:         boundVia,
 	}); err != nil {
+		var reserved *mission.DelegationReservedError
+		if errors.As(err, &reserved) {
+			keepID = true
+		}
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))
 	}
@@ -875,11 +880,11 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 	// regardless of whether the downstream depth check or response
 	// encode succeeds — rolling the counter back here would let the
 	// next NewID return the same delegation_id and collide with the
-	// just-written record. Commit the counter (success=true) at this
+	// just-written record. Commit the counter (keepID=true) at this
 	// point; failures past here log to stderr but do not rollback
 	// (Bugbot HIGH on PR #327 d12ade2: rolling back after the
 	// skeleton is on disk enables ID reuse → directory collision).
-	success = true
+	keepID = true
 
 	// Depth gate (DES-054 v5): walk parent_delegation chain and refuse
 	// if adding this spawn would exceed the configured ceiling. The
@@ -888,7 +893,7 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 	// (terminated before the worker started) from a spawn that ran and
 	// failed downstream. The walker fails closed on a missing or
 	// unparseable ancestor; we refuse rather than silently admit.
-	if reason, ok := enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation); !ok {
+	if reason, ok := enforceDelegationDepth(roots, missionID, delegationID, parentDelegation); !ok {
 		return writeAgentBlock(w, reason)
 	}
 
@@ -914,7 +919,7 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 		"PARENT_DELEGATION_ID":  delegationID,
 		"MISSION_ID":            missionID,
 		"PARENT_SESSION_ID":     sessionID,
-		"MISSION_ARTIFACTS_DIR": mission.DelegationDir(repoRoot, missionID, delegationID),
+		"MISSION_ARTIFACTS_DIR": artifacts,
 	}
 	if err := json.NewEncoder(w).Encode(preToolUsePassWithEnv(env)); err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -950,8 +955,9 @@ func dispatchTierB(w io.Writer, roots tierBRoots, sessionID, missionID string, t
 // rather than a silent admit: a runaway recursive spawn pattern is
 // exactly what the depth gate exists to defeat, and silently treating
 // a missing ancestor as zero depth would let one through.
-func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation string) (string, bool) {
-	limit, err := resolve.ResolveMaxDelegationDepth(repoRoot, mission.MaxDelegationDepthDefault)
+func enforceDelegationDepth(roots tierBRoots, missionID, delegationID, parentDelegation string) (string, bool) {
+	repoRoot := roots.store
+	limit, err := roots.maxDelegationDepth()
 	if err != nil {
 		closeDelegationAborted(repoRoot, missionID, delegationID)
 		return fmt.Sprintf(
@@ -1042,9 +1048,9 @@ func storeDenyError(err error) error {
 		"repository that holds the .punt-labs/ethos store", err)
 }
 
-// tierBRepoRoot is the current work tree root for the per-checkout portions of
-// the hook — the audit/precondition read path, whose entries live in the
-// committing checkout, not the shared store. Store portions use the tier-B store root (locateTierBRoots).
+// tierBRepoRoot is the legacy checkout-only location helper. Request paths use
+// the captured Located snapshot instead: audit history lives at S, while paths
+// recorded in that history are interpreted against C.
 // Outside a repository it is ("", nil): there is no checkout. Any other
 // failure is returned as the error, never answered with the working directory,
 // which would read audit entries from whatever directory the hook happened to
@@ -1071,11 +1077,8 @@ func tierBGlobalRoot() (string, error) {
 	return filepath.Join(home, ".punt-labs", "ethos"), nil
 }
 
-// tierBMissionStore builds the mission store the dispatch path reads.
-// Mirrors cmd/ethos/mission.go's missionStore() but contained in the
-// hook package so the PreToolUse entry point stays a single-argument
-// (io.Reader, io.Writer) interface — adding deps would force a
-// cmd/ethos/hook.go change outside the mission's write_set.
+// tierBMissionStore builds the mission store from the dispatch's entry-time
+// roots and configuration, without a second location/configuration read.
 //
 // Errors from os.UserHomeDir surface as a block decision rather than
 // a silent allow; the hook fails closed when its persistence layer is
@@ -1097,12 +1100,8 @@ func tierBMissionStore(roots tierBRoots) (*mission.Store, error) {
 	// tree in a linked worktree (CR#1). Without this the dispatch hook reads
 	// a different store than the CLI wrote and refuses the spawn.
 	//
-	// WithCheckoutRoot keeps the two-root invariant uniform across every
-	// mission Store: the record resolves to the store root, the DES-058 audit
-	// zone to the checkout (tierBRepoRoot). The dispatch path only Loads the
-	// contract today (no event append/read), so this is defensive — but it
-	// means a future audit access here cannot silently route to the store tree
-	// (PR #370 sweep).
+	// The policy keeps shared records and local history at S, and uses C for
+	// path interpretation and publication. The store receives that same policy.
 	//
 	// The checkout root FOLLOWS the store root to "" outside a repository:
 	// the tier-B store root (locateTierBRoots) refuses a bad ETHOS_REPO_ROOT (which must hold a
@@ -1110,8 +1109,18 @@ func tierBMissionStore(roots tierBRoots) (*mission.Store, error) {
 	// store, so it would re-accept the refused path. Pairing them unconditionally would let the audit zone
 	// resurrect a path the store already refused (PR #370 override-resurrection
 	// class, same guard as missionCheckoutRoot + runUI).
-	return mission.NewStoreWithRoots(roots.store, globalRoot).
-		WithCheckoutRoot(roots.checkout), nil
+	if roots.store == "" {
+		return mission.NewStore(globalRoot), nil
+	}
+	loc := roots.located
+	if loc == nil {
+		loc = &resolve.Located{Store: roots.store, Checkout: roots.checkout}
+	}
+	p, err := loc.Layout()
+	if err != nil {
+		return nil, err
+	}
+	return mission.NewRepositoryStore(p, globalRoot), nil
 }
 
 // writeAgentBlock emits a block decision with a named reason. Used on
@@ -1123,9 +1132,12 @@ func writeAgentBlock(w io.Writer, msg string) error {
 
 // tierBRoots is where the repository is, located once per hook invocation by
 // dispatchAgent (or evalContractPreconditions) and passed to everything that
-// follows: the store root holds the mission record, the checkout holds the
-// audit zone. Nothing below looks either up again.
-type tierBRoots struct{ store, checkout string }
+// follows: the store owns mission records and local audit history; the checkout
+// owns path interpretation and publication. Nothing below locates either again.
+type tierBRoots struct {
+	store, checkout string
+	located         *resolve.Located
+}
 
 // locateTierBRoots locates the store and, when there is one, the checkout. The
 // checkout follows the store to "" outside a repository: the tier-B store root (locateTierBRoots) refuses
@@ -1133,11 +1145,14 @@ type tierBRoots struct{ store, checkout string }
 // override directory with no store, so pairing them unconditionally would let
 // the audit zone resurrect a path the store already refused.
 func locateTierBRoots() (tierBRoots, error) {
-	loc := resolve.Roots()
+	return tierBRootsFromLocated(resolve.Roots())
+}
+
+func tierBRootsFromLocated(loc resolve.Located) (tierBRoots, error) {
 	if err := loc.StoreFailure(); err != nil {
 		return tierBRoots{}, storeDenyError(err)
 	}
-	r := tierBRoots{store: loc.Store}
+	r := tierBRoots{store: loc.Store, located: &loc}
 	if loc.Store != "" {
 		if loc.CheckoutErr != nil {
 			return tierBRoots{}, fmt.Errorf("locating the checkout: %w", loc.CheckoutErr)
@@ -1145,4 +1160,24 @@ func locateTierBRoots() (tierBRoots, error) {
 		r.checkout = loc.Checkout
 	}
 	return r, nil
+}
+
+// maxDelegationDepth is the pure-config counterpart of the legacy resolver:
+// zero/absent uses the default; a negative value is an explicit error.
+func (r tierBRoots) maxDelegationDepth() (int, error) {
+	limit := mission.MaxDelegationDepthDefault
+	if r.located == nil || r.located.Config == nil || r.store == "" {
+		return limit, nil
+	}
+	if err := r.located.ConfigErr; err != nil {
+		return limit, err
+	}
+	n := r.located.Config.MaxDelegationDepth
+	if n < 0 {
+		return limit, fmt.Errorf("resolve max_delegation_depth: max_delegation_depth must be non-negative (got %d)", n)
+	}
+	if n != 0 {
+		limit = n
+	}
+	return limit, nil
 }

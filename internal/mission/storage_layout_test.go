@@ -13,12 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestStorageLayout_FullLifecycleAllFilesInRepoTree drives a single
-// mission through every state-producing operation the Store exposes
-// and asserts that EVERY artifact lands at <repoRoot>/.punt-labs/
-// ethos/missions/<id>/<file>, with the only exception being the
-// per-mission flock (which by DES-054 design lives under the global
-// tree because lockfile inodes must not move between layers).
+// TestStorageLayout_FullLifecycleAllFilesInRepoTree drives repository
+// lifecycle writes and checks the DES-079 record/local boundary.
 //
 // The lifecycle:
 //
@@ -68,8 +64,8 @@ func TestStorageLayout_FullLifecycleAllFilesInRepoTree(t *testing.T) {
 	r := reflectionFor(id, 1, RecommendationContinue)
 	require.NoError(t, s.AppendReflection(id, r))
 
-	assertFileExists(t, filepath.Join(perMissionDir, "reflections.yaml"),
-		"AppendReflection must write reflections.yaml into the repo tree")
+	assertFileExists(t, s.reflectionArchivePath(id, 1), "full reflection detail must stay local")
+	assertFileMissing(t, filepath.Join(perMissionDir, "reflections.yaml"), "blame must not publish reflection prose")
 
 	// --- 3. Result produces results.yaml ---
 
@@ -92,8 +88,8 @@ func TestStorageLayout_FullLifecycleAllFilesInRepoTree(t *testing.T) {
 	delegationDir := filepath.Join(perMissionDir, "delegations", delegationID)
 	assertFileExists(t, filepath.Join(delegationDir, "record.yaml"),
 		"WriteDelegationSkeleton must write record.yaml into the repo tree")
-	assertFileExists(t, filepath.Join(delegationDir, "prompt.md"),
-		"WriteDelegationSkeleton with a non-empty Prompt must also write prompt.md")
+	assertFileExists(t, delegationPromptPath(s.policy, id, delegationID), "prompt detail must stay local")
+	assertFileMissing(t, filepath.Join(delegationDir, "prompt.md"), "blame must not publish prompt detail")
 
 	// --- 5. Close produces a missions.jsonl trace entry at parent level ---
 
@@ -117,7 +113,7 @@ func TestStorageLayout_FullLifecycleAllFilesInRepoTree(t *testing.T) {
 	// path drift becomes a test failure.
 	want := []string{
 		"contract.yaml",
-		"reflections.yaml",
+		"corrections.yaml",
 		"results.yaml",
 		"delegations",
 	}
@@ -140,8 +136,8 @@ func TestStorageLayout_FullLifecycleAllFilesInRepoTree(t *testing.T) {
 		"results MUST NOT live in legacy global when repoRoot is set")
 	assertFileMissing(t, filepath.Join(legacyDir, id+".reflections.yaml"),
 		"reflections MUST NOT live in legacy global when repoRoot is set")
-	assertFileExists(t, filepath.Join(legacyDir, id+".lock"),
-		"per-mission flock IS expected at the global tree (DES-054 lock invariant)")
+	assertFileMissing(t, filepath.Join(legacyDir, id+".lock"), "repository locks must not depend on the home store")
+	assertFileExists(t, s.MissionLockPath(id), "canonical local mission lock must exist")
 }
 
 // TestStorageLayout_NewStoreOnly_LegacyPathWhenNoRepoRoot pins the

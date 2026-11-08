@@ -65,6 +65,25 @@ func GitCeiling() string {
 	return os.TempDir()
 }
 
+// OutsideRepo creates an empty directory with a test-owned parent as Git's
+// ceiling, so discovery never examines an enclosing repository or broken .git.
+// The ceiling must be a proper ancestor, not the directory itself. It is restored
+// at cleanup. Subprocesses must inherit it or include it in their explicit env.
+// This changes the process environment and must not be used in parallel tests.
+func OutsideRepo(t testing.TB) string {
+	t.Helper()
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolving outside-repository fixture parent: %v", err)
+	}
+	dir := filepath.Join(parent, "outside")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("creating outside-repository fixture: %v", err)
+	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", parent)
+	return dir
+}
+
 // IsolateGit prepares the test process for running git: it unsets every git
 // location, configuration and identity variable and sets
 // GIT_CEILING_DIRECTORIES to the temporary root, so a temporary directory

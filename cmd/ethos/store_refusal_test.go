@@ -131,6 +131,10 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 		{"identity", "whoami"},
 		{"session", "start"},
 		{"adr", "create", "--title", "t", "--decision", "d"},
+		{"adr", "list"},
+		{"adr", "show", "DES-001"},
+		{"adr", "settle", "DES-001"},
+		{"adr", "migrate", "DES-001"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
@@ -166,9 +170,6 @@ func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
 		{"session", "delete-current", "--pid", "1"},
 		{"iam", "x"},
 		{"session", "iam", "x"},
-		{"adr", "list"},
-		{"adr", "show", "x"},
-		{"adr", "settle", "x"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
@@ -213,11 +214,10 @@ func TestStoreRefusalExemptions(t *testing.T) {
 			{"session", "write-current"}, {"session", "purge"}, {"session", "end"},
 			{"session", "join"}, {"session", "leave"}, {"session", "create"},
 			{"session", "delete"}, {"session", "delete-current"},
-			{"iam"}, {"session", "iam"},
-			{"adr", "list"}, {"adr", "show"}, {"adr", "settle"}},
+			{"iam"}, {"session", "iam"}},
 		storeRefuses: {{"identity", "list"}, {"mission", "list"},
 			{"whoami"}, {"identity", "whoami"},
-			{"session", "start"}, {"adr", "create"}},
+			{"session", "start"}, {"adr", "create"}, {"adr", "list"}, {"adr", "show"}, {"adr", "settle"}, {"adr", "migrate"}},
 	}
 	for want, cmds := range cases {
 		for _, args := range cmds {

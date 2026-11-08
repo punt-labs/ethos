@@ -2,6 +2,9 @@
 % spec-mission-lifecycle.tex
 %
 % Mission Lifecycle: A Z Specification
+% DES-079 shared-decision amendment, November 2026. Legacy citations and
+% historical runs are retained, not recertified. New protocol clauses are
+% refinement obligations until the accompanying implementation is tested.
 % A formal model of the mission-contract state machine implemented in
 % internal/mission (mission.go, store.go, validate.go, delegation.go,
 % correct.go) and, for the two delegation-refusal call sites Abandon's
@@ -27,16 +30,31 @@
 \usepackage{fuzz}
 \usepackage{booktabs}
 \usepackage{tabularx}
+\usepackage{longtable}
+\PassOptionsToPackage{obeyspaces}{url}
+\usepackage{xurl}
 \usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
 
-\newcommand{\fpath}[1]{\texttt{#1}}
-\newcommand{\field}[1]{\texttt{#1}}
+\newcommand{\fpath}[1]{\nolinkurl{#1}}
+% Break prose identifiers at word boundaries; mathematical fields stay boxed.
+\ExplSyntaxOn
+\NewDocumentCommand{\breakfield}{m}{
+  \group_begin:
+  \tl_set:Nn \l_tmpa_tl {#1}
+  \regex_replace_all:nnN {([a-z])([A-Z])} {\1\c{allowbreak}\2} \l_tmpa_tl
+  \tl_replace_all:Nnn \l_tmpa_tl {\_} {\_\allowbreak}
+  \texttt{\tl_use:N \l_tmpa_tl}
+  \group_end:
+}
+\ExplSyntaxOff
+\newcommand{\field}[1]{\ifmmode\texttt{#1}\else\texorpdfstring{\breakfield{#1}}{#1}\fi}
+\emergencystretch=2em
 
 \begin{document}
 
 \title{Mission Lifecycle: A Z Specification}
 \author{Mike S, for Punt Labs}
-\date{August 2026 (re-baselined September 2026)}
+\date{November 2026 (shared-decision amendment)}
 \hypersetup{
   pdftitle={Mission Lifecycle: A Z Specification},
   pdfauthor={Punt Labs},
@@ -52,20 +70,25 @@
 \label{sec:scope}
 % ===================================================================
 
-This specification models the mission-contract lifecycle as it is
-implemented today in \fpath{internal/mission}: the status values a
+This specification models the mission-contract lifecycle in
+\fpath{internal/mission}: the status values a
 contract can hold (\field{validStatuses}, mission.go:10--28), the nine
 transitions named below --- create, delegate, delegate-aborted,
 disclaim-delegation, submit-result, reflect, advance-round, close,
 abandon --- and the invariants those transitions must jointly
 preserve. \field{DelegateAborted} and \field{DisclaimDelegation} are
 new in this revision (DES-076, \S\ref{sec:opabandon}); the other seven
-carry over from the original baseline. It is a baseline, not a design
-proposal: every predicate below is read off existing code, cited by
-file and line, and the point of writing it down is to give a fixed
-target that future changes to \fpath{internal/mission} must not
-violate without a deliberate, reviewed amendment to this document ---
-see the currency rule, \S\ref{sec:currency}.
+carry over from the original baseline. The November 2026 DES-079
+amendment makes compact round decisions shared authority and separates
+them from machine-local reflective detail. It adds protected Update
+and a correction stutter to the abstract operation set; preparation,
+required-event delivery and acceptance are separate concrete steps
+(\S\ref{sec:decision-protocol}). These are implementation obligations,
+not a claim that concurrent implementation work already satisfies
+them. Older file/line citations describe the September baseline;
+historical model-check counts in \S\ref{sec:validation} do not certify
+the amended model. Changes require deliberate review under
+\S\ref{sec:currency}.
 
 \subsection{Modelling choice: one mission at a time}
 \label{sec:modelling-one-mission}
@@ -114,16 +137,14 @@ obscure rather than sharpen the model:
     depends on an external \field{RoleLister} and is opt-in (nil
     disables it); it is an identity-system concern, not a
     lifecycle-state concern.
-  \item \textbf{Generic \field{Store.Update}} (store.go:878--946) lets
-    a caller rewrite an arbitrary field of an open contract. It is not
-    one of the nine named transitions and none of the CLI/MCP surfaces
-    route ordinary lifecycle events through it. It now refuses a
-    terminal on-disk mission the same way its six siblings do
-    (ethos-fhns), but a caller can still forge an open mission's
-    \field{Status} directly to a terminal value through it, past
-    \field{Close}'s and \field{Abandon}'s own gates --- see the
-    disclosed divergence in \S\ref{sec:ops} and bead
-    \field{ethos-w1ii}.
+  \item \textbf{Non-lifecycle fields edited by \field{Store.Update}}
+    are outside the state schema. Update is no longer excluded as an
+    authority bypass: \field{UpdateProtected} below requires comparison
+    against the latest locked contract and frames protected authority.
+    Worker reassignment remains modeled explicitly; no new role-overlap
+    guard is invented for Update.
+    The older implementation's whole-contract replacement remains a
+    disclosed implementation gap until those checks land.
   \item \textbf{Pipelines, \field{depends\_on}, delegation-inheritance
     templates, and preconditions} (\field{Contract} fields
     \field{Pipeline}, \field{DependsOn}, \field{Preconditions},
@@ -161,72 +182,38 @@ obscure rather than sharpen the model:
     when it runs.
 \end{itemize}
 
-\subsection{DES-072 correction events: excluded, with cause}
+\subsection{Corrections: shared authority, lifecycle stutter}
 \label{sec:des072}
 
-DES-072 (DESIGN.md; \#478, commit-dated 2026-08-22) adds
-\field{Store.Correct} (correct.go:187--228), a new operation on an
-\emph{already-closed} mission: it records a factual correction, a
-fabrication finding, or a decision annotation as a new \texttt{correct}
-event on the mission's append-only event log. This is exactly the
-kind of post-terminal write the mission brief for this re-baseline
-asks to be either modelled or excluded by name, with a restated
-\field{TerminalIsFinal} if modelled. It is excluded, for a reason the
-implementation itself states as a design invariant, not merely as an
-empirical observation about the current code:
+The historical DES-072 implementation (correct.go:187--228) appends
+only an event. Under DES-079, \fpath{corrections.yaml} is shared
+append-only correction authority; the local event is not a sufficient
+clone-visible source. The strict envelope is \field{version: 1},
+\field{mission}, and \field{entries}, each entry containing an ID,
+creation timestamp and the existing redacted Correction value. An
+initialized empty envelope is different from absent/unmigrated data.
+New Create must prepare the empty shared correction authority before
+making the new contract visible; legacy import must explicitly mark
+complete empty history rather than infer it from a missing file.
+Import cannot declare a partially decoded tolerant event log complete.
+Do not deduplicate distinct annotations by prose equality.
 
-\begin{quote}
-``\emph{Correct never touches contract.yaml, results.yaml,
-reflections.yaml, or any of the Mission schema's fields --- the
-operation's entire effect is one appendEventLocked call with Event:
-"correct". This is why Correct cannot falsify the TerminalIsFinal
-theorem: there is no Mission value in scope for it to mutate.}''
-(correct.go:163--171)
-\end{quote}
+Preserve the existing guards: terminal mission, validated correction
+and resolved author, matching mission, round zero (whole mission) or
+a round no greater than CurrentRound. The required event is durably
+recorded \emph{before} installing shared correction authority, using
+the same acceptance distinction as the reflection protocol. A known
+receipt supports recovery idempotence; indistinguishable repeated
+user requests do not imply exactly-once correction without an explicit
+reusable request ID.
 
-Three facts, checked directly against \field{Store.Correct}
-(correct.go:187--228), justify the exclusion:
-
-\begin{enumerate}
-  \item \textbf{Guard is the complement of every modelled operation's.}
-    \field{Correct} refuses \field{status = stOpen}
-    (correct.go:207--210: ``\emph{corrections apply only to closed
-    missions}'') --- the opposite of every operation in
-    \S\ref{sec:ops}, all of which \emph{require}
-    $\field{status} = \field{stOpen}$. A correction is definitionally
-    unreachable from any state this specification's operation set can
-    still act on.
-  \item \textbf{No write touches a \field{Mission} field.} The
-    function body (correct.go:211--226) validates the correction,
-    checks \field{staged.Mission} and \field{staged.Round} against the
-    loaded contract, then calls exactly one
-    \field{s.appendEventLocked} (correct.go:221--226) with
-    \field{Event: EventCorrect}. \field{status}, \field{CurrentRound},
-    \field{Budget.Rounds}, \field{Worker}, \field{Evaluator}, the
-    delegations directory, and the results file are all read-only
-    inputs to a validation check --- none is ever written.
-  \item \textbf{The event log is not part of the \field{Mission}
-    state schema.} \S\ref{sec:state}'s \field{Mission} schema already
-    omits the event log entirely (it is an audit trail, not lifecycle
-    state --- the same omission that lets \field{Leader}, per
-    \S\ref{sec:basic}, be left out of the schema even though it rides
-    on every event). A \texttt{correct} event appended to a log this
-    specification does not model cannot change a reachable
-    \field{Mission} value, by construction.
-\end{enumerate}
-
-Given all three, \field{TerminalIsFinal} (\S\ref{sec:theorems}) needs
-no restatement: there is no new value \field{status} can take
-(\field{Correct} never assigns one), and no additional way for
-\field{status}$'$, \field{currentRound}$'$,
-\field{blockingDelegationCount}$'$, or \field{resultRounds}$'$ to
-differ from their pre-state once a mission is terminal. \field{Correct} is a real, callable,
-CLI/MCP-exposed operation --- and a load-bearing fix for the
-fabricated-result incident that motivated it (ethos-11fy, ethos-ecpv)
---- but it operates entirely outside the state space this
-specification checks, which is exactly the intended shape: an audit
-annotation should never be able to reopen, or even perturb, a
-finished mission's status machine.
+\field{CorrectAnnotation} below is $\Xi\field{Mission}$, not a new
+terminal status or a reopening transition. Correct may change shared
+corrections and local trace, which are outside this lifecycle state,
+but must frame \emph{every} lifecycle field, including shared round
+decisions. This frame argument replaces the now-inapplicable claim
+that its entire effect is one event append. Terminal finality means
+no further lifecycle change, not absence of every terminal operation.
 
 \subsection{Currency}
 \label{sec:currency}
@@ -304,7 +291,7 @@ Status ::= stOpen | stClosed | stFailed | stEscalated | stAbandoned
 
 \field{stClosed}, \field{stFailed}, and \field{stEscalated} are the
 three statuses \field{Store.Close} can produce
-(store.go:963--964: ``\emph{must be closed, failed, or escalated}'').
+(store.go:\allowbreak963--964: ``\emph{must be closed, failed, or escalated}'').
 \field{stAbandoned} is reachable only through \field{Store.Abandon}
 (store.go:1290--1487) and is explicitly excluded from \field{Close}'s
 own range (store.go:957--965, comment: ``\emph{StatusAbandoned is
@@ -396,7 +383,7 @@ maxDelegations = 2
 \end{axdef}
 
 % ===================================================================
-\section{State}
+\section{State and shared-authority retrieve relation}
 \label{sec:state}
 % ===================================================================
 
@@ -416,9 +403,57 @@ currentRound \in 1 \upto budgetRounds \\
 blockingDelegationCount \leq maxDelegations \\
 resultRounds \subseteq 1 \upto budgetRounds \\
 \dom reflected \subseteq 1 \upto budgetRounds \\
+\dom reflected \subseteq 1 \upto currentRound \\
+1 \upto (currentRound - 1) \subseteq \dom reflected \\
+\forall r : 1 \upto (currentRound - 1) @
+  reflected(r) \notin TerminalRecommendation \\
 status = stAbandoned \implies
   (blockingDelegationCount = 0 \land resultRounds = \emptyset)
 \end{schema}
+
+\field{reflected} retains its historical name to keep the operation
+frames readable, but now denotes \emph{accepted shared decisions}, not
+the locally readable prose file. For v1 contracts the retrieve relation
+maps each \field{round\_decisions.entries} record's round to its
+recommendation. Contract status/current round/budget/evaluator remain
+the sole authority for those fields; results and blocking delegations
+are retrieved from their existing shared records. No local intent,
+event, archive, mode setting or reason string contributes permission.
+
+The three new predicates impose the v1 crossed-round prefix: no future
+decision, an entry for every round already crossed, and only permitting
+recommendations on that prefix. Application of the partial function is
+defined by the preceding domain inclusion. The current round may have
+zero or one decision, including stop/escalate. These predicates specify
+valid authority; mutant searches must use a weaker structural state
+and an external safety query, otherwise primed schema predicates would
+absorb faulty transitions (\S\ref{sec:validation}).
+
+\textbf{Strict representation.} New Create writes a non-null
+\field{round\_decisions} block with \field{version: 1} and explicit
+\field{entries: []}. Each compact entry has exactly \field{id}
+(32 lowercase hexadecimal digits), \field{round}, \field{created\_at},
+\field{author}, and \field{recommendation}. IDs and rounds are unique;
+entries are strictly round-sorted, at most ten and within the contract's
+current round and budget. All five recommendations remain accepted.
+Signals, converging, reason, prose hashes, and copies of budget or
+evaluator are excluded. Full Reflection submission validation remains
+mandatory. Validate a supplied timestamp; fill a blank one once and
+reuse it on retry, matching existing submission semantics. Legacy
+import may preserve an unknown timestamp; do not invent one.
+
+An omitted block is legacy authority, not initialized empty authority.
+Explicit null, unknown versions/keys, duplicate keys, absent or null
+entries, malformed records and multiple documents refuse. Inspect YAML
+node presence/kind: an optional Go pointer alone cannot distinguish
+omission from explicit null. Default-filling applies only to legacy
+input. Upgrade maps strictly validated legacy reflections, with the
+existing blank-mission backfill, into compact entries. An incomplete
+crossed prefix, terminal decision on a crossed round, or unreadable
+source refuses automatic upgrade; neither CurrentRound nor an event
+alone fabricates a continue decision. Read-only legacy display may
+report unknown history. Preserve existing evaluator pins; a missing
+legacy pin does not become today's identity hash.
 
 \field{blockingDelegationCount} models \field{countBlockingDelegations}'s
 return value (store.go:1959--1999) --- the count \field{Abandon}'s own
@@ -434,7 +469,7 @@ block' are no longer the same question once either exclusion
 applies}''), and only the second one bears on any invariant this
 specification checks.
 
-Six predicates, grouped into three invariants:
+The baseline predicates and the new shared-prefix requirement:
 
 \begin{itemize}
   \item \field{budgetRounds} $\in 1 \upto \field{maxRounds}$ and
@@ -444,9 +479,10 @@ Six predicates, grouped into three invariants:
     [1,\field{budget.rounds}]$, validate.go:243--253) --- \textbf{round
     number never exceeds the budget}.
   \item \field{blockingDelegationCount} $\leq \field{maxDelegations}$
-    and the \field{resultRounds}/\field{reflected} domain bounds are
-    ProB animatability conditions with no code counterpart --- they
-    only keep the state space finite.
+    is a finite-animation bound. The result-round bound retains the
+    baseline abstraction; shared decision domain and crossed-prefix
+    predicates are now v1 validation obligations, not merely
+    animation bounds.
   \item The final line is the \textbf{abandon invariant}: a mission
     in state \field{stAbandoned} has zero \emph{blocking} delegations
     and no results for any round. This is the property store.go:
@@ -487,11 +523,13 @@ enforces it, but only at \field{Store.Create} --- it is not one of
 hand-edited on-disk contract with \field{worker} = \field{evaluator}
 would load without error. Encoding it as a standing schema invariant
 would overstate what the real code guarantees. It appears instead as
-a guard on \field{Init} only (\S\ref{sec:init}); every other
-operation below leaves \field{worker} and \field{evaluatorHandle}
-unchanged, so the property, once established at creation, survives
-every transition this specification models --- but that is a fact
-about which operations exist, not a checked invariant.
+a guard on \field{Init} only (\S\ref{sec:init}). The named lifecycle
+transitions leave worker/evaluator unchanged. The newly included
+UpdateProtected may reassign the worker, matching the existing
+generic update semantics; this amendment does not invent a new
+worker/evaluator-separation check on Update. Consequently separation
+at creation is not a trajectory invariant of the expanded operation
+set. The evaluator tuple itself remains frozen.
 
 % ===================================================================
 \section{Initialization}
@@ -502,7 +540,11 @@ about which operations exist, not a checked invariant.
 (store.go:606--728) as prepared by \field{ApplyServerFields}
 (store.go:323--368): a freshly created mission is always
 \field{stOpen}, at round~1, with zero blocking delegations and zero
-results.
+results. New-format Create also initializes the explicit empty v1
+decision block and ignores supplied permission entries. Strict legacy
+upgrade is separate, not a license to initialize malformed v1 authority
+as empty. Model checking Init's separation guard needs at least two
+HANDLE values.
 
 \begin{schema}{Init}
 Mission'
@@ -528,10 +570,9 @@ built their \field{Store}, not a choice \field{Create} itself makes.
 \label{sec:ops}
 % ===================================================================
 
-Every operation below requires \field{status = stOpen} as a
-precondition, with the sole exception of \field{Idle}
-(\S\ref{sec:idle}), whose entire purpose is to be enabled exactly
-where the others are not. This is not incidental repetition: it is
+Every lifecycle-changing operation below requires \field{status = stOpen}
+as a precondition. \field{Idle} and \field{CorrectAnnotation} are
+terminal stutters. This is not incidental repetition: it is
 the single fact from which \textbf{terminal states are final} follows
 --- \field{AppendResult}, \field{AppendReflection},
 \field{AdvanceRound}, \field{Close}, \field{Abandon}, and
@@ -545,47 +586,56 @@ it again --- see \field{TerminalIsFinal} (\S\ref{sec:theorems}) for
 the precise claim and the one place it is disclosed as narrower than
 the real code.
 
-\textbf{Disclosed divergence: \field{Store.Update} is asymmetrically
-guarded.} \field{Store.Update} (store.go:878--946) is the seventh
-write path in this package. In the \emph{terminal}$\to$\field{stOpen}
-direction it now carries the same on-disk terminal-state guard as its
-six siblings: \field{onDisk.Status} $\neq$ \field{StatusOpen} refuses
-before any write (store.go:914--916), and the check reads the
-on-disk contract under the per-mission lock, not the caller's
-proposed \field{Status} --- a caller cannot resurrect a closed,
-failed, escalated, or abandoned mission by forging its own copy's
-\field{Status} back to \field{"open"} (ethos-fhns, fixed on this
-branch; pinned by
-\field{TestStore\_Update\_CannotReopenClosedMission},
-store\_test.go:4279).
+\textbf{Protected Update is a required refinement, not an existing
+guarantee.} The September baseline's Update refused terminal missions
+but replaced the entire caller-supplied open contract, allowing an
+open-to-terminal bypass of Close/Abandon (ethos-w1ii). The inspected
+pre-amendment store.go:929--954 also accepts changed budget/evaluator
+fields. Under the mission lock, compare against the \emph{latest}
+on-disk contract and reject differences in decisions, current round,
+status/closed-at, the whole Budget and the entire Evaluator tuple.
+An allowlisted edit representation is also sound. Explicitly stale
+authority must not overwrite newer authority. Dedicated operations
+alone own those changes. The abstract protected operation may change
+the worker; every other modeled field is framed. Other editable
+contract metadata is outside this state. This does not weaken any
+decision, budget, evaluator, result, close or abandon gate.
 
-The narrower divergence that remains: once \field{onDisk.Status} is
-confirmed \field{stOpen}, \field{Update} copies the \emph{entire}
-caller-supplied contract (store.go:917: \field{updated := *c}) and
-passes it to \field{s.validateContract} (store.go:920--922), which
-runs \field{Contract.Validate} (validate.go:41--97) --- accepting any
-of the five \field{Status} values with no constraint tying
-\field{Status} to which \emph{other} fields may change alongside it.
-Neither \field{checkResultGateLocked} nor
-\field{countBlockingDelegations} is ever called from \field{Update}'s
-body, so a caller can set \field{c.Status} directly to
-\field{"closed"}/\field{"failed"}/\field{"escalated"} and forge the
-$\field{stOpen} \to \field{CloseableStatus}$ transition past
-\field{Close}'s result gate (\S\ref{sec:opclose}), or to
-\field{"abandoned"} and forge it past \field{Abandon}'s blocking-
-delegation gate (\S\ref{sec:opabandon}) --- filed as bead
-\field{ethos-w1ii}, a real gap in the implementation, not a
-simplification in this specification. \field{TerminalIsFinal}
-therefore holds for \field{Update} in the
-\emph{terminal}$\to$\field{stOpen} direction; it is the
-$\field{stOpen} \to \emph{terminal}$ direction via \field{Update} that
-remains unguarded, and \field{Update} stays excluded from the
-theorem's operation set (\S\ref{sec:theorems}) for that reason ---
-an asymmetric gap, not a wholesale absence of a guard --- rather than
-for lacking a guard outright. It remains a Non-goal for the reasons
-\S\ref{sec:nongoals} already gives (not one of the named transitions,
-no CLI/MCP surface routes ordinary lifecycle events through it), with
-this exception recorded rather than modelled around.
+\begin{schema}{UpdateProtected}
+\Delta Mission \\
+status? : Status \\
+round?, budget? : \nat \\
+worker? : HANDLE \\
+reviewer? : HANDLE \\
+hash? : HASH \\
+decisions? : \nat \pfun Recommendation
+\where
+status = stOpen \\
+status? = status \\
+round? = currentRound \\
+budget? = budgetRounds \\
+reviewer? = evaluatorHandle \\
+hash? = evaluatorHash \\
+decisions? = reflected \\
+status' = status \\
+currentRound' = currentRound \\
+budgetRounds' = budgetRounds \\
+worker' = worker? \\
+evaluatorHandle' = evaluatorHandle \\
+evaluatorHash' = evaluatorHash \\
+blockingDelegationCount' = blockingDelegationCount \\
+resultRounds' = resultRounds \\
+reflected' = reflected \\
+repoRootSet' = repoRootSet
+\end{schema}
+
+ClosedAt, Budget's other components and evaluator PinnedAt are not
+explicit state components at this abstraction level; the concrete
+comparison must include them. Result, advance, close, abandon and
+Update retain their ordinary required-event-failure rollback
+semantics. A failure to roll back is reported, not abstracted as a
+successful unchanged refusal. This amendment introduces no generic
+transaction engine or new compare-and-advance API.
 
 \subsection{Delegate}
 \label{sec:opdelegate}
@@ -631,17 +681,17 @@ immediately, within the same synchronous hook invocation, by
 \field{Verdict: DelegationVerdictAborted}. Exactly two call sites do
 this, and \field{TestAbortedVerdictWriteSites\_MatchKnownThree}
 (store.go:1907--1914, referring to
-\fpath{aborted\_writer\_drift\_test.go}) enforces that the set stays
+    \fpath{aborted_writer_drift_test.go}) enforces that the set stays
 exactly three (the third, \field{closeDelegationSkeletons}'
 escalate-mapping inside \field{Close}, cannot fire here --- see below):
 
 \begin{itemize}
   \item the \field{max\_delegation\_depth} refusal,
     \field{closeDelegationAborted}
-    (internal/hook/pretooluse\_dispatch.go:991--1014);
+    (\fpath{internal/hook/pretooluse_dispatch.go}:991--1014);
   \item the content-hash verifier-gate refusal,
     \field{closeSkeletonOnHashRefusal}
-    (internal/hook/subagent\_start.go:787--833).
+    (\fpath{internal/hook/subagent_start.go}:787--833).
 \end{itemize}
 
 \field{countBlockingDelegations} (store.go:1959--1999) skips any
@@ -748,9 +798,12 @@ repoRootSet' = repoRootSet
 
 \subsection{Reflect}
 
-Models \field{Store.AppendReflection} (store.go:2703--2807): same
-shape as \field{SubmitResult} --- open mission, current round only,
-append-only (store.go:2727--2729, 2749--2756).
+Models acceptance by \field{Store.AppendReflection}: open mission,
+current round only, append-only. The concrete acceptance point is
+installation of the shared decision after durable preparation and
+required-event delivery (\S\ref{sec:decision-protocol}). It still
+requires a valid full Reflection, not merely an enum submitted alone.
+No Result is required here, and the operation does not advance.
 
 \begin{schema}{Reflect}
 \Delta Mission \\
@@ -774,11 +827,15 @@ repoRootSet' = repoRootSet
 
 \subsection{AdvanceRound}
 
-Models \field{Store.AdvanceRound} (store.go:2878--2963): the budget
-check comes first in the real code (``\emph{the operator sees the
-right diagnostic}'', store.go:2894--2898), then the reflection-exists
-check, then the terminal-recommendation refusal
-(store.go:2916--2927).
+Models \field{Store.AdvanceRound}. Read shared authority, then check
+terminal mission, budget exhaustion, absent current decision, terminal
+recommendation, in that order. Optional local prose is not read to
+decide permission. A missing reason changes diagnostic detail only.
+An ordinary required-event failure still rolls back the contract bump.
+Without a reusable request token the API does not promise exactly-once
+advance after a lost response: advance 1--2, reflect on 2, retry an
+unconditional advance may legitimately reach 3. That is not a failure
+of the decision or budget gate, but a limit on retry guarantees.
 
 \begin{schema}{AdvanceRound}
 \Delta Mission
@@ -881,9 +938,15 @@ repoRootSet' = repoRootSet
 \end{schema}
 
 The \field{Mission} state invariant already requires
-$\field{status}' = \field{stAbandoned} \implies
-(\field{blockingDelegationCount}' = 0 \land \field{resultRounds}' =
-\emptyset)$; \field{Abandon}'s own guard is not logically necessary
+\begin{displaymath}
+\begin{array}{l}
+\field{status}' = \field{stAbandoned} \implies \\
+\quad (\field{blockingDelegationCount}' = 0 \land \field{resultRounds}' =
+\emptyset);
+\end{array}
+\end{displaymath}
+\noindent
+\field{Abandon}'s own guard is not logically necessary
 given that invariant and the frame equations above --- it is written
 out anyway, because the guard is the design step (precondition
 calculation is what \field{Store.Abandon}'s author had to get right),
@@ -931,6 +994,243 @@ modelled as ``nothing more happens,'' not ``the machine got stuck.''
 status \neq stOpen
 \end{schema}
 
+\begin{schema}{CorrectAnnotation}
+\Xi Mission \\
+round? : \nat
+\where
+status \neq stOpen \\
+round? \leq currentRound
+\end{schema}
+
+The correction's content, mission ID and author-resolution checks are
+concrete preconditions, not waived by this coarse schema. Zero is the
+whole-mission sentinel. Correction acceptance changes only the shared
+annotation collection and trace, outside \field{Mission}.
+
+% ===================================================================
+\section{Decision preparation, required event, and acceptance}
+\label{sec:decision-protocol}
+% ===================================================================
+
+Let $S$ be \field{resolve.Roots().Store}, $C$ the checkout, and $L$ be
+\fpath{S/.punt-labs/local/ethos}. Resolve a validated policy snapshot;
+all repository-local live files, archives, intents, locks and
+\emph{every temporary file}, including rollback/publication staging,
+belong under $L$. A shared destination still requires same-filesystem
+atomic rename. \texttt{EXDEV} refuses without replacement: no adjacent
+temporary exception and no copy-over fallback. Destination-directory
+sync confirms authority durability; cleanup of the source staging
+directory is a distinct completion concern.
+
+Use one bounded per-round reflection intent, not a generic transaction
+engine. Its strict fields are \field{version: 1}, \field{kind: reflect},
+\field{mission}, \field{decision}, full redacted \field{reflection},
+the final \field{event}, \field{event\_session}, and boolean
+\field{publish}. The event contains \field{operation\_id = decision.id}
+and its final allocated timestamp. The stream identifier is validated
+data, not a path. Derive paths internally. Check agreement of mission,
+round, ID, author and recommendation across every component; store
+neither a stale whole contract nor raw unredacted prose. Captured
+publication consent does not change when a later request changes mode.
+
+Acquire the mission-state lock before the original stream lock. Before
+allowing later mission event writes, reconcile unresolved preparation:
+otherwise later timestamps can overtake an undelivered prepared event.
+Recovery classifies or explicitly aborts; it never accepts a decision
+automatically. Under the locks, validate/normalize/redact/revalidate
+Reflection, check open/current-round/append-only, allocate its event
+timestamp once, then durably persist the full intent. Complete writes,
+file sync and necessary new directory/ancestor sync are prerequisites,
+not the mere existence of a file.
+
+The small phase component below names the protocol's checkpoints. It
+is composed with the abstract mission at acceptance; the payload
+represents one validated request. Phase edges do not model syscalls or
+prove that the filesystem implements their durability assumptions.
+
+\begin{zed}
+[OPID, STREAM, STAMP]
+\end{zed}
+\begin{zed}
+AttemptPhase ::= fresh | prepared | eventDurable | accepted
+               | materialized | aborted
+\end{zed}
+\begin{schema}{AttemptPayload}
+op : OPID \\
+stream : STREAM \\
+stamp : STAMP \\
+attemptRound : \nat \\
+recommendation : Recommendation
+\where
+attemptRound \in 1 \upto maxRounds
+\end{schema}
+\begin{schema}{Attempt}
+AttemptPayload \\
+phase : AttemptPhase
+\end{schema}
+\begin{schema}{InitAttempt}
+Attempt'
+\where
+phase' = fresh
+\end{schema}
+\begin{schema}{PrepareAttempt}
+\Delta Attempt \\
+\Xi AttemptPayload
+\where
+phase = fresh \\
+phase' = prepared
+\end{schema}
+\begin{schema}{DeliverRequiredEvent}
+\Delta Attempt \\
+\Xi AttemptPayload
+\where
+phase = prepared \\
+phase' = eventDurable
+\end{schema}
+\begin{schema}{AcceptDecision}
+Reflect \\
+\Delta Attempt \\
+\Xi AttemptPayload
+\where
+phase = eventDurable \\
+round? = attemptRound \\
+rec? = recommendation \\
+phase' = accepted
+\end{schema}
+\begin{schema}{MaterializeDetail}
+\Delta Attempt \\
+\Xi AttemptPayload
+\where
+phase = accepted \\
+phase' = materialized
+\end{schema}
+\begin{schema}{AbortPreparation}
+\Delta Attempt \\
+\Xi AttemptPayload
+\where
+phase \in \{prepared, eventDurable\} \\
+phase' = aborted
+\end{schema}
+\begin{schema}{RetryAccepted}
+\Xi Attempt
+\where
+phase \in \{accepted, materialized\}
+\end{schema}
+
+Prepare, deliver, abort, materialize and receipt-retry are
+$\Xi\field{Mission}$ at the retrieve boundary. Only AcceptDecision
+refines Reflect. Its concrete linearization point is the shared
+contract rename, after the exact required event is durably present.
+Stage and sync the candidate under $L$, preserving frozen fields from
+the latest locked contract. Sync the destination directory after
+rename. A required-event append/sync failure prevents acceptance and
+returns ordinary failure; preserve truncate-and-sync rollback error
+reporting, including rollback failures. A rename success followed by
+directory-sync failure is \emph{applied, durability unconfirmed}, not
+rolled back. Retain the receipt. Materialization/publication/cleanup
+can remain pending after acceptance because the full reflection is
+already durable in the intent; the required event cannot be pending.
+
+The implementation retains a separate bounded receipt for each round at
+\fpath{L/missions/<id>/reflection-intents/<round>.yaml}. An accepted
+receipt with confirmed matching required delivery must not block Advance
+merely because optional archive, publication or cleanup keeps failing.
+Report that pending work and keep its full payload; preparing a later
+round cannot overwrite the earlier round's only durable detail. A
+missing or conflicting required event, unresolved preparation, or
+conflicting authority remains a mutation fence.
+
+On replay, inspect the \emph{original} live/sealed/archive stream by
+operation ID, including when the caller now belongs to another
+session. Identical complete delivery is already delivered; the same
+ID with different bytes is corruption; a torn tail is not delivery.
+Equal bytes alone do not establish durability after an earlier sync
+failure: re-confirm the necessary file/directory syncs before entering
+eventDurable. Never reinstall authority on an unconfirmed event.
+Reuse the original allocated timestamp rather than re-entering normal
+AppendMonotonic allocation. The reconciliation fence prevents a later
+append from making that older timestamp unsafe to deliver.
+
+\textbf{Acceptance join.} Let \field{decisionIDs} map accepted rounds
+injectively to operation IDs, with the same domain as \field{reflected}.
+A new operation-ID-bearing reflect event is accepted iff a shared
+entry has the same ID and matching mission, round, author and
+recommendation. No matching decision means an uncommitted attempt;
+unreadable authority means acceptance unknown. Raw event existence,
+even in a sealed chunk, never grants permission. An aborted attempt
+may remain forensic evidence but cannot appear as an accepted
+reflection in CLI/MCP/UI or documented filesystem reads.
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.35\textwidth}>{\raggedright\arraybackslash}p{\dimexpr0.65\textwidth-2\tabcolsep\relax}@{}}
+\toprule
+Recovered state & Required outcome \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+No decision/intent & Ordinary new submission. \\
+Intent, no decision & Uncommitted; advance refuses. Exact retry rechecks
+guards and reuses ID/time/stream/consent. A different request requires
+explicit abort/classification first. \\
+Matching decision/receipt & Already applied; finish only local
+materialization/publication/cleanup. No second event or decision. \\
+Decision, missing full payload & Already decided; do not certify
+equality of unavailable prose or accept a replacement. \\
+Conflicting receipt/event & Retain evidence and refuse recovery mutation. \\
+Unreadable authority & Outcome unknown; no lifecycle or recovery writes. \\
+\end{longtable}
+
+The return contract distinguishes application
+(applied/already-applied/not-applied/unknown), durability
+(confirmed/unconfirmed/not-applicable), trace (complete/pending), and
+diagnostics. Required-event failure is not-applied and CLI/MCP failure.
+Post-rename durability warnings must also appear in machine output.
+The protocol is deliberately \emph{not} generalized to result,
+advance, close, abandon or Update: their ordinary event-failure
+rollback remains required. A local summary after close is ancillary,
+not the required close event. Crash-interrupted multi-file rollback
+is not proved atomic by the abstract lifecycle model.
+
+\subsection{Read outcomes and clone refinement}
+
+\begin{zed}
+AuthorityRead ::= decisionPresent | decisionAbsent
+                | legacyUnknown | authorityUnreadable
+\end{zed}
+\begin{zed}
+DetailRead ::= detailPresent | detailAbsent
+             | unavailableHere | detailUnreadable
+\end{zed}
+
+A missing mission is a mission-not-found error. Read authority first.
+No v1 decision plus a prepared intent is decisionAbsent/detailAbsent
+with pending true. A valid shared decision with no admissible detail
+is unavailableHere, not never-submitted. Corrupt optional detail is
+detailUnreadable while authority stays decisionPresent. An I/O,
+permission, path/symlink or decoding failure is never converted into
+absence by falling back to a different layer. A legacy omission is
+legacyUnknown, not a silently initialized block.
+
+Join complete detail per round across matching intent, archive,
+published and supported legacy sources. Equal copies deduplicate;
+unequal copies conflict. Local detail need not form a complete prefix:
+a clone may have published round 1 and local round 2. Do not synthesize
+an invalid empty Reflection or map unavailable detail to an empty
+array without its availability result. The advance gate depends on
+none of these detail reads. A stop with missing reason remains stop.
+
+For the same shared snapshot, Clone, mode changes and optional-detail
+loss are lifecycle stutters and must give identical advance eligibility.
+A Git clone only carries records actually included in its source
+commit; shared-store writes are not automatically in a feature
+checkout's index. Publish the authoritative snapshot before claiming
+squash/clone durability. Local records and intents are not part of
+that premise. Different clones are not coordinated by local flocks.
+Publication must not add a results-for-every-crossed-round precondition:
+Reflect/Advance permit progression without a Result. Only Close needs
+the current-round Result. A publisher must understand the same strict
+decision and correction envelopes as the authoritative store.
+
 % ===================================================================
 \section{Theorems}
 \label{sec:theorems}
@@ -938,24 +1238,27 @@ status \neq stOpen
 
 fuzz type-checks schemas; it does not discharge proof obligations.
 The following are claims about the operation set
-$\{\field{Init}, \field{Delegate}, \field{DelegateAborted},
+\{\field{Init}, \field{Delegate}, \field{DelegateAborted},
 \field{DisclaimDelegation}, \field{SubmitResult}, \field{Reflect},
-\field{AdvanceRound}, \field{Close}, \field{Abandon}\}$, each backed
-by inspection of the schemas above; two (\field{TerminalIsFinal},
-\field{AbandonSafety}) are additionally exercised by ProB animation
-(\S\ref{sec:validation}). \field{EvaluatorHashFrozen} is a syntactic
+\field{AdvanceRound}, \field{Close}, \field{Abandon},
+\field{UpdateProtected}, \field{CorrectAnnotation}\}, each backed
+by inspection of the schemas above. The historical ProB evidence in
+\S\ref{sec:validation} predates the DES-079 amendment and is not a
+run of this amended operation set. \field{EvaluatorHashFrozen} is a syntactic
 guarantee of every operation's frame conjunct --- no reachable
 violation is even expressible, so animation would confirm nothing
 non-trivial. \field{CloseRequiresResult}'s justification is a
 file:line correspondence to the real Go source, which ProB cannot
-check --- it never reads Go code. None of the four claims are
+check --- it never reads Go code. None of these claims are
 discharged by proof:
 
-\begin{center}
-\begin{tabularx}{\textwidth}{@{}lX@{}}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.30\textwidth}>{\raggedright\arraybackslash}p{\dimexpr0.70\textwidth-2\tabcolsep\relax}@{}}
 \toprule
 \textbf{Theorem} & \textbf{Justification} \\
 \midrule
+\endhead
+\bottomrule
+\endfoot
 \field{EvaluatorHashFrozen} &
   Every operation's predicate includes
   $\field{evaluatorHash}' = \field{evaluatorHash}$ (or, for
@@ -970,22 +1273,16 @@ discharged by proof:
   \field{SubmitResult}, \field{Reflect}, \field{AdvanceRound},
   \field{Close}, and \field{Abandon} all guard on $\field{status} =
   \field{stOpen}$. Once $\field{status}' \neq \field{stOpen}$ (via
-  \field{Close} or \field{Abandon}), no operation in this set is
-  enabled again --- \field{status} is absorbing at every value in
+  \field{Close} or \field{Abandon}), no lifecycle-changing operation
+  in this set is enabled again --- \field{status} is absorbing at every value in
   \field{CloseableStatus} $\cup \{ \field{stAbandoned} \}$, for the
-  operation set this specification models. DES-072's
-  \field{Correct} does not extend this set; \S\ref{sec:des072}
-  establishes why it cannot falsify this claim without being modelled
-  at all. \field{Store.Update} (store.go:878--946) holds this claim
-  in one direction only: its own on-disk terminal-state guard
-  (store.go:914--916, ethos-fhns) makes
-  \emph{terminal}$\to$\field{stOpen} via \field{Update} exactly as
-  unreachable as it is via every operation in this set, but
-  $\field{stOpen} \to \emph{terminal}$ via \field{Update} remains
-  unguarded (bead \field{ethos-w1ii}) --- \field{Update} is excluded
-  from this theorem's operation set for that one-sided gap, not for
-  lacking a guard outright; \S\ref{sec:ops} gives the full disclosed
-  divergence. \\
+  operation set this specification models. CorrectAnnotation and Idle
+  explicitly frame every lifecycle field at terminal states.
+  UpdateProtected is guarded by open status and comparison against
+  locked authority; its worker reassignment cannot change any terminal
+  mission. The legacy whole-contract Update bypass
+  is not covered by this claim; implementing that protection is a
+  prerequisite, not a consequence of writing its schema. \\
 \field{CloseRequiresResult} &
   \field{Close}'s guard $\field{currentRound} \in
   \field{resultRounds}$ is exactly the calculated precondition of
@@ -1005,14 +1302,100 @@ discharged by proof:
   and every other operation because it either leaves \field{status} at
   \field{stOpen} or does not touch \field{status} at \field{stAbandoned}
   at all. \\
-\bottomrule
-\end{tabularx}
-\end{center}
+\field{SharedDecisionPrefix} &
+  Init has an empty crossed prefix. Reflect adds only the current
+  round, without changing the prefix. Advance's explicit domain and
+  nonterminal guards extend it by one permitting decision. All other
+  abstract operations frame currentRound and reflected. This is an
+  inspection argument; an external mutant search must not use the
+  same property as a primed State predicate. \\
+\end{longtable}
 
 % ===================================================================
-\section{Validation: the abandon fail-open regression}
+\section{DES-079 validation obligations}
+\label{sec:des079-validation}
+
+Both amended maintained documents passed direct fuzz type checking
+during the November edit. That is not model checking. In that author's
+context, the available tool catalog exposed no native zspec schemas/calls.
+The explicitly authorized CLI invocation
+\texttt{z-spec model-check FILE --setsize 2 --max-ops 1000 --timeout 30000}
+and the corresponding \texttt{z-spec test} request on scratch input
+were permission-rejected before execution. That author obtained no ProB
+counts or counterexamples. The separately attributed parent runs below
+do not turn the denied requests into executed checks.
+
+The task's \fpath{.tmp/opencode/formal-*} scratch models separate the
+checks from the maintained compound document: a three-round protocol
+model (budget 3, structural numeric domain through 4), an event-order
+mutant, a missing-local-detail gate mutant, and a three-round lost-
+response replay witness. HANDLE is instantiated with setsize 2 so
+distinct worker/evaluator initialization is satisfiable. Permitting
+recommendations are collapsed to one value and terminal ones to one
+value only in the bounded protocol model; the maintained enum and
+implementation tests retain all five values.
+
+The scratch safety goal is failure of the crossed-prefix/domain,
+operation-ID delivery join or logical-event-count property, not an
+always-framed \field{unsafeAdvance} flag. A pre-state-only monitor
+freezes at the first bad successor, encoding that goal as a deadlock.
+Safety is absent from the structural State and its prime, so a faulty
+installation/advance is not swallowed. A healthy-state idle loop is
+diagnostic infrastructure, not evidence of product liveness. The
+replay witness intentionally targets round 3 after a lost 1--2 response
+and a valid round-2 reflection; reaching it limits an exactly-once
+claim, not the unchanged API's actual budget/decision contract.
+
+Scratch inputs passed fuzz. The parent subsequently executed ProB on
+these bounded scratch models; independent formal review by jra in round
+23 accepted the models and evidence. Logs are
+\fpath{.tmp/opencode/formal-*-prob.log}. The protocol bound is three rounds,
+two recommendation classes, three operation IDs and two handles; the
+audit bound is two lines and two modes. These are scratch-model results,
+not a whole-file certification of either maintained compound document.
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedleft\arraybackslash}p{3em}>{\raggedleft\arraybackslash}p{5.5em}>{\centering\arraybackslash}p{2.5em}>{\raggedright\arraybackslash}p{\dimexpr0.73\textwidth-11em-8\tabcolsep\relax}@{}}
+\toprule
+Model & States & Transitions & Exit & Outcome \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Protocol & 211 & 1075 & 0 & Nine named operations plus initialization
+and setup covered; Advance fired 20 times. \\
+Audit retention & 108 & 1109 & 0 & Conditional retention check passed. \\
+Ordering mutant & 3 & 9 & 1 & Expected diagnostic deadlock:
+Prepare $\to$ InstallWithoutEvent. \\
+Gate mutant & 4 & 12 & 1 & Expected diagnostic deadlock:
+Clone $\to$ AdvanceMissingLocal. \\
+Replay witness & 4 & 10 & 1 & Expected lost-response witness, not a
+promised exactly-once guarantee. \\
+\end{longtable}
+
+The replay trace is AdvanceLoseResponse $\to$ AcceptSecondDecision
+$\to$ RetryUnconditionalAdvance. The models
+omit syscall interruption, legacy migration, full event payloads,
+lock scheduling and disk durability. Require concrete tests for all
+recommendations and budgets 1/2/3/10, explicit-null versus omitted
+authority, stale Update, required-event failure, every interruption
+boundary, same-ID replay from a different session, read availability,
+same-filesystem local staging/EXDEV, and isolated-HOME squash/clone
+publication. Preserve ordinary result/advance/close rollback tests.
+There is no disk-durability, liveness, privacy or full implementation-
+refinement proof. PDF compilation and integrated implementation gates
+are separate. The jms receipt extraction failed even after re-emission;
+no correlated jms receipt is claimed. Evidence is the parent's actual
+tool runs and jra's independent fuzz checks and review.
+
+% ===================================================================
+\section{Historical validation: the abandon fail-open regression}
 \label{sec:validation}
 % ===================================================================
+
+Everything in this section, including the old coverage limitation,
+records runs of the pre-DES-079 schemas. The old counts and traces
+are preserved as historical evidence, not attributed to the amended
+shared-decision model or its additional protocol component.
 
 This specification also demonstrates a concrete case where it would
 have caught a real regression: the fail-open bug fixed in PR \#432
@@ -1076,10 +1459,10 @@ as a live schema typed against $\Delta \field{Mission}$, alongside
 \field{Abandon} and \field{Idle}, and claimed that model-checking the
 combined operation set would surface the invariant violation directly.
 It does not, and the claim was wrong. Model-checking
-$\{\field{Init}, \field{Delegate}, \field{DelegateAborted},
+\{\field{Init}, \field{Delegate}, \field{DelegateAborted},
 \field{DisclaimDelegation}, \field{SubmitResult},
 \field{Reflect}, \field{AdvanceRound}, \field{Close}, \field{Abandon},
-\field{AbandonFailOpen}, \field{Idle}\}$ against \field{Mission}
+\field{AbandonFailOpen}, \field{Idle}\} against \field{Mission}
 explored the state space reported in the Tool run table
 (\S\ref{sec:probrun}) and reported \textbf{zero} violations --- with
 the buggy operation present and enabled.
@@ -1198,13 +1581,15 @@ certificate of deadlock-freedom.
 \subsection{Tool run}
 \label{sec:probrun}
 
-\begin{center}
-\begin{tabularx}{\textwidth}{@{}lccl@{}}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.30\textwidth}>{\centering\arraybackslash}p{4em}>{\centering\arraybackslash}p{6em}>{\raggedright\arraybackslash}p{\dimexpr0.70\textwidth-10em-6\tabcolsep\relax}@{}}
 \toprule
 \textbf{Model} & \textbf{States} & \textbf{Transitions} &
   \textbf{Result} \\
 \midrule
-Main document (\S\ref{sec:state}--\ref{sec:ops}), all 9 operations
+\endhead
+\bottomrule
+\endfoot
+September baseline, all 9 operations
   $+$ \field{Idle} & 373 & 989 & 0 violations \\
 Same, $+$ \field{AbandonFailOpen} (errata above) & 385 & 1025 &
   0 violations --- false negative, see errata \\
@@ -1214,9 +1599,7 @@ Decoupled, \field{AbandonFailOpen} & 7 & 21 & deadlock at
   first violation, so this count is not the full space \\
 Decoupled, \field{Abandon} & 15 & 29 & 0 violations, not certified
   complete \\
-\bottomrule
-\end{tabularx}
-\end{center}
+\end{longtable}
 
 The two decoupled counts above are search-order artifacts, not
 reproducible constants: probcli's deadlock search stops at the first
@@ -1233,17 +1616,17 @@ $\field{status} = \field{stAbandoned} \land
 reached by the same four-step trace given below, regardless of exactly
 how many states probcli visits before reporting it.
 
-fuzz's \texttt{/z-spec:check} type-checks this document with 0 errors
-in every revision recorded in its commit history. \texttt{probcli}
+The September record reported fuzz type-checking with 0 errors.
+\texttt{probcli}
 requires a \texttt{.tex} extension to run its Z-to-B translation ---
 \texttt{/z-spec:check} runs fuzz directly on any extension, but
-\texttt{/z-spec:test}/\texttt{/z-spec:model\_check} silently produced
+\texttt{/z-spec:test}/\allowbreak\texttt{/z-spec:model\_check} silently produced
 0 states and 0 transitions when an earlier revision of this content
 was saved with a \texttt{.md} extension --- the file was renamed to
 \texttt{.tex} for exactly this reason before this document was first
 submitted for review. All \texttt{model\_check}/\texttt{animate} runs
 reported in this section, including the two decoupled documents, were
-re-run against the current \texttt{.tex} file at this re-baseline.
+run against the September \texttt{.tex} baseline, not this amendment.
 The Result column reports the \texttt{model\_check} outcome
 specifically (assertion/invariant violations), matching how this
 section has always been read; \S\ref{sec:probrun-coverage} records a
@@ -1293,11 +1676,13 @@ as settled.
 \label{sec:trace}
 % ===================================================================
 
-\begin{center}
-\begin{tabularx}{\textwidth}{@{}llX@{}}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.25\textwidth}>{\raggedright\arraybackslash}p{0.40\textwidth}>{\raggedright\arraybackslash}p{\dimexpr0.35\textwidth-4\tabcolsep\relax}@{}}
 \toprule
 \textbf{Z construct} & \textbf{Go source} & \textbf{Note} \\
 \midrule
+\endhead
+\bottomrule
+\endfoot
 \field{Status} & mission.go:10--28 & \field{validStatuses},
   validate.go:28--34 \\
 \field{Recommendation} & reflection.go:89--103 &
@@ -1332,6 +1717,11 @@ as settled.
   (store.go:2703--2807) & \\
 \field{AdvanceRound} & \field{Store.AdvanceRound}
   (store.go:2878--2963) & \\
+\field{AcceptDecision} & \field{Store.AppendReflection},
+  live-log append and local staging helpers & durable intent, required
+  event, then shared contract; see \S\ref{sec:decision-protocol} \\
+\field{UpdateProtected} & \field{Store.Update} & locked comparison of
+  protected authority; worker edits do not grant new decisions \\
 \field{Close} & \field{Store.Close} (store.go:956--1187) via
   \field{checkResultGateLocked} (store.go:3516--3533) & \\
 \field{Abandon} & \field{Store.Abandon} (store.go:1290--1487) &
@@ -1340,15 +1730,15 @@ as settled.
 \field{AbandonFailOpen} & historical \field{Store.Abandon}, fixed
   PR \#432 (9a60b39) & not present in current code; modelled only
   for \S\ref{sec:validation} \\
-(excluded) \field{Correct} & \field{Store.Correct}
-  (correct.go:187--228) & DES-072; excluded by design, see
+\field{CorrectAnnotation} & \field{Store.Correct}
+  (correct.go:187--228 baseline) & lifecycle stutter with shared
+  correction authority, see
   \S\ref{sec:des072} \\
-\bottomrule
-\end{tabularx}
-\end{center}
+\end{longtable}
 
-Pinned baseline commit: \textbf{244b6c3} (PR \#517), superseding the
-original \textbf{9a60b39} (PR \#432) pin. See \S\ref{sec:currency} for
-the currency rule this re-baseline exists to satisfy going forward.
+Historical baseline commit: \textbf{244b6c3} (PR \#517), superseding
+\textbf{9a60b39} (PR \#432). DES-079's November amendment is a
+normative refinement target; its implementation must be verified at
+integration rather than assigned a guessed implementation commit.
 
 \end{document}

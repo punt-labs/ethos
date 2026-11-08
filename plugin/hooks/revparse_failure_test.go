@@ -79,23 +79,27 @@ func TestPreCommitSealsDespiteRevParseStderrNoise(t *testing.T) {
 // 1: the trailer is never silently replaced by a plain append.
 func TestCommitMsgInterpretTrailersFailureBlocks(t *testing.T) {
 	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 	bin := fakeGitDir(t, `case "$1" in
-rev-parse) echo "$REPO"; exit 0;;
 interpret-trailers) echo "fatal: interpret-trailers exploded" >&2; exit 128;;
 esac
-exit 0
+exec "$REAL_GIT" "$@"
 `)
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	msg := filepath.Join(t.TempDir(), "MSG")
 	require.NoError(t, os.WriteFile(msg, []byte("subject\n"), 0o644))
 
-	cmd := exec.Command("/bin/sh", "commit-msg.sh", msg)
-	cmd.Env = []string{"HOME=" + t.TempDir(), "REPO=" + repo, "MISSION_ID=m-2026-01-01-001", "PATH=" + bin + ":/usr/bin:/bin"}
+	script, err := filepath.Abs("commit-msg.sh")
+	require.NoError(t, err)
+	cmd := exec.Command("/bin/sh", script, msg)
+	cmd.Dir = repo
+	cmd.Env = []string{"HOME=" + t.TempDir(), "REAL_GIT=" + realGit, "MISSION_ID=m-2026-01-01-001", "PATH=" + bin + ":" + ethosBinDir(t) + ":/usr/bin:/bin"}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	var ee *exec.ExitError
 	require.ErrorAs(t, err, &ee)
 	assert.Equal(t, 1, ee.ExitCode())
@@ -162,36 +166,45 @@ func TestPreCommitFailsWhenEnabledAndEthosMissing(t *testing.T) {
 	assert.Contains(t, stderr.String(), "ethos is enabled here but not installed; the commit is not sealed")
 }
 
-// A redirect that fails is reported as one, not as git interpret-trailers
-// failing with a message nobody wrote; the trailer still lands by plain append.
-func TestCommitMsgRedirectFailureIsReportedAsSuch(t *testing.T) {
+// A helper's staging refusal is reported as such, not as a Git rendering
+// failure. It blocks the commit with the old message intact, never plain-appends.
+func TestCommitMsgStagingFailureIsReportedAsSuch(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 	bin := fakeGitDir(t, `case "$1" in
 rev-parse) echo "$REPO"; exit 0;;
-interpret-trailers) echo "git must not run"; exit 0;;
 esac
-exit 0
+echo "unexpected git invocation" >&2
+exit 2
 `)
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
-	// The temp file is made, and its .err sibling cannot be: a directory is there.
-	shimMktemp(t, bin, `f=$(/usr/bin/mktemp "$@") || exit 1
-mkdir "$f.err" || exit 1
-echo "$f"
-`)
+	// Model a helper that cannot prepare its local stage: it reports failure
+	// without replacing the message. Actual write/EXDEV injections live in the
+	// installed-helper tests in commit_msg_test.go.
+	helper := `#!/bin/sh
+if [ "$#" -ne 3 ] || [ "$1 $2" != 'hook commit-message' ] || [ "$3" != "$MESSAGE_FILE" ]; then
+  echo "unexpected ethos invocation" >&2
+  exit 2
+fi
+echo "ethos: commit-message: staging commit message: injected staging refusal" >&2
+exit 1
+`
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(helper), 0o755))
 	msg := filepath.Join(t.TempDir(), "MSG")
 	require.NoError(t, os.WriteFile(msg, []byte("subject\n"), 0o644))
 	cmd := exec.Command("/bin/sh", "commit-msg.sh", msg)
-	cmd.Env = []string{"HOME=" + t.TempDir(), "REPO=" + repo, "MISSION_ID=m-2026-01-01-001", "PATH=" + bin + ":/usr/bin:/bin"}
+	cmd.Env = []string{"HOME=" + t.TempDir(), "REPO=" + repo, "MESSAGE_FILE=" + msg, "MISSION_ID=m-2026-01-01-001", "PATH=" + bin + ":/usr/bin:/bin"}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	require.NoError(t, cmd.Run(), stderr.String())
-	assert.Contains(t, stderr.String(), "cannot create")
+	err := cmd.Run()
+	var ee *exec.ExitError
+	require.ErrorAs(t, err, &ee, stderr.String())
+	assert.Equal(t, 1, ee.ExitCode())
+	assert.Contains(t, stderr.String(), "staging commit message: injected staging refusal")
 	assert.NotContains(t, stderr.String(), "interpret-trailers failed")
 	got, err := os.ReadFile(msg)
 	require.NoError(t, err)
-	assert.Contains(t, string(got), "Mission: m-2026-01-01-001", "the trailer landed by plain append")
+	assert.Equal(t, "subject\n", string(got), "a staging failure must not fall back to plain append")
 }
 
 // realRepoWithHooks is a real repository with both hooks installed, a commit
@@ -347,7 +360,18 @@ func TestHooksIgnoreATraceOnStdout(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(setup.cfg), 0o644))
 			}
 			marker := filepath.Join(t.TempDir(), "sealed")
-			ethos := "#!/bin/sh\nif [ \"$1\" = audit ]; then echo sealed >> '" + marker + "'; fi\nif [ \"$1\" = hook ]; then echo MISSION_ID=m-2026-01-01-001; fi\nexit 0\n"
+			// Stub sealing and session discovery, but let the real message helper
+			// render and install trailers under the caller's trace configuration.
+			ethos := `#!/bin/sh
+case "$1 $2" in
+'audit seal') echo sealed >> '` + marker + `';;
+'provenance verify-index') ;;
+'hook commit-trailers') echo MISSION_ID=m-2026-01-01-001;;
+'hook commit-message') exec '` + filepath.Join(ethosBinDir(t), "ethos") + `' "$@";;
+*) echo "unexpected ethos invocation" >&2; exit 2;;
+esac
+exit 0
+`
 			require.NoError(t, os.MkdirAll(filepath.Join(home, ".local", "bin"), 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(home, ".local", "bin", "ethos"), []byte(ethos), 0o755))
 			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos"), 0o755))
@@ -364,6 +388,13 @@ func TestHooksIgnoreATraceOnStdout(t *testing.T) {
 			// (The log command itself traces here; the message is the block it prints,
 			// and it must be the clean subject plus trailer, with no trace inside.)
 			assert.Contains(t, msg, "subject\n\nMission: m-2026-01-01-001\n")
+			// Inspect the stored commit without the reader's own trace noise so
+			// an extra trace before the subject or after the trailer cannot hide.
+			read := exec.Command("git", "-C", repo, "log", "-1", "--format=%B")
+			read.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "GIT_TRACE=0", "GIT_TRACE2=0", "GIT_TRACE2_PERF=0", "GIT_TRACE2_EVENT=0"}
+			stored, err := read.CombinedOutput()
+			require.NoError(t, err, string(stored))
+			assert.Equal(t, "subject\n\nMission: m-2026-01-01-001\n\n", string(stored))
 		})
 	}
 }

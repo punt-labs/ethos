@@ -14,8 +14,8 @@ import (
 // "resolve and validate" alternative (follow then check enclosing
 // layer root) would have to track the layer root for every loader
 // path and re-validate after every Readlink — more surface area, more
-// branches, larger blast radius for a future bug. The refuse policy is
-// a single Lstat per open: smaller, simpler, and uniform.
+// branches, larger blast radius for a future bug. Repository authority also
+// validates every existing ancestor against its captured policy before use.
 //
 // The check is mechanical (Lstat + ModeSymlink) and fires before any
 // follow-on open or stat that would dereference the link. Callers see
@@ -49,6 +49,109 @@ func rejectSymlink(path string) error {
 		return fmt.Errorf("refusing to follow symlink: %s", path)
 	}
 	return nil
+}
+
+// validatePhysicalPath refuses stable redirects, including dangling symlinks,
+// before a read, mkdir or install. Check from the filesystem root downward:
+// Lstat of only the leaf would follow an ancestor, and ENOENT there could hide
+// a dangling redirect. A genuinely absent suffix is allowed. This is a placement
+// check for cooperative paths, not protection against concurrent replacement.
+func validatePhysicalPath(path string, directory bool) error {
+	if !filepath.IsAbs(path) || path != filepath.Clean(path) {
+		return fmt.Errorf("mission path must be clean and absolute: %s", path)
+	}
+	var chain []string
+	for current := path; ; current = filepath.Dir(current) {
+		chain = append(chain, current)
+		if filepath.Dir(current) == current {
+			break
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		info, err := os.Lstat(chain[i])
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("lstat %s: %w", chain[i], err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to follow symlink: %s", chain[i])
+		}
+		if (i > 0 || directory) && !info.IsDir() {
+			return fmt.Errorf("mission path ancestor is not a directory: %s", chain[i])
+		}
+	}
+	return nil
+}
+
+// validateRepositoryRecordPath uses the caller's named repository, never a root
+// rediscovered from a redirected target or the first textual .punt-labs marker.
+func validateRepositoryRecordPath(repoRoot, path string) error {
+	if repoRoot == "" || !filepath.IsAbs(repoRoot) {
+		return fmt.Errorf("mission record requires an absolute repository root")
+	}
+	rel, err := filepath.Rel(RepoStatePath(repoRoot), path)
+	if err != nil || !filepath.IsLocal(rel) || rel == "." {
+		return fmt.Errorf("mission record path is outside the named repository: %s", path)
+	}
+	return validatePhysicalPath(path, false)
+}
+
+// validateRepositoryDelegationPath covers path-only convenience loaders too.
+// Recognize the exact repository suffix, not the first .punt-labs segment.
+// Other standalone record locations retain their existing loader contract.
+// Abs is lexical only: it must not resolve/adopt a symlink target as authority.
+func validateRepositoryDelegationPath(path string) (string, error) {
+	if filepath.Base(path) != "record.yaml" {
+		return path, nil
+	}
+	isRepositoryDelegationDir := func(dir string) bool {
+		missionDir := filepath.Dir(filepath.Dir(filepath.Dir(dir)))
+		recordRoot := filepath.Dir(missionDir)
+		return filepath.Base(filepath.Dir(dir)) == "delegations" &&
+			filepath.Base(missionDir) == "missions" && filepath.Base(recordRoot) == "ethos" &&
+			filepath.Base(filepath.Dir(recordRoot)) == ".punt-labs"
+	}
+	if path != filepath.Clean(path) {
+		// Split, unlike Dir, preserves the raw prefixes. Inspect them before
+		// '..' can erase either a traversed link or the repository markers.
+		// This recognizes named layout only; it does not discover a new root.
+		for raw := path; raw != ""; {
+			dir, _ := filepath.Split(raw)
+			if dir == "" {
+				break
+			}
+			raw = dir[:len(dir)-1] // Remove just the trailing native separator.
+			if isRepositoryDelegationDir(raw) {
+				return "", fmt.Errorf("repository delegation path must be clean: %s", path)
+			}
+		}
+	}
+	if !isRepositoryDelegationDir(filepath.Dir(path)) {
+		return path, nil
+	}
+	abs := path
+	if !filepath.IsAbs(path) {
+		// Do not guess a separate Windows drive/root-relative base.
+		if filepath.VolumeName(path) != "" || os.IsPathSeparator(path[0]) {
+			return "", fmt.Errorf("repository delegation path requires an absolute path or an ordinary relative path: %s", path)
+		}
+		base, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("locating delegation working directory: %w", err)
+		}
+		// Getwd can return a valid logical PWD containing symlinks or dots.
+		// Check that exact base before Join can erase its components with '..'.
+		if err := validatePhysicalPath(base, true); err != nil {
+			return "", fmt.Errorf("delegation working directory: %w", err)
+		}
+		abs = filepath.Join(base, path)
+	}
+	if err := validatePhysicalPath(abs, false); err != nil {
+		return "", err
+	}
+	return abs, nil // The loader must read the same pathname that was validated.
 }
 
 // EthosRepoStateRoot is the path, relative to a repository root,
@@ -109,7 +212,7 @@ type pathSet struct {
 	log         string
 	results     string
 	reflections string
-	lock        string // always under the global tree per DES-054 concurrency model
+	lock        string // layer owner's state lock (selection also needs S's fence)
 }
 
 // repoMissionsDir returns the per-repo missions root —
@@ -147,7 +250,7 @@ func (s *Store) pathSetFor(missionID string, layer missionLayer) pathSet {
 			log:         filepath.Join(dir, "log.jsonl"),
 			results:     filepath.Join(dir, "results.yaml"),
 			reflections: filepath.Join(dir, "reflections.yaml"),
-			lock:        filepath.Join(s.globalMissionsDir(), id+".lock"),
+			lock:        s.lockPath(missionID),
 		}
 	default:
 		// layerGlobal and layerUnset share the legacy layout.
@@ -170,8 +273,14 @@ func (s *Store) pathSetFor(missionID string, layer missionLayer) pathSet {
 // Returns layerUnset when neither tree carries the mission, which
 // the caller interprets as "not found".
 func (s *Store) resolveLayer(missionID string) (missionLayer, error) {
+	if s.policyErr != nil {
+		return layerUnset, s.policyErr
+	}
 	if s.twoTreeStorage && s.repoRoot != "" {
 		repoSet := s.pathSetFor(missionID, layerRepo)
+		if err := validateRepositoryRecordPath(s.repoRoot, repoSet.contract); err != nil {
+			return layerUnset, err
+		}
 		switch _, err := os.Stat(repoSet.contract); {
 		case err == nil:
 			return layerRepo, nil
@@ -180,6 +289,9 @@ func (s *Store) resolveLayer(missionID string) (missionLayer, error) {
 		}
 	}
 	globalSet := s.pathSetFor(missionID, layerGlobal)
+	if err := rejectSymlink(globalSet.contract); err != nil {
+		return layerUnset, err
+	}
 	switch _, err := os.Stat(globalSet.contract); {
 	case err == nil:
 		return layerGlobal, nil

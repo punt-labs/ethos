@@ -438,7 +438,7 @@ func TestScrubFiles_HoldsTheWritersLock(t *testing.T) {
 			return holdLock(t, func(fn func() error) error { return s.withLock(mid, fn) })
 		}},
 		{"delegation", m + "delegations/d-1/prompt.md", func(t *testing.T, repo, global string) func() {
-			release, err := AcquireDelegationLock(global, "d-1")
+			release, err := NewStoreWithRoots(repo, global).AcquireDelegationLock("d-1")
 			require.NoError(t, err)
 			return release
 		}},

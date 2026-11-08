@@ -16,6 +16,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
@@ -54,9 +55,20 @@ func missionStore() *mission.Store {
 	// The record resolves to the store root (main in a worktree); the DES-058
 	// audit concern (live zone + sealed chunks) resolves to the checkout so
 	// it agrees with the pre-commit seal that runs there (Bugbot HIGH #370).
-	return mission.NewStoreWithRoots(repoRoot, root).
-		WithCheckoutRoot(missionCheckoutRoot(repoRoot)).
+	return missionStoreAtCurrentRoots(repoRoot, root).
 		WithSessionResolver(currentSessionIDBestEffort)
+}
+
+func missionStoreAtCurrentRoots(repoRoot, globalRoot string) *mission.Store {
+	if repoRoot == "" {
+		return mission.NewStore(globalRoot)
+	}
+	p, err := currentRoots().Layout()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission: invalid repository policy: %v\n", err)
+		os.Exit(1)
+	}
+	return mission.NewRepositoryStore(p, globalRoot)
 }
 
 // missionCheckoutRoot returns the per-checkout root for the DES-058 audit
@@ -174,8 +186,7 @@ func missionStoreForCreate() *mission.Store {
 	warnIfGlobalFallback(storeRoot)
 	// Record → store root; DES-058 audit (live + sealed chunks) → checkout
 	// root, matching the pre-commit seal (Bugbot HIGH #370).
-	ms := mission.NewStoreWithRoots(storeRoot, root).
-		WithCheckoutRoot(missionCheckoutRoot(storeRoot)).
+	ms := missionStoreAtCurrentRoots(storeRoot, root).
 		WithSessionResolver(currentSessionIDBestEffort)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
@@ -802,6 +813,7 @@ Example:
 // --- mission export ---
 
 var missionExportDir string
+var missionExportFull bool
 
 // missionExportDefaultDir is where `ethos mission export` writes when --dir is
 // not given, relative to the repository root.
@@ -826,7 +838,13 @@ the repository root, wherever in the repository the command runs; an explicit
 
 If the mission has no result yet (still open), only the contract is
 exported and a warning is printed to stderr. The exported files are
-plain YAML — the same format as the store.`,
+plain YAML — the same format as the store.
+
+With --full, first seal this mission's unsealed event tail locally, then also
+export retained prompts, accepted reflection detail and mission event chunks
+under <dir>/<id>/. This explicitly shares private history regardless of recording
+mode. Missing expected detail is reported as incomplete. Session audits, scratch,
+agent artifacts and transcripts are excluded. No export stages the Git index.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runMissionExport,
 }
@@ -922,11 +940,20 @@ Exit codes:
 // checkout, not the shared store root: the files to scrub are the tracked
 // ones in the tree the operator will commit from.
 func runMissionScrub(out, errOut io.Writer) error {
-	repoRoot, err := requireCheckout(errOut, "mission scrub")
-	if err != nil {
-		return err
+	roots := currentRoots()
+	if roots.CheckoutErr != nil {
+		fmt.Fprintf(errOut, "ethos: mission scrub: %v\n", roots.CheckoutErr)
+		return failClosed{}
 	}
-	rels, err := mission.TrackedRecordFiles(repoRoot)
+	if roots.Checkout == "" {
+		fmt.Fprintln(errOut, "ethos: mission scrub must run inside a repo")
+		return usageError{}
+	}
+	p, err := roots.Layout()
+	if err != nil {
+		return fmt.Errorf("mission scrub: %w", err)
+	}
+	rels, err := mission.TrackedRecordFiles(roots.Checkout)
 	if err != nil {
 		return fmt.Errorf("mission scrub: %w", err)
 	}
@@ -934,7 +961,7 @@ func runMissionScrub(out, errOut io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("mission scrub: resolving the global store root: %w", err)
 	}
-	res, err := mission.ScrubFiles(repoRoot, filepath.Join(home, ".punt-labs", "ethos"), rels, !missionScrubApply)
+	res, err := mission.ScrubFilesWithPolicy(p, filepath.Join(home, ".punt-labs", "ethos"), rels, !missionScrubApply)
 	for _, rel := range res.Skipped {
 		fmt.Fprintf(errOut, "ethos: mission scrub: skipping %s: tracked but missing from the worktree\n", rel)
 	}
@@ -1064,6 +1091,8 @@ func init() {
 
 	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", "",
 		"Directory to export artifacts into (default <repo root>/"+missionExportDefaultDir+")")
+	missionExportCmd.Flags().BoolVar(&missionExportFull, "full", false,
+		"Explicitly share this mission's retained prompts, reflections and event chunks without staging")
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchEvaluator, "evaluator", "", "Evaluator handle (required)")
@@ -1410,11 +1439,15 @@ func runMissionShow(idOrPrefix string) error {
 	// carries the load failure. Round 4 fixed the Results case (mdm
 	// N1); round 6 closed the parallel miss for Reflections (Bugbot);
 	// DES-072 adds Corrections to the same pattern.
-	reflections, err := ms.LoadReflections(id)
+	reflections, err := ms.ReadReflections(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading reflections: %v\n", err)
 	}
-	printReflections(reflections)
+	if err != nil {
+		fmt.Println("Reflections: unreadable")
+	} else {
+		printReflectionStates(reflections)
+	}
 
 	results, err := ms.LoadResults(id)
 	if err != nil {
@@ -1443,20 +1476,17 @@ func runMissionReflections(idOrPrefix string) error {
 	if err != nil {
 		return fmt.Errorf("mission reflections: %w", err)
 	}
-	rs, err := ms.LoadReflections(id)
+	rs, err := ms.ReadReflections(id)
 	if err != nil {
 		return fmt.Errorf("mission reflections: %w", err)
 	}
 	if jsonOutput {
 		// Always return an array, never null, so consumers can
 		// unmarshal into []Reflection without a nil check.
-		if rs == nil {
-			rs = []mission.Reflection{}
-		}
 		printJSON(rs)
 		return nil
 	}
-	printReflections(rs)
+	printReflectionStates(rs)
 	return nil
 }
 
@@ -1609,28 +1639,18 @@ func runMissionClose(idOrPrefix, status string) error {
 	// "fix" turned a silent success into a post-commit failure.
 	// Pushing the data through Close closes the TOCTOU window
 	// entirely: on success, r is guaranteed non-nil.
-	r, err := ms.Close(id, status)
+	r, outcome, err := ms.CloseWithOutcome(id, status)
 	if err != nil {
-		return fmt.Errorf("mission close: %w", err)
+		return reportMissionMutationError(id, outcome, fmt.Errorf("mission close: %w", err))
 	}
-	// DES-058: mission close is the authoritative seal for the closing
-	// checkout — it seals every session's mission-log tail under
-	// missions/<id>/ so the record is complete on disk even if no commit
-	// immediately follows. A seal failure must not lose the close (the
-	// contract is already closed on disk); surface it on stderr and carry
-	// on — the pre-commit seal is the clean-tree backstop.
-	//
-	// Seal against the CHECKOUT root, not the store root: the live zone it
-	// consumes and the chunks it stages belong to the committing checkout,
-	// and this must resolve the same tree the pre-commit seal (CheckoutRootIfAny)
-	// does — else it seals a tree the worktree never commits (Bugbot HIGH
-	// on PR #370).
-	if loc := currentRoots(); loc.CheckoutErr != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: locating the checkout: %v\n", loc.CheckoutErr)
-	} else if repoRoot := loc.Checkout; repoRoot != "" {
-		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
+	// Use the store's captured roots and consent: S owns retention, while C
+	// owns eligible publication. A seal failure cannot undo the accepted close.
+	if p, ok := ms.RepositoryPolicy(); ok {
+		if _, sErr := hook.SealMissionWithPolicy(p, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
+			addMissionSealWarning(&outcome, fmt.Sprintf("mission close: sealing mission log: %v", sErr))
 		}
+	} else {
+		addMissionSealWarning(&outcome, "mission close: sealing mission log: repository policy unavailable")
 	}
 	// A terminal transition ends this session's work on the mission, so
 	// clear both of its sidecars — otherwise the commit-msg hook keeps
@@ -1639,7 +1659,7 @@ func runMissionClose(idOrPrefix, status string) error {
 	// or a sidecar cannot be removed.
 	clearClosedSessionBindings(id)
 	if jsonOutput {
-		printJSON(map[string]any{
+		printMissionMutationJSON(outcome, map[string]any{
 			"mission_id": id,
 			"round":      r.Round,
 			"verdict":    r.Verdict,
@@ -1647,6 +1667,7 @@ func runMissionClose(idOrPrefix, status string) error {
 		})
 		return nil
 	}
+	printMissionMutationWarnings(outcome)
 	// Text mode echoes a one-line summary; round, verdict, and
 	// status mirror the close event-log summary in
 	// summarizeEventDetails so CLI echo and audit log read the same.
@@ -1696,23 +1717,23 @@ func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 		}
 		disclaimed = append(disclaimed, delegationID)
 	}
-	c, err := ms.Abandon(id, reason)
+	c, outcome, err := ms.AbandonWithOutcome(id, reason)
 	if err != nil {
 		if len(disclaimed) > 0 {
-			return fmt.Errorf("mission abandon: %w (disclaimed and cannot be undone despite the failed abandon: %s)",
-				err, strings.Join(disclaimed, ", "))
+			return reportMissionMutationError(id, outcome, fmt.Errorf("mission abandon: %w (disclaimed and cannot be undone despite the failed abandon: %s)",
+				err, strings.Join(disclaimed, ", ")))
 		}
-		return fmt.Errorf("mission abandon: %w", err)
+		return reportMissionMutationError(id, outcome, fmt.Errorf("mission abandon: %w", err))
 	}
-	// Parity with close: seal the checkout's mission-log tail so the
+	// Parity with close: seal the canonical store's mission-log tail so the
 	// abandon event is complete on disk even if no commit immediately
 	// follows. Non-fatal — the mission is already abandoned.
-	if loc := currentRoots(); loc.CheckoutErr != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: locating the checkout: %v\n", loc.CheckoutErr)
-	} else if repoRoot := loc.Checkout; repoRoot != "" {
-		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: %v\n", sErr)
+	if p, ok := ms.RepositoryPolicy(); ok {
+		if _, sErr := hook.SealMissionWithPolicy(p, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
+			addMissionSealWarning(&outcome, fmt.Sprintf("mission abandon: sealing mission log: %v", sErr))
 		}
+	} else {
+		addMissionSealWarning(&outcome, "mission abandon: sealing mission log: repository policy unavailable")
 	}
 	// A terminal transition ends this session's work on the mission, so
 	// clear its sidecars the same way close does — otherwise the
@@ -1720,7 +1741,7 @@ func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 	// now-abandoned mission.
 	clearClosedSessionBindings(id)
 	if jsonOutput {
-		printJSON(map[string]any{
+		printMissionMutationJSON(outcome, map[string]any{
 			"mission_id": id,
 			"status":     c.Status,
 			"reason":     reason,
@@ -1728,6 +1749,7 @@ func runMissionAbandon(idOrPrefix, reason string, disclaim []string) error {
 		})
 		return nil
 	}
+	printMissionMutationWarnings(outcome)
 	fmt.Printf("abandoned: %s reason=%q\n", id, reason)
 	if len(disclaim) > 0 {
 		fmt.Printf("disclaimed: %s\n", strings.Join(disclaim, ", "))
@@ -1757,18 +1779,33 @@ func runMissionReflect(idOrPrefix, file string) error {
 	if err != nil {
 		return fmt.Errorf("mission reflect: %w", err)
 	}
-	if err := ms.AppendReflection(id, r); err != nil {
-		return fmt.Errorf("mission reflect: %w", err)
+	var outcome mission.OperationResult
+	if _, repository := ms.RepositoryPolicy(); repository {
+		outcome, err = ms.ApplyReflection(id, r)
+	} else {
+		err = ms.AppendReflection(id, r)
+	}
+	warnings := mission.MutationOutcome{Warnings: outcome.Diagnostics}
+	if err != nil {
+		err = fmt.Errorf("mission reflect: %w", err)
+		if jsonOutput && len(warnings.Warnings) > 0 {
+			printMissionMutationJSON(warnings, map[string]any{"mission_id": id, "error": err.Error(), "outcome": outcome})
+		} else {
+			printMissionMutationWarnings(warnings)
+		}
+		return err
 	}
 	if jsonOutput {
-		printJSON(map[string]any{
+		printMissionMutationJSON(warnings, map[string]any{
 			"mission_id":     id,
 			"round":          r.Round,
 			"recommendation": r.Recommendation,
 			"created_at":     r.CreatedAt,
+			"outcome":        outcome,
 		})
 		return nil
 	}
+	printMissionMutationWarnings(warnings)
 	// Text mode echoes a one-line summary; the rec= tag matches the
 	// reflect event-log summary in summarizeEventDetails.
 	fmt.Printf("reflected: %s round=%d rec=%s\n",
@@ -1834,11 +1871,12 @@ func runMissionResult(idOrPrefix, file string) error {
 	// path already includes. Without this wrapper the operator
 	// sees "invalid result: invalid verdict" with no hint which
 	// file produced it.
-	if err := ms.AppendResult(id, r); err != nil {
-		return fmt.Errorf("mission result: %s: %w", file, err)
+	outcome, err := ms.AppendResultWithOutcome(id, r)
+	if err != nil {
+		return reportMissionMutationError(id, outcome, fmt.Errorf("mission result: %s: %w", file, err))
 	}
 	if jsonOutput {
-		printJSON(map[string]any{
+		printMissionMutationJSON(outcome, map[string]any{
 			"mission_id": id,
 			"round":      r.Round,
 			"verdict":    r.Verdict,
@@ -1847,6 +1885,7 @@ func runMissionResult(idOrPrefix, file string) error {
 		})
 		return nil
 	}
+	printMissionMutationWarnings(outcome)
 	// Text mode echoes a one-line summary; round and verdict mirror
 	// the result event-log summary in summarizeEventDetails.
 	fmt.Printf("result: %s round=%d verdict=%s\n",
@@ -2059,16 +2098,16 @@ func runMissionAdvance(idOrPrefix string) error {
 	if err != nil {
 		return fmt.Errorf("mission advance: %w", err)
 	}
-	newRound, err := ms.AdvanceRound(id, actor)
+	newRound, outcome, err := ms.AdvanceRoundWithOutcome(id, actor)
 	if err != nil {
-		return fmt.Errorf("mission advance: %w", err)
+		return reportMissionMutationError(id, outcome, fmt.Errorf("mission advance: %w", err))
 	}
 	if jsonOutput {
 		// Surface both endpoints of the round transition so the JSON
 		// shape carries the same information as the text echo and
 		// the round_advanced event-log entry. from_round and
 		// to_round match the event-log field names.
-		printJSON(map[string]any{
+		printMissionMutationJSON(outcome, map[string]any{
 			"mission_id":    id,
 			"from_round":    newRound - 1,
 			"to_round":      newRound,
@@ -2076,11 +2115,47 @@ func runMissionAdvance(idOrPrefix string) error {
 		})
 		return nil
 	}
+	printMissionMutationWarnings(outcome)
 	// Text mode echoes the round transition; format mirrors the
 	// round_advanced event-log summary in summarizeEventDetails so
 	// CLI echo and audit log read the same.
 	fmt.Printf("advanced: %s round %d -> %d\n", id, newRound-1, newRound)
 	return nil
+}
+
+// reportMissionMutationError leaves exit status and the main stderr diagnostic
+// with the existing error path. Only errors carrying prior accepted warnings add
+// JSON output; warning-free errors retain the established empty stdout contract.
+func reportMissionMutationError(id string, outcome mission.MutationOutcome, err error) error {
+	if jsonOutput && len(outcome.Warnings) > 0 {
+		printMissionMutationJSON(outcome, map[string]any{"mission_id": id, "error": err.Error()})
+	} else {
+		printMissionMutationWarnings(outcome)
+	}
+	return err
+}
+
+func printMissionMutationJSON(outcome mission.MutationOutcome, payload map[string]any) {
+	if len(outcome.Warnings) > 0 {
+		payload["warnings"] = outcome.Warnings
+	}
+	printJSON(payload)
+}
+
+// Sealing warnings historically appeared on stderr even with --json. Preserve
+// that channel as well as adding them to the JSON response. Human mode prints
+// them with the other operation warnings, exactly once.
+func addMissionSealWarning(outcome *mission.MutationOutcome, warning string) {
+	outcome.Warnings = append(outcome.Warnings, warning)
+	if jsonOutput {
+		fmt.Fprintln(os.Stderr, "ethos: "+warning)
+	}
+}
+
+func printMissionMutationWarnings(outcome mission.MutationOutcome) {
+	for _, warning := range outcome.Warnings {
+		fmt.Fprintln(os.Stderr, "ethos: "+warning)
+	}
 }
 
 // missionExportDirectory returns the directory to export into: flag when the
@@ -2120,10 +2195,6 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating export directory %q: %w", dir, err)
-	}
-
 	// The export directory is tracked, so records are redacted on the way
 	// out as well: a record an older ethos wrote unredacted must not be
 	// republished verbatim. Both payloads are built first and written
@@ -2155,10 +2226,64 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 		files = append(files, mission.TrackedFile{Path: resultPath, Data: resultData, Perm: 0o644})
 	}
 	if len(results) == 0 {
-		fmt.Fprintf(os.Stderr, "ethos: mission %s has no result yet — exporting contract only\n", id)
+		if missionExportFull {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s has no result yet — exporting without a final result\n", id)
+		} else {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s has no result yet — exporting contract only\n", id)
+		}
+	}
+	if missionExportFull {
+		p, ok := ms.RepositoryPolicy()
+		if !ok {
+			return fmt.Errorf("full export requires a valid repository policy")
+		}
+		// Explicit export must not stage, even in a full-recording repository.
+		// Derive an archive-only policy from this request's captured roots;
+		// never reread configuration or mutate the store's recording mode.
+		archivePolicy, err := layout.NewRepository(
+			filepath.Dir(filepath.Dir(p.RecordRoot())),
+			filepath.Dir(filepath.Dir(p.CheckoutRecordRoot())), layout.RecordBlame)
+		if err != nil {
+			return err
+		}
+		if _, err := hook.SealMissionWithPolicy(archivePolicy, id, time.Now(), hook.SealOptions{}); err != nil {
+			return fmt.Errorf("full export incomplete: sealing mission %s locally: %w", id, err)
+		}
+		trace, err := ms.SnapshotFullTrace(id)
+		if err != nil {
+			return err
+		}
+		for _, file := range trace {
+			file.Path = filepath.Join(dir, file.Path)
+			// Export chunks are immutable too. Never overwrite a divergent
+			// previously exported chunk; the original local copy is untouched.
+			if strings.HasSuffix(file.Path, ".jsonl") {
+				if info, err := os.Lstat(file.Path); err == nil && !info.Mode().IsRegular() {
+					return fmt.Errorf("full export refuses non-regular event chunk")
+				} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				old, err := os.ReadFile(file.Path)
+				if err == nil && !bytes.Equal(old, file.Data) {
+					return fmt.Errorf("full export refuses to rewrite immutable chunk %s", filepath.Base(file.Path))
+				}
+				if err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				if err == nil {
+					continue
+				}
+			}
+			files = append(files, file)
+		}
+	}
+	for _, file := range files {
+		if err := ensureMissionExportDir(filepath.Dir(file.Path)); err != nil {
+			return err
+		}
 	}
 	err = writeExport(os.Stdout, id, files, func(fs ...mission.TrackedFile) error {
-		return mission.WriteTrackedFiles(fs...)
+		return ms.WriteExportFiles(fs...)
 	})
 	// The files are in place unless the write itself failed; a failed
 	// directory sync is reported by err, and the notices still apply.
@@ -2169,6 +2294,26 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return err
+}
+
+func ensureMissionExportDir(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	for path := abs; ; path = filepath.Dir(path) {
+		info, err := os.Lstat(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return fmt.Errorf("refusing non-directory or symlink in export destination")
+		}
+		if parent := filepath.Dir(path); parent == path {
+			break
+		}
+	}
+	return os.MkdirAll(abs, 0o755)
 }
 
 // writeExport writes the export files with write and reports each on out. When
@@ -2456,7 +2601,7 @@ func bindDispatchedMission(op, missionID, worker string) {
 	// (internal/mcp/mission_tools.go's bindDispatchedMission) into one
 	// shared implementation.
 	repoRoot := storeRootForStores()
-	store := mission.NewStoreWithRoots(repoRoot, globalRoot)
+	store := missionStoreAtCurrentRoots(repoRoot, globalRoot)
 	remedy := fmt.Sprintf(
 		"run `ethos mission release` to clear every pending dispatch in this session, "+
 			"or `ethos mission close`/`abandon %s` to clear this one specifically, if that is not what you want",
@@ -2694,42 +2839,29 @@ func printContract(c *mission.Contract) {
 	}
 }
 
-// printReflections renders the round-by-round reflection log under
-// the contract block. Empty input renders "Reflections: (none)" so
-// an operator running `mission show` on a fresh mission — or on one
-// whose sibling `.reflections.yaml` failed to load — sees the
-// section exists but has no entries. Each reflection is rendered as
-// a small block: round number, recommendation, signals, and reason
-// (when present), so the operator can read the leader's decision
-// history without parsing YAML.
-//
-// Terminal recommendations (stop, escalate) are uppercased so an
-// operator scanning a long reflection log can spot a blocking
-// decision at a glance — a lowercase "stop" between two "continue"
-// rows is easy to miss.
-//
-// Round 6 of Phase 3.6 added the empty-state marker, parallel to
-// the round-3 E1 fix for printResults. Bugbot caught the Reflections
-// case when round 4 fixed only the Results side of the pair.
-func printReflections(rs []mission.Reflection) {
-	fmt.Println()
-	fmt.Println("Reflections:")
-	if len(rs) == 0 {
+// printReflectionStates separates shared decisions from unavailable, pending,
+// conflicting or readable optional detail. Missing prose is not non-submission.
+func printReflectionStates(states []mission.ReflectionRead) {
+	fmt.Println("\nReflections:")
+	if len(states) == 0 {
 		fmt.Println("  (none)")
-		return
 	}
-	for _, r := range rs {
-		rec := r.Recommendation
-		if mission.IsTerminalRecommendation(rec) {
-			rec = strings.ToUpper(rec)
+	for _, state := range states {
+		fmt.Printf("  round %d: decision=%s detail=%s pending=%t\n", state.Round, state.DecisionState, state.DetailState, state.Pending)
+		if state.Decision != nil {
+			fmt.Printf("    recommendation: %s by %s\n", state.Decision.Recommendation, state.Decision.Author)
 		}
-		fmt.Printf("  - round %d (%s) by %s — converging=%t\n",
-			r.Round, rec, r.Author, r.Converging)
-		for _, sig := range r.Signals {
-			fmt.Printf("      • %s\n", sig)
+		if state.Reflection != nil {
+			for _, signal := range state.Reflection.Signals {
+				fmt.Printf("    - %s\n", signal)
+			}
+			if state.Reflection.Reason != "" {
+				fmt.Printf("    reason: %s\n", state.Reflection.Reason)
+			}
 		}
-		if r.Reason != "" {
-			fmt.Printf("      reason: %s\n", r.Reason)
+		for _, diagnostic := range state.Diagnostics {
+			fmt.Printf("    diagnostic: %s\n", diagnostic)
+			fmt.Fprintf(os.Stderr, "ethos: loading reflections: %s\n", diagnostic)
 		}
 	}
 }
@@ -2949,6 +3081,15 @@ func detailStr(m map[string]any, key string) string {
 // detailRound extracts a numeric round from a details map. JSON
 // decoding produces float64; in-process construction may produce int.
 func detailRound(m map[string]any, key string) float64 {
+	// Repository JSON numbers expose a checked integer parser. Parse before
+	// converting for display so a precise fractional token cannot become round 1.
+	if v, ok := m[key].(interface{ Int64() (int64, error) }); ok {
+		round, err := v.Int64()
+		if err != nil {
+			return 0
+		}
+		return float64(round)
+	}
 	if v, ok := m[key].(float64); ok {
 		return v
 	}
@@ -3032,7 +3173,7 @@ func printResults(rs []mission.Result) {
 //
 // Empty input renders "Corrections: (none)" so an operator sees the
 // section exists even on a mission with a clean record — the same
-// empty-state convention printResults and printReflections use.
+// empty-state convention printResults and printReflectionStates use.
 func printCorrections(cs []mission.Correction) {
 	fmt.Println()
 	fmt.Println("Corrections:")

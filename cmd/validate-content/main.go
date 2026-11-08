@@ -120,20 +120,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	loc := resolve.Roots()
-	if err := loc.StoreFailure(); err != nil {
-		fmt.Fprintf(os.Stderr, "validate-content: locating the repository store: %v\n", err)
-		os.Exit(1)
-	}
-	defaultEthosRoot := loc.Ethos
 	defaultGlobalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	var ethosRoot, globalRoot string
-	flag.StringVar(&ethosRoot, "ethos-root", defaultEthosRoot, "path to .punt-labs/ethos/")
+	flag.StringVar(&ethosRoot, "ethos-root", "", "path to .punt-labs/ethos/ (default: located repository store)")
 	flag.StringVar(&globalRoot, "global-root", defaultGlobalRoot, "path to global ethos dir")
 	flag.Parse()
 
-	rep, err := run(ethosRoot, globalRoot)
+	explicitTarget := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "ethos-root" {
+			explicitTarget = true
+		}
+	})
+	var loc resolve.Located
+	if explicitTarget {
+		loc, err = contentTarget(ethosRoot)
+	} else {
+		loc = resolve.Roots()
+		err = loc.StoreFailure()
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "validate-content: selecting content target: %v\n", err)
+		os.Exit(1)
+	}
+	rep, err := runFor(loc, globalRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "validate-content: %v\n", err)
 		os.Exit(1)
@@ -163,13 +174,58 @@ func main() {
 // resolution: repo-only repo that cannot be honored.
 //
 // It resolves the repo's active bundle and DES-057 resolution mode the same
-// way cmd/ethos does — through bundle.ResolveRoot and bundle.VerifyRepoOnly,
+// way cmd/ethos does — through bundle.ResolveRootFromConfig and bundle.VerifyRepoOnly,
 // the shared internal/bundle logic cmd/ethos's identityStore() also calls —
 // so a repo-local bundle supplying an identity's talent is visible here too,
 // and a repo-only misconfiguration the real CLI would refuse to start under
 // fails this check loud rather than silently validating a config nothing
 // would actually run under (ethos-ccjz).
 func run(ethosRoot, globalRoot string) (report, error) {
+	loc, err := contentTarget(ethosRoot)
+	if err != nil {
+		return report{}, err
+	}
+	return runFor(loc, globalRoot)
+}
+
+// contentTarget captures the explicitly selected content scope. It must not
+// inherit config from cwd: --ethos-root can name a different repository.
+func contentTarget(ethosRoot string) (resolve.Located, error) {
+	if ethosRoot == "" {
+		return resolve.Located{}, fmt.Errorf("ethos root not found")
+	}
+	abs, err := filepath.Abs(ethosRoot)
+	if err != nil {
+		return resolve.Located{}, fmt.Errorf("making ethos root absolute: %w", err)
+	}
+	repoRoot := filepath.Dir(filepath.Dir(abs))
+	// As with resolve.Roots, freeze a physical repository root before deriving
+	// layout paths. Retargeting an invoking root alias must not retarget this
+	// operation. Do not resolve symlinks inside the repository's storage zones.
+	physicalRoot, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		return resolve.Located{}, fmt.Errorf("locating selected repository root: %w", err)
+	}
+	ethosRelative, err := filepath.Rel(repoRoot, abs)
+	if err != nil {
+		return resolve.Located{}, fmt.Errorf("locating selected content path: %w", err)
+	}
+	repoRoot = physicalRoot
+	loc := resolve.Located{Store: repoRoot, Checkout: repoRoot, Ethos: filepath.Join(repoRoot, ethosRelative)}
+	loc.Config, loc.ConfigErr = resolve.ConfigOf(repoRoot)
+	if loc.ConfigErr != nil {
+		return loc, fmt.Errorf("reading selected content configuration: %w", loc.ConfigErr)
+	}
+	return loc, nil
+}
+
+// runFor uses the target's captured store/configuration for content selection
+// and its captured checkout for document embed-sync checks.
+func runFor(loc resolve.Located, globalRoot string) (report, error) {
+	if err := loc.StoreFailure(); err != nil {
+		return report{}, err
+	}
+	ethosRoot, repoRoot := loc.Ethos, loc.Store
 	if ethosRoot == "" {
 		return report{}, fmt.Errorf("ethos root not found")
 	}
@@ -186,16 +242,11 @@ func run(ethosRoot, globalRoot string) (report, error) {
 		return report{}, fmt.Errorf("checking global root %s: %w", globalRoot, err)
 	}
 
-	// ethosRoot is always <repo>/.punt-labs/ethos — derive repo root
-	// structurally rather than re-walking .git, matching the DES-057
-	// consumers this file mirrors.
-	repoRoot := filepath.Dir(filepath.Dir(ethosRoot))
-
-	bundleRoot, active, err := bundle.ResolveRoot(repoRoot, globalRoot)
+	bundleRoot, active, err := bundle.ResolveRootFromConfig(repoRoot, globalRoot, loc.Config)
 	if err != nil {
 		return report{}, fmt.Errorf("bundle resolution failed: %w", err)
 	}
-	mode, err := resolve.ResolveResolution(repoRoot)
+	mode, err := resolve.ResolutionFromConfig(loc.Config)
 	if err != nil {
 		return report{}, err
 	}
@@ -209,7 +260,11 @@ func run(ethosRoot, globalRoot string) (report, error) {
 	var results []result
 
 	// Build identity stores.
-	repoIDStore := identity.NewStore(ethosRoot)
+	policy, err := loc.Layout()
+	if err != nil {
+		return report{}, fmt.Errorf("constructing selected identity storage: %w", err)
+	}
+	repoIDStore := identity.NewStore(ethosRoot, identity.RepositoryPolicy(policy))
 	var bundleIDStore *identity.Store
 	if bundleRoot != "" {
 		bundleIDStore = identity.NewStore(bundleRoot)
@@ -260,10 +315,11 @@ func run(ethosRoot, globalRoot string) (report, error) {
 		results = append(results, pass("identities: referential integrity"))
 	}
 
-	// The two vendored documents `ethos enable` deposits must match the bytes
-	// this binary embeds, or the repo is dogfooding content no consumer gets.
-	results = append(results, checkSetupSync(repoRoot))
-	results = append(results, checkGuideSync(repoRoot))
+	// Checkout documents must match the bytes this binary embeds, or the repo
+	// is dogfooding content no consumer gets. The shared store may be a
+	// different checkout with different factory sources and deposits.
+	results = append(results, checkSetupSync(loc.Checkout))
+	results = append(results, checkGuideSync(loc.Checkout))
 
 	// Check 5: agent file path resolution.
 	agentFails := 0
@@ -360,7 +416,7 @@ func run(ethosRoot, globalRoot string) (report, error) {
 	// `ethos vendor` runs on its own output, and `ethos doctor` runs on the
 	// live tree — now runs on every push/PR via this binary rather than
 	// nowhere in CI. PASSes with "not applicable" in layered mode.
-	results = append(results, fromDoctor(doctor.CheckRepoSetComplete(layeredID, repoRoot)))
+	results = append(results, fromDoctor(doctor.CheckRepoOnlyFromConfig(layeredID, repoRoot, loc.Config)))
 
 	// DES-069 R2: every mcp__ tool a role grants must be classified. Scoped
 	// to this repo's own roles, not the bundle or global layers — those

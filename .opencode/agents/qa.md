@@ -11,6 +11,13 @@
     { "action": "external_directory", "resource": "*", "effect": "allow" },
     { "action": "shell", "resource": "git status *", "effect": "allow" },
     { "action": "shell", "resource": "git diff *", "effect": "allow" },
+    { "action": "shell", "resource": "git rev-parse HEAD", "effect": "allow" },
+    { "action": "shell", "resource": "python3 -B scripts/opencode_evidence.py hash *", "effect": "allow" },
+    { "action": "shell", "resource": "python3 -B scripts/opencode_evidence.py inventory *", "effect": "allow" },
+    { "action": "shell", "resource": "python3 -B scripts/opencode_evidence.py go-test *", "effect": "allow" },
+    { "action": "shell", "resource": "python3 -B scripts/opencode_evidence.py json *", "effect": "allow" },
+    { "action": "shell", "resource": "python3 -B scripts/opencode_evidence.py tool go", "effect": "allow" },
+    { "action": "shell", "resource": "python3 -B scripts/opencode_evidence.py tool gcc", "effect": "allow" },
     { "action": "shell", "resource": "go test *", "effect": "allow" },
     { "action": "shell", "resource": "go vet *", "effect": "allow" },
     { "action": "shell", "resource": "make check-opencode", "effect": "allow" },
@@ -53,6 +60,22 @@ Canonical make build/test/check/lint and selected ./ethos read commands are
 available for assigned acceptance. Inspect targets first; use isolated fixtures
 for stateful scenarios. Ask the leader for a bounded grant if a real acceptance
 entry point is absent, rather than substituting unit tests for the user journey.
+
+For assigned evidence audits, `git rev-parse HEAD` and the read-only helper
+`python3 -B scripts/opencode_evidence.py` are available: `hash FILE...`,
+`inventory DIRECTORY`, `go-test JSONL`, `json FILE`, and `tool go` / `tool gcc`.
+Workspace paths are relative to this checkout's root (absolute paths inside it
+also work); traversal, credential-name components, symlinks and special files
+are refused. Only the two installed tool files bound in r351 have external
+hash/stat aliases; external contents and directory inventories are unavailable.
+Inspect the helper before use. It prints JSON to stdout only, including visible
+nonzero failures. A valid recount can include failed tests (RED). The helper
+checks JSON shape, package activity and per-node start, pause/resume and terminal
+transitions; it is not a complete Go protocol validator. Independently reconcile
+source/run inventories, package outcomes and process exit evidence. It does not
+certify test-process exit status or historical absence of changes.
+Ask the leader to persist stdout;
+do not redirect output, run arbitrary Python, or execute evidence as code.
 
 No source edits, delegation, release, install, or cleanup of user state. Tests
 execute with host authority, not a sandbox; do not use flags to mutate source.

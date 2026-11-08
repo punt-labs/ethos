@@ -91,14 +91,15 @@ func CheckUnclassifiedFiles(repoRoot string) Result {
 // scan is what the check found: unclassified files, paths it could not scan,
 // and summary lines that are neither. Only files are counted as files.
 type scan struct {
-	files   map[string]bool // paths no table entry matches
-	skipped map[string]bool // why a path was not scanned
-	notes   map[string]bool // one-line findings about the hooks directory
-	zones   int             // zones that existed and were walked
+	files     map[string]bool // paths no table entry matches
+	skipped   map[string]bool // why a path was not scanned
+	notes     map[string]bool // one-line findings about the hooks directory
+	misplaced map[string]bool // recognized local data physically in source
+	zones     int             // zones that existed and were walked
 }
 
 func newScan() *scan {
-	return &scan{files: map[string]bool{}, skipped: map[string]bool{}, notes: map[string]bool{}}
+	return &scan{files: map[string]bool{}, skipped: map[string]bool{}, notes: map[string]bool{}, misplaced: map[string]bool{}}
 }
 
 func (s *scan) clean() bool { return len(s.files)+len(s.skipped)+len(s.notes) == 0 }
@@ -175,6 +176,13 @@ func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
 			return fmt.Errorf("%s: %w", p, err)
 		}
 		if d.IsDir() {
+			rel, err := filepath.Rel(root, p)
+			if err != nil {
+				return err
+			}
+			if misplacedLocal(filepath.ToSlash(rel)) {
+				s.misplaced[filepath.ToSlash(rel)] = true
+			}
 			tree, err := resolve.IsWorkingTree(p)
 			if err != nil {
 				return fmt.Errorf("checking %s for .git: %w", p, err)
@@ -203,6 +211,9 @@ func (s *scan) walkZone(table []layout.Entry, root, zone string) (bool, error) {
 		}
 		if _, _, ok := layout.ClassifyIn(table, rel); !ok {
 			s.files[rel] = true
+		}
+		if misplacedLocal(rel) {
+			s.misplaced[rel] = true
 		}
 		return nil
 	})

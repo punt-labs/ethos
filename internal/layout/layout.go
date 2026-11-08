@@ -1,6 +1,7 @@
-// Package layout classifies every path ethos writes inside a repository's
-// working tree (DES-079). The ordered Table is the authority; prose lists of
-// paths cannot stay complete as writers are added, a failing test can.
+// Package layout defines repository storage destinations and classifies paths
+// ethos writes inside a working tree (DES-079). Policy determines placement;
+// the ordered Table determines file classes, not permission to write a file
+// into a particular zone.
 package layout
 
 import (
@@ -128,9 +129,15 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions.jsonl.lock", Class: Never},
 	{Pattern: ".punt-labs/ethos/identities/*.yaml.lock", Class: Never},
 	{Pattern: ".punt-labs/local/ethos/**/*.lock", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intent.yaml", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/missions/*/reflection-intents/*.yaml", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/missions/*/correction-intent.yaml", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/trace/missions/*/delegations/*/prompt-consent.yaml", Class: Never},
 	// The original bytes of a retired chunk the redaction check withheld from
 	// the tracked tree: <stem>.<hash>.corrupt, kept in the machine-local zone.
 	{Pattern: ".punt-labs/local/ethos/quarantine/*.corrupt", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/quarantine/*/*.corrupt", Class: Never},
+	{Pattern: ".punt-labs/local/ethos/quarantine/*/*.corrupt.json", Class: Never},
 	// Every staging name a helper in temp.go builds contains TmpMarker: the
 	// file, and a staging directory with whatever a crash leaves in it.
 	temp("**/*" + TmpMarker + "*"),
@@ -141,7 +148,9 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions/.*.migrate-*/**", Class: Never},
 
 	// Class 3: trace tier. The live files and the record: blame archive sit
-	// in the machine-local zone; the rest are written at tracked paths today.
+	// in the machine-local zone; tracked paths hold explicit published copies or
+	// supported historical records. Classification is not permission to place a
+	// private trace or runtime file in the record tree.
 	{Pattern: ".punt-labs/local/ethos/sessions/*.audit.jsonl", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/missions/*/*.log.jsonl", Class: Trace},
 	{Pattern: ".punt-labs/local/ethos/missions/*.jsonl", Class: Trace},
@@ -163,11 +172,10 @@ var Table = []Entry{
 	{Pattern: ".punt-labs/ethos/missions.jsonl", Class: Blame},
 	{Pattern: ".punt-labs/ethos/missions/*/contract.yaml", Class: Blame},
 	{Pattern: ".punt-labs/ethos/missions/*/results.yaml", Class: Blame},
-	// No writer yet: the corrections slice of ethos-g3g3 will create it. The
-	// entry is kept so the file has a class on the day it appears.
 	{Pattern: ".punt-labs/ethos/missions/*/corrections.yaml", Class: Blame},
 	{Pattern: ".punt-labs/ethos/missions/*/delegations/*/record.yaml", Class: Blame},
 	{Pattern: ".punt-labs/ethos/adrs/*.yaml", Class: Blame},
+	{Pattern: ".punt-labs/ethos/provenance/*.yaml", Class: Blame},
 
 	// Class 1: source and configuration.
 	{Pattern: ".punt-labs/ethos.yaml", Class: Source},

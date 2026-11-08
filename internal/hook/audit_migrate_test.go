@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,6 +30,16 @@ func writeLegacyAudit(t *testing.T, globalDir, sessionID string, entries []audit
 func repoSessionDir(t *testing.T, repoRoot, date, sessionID string) string {
 	t.Helper()
 	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", date+"-"+sessionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	return dir
+}
+
+// migrationSessionDir retains a legacy record-tree association while returning
+// the new local destination. Migration never writes to the old record tree.
+func migrationSessionDir(t *testing.T, root, date, session string) string {
+	t.Helper()
+	repoSessionDir(t, root, date, session)
+	dir := archiveSessionDir(t, root, session, date)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	return dir
 }
@@ -78,7 +87,7 @@ func TestMigrateAudit_NoGlobalDir(t *testing.T) {
 	assert.Equal(t, "nothing to migrate\n", out.String())
 }
 
-func TestMigrateAudit_CopiesEntriesAndDeletesLegacy(t *testing.T) {
+func TestMigrateAudit_CopiesEntriesAndRetainsLegacy(t *testing.T) {
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
 
@@ -88,15 +97,15 @@ func TestMigrateAudit_CopiesEntriesAndDeletesLegacy(t *testing.T) {
 		sampleEntry(sessID, "2026-05-22T10:00:01Z", "Read", "h2"),
 	}
 	legacyPath := writeLegacyAudit(t, globalDir, sessID, legacyEntries)
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 
 	var out bytes.Buffer
 	err := MigrateAudit(globalDir, repoRoot, false, &out)
 	require.NoError(t, err)
 
-	// Legacy gone.
+	// Sources remain safe for older processes that already have them open.
 	_, statErr := os.Stat(legacyPath)
-	assert.True(t, os.IsNotExist(statErr), "legacy file should be deleted: %v", statErr)
+	require.NoError(t, statErr, "legacy source is retained")
 
 	// Repo file has both entries in order.
 	got := readRepoAuditEntries(t, repoDir)
@@ -120,7 +129,7 @@ func TestMigrateAudit_PreservesRawUnknownFields(t *testing.T) {
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
 	require.NoError(t, os.WriteFile(legacyPath, []byte(sentinel+"\n"+future+"\n"), 0o600))
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 
 	var out bytes.Buffer
 	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
@@ -132,7 +141,7 @@ func TestMigrateAudit_PreservesRawUnknownFields(t *testing.T) {
 	assert.Contains(t, body, `"future_field":"keepme"`, "unknown field must survive migration byte-intact")
 
 	_, statErr := os.Stat(legacyPath)
-	assert.True(t, os.IsNotExist(statErr), "legacy file should be deleted after migration")
+	assert.NoError(t, statErr, "legacy source remains after migration")
 }
 
 // TestMigrateAudit_SameSecondSentinelsBothSurvive is SFH R3-1: two sentinels
@@ -149,7 +158,7 @@ func TestMigrateAudit_SameSecondSentinelsBothSurvive(t *testing.T) {
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
 	require.NoError(t, os.WriteFile(legacyPath, []byte(s1+"\n"+s2+"\n"), 0o600))
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 
 	var out bytes.Buffer
 	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
@@ -174,7 +183,7 @@ func TestMigrateAudit_IdenticalSentinelBurstAllSurvive(t *testing.T) {
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
 	require.NoError(t, os.WriteFile(legacyPath, []byte(s+"\n"+s+"\n"+s+"\n"), 0o600))
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 
 	var out bytes.Buffer
 	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
@@ -186,7 +195,7 @@ func TestMigrateAudit_IdenticalSentinelBurstAllSurvive(t *testing.T) {
 // TestMigrateAudit_IdenticalBurstResumesAfterCrash is SFH R4-1: a crash
 // interrupts the append of a 3-line identical burst after 2 lines landed. The
 // re-run must top the repo up to exactly 3 (append 1), and a further run must
-// append 0 and delete the legacy file.
+// append 0 while retaining the legacy source.
 func TestMigrateAudit_IdenticalBurstResumesAfterCrash(t *testing.T) {
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
@@ -196,7 +205,7 @@ func TestMigrateAudit_IdenticalBurstResumesAfterCrash(t *testing.T) {
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
 	require.NoError(t, os.WriteFile(legacyPath, []byte(s+"\n"+s+"\n"+s+"\n"), 0o600))
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 
 	// Simulate a crash that landed only 2 of the 3 lines in the repo file.
 	repoPath := filepath.Join(repoDir, "audit.jsonl")
@@ -207,26 +216,24 @@ func TestMigrateAudit_IdenticalBurstResumesAfterCrash(t *testing.T) {
 	require.Len(t, readRepoAuditEntries(t, repoDir), 3, "re-run must top up to exactly the legacy count")
 	assert.Contains(t, out1.String(), "migrate sess-resume")
 
-	// The top-up run appended one line and then deleted the legacy file.
+	// The top-up run installed a complete local collection without deleting source.
 	_, statErr := os.Stat(legacyPath)
-	require.True(t, os.IsNotExist(statErr), "legacy file must be deleted after the top-up append")
+	require.NoError(t, statErr, "legacy file remains after the top-up")
 
 	// Re-stage the legacy burst (a stale tree or second machine) and run again.
-	// The repo already holds all three, so the dedupe appends zero and deletes.
+	// The local archive already holds all three, so dedupe adds zero.
 	require.NoError(t, os.WriteFile(legacyPath, []byte(s+"\n"+s+"\n"+s+"\n"), 0o600))
 	var out2 bytes.Buffer
 	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out2))
 	assert.Len(t, readRepoAuditEntries(t, repoDir), 3, "completed run must not double-write")
 	assert.Contains(t, out2.String(), "noop sess-resume")
 	_, statErr = os.Stat(legacyPath)
-	assert.True(t, os.IsNotExist(statErr), "legacy file must be deleted after a completed re-run")
+	assert.NoError(t, statErr, "legacy file remains after a completed re-run")
 }
 
-// TestMigrateAudit_TornDestinationTailNotFused is SFH R3-2: when the
-// destination already ends in a torn fragment, the first migrated line must not
-// glue onto it. A separator newline keeps the fragment its own (skipped) line
-// and the migrated sentinel decodable.
-func TestMigrateAudit_TornDestinationTailNotFused(t *testing.T) {
+// A damaged retained destination is an explicit recovery error, not permission
+// to overwrite evidence or silently treat it as an empty collection.
+func TestMigrateAudit_TornDestinationRefusesWithoutChangingSource(t *testing.T) {
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
 	sessID := "sess-torn"
@@ -234,25 +241,21 @@ func TestMigrateAudit_TornDestinationTailNotFused(t *testing.T) {
 	sentinel := `{"ts":"2026-05-22T10:00:01Z","session":"sess-torn","audit_error":"boom"}`
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(globalDir, sessID+".audit.jsonl"), []byte(sentinel+"\n"), 0o600))
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 	// A prior write crashed mid-line, leaving a fragment with no terminator.
 	repoPath := filepath.Join(repoDir, "audit.jsonl")
-	require.NoError(t, os.WriteFile(repoPath, []byte(`{"ts":"2026-05-22T09:59:59Z","session":"sess-torn","tool":"Ba`), 0o600))
+	torn := []byte(`{"ts":"2026-05-22T09:59:59Z","session":"sess-torn","tool":"Ba`)
+	require.NoError(t, os.WriteFile(repoPath, torn, 0o600))
 
 	var out bytes.Buffer
-	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
-
-	// The sentinel must be its own decodable line, not fused onto the fragment.
-	entries, err := readRawAuditLines(repoPath)
+	err := MigrateAudit(globalDir, repoRoot, false, &out)
+	require.ErrorContains(t, err, "legacy source retained")
+	data, err := os.ReadFile(repoPath)
 	require.NoError(t, err)
-	var found bool
-	for _, rl := range entries {
-		if bytes.Contains(rl.raw, []byte(`"audit_error":"boom"`)) {
-			found = true
-		}
-	}
-	data, _ := os.ReadFile(repoPath)
-	assert.True(t, found, "migrated sentinel must survive as its own line: %q", string(data))
+	assert.Equal(t, torn, data)
+	data, err = os.ReadFile(filepath.Join(globalDir, sessID+".audit.jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, sentinel+"\n", string(data))
 }
 
 func TestMigrateAudit_IdempotentNoDoubleWrite(t *testing.T) {
@@ -265,16 +268,13 @@ func TestMigrateAudit_IdempotentNoDoubleWrite(t *testing.T) {
 		sampleEntry(sessID, "2026-05-22T10:00:01Z", "Read", "h2"),
 	}
 	writeLegacyAudit(t, globalDir, sessID, entries)
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 
 	// First run: copies.
 	var out1 bytes.Buffer
 	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out1))
 
-	// Stage the legacy file again to simulate a second machine or a
-	// stale tree, then run again. Repo already has the entries; the
-	// dedupe must skip them and not double-write.
-	writeLegacyAudit(t, globalDir, sessID, entries)
+	// The retained legacy file is unchanged on the second run.
 
 	var out2 bytes.Buffer
 	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out2))
@@ -316,7 +316,7 @@ func TestMigrateAudit_DryRun(t *testing.T) {
 		sampleEntry(sessID, "2026-05-22T10:00:00Z", "Bash", "h1"),
 	}
 	legacyPath := writeLegacyAudit(t, globalDir, sessID, legacyEntries)
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 
 	var out bytes.Buffer
 	err := MigrateAudit(globalDir, repoRoot, true, &out)
@@ -341,7 +341,7 @@ func TestMigrateAudit_PartialEntriesAlreadyInRepo(t *testing.T) {
 	repoRoot := t.TempDir()
 
 	sessID := "sess-partial"
-	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	repoDir := migrationSessionDir(t, repoRoot, "2026-05-22", sessID)
 	repoFile := filepath.Join(repoDir, "audit.jsonl")
 
 	repoSeed := sampleEntry(sessID, "2026-05-22T10:00:00Z", "Bash", "h1")
@@ -364,7 +364,7 @@ func TestMigrateAudit_PartialEntriesAlreadyInRepo(t *testing.T) {
 	assert.Contains(t, out.String(), "1 new entries")
 }
 
-func TestMigrateAudit_ReadOnlyLegacyFileSkipped(t *testing.T) {
+func TestMigrateAudit_UnreadableLegacyFileRefuses(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file mode semantics differ on windows")
 	}
@@ -387,15 +387,14 @@ func TestMigrateAudit_ReadOnlyLegacyFileSkipped(t *testing.T) {
 
 	var out bytes.Buffer
 	err := MigrateAudit(globalDir, repoRoot, false, &out)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, os.ErrPermission)
 
 	// Legacy file still present (no destructive action on a
 	// read-only source).
 	_, statErr := os.Stat(legacyPath)
 	require.NoError(t, statErr)
 
-	assert.Contains(t, out.String(), "skip sess-ro")
-	assert.Contains(t, out.String(), "read-only")
+	assert.Contains(t, err.Error(), "legacy source retained")
 }
 
 func TestMigrateAudit_EmptyRepoRoot(t *testing.T) {
@@ -405,14 +404,11 @@ func TestMigrateAudit_EmptyRepoRoot(t *testing.T) {
 	var out bytes.Buffer
 	err := MigrateAudit(t.TempDir(), "", false, &out)
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "repoRoot"))
+	assert.Contains(t, err.Error(), "repository root is empty")
 }
 
 func TestMigrateAudit_LegacyFileEmptied(t *testing.T) {
-	// An empty legacy file (zero entries) should be removed without
-	// writing anything to the repo tree. Output is the "noop"
-	// decision so an operator running -v sees that the file was
-	// processed.
+	// Empty sources are retained too; cleanup requires operator consent.
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
 
@@ -426,6 +422,6 @@ func TestMigrateAudit_LegacyFileEmptied(t *testing.T) {
 	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
 
 	_, statErr := os.Stat(legacyPath)
-	assert.True(t, os.IsNotExist(statErr), "empty legacy file should be cleaned up")
-	assert.Contains(t, out.String(), "noop sess-empty")
+	assert.NoError(t, statErr, "empty legacy file remains")
+	assert.Contains(t, out.String(), "0 new entries; source retained")
 }

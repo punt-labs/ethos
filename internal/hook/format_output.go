@@ -760,7 +760,50 @@ func formatRoleShow(w io.Writer, result string) error {
 
 // --- Mission tool formatters ---
 
-// formatMission dispatches on method for the mission MCP tool. Each
+// formatMission preserves the mission tool's operation-scoped warnings before
+// dispatching to a compact formatter. Warnings never change the success summary
+// or copy the original payload into context. Centralizing this here also covers
+// future methods and malformed success shapes that use a fallback formatter.
+func formatMission(w io.Writer, method, result string) error {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		// Arrays and non-JSON results retain the existing formatter behavior.
+		return formatMissionMethod(w, method, result)
+	}
+	raw := payload["warnings"]
+	if raw == nil {
+		return formatMissionMethod(w, method, result)
+	}
+	warnings, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("format-output: mission.%s: warnings must be an array of strings", method)
+	}
+	for i, entry := range warnings {
+		if _, ok := entry.(string); !ok {
+			// Report the field, not its possibly sensitive malformed value.
+			return fmt.Errorf("format-output: mission.%s: warnings entry %d must be a string", method, i+1)
+		}
+	}
+	if len(warnings) == 0 {
+		return formatMissionMethod(w, method, result)
+	}
+	var buf bytes.Buffer
+	if err := formatMissionMethod(&buf, method, result); err != nil {
+		return err
+	}
+	var formatted formatResult
+	if err := json.Unmarshal(buf.Bytes(), &formatted); err != nil {
+		return fmt.Errorf("format-output: re-reading mission.%s output: %w", method, err)
+	}
+	out := &formatted.HookSpecificOutput
+	var ctx strings.Builder
+	ctx.WriteString(out.AdditionalContext)
+	writeMissionWarnings(&ctx, warnings, "mission."+method)
+	out.AdditionalContext = strings.TrimPrefix(ctx.String(), "\n\n")
+	return json.NewEncoder(w).Encode(formatted)
+}
+
+// formatMissionMethod dispatches on method for the mission MCP tool. Each
 // mission method has a distinct result shape:
 //
 //	create        → a single Contract object
@@ -774,7 +817,7 @@ func formatRoleShow(w io.Writer, result string) error {
 //	result        → {mission_id, round, verdict, confidence, created_at}
 //	results       → {results: [...], corrections: [...]} (DES-072)
 //	correct       → {mission_id, kind, round, author}
-func formatMission(w io.Writer, method, result string) error {
+func formatMissionMethod(w io.Writer, method, result string) error {
 	switch method {
 	case "create":
 		return formatMissionCreate(w, result)
@@ -833,9 +876,6 @@ func formatMissionLog(w io.Writer, result string) error {
 		// why the events are missing.
 		var ctx strings.Builder
 		ctx.WriteString("(none)")
-		if warnings, _ := payload["warnings"].([]any); len(warnings) > 0 {
-			writeMissionWarnings(&ctx, warnings, "mission.log")
-		}
 		return emit(w, summary, ctx.String())
 	}
 	var ctx strings.Builder
@@ -861,9 +901,6 @@ func formatMissionLog(w io.Writer, result string) error {
 		if detailSummary := summarizeEventDetailsRaw(evType, details); detailSummary != "" {
 			fmt.Fprintf(&ctx, "  %s", detailSummary)
 		}
-	}
-	if warnings, _ := payload["warnings"].([]any); len(warnings) > 0 {
-		writeMissionWarnings(&ctx, warnings, "mission.log")
 	}
 	return emit(w, summary, ctx.String())
 }
@@ -998,7 +1035,6 @@ func formatMissionResults(w io.Writer, result string) error {
 	var payload struct {
 		Results     []map[string]any `json:"results"`
 		Corrections []any            `json:"corrections"`
-		Warnings    []string         `json:"warnings"`
 	}
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		return emitSimple(w, truncate(result, 200))
@@ -1010,15 +1046,10 @@ func formatMissionResults(w io.Writer, result string) error {
 		noun = "result"
 	}
 	summary := fmt.Sprintf("%d %s", n, noun)
-	warnings := make([]any, len(payload.Warnings))
-	for i, s := range payload.Warnings {
-		warnings[i] = s
-	}
 	if n == 0 {
 		var ctx strings.Builder
 		ctx.WriteString("(none)")
 		writeMissionCorrections(&ctx, payload.Corrections)
-		writeMissionWarnings(&ctx, warnings, "mission.results")
 		return emit(w, summary, ctx.String())
 	}
 	var ctx strings.Builder
@@ -1053,7 +1084,6 @@ func formatMissionResults(w io.Writer, result string) error {
 		}
 	}
 	writeMissionCorrections(&ctx, payload.Corrections)
-	writeMissionWarnings(&ctx, warnings, "mission.results")
 	return emit(w, summary, ctx.String())
 }
 
@@ -1102,15 +1132,7 @@ func writeMissionCorrections(ctx *strings.Builder, raw any) {
 }
 
 // formatMissionCorrect renders the correct method's confirmation:
-// "Corrected <mission_id> (<kind>)", plus a Warnings section when the
-// payload carries one.
-//
-// handleCorrectMission attaches a "warnings" entry when the
-// post-correction seal fails (parity with formatMissionClose's
-// sidecar-cleanup warning): the correction is already recorded, so
-// the summary line is unchanged, but the operator must learn the
-// mission log may not be durable on disk yet. Without this the
-// warning would reach no rendered surface at all.
+// "Corrected <mission_id> (<kind>)". formatMission adds operation warnings.
 func formatMissionCorrect(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -1121,14 +1143,7 @@ func formatMissionCorrect(w io.Writer, result string) error {
 	if missionID == "" || kind == "" {
 		return emitSimple(w, truncate(result, 200))
 	}
-	summary := fmt.Sprintf("Corrected %s (%s)", missionID, kind)
-	warnings, _ := c["warnings"].([]any)
-	if len(warnings) == 0 {
-		return emitSimple(w, summary)
-	}
-	var ctx strings.Builder
-	writeMissionWarnings(&ctx, warnings, "mission.correct")
-	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
+	return emitSimple(w, fmt.Sprintf("Corrected %s (%s)", missionID, kind))
 }
 
 // formatMissionReflect renders the reflect method's confirmation:
@@ -1146,7 +1161,46 @@ func formatMissionReflect(w io.Writer, result string) error {
 	if missionID == "" || !ok {
 		return emitSimple(w, truncate(result, 200))
 	}
-	return emitSimple(w, fmt.Sprintf("Reflected %s round %d (%s)", missionID, int(round), rec))
+	summary := fmt.Sprintf("Reflected %s round %d (%s)", missionID, int(round), rec)
+	if outcome, ok := c["outcome"].(map[string]any); ok {
+		warnings, _ := c["warnings"].([]any)
+		omitReflectWarningDiagnostics(outcome, warnings)
+		b, err := json.Marshal(outcome)
+		if err != nil {
+			return err
+		}
+		return emit(w, summary, string(b))
+	}
+	return emitSimple(w, summary)
+}
+
+// omitReflectWarningDiagnostics removes only exact diagnostic strings already
+// rendered by formatMission's common warning section. outcome is request-local
+// decoded JSON; state fields and unmatched entries (including repeats and
+// unexpected shapes) stay intact. No warnings means no compatibility change.
+func omitReflectWarningDiagnostics(outcome map[string]any, warnings []any) {
+	diagnostics, ok := outcome["diagnostics"].([]any)
+	if !ok || len(warnings) == 0 {
+		return
+	}
+	warningSet := make(map[string]struct{}, len(warnings))
+	for _, entry := range warnings {
+		if warning, ok := entry.(string); ok {
+			warningSet[warning] = struct{}{}
+		}
+	}
+	unmatched := make([]any, 0, len(diagnostics))
+	for _, entry := range diagnostics {
+		if diagnostic, ok := entry.(string); ok {
+			if _, matched := warningSet[diagnostic]; matched {
+				continue
+			}
+		}
+		unmatched = append(unmatched, entry)
+	}
+	if len(unmatched) != len(diagnostics) {
+		outcome["diagnostics"] = unmatched
+	}
 }
 
 // formatMissionAdvance renders the advance method's confirmation:
@@ -1186,6 +1240,29 @@ func formatMissionReflections(w io.Writer, result string) error {
 	}
 	var ctx strings.Builder
 	for i, e := range entries {
+		if state, ok := e["decision_state"].(string); ok {
+			if i > 0 {
+				ctx.WriteString("\n")
+			}
+			round, _ := e["round"].(float64)
+			fmt.Fprintf(&ctx, "  - round %d decision=%s detail=%v pending=%v", int(round), state, e["detail_state"], e["pending"])
+			if decision, ok := e["decision"].(map[string]any); ok {
+				fmt.Fprintf(&ctx, " (%v) by %v", decision["recommendation"], decision["author"])
+			}
+			if detail, ok := e["reflection"].(map[string]any); ok {
+				b, err := json.Marshal(detail)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(&ctx, "\n      %s", b)
+			}
+			if diagnostics, ok := e["diagnostics"].([]any); ok {
+				for _, d := range diagnostics {
+					fmt.Fprintf(&ctx, "\n      diagnostic: %v", d)
+				}
+			}
+			continue
+		}
 		round, _ := e["round"].(float64)
 		rec, _ := e["recommendation"].(string)
 		author, _ := e["author"].(string)
@@ -1252,13 +1329,6 @@ func formatMissionShow(w io.Writer, result string) error {
 	if raw, ok := c["corrections"]; ok {
 		writeMissionCorrections(&ctx, raw)
 	}
-	// Surface any warnings from a corrupt sibling file. Round 3
-	// added this — without it, a corrupted results file was
-	// indistinguishable from "no results yet" for MCP callers.
-	if raw, ok := c["warnings"]; ok {
-		writeMissionWarnings(&ctx, raw, "mission.show")
-	}
-
 	return emit(w, summary, ctx.String())
 }
 
@@ -1304,10 +1374,9 @@ func writeMissionResults(ctx *strings.Builder, raw any) {
 // the failure even in JSON-parsed MCP mode.
 //
 // caller identifies the emitting tool method (e.g. "mission.show")
-// so a dropped non-string entry can be traced back to the formatter
-// that produced it; the six call sites share this one helper, and
-// without a caller label a stderr line naming only the type and
-// value gives the operator no way to tell them apart.
+// so a dropped non-string entry can be traced back to its source. formatMission
+// validates entries before calling this helper; the stderr diagnostic is kept
+// for direct callers.
 func writeMissionWarnings(ctx *strings.Builder, raw any, caller string) {
 	entries, ok := raw.([]any)
 	if !ok || len(entries) == 0 {
@@ -1343,13 +1412,6 @@ func formatMissionCreate(w io.Writer, result string) error {
 
 	var ctx strings.Builder
 	writeMissionFields(&ctx, c)
-	// handleCreateMission carries a rebind warning (ethos-5jsf) in the
-	// same top-level `warnings` array formatMissionShow already renders;
-	// without this the notice reached JSON but never a rendered surface.
-	if raw, ok := c["warnings"]; ok {
-		writeMissionWarnings(&ctx, raw, "mission.create")
-	}
-
 	return emit(w, summary, ctx.String())
 }
 
@@ -1538,14 +1600,7 @@ func formatMissionList(w io.Writer, result string) error {
 }
 
 // formatMissionClose renders the close method's confirmation as a
-// single-line summary, plus a Warnings section when the payload carries
-// one.
-//
-// Close warns only when the post-close sidecar cleanup failed
-// (ethos-jawp): the mission did close, so the summary line is unchanged,
-// but the operator must learn that a sidecar may still be tagging
-// commits with the closed mission. Without this the warning would reach
-// no rendered surface at all.
+// single-line summary. formatMission adds operation warnings.
 func formatMissionClose(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -1556,24 +1611,13 @@ func formatMissionClose(w io.Writer, result string) error {
 	if missionID == "" {
 		return emitSimple(w, truncate(result, 200))
 	}
-	summary := fmt.Sprintf("Closed %s as %s", missionID, status)
-	warnings, _ := c["warnings"].([]any)
-	if len(warnings) == 0 {
-		return emitSimple(w, summary)
-	}
-	var ctx strings.Builder
-	writeMissionWarnings(&ctx, warnings, "mission.close")
-	// writeMissionWarnings separates its section from whatever precedes
-	// it; on a close nothing does, so drop the leading blank lines.
-	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
+	return emitSimple(w, fmt.Sprintf("Closed %s as %s", missionID, status))
 }
 
 // formatMissionAbandon renders the abandon method's confirmation as a
 // single-line summary, plus a Disclaimed line (DES-076 round 2, when
 // any delegation IDs were disclaimed as part of this call) and a
-// Warnings section when the payload carries one. Parallels
-// formatMissionClose — abandon is a terminal transition like close,
-// and shares the same sidecar-cleanup warning path (ethos-jawp).
+// Warnings section added by formatMission when the payload carries one.
 func formatMissionAbandon(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -1587,8 +1631,7 @@ func formatMissionAbandon(w io.Writer, result string) error {
 	}
 	summary := fmt.Sprintf("Abandoned %s as %s: %s", missionID, status, reason)
 	disclaimed, _ := c["disclaimed"].([]any)
-	warnings, _ := c["warnings"].([]any)
-	if len(disclaimed) == 0 && len(warnings) == 0 {
+	if len(disclaimed) == 0 {
 		return emitSimple(w, summary)
 	}
 	var ctx strings.Builder
@@ -1615,9 +1658,6 @@ func formatMissionAbandon(w io.Writer, result string) error {
 		if len(ids) > 0 {
 			fmt.Fprintf(&ctx, "\n\nDisclaimed: %s", strings.Join(ids, ", "))
 		}
-	}
-	if len(warnings) > 0 {
-		writeMissionWarnings(&ctx, warnings, "mission.abandon")
 	}
 	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
 }

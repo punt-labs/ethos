@@ -11,7 +11,7 @@ import (
 // TestGitignoreStagingNameFollowsTheLogicalPath: a .gitignore linked to a file
 // with another name is classified by the path the caller asked to write.
 func TestGitignoreStagingNameFollowsTheLogicalPath(t *testing.T) {
-	root := t.TempDir()
+	root := physicalTempDir(t)
 	if err := os.Mkdir(filepath.Join(root, "config"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -24,13 +24,20 @@ func TestGitignoreStagingNameFollowsTheLogicalPath(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	f, err := createGitignoreTemp(target, link)
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := createGitignoreTemp(link, p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	name := f.Name()
 	_ = f.Close()
 	defer func() { _ = os.Remove(name) }()
+	if filepath.Dir(name) != p.TempDir() {
+		t.Errorf("staging file %s is outside %s", name, p.TempDir())
+	}
 
 	rel, err := filepath.Rel(root, name)
 	if err != nil {

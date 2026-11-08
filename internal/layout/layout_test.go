@@ -125,6 +125,7 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/missions/m-1/corrections.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions.jsonl", layout.Blame, true},
 		{".punt-labs/ethos/adrs/DES-079.yaml", layout.Blame, true},
+		{".punt-labs/ethos/provenance/manifest.yaml", layout.Blame, true},
 		{".punt-labs/ethos/missions/m-1/delegations/d-1/prompt.md", layout.Trace, true},
 		{".punt-labs/ethos/missions/m-1/reflections.yaml", layout.Trace, true},
 		{".punt-labs/ethos/missions/m-1/artifacts/notes.md", layout.Trace, true},
@@ -136,6 +137,8 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/ethos/identities/bwk.ext/quarry.local.yaml", layout.Never, true},
 		{".punt-labs/ethos/identities/bwk.yaml.lock", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/s-1.lock", layout.Never, true},
+		{".punt-labs/local/ethos/missions/m-1/reflection-intent.yaml", layout.Never, true},
+		{".punt-labs/local/ethos/missions/m-1/correction-intent.yaml", layout.Never, true},
 		// No entry.
 		{".punt-labs/ethos/ethos.yaml", 0, false},
 		{".punt-labs/ethos/unknown/file", 0, false},

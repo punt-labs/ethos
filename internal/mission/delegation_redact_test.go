@@ -178,7 +178,9 @@ func TestCloseDelegation_RedactsReason(t *testing.T) {
 
 func readPrompt(t *testing.T, dir string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, "prompt.md"))
+	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(dir))))))
+	missionID := filepath.Base(filepath.Dir(filepath.Dir(dir)))
+	data, err := os.ReadFile(filepath.Join(root, ".punt-labs", "local", "ethos", "trace", "missions", missionID, "delegations", filepath.Base(dir), "prompt.md"))
 	require.NoError(t, err)
 	return string(data)
 }

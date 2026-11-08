@@ -14,6 +14,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 type dashboardData struct {
@@ -145,6 +146,8 @@ type missionData struct {
 	Delegations         []*mission.Delegation
 	Results             []mission.Result
 	ResultsError        string
+	Reflections         []mission.ReflectionRead
+	ReflectionsError    string
 	Corrections         []mission.Correction
 	CorrectionsError    string
 	CorrectionsWarnings []string
@@ -156,16 +159,18 @@ type missionData struct {
 	Notices             []string // what could not be read, shown on the page
 }
 
-// missionStore builds the mission store the UI reads from. The record
-// (contract, results) resolves under the store root, but the DES-058 event
-// union is the per-checkout audit concern — it lives under the work tree
-// where the events were appended and sealed. Wiring the checkout root
-// (s.repoRoot, the work-tree root per CR#2) keeps the mission timeline
-// non-empty when the UI runs from a linked worktree (Bugbot HIGH #370 class,
-// one layer up).
-func (s *Server) missionStore() *mission.Store {
-	return mission.NewStoreWithRoots(s.storeRoot, s.globalRoot).
-		WithCheckoutRoot(s.repoRoot)
+// missionStore validates configuration once for this request, with canonical
+// local history at S and optional publication reads in the invoking checkout C.
+func (s *Server) missionStore() (*mission.Store, error) {
+	cfg, err := resolve.ConfigOf(s.storeRoot)
+	if err != nil {
+		return nil, err
+	}
+	p, err := (resolve.Located{Store: s.storeRoot, Checkout: s.repoRoot, Config: cfg}).Layout()
+	if err != nil {
+		return nil, err
+	}
+	return mission.NewRepositoryStore(p, s.globalRoot), nil
 }
 
 func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +180,16 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store := s.missionStore()
+	store, err := s.missionStore()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("mission policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+	policy, ok := store.RepositoryPolicy()
+	if !ok {
+		http.Error(w, "mission policy: repository policy unavailable", http.StatusInternalServerError)
+		return
+	}
 	c, err := store.Load(id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("mission %q: %v", id, err), loadStatus(err))
@@ -186,19 +200,13 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	results, resultsErr := s.loadResults(store, id)
 	events, warnings, eventsErr := s.loadEvents(store, id)
 
-	// Corrections are a "correct" event under the same log the Events
-	// section renders (DES-072) — deriving them from the events slice
-	// already in hand avoids a second LoadEvents call (and a second
-	// disk read + JSON decode) for the same mission log.
-	var corrections []mission.Correction
-	if eventsErr == nil {
-		corrections = mission.CorrectionsFromEvents(id, events)
-	}
+	corrections, correctionWarnings, correctionsErr := store.LoadCorrections(id)
+	reflections, reflectionsErr := store.ReadReflections(id)
 
 	// Aggregate audit entries across all delegations under this mission.
 	var allAudit []hook.AuditView
 	for _, d := range delegations {
-		entries, aerr := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, d.ID)
+		entries, aerr := hook.QueryAuditByDelegationWithPolicy(policy, s.globalSessionsDir, d.ID)
 		if aerr != nil {
 			notices = append(notices, fmt.Sprintf("audit entries for delegation %s could not be queried: %v", d.ID, aerr))
 		}
@@ -207,34 +215,30 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(allAudit, func(i, j int) bool { return allAudit[i].Ts < allAudit[j].Ts })
 
 	data := missionData{
-		Title:          id,
-		Contract:       c,
-		Delegations:    delegations,
-		Results:        results,
-		Corrections:    corrections,
-		Events:         events,
-		EventsWarnings: warnings,
-		AuditEntries:   allAudit,
-		AuditCount:     len(allAudit),
-		Notices:        notices,
+		Title:               id,
+		Contract:            c,
+		Delegations:         delegations,
+		Results:             results,
+		Reflections:         reflections,
+		Corrections:         corrections,
+		CorrectionsWarnings: correctionWarnings,
+		Events:              events,
+		EventsWarnings:      warnings,
+		AuditEntries:        allAudit,
+		AuditCount:          len(allAudit),
+		Notices:             notices,
 	}
 	if resultsErr != nil {
 		data.ResultsError = resultsErr.Error()
 	}
-	switch {
-	case eventsErr != nil:
+	if reflectionsErr != nil {
+		data.ReflectionsError = reflectionsErr.Error()
+	}
+	if correctionsErr != nil {
+		data.CorrectionsError = correctionsErr.Error()
+	}
+	if eventsErr != nil {
 		data.EventsError = eventsErr.Error()
-		// The Corrections section reads from the same event log; a
-		// failure there is the same integrity signal, not a separate
-		// one, so it is surfaced through CorrectionsError too rather
-		// than left blank while Events shows the warning.
-		data.CorrectionsError = eventsErr.Error()
-	case len(warnings) > 0:
-		// eventsErr is nil but the union has per-line decode warnings
-		// (a corrupt line skipped, not a hard failure) — Corrections
-		// was still derived from the events that DID decode, so a
-		// dropped correct event must not render as a clean section.
-		data.CorrectionsWarnings = warnings
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "mission.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -332,15 +336,27 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 
 	var notices []string
 	prompt := ""
-	promptData, readErr := os.ReadFile(filepath.Join(dir, "prompt.md"))
+	store, err := s.missionStore()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("mission policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+	policy, ok := store.RepositoryPolicy()
+	if !ok {
+		http.Error(w, "mission policy: repository policy unavailable", http.StatusInternalServerError)
+		return
+	}
+	promptData, readErr := store.LoadDelegationPrompt(missionID, delegationID)
 	switch {
 	case readErr == nil:
 		prompt = string(promptData)
-	case !errors.Is(readErr, fs.ErrNotExist): // no prompt recorded is not a failure
+	case errors.Is(readErr, fs.ErrNotExist) && d.PromptHash != "":
+		notices = append(notices, fmt.Sprintf("the prompt of %s was recorded but detail is unavailable here", delegationID))
+	case !errors.Is(readErr, fs.ErrNotExist): // no hash and no prompt is not a failure
 		notices = append(notices, fmt.Sprintf("the prompt of %s could not be read: %v", delegationID, readErr))
 	}
 
-	auditEntries, aerr := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, delegationID)
+	auditEntries, aerr := hook.QueryAuditByDelegationWithPolicy(policy, s.globalSessionsDir, delegationID)
 	if aerr != nil {
 		notices = append(notices, fmt.Sprintf("audit entries for delegation %s could not be queried: %v", delegationID, aerr))
 	}

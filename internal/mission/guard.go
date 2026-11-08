@@ -1152,6 +1152,29 @@ var renameFile = os.Rename
 // A file's mode is exactly Perm: it is set with chmod, so the umask does not
 // narrow it.
 func WriteTrackedFiles(files ...TrackedFile) error {
+	return writeTrackedFiles(writeTrackedTemp, files...)
+}
+
+// WriteExportFiles stages repository exports and their rollback bytes in the
+// canonical local zone even when --dir names a destination outside the store.
+// Standalone global exports retain their existing staging behavior.
+func (s *Store) WriteExportFiles(files ...TrackedFile) error {
+	if s.policyErr != nil {
+		return s.policyErr
+	}
+	if !s.twoTreeStorage {
+		return WriteTrackedFiles(files...)
+	}
+	return writeTrackedFiles(func(f TrackedFile) (string, error) {
+		tmp, err := layout.CreateLocalTemp(s.policy, "mission-export", ".export")
+		if err != nil {
+			return "", err
+		}
+		return finishTrackedTemp(tmp, f)
+	}, files...)
+}
+
+func writeTrackedFiles(stage func(TrackedFile) (string, error), files ...TrackedFile) error {
 	files = append([]TrackedFile(nil), files...)
 	for i, f := range files {
 		data, err := guardWrite(f.Path, f.Data)
@@ -1197,7 +1220,7 @@ func WriteTrackedFiles(files ...TrackedFile) error {
 		return errors.Join(errs...)
 	}
 	for i, f := range files {
-		tmp, err := writeTrackedTemp(TrackedFile{Path: f.Path, Data: f.Data, Perm: f.Perm})
+		tmp, err := stage(TrackedFile{Path: f.Path, Data: f.Data, Perm: f.Perm})
 		temps[i] = tmp
 		if err != nil {
 			return errors.Join(err, removeTemps())
@@ -1208,7 +1231,7 @@ func WriteTrackedFiles(files ...TrackedFile) error {
 		if err := renameFile(temps[i], f.Path); err != nil {
 			errs := []error{ioErr("renaming the temp file to", f.Path, err), removeTemps()}
 			for j := i - 1; j >= 0; j-- {
-				errs = append(errs, restoreTracked(files[j].Path, old[j].data, old[j].perm, old[j].ok))
+				errs = append(errs, restoreTrackedWith(stage, files[j].Path, old[j].data, old[j].perm, old[j].ok))
 			}
 			return errors.Join(errs...)
 		}
@@ -1236,14 +1259,14 @@ func WriteTrackedFiles(files ...TrackedFile) error {
 // restoreTracked puts dest back as it was before a swap: the saved bytes,
 // written to a marked temp and renamed over dest, or no file if there was none.
 // On failure dest keeps what it holds now.
-func restoreTracked(dest string, data []byte, perm os.FileMode, existed bool) error {
+func restoreTrackedWith(stage func(TrackedFile) (string, error), dest string, data []byte, perm os.FileMode, existed bool) error {
 	if !existed {
 		if err := os.Remove(dest); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return ioErr("removing", dest, err)
 		}
 		return nil
 	}
-	tmp, err := writeTrackedTemp(TrackedFile{Path: dest, Data: data, Perm: perm})
+	tmp, err := stage(TrackedFile{Path: dest, Data: data, Perm: perm})
 	if err == nil {
 		err = renameFile(tmp, dest)
 	}
@@ -1267,9 +1290,16 @@ func writeTrackedTemp(f TrackedFile) (string, error) {
 	if err != nil {
 		return "", ioErr("creating temp file for", f.Path, err)
 	}
+	return finishTrackedTemp(tmp, f)
+}
+
+func finishTrackedTemp(tmp *os.File, f TrackedFile) (string, error) {
 	name := tmp.Name()
-	if _, err := tmp.Write(f.Data); err != nil {
+	if n, err := tmp.Write(f.Data); err != nil || n != len(f.Data) {
 		_ = tmp.Close()
+		if err == nil {
+			err = io.ErrShortWrite
+		}
 		return name, ioErr("writing", f.Path, err)
 	}
 	if err := tmp.Chmod(f.Perm); err != nil {

@@ -2,6 +2,7 @@ package testhelpers
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +44,21 @@ func TestIsolateGit(t *testing.T) {
 		assert.False(t, set, v)
 	}
 	assert.Equal(t, os.TempDir(), os.Getenv("GIT_CEILING_DIRECTORIES"))
+}
+
+func TestOutsideRepo(t *testing.T) {
+	t.Setenv("GIT_CEILING_DIRECTORIES", "previous ceiling")
+	t.Run("owned ceiling excludes a broken ancestor", func(t *testing.T) {
+		dir := OutsideRepo(t)
+		parent := filepath.Dir(dir)
+		require.NoError(t, os.Mkdir(filepath.Join(parent, ".git"), 0o700))
+		assert.Equal(t, parent, os.Getenv("GIT_CEILING_DIRECTORIES"))
+		assert.Equal(t, []string{dir}, gitenv.Walk(dir))
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
+	assert.Equal(t, "previous ceiling", os.Getenv("GIT_CEILING_DIRECTORIES"), "restore the caller's ceiling")
 }
 
 // GitTimeout shortens the git deadline for one test and restores it after.

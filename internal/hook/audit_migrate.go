@@ -15,105 +15,25 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
-// MigrateAudit copies legacy global audit JSONL files (the
-// <globalSessionsDir>/<id>.audit.jsonl shape used by v3.11) into the
-// DES-054 v5 repo-tree layout
-// (<repoRoot>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl). Each legacy
-// file whose session id matches a repo-tree session directory is
-// merged in; entries already present (matched on tool_use_id + ts +
-// tool_name) are not re-written. Legacy files with no matching
-// repo-tree session are left alone — cross-repo policy.
-//
-// dryRun=true enumerates what would change without writing or
-// deleting. The function is idempotent: running twice produces the
-// same on-disk state as running once. A real run renames the legacy file to
-// its .ethos-tmp name first, so on an error mid-merge the legacy content is
-// under that name in the same directory and the next run picks it up; the
-// staged file is deleted only after a successful append of all new entries to
-// the repo-tree file.
-//
-// out receives one human-readable line per session decision:
-//
-//	migrate sess-abc -> .punt-labs/ethos/sessions/2026-05-23-sess-abc (N new entries)
-//	skip sess-xyz: no repo-tree session
-//	skip sess-ro: read-only
-//	noop sess-dup: already migrated
-//
-// A successful run with no legacy files prints "nothing to migrate".
+// MigrateAudit copies associated legacy global files into the shared local
+// archive. Sources remain in place for late legacy writers and explicit operator
+// cleanup; no migration implicitly deletes history or grants publication consent.
 func MigrateAudit(globalSessionsDir, repoRoot string, dryRun bool, out io.Writer) error {
-	if repoRoot == "" {
-		return fmt.Errorf("migrate audit: repoRoot is empty")
-	}
-	legacyFiles, err := enumerateLegacyAuditFiles(globalSessionsDir)
+	p, err := auditPolicy(repoRoot)
 	if err != nil {
-		return fmt.Errorf("enumerating legacy audit files in %s: %w", globalSessionsDir, err)
+		return err
 	}
-	if len(legacyFiles) == 0 {
-		fmt.Fprintln(out, "nothing to migrate")
-		return nil
-	}
-
-	sessionsBase := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions")
-	var failures []string
-	for _, lf := range legacyFiles {
-		sessionID := strings.TrimSuffix(filepath.Base(lf), ".audit.jsonl")
-		if sessionID == "" {
-			continue
-		}
-		decision, err := migrateOneSession(lf, sessionsBase, sessionID, dryRun)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: audit migrate: %s: %v\n", sessionID, err)
-			failures = append(failures, sessionID)
-			continue
-		}
-		fmt.Fprintln(out, decision)
-	}
-	if len(failures) > 0 {
-		return fmt.Errorf("audit migrate: %d session(s) failed: %s",
-			len(failures), strings.Join(failures, ", "))
-	}
-	return nil
+	return MigrateAuditWithPolicy(p, globalSessionsDir, dryRun, out)
 }
 
-// stagedSuffix names the file a migration works from: the legacy file renamed
-// in place, in the same directory (a machine-local class 4 temp). A writer that
-// appends meanwhile creates a fresh legacy file, which the next run picks up.
-// An appender that already holds the old file open can still lose a line to
-// the deletion, as it could before staging; removeStaged narrows that window by
-// keeping a file that grew since it was read.
+// stagedSuffix recognizes sources left by older interrupted migrations. New
+// migrations never rename or delete these global sources.
 const stagedSuffix = ".ethos-tmp"
-
-// stageLegacy renames legacyPath to its staging name and returns that name. A
-// staging file left by an earlier run is taken as it is, and the legacy file, if
-// any, waits for the next run. It returns "" when there is nothing to migrate.
-func stageLegacy(legacyPath string) (string, error) {
-	staged := legacyPath + stagedSuffix
-	if _, err := os.Stat(staged); err == nil {
-		return staged, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("stat %s: %w", staged, err)
-	}
-	if err := os.Rename(legacyPath, staged); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", nil
-		}
-		return "", fmt.Errorf("staging %s: %w", legacyPath, err)
-	}
-	return staged, nil
-}
-
-// unstageLegacy puts a staged file back under its legacy name when no new
-// legacy file has appeared; otherwise the staged file stays for the next run.
-func unstageLegacy(staged, legacyPath string) {
-	if _, err := os.Stat(legacyPath); errors.Is(err, fs.ErrNotExist) {
-		_ = os.Rename(staged, legacyPath)
-	}
-}
 
 // enumerateLegacyAuditFiles returns the absolute paths of every
 // <globalSessionsDir>/*.audit.jsonl file. A missing or read-only
@@ -125,9 +45,6 @@ func enumerateLegacyAuditFiles(globalSessionsDir string) ([]string, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		if errors.Is(err, fs.ErrPermission) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("reading %s: %w", globalSessionsDir, err)
 	}
 	var out []string
@@ -135,8 +52,8 @@ func enumerateLegacyAuditFiles(globalSessionsDir string) ([]string, error) {
 		if e.IsDir() {
 			continue
 		}
-		// A staged leftover (a run that crashed or found late appends) is
-		// migrated under its legacy name, which stageLegacy resolves.
+		// Enumerate a staged leftover under its legacy name. Readers include
+		// both sources without creating any new global staging.
 		name := strings.TrimSuffix(e.Name(), stagedSuffix)
 		path := filepath.Join(globalSessionsDir, name)
 		if !strings.HasSuffix(name, ".audit.jsonl") || slices.Contains(out, path) {
@@ -145,164 +62,6 @@ func enumerateLegacyAuditFiles(globalSessionsDir string) ([]string, error) {
 		out = append(out, path)
 	}
 	return out, nil
-}
-
-// migrateOneSession migrates a single legacy audit file. Returns a
-// short status line describing the decision: skip (no repo-tree
-// session), noop (already migrated), skip (read-only legacy file),
-// or migrate (N new entries copied). On any I/O error the legacy
-// file is preserved.
-func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) (string, error) {
-	repoDir, err := findSessionDir(sessionsBase, sessionID)
-	if err != nil {
-		return "", fmt.Errorf("looking up repo session dir: %w", err)
-	}
-	if repoDir == "" {
-		// Cross-repo policy: session belongs to a different repo or
-		// was created outside any repo. Leave the legacy file alone.
-		return fmt.Sprintf("skip %s: no repo-tree session", sessionID), nil
-	}
-
-	// Migrate RAW lines, not decoded entries: re-marshaling through auditEntry
-	// strips any field the struct does not name — notably the audit_error
-	// sentinel key — silently destroying a loss marker. Copying the exact bytes
-	// preserves every unknown field for every line, matching the permissive-
-	// decode compatibility posture (docs/audit-seal.md §Migration).
-	//
-	// A real run first renames the legacy file to its staging name and works
-	// from that, so an append that opens the legacy path afterwards creates a
-	// fresh file instead of being deleted with this one. An appender that
-	// already holds the old file open can still write into the staged file; a
-	// line landing after removeStaged's size check is lost, as it was before.
-	origPath := legacyPath
-	var stagedSize int64
-	if !dryRun {
-		staged, err := stageLegacy(legacyPath)
-		if err != nil {
-			return "", err
-		}
-		if staged == "" {
-			return fmt.Sprintf("noop %s: nothing to migrate", sessionID), nil
-		}
-		legacyPath = staged
-	} else if _, err := os.Stat(legacyPath + stagedSuffix); err == nil {
-		legacyPath += stagedSuffix
-	}
-	if fi, err := os.Stat(legacyPath); err == nil {
-		stagedSize = fi.Size()
-	}
-	legacyLines, err := readLegacyAuditLines(legacyPath)
-	if err != nil {
-		if errors.Is(err, fs.ErrPermission) {
-			if legacyPath != origPath && !dryRun {
-				unstageLegacy(legacyPath, origPath)
-			}
-			return fmt.Sprintf("skip %s: read-only", sessionID), nil
-		}
-		return "", fmt.Errorf("reading legacy %s: %w", legacyPath, err)
-	}
-
-	// Legacy lines predate the redaction policy, and repoDir is tracked.
-	// Redact them before the dedupe below so its keys are computed over the
-	// form that lands on disk; a re-run then finds its own earlier output.
-	// A redactor failure refuses the migration and leaves the legacy content
-	// under its .ethos-tmp name (queryLegacyAudit reads it there): unlike the
-	// audit hook, this is an operator command and may refuse.
-	legacyLines, err = redactLegacyLines(legacyLines, filepath.Dir(filepath.Dir(filepath.Dir(sessionsBase))))
-	if err != nil {
-		return "", fmt.Errorf("redacting legacy %s: %w", legacyPath, err)
-	}
-
-	repoPath := filepath.Join(repoDir, "audit.jsonl")
-	repoLines, err := readRawAuditLines(repoPath)
-	if err != nil {
-		return "", fmt.Errorf("reading repo %s: %w", repoPath, err)
-	}
-
-	// Dedupe as a MULTISET on rawAuditLineKey. Both sides read raw so the key
-	// scheme matches: a hashed entry keys on ts+tool+hash; a hashless line
-	// (e.g. a sentinel, which is ts+empty+empty and so degenerate on ts alone)
-	// keys on a hash of its raw bytes. Byte-identical legacy lines legitimately
-	// recur: an ENOSPC burst emits one same-second, same-text sentinel per
-	// failed write (emitLegacySentinel), so N identical loss markers must
-	// migrate as N, not collapse to one. Count each key on the repo side and
-	// decrement per legacy match — a key already present M times absorbs the
-	// first M legacy copies and appends the rest. This keeps crash-re-run
-	// idempotency: a run interrupted mid-append tops the repo up to exactly the
-	// legacy count; a completed run appends zero and deletes.
-	repoCounts := make(map[string]int, len(repoLines))
-	for _, rl := range repoLines {
-		repoCounts[rl.key]++
-	}
-	var newLines [][]byte
-	var notes []*migrateNote
-	for _, rl := range legacyLines {
-		if repoCounts[rl.key] > 0 {
-			repoCounts[rl.key]--
-			continue
-		}
-		newLines = append(newLines, rl.raw)
-		notes = append(notes, rl.note)
-	}
-
-	if len(newLines) == 0 {
-		if dryRun {
-			return fmt.Sprintf("noop %s: already migrated (dry-run)", sessionID), nil
-		}
-		// Already merged in a prior run. The legacy file is
-		// redundant and safe to delete.
-		if _, err := removeStaged(legacyPath, stagedSize); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("noop %s: already migrated", sessionID), nil
-	}
-
-	rel, relErr := filepath.Rel(filepath.Dir(filepath.Dir(sessionsBase)), repoDir)
-	if relErr != nil {
-		rel = repoDir
-	}
-
-	if dryRun {
-		noticeMigratedFile(sessionID, notes, len(newLines), true)
-		return fmt.Sprintf("migrate %s -> %s (%d new entries, dry-run)", sessionID, rel, len(newLines)), nil
-	}
-
-	if err := os.MkdirAll(repoDir, 0o700); err != nil {
-		return "", fmt.Errorf("creating %s: %w", repoDir, err)
-	}
-	guardNotes, writeErr := appendRawAuditLines(repoPath, newLines)
-	if writeErr != nil {
-		return "", fmt.Errorf("appending to %s: %w", repoPath, writeErr)
-	}
-	// Only lines that were appended are reported.
-	noticeMigratedFile(sessionID, notes, len(newLines), false)
-	printNotices(guardNotes)
-	// Only delete the staged file after every line has been successfully
-	// appended and fsynced. If we crashed during the append, a re-run finds the
-	// staged .ethos-tmp file still in place, picks it up, and the dedupe above
-	// skips lines that already landed.
-	left, err := removeStaged(legacyPath, stagedSize)
-	if err != nil {
-		return "", err
-	}
-	if left {
-		return fmt.Sprintf("migrate %s -> %s (%d new entries; late appends left staged for the next run)", sessionID, rel, len(newLines)), nil
-	}
-	return fmt.Sprintf("migrate %s -> %s (%d new entries)", sessionID, rel, len(newLines)), nil
-}
-
-// removeStaged deletes the staged file once its lines are written, unless it
-// grew after it was read (an appender that had it open when it was renamed):
-// then it is left for the next run, whose dedupe skips what already landed. It
-// reports whether it left the file.
-func removeStaged(path string, readSize int64) (bool, error) {
-	if fi, err := os.Stat(path); err == nil && fi.Size() != readSize {
-		return true, nil
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false, fmt.Errorf("removing legacy %s: %w", path, err)
-	}
-	return false, nil
 }
 
 // redactLegacyLines applies the audit path's redaction to legacy lines and
@@ -611,11 +370,13 @@ func appendRawAuditLines(path string, lines [][]byte) ([]string, error) {
 // re-marshalled (the form the guard writes), so only identical lines dedupe
 // and distinct losses each survive.
 func rawAuditLineKey(e auditEntry, raw []byte) string {
-	if e.ToolInputHash != "" {
-		return e.Ts + "|" + e.Tool + "|" + e.ToolInputHash
+	key, err := audit.LegacyIdentity(audit.SessionNS, raw)
+	if err == nil {
+		return key
 	}
-	sum := sha256.Sum256(remarshalled(raw))
-	return e.Ts + "|" + e.Tool + "|raw:" + hex.EncodeToString(sum[:])
+	// Global legacy corruption is converted to a loss marker before migration.
+	sum := sha256.Sum256(raw)
+	return e.Ts + "|" + e.Tool + "|invalid:" + hex.EncodeToString(sum[:])
 }
 
 // remarshalled is raw decoded and encoded again, the form guardAuditLine

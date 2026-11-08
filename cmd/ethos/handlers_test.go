@@ -186,10 +186,8 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
-	// ethos-bfml/ethos-hy40 added "Audit trailer hook" and ethos-e05k
-	// added "Code archetype delegated-worker guard", bumping the count
-	// from 12 to 14; "Team members" made it 16.
-	require.Len(t, results, 16)
+	// DES-079 adds physical placement and exact agent-file currency checks.
+	require.Len(t, results, 18)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
@@ -199,6 +197,8 @@ func TestRunDoctor_JSON(t *testing.T) {
 	assert.Contains(t, names, "Team members")
 	assert.Contains(t, names, "Repo-only completeness")
 	assert.Contains(t, names, "Mission file hand-edits")
+	assert.Contains(t, names, "Physical storage placement")
+	assert.Contains(t, names, "Agent file currency")
 }
 
 // --- whoami ---

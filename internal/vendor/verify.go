@@ -137,7 +137,7 @@ func Check(roots ...string) (*Report, error) {
 
 	// Identity dimension: every identity must resolve its attributes.
 	for _, handle := range rep.Handles {
-		_, err := store.Load(handle)
+		_, err := store.Load(handle, identity.WithoutMigration())
 		var incomplete *repomiss.ErrIncompleteRepoSet
 		switch {
 		case err == nil:

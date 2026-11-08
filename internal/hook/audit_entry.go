@@ -66,7 +66,8 @@ type auditEntry struct {
 	// RawPlaceholder marks a line whose tool_input path field is ambiguous: the
 	// stored value would read back as a different file (a file really named
 	// cache/-~-project/x), so a precondition does not count the line as a Read.
-	RawPlaceholder bool `json:"raw_placeholder,omitempty"`
+	RawPlaceholder bool   `json:"raw_placeholder,omitempty"`
+	Record         string `json:"record,omitempty"`
 }
 
 // guardReport is the sink guard's account of one written line.

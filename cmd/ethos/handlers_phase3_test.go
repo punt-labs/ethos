@@ -440,7 +440,7 @@ func TestRunAuditSeal_VacuumRunsAfterSealing(t *testing.T) {
 	_, stderr, err := execHandler(t, "audit", "seal")
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "sess-lost", "vacuum warning must appear even when a chunk sealed")
-	assert.Contains(t, stderr, "live file is gone")
+	assert.Contains(t, stderr, "has no shared live file")
 }
 
 // setupRefusedSession creates a stale, repo-bound session with an unsealed

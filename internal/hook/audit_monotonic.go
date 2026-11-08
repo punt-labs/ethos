@@ -3,7 +3,6 @@ package hook
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
@@ -41,11 +40,4 @@ func appendLiveAuditReport(livePath, sealedDir, legacyPath string, entry auditEn
 	}
 	entry.Ts = audit.FormatLineTS(ts)
 	return entry, report, nil
-}
-
-// sessionLegacyPath returns the frozen legacy audit.jsonl path in a session's
-// sealed directory — the pre-DES-058 committed history, read as the oldest
-// chunk and never rewritten.
-func sessionLegacyPath(sealedDir string) string {
-	return filepath.Join(sealedDir, "audit.jsonl")
 }

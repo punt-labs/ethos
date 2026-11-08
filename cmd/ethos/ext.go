@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
@@ -116,8 +118,14 @@ func runExtDel(_ *cobra.Command, args []string) error {
 
 func runExtList(cmd *cobra.Command, args []string) error {
 	s := identityStore()
-	if !s.Exists(args[0]) {
-		return fmt.Errorf("handle %q does not exist", args[0])
+	// A boolean existence probe cannot distinguish absence from a rejected
+	// owner. Check without resolving unrelated attributes or migrating voice;
+	// listing extensions must remain read-only.
+	if _, err := s.Load(args[0], identity.Reference(true), identity.WithoutMigration()); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("handle %q does not exist", args[0])
+		}
+		return err
 	}
 	namespaces, err := s.ExtList(args[0])
 	if err != nil {

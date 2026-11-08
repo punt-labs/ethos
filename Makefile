@@ -216,7 +216,13 @@ smoke-opencode-health: ## Smoke root Code Mode health calls only (uses model cre
 smoke-opencode-formatter: ## Smoke formatter byte preservation only (uses model credits)
 	python3 -B scripts/opencode.py smoke --stage formatter
 
-check: lint docs test validate-content fuzz-check check-opencode ## Run all quality gates
+.PHONY: check-storage
+
+check-storage: ## Exercise offline storage boundaries through the real CLI, wrappers and Git hooks
+	python3 -B -m unittest discover -s scripts -p 'storage_acceptance_test.py'
+	python3 -B scripts/storage_acceptance.py
+
+check: lint docs test validate-content fuzz-check check-opencode check-storage ## Run all quality gates
 
 format: ## Format code (applies the formatters golangci-lint gates)
 	$(GOLANGCI_LINT) fmt

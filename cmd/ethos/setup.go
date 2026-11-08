@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,9 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/punt-labs/ethos/v4/internal/team"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -127,10 +130,21 @@ func runSetup(cmd *cobra.Command) error {
 
 	// Locate the checkout and the shared store BEFORE any write, applying
 	// both refusals, so a refusal leaves no identity behind.
-	repoRoot, storeRoot, err := locateSetupRoots()
+	loc := currentRoots().Located
+	repoRoot, storeRoot, err := setupRoots(loc)
 	if err != nil {
 		return err
 	}
+	if err := loc.Err(); err != nil {
+		return fmt.Errorf("setup: locating the repository: %w", err)
+	}
+	// Setup owns only this copy. Advance it after successful writes, never by
+	// rediscovering roots or adopting another writer's configuration mid-run.
+	privateConfig := resolve.RepoConfig{}
+	if loc.Config != nil {
+		privateConfig = *loc.Config
+	}
+	loc.Config = &privateConfig
 
 	// Default the human's email to git user.email when unspecified. This is
 	// what makes the created identity resolvable out of the box: resolve.Resolve
@@ -157,10 +171,7 @@ func runSetup(cmd *cobra.Command) error {
 	// activation below), so the active bundle is the one every check before
 	// the first write validates — not the "foundation" default.
 	if !cfg.Solo && repoRoot != "" && !cmd.Flags().Changed("bundle") {
-		current, err := resolve.ResolveActiveBundle(storeRoot)
-		if err != nil {
-			return fmt.Errorf("setup: reading active bundle: %w", err)
-		}
+		current := privateConfig.ActiveBundle
 		if current != "" {
 			cfg.Bundle = current
 		}
@@ -261,6 +272,14 @@ func runSetup(cmd *cobra.Command) error {
 		return nil
 	}
 
+	// Protect both captured roots, including solo setup. The shared store owns
+	// private overlays and trace even when setup runs in a linked checkout.
+	if added, err := ensureLocalZonesIgnored(loc); err != nil {
+		return fmt.Errorf("setup: %w", err)
+	} else if added {
+		fmt.Fprintf(errw, "added: .gitignore rule %s\n", enable.LocalIgnoreRule)
+	}
+
 	// The repo config, bundle, team, and default-agent selection all resolve
 	// from the SHARED store (storeRoot) — the tree every reader uses (team
 	// activate, resolveBundleRoot, the SessionStart persona, doctor) — so
@@ -282,12 +301,14 @@ func runSetup(cmd *cobra.Command) error {
 	configPath := filepath.Join(storeRoot, ".punt-labs", "ethos.yaml")
 	result.RepoConfig = ".punt-labs/ethos.yaml"
 
-	if err := mergeRepoConfig(storeRoot); err != nil {
+	addedAgent, err := mergeRepoConfigAgent(storeRoot, loc.Config)
+	if err != nil {
 		return fmt.Errorf("setup: writing repo config: %w", err)
 	}
+	if addedAgent {
+		privateConfig.Agent = "claude"
+	}
 	fmt.Fprintf(errw, "wrote: %s\n", configPath)
-	// The repo config now exists: stores built from here on must see it.
-	refreshRoots()
 
 	// --- Bundle activation ---
 	if cfg.Solo {
@@ -306,14 +327,8 @@ func runSetup(cmd *cobra.Command) error {
 
 	// Check if already active. If --bundle wasn't explicit and a bundle
 	// is already active, keep the existing one.
-	current, err := resolve.ResolveActiveBundle(storeRoot)
-	if err != nil {
-		return fmt.Errorf("setup: reading active bundle: %w", err)
-	}
-	team, err := resolve.ResolveTeam(storeRoot)
-	if err != nil {
-		return fmt.Errorf("setup: reading team: %w", err)
-	}
+	current := privateConfig.ActiveBundle
+	team := privateConfig.Team
 	teamNamesBundle := bundleNameExists(bundles, team)
 	switch {
 	case current != "" && !cmd.Flags().Changed("bundle"):
@@ -323,11 +338,17 @@ func runSetup(cmd *cobra.Command) error {
 		if err := ensureTeamKey(errw, storeRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
 			return err
 		}
+		if team == "" {
+			privateConfig.Team = cfg.Bundle
+		}
 	case current == cfg.Bundle:
 		fmt.Fprintf(errw, "skipped: bundle %q already active\n", cfg.Bundle)
 		result.Skipped = append(result.Skipped, "bundle")
 		if err := ensureTeamKey(errw, storeRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
 			return err
+		}
+		if team == "" {
+			privateConfig.Team = cfg.Bundle
 		}
 	default:
 		// Write team FIRST so active_bundle — the idempotency sentinel the
@@ -337,42 +358,52 @@ func runSetup(cmd *cobra.Command) error {
 		if err := setConfigKey(storeRoot, "team", cfg.Bundle); err != nil {
 			return fmt.Errorf("setup: setting team: %w", err)
 		}
+		privateConfig.Team = cfg.Bundle
 		if err := setConfigKey(storeRoot, "active_bundle", cfg.Bundle); err != nil {
 			return fmt.Errorf("setup: activating bundle: %w", err)
 		}
+		privateConfig.ActiveBundle = cfg.Bundle
 		fmt.Fprintf(errw, "activated: bundle %q\n", cfg.Bundle)
 	}
 	result.Bundle = cfg.Bundle
+	var selected *bundle.Bundle
+	for i := range bundles {
+		if bundles[i].Source != bundle.SourceLegacy && bundles[i].Name == cfg.Bundle {
+			selected = &bundles[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("setup: selected bundle %q is unavailable", cfg.Bundle)
+	}
+	// The leadership write creates the repository team store. Include that
+	// intended destination in the private snapshot even on a fresh setup.
+	loc.Ethos = filepath.Join(storeRoot, ".punt-labs", "ethos")
+	is, err := selectionIdentityStore(loc, selected)
+	if err != nil {
+		return fmt.Errorf("setup: constructing selected stores: %w", err)
+	}
+	rs := layeredRoleStore(is)
 
 	// --- Assign CEO/COO leadership ---
 	// The default org shape is human=CEO (apex), claude=COO; specialists
 	// report to the COO. The bundle team ships the graph with placeholder
 	// ceo/coo seats — bind them to the real identities so the activated
 	// team resolves against real members.
-	if err := assignLeadershipTeam(errw, storeRoot, resolveBundleRoot(), cfg.Bundle, cfg.Handle); err != nil {
+	if err := assignLeadershipTeam(errw, storeRoot, selected.Path, cfg.Bundle, cfg.Handle, is, rs); err != nil {
 		return fmt.Errorf("setup: assigning CEO/COO team: %w", err)
 	}
 
-	// --- Exclude .local extension files from git ---
-	// Emitted at setup so the rule predates the repo's first
-	// `ethos ext set --local`; a rule added afterwards does not untrack
-	// what is already in the index (DES-057 Part C).
-	if added, err := ensureLocalExtIgnored(repoRoot); err != nil {
-		return fmt.Errorf("setup: %w", err)
-	} else if added {
-		fmt.Fprintf(errw, "added: .gitignore rule %s\n", enable.LocalIgnoreRule)
-	}
-
 	// --- Generate agent files ---
-	// Setup has just created the repo store (the leadership team lives in it):
-	// the stores built from here on must see it.
-	refreshRoots()
-	is := identityStore()
 	ts := layeredTeamStore(is)
-	rs := layeredRoleStore(is)
 	// Config/team selection from the store; agent files into the checkout
 	// (.claude/agents is per-checkout, matching session_start + agent_installer).
-	if err := hook.GenerateAgentFilesTo(storeRoot, repoRoot, is, ts, rs); err != nil {
+	plan, planErr := hook.PlanGeneratedAgentFilesFromConfig(loc.Config, hook.AgentProjectPatterns(repoRoot), selected.Manifest.DefaultSkills, hook.AgentIdentities(is), ts, rs)
+	policy, err := loc.Layout()
+	if err != nil {
+		return fmt.Errorf("setup: constructing agent storage: %w", err)
+	}
+	if err := errors.Join(planErr, hook.ApplyAgentPlan(policy, plan)); err != nil {
 		return fmt.Errorf("setup: generating agent files: %w", err)
 	}
 
@@ -418,7 +449,7 @@ func runSetup(cmd *cobra.Command) error {
 // untouched. A bundle whose team ships no ceo or coo seat is left as-is —
 // nothing is rebound and no repo team is written. bundleRoot is the active
 // bundle's path (empty for legacy/no-bundle, in which case this is a no-op).
-func assignLeadershipTeam(errw io.Writer, storeRoot, bundleRoot, bundleName, humanHandle string) error {
+func assignLeadershipTeam(errw io.Writer, storeRoot, bundleRoot, bundleName, humanHandle string, identities identity.IdentityStore, roles *role.LayeredStore) error {
 	if bundleRoot == "" {
 		return nil // legacy or no bundle — nothing to bind
 	}
@@ -446,11 +477,35 @@ func assignLeadershipTeam(errw io.Writer, storeRoot, bundleRoot, bundleName, hum
 		return nil // bundle team has no leadership seats to rebind
 	}
 
-	if err := repoStore.Save(src, identityExistsFunc(), roleExistsFunc()); err != nil {
+	if err := repoStore.Save(src, identities.Exists, roles.Exists); err != nil {
 		return fmt.Errorf("writing team %q: %w", bundleName, err)
 	}
 	fmt.Fprintf(errw, "assigned: %s=ceo, %s=coo on team %q\n", humanHandle, cooIdentity, bundleName)
 	return nil
+}
+
+// selectionIdentityStore builds all leadership validation layers from one
+// explicit choice, including the intended post-write configuration on activate.
+// It must not consult currentRoots: that remains the immutable entry snapshot.
+func selectionIdentityStore(loc resolve.Located, selected *bundle.Bundle) (identity.IdentityStore, error) {
+	if err := loc.StoreFailure(); err != nil {
+		return nil, err
+	}
+	mode, err := resolve.ResolutionFromConfig(loc.Config)
+	if err != nil {
+		return nil, err
+	}
+	bundleRoot := ""
+	if selected != nil {
+		bundleRoot = selected.Path
+	}
+	repoOnly := mode == resolve.ResolutionRepoOnly
+	if repoOnly {
+		if err := bundle.VerifyRepoOnly(loc.Ethos, bundleRoot, selected); err != nil {
+			return nil, err
+		}
+	}
+	return newIdentityStore(loc.Ethos, bundleRoot, repoOnly, loc)
 }
 
 // cooIdentity is the agent handle setup always binds to the coo seat — the
@@ -664,44 +719,105 @@ func resolveStyleChoice(choice string, attrs []*attribute.Attribute) string {
 // mergeRepoConfig writes .punt-labs/ethos.yaml, merging with any existing
 // content. Existing keys are never overwritten.
 func mergeRepoConfig(repoRoot string) error {
+	cfg, err := resolve.ConfigOf(repoRoot)
+	if err != nil {
+		return err
+	}
+	_, err = mergeRepoConfigAgent(repoRoot, cfg)
+	return err
+}
+
+// mergeRepoConfigAgent reports whether this operation added agent: claude.
+// A new canonical file must carry the captured selection: it takes precedence
+// over a supported legacy config, which must not disappear on the next request.
+// The caller advances its private snapshot only for a successful write.
+func mergeRepoConfigAgent(repoRoot string, captured *resolve.RepoConfig) (bool, error) {
 	path := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
 
 	// Ensure parent dir exists.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating config dir: %w", err)
+		return false, fmt.Errorf("creating config dir: %w", err)
 	}
 
-	// Read existing config (if any).
-	existing := make(map[string]string)
+	intended := resolve.RepoConfig{}
+	if captured != nil {
+		intended = *captured
+	}
+	addedAgent := intended.Agent == ""
+	if addedAgent {
+		intended.Agent = "claude"
+	}
+	// Selection comes from captured, not from a replacement config installed
+	// during setup. The existing-file path below checks key presence only.
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		data, err := yaml.Marshal(intended)
+		if err != nil {
+			return false, fmt.Errorf("encoding captured config: %w", err)
+		}
+		policy, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+		if err != nil {
+			return false, fmt.Errorf("config layout: %w", err)
+		}
+		if err := writeConfigFile(path, string(data), policy); err != nil {
+			return false, err
+		}
+		return addedAgent, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("config is not a regular file: %s", path)
+	}
+
+	if !addedAgent {
+		return false, nil
+	}
+	// Insert only: an explicit empty agent disables the default and is not an
+	// absent key. Do not adopt any value read here into the operation snapshot.
+	// Encode this same document, preserving unrelated keys and comments, rather
+	// than checking presence and then having setConfigKey reread another file.
 	data, err := os.ReadFile(path)
-	if err == nil && len(data) > 0 {
-		var raw map[string]interface{}
-		if err := yaml.Unmarshal(data, &raw); err == nil {
-			// A present-but-non-string agent key is malformed. Surface it
-			// rather than treating it as absent and clobbering it — the
-			// merge contract is "existing keys are never overwritten".
-			if v, present := raw["agent"]; present {
-				if _, ok := v.(string); !ok {
-					return fmt.Errorf("setup: repo config key \"agent\" has a non-string value (%T); fix .punt-labs/ethos.yaml by hand", v)
-				}
-			}
-			for k, v := range raw {
-				if s, ok := v.(string); ok {
-					existing[k] = s
-				}
-			}
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return false, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if doc.Kind == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return false, fmt.Errorf("config is not a mapping: %s", path)
+	}
+	mapping := doc.Content[0]
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == "agent" {
+			return false, nil
 		}
 	}
-
-	// Merge: add missing keys only. Bundle-related keys (active_bundle, team)
-	// are written by runSetup's bundle activation section, not here, so the
-	// idempotency check can distinguish first-run from re-run.
-	if _, ok := existing["agent"]; !ok {
-		if err := setConfigKey(repoRoot, "agent", "claude"); err != nil {
-			return err
-		}
+	if err := applyKey(mapping, "agent", "claude"); err != nil {
+		return false, err
 	}
-	return nil
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return false, fmt.Errorf("encoding config: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return false, fmt.Errorf("encoding config: %w", err)
+	}
+	policy, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
+	if err != nil {
+		return false, fmt.Errorf("config layout: %w", err)
+	}
+	if err := writeConfigFile(path, buf.String(), policy); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ensureTeamKey repairs an ABSENT team key. active_bundle is the
@@ -903,12 +1019,11 @@ func findBundle(storeRoot, globalRoot, name string) ([]bundle.Bundle, error) {
 	return nil, fmt.Errorf("setup: bundle %q not found; available bundles:\n%s", name, listBundleNames(bundles))
 }
 
-// locateSetupRoots returns the checkout and the shared store setup writes to.
+// setupRoots returns the checkout and the shared store setup writes to.
 // Both are empty outside a repository. Any other failure to locate either —
 // a refused ETHOS_REPO_ROOT, a .git that cannot be read — is an error: setup
 // must not degrade to no-repo mode.
-func locateSetupRoots() (repoRoot, storeRoot string, err error) {
-	r := currentRoots()
+func setupRoots(r resolve.Located) (repoRoot, storeRoot string, err error) {
 	if r.Checkout == "" {
 		// A set-but-refused override must FAIL LOUD, not silently skip repo
 		// config and report success (#370 F-A).
