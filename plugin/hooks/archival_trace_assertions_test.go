@@ -17,7 +17,7 @@ import (
 
 // This bounded observer checks namespace creation/open-for-write destinations,
 // not every write. The fixture requests -f -yy -s 0 and the explicit filter
-// %file,fsync,fchdir,clone,clone3,fork,vfork, without timestamps/syscall numbers.
+// %file,fsync,fchdir,clone,clone3,fork,vfork,exit_group, without timestamps/syscall numbers.
 // archivalDestinations enumerates supported mutations and recognized calls
 // outside that destination check; any other syscall name in the trace refuses.
 // This says nothing about untraced calls, descriptor writes, deletion safety,
@@ -342,7 +342,7 @@ func archivalDestinations(c archivalCall, cwd string) ([]archivalDestination, er
 	switch c.name {
 	case "access", "faccessat", "faccessat2", "stat", "lstat", "newfstatat", "statx", "statfs", "readlink", "readlinkat", "getcwd":
 		return nil, nil // lookup only; no namespace creation destination
-	case "execve", "execveat", "clone", "clone3", "fork", "vfork", "chdir", "fchdir", "fsync":
+	case "execve", "execveat", "clone", "clone3", "fork", "vfork", "chdir", "fchdir", "fsync", "exit_group":
 		return nil, nil // execution/cwd/durability; cwd inheritance handled below
 	case "unlink", "unlinkat", "rmdir":
 		return nil, nil // removal explicitly outside the creation-placement claim
@@ -576,6 +576,8 @@ func TestArchivalTraceContract(t *testing.T) {
 	for _, tc := range []struct {
 		name, trace, wantError string
 	}{
+		{"known process exit", "1 exit_group(0) = ?\n1 +++ exited with 0 +++", ""},
+		{"undecodable teardown still refuses", "1 ???( <unfinished ...>\n1 +++ exited with 0 +++", "unsupported syscall record"},
 		{"unknown namespace primitive", `1 new_namespace_primitive("/s/local/tmp/stage", "/c/records/bad") = 0`, "unsupported syscall"},
 		{"unsupported real namespace primitive", `1 move_mount(AT_FDCWD, "/s/local/tmp/stage", AT_FDCWD, "/c/records/bad", 0) = 0`, "unsupported syscall"},
 		{"unknown resumed primitive", "1 new_namespace_primitive(\"/c/records/bad\" <unfinished ...>\n1 <... new_namespace_primitive resumed>) = 0", "unsupported syscall"},

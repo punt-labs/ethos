@@ -113,7 +113,7 @@ func installedAuditPaths(t *testing.T, store, checkout string, live []byte) (str
 func traceInstalledArchive(t *testing.T, strace, hook, checkout string, env []string, inject string, policy archivalTracePolicy) ([]byte, archivalTraceSummary, string, error) {
 	t.Helper()
 	trace := filepath.Join(t.TempDir(), "syscalls")
-	args := []string{"-f", "-yy", "-s", "0", "-o", trace, "-e", "trace=%file,fsync,fchdir,clone,clone3,fork,vfork"}
+	args := []string{"-f", "-yy", "-s", "0", "-o", trace, "-e", "trace=%file,fsync,fchdir,clone,clone3,fork,vfork,exit_group"}
 	// Let strace drain sibling syscall stops before exit_group destroys their
 	// register state. Keep every selected call, including interrupted installs;
 	// an undecodable record still fails the unchanged observer.
