@@ -33,8 +33,9 @@ type AuditView struct {
 	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
 	Redacted         bool           `json:"redacted,omitempty"`
 
-	PathFormat     int  `json:"path_format,omitempty"`
-	RawPlaceholder bool `json:"raw_placeholder,omitempty"`
+	PathFormat     int    `json:"path_format,omitempty"`
+	RawPlaceholder bool   `json:"raw_placeholder,omitempty"`
+	Record         string `json:"record,omitempty"`
 }
 
 // Summary returns a single-line human description of the entry. Prefers
@@ -75,6 +76,13 @@ func toView(e auditEntry) AuditView {
 // Missing directories are not an error: a fresh install has neither
 // tree and the function returns an empty slice with nil error.
 func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([]AuditView, error) {
+	if repoRoot != "" {
+		p, err := auditPolicy(repoRoot)
+		if err != nil {
+			return nil, err
+		}
+		return QueryAuditByDelegationWithPolicy(p, globalSessionsDir, delegationID)
+	}
 	if delegationID == "" {
 		return nil, nil
 	}

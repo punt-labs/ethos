@@ -43,7 +43,7 @@ log)
   case "$2" in --format=%s) echo 'no ticket here'; exit 0;; esac
   echo x >> ` + count + `
   if [ "$(wc -l < ` + count + `)" = 1 ]; then echo 'fatal: transient' >&2; exit 128; fi
-  printf 'm-2026-01-01-001\nd-1\n' ;;
+  printf 'm-2026-01-01-001\nd-1\n\n' ;;
 esac
 `
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))

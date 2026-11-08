@@ -195,9 +195,8 @@ func TestDelegationWriters_Redact(t *testing.T) {
 		Prompt: []byte(f.text), PromptHash: strings.Repeat("cd", 32),
 	})
 	require.NoError(t, err)
-	dir := filepath.Dir(rec)
 	f.assertClean(t, rec)
-	f.assertClean(t, filepath.Join(dir, "prompt.md"))
+	f.assertClean(t, filepath.Join(repoRoot, ".punt-labs", "local", "ethos", "trace", "missions", mID, "delegations", dID, "prompt.md"))
 
 	d, err := LoadDelegation(rec)
 	require.NoError(t, err)

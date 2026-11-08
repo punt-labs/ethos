@@ -11,6 +11,19 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
+func archiveMissionDir(t *testing.T, root, mission string) string {
+	t.Helper()
+	p, err := auditPolicy(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := audit.ArchiveDir(p, audit.Stream{Namespace: audit.MissionNS, Mission: mission, Session: "no-session"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // writeMissionLiveLines writes ts event lines to a (mission, session) live log.
 func writeMissionLiveLines(t *testing.T, repo, missionID, sessionID string, tss ...int64) {
 	t.Helper()
@@ -42,7 +55,7 @@ func TestSealMissionWritesChunk(t *testing.T) {
 	if res.LinesSealed != 4 || res.SessionsSealed != 2 {
 		t.Errorf("res = %+v, want 4 lines / 2 sessions", res)
 	}
-	sealedDir := sealedMissionDir(repo, mid)
+	sealedDir := archiveMissionDir(t, repo, mid)
 	// Each session seals into its own log-<session>-* chunk.
 	if _, err := os.Stat(filepath.Join(sealedDir, audit.MissionChunkFile("sessA", 100, 200))); err != nil {
 		t.Errorf("sessA chunk missing: %v", err)
@@ -53,13 +66,8 @@ func TestSealMissionWritesChunk(t *testing.T) {
 }
 
 // TestSealMissionConcurrentSessions seals one mission from two sessions at
-// once, each under its own per-(mission, session) flock into the shared
-// mission directory. Neither seal may spuriously fail by sweeping the other's
-// in-flight temp: both chunks must land. It drives the seal critical section
-// directly (where SweepStaleTemps + WriteChunkAtomic run) rather than the full
-// sealMissionSession, so the two goroutines do not contend on git's single
-// index.lock — a git-level concern orthogonal to the sweep race under test.
-// Run under -race.
+// once, under shared per-stream locks. Both chunks must land, and each writer's
+// store-local staging file must remain independent. Run under -race.
 func TestSealMissionConcurrentSessions(t *testing.T) {
 	repo := t.TempDir()
 	mid := "m-2026-07-21-010"
@@ -73,22 +81,18 @@ func TestSealMissionConcurrentSessions(t *testing.T) {
 	writeMissionLiveLines(t, repo, mid, "sessB", tss...)
 
 	now := time.Now().UTC()
-	sealedDir := sealedMissionDir(repo, mid)
+	sealedDir := archiveMissionDir(t, repo, mid)
+	p, err := auditPolicy(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	seal := func(idx int, sessionID string) {
 		defer wg.Done()
-		errs[idx] = WithLiveMissionLock(repo, mid, sessionID, func() error {
-			_, e := sealDirLocked(sealDirParams{
-				repoRoot:  repo,
-				ns:        audit.MissionNS,
-				session:   sessionID,
-				sealedDir: sealedDir,
-				livePath:  liveMissionLogPath(repo, mid, sessionID),
-				chunkName: func(f, l int64) string { return audit.MissionChunkFile(sessionID, f, l) },
-				tempName:  func(f, l int64) string { return audit.MissionTempFile(sessionID, f, l) },
-				label:     "mission " + mid + " session " + sessionID,
-			}, now, SealOptions{})
+		s := audit.Stream{Namespace: audit.MissionNS, Mission: mid, Session: sessionID}
+		errs[idx] = audit.WithStreamLock(p, s, func() error {
+			_, _, e := sealPolicyStream(p, s, now, SealOptions{})
 			return e
 		})
 	}

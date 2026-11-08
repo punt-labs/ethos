@@ -23,12 +23,12 @@ func WithStoreError(err error) Option {
 
 // strictTools refuse every method, reads included, when the store cannot be
 // used: their answers are only right from the repository store.
-var strictTools = map[string]bool{"identity": true}
+var strictTools = map[string]bool{"identity": true, "adr": true}
 
-// unguardedTools never touch the repository store: session and adr keep
-// global-only stores, and doctor reports on the store's state. The matching CLI
+// unguardedTools never touch the repository store: session keeps a global-only
+// store, and doctor reports on the store's state. The matching CLI
 // commands are exempt from the store refusal too.
-var unguardedTools = map[string]bool{"session": true, "doctor": true, "adr": true}
+var unguardedTools = map[string]bool{"session": true, "doctor": true}
 
 // storeReads lists, per guarded tool, the methods that only read. They are the
 // only methods that run when the store cannot be located: anything not listed
@@ -42,6 +42,7 @@ var storeReads = map[string][]string{
 	"role":          {"list", "show"},
 	"team":          {"list", "show", "for_repo"},
 	"mission":       {"show", "list", "reflections", "results", "log"},
+	"adr":           {"list", "show"},
 }
 
 // storeWrites lists, per guarded tool, the methods that write the store. The
@@ -57,6 +58,7 @@ var storeWrites = map[string][]string{
 	"role":          {"create", "delete"},
 	"team":          {"create", "delete", "add_member", "remove_member", "add_collab"},
 	"mission":       {"create", "close", "abandon", "reflect", "advance", "result", "correct"},
+	"adr":           {"create"},
 	"vendor":        {""},
 }
 
@@ -73,12 +75,18 @@ type StoreLocation struct {
 	EthosRoot string
 	Checkout  string
 	Err       error
+	// Config is a value snapshot, not a pointer to configuration that another
+	// request could mutate. A recording-mode change must rebuild the stores
+	// even when all filesystem roots stay the same.
+	Config    resolve.RepoConfig
+	HasConfig bool
 }
 
 // same reports whether a and b are the same answer. Errors compare by text:
 // a freshly built error for the same .git is the same answer.
 func (a StoreLocation) same(b StoreLocation) bool {
-	return a.Root == b.Root && a.EthosRoot == b.EthosRoot && a.Checkout == b.Checkout && errText(a.Err) == errText(b.Err)
+	return a.Root == b.Root && a.EthosRoot == b.EthosRoot && a.Checkout == b.Checkout &&
+		a.HasConfig == b.HasConfig && a.Config == b.Config && errText(a.Err) == errText(b.Err)
 }
 
 // storeRelocation re-locates the repository store on every tool call and
@@ -165,8 +173,8 @@ func (h *Handler) guardStore(tool string, fn mcpserver.ToolHandlerFunc) mcpserve
 		}
 		if strictTools[tool] {
 			return mcplib.NewToolResultError(fmt.Sprintf(
-				"%s %s: %s (%v); refusing identity: it is only answered from a repository store that can be used",
-				tool, method, what, h.storeErr)), nil
+				"%s %s: %s (%v); refusing %s: it is only answered from a repository store that can be used",
+				tool, method, what, h.storeErr, tool)), nil
 		}
 		if !slices.Contains(storeReads[tool], method) {
 			return mcplib.NewToolResultError(fmt.Sprintf(

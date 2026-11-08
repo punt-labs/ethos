@@ -113,7 +113,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up a fake repo root with .git marker.
-			repoRoot := t.TempDir()
+			repoRoot := physicalAgentTempDir(t)
 			testhelpers.MakeGitDir(t, repoRoot)
 
 			// Chdir to the repo root so CheckoutRootIfAny works.
@@ -164,7 +164,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 // rather than into the real checkout. Returns the repo root.
 func setupStubRepo(t *testing.T, stub string) string {
 	t.Helper()
-	repoRoot := t.TempDir()
+	repoRoot := physicalAgentTempDir(t)
 	testhelpers.MakeGitDir(t, repoRoot)
 
 	orig, err := os.Getwd()

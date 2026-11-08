@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/bundle"
-	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/spf13/cobra"
 )
@@ -42,12 +42,35 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// whichever repo `ethos seed` runs in. Outside a repo there is nowhere to
 	// put them, so the category is skipped rather than guessed.
 	loc := currentRoots()
-	if loc.CheckoutErr != nil {
-		return fmt.Errorf("seed: locating the repository: %w", loc.CheckoutErr)
+	for _, err := range []error{loc.StoreErr, loc.EthosErr, loc.CheckoutErr} {
+		if err != nil {
+			return fmt.Errorf("seed: locating the repository: %w", err)
+		}
+	}
+	// Config repair may ignore a malformed bundle/persona configuration, not an
+	// explicit invalid recording policy. Inspect the loaded error, never reread
+	// the config to decide which error this request saw.
+	var policyErr *layout.ValidationError
+	if errors.As(loc.ConfigErr, &policyErr) && policyErr.Field == "record" {
+		return fmt.Errorf("seed: repository storage policy: %w", loc.ConfigErr)
+	}
+	if loc.ConfigErr == nil && loc.Config != nil {
+		if _, err := loc.Config.RecordingMode(); err != nil {
+			return fmt.Errorf("seed: repository storage policy: %w", err)
+		}
 	}
 	repoRoot := loc.Checkout
 	var agentsRoot, activeBundle, activeBundleDir string
+	var options []seed.Option
 	if repoRoot != "" {
+		// Agent staging is mode-independent. Trusted physical roots remain
+		// usable for this repair even when the config cannot be decoded; blame
+		// grants no accidental full-mode publication permission.
+		policy, err := layout.NewRepository(loc.Store, repoRoot, layout.RecordBlame)
+		if err != nil {
+			return fmt.Errorf("seed: repository storage policy: %w", err)
+		}
+		options = append(options, seed.WithRepositoryAgents(policy))
 		agentsRoot = filepath.Join(repoRoot, ".claude", "agents")
 		// activeBundle/activeBundleDir drive DES-073's bundle-scoped skill
 		// deploy. bundle.ResolveActive is the SAME resolution the
@@ -57,24 +80,29 @@ func runSeed(cmd *cobra.Command, args []string) error {
 		// resolution error (malformed config, a malformed bundle) is not
 		// fatal to seeding — it means no bundle-scoped skills land this
 		// run — but it is said, never swallowed.
-		name, cfgErr := resolve.ResolveActiveBundle(repoRoot)
-		if cfgErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: seed: reading the repo config: %v; deploying no bundle-scoped skills\n", cfgErr)
-		} else if b, bErr := bundle.ResolveActive(repoRoot, destRoot); bErr == nil && b != nil {
-			activeBundle = b.Name
-			activeBundleDir = b.Path
+		if loc.ConfigErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: seed: reading the repo config: %v; no bundle-scoped skills will be deployed\n", loc.ConfigErr)
 		} else {
-			// Fresh install: active_bundle is set in .punt-labs/ethos.yaml
-			// but the bundle isn't on disk yet (nothing for
-			// bundle.ResolveActive to find in either repo or global
-			// scope) — this seed run is what's supposed to put it there.
-			// Fall back to the config's bundle NAME with no resolved dir,
-			// so SeedVersionWithBundleDir's embedded-fallback path
-			// deploys the embedded skills for it instead of no-op'ing.
-			if bErr != nil && !errors.Is(bErr, bundle.ErrActiveNotFound) {
-				fmt.Fprintf(os.Stderr, "ethos: seed: resolving the active bundle: %v; using the embedded skills for %q\n", bErr, name)
+			name := ""
+			if loc.Config != nil {
+				name = loc.Config.ActiveBundle
 			}
-			activeBundle = name
+			if b, bErr := bundle.ResolveActiveFromConfig(loc.Store, destRoot, loc.Config); bErr == nil && b != nil {
+				activeBundle = b.Name
+				activeBundleDir = b.Path
+			} else {
+				// Fresh install: active_bundle is set in .punt-labs/ethos.yaml
+				// but the bundle isn't on disk yet (nothing for
+				// bundle.ResolveActive to find in either repo or global
+				// scope) — this seed run is what's supposed to put it there.
+				// Fall back to the config's bundle NAME with no resolved dir,
+				// so SeedVersionWithBundleDir's embedded-fallback path
+				// deploys the embedded skills for it instead of no-op'ing.
+				if bErr != nil && !errors.Is(bErr, bundle.ErrActiveNotFound) {
+					fmt.Fprintf(os.Stderr, "ethos: seed: resolving the active bundle: %v; using the embedded skills for %q\n", bErr, name)
+				}
+				activeBundle = name
+			}
 		}
 	}
 
@@ -82,7 +110,7 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// non-empty when the Makefile's ldflags set it (main.go, ethos-vqbk),
 	// and a `go install`-built binary should stamp its real module
 	// version into the manifest it seeds, same as `ethos version` reports.
-	result, err := seed.SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, resolveVersion(), seedForce)
+	result, err := seed.SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, resolveVersion(), seedForce, options...)
 	if result != nil {
 		// Printed whether or not the run errored: seed mutates files in
 		// place as it goes, so an error partway through still leaves real

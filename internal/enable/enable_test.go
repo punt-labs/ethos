@@ -32,11 +32,22 @@ func gitRepo(t *testing.T) string {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	dir := t.TempDir()
+	dir := physicalTempDir(t)
 	gitRun(t, dir, "init", "-q")
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "test")
 	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	return dir
+}
+
+// Direct package APIs consume physical roots, like the production resolver.
+// macOS temporary roots can otherwise retain /var or /tmp symlink ancestors.
+func physicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -324,7 +335,7 @@ func TestDisableRefusesEnabledSiblingWorktree(t *testing.T) {
 	}
 	gitRun(t, dir, "add", "f")
 	gitRun(t, dir, "commit", "-q", "-m", "init")
-	wt := filepath.Join(t.TempDir(), "wt")
+	wt := filepath.Join(physicalTempDir(t), "wt")
 	gitRun(t, dir, "worktree", "add", "-q", wt)
 	if _, err := Enable(dir); err != nil {
 		t.Fatalf("Enable main: %v", err)
@@ -343,16 +354,11 @@ func TestDisableRefusesEnabledSiblingWorktree(t *testing.T) {
 }
 
 func TestDisableRefusesWhenWorktreeProbeFails(t *testing.T) {
-	// A directory that is not a git repo (and, via /tmp, has no git ancestor)
+	// A directory that is not a git repo (TestMain fences ancestor discovery)
 	// makes git fail; disable must refuse (fail closed), not silently degrade
 	// to --force behavior (S3). The hooks lookup fails first, so the refusal
-	// names the unverified hooks directory. /tmp escapes the repo-nested
-	// TMPDIR, the same escape the doctor tests use.
-	nonRepo, err := os.MkdirTemp("/tmp", "ethos-disable-*")
-	if err != nil {
-		t.Skipf("cannot create an outside-repo temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
+	// names the unverified hooks directory.
+	nonRepo := physicalTempDir(t)
 
 	if _, err := Disable(nonRepo, false); err == nil {
 		t.Fatal("expected disable to refuse when the worktree probe fails")
@@ -376,14 +382,16 @@ func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
 	if _, err := Disable(dir, false); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	// After a full enable+disable cycle, nothing named like a lock file may
-	// remain anywhere in the work tree (R2 — the lock lives in the per-user
-	// dir, never beside the target).
+	// Repository locks are retained in the canonical shared-local zone, never
+	// beside host/source files. Ignore status is checked separately below.
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.Name() == ".git" && d.IsDir() {
+			return filepath.SkipDir
+		}
+		if path == filepath.Join(dir, ".punt-labs", "local") {
 			return filepath.SkipDir
 		}
 		if strings.HasSuffix(d.Name(), ".lock") {
@@ -564,7 +572,7 @@ func TestEnableRefusesStaleLinkedWorktree(t *testing.T) {
 	}
 	gitRun(t, dir, "add", "f")
 	gitRun(t, dir, "commit", "-q", "-m", "init")
-	wt := filepath.Join(t.TempDir(), "wt")
+	wt := filepath.Join(physicalTempDir(t), "wt")
 	gitRun(t, dir, "worktree", "add", "-q", wt)
 	gitdir := filepath.Join(dir, ".git", "worktrees", "wt")
 	if err := os.RemoveAll(gitdir); err != nil {

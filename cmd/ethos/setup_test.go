@@ -554,15 +554,10 @@ func TestSetup_NoTTY_NoFile(t *testing.T) {
 }
 
 func TestSetup_NotInGitRepo(t *testing.T) {
-	// t.TempDir uses TMPDIR which may be inside the repo (.tmp/).
-	// Create an isolated dir under /tmp so CheckoutRootIfAny finds no .git.
-	noRepo, err := os.MkdirTemp("/tmp", "ethos-setup-norepo-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(noRepo) })
-
-	home, err := os.MkdirTemp("/tmp", "ethos-setup-home-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(home) })
+	// TestMain sets Git's ceiling at TMPDIR. Keep fixtures there rather than
+	// under /tmp, whose enclosing .git state is not owned by this test.
+	noRepo := t.TempDir()
+	home := t.TempDir()
 
 	// Reset flag state.
 	setupBundle = "foundation"
@@ -609,12 +604,8 @@ email: no-repo@example.com
 // A .git git refuses (an empty gitfile) fails setup with the cause; it is not "no
 // repo" and must not skip the repo config silently.
 func TestSetup_UnexaminableGitFails(t *testing.T) {
-	noRepo, err := os.MkdirTemp("/tmp", "ethos-setup-baddot-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(noRepo) })
-	home, err := os.MkdirTemp("/tmp", "ethos-setup-home-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(home) })
+	noRepo := t.TempDir()
+	home := t.TempDir()
 	dot := filepath.Join(noRepo, ".git")
 	require.NoError(t, os.WriteFile(dot, nil, 0o644))
 

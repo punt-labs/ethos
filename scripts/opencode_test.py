@@ -1,16 +1,20 @@
 """Offline regression tests; fixtures live only under .tmp/opencode."""
 
 import copy
+import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import opencode as oc
+import opencode_evidence as evidence
 import opencode_live as live
 
 
@@ -130,6 +134,34 @@ class ConfigTests(unittest.TestCase):
         (self.root / ".opencode/skills/ethos-qodo-review/SKILL.md").unlink()
         self.rejected()
 
+    def test_qa_evidence_grants_are_narrow_and_canonical(self):
+        config = oc.check(self.root)
+        info, _ = oc.frontmatter(self.root / ".opencode/agents/qa.md")
+        self.assertEqual(info["permissions"], oc.role_permissions("qa"))
+        rules = config["permissions"] + info["permissions"]
+        prefix = "python3 -B scripts/opencode_evidence.py "
+        for command in ("git rev-parse HEAD", prefix + "hash coverage.out scripts/opencode.py",
+                        prefix + "inventory .tmp/opencode/fixture", prefix + "go-test .tmp/opencode/test.jsonl",
+                        prefix + "json .tmp/opencode/intent.json", prefix + "tool go", prefix + "tool gcc"):
+            with self.subTest(command=command):
+                self.assertEqual(oc.effect(rules, "shell", command), "allow")
+        for command in ("git rev-parse --show-toplevel", "git rev-parse HEAD other", "git rev-parse",
+                        "python3 -c 'print(1)'", "python3 -B -c 'print(1)'", "python3 -", "python3 -B -",
+                        "python3 -B", "python3 scripts/opencode_evidence.py hash coverage.out",
+                        "python3 -B scripts/other.py", "python3 -B scripts/opencode.py doctor",
+                        prefix + "launch fixture", prefix + "tool other", prefix + "tool go extra",
+                        "docker run fixture", "./ethos serve", "make install"):
+            with self.subTest(command=command):
+                self.assertEqual(oc.effect(rules, "shell", command), "deny")
+        for action in ("edit", "subagent", "execute"):
+            self.assertEqual(oc.effect(rules, action, "*"), "deny")
+        for command in (prefix + "hash *", "git rev-parse *", "python3 -B *"):
+            path = self.root / ".opencode/agents/qa.md"
+            original = path.read_text()
+            self.mutate_agent(lambda a: a["permissions"].append(oc.permission("shell", command)), "qa")
+            self.rejected()
+            path.write_text(original)
+
     def test_non_go_formatting_and_duplicate_sources(self):
         self.mutate_config(lambda c: c["formatter"].update(latexindent={}))
         self.rejected()
@@ -242,6 +274,390 @@ class ConfigTests(unittest.TestCase):
         paths[1].unlink()
         with self.assertRaisesRegex(oc.CheckError, "release.yaml"):
             oc.sources(linked, "release")
+
+
+class EvidenceTests(unittest.TestCase):
+    def setUp(self):
+        scratch = oc.ROOT / ".tmp/opencode"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=scratch, prefix="evidence-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "scripts").mkdir()
+        self.script = self.root / "scripts/opencode_evidence.py"
+        shutil.copyfile(oc.ROOT / "scripts/opencode_evidence.py", self.script)
+
+    def cli(self, *args, expected=0, cwd=None):
+        result = subprocess.run([sys.executable, "-B", str(self.script), *map(str, args)],
+                                cwd=cwd or self.root, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
+        report = json.loads(result.stdout)
+        self.assertEqual(report["ok"], expected == 0)
+        return report
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_file_metadata_and_directory_hashes_are_read_only_and_sorted(self):
+        directory = self.root / "records"
+        (directory / "nested").mkdir(parents=True)
+        (directory / "z").write_bytes(b"\x00\xff\r\n")
+        (directory / "nested/a").write_bytes(b"a")
+        (directory / ".hidden").write_bytes(b"")
+        # Python-looking evidence is hashed as bytes, never imported or executed.
+        (directory / "danger.py").write_text("raise RuntimeError('must not execute')\n")
+        before = {str(path.relative_to(self.root)): (path.lstat(), path.read_bytes() if path.is_file() else None)
+                  for path in self.root.rglob("*")}
+        report = self.cli("hash", "records/z", directory / ".hidden", cwd=directory)
+        first = report["files"][0]
+        info = (directory / "z").stat()
+        self.assertEqual(first, {"path": str(directory / "z"), "size": 4,
+                                 "device": info.st_dev, "inode": info.st_ino,
+                                 "sha256": hashlib.sha256(b"\x00\xff\r\n").hexdigest()})
+        inventory = self.cli("inventory", "records")
+        self.assertEqual([item["path"] for item in inventory["files"]],
+                         [".hidden", "danger.py", "nested/a", "z"])
+        for item in inventory["files"]:
+            self.assertEqual(item["sha256"], hashlib.sha256((directory / item["path"]).read_bytes()).hexdigest())
+        after = {str(path.relative_to(self.root)): (path.lstat(), path.read_bytes() if path.is_file() else None)
+                 for path in self.root.rglob("*")}
+        self.assertEqual(set(before), set(after))
+        for name in before:
+            # Reads may change atime. Contents, modes, identity and write timestamps must not change.
+            self.assertEqual(evidence.stamp(before[name][0]), evidence.stamp(after[name][0]))
+            self.assertEqual(before[name][1], after[name][1])
+        self.assertEqual(inventory, self.cli("inventory", "records"))
+        for args in (("hash", "records/z", "--output", "report.json"), ("hash",),
+                     ("json", "records/z", "extra"), ("inventory", "records", "--follow")):
+            self.cli(*args, expected=1)
+        self.assertFalse((self.root / "report.json").exists())
+
+    def test_directory_enumeration_is_bounded_sorted_and_closes_scanner(self):
+        class Scanner:
+            def __init__(self, names):
+                self.names = iter(names)
+                self.reads = 0
+                self.closed = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.closed = True
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                name = next(self.names)
+                self.reads += 1
+                return Path(name)
+
+        for limit, names, expected in ((2, ("z", "a"), ["a", "z"]),
+                                       (0, (), []),
+                                       (2, ("z", "a", "excess", "unread"), None),
+                                       (0, ("excess", "unread"), None)):
+            scanner = Scanner(names)
+            with self.subTest(limit=limit, names=names), \
+                    patch.object(evidence.os, "scandir", return_value=scanner) as scan:
+                # The mock stands for an already-pinned directory descriptor.
+                if expected is None:
+                    with self.assertRaisesRegex(evidence.EvidenceError, "entry limit"):
+                        evidence.directory_names(123, limit)
+                    self.assertEqual(scanner.reads, limit + 1)
+                else:
+                    self.assertEqual(evidence.directory_names(123, limit), expected)
+                    self.assertEqual(scanner.reads, len(names))
+                scan.assert_called_once_with(123)
+                self.assertTrue(scanner.closed)
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_inventory_counts_siblings_and_nested_entries_in_one_bounded_budget(self):
+        directory = self.root / "records"
+        for name in ("a", "z"):
+            (directory / name).mkdir(parents=True)
+            (directory / name / "file").write_bytes(b"fixture")
+        with patch.object(evidence, "MAX_FILES", 4):
+            report = evidence.inventory(directory)
+        self.assertEqual([item["path"] for item in report["files"]], ["a/file", "z/file"])
+        with patch.object(evidence, "MAX_FILES", 3), \
+                self.assertRaisesRegex(evidence.EvidenceError, "entry limit"):
+            evidence.inventory(directory)
+        with patch.object(evidence.os, "supports_fd", evidence.os.supports_fd - {os.scandir}), \
+                self.assertRaisesRegex(evidence.EvidenceError, "unsupported"):
+            evidence.inventory(directory)
+
+    def test_workspace_paths_cannot_escape_and_credential_components_are_refused(self):
+        (self.root / "plain").write_text("{}")
+        for command in ("hash", "json", "inventory", "go-test"):
+            for path in ("../plain", self.root / "../plain", "/etc/passwd", "/usr/bin",
+                         ".env", "dir/.envrc.local/file", "dir/.env.prod/file", "dir/.ENV/key",
+                         "key.env.backup", "https://example.invalid/evidence"):
+                with self.subTest(command=command, path=path):
+                    self.cli(command, path, expected=1)
+        self.cli("hash", "missing", expected=1)
+        self.cli("hash", "scripts", expected=1)
+        self.cli("inventory", "plain", expected=1)
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_symlinks_and_nonregular_inputs_are_refused_without_blocking(self):
+        (self.root / "file").write_text("{}")
+        (self.root / "link").symlink_to("file")
+        (self.root / "dirlink").symlink_to("scripts", target_is_directory=True)
+        (self.root / "broken").symlink_to("missing")
+        os.mkfifo(self.root / "fifo")
+        for path in ("link", "broken", "fifo", "dirlink/opencode_evidence.py"):
+            for command in ("hash", "json", "go-test"):
+                with self.subTest(command=command, path=path):
+                    self.cli(command, path, expected=1)
+        self.cli("inventory", "dirlink", expected=1)
+        self.cli("inventory", ".", expected=1)
+        (self.root / "records/.envrc.local").mkdir(parents=True)
+        self.cli("inventory", "records", expected=1)
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_json_is_strict_and_never_runs_embedded_code(self):
+        path = self.root / "evidence.json"
+        value = {"argv": ["not-a-command"], "code": "raise RuntimeError()", "result": [1, None, True]}
+        path.write_text(json.dumps(value))
+        self.assertEqual(self.cli("json", path)["value"], value)
+        for data in (b'{"x":1,"x":2}', b'{"x":NaN}', b'{"x":1e999}', b'{} trailing', b'{', b'\xff'):
+            path.write_bytes(data)
+            with self.subTest(data=data):
+                self.cli("json", path, expected=1)
+
+    @staticmethod
+    def event(action, test="", package="fixture", **extra):
+        return {"Action": action, "Package": package, **({"Test": test} if test else {}), **extra}
+
+    def log(self, events):
+        path = self.root / "test.jsonl"
+        path.write_text("".join(json.dumps(event) + "\n" for event in events))
+        return path
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_go_recount_run_terminal_inventories_and_packages(self):
+        e = self.event
+        events = [e("start"), e("run", "TestA"), e("pause", "TestA"), e("cont", "TestA"),
+                  e("run", "TestA/sub"), e("output", "TestA/sub", Output="hello\n"),
+                  e("pass", "TestA/sub"), e("pass", "TestA"), e("run", "TestB"),
+                  e("skip", "TestB"), e("run", "TestC"), e("fail", "TestC"), e("fail"),
+                  e("start", package="other"), e("run", "TestA", package="other"),
+                  e("pass", "TestA", package="other"), e("pass", package="other")]
+        report = self.cli("go-test", self.log(events))
+        self.assertEqual(report["json_events"], len(events))
+        self.assertEqual(report["test_nodes"], 5)
+        self.assertEqual(report["top_level_tests"], 4)
+        self.assertEqual(report["test_actions"], {"run": 5, "pass": 3, "skip": 1, "fail": 1,
+                                                 "output": 1, "pause": 1, "cont": 1})
+        self.assertEqual(report["inventory"]["fail"], [{"package": "fixture", "test": "TestC"}])
+        self.assertEqual(report["inventory"]["skip"], [{"package": "fixture", "test": "TestB"}])
+        self.assertEqual(len(report["inventory"]["run"]), 5)
+        self.assertEqual(len(report["packages"]["fail"]), 1)
+        self.assertEqual(report["anomalies"], [])
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_go_recount_rejects_duplicate_missing_and_out_of_order_terminals(self):
+        e = self.event
+        cases = [([e("start"), e("run", "TestA"), e("pass")], "missing_terminal"),
+                 ([e("start"), e("run", "TestA"), e("run", "TestA"), e("pass", "TestA"), e("pass")],
+                  "duplicate_start"),
+                 ([e("start"), e("run", "TestA"), e("pass", "TestA"), e("fail", "TestA"), e("fail")],
+                  "duplicate_terminal"),
+                 ([e("start"), e("pass", "TestA"), e("pass")], "missing_start"),
+                 ([e("start"), e("pass", "TestA"), e("run", "TestA"), e("pass")], "terminal_before_start"),
+                 ([e("start"), e("run", "TestA"), e("pass", "TestA")], "missing_terminal"),
+                 ([e("run", "TestA"), e("pass", "TestA")], "missing_package"),
+                 ([e("start"), e("pass"), e("pass")], "duplicate_terminal"),
+                 ([e("start"), e("run", "TestA"), e("pause", "TestA"), e("pause", "TestA"),
+                   e("cont", "TestA"), e("pass", "TestA"), e("pass")], "invalid_transition"),
+                 ([e("start"), e("run", "TestA"), e("pause", "TestA"), e("cont", "TestA"),
+                   e("cont", "TestA"), e("pass", "TestA"), e("pass")], "invalid_transition")]
+        for events, kind in cases:
+            with self.subTest(kind=kind, events=events):
+                report = self.cli("go-test", self.log(events), expected=1)
+                self.assertIn(kind, {item["kind"] for item in report["anomalies"]})
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_go_recount_valid_pause_resume_with_concurrent_packages_and_red_outcome(self):
+        e = self.event
+        events = [e("start"), e("run", "TestA"), e("pause", "TestA"),
+                  e("start", package="other"), e("run", "TestA", package="other"),
+                  e("output", "TestA", Output="paused output\n"), e("cont", "TestA"),
+                  e("pause", "TestA"), e("cont", "TestA"), e("pass", "TestA"), e("pass"),
+                  e("fail", "TestA", package="other"), e("fail", package="other"),
+                  e("start", package="empty"), e("skip", package="empty")]
+        report = self.cli("go-test", self.log(events))
+        # ok describes a well-formed recount, not a successful test invocation.
+        self.assertEqual(report["anomalies"], [])
+        self.assertEqual(report["test_nodes"], 2)
+        self.assertEqual(report["test_actions"]["pause"], 2)
+        self.assertEqual(report["test_actions"]["cont"], 2)
+        self.assertEqual(report["inventory"]["fail"], [{"package": "other", "test": "TestA"}])
+        self.assertEqual(report["packages"]["fail"], [{"package": "other", "test": ""}])
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_go_recount_checks_every_test_lifecycle_transition(self):
+        e = self.event
+        prefixes = {"not_started": [], "running": [e("run", "TestA")],
+                    "paused": [e("run", "TestA"), e("pause", "TestA")],
+                    "terminal": [e("run", "TestA"), e("pass", "TestA")]}
+        allowed = {"not_started": {"run": "running"},
+                   "running": {"pause": "paused", "output": "running", "bench": "running",
+                               "pass": "terminal", "fail": "terminal", "skip": "terminal"},
+                   "paused": {"cont": "running", "output": "paused", "bench": "paused"},
+                   "terminal": {}}
+        completions = {"running": [e("pass", "TestA")],
+                       "paused": [e("cont", "TestA"), e("pass", "TestA")], "terminal": []}
+        for state, prefix in prefixes.items():
+            for action in ("run", "pause", "cont", "output", "bench", "pass", "fail", "skip"):
+                with self.subTest(state=state, action=action):
+                    following = allowed[state].get(action)
+                    event = e(action, "TestA", **({"Output": "fixture\n"} if action == "output" else {}))
+                    events = [e("start"), *prefix, event, *completions.get(following, []), e("pass")]
+                    report = self.cli("go-test", self.log(events), expected=0 if following else 1)
+                    if following:
+                        self.assertEqual(report["anomalies"], [])
+                    else:
+                        kind = ("event_after_terminal" if state == "terminal" else
+                                "event_before_start" if state == "not_started" else "invalid_transition")
+                        self.assertIn({"kind": kind, "package": "fixture", "test": "TestA",
+                                       "event": len(prefix) + 2, "action": action, "state": state},
+                                      report["anomalies"])
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_go_recount_checks_every_package_lifecycle_transition(self):
+        e = self.event
+        prefixes = {"not_started": [], "running": [e("start")],
+                    "terminal": [e("start"), e("pass")]}
+        allowed = {"not_started": {"start": "running"},
+                   "running": {"output": "running", "pass": "terminal", "fail": "terminal", "skip": "terminal"},
+                   "terminal": {}}
+        for state, prefix in prefixes.items():
+            for action in ("start", "output", "pass", "fail", "skip"):
+                with self.subTest(state=state, action=action):
+                    following = allowed[state].get(action)
+                    event = e(action, **({"Output": "fixture\n"} if action == "output" else {}))
+                    events = [*prefix, event, *([e("pass")] if following == "running" else [])]
+                    report = self.cli("go-test", self.log(events), expected=0 if following else 1)
+                    if following:
+                        self.assertEqual(report["anomalies"], [])
+                    else:
+                        kind = ("event_after_terminal" if state == "terminal" else
+                                "event_before_start" if state == "not_started" else "invalid_transition")
+                        self.assertIn({"kind": kind, "package": "fixture", "test": "",
+                                       "event": len(prefix) + 1, "action": action, "state": state},
+                                      report["anomalies"])
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_go_recount_rejects_every_test_event_before_package_start_or_after_end(self):
+        e = self.event
+        for state, prefix in (("not_started", []), ("terminal", [e("start"), e("pass")])):
+            for action in ("run", "pause", "cont", "output", "bench", "pass", "fail", "skip"):
+                with self.subTest(state=state, action=action):
+                    event = e(action, "TestLate", **({"Output": "fixture\n"} if action == "output" else {}))
+                    # A different active package must not authorize this test.
+                    events = [e("start", package="other"), *prefix, event, e("pass", package="other")]
+                    report = self.cli("go-test", self.log(events), expected=1)
+                    self.assertIn({"kind": "test_outside_active_package", "package": "fixture",
+                                   "test": "TestLate", "event": len(prefix) + 2,
+                                   "action": action, "state": state}, report["anomalies"])
+        # Exact r387 reproducer: matching per-node counts cannot repair order.
+        report = self.cli("go-test", self.log([e("start"), e("pass"),
+                                               e("run", "TestLate"), e("pass", "TestLate")]), expected=1)
+        self.assertEqual(report["test_nodes"], 1)
+        self.assertEqual(report["inventory"]["pass"], [{"package": "fixture", "test": "TestLate"}])
+        self.assertIn("test_outside_active_package", {item["kind"] for item in report["anomalies"]})
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_go_recount_package_terminals_refuse_running_paused_and_uncollected_tests(self):
+        e = self.event
+        prefixes = {"running": [e("run", "TestA")],
+                    "paused": [e("run", "TestA"), e("pause", "TestA")],
+                    "without_run": [e("output", "TestA", Output="fixture\n")],
+                    "terminal_without_run": [e("pass", "TestA")]}
+        for state, prefix in prefixes.items():
+            for action in ("pass", "fail", "skip"):
+                with self.subTest(state=state, action=action):
+                    events = [e("start"), *prefix, e(action), e("pass", "TestA")]
+                    report = self.cli("go-test", self.log(events), expected=1)
+                    kinds = {item["kind"] for item in report["anomalies"]}
+                    self.assertIn("package_terminal_with_uncollected_tests", kinds)
+                    self.assertIn("test_outside_active_package", kinds)
+
+    def test_go_recount_rejects_malformed_nonobject_and_invalid_events(self):
+        e = self.event
+        for event in ([], None, 1, "event", {}, e("unknown"), e("run", "TestA", Package=None),
+                      e("run", "TestA", Test=2), e("output", Output=2), e("start", "TestA"),
+                      e("run"), e("pause"), e("cont"), e("bench")):
+            with self.subTest(event=event):
+                self.cli("go-test", self.log([event]), expected=1)
+        path = self.root / "test.jsonl"
+        for data in (b"", b"\n", b"not JSON\n", b'{"Action":"start","Action":"pass"}\n',
+                     b'{"Action":"start","Package":"fixture","Elapsed":Infinity}\n', b'\xff\n',
+                     b'{"Action":"start","Package":"fixture"}\n{"Action":'):
+            with self.subTest(data=data):
+                path.write_bytes(data)
+                self.cli("go-test", path, expected=1)
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_tool_aliases_only_hash_the_two_exact_bound_paths(self):
+        self.assertEqual(str(evidence.TOOLS["go"]), str(Path("/", "home", "jfreeman", "go", "pkg", "mod",
+                         "golang.org", "toolchain@v0.0.1-go1.26.5.linux-amd64", "bin", "go")))
+        self.assertEqual(str(evidence.TOOLS["gcc"]), "/usr/bin/x86_64-linux-gnu-gcc-13")
+        self.assertEqual(set(evidence.TOOLS), {"go", "gcc"})
+        # No reads of the host's installed tools in offline tests.
+        tool = self.root / "synthetic-tool"
+        tool.write_bytes(b"not executable\x00")
+        for alias in ("go", "gcc"):
+            output = io.StringIO()
+            with patch.object(evidence, "TOOLS", {alias: tool}), patch("sys.stdout", output):
+                self.assertEqual(evidence.main(["tool", alias]), 0)
+            report = json.loads(output.getvalue())
+            self.assertEqual(report["sha256"], hashlib.sha256(tool.read_bytes()).hexdigest())
+            self.assertNotIn("value", report)
+        link = self.root / "tool-link"
+        link.symlink_to("synthetic-tool")
+        output = io.StringIO()
+        with patch.object(evidence, "TOOLS", {"go": link}), patch("sys.stdout", output):
+            self.assertEqual(evidence.main(["tool", "go"]), 1)
+        self.assertFalse(json.loads(output.getvalue())["ok"])
+        self.cli("tool", "other", expected=1)
+        self.cli("tool", "/etc/passwd", expected=1)
+        self.cli("tool", "go", "extra", expected=1)
+        self.cli("hash", evidence.TOOLS["go"], expected=1)
+        self.cli("json", evidence.TOOLS["gcc"], expected=1)
+        self.cli("inventory", evidence.TOOLS["gcc"].parent, expected=1)
+
+    @unittest.skipUnless(os.name == "posix", "descriptor/no-follow helper is POSIX-only")
+    def test_changed_or_replaced_file_is_not_reported_as_stable(self):
+        path = self.root / "file"
+        path.write_bytes(b"original")
+        with self.assertRaisesRegex(evidence.EvidenceError, "changed"):
+            with evidence.opened(path):
+                path.write_bytes(b"mutated")
+        with self.assertRaisesRegex(evidence.EvidenceError, "changed"):
+            with evidence.opened(path):
+                path.unlink()
+                path.symlink_to("scripts/opencode_evidence.py")
+
+    def test_unsupported_platform_and_resource_limits_fail_visibly(self):
+        with patch.object(evidence.os, "name", "unsupported"), \
+                self.assertRaisesRegex(evidence.EvidenceError, "unsupported"):
+            with evidence.opened(self.script):
+                self.fail("unsupported platform must not open evidence")
+        with patch.object(evidence, "MAX_BYTES", 1), self.assertRaises(evidence.EvidenceError):
+            evidence.fingerprint(self.script)
+        with patch.object(evidence, "MAX_JSON_BYTES", 1), self.assertRaises(evidence.EvidenceError):
+            evidence.read_json(self.script)
+        path = self.log([self.event("start"), self.event("pass")])
+        with patch.object(evidence, "MAX_EVENTS", 1), self.assertRaises(evidence.EvidenceError):
+            evidence.recount(path)
+        with patch.object(evidence, "MAX_LINE_BYTES", 1), self.assertRaises(evidence.EvidenceError):
+            evidence.recount(path)
+        with patch.object(evidence, "MAX_FILES", 0), self.assertRaises(evidence.EvidenceError):
+            evidence.inventory(self.root)
+        with patch.object(evidence, "MAX_DEPTH", 0), self.assertRaises(evidence.EvidenceError):
+            evidence.inventory(self.root)
 
 
 class ResultTests(unittest.TestCase):

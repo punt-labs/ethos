@@ -11,6 +11,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
@@ -33,13 +34,14 @@ var (
 
 var auditMigrateCmd = &cobra.Command{
 	Use:   "migrate",
-	Short: "Migrate legacy global audit logs into the repo-tree layout",
-	Long: `Migrate legacy global audit logs into the repo-tree layout.
+	Short: "Copy legacy global audit logs into the shared local archive",
+	Long: `Copy legacy global audit logs into the shared local archive.
 
 Scans ~/.punt-labs/ethos/sessions/*.audit.jsonl (the v3.11 layout) and
-copies each file's entries into the v3.12+ repo-tree layout under
-<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl, then deletes the
-legacy file once every entry has landed and been fsynced.
+copies associated sessions into the store root's local archive under
+.punt-labs/local/ethos/trace/sessions/<YYYY-MM-DD>-<id>/audit.jsonl.
+Legacy data remains private in every recording mode. Original files are retained
+because an older writer may still have them open for append. Nothing is staged.
 
 Idempotent: a second run on the same machine is a no-op. Cross-repo
 safe: a legacy session whose id has no matching repo-tree directory is
@@ -71,10 +73,10 @@ var auditShowCmd = &cobra.Command{
 	Short: "Show audit entries that belong to one delegation",
 	Long: `Show audit entries that belong to one delegation.
 
-Walks <repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl and falls back
-to ~/.punt-labs/ethos/sessions/<id>.audit.jsonl for sessions with no
-repo-tree counterpart. Prints every entry whose delegation_id field
-matches --delegation.
+Unions the shared local archive, published chunks, supported legacy files and
+live lines, independently of the current recording mode. Equal copies collapse;
+divergent monotonic identities and unreadable history are visible errors.
+Prints every entry whose delegation_id field matches --delegation.
 
 Flags:
   --delegation <id>   delegation id to filter on (required)
@@ -93,34 +95,35 @@ Exit codes:
 // --- audit seal ---
 
 var (
-	auditSealDryRun  bool
-	auditSealVerbose bool
+	auditSealDryRun        bool
+	auditSealVerbose       bool
+	auditSealCommitContext bool
 )
 
 var auditSealCmd = &cobra.Command{
 	Use:   "seal",
-	Short: "Seal pending live audit lines into immutable tracked chunks",
-	Long: `Seal pending live audit lines into immutable tracked chunks.
+	Short: "Archive live audit lines locally; publish eligible full-mode copies",
+	Long: `Archive live audit and mission event lines into immutable local chunks.
 
-Visits every session in the repo, copies each session's not-yet-sealed
-live lines (ts past the sealed watermark) into a new immutable chunk
-audit-<first>-<last>.jsonl under the session's dated sealed directory,
-and git-adds every untracked chunk it finds — recovering an orphan a
-prior crashed seal left behind. Between seals no tracked file changes, so
-the repo tree stays clean while a session is live.
+Retains every stream in the shared store root's .punt-labs/local/ethos/trace/.
+Under record: blame (the default), performs no Git index query or mutation.
+Under record: full, additionally copies and stages only entries whose full-mode
+eligibility was captured when written. Missing legacy eligibility is private.
+Publication failure retains the archive for a later full-mode retry.
 
-Called by the pre-commit hook so sealed records land in the same commit
-as the work they document, and by ethos mission close.
+The installed pre-commit hook passes --commit-context. Only in that context,
+blame archival errors warn and permit a source commit while retaining live data.
+Configuration errors and full-mode failures always block. Manual commands keep
+visible errors in both modes; recover damaged chunks with ethos audit quarantine.
 
 Flags:
   --dry-run   print the per-session line counts it would seal, writing nothing
   --verbose   print one line per sealed session
+  --commit-context  allow blame archival warnings during a source commit
 
 Exit codes:
-  0  sealed, nothing pending, or a gitlink-mounted no-op (deferral notice on stderr)
-  2  fail-closed: an I/O error, a malformed chunk name, a corrupt sealed
-     chunk, or a git-add failure — blocks the commit; the escape is
-     ethos audit quarantine, never git commit --no-verify`,
+  0  archived, nothing pending, or a blame commit-context retained-data warning
+  2  invalid policy, archival failure outside that exception, or full publication failure`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runAuditSeal(cmd.OutOrStdout(), cmd.ErrOrStderr())
@@ -137,13 +140,11 @@ var auditQuarantineCmd = &cobra.Command{
 	Long: `Retire a corrupt sealed chunk, the sanctioned alternative to
 git commit --no-verify when a seal or read fails on a corrupt chunk.
 
-Given the chunk path the seal/read error named, it retires the chunk to
-<name>.jsonl.corrupt (committed as evidence), re-seals every line of the
-chunk's range the live file still holds into a fresh content-named chunk,
-writes a deterministic .quarantine marker recording the verified loss
-point and any unrecovered sub-range, and stages all three — so the tree
-is committable without --no-verify and the loss becomes a visible audit
-event and a read-time gap marker, never a silent skip.
+Given the chunk path the seal/read error named, retains the original corrupt
+bytes only in the shared local quarantine, recovers safe live lines into the
+local archive, and writes a local marker recording any unrecovered range.
+Nothing is staged in either mode. A later full seal can publish eligible
+recovered lines separately. Inspection continues to show explicit gaps.
 
 Idempotent and crash-resumable: re-running after a mid-verb crash
 completes the quarantine from whichever artifacts exist.
@@ -173,6 +174,8 @@ func init() {
 		"Print the line counts it would seal without writing")
 	auditSealCmd.Flags().BoolVar(&auditSealVerbose, "verbose", false,
 		"Print one line per sealed session")
+	auditSealCmd.Flags().BoolVar(&auditSealCommitContext, "commit-context", false,
+		"Warn and allow a source commit on blame-mode archival failure; configuration and full-publication failures still block")
 
 	auditQuarantineCmd.Flags().StringVar(&auditQuarantineReason, "reason", "corrupt sealed chunk",
 		"Corruption reason recorded in the quarantine marker")
@@ -281,17 +284,22 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 	if err != nil {
 		return err
 	}
+	p, err := currentRoots().Layout()
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
+		return failClosed{}
+	}
 	// Resolve a relative path against the repo root so the operator can pass
 	// the path exactly as the seal/read error printed it.
 	if !filepath.IsAbs(chunkPath) {
 		chunkPath = filepath.Join(repoRoot, chunkPath)
 	}
-	marker, err := hook.QuarantineChunk(repoRoot, chunkPath, auditQuarantineReason)
+	marker, err := hook.QuarantineChunkWithPolicy(p, chunkPath, auditQuarantineReason)
 	if err != nil {
 		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
 		return failClosed{}
 	}
-	fate := quarantineFate(repoRoot, chunkPath, marker)
+	fate := "retained in the shared local archive; nothing staged"
 	if marker.HasGap() {
 		fmt.Fprintf(out,
 			"quarantined %s: recovered through ts %d, lost [%d,%d] — %s\n",
@@ -304,45 +312,9 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 	return nil
 }
 
-// quarantineFate says what a finished quarantine left in the index, decided
-// from the index alone: GitAdd drops every path the repo ignores, and git mv
-// moves index entries, so neither the ignore rules nor the state of one path
-// says what was staged. In order: a git failure is unknown; anything staged
-// under the chunk's directory while the marker is ignored and not staged is a
-// partial record; anything staged there is staged; an ignored marker is kept
-// local; anything else has nothing new. The run may retire a chunk other than
-// the one named, so the directory is the unit, not the chunk.
-func quarantineFate(repoRoot, chunkPath string, m audit.Marker) string {
-	unknown := func(err error) string { return fmt.Sprintf("staging status unknown: %v", err) }
-	markerPath := filepath.Join(filepath.Dir(chunkPath), m.Chunk+".quarantine")
-	anyStaged, err := audit.StagedChange(repoRoot, filepath.Dir(chunkPath))
-	if err != nil {
-		return unknown(err)
-	}
-	markerStaged, err := audit.StagedChange(repoRoot, markerPath)
-	if err != nil {
-		return unknown(err)
-	}
-	ignored, err := audit.IsIgnored(repoRoot, markerPath)
-	if err != nil {
-		return unknown(err)
-	}
-	switch {
-	case anyStaged && ignored && !markerStaged:
-		return fmt.Sprintf("changes under the chunk's directory are staged but its marker is gitignored and was not; record it with `git add -f %s`", audit.ShellQuote(markerPath))
-	case anyStaged:
-		return "staged, commit to record"
-	case ignored:
-		return "kept local (this repo gitignores it)"
-	}
-	return "nothing new to stage"
-}
-
 // runAuditSeal is the audit-seal command implementation. It seals every
-// repo session's pending live lines and stages the chunks. Fail-closed
-// (DES-055 shape): on any seal error it prints a self-contained message to
-// stderr and returns failClosed so the process exits 2, blocking the
-// commit. A gitlink-mounted no-op and a nothing-to-seal run both exit 0.
+// repository stream locally. Full mode adds eligible publication copies. Manual
+// failures exit 2; only blame commit-context archival errors may warn/proceed.
 func runAuditSeal(out, errOut io.Writer) error {
 	// The seal is classed as handling its own errors, so nothing refused it
 	// before: it applies the full refusal itself — the store, its
@@ -350,7 +322,8 @@ func runAuditSeal(out, errOut io.Writer) error {
 	// blocks the commit (exit 2) rather than sealing against a guess.
 	// An ETHOS_REPO_ROOT naming a repository with no store yet is not a broken
 	// store: there is nothing there to seal against, and enable creates it.
-	if err := currentRoots().StoreFailure(); err != nil && !errors.Is(err, resolve.ErrOverrideNoStore) {
+	roots := currentRoots()
+	if err := roots.StoreFailure(); err != nil && !errors.Is(err, resolve.ErrOverrideNoStore) {
 		fmt.Fprintf(errOut, "ethos: audit seal: %v\n", err)
 		return failClosed{}
 	}
@@ -358,15 +331,27 @@ func runAuditSeal(out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	p, err := roots.Layout()
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit seal: invalid repository policy: %v\n", err)
+		return failClosed{}
+	}
 	opts := hook.SealOptions{
 		DryRun:    auditSealDryRun,
 		Verbose:   auditSealVerbose,
 		Out:       out,
 		StartDate: sessionStartDateResolver(),
 	}
-	res, err := hook.SealRepo(repoRoot, time.Now().UTC(), opts)
+	res, err := hook.SealRepoWithPolicy(p, time.Now().UTC(), opts)
 	if err != nil {
 		fmt.Fprintf(errOut, "ethos: audit seal: %v\n", err)
+		// Captured full-consent publication is not an optional archival warning,
+		// even after switching to blame or when joined with an archive error.
+		var promptRetry *hook.PromptPublicationRetryError
+		if auditSealCommitContext && p.RecordMode() == layout.RecordBlame && !errors.As(err, &promptRetry) {
+			fmt.Fprintln(errOut, "ethos: audit seal: retained-data warning: local archival incomplete; live data retained; allowing the source commit; inspect with ethos audit seal and recover with ethos audit quarantine <chunk>")
+			return nil
+		}
 		return failClosed{}
 	}
 	if res.Deferred {
@@ -380,7 +365,7 @@ func runAuditSeal(out, errOut io.Writer) error {
 	if !auditSealDryRun {
 		if home, hErr := os.UserHomeDir(); hErr == nil {
 			globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-			if vErr := hook.VacuumCrossCheck(repoRoot, globalRoot, activeRepoSessions(repoRoot, errOut), errOut); vErr != nil {
+			if vErr := hook.VacuumCrossCheckWithPolicy(p, globalRoot, activeRepoSessions(repoRoot, errOut), errOut); vErr != nil {
 				fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check: %v\n", vErr)
 			}
 		} else {
@@ -405,9 +390,13 @@ func runAuditSeal(out, errOut io.Writer) error {
 // "must run inside a repo" with exit code 2 when no repo root can be
 // found.
 func runAuditMigrate(out, errOut io.Writer) error {
-	repoRoot, err := requireCheckout(errOut, "audit migrate")
+	_, err := requireCheckout(errOut, "audit migrate")
 	if err != nil {
 		return err
+	}
+	p, err := currentRoots().Layout()
+	if err != nil {
+		return fmt.Errorf("audit migrate: %w", err)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -426,7 +415,7 @@ func runAuditMigrate(out, errOut io.Writer) error {
 	if !auditMigrateVerbose {
 		sink = io.Discard
 	}
-	if err := hook.MigrateAudit(globalDir, repoRoot, auditMigrateDryRun, sink); err != nil {
+	if err := hook.MigrateAuditWithPolicy(p, globalDir, auditMigrateDryRun, sink); err != nil {
 		return fmt.Errorf("audit migrate: %w", err)
 	}
 	if !auditMigrateVerbose {
@@ -448,9 +437,13 @@ func runAuditMigrate(out, errOut io.Writer) error {
 // for matching entries, then renders them as JSONL or as a one-line
 // text summary per entry.
 func runAuditShow(out, errOut io.Writer) error {
-	repoRoot, err := requireCheckout(errOut, "audit show")
+	_, err := requireCheckout(errOut, "audit show")
 	if err != nil {
 		return err
+	}
+	p, err := currentRoots().Layout()
+	if err != nil {
+		return fmt.Errorf("audit show: %w", err)
 	}
 	switch auditShowFormat {
 	case "json", "text":
@@ -465,7 +458,7 @@ func runAuditShow(out, errOut io.Writer) error {
 	}
 	globalDir := filepath.Join(home, ".punt-labs", "ethos", "sessions")
 
-	entries, err := hook.QueryAuditByDelegation(repoRoot, globalDir, auditShowDelegation)
+	entries, err := hook.QueryAuditByDelegationWithPolicy(p, globalDir, auditShowDelegation)
 	if err != nil {
 		return fmt.Errorf("audit show: %w", err)
 	}
@@ -474,10 +467,10 @@ func runAuditShow(out, errOut io.Writer) error {
 	// corruption) and gitlink-deferred sessions (live lines past the
 	// watermark not yet sealed). Flagged on stderr so the delegation-filtered
 	// stream on stdout stays a valid audit-log fragment.
-	if diag, dErr := hook.CollectAuditDiagnostics(repoRoot, time.Now().UTC()); dErr == nil {
+	if diag, dErr := hook.CollectAuditDiagnosticsWithPolicy(p); dErr == nil {
 		diag.WriteDiagnostics(errOut)
 	} else {
-		fmt.Fprintf(errOut, "ethos: audit show: diagnostics: %v\n", dErr)
+		return fmt.Errorf("audit show: diagnostics: %w", dErr)
 	}
 
 	if auditShowFormat == "json" {

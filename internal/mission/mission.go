@@ -106,6 +106,10 @@ type Contract struct {
 	// field — the trust boundary stays in one place.
 	CurrentRound int `yaml:"current_round,omitempty" json:"current_round" redact:"keep"`
 
+	// RoundDecisions is shared workflow authority. A missing block denotes a
+	// legacy contract; reflection prose is optional local forensic detail.
+	RoundDecisions *RoundDecisions `yaml:"round_decisions,omitempty" json:"round_decisions,omitempty"`
+
 	Context string `yaml:"context,omitempty" json:"context,omitempty"`
 
 	// Pipeline is an optional identifier grouping related missions into a

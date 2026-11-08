@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,13 +112,17 @@ func TestCLI_SeedFailsLoud_UnwritableDest(t *testing.T) {
 	home := t.TempDir()
 	// Block the ethos destination: ~/.punt-labs is a file, not a dir.
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".punt-labs"), []byte("x"), 0o644))
+	outside := testhelpers.OutsideRepo(t)
+	// The child must reach the blocked destination, not refuse an ancestor.
+	require.NoError(t, os.Mkdir(filepath.Join(filepath.Dir(outside), ".git"), 0o700))
 
 	se := &cliSubprocessEnv{
 		home: home,
-		repo: t.TempDir(),
+		repo: outside,
 		env: []string{
 			"HOME=" + home,
 			"USER=tester",
+			"GIT_CEILING_DIRECTORIES=" + os.Getenv("GIT_CEILING_DIRECTORIES"),
 			"GIT_CONFIG_GLOBAL=/dev/null",
 			"GIT_CONFIG_SYSTEM=/dev/null",
 			"PATH=" + os.Getenv("PATH"),

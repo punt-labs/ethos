@@ -37,7 +37,9 @@ func TestServerMissionStore_ReadsEventsFromCheckoutRoot(t *testing.T) {
 	// A Server whose work-tree root is the checkout reads a non-empty
 	// timeline — the fix wires WithCheckoutRoot(s.repoRoot).
 	srv := &Server{storeRoot: storeRoot, repoRoot: checkoutRoot, globalRoot: globalRoot}
-	events, _, err := srv.missionStore().LoadEvents(id)
+	reader, err := srv.missionStore()
+	require.NoError(t, err)
+	events, _, err := reader.LoadEvents(id)
 	require.NoError(t, err)
 	assert.NotEmpty(t, events, "the mission timeline must be non-empty from a worktree")
 	assert.Equal(t, "create", events[0].Event)
@@ -47,8 +49,24 @@ func TestServerMissionStore_ReadsEventsFromCheckoutRoot(t *testing.T) {
 	buggy := mission.NewStoreWithRoots(storeRoot, globalRoot)
 	bugEvents, _, err := buggy.LoadEvents(id)
 	require.NoError(t, err)
-	assert.Empty(t, bugEvents,
-		"without the checkout root the UI would show an empty timeline from a worktree")
+	assert.Equal(t, events, bugEvents,
+		"canonical local history remains readable without the publishing checkout")
+}
+
+func TestHandleMissionReflectionUnavailable(t *testing.T) {
+	root := t.TempDir()
+	store := mission.NewStoreWithRoots(root, t.TempDir())
+	id := "m-2026-11-04-919"
+	require.NoError(t, store.Create(uiTestContract(id)))
+	require.NoError(t, store.AppendReflection(id, &mission.Reflection{Mission: id, Round: 1, Author: "claude", Recommendation: mission.RecommendationContinue, Signals: []string{"checked"}}))
+	require.NoError(t, os.RemoveAll(filepath.Join(root, ".punt-labs", "local", "ethos")))
+	srv, err := NewServer(root, root)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/missions/"+id, nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "decision=present detail=unavailable_here")
+	assert.Contains(t, rec.Body.String(), "continue by claude")
 }
 
 // TestHandleDashboard_RendersAbandonedPill asserts an abandoned
@@ -215,25 +233,22 @@ func TestHandleMission_RendersCorrectionsWarningsOnPartialLog(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	// The mission log is only partially unreadable, not a hard
-	// failure, so eventsErr is nil and the readable correct event must
-	// still render...
+	// Shared corrections remain complete even when optional legacy event
+	// history refuses decoding. Do not mislabel shared authority incomplete.
 	assert.Contains(t, body, "the round-1 verdict stands", "detail: %s", body)
 	// ...but the page must not look clean: a warning naming the
 	// unreadable line must be visible.
-	assert.Contains(t, body, "corrections may be incomplete", "detail: %s", body)
+	assert.NotContains(t, body, "corrections may be incomplete", "detail: %s", body)
+	assert.Contains(t, body, "could not load events", "detail: %s", body)
 	assert.Contains(t, body, "line 1", "detail: %s", body)
 }
 
-// TestHandleMission_DerivesCorrectionsFromEventsOnce asserts
-// handleMission loads the mission event log exactly once and derives
-// both the Corrections and Events sections from that single slice,
-// rather than loadCorrections and loadEvents each calling
-// store.LoadEvents independently. A failing event load must surface
-// as both an EventsError and a CorrectionsError on the same page,
-// since the Corrections section reads from that same log and has no
-// independent source of its own.
-func TestHandleMission_DerivesCorrectionsFromEventsOnce(t *testing.T) {
+// TestMissionTemplate_RendersIndependentHistoryErrors checks only the template:
+// independently supplied event and correction errors must both remain visible.
+// It does not exercise handleMission or establish how either source is loaded.
+// DES-079 shared corrections are independent of optional event history; real
+// endpoint coverage lives in handlers_independent_history_test.go.
+func TestMissionTemplate_RendersIndependentHistoryErrors(t *testing.T) {
 	storeRoot := t.TempDir()
 	globalRoot := t.TempDir()
 
@@ -242,24 +257,21 @@ func TestHandleMission_DerivesCorrectionsFromEventsOnce(t *testing.T) {
 	srv.globalRoot = globalRoot
 	srv.repoRoot = storeRoot
 
-	// No mission was ever created at this id, so store.Load fails
-	// before events are ever read — handleMission 404s. Instead,
-	// exercise the events-error path directly the way
-	// TestHandleMission_RendersEventsError does: construct missionData
-	// as handleMission would after an event-log failure and confirm
-	// both error fields are populated from the one failure.
+	// Prepared data isolates rendering, not handler-to-template propagation.
 	data := missionData{
 		Title:            "m-2026-08-22-094",
 		Contract:         uiTestContract("m-2026-08-22-094"),
-		EventsError:      "loading events for mission \"m-2026-08-22-094\": boom",
-		CorrectionsError: "loading events for mission \"m-2026-08-22-094\": boom",
+		EventsError:      "optional event history unreadable",
+		CorrectionsError: "shared correction authority unreadable",
 	}
 	rec := httptest.NewRecorder()
 	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
 
 	body := rec.Body.String()
 	assert.Contains(t, body, "could not load events")
+	assert.Contains(t, body, data.EventsError)
 	assert.Contains(t, body, "could not load corrections")
+	assert.Contains(t, body, data.CorrectionsError)
 }
 
 // TestHandleMission_RendersEventsWarnings asserts a mission log with

@@ -2,64 +2,52 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
-// ensureLocalExtIgnored adds DES-057 Part C's git-exclusion rule to the
-// repo's .gitignore if the repo does not already exclude machine-local
-// files, and reports whether it wrote anything.
-//
-// The rule is the boundary. `.local.yaml` is a git-exclusion mechanism,
-// not a vault: the merged view still reaches the model at runtime. What
-// it guarantees is that the file never enters git — and only if the rule
-// is there before the first `ethos ext set --local`.
-//
-// Coverage is enable.LocalIgnored — git's own answer for a representative
-// `.local` path — so any rule that already excludes such a file counts
-// and a re-run adds nothing. It never rewrites or reorders existing
-// lines. The note above the rule is deliberately not the marker `ethos
-// enable` uses for the runtime zones: those churn and must stay untracked
-// for mechanical reasons, this one may hold secrets, and one label for
-// both would mislead whoever reads the .gitignore next.
+// ensureLocalZonesIgnored protects both the shared local owner and the invoking
+// checkout using only the request's captured roots. In a linked worktree C's
+// .gitignore does not protect private files retained at S.
+func ensureLocalZonesIgnored(loc resolve.Located) (added bool, err error) {
+	if err := loc.Err(); err != nil {
+		return false, fmt.Errorf("locating repository for the local-zone ignore rule: %w", err)
+	}
+	if loc.Store == "" && loc.Checkout == "" {
+		return false, nil
+	}
+	p, err := loc.Layout()
+	if err != nil {
+		return false, fmt.Errorf("capturing local-zone ignore policy: %w", err)
+	}
+	roots := []string{loc.Store}
+	// Roots has already normalized physical paths; do not resolve them again.
+	if loc.Store != loc.Checkout {
+		roots = append(roots, loc.Checkout)
+	}
+	for _, root := range roots {
+		changed, err := enable.EnsureLocalIgnored(root, p)
+		added = added || changed
+		if err != nil {
+			return added, fmt.Errorf("protecting local zone in %s: %w", root, err)
+		}
+	}
+	return added, nil
+}
+
+// ensureLocalExtIgnored maintains the shared machine-local zone exclusion for
+// setup/vendor without installing hooks or changing other enablement state.
+// Repository overlays are physically local; the ignore rule does not determine
+// their destination. Existing legacy protections are preserved for operator review.
 func ensureLocalExtIgnored(repoRoot string) (added bool, err error) {
 	if repoRoot == "" {
 		return false, nil
 	}
-	covered, err := enable.LocalIgnored(repoRoot)
+	p, err := layout.NewRepository(repoRoot, repoRoot, layout.RecordBlame)
 	if err != nil {
 		return false, err
 	}
-	if covered {
-		return false, nil
-	}
-
-	path := filepath.Join(repoRoot, ".gitignore")
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("reading %s: %w", path, err)
-	}
-
-	var b strings.Builder
-	b.Write(data)
-	if len(data) > 0 {
-		if !strings.HasSuffix(string(data), "\n") {
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString(enable.LocalIgnoreNote + "\n")
-	b.WriteString(enable.LocalIgnoreRule + "\n")
-
-	mode := os.FileMode(0o644)
-	if fi, statErr := os.Stat(path); statErr == nil {
-		mode = fi.Mode().Perm()
-	}
-	if err := os.WriteFile(path, []byte(b.String()), mode); err != nil {
-		return false, fmt.Errorf("writing %s: %w", path, err)
-	}
-	return true, nil
+	return enable.EnsureLocalIgnored(repoRoot, p)
 }

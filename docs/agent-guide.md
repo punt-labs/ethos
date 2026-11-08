@@ -6,6 +6,13 @@ This is the consumer reference. Development instructions are in
 
 How to use ethos from an AI agent session — CLI, MCP tools, hooks, and extending identities with custom attributes.
 
+**Storage status:** DES-080 redaction shipped in v4.20.0. DES-079 storage,
+round-decision, publication and full-export behavior below is the required
+contract, **pending final entry-point acceptance**, not a claim about an
+installed binary. The [storage and publication contract](storage-layout.md)
+supersedes older path and tracked-by-default seal descriptions in linked
+historical references and lists the outstanding acceptance cases.
+
 ## Prerequisites: Agent Definitions
 
 Ethos auto-generates `.claude/agents/<handle>.md` files at **SessionStart**
@@ -250,12 +257,15 @@ is `--session` > `ETHOS_SESSION` > the Claude process-tree walk; outside a
 session, `iam` and `mission claim` fail with an error naming
 `ethos session start`.
 
-The repo store (`<repo>/.punt-labs/ethos/`) resolves through the git common
-dir, so a linked worktree addresses the main work tree's store — a mission
-is visible from either checkout, and dispatch from a worktree binds the same
-store the CLI wrote to, so delegation resolves instead of failing
-"MISSION_ID not found". Per-checkout state (enable marker, generated
-`.claude/agents/`, audit trail, verifier file walk) stays in the worktree.
+The canonical store root **S** resolves through Git's common directory;
+the invoking checkout **C** is separate. Missions share
+`S/.punt-labs/ethos/`. DES-079 requires all repository-local live streams,
+retained trace, overlays, locks, receipts, scratch and staging under
+`S/.punt-labs/local/ethos/` in both modes. Enablement deposits, generated
+`.claude/agents/`, verifier file walks and publication/index effects target C.
+Publication copies are not a second mutable mission authority. Removing a
+linked C distinct from S must retain even unsealed tails without SessionEnd;
+deleting S or cleaning its local tree is outside that guarantee.
 The mission store warns when no repo is in scope and it falls back to the
 global store. Set `ETHOS_REPO_ROOT` to force the store root when
 auto-resolution is wrong; a bogus override (missing dir, or no
@@ -393,16 +403,28 @@ ethos ext delete mal vox default_mood
 # Delete an entire namespace
 ethos ext delete mal vox
 
-# Write a secret to the git-excluded companion file
+# Write a machine-local overlay (not a vault)
 ethos ext set --local mal vox api_token <value>
 ```
 
-Each namespace has an optional `<handle>.ext/<namespace>.local.yaml` companion
-for secret or machine-specific values (mirrors `.envrc`/`.envrc.local`). Reads
-return base overlaid with `.local`; `ethos ext set --local` targets the
-companion, which `.gitignore` covers and `ethos vendor` never copies. This is a
-git-exclusion mechanism, not a vault — the merged view still reaches the model
-at runtime (DES-057).
+Each namespace has an optional local overlay for machine-specific values.
+Under the pending DES-079 contract, repository overlays live at
+`S/.punt-labs/local/ethos/identities/<handle>.ext/<namespace>.local.yaml`,
+not beside tracked extensions. The base stays in the identity's source layer.
+Global identities retain their existing sibling `.local.yaml` layout.
+Reads apply per-key local precedence; ordinary writes serialize base only,
+never the merged secret-bearing identity. Namespace limits, source-layer
+selection and read-only bundle behavior remain unchanged. Vendor never copies
+overlays. This is Git exclusion, not a vault: merged values can reach model
+context (DES-057).
+
+Legacy repository sibling `<namespace>.local.yaml` overlays are read-only
+compatibility inputs. Before modifying one, stop writers and explicitly reconcile
+it into S's local destination above, preserving every credential and resolving
+any existing destination before removing the old copy. Unequal copies refuse
+reads; local writes refuse while a legacy sibling remains. Do not print values
+or put the merged identity into the tracked base. `ethos repair` excludes overlays
+and credentials; there is no storage-upgrade command. Global overlays are unchanged.
 
 ### MCP Tools
 
@@ -440,6 +462,11 @@ Tools don't need to go through ethos to read their extensions. The file path is 
 ```
 
 Any tool can read its own namespace file directly — stable paths, no import dependency. This is the filesystem integration pattern; tools that prefer structured access use the CLI or MCP server instead.
+
+For a repository identity, resolve S and the identity's source layer first.
+Direct base-file reads see base only. A filesystem consumer that needs the
+merged view must explicitly read the local overlay at the path above and apply
+the same precedence and validation; do not infer a sibling repository overlay.
 
 ### Validation Constraints
 
@@ -725,6 +752,46 @@ Call mcp__plugin_ethos_self__mission with method="advance", mission_id="..."
 Call mcp__plugin_ethos_self__mission with method="reflections", mission_id="..."
 ```
 
+DES-079 keeps the full structured Reflection mandatory on submission, while
+shared `contract.yaml` holds a non-null `round_decisions: {version: 1, entries: []}`
+block initialized by Create. At most ten compact entries contain only `id`,
+`round`, `created_at`, `author` and `recommendation`. The crossed-round prefix
+and all five recommendations (`continue`, `advance`, `pivot`, `stop`, `escalate`)
+remain authoritative across clones and recording modes; full prose stays local.
+Malformed, explicit-null, unknown-version, duplicate-key and multi-document
+authority refuses rather than defaulting to empty. Generic Update cannot erase
+decisions or stale-overwrite round, lifecycle, budget or evaluator authority.
+
+Acceptance requires durable local intent and the required event **before**
+shared decision installation. A prepared event alone is not an accepted
+reflection. Exact retry retains its operation ID, timestamp, original stream
+and consent; recovery never auto-commits a decision. After installation,
+directory-sync uncertainty or pending trace completion must be reported as
+applied, not rolled back. Ordinary required-event failure rollback remains for
+other mission operations. See [authority and recovery](storage-layout.md#round-authority-and-interrupted-persistence).
+
+The actual retained file is
+`S/.punt-labs/local/ethos/trace/missions/<id>/reflection-<round>.yaml`, not an
+aggregate `reflections.yaml`. Its single-document envelope contains `version: 1`,
+`kind: reflect`, `mission`, `decision`, `reflection`, `event`, `event_session`
+(the original stream) and `publish` (captured consent). Pending detail uses the
+same envelope at
+`S/.punt-labs/local/ethos/missions/<id>/reflection-intents/<round>.yaml` and may
+remain after acceptance. Join all five `decision` fields against the shared
+round entry; the event's YAML `operationid` must equal the decision ID (JSONL uses
+`operation_id`). A prepared receipt/event without a shared decision is not
+accepted. Published/exported `missions/<id>/reflections.yaml` is instead a mapping
+with `reflections: [...]`. See the
+[filesystem shapes and authority join](storage-layout.md#reflection-files-and-the-authority-join)
+for exact fields, conflict checks and unavailable-versus-unsubmitted outcomes.
+
+Readers must distinguish no submission, legacy unknown, submitted with detail
+unavailable here, corrupt optional detail and unreadable authority. Unavailable
+prose is not an empty reflection list and does not change advancement permission;
+malformed authority is an error/unknown. Filesystem-only consumers have the same
+obligation. Quarry's indexing and later explicit repair of incomplete memory are
+consumer work, not something Ethos legacy fallback supplies automatically.
+
 ### Closing
 
 Closing requires a valid result artifact for the current round:
@@ -762,6 +829,52 @@ Via MCP:
 Call mcp__plugin_ethos_self__mission with method="log", mission_id="..."
 ```
 
+Under DES-079, required mission events are local transactional evidence, not
+best-effort audit telemetry. Shared corrections use strict versioned
+`corrections.yaml` authority with durable intent/event-before-install ordering;
+they change no lifecycle field. Readers union local live/archive, published and
+supported legacy sources in either mode. Compare canonical overlapping payloads
+before watermark filtering: equal identities collapse; unequal copies are loud
+conflicts. Keep legacy timestamp-collision rules distinct.
+
+### Publication and Export (DES-079; acceptance pending)
+
+| Command | Required behavior |
+|---|---|
+| `ethos mission publish <id>...` | Snapshot selected complete blame records from S into C and its actual index; no implicit trace under blame |
+| `ethos provenance message <ref>` | Generate the squash body for the final publication commit |
+| `ethos provenance verify <ref>` | Verify inventory, references and source associations against the actual commit |
+| `ethos mission export <id> [--dir]` | Existing portability operation: redacted contract and final result, without staging |
+| `ethos mission export <id> --full` | Explicitly share retained selected-mission trace regardless of original mode, without staging |
+
+Publication includes inline decisions, **all accepted results**, delegation
+records, corrections, selected summary rows and applicable ADRs (mission-linked
+plus explicitly selected IDs). Per-mission locked snapshot cuts are not a
+repository-wide instant. A versioned inventory marks required/optional records;
+unknown kinds, missing required records and divergent edits refuse. A private
+candidate index must preserve unrelated staged entries and install only if the
+starting actual index still matches under Git's index lock. Revalidate against
+the actual committing index, including `GIT_INDEX_FILE` and partial commits;
+report partial checkout installation separately from index success.
+
+Immutable manifests retain explicit mission/delegation tuples, source-snapshot
+paths, blob identities, ranges and branch-derived evidence sufficient after
+branch deletion. Historical reads use the manifest-bearing commit; later blame
+uses that commit's original filename and line. Ambiguity stays ambiguous, never
+a first-delegation or ticket guess. Changed source blobs require regeneration.
+The supported [GitHub squash route](example/07-pr-and-merge.md#des-079-squash-route-acceptance-pending)
+supplies the generated body, pins the reviewed head, then fetches and verifies
+the actual merge SHA. Local hooks do not run on GitHub's squash server; failed
+verification is failed provenance. These commands still need product acceptance.
+
+Plain export defaults to C's root regardless of cwd; explicit `--dir` remains
+cwd-relative. Full export first snapshots/seals the mission's unsealed tail
+locally, then exports retained prompts, reflections and mission chunks through
+redaction. Missing expected history reports incomplete, not empty success.
+It excludes session audits, unrelated missions, live files as files, scratch,
+raw quarantine, overlays, agent artifacts and transcripts. Existing immutable
+chunks stay unchanged. Exported files use ordinary `git add`, never force-add.
+
 ### Linting
 
 Advisory pre-delegation linter with heuristic checks:
@@ -786,7 +899,7 @@ step. Ctrl-C stops the server.
 
 ### Migration from v3.11
 
-Two one-time relocation commands move legacy global artifacts into
+These historical one-time relocation commands move legacy global artifacts into
 the DES-054 per-repo tree. Both are idempotent, both honour
 `--dry-run`, and both refuse to touch artifacts that belong to a
 different repo's work tree.
@@ -804,6 +917,36 @@ session directory, or a mission whose `contract_id` is not referenced
 by any audit entry in `<repo>/.punt-labs/ethos/sessions/`, stays where it is —
 it belongs to another checkout.
 
+These historical shipped commands are not expanded into a DES-079 migration or
+backfill workflow and do not prove its acceptance.
+
+### Bounded legacy repair (DES-079; final acceptance pending)
+
+`ethos repair --dry-run` shows known obsolete trace/runtime files. Destructive
+`ethos repair` lists the paths, warns of permanent loss of old prompts,
+reflections, events/audit history and runtime residue, then asks
+`Are you sure? [y/N]` in a terminal. Empty input, no and EOF delete nothing.
+`ethos repair --yes` explicitly consents for automation; it also asserts that all
+old/new writers, hooks and MCP servers have stopped. Busy locks refuse cleanup.
+Deletion currently refuses on Windows: inventory is available, but destructive
+repair requires a Unix host with all writers stopped.
+
+There is no backup, lossless migration or authority backfill. Cleanup excludes
+shared identities, contracts, results, corrections, provenance and ADRs, private
+credentials/overlays, configuration, global data, arbitrary/agent-owned files and
+canonical local history. Current publications and flat current exports
+(`missions/<id>.contract.yaml` / `<id>.result.yaml`, with associated trace) are
+retained, including incomplete/ambiguous exports. Other intentional publications
+and exports are not blanket deletion targets. Private legacy overlays require
+the explicit credential-preserving handling described above, not repair.
+
+Deletion is incremental; if interrupted, inspect the new inventory and confirm
+again, without assuming rollback. Historical missions may need manual retirement;
+repair does not invent decisions, corrections or lifecycle transitions. Afterward,
+review tracked deletions and stage/commit normally, run `ethos enable` to refresh
+integration, then reconnect long-lived MCP servers. Re-enable maintains the shared
+local-zone exclusion, not record-tree ignore exceptions; it is not migration proof.
+
 ## Audited Delegation
 
 Every `Agent` tool call is allocated a `delegation_id` and the spawn's
@@ -813,7 +956,7 @@ they write:
 | Tier | When | Persistence | Enforcement |
 |------|------|-------------|-------------|
 | A | `Agent(...)` with no `MISSION_ID` | `delegation_id` only; tool calls land in the per-session `audit.jsonl` tagged with it | Advisory stderr line; spawn always allowed |
-| B | `MISSION_ID` set, OR inherited from a parent contract | Same audit tagging plus a per-delegation `record.yaml` (and optional `prompt.md`) under the mission tree | Preconditions, depth limit, write-set, hash gate |
+| B | `MISSION_ID` set, OR inherited from a parent contract | Same audit tagging plus shared per-delegation `record.yaml`; DES-079 retains optional prompt detail locally | Preconditions, depth limit, write-set, hash gate |
 
 The forensic answer to "what did this spawn do" comes from
 `ethos audit show --delegation <id>` for either tier; the Tier B
@@ -831,8 +974,11 @@ The `PreToolUse` hook routes on `Agent` calls:
 On every path the hook emits an `additional_env` block consumed by
 the spawned worker: `DELEGATION_ID`, `PARENT_DELEGATION_ID`,
 `PARENT_SESSION_ID`. Tier B also emits `MISSION_ID` and
-`MISSION_ARTIFACTS_DIR` (the per-delegation directory the worker
-writes results into).
+`MISSION_ARTIFACTS_DIR`. DES-079 requires that worker artifact destination to
+be local scratch under S's local tree, never the tracked delegation directory.
+Desk and other direct readers must discover local versus published prompts and
+this local artifact destination explicitly. Agent-owned files are not
+automatically exported or redacted.
 
 Refusal reasons (Tier B only — Tier A is always allow):
 
@@ -900,24 +1046,33 @@ regex (`^(?:<pattern>)$`); a malformed pattern is rejected at
 ```bash
 ethos audit show --delegation <id>             # forensic query across sessions
 ethos audit show --delegation <id> --format text
-ethos audit seal [--dry-run]                   # seal live lines into tracked chunks (pre-commit runs this)
+ethos audit seal [--dry-run]                   # immutable archive; DES-079 defaults to local, not staged
 ethos audit quarantine <chunk>                 # retire a corrupt sealed chunk, recover the live tail
-ethos audit migrate                            # legacy → repo-tree audit logs
+ethos audit migrate                            # historical legacy → repo-tree audit logs
 ethos audit migrate --dry-run --verbose
-ethos mission migrate --to-repo                # legacy → repo-tree missions
+ethos mission migrate --to-repo                # historical legacy → repo-tree missions
 ethos mission migrate <mission-id> --to-repo
 ```
 
-During a session, per-tool-call lines write to a machine-local, gitignored
-live file, so an active session keeps a clean `git status`. The `pre-commit`
-hook runs `ethos audit seal`, which copies pending lines into immutable,
-timestamp-named chunks under the tracked tree, so the audit record lands in
-the same commit as the work (DES-058).
+DES-079 requires live lines and immutable archives at S in **both** modes.
+Default `record: blame` sealing neither queries nor changes the index and
+stages no trace. Full mode adds eligible published copies in C, including
+sealed session audits, while retaining the local copy. Consent belongs to
+each immutable entry, not the file, session or seal-time mode. Missing/legacy
+consent is private. Mode changes alone publish nothing, never promote older
+private entries and never delete already published history. Captured eligible
+pending copies remain retryable even after returning to blame.
 
-`ethos audit show` walks `<repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl`
-(with legacy global fallback) and prints every entry whose
-`delegation_id` matches. JSON output is one entry per line and is
+`ethos audit show` must union local live/archive, published and supported legacy
+sources and print matching `delegation_id` entries, refusing divergent copies
+and exposing corruption or gaps. JSON output is one entry per line and is
 itself a valid audit-log fragment — pipes cleanly into `jq`.
+
+Audit recording failures remain visible without blocking a tool call. Manual
+archive commands report errors. Default-blame commit-context archival failure
+reports retained state and permits unrelated source commits; invalid config and
+required blame/full publication failure block. Required mission-event failure
+is a separate transactional domain, not successful best-effort acceptance.
 
 ### Commit-Msg Trailer Hook
 
@@ -1049,12 +1204,13 @@ full setup guide.
 
 ## Repo Configuration
 
-Ethos reads per-repo configuration from `.punt-labs/ethos.yaml`:
+Ethos reads per-repo configuration from S's `.punt-labs/ethos.yaml`:
 
 ```yaml
 agent: claude             # handle of the primary agent identity
 team: engineering         # team name for session context
 active_bundle: gstack     # optional: bundle for layer 2 resolution
+record: blame             # DES-079: default when omitted; full opts in prospectively
 ```
 
 | Field | Default | Description |
@@ -1062,6 +1218,12 @@ active_bundle: gstack     # optional: bundle for layer 2 resolution
 | `agent` | *(none)* | Handle of the primary agent identity. When set, ethos injects this persona at session start. When omitted, no agent persona is injected. |
 | `team` | *(none)* | Team name. When set, ethos injects members, roles, and collaboration graph into session context. |
 | `active_bundle` | *(none)* | Bundle name for layer 2 resolution. Omit if not using bundles. |
+| `record` | `blame` | DES-079: `blame` retains trace locally; `full` additionally publishes eligible entries. Invalid values fail visibly on CLI, hooks and MCP. Acceptance pending. |
+
+Resolve and validate roots plus policy once at request entry, including each
+call in a long-lived MCP server; subordinate operations use that immutable
+snapshot. A concurrent config edit must not change an in-flight operation's
+destinations or consent, and concurrent requests must not mutate shared policy.
 
 ### Three-layer resolution
 
@@ -1219,14 +1381,20 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 
 ## Storage Layout
 
+The following DES-079 paths are required targets, pending acceptance. S is the
+canonical store root; C is the invoking checkout. A "Yes" means intended for
+Git, not automatically staged/committed. The complete authority, reader and
+failure contract is [storage-layout.md](storage-layout.md).
+
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Repo config | `.punt-labs/ethos.yaml` | Yes |
-| Repo-local (layer 1) | `.punt-labs/ethos/<subdir>/<file>` | Yes |
+| Repo config | `S/.punt-labs/ethos.yaml` | Yes |
+| Repo-local (layer 1) | `S/.punt-labs/ethos/<subdir>/<file>` | Yes |
 | Bundle — repo (layer 2) | `.punt-labs/ethos-bundles/<name>/<subdir>/<file>` | Yes |
 | Bundle — global (layer 2) | `~/.punt-labs/ethos/bundles/<name>/<subdir>/<file>` | No |
 | Global (layer 3) | `~/.punt-labs/ethos/<subdir>/<file>` | No |
-| Repo agents | `.claude/agents/<handle>.md` | Yes |
+| Repo agents | `C/.claude/agents/<handle>.md` | Yes |
+| Repo extension overlays | `S/.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml` | No |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Extensions | `~/.punt-labs/ethos/identities/<handle>.ext/<ns>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
@@ -1238,48 +1406,49 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 | Session locks | `~/.punt-labs/ethos/sessions/<id>.lock` | No |
 | Current session | `~/.punt-labs/ethos/sessions/current/<pid>` | No |
 
-### DES-054 — date-keyed two-tree mission storage
+### DES-079 — shared authority, retained local trace, explicit publication
 
-Mission and session artifacts move into a per-mission and per-session
-directory layout. The mission ID encodes the date, so date browsing
-is `ls .punt-labs/ethos/missions/m-2026-05-22-*/`. Sessions get the date as a
-directory prefix so `ls .punt-labs/ethos/sessions/2026-05-22-*/` lists every
-session started that day.
+Mission IDs still encode the date. Local trace mirrors record-relative paths
+under `trace/`, including dated session chunk directories. Full-mode publication
+adds copies under C's record tree; it never relocates the only archive there.
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Mission contract (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/contract.yaml` | Yes |
-| Mission event log (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/log.jsonl` | Yes |
-| Mission results (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/results.yaml` | Yes |
-| Mission reflections (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/reflections.yaml` | Yes |
-| Tier B delegation record (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml` | Yes |
-| Tier B delegation prompt (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md` | Yes |
-| Per-mission shared flock | `<repo>/.punt-labs/ethos/missions/<mission-id>/.lock` | No |
+| Contract with inline decisions | `S/.punt-labs/ethos/missions/<id>/contract.yaml` | Yes |
+| All accepted results | `S/.punt-labs/ethos/missions/<id>/results.yaml` | Yes |
+| Shared corrections | `S/.punt-labs/ethos/missions/<id>/corrections.yaml` | Yes |
+| Tier B delegation record | `S/.punt-labs/ethos/missions/<id>/delegations/<d>/record.yaml` | Yes |
+| Summaries; repo ADRs | `S/.punt-labs/ethos/{missions.jsonl,adrs/<id>.yaml}` | Yes |
+| Mission event live file | `S/.punt-labs/local/ethos/missions/<id>/<sid>.log.jsonl` | No |
+| Session audit live file | `S/.punt-labs/local/ethos/sessions/<sid>.audit.jsonl` | No |
+| Prompts, full reflections, sealed mission/session chunks | `S/.punt-labs/local/ethos/trace/` plus record-relative path | No |
+| Publication copies and immutable manifests | `C/.punt-labs/ethos/` selected paths; `provenance/` manifests | Yes |
+| Repository locks, receipts, eligibility metadata, scratch and temporaries | `S/.punt-labs/local/ethos/` | No |
 | Mission contract (legacy global, read-only fallback) | `~/.punt-labs/ethos/missions/<mission-id>.yaml` | No |
-| Session audit log (repo) | `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | Yes |
 | Session audit log (legacy global, read-only fallback) | `~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl` | No |
 | Mission ID counter | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | No |
 | Delegation ID counter | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | No |
-| Per-delegation exclusive flock | `~/.punt-labs/ethos/delegations/<delegation-id>.lock` | No |
 
 Each Tier B `record.yaml` carries the on-disk
 [`Delegation`](audited-delegation.md) shape: `id`, `tier`,
 `mission`, `parent_delegation`, `parent_session`, `agent_type`,
 `spawn_pattern`, `created_at`, `closed_at`, `verdict`, `prompt_hash`,
-`reason`. Atomic write via `os.CreateTemp` + `Chmod(0o600)` + `Sync` +
-`Rename` in the record's own directory.
+`reason`. Repository staging, including rollback, uses S's local zone with
+file sync, atomic rename/link and destination-directory sync as applicable.
+`EXDEV` refuses with the old target intact; no adjacent temporary or copy-over
+fallback. Post-rename sync failure means applied/durability unconfirmed.
 
 Lock acquisition order (LIFO release via `defer`):
 
 ```text
-per-mission (LOCK_SH, repo tree) → per-delegation (LOCK_EX, global tree)
+per-mission (LOCK_SH) → per-delegation (LOCK_EX)
 ```
 
-The per-mission flock lives in the repo tree at
-`<repo>/.punt-labs/ethos/missions/<mission-id>/.lock`; the per-delegation flock
-lives in the global tree at
-`~/.punt-labs/ethos/delegations/<delegation-id>.lock` so two checkouts
-of the same repo lock the same inode. The per-mission lock is
+DES-079 places repository locks under S's local tree, shared by linked
+checkouts regardless of mode. Preserve distinct lock domains and acquisition
+order, including mission-state → event-stream ordering for reflection/correction.
+Quiesce old writers before changing paths: a moved pathname does not move an
+already-held lock inode. The Tier B per-mission lock is
 **shared** so two Tier B spawns under one mission do not serialize.
 The per-delegation lock is **exclusive** so the skeleton write is the
 sole writer for its ID.
@@ -1289,7 +1458,7 @@ is a single integer, flock-guarded, and adding a new namespace adds
 a new sibling file without changing any existing one (DES-054
 invariant I9-counter). Session rosters and PID pointers stay under
 `~/.punt-labs/ethos/sessions/` because they reference live process
-state; only audit logs move into the repo.
+state; repository audit history uses canonical S-local retention.
 
 Full audited-delegation reference:
 [docs/audited-delegation.md](audited-delegation.md).

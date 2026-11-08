@@ -93,7 +93,7 @@ func TestMigrateAudit_RedactsLegacyLines(t *testing.T) {
 	t.Setenv("HOME", home)
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
-	sessionDir := repoSessionDir(t, repoRoot, "2026-05-22", "sess-1")
+	sessionDir := migrationSessionDir(t, repoRoot, "2026-05-22", "sess-1")
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 
 	secret := "ghp_" + strings.Repeat("a1B2", 9)
@@ -135,7 +135,7 @@ func TestMigrateAudit_RedactsLegacyLines(t *testing.T) {
 func TestMigrateAudit_RefusesWithoutRedactor(t *testing.T) {
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
-	sessionDir := repoSessionDir(t, repoRoot, "2026-05-22", "sess-1")
+	sessionDir := migrationSessionDir(t, repoRoot, "2026-05-22", "sess-1")
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 	legacy := filepath.Join(globalDir, "sess-1.audit.jsonl")
 	require.NoError(t, os.WriteFile(legacy, legacyLine(t, "sess-1", "2026-05-22T10:00:00Z", map[string]any{"command": "x"}), 0o600))
@@ -145,9 +145,10 @@ func TestMigrateAudit_RefusesWithoutRedactor(t *testing.T) {
 	require.Error(t, MigrateAudit(globalDir, repoRoot, false, &out), "migration is an operator command and refuses")
 	_, err := os.Stat(filepath.Join(sessionDir, "audit.jsonl"))
 	assert.True(t, os.IsNotExist(err))
-	// The legacy file stays, under its staging name; the next run resumes from it.
-	_, err = os.Stat(legacy + stagedSuffix)
-	assert.NoError(t, err, "legacy file stays, staged")
+	// Refusal leaves the original source in place, not newly staged globally.
+	_, err = os.Stat(legacy)
+	assert.NoError(t, err, "legacy source stays")
+	assert.NoFileExists(t, legacy+stagedSuffix)
 }
 
 // TestMigrateAudit_PathOnlyLegacyLineIsRedacted: a legacy line whose only
@@ -158,7 +159,7 @@ func TestMigrateAudit_PathOnlyLegacyLineIsRedacted(t *testing.T) {
 	t.Setenv("HOME", home)
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
-	sessionDir := repoSessionDir(t, repoRoot, "2026-05-22", "sess-1")
+	sessionDir := migrationSessionDir(t, repoRoot, "2026-05-22", "sess-1")
 	require.NoError(t, os.MkdirAll(globalDir, 0o700))
 
 	ti := map[string]any{"command": "cat " + filepath.Join(home, "notes.txt")}
@@ -186,8 +187,7 @@ func TestQuarantineChunk_ReasonUsesPathRedactor(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)
 	sid := "sess-q"
-	sealedDir, err := resolveRepoSessionDir(repo, sid, time.Now().UTC())
-	require.NoError(t, err)
+	sealedDir := archiveSessionDir(t, repo, sid, time.Now().UTC().Format(audit.SessionDateFormat))
 	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 	chunk := audit.SessionChunkFile(100, 300)
 	require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
@@ -208,16 +208,15 @@ func TestQuarantineChunk_RefusesWithoutRedactor(t *testing.T) {
 	t.Setenv("HOME", "/var/home/zed")
 	repo := t.TempDir()
 	initGitRepo(t, repo)
-	sealedDir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
-	require.NoError(t, err)
+	sealedDir := archiveSessionDir(t, repo, "sess-q", time.Now().UTC().Format(audit.SessionDateFormat))
 	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 	chunk := audit.SessionChunkFile(100, 300)
 	require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
 
 	t.Setenv("HOME", "/")
-	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+	_, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "path redactor")
+	assert.Contains(t, err.Error(), "path redaction")
 	_, statErr := os.Stat(filepath.Join(sealedDir, strings.TrimSuffix(chunk, ".jsonl")+".quarantine"))
 	assert.True(t, os.IsNotExist(statErr), "a refused quarantine writes no marker")
 }
@@ -263,11 +262,8 @@ func TestRedactLegacyLine_AuditErrorIsSweptBesideAChangedInput(t *testing.T) {
 	assert.NotContains(t, string(out), "bob@example.com")
 }
 
-// TestQuarantineChunk_EveryRetiredChunkIsWithheld: the .corrupt is staged in a
-// tracked tree, so no retired chunk's bytes are staged, whatever they hold and
-// however they are spelled: the tracked file is a record of the hash, size and
-// rule, and the original is kept, byte for byte, in the local quarantine zone.
-// The decision does not depend on reading the bytes.
+// Every retired chunk stays local, including its digest metadata and marker.
+// Originals remain byte-for-byte in a stream-specific quarantine directory.
 func TestQuarantineChunk_EveryRetiredChunkIsWithheld(t *testing.T) {
 	home := "/var/home/zed"
 	bodies := map[string]string{
@@ -288,11 +284,13 @@ func TestQuarantineChunk_EveryRetiredChunkIsWithheld(t *testing.T) {
 			t.Setenv("HOME", home)
 			repo := t.TempDir()
 			initGitRepo(t, repo)
-			sealedDir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
-			require.NoError(t, err)
+			sealedDir := archiveSessionDir(t, repo, "sess-q", time.Now().UTC().Format(audit.SessionDateFormat))
 			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 			chunk := audit.SessionChunkFile(100, 300)
 			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte(body), 0o600))
+			indexPath := filepath.Join(repo, ".git", "index")
+			indexBefore, err := os.ReadFile(indexPath)
+			require.NoError(t, err)
 
 			_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 			require.NoError(t, err)
@@ -304,38 +302,36 @@ func TestQuarantineChunk_EveryRetiredChunkIsWithheld(t *testing.T) {
 			assert.NotContains(t, string(got), "alice@example.com")
 			assert.NotContains(t, string(got), "hunter2")
 
-			local, err := os.ReadDir(audit.QuarantineDir(repo))
-			require.NoError(t, err)
+			local := quarantineOriginalFiles(t, repo)
 			require.Len(t, local, 1)
-			orig, err := os.ReadFile(filepath.Join(audit.QuarantineDir(repo), local[0].Name()))
+			orig, err := os.ReadFile(local[0])
 			require.NoError(t, err)
 			assert.Equal(t, body, string(orig), "the local copy holds the bytes exactly")
+			indexAfter, err := os.ReadFile(indexPath)
+			require.NoError(t, err)
+			assert.Equal(t, indexBefore, indexAfter, "quarantine must not alter the index")
 		})
 	}
 }
 
-// TestQuarantineChunk_TwiceIsANoOp: a chunk withheld for a slug leaves a record
-// whose rule text names no leak, so a second quarantine of the same chunk
-// finds nothing to withhold: the tracked bytes are the same and the local zone
-// gets no new file.
+// A completed quarantine retries without changing metadata or copying the raw
+// original again. No Git index is involved.
 func TestQuarantineChunk_TwiceIsANoOp(t *testing.T) {
 	t.Setenv("HOME", "/var/home/zed")
 	repo := t.TempDir()
 	initGitRepo(t, repo)
-	sealedDir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
-	require.NoError(t, err)
+	sealedDir := archiveSessionDir(t, repo, "sess-q", time.Now().UTC().Format(audit.SessionDateFormat))
 	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 	chunk := audit.SessionChunkFile(100, 300)
 	require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage -home-bob-proj\n"), 0o600))
 
-	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+	_, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 	require.NoError(t, err)
 	corrupt := filepath.Join(sealedDir, chunk+".corrupt")
 	first, err := os.ReadFile(corrupt)
 	require.NoError(t, err)
 	require.Contains(t, string(first), "withheld")
-	local1, err := os.ReadDir(audit.QuarantineDir(repo))
-	require.NoError(t, err)
+	local1 := quarantineOriginalFiles(t, repo)
 
 	second := testhelpers.CaptureStderr(t, func() {
 		_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
@@ -344,8 +340,7 @@ func TestQuarantineChunk_TwiceIsANoOp(t *testing.T) {
 	again, err := os.ReadFile(corrupt)
 	require.NoError(t, err)
 	assert.Equal(t, string(first), string(again), "the tracked record is unchanged")
-	local2, err := os.ReadDir(audit.QuarantineDir(repo))
-	require.NoError(t, err)
+	local2 := quarantineOriginalFiles(t, repo)
 	assert.Len(t, local2, len(local1), "no new local file")
 	assert.NotContains(t, second, "withheld")
 }
@@ -362,11 +357,9 @@ func TestQuarantineChunk_ReasonThatStillLeaksIsReplaced(t *testing.T) {
 			initGitRepo(t, repo)
 			var sealedDir, chunk string
 			if mode == "session" {
-				d, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
-				require.NoError(t, err)
-				sealedDir, chunk = d, audit.SessionChunkFile(100, 300)
+				sealedDir, chunk = archiveSessionDir(t, repo, "sess-q", time.Now().UTC().Format(audit.SessionDateFormat)), audit.SessionChunkFile(100, 300)
 			} else {
-				sealedDir, chunk = sealedMissionDir(repo, "m-2026-07-21-030"), audit.MissionChunkFile("sessX", 100, 300)
+				sealedDir, chunk = archiveMissionDir(t, repo, "m-2026-07-21-030"), audit.MissionChunkFile("sessX", 100, 300)
 			}
 			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600))
@@ -390,13 +383,13 @@ func TestQuarantineChunk_LeakingTokenOfTheReasonIsReplacedAlone(t *testing.T) {
 	t.Setenv("HOME", "/var/home/zed")
 	repo := t.TempDir()
 	initGitRepo(t, repo)
-	dir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
-	require.NoError(t, err)
+	dir := archiveSessionDir(t, repo, "sess-q", time.Now().UTC().Format(audit.SessionDateFormat))
 	chunk := audit.SessionChunkFile(100, 300)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, chunk), []byte("\x00garbage\n"), 0o600))
 
 	var m audit.Marker
+	var err error
 	stderr := captureStderr(t, func() {
 		m, err = QuarantineChunk(repo, filepath.Join(dir, chunk),
 			"open %2Fhome%2Falice%2Fprivate: sha256 mismatch at line 4, disk full during seal")
@@ -415,8 +408,8 @@ func TestQuarantineChunk_LeakingTokenOfTheReasonIsReplacedAlone(t *testing.T) {
 // TestQuarantineChunk_RecordLookingChunkIsWithheld: a retired chunk that is
 // shaped like a withheld record but spells it differently (text in ts, a
 // duplicate or case-variant key) is not taken for one: it is withheld like any
-// chunk, the index holds a new, exact record, and the local zone holds the
-// original.
+// chunk, the local archive holds fresh digest metadata, and local quarantine
+// holds the original. Nothing from this operation is staged.
 func TestQuarantineChunk_RecordLookingChunkIsWithheld(t *testing.T) {
 	sum := strings.Repeat("ab", 32)
 	base := `"withheld":"retired chunk bytes withheld from the tracked tree","sha256":"` + sum + `","size":3,"rule":"retired chunk withheld"`
@@ -430,28 +423,35 @@ func TestQuarantineChunk_RecordLookingChunkIsWithheld(t *testing.T) {
 			t.Setenv("HOME", "/var/home/zed")
 			repo := t.TempDir()
 			initGitRepo(t, repo)
-			sealedDir, err := resolveRepoSessionDir(repo, "sess-q", time.Now().UTC())
-			require.NoError(t, err)
+			sealedDir := archiveSessionDir(t, repo, "sess-q", time.Now().UTC().Format(audit.SessionDateFormat))
 			require.NoError(t, os.MkdirAll(sealedDir, 0o700))
 			chunk := audit.SessionChunkFile(100, 300)
 			require.NoError(t, os.WriteFile(filepath.Join(sealedDir, chunk), []byte(body), 0o600))
 
-			_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
+			_, err := QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 			require.NoError(t, err)
 			corrupt := filepath.Join(sealedDir, chunk+".corrupt")
-			blob, tracked, err := audit.IndexBlob(repo, corrupt)
+			_, tracked, err := audit.IndexBlob(repo, corrupt)
 			require.NoError(t, err)
-			require.True(t, tracked, "the record is staged")
-			assert.True(t, audit.IsWithheldRecord(blob), "the index holds an exact record: %s", blob)
+			require.False(t, tracked, "quarantine never stages metadata")
+			blob, err := os.ReadFile(corrupt)
+			require.NoError(t, err)
+			assert.Contains(t, string(blob), `"sha256"`)
 			assert.NotContains(t, string(blob), "hunter2")
 			assert.NotContains(t, string(blob), "alice@example.com")
 
-			local, err := os.ReadDir(audit.QuarantineDir(repo))
-			require.NoError(t, err)
+			local := quarantineOriginalFiles(t, repo)
 			require.Len(t, local, 1)
-			orig, err := os.ReadFile(filepath.Join(audit.QuarantineDir(repo), local[0].Name()))
+			orig, err := os.ReadFile(local[0])
 			require.NoError(t, err)
 			assert.Equal(t, body, string(orig))
 		})
 	}
+}
+
+func quarantineOriginalFiles(t *testing.T, root string) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(audit.QuarantineDir(root), "*", "*.corrupt"))
+	require.NoError(t, err)
+	return files
 }

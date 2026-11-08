@@ -1,6 +1,8 @@
 package layout_test
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -37,6 +39,8 @@ func writerCorpus(t *testing.T) corpus {
 	t.Helper()
 
 	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
 	t.Setenv("HOME", t.TempDir()) // claudemd and counters lock under $HOME
 	global := t.TempDir()
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
@@ -50,15 +54,15 @@ func writerCorpus(t *testing.T) corpus {
 		t.Fatalf("enable: %v", err)
 	}
 
-	writeIdentityGraph(t, ethosDir)
+	policy := writerPolicy(t, root)
+	writeIdentityGraph(t, ethosDir, identity.RepositoryPolicy(policy))
 	writeMissionRecord(t, root, global)
 	writeAuditFiles(t, root)
 	writeAgents(t, root, ethosDir, global)
 
-	// The ADR store takes its directory from the caller; DES-079 puts it at
-	// <repo>/.punt-labs/ethos/adrs; the CLI's own default store is global and is
-	// covered in cmd/ethos.
-	require.NoError(t, adr.NewStore(filepath.Join(ethosDir, "adrs")).Create(&adr.ADR{
+	adrs, err := adr.NewRepositoryStore(policy, "")
+	require.NoError(t, err)
+	require.NoError(t, adrs.Create(&adr.ADR{
 		ID: "DES-901", Title: "t", Status: adr.StatusProposed, Author: "bwk",
 		CreatedAt: "2026-10-24T00:00:00Z", UpdatedAt: "2026-10-24T00:00:00Z",
 		Context: "c", Decision: "d",
@@ -67,7 +71,7 @@ func writerCorpus(t *testing.T) corpus {
 	writeMigrations(t, root, global)
 
 	var paths []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -110,7 +114,14 @@ func gitIn(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func writeIdentityGraph(t *testing.T, ethosDir string) {
+func writerPolicy(t *testing.T, root string) layout.Policy {
+	t.Helper()
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	return p
+}
+
+func writeIdentityGraph(t *testing.T, ethosDir string, opts ...identity.StoreOption) {
 	t.Helper()
 
 	for _, a := range []struct {
@@ -125,7 +136,7 @@ func writeIdentityGraph(t *testing.T, ethosDir string) {
 			&attribute.Attribute{Slug: a.slug, Content: "# " + a.slug + "\n\nBody.\n"}))
 	}
 
-	ids := identity.NewStore(ethosDir)
+	ids := identity.NewStore(ethosDir, opts...)
 	require.NoError(t, ids.Save(&identity.Identity{Name: "Brian K", Handle: "bwk", Kind: "agent",
 		Personality: "kernighan", WritingStyle: "kernighan-prose", Talents: []string{"engineering"}}))
 	require.NoError(t, ids.ExtSet("bwk", "quarry", "collection", "memory-bwk"))
@@ -151,7 +162,7 @@ func writeIdentityGraph(t *testing.T, ethosDir string) {
 func writeMissionRecord(t *testing.T, root, global string) {
 	t.Helper()
 
-	s := mission.NewStoreWithRoots(root, global).WithSessionID("sess-1")
+	s := mission.NewRepositoryStore(writerPolicy(t, root), global).WithSessionID("sess-1")
 	c := &mission.Contract{
 		MissionID: "m-2026-10-24-901",
 		Status:    mission.StatusOpen,
@@ -170,6 +181,10 @@ func writeMissionRecord(t *testing.T, root, global string) {
 		CurrentRound: 1,
 	}
 	require.NoError(t, s.Create(c))
+	// Force optional archival to fail after the real writer accepts the shared
+	// decision. Its durable per-round receipt must survive the final corpus walk.
+	archive := filepath.Join(root, ".punt-labs", "local", "ethos", "trace", "missions", c.MissionID, "reflection-1.yaml")
+	require.NoError(t, os.MkdirAll(archive, 0o700))
 	require.NoError(t, s.AppendReflection(c.MissionID, &mission.Reflection{
 		Mission: c.MissionID, Round: 1, Author: "claude", Converging: true,
 		Signals: []string{"green"}, Recommendation: mission.RecommendationContinue, Reason: "ok",
@@ -184,6 +199,52 @@ func writeMissionRecord(t *testing.T, root, global string) {
 	require.NoError(t, err)
 	_, err = s.Close(c.MissionID, mission.StatusClosed)
 	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(root, ".punt-labs", "local", "ethos", "missions", c.MissionID, "reflection-intents", "1.yaml"))
+}
+
+func TestRetainedReflectionReceiptIsClassified(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	writeMissionRecord(t, root, t.TempDir())
+	rel := ".punt-labs/local/ethos/missions/m-2026-10-24-901/reflection-intents/1.yaml"
+	require.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
+	class, _, ok := layout.Classify(rel)
+	require.True(t, ok)
+	require.Equal(t, layout.Never, class)
+
+	var trimmed []layout.Entry
+	for _, entry := range layout.Table {
+		if entry.Pattern != ".punt-labs/local/ethos/missions/*/reflection-intents/*.yaml" {
+			trimmed = append(trimmed, entry)
+		}
+	}
+	require.Equal(t, []string{rel}, unclassified(trimmed, []string{rel}), "removing the receipt entry must expose the actual retained writer output")
+}
+
+func TestPromptConsentIsNeverPublishedTrace(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	const id = "m-2026-10-24-905"
+	const delegation = "d-2026-10-24-905"
+	_, err = mission.WriteDelegationSkeletonWithPolicy(writerPolicy(t, root), id, delegation, mission.DelegationSkeleton{
+		Tier: mission.TierB, AgentType: "bwk", Prompt: []byte("bounded work"),
+	})
+	require.NoError(t, err)
+	rel := ".punt-labs/local/ethos/trace/missions/" + id + "/delegations/" + delegation + "/prompt-consent.yaml"
+	require.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
+	class, _, ok := layout.Classify(rel)
+	require.True(t, ok)
+	require.Equal(t, layout.Never, class, "consent is local eligibility metadata, not shareable prompt content")
+
+	var trimmed []layout.Entry
+	for _, entry := range layout.Table {
+		if entry.Pattern != ".punt-labs/local/ethos/trace/missions/*/delegations/*/prompt-consent.yaml" {
+			trimmed = append(trimmed, entry)
+		}
+	}
+	class, _, ok = layout.ClassifyIn(trimmed, rel)
+	require.True(t, ok)
+	require.Equal(t, layout.Trace, class, "the real writer output must expose a missing eligibility-metadata override")
 }
 
 // writeAuditFiles creates the live audit files, seals them with the real
@@ -222,26 +283,36 @@ func writeAuditFiles(t *testing.T, root string) {
 		require.NoError(t, os.WriteFile(p, nil, 0o644))
 	}
 
-	quarantineTwice(t, root, sessionDir, sess)
-	quarantineTwice(t, root, missionDir, msn)
+	quarantineOnce(t, root, sessionDir, sess)
+	quarantineOnce(t, root, missionDir, msn)
 }
 
-// quarantineTwice corrupts the chunk named cn in dir and runs the real
-// quarantine on it, then corrupts it again and runs it a second time, so the
-// directory holds the <stem>.jsonl.corrupt a first event leaves, the marker, and
-// the <stem>.jsonl.corrupt-<hash> a second event retires fresh damage to.
-func quarantineTwice(t *testing.T, root, dir string, cn audit.ChunkName) {
+// quarantineOnce exercises repeated recovery: retirement metadata and distinct
+// damaged payloads remain local even when the same chunk name is damaged twice.
+func quarantineOnce(t *testing.T, root, dir string, cn audit.ChunkName) {
 	t.Helper()
 
-	for _, garbage := range []string{"not json\n", "still not json\n"} {
-		require.NoError(t, os.MkdirAll(dir, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(garbage), 0o644))
-		_, err := hook.QuarantineChunk(root, filepath.Join(dir, cn.ChunkFile()), "test corruption")
-		require.NoError(t, err)
-	}
-	matches, err := filepath.Glob(filepath.Join(dir, audit.CorruptName(cn.Stem())+"-*"))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	chunk := filepath.Join(dir, cn.ChunkFile())
+	require.NoError(t, os.WriteFile(chunk, []byte("not json\n"), 0o644))
+	_, err := hook.QuarantineChunk(root, chunk, "test corruption")
 	require.NoError(t, err)
-	require.NotEmpty(t, matches, "the second quarantine must retire to a .corrupt-<hash> name")
+	require.NoFileExists(t, chunk)
+	require.NoError(t, os.WriteFile(chunk, []byte("still not json\n"), 0o644))
+	_, err = hook.QuarantineChunk(root, chunk, "new corruption")
+	require.NoError(t, err)
+	require.NoFileExists(t, chunk)
+	for _, body := range []string{"not json\n", "still not json\n"} {
+		digest := sha256.Sum256([]byte(body))
+		copies, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "quarantine", "*", fmt.Sprintf("%x.corrupt", digest)))
+		require.NoError(t, err)
+		require.NotEmpty(t, copies, "every damaged payload must retain distinct content-addressed local evidence")
+		for _, path := range copies {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, body, string(data))
+		}
+	}
 }
 
 // writeAgents runs the three writers of .claude/agents/<name>.md: the
@@ -264,7 +335,7 @@ func writeAgents(t *testing.T, root, ethosDir, global string) {
 	require.NoError(t, err)
 
 	_, err = seed.SeedVersionWithBundleDir(filepath.Join(global, "seed"), filepath.Join(global, "skills"),
-		filepath.Join(root, ".claude", "agents"), "", "", "test", false)
+		filepath.Join(root, ".claude", "agents"), "", "", "test", false, seed.WithRepositoryAgents(writerPolicy(t, root)))
 	require.NoError(t, err)
 }
 
@@ -313,29 +384,64 @@ func writeMigrations(t *testing.T, root, global string) {
 	require.NoError(t, os.WriteFile(filepath.Join(staging, "contract.yaml"), []byte("x: 1\n"), 0o600))
 
 	sessions := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(sessions, "sess-1.audit.jsonl"),
+	// Keep this migration stream independent of the intentionally damaged
+	// quarantine fixtures above; their malformed marker must remain an error.
+	require.NoError(t, os.WriteFile(filepath.Join(sessions, "sess-migrate.audit.jsonl"),
 		[]byte(`{"ts":"2026-10-23T00:00:00Z","tool_name":"Read","tool_use_id":"t1"}`+"\n"), 0o644))
 	require.NoError(t, hook.MigrateAudit(sessions, root, false, io.Discard))
 }
 
-// TestSymlinkedTargetsAreClassified: `ethos enable` writes through a CLAUDE.md
-// linked to AGENTS.md and a .gitignore linked to another name. The links are
-// classified by their logical names, and the writers leave nothing behind that
-// is not. The link targets are the user's files, not ethos writes.
+// Enable writes through CLAUDE.md links to user files inside or outside C. Git
+// must be able to prove the whole local directory excluded, so the ignore source
+// is a regular file, not a symlink Git refuses to read (tested separately below).
+// Classification uses the logical writer name, not the user-chosen target.
 func TestSymlinkedTargetsAreClassified(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("HOME", t.TempDir())
-	gitIn(t, root, "init", "-q")
-	for target, link := range map[string]string{"docs/AGENTS.md": "CLAUDE.md", "config/shared.ignore": ".gitignore"} {
-		require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(target)), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(root, target), []byte("# user file\n"), 0o644))
-		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
+	for _, outside := range []bool{false, true} {
+		t.Run(fmt.Sprintf("outside=%t", outside), func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			t.Setenv("HOME", t.TempDir())
+			gitIn(t, root, "init", "-q")
+			target := filepath.Join(root, "docs", "AGENTS.md")
+			linkText := filepath.Join("docs", "AGENTS.md")
+			if outside {
+				external, err := filepath.EvalSymlinks(t.TempDir())
+				require.NoError(t, err)
+				target = filepath.Join(external, "AGENTS.md")
+				linkText = target
+			}
+			require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+			require.NoError(t, os.WriteFile(target, []byte("# user file\n"), 0o644))
+			link := filepath.Join(root, "CLAUDE.md")
+			if err := os.Symlink(linkText, link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			_, err = enable.Enable(root)
+			require.NoError(t, err)
+			covered, err := enable.LocalIgnored(root)
+			require.NoError(t, err)
+			require.True(t, covered, "real Git must confirm directory-level protection")
+			data, err := os.ReadFile(target)
+			require.NoError(t, err)
+			require.Contains(t, string(data), "# user file\n")
+			require.Contains(t, string(data), enable.CanonicalImport)
+			gotLink, err := os.Readlink(link)
+			require.NoError(t, err)
+			require.Equal(t, linkText, gotLink)
+			class, _, ok := layout.Classify("CLAUDE.md")
+			require.True(t, ok)
+			require.Equal(t, layout.Source, class)
+			checkSymlinkWriterPaths(t, root, "docs/AGENTS.md")
+			entries, err := os.ReadDir(filepath.Dir(target))
+			require.NoError(t, err)
+			require.Len(t, entries, 1, "no adjacent staging debris at either physical target")
+			require.Equal(t, "AGENTS.md", entries[0].Name())
+		})
 	}
-	_, err := enable.Enable(root)
-	require.NoError(t, err)
+}
 
+func checkSymlinkWriterPaths(t *testing.T, root string, userPaths ...string) {
+	t.Helper()
 	var leftovers []string
 	require.NoError(t, filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -348,8 +454,13 @@ func TestSymlinkedTargetsAreClassified(t *testing.T) {
 		if rel == ".git" && d.IsDir() {
 			return filepath.SkipDir
 		}
-		if d.IsDir() || rel == "docs/AGENTS.md" || rel == "config/shared.ignore" {
+		if d.IsDir() {
 			return nil
+		}
+		for _, userPath := range userPaths {
+			if filepath.ToSlash(rel) == userPath {
+				return nil
+			}
 		}
 		if _, _, ok := layout.Classify(filepath.ToSlash(rel)); !ok {
 			leftovers = append(leftovers, rel)
@@ -359,11 +470,69 @@ func TestSymlinkedTargetsAreClassified(t *testing.T) {
 	if len(leftovers) > 0 {
 		t.Errorf("enable through symlinks left unclassified files: %v", leftovers)
 	}
-	for _, link := range []string{"CLAUDE.md", ".gitignore"} {
-		fi, err := os.Lstat(filepath.Join(root, link))
-		require.NoError(t, err)
-		if fi.Mode()&os.ModeSymlink == 0 {
-			t.Errorf("%s is no longer a symlink", link)
-		}
+}
+
+// Ignore sources refuse symlinks before reading their payload, even when the
+// target is readable and holds the literal rule. Neither that rule nor selected
+// filename coverage can replace Git's directory-level proof. Preserve user files/index,
+// and do not mark enabled or install hooks/imports after the refusal.
+func TestSymlinkedGitignoreRefusesUnconfirmedProtection(t *testing.T) {
+	for _, outside := range []bool{false, true} {
+		t.Run(fmt.Sprintf("outside=%t", outside), func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			t.Setenv("HOME", t.TempDir())
+			gitIn(t, root, "init", "-q")
+			gitIn(t, root, "config", "core.hooksPath", ".githooks")
+			require.NoError(t, os.WriteFile(filepath.Join(root, "source.txt"), []byte("source\n"), 0o644))
+			gitIn(t, root, "add", "source.txt")
+			index := filepath.Join(root, ".git", "index")
+			beforeIndex, err := os.ReadFile(index)
+			require.NoError(t, err)
+
+			target := filepath.Join(root, "config", "shared.ignore")
+			linkText := filepath.Join("config", "shared.ignore")
+			if outside {
+				external, err := filepath.EvalSymlinks(t.TempDir())
+				require.NoError(t, err)
+				target = filepath.Join(external, "shared.ignore")
+				linkText = target
+			}
+			require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+			original := []byte("# user file\n" + enable.LocalIgnoreRule + "\n")
+			require.NoError(t, os.WriteFile(target, original, 0o644))
+			link := filepath.Join(root, ".gitignore")
+			if err := os.Symlink(linkText, link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			claude := filepath.Join(root, "CLAUDE.md")
+			require.NoError(t, os.WriteFile(claude, []byte("# user instructions\n"), 0o644))
+			added, err := enable.EnsureLocalIgnored(root, writerPolicy(t, root))
+			require.ErrorContains(t, err, "reading .gitignore")
+			require.ErrorContains(t, err, "not a regular file (symlinks are not allowed); refusing to read")
+			require.False(t, added)
+			require.NoDirExists(t, filepath.Join(root, ".punt-labs"), "ignore maintenance must refuse before staging or writing")
+
+			_, err = enable.Enable(root)
+			require.ErrorContains(t, err, "reading .gitignore")
+			require.ErrorContains(t, err, "not a regular file (symlinks are not allowed); refusing to read")
+			require.NoFileExists(t, filepath.Join(root, ".punt-labs", "ethos", "enabled"))
+			require.NoDirExists(t, filepath.Join(root, ".githooks"))
+			for path, want := range map[string][]byte{target: original, claude: []byte("# user instructions\n"), index: beforeIndex} {
+				got, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, want, got, "refusal must preserve %s", path)
+			}
+			gotLink, err := os.Readlink(link)
+			require.NoError(t, err)
+			require.Equal(t, linkText, gotLink)
+			// Enable may deposit its guides before checking protection. Those
+			// outputs still must be classified; this is not all-or-nothing enable.
+			checkSymlinkWriterPaths(t, root, "config/shared.ignore", "source.txt")
+			entries, err := os.ReadDir(filepath.Dir(target))
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			require.Equal(t, "shared.ignore", entries[0].Name())
+		})
 	}
 }

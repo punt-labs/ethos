@@ -143,10 +143,11 @@ func runMissionCorrect(cmd *cobra.Command, idOrPrefix string) error {
 		return fmt.Errorf("mission correct: %w", err)
 	}
 
-	if err := ms.Correct(id, *c); err != nil {
-		return fmt.Errorf("mission correct: %w", err)
+	outcome, err := ms.CorrectWithOutcome(id, *c)
+	if err != nil {
+		return reportMissionMutationError(id, outcome, fmt.Errorf("mission correct: %w", err))
 	}
-	// Parity with close/abandon: seal the checkout's mission-log tail
+	// Parity with close/abandon: seal the canonical store's mission-log tail
 	// so the correction is durable on disk even if no commit
 	// immediately follows. Store.Correct cannot do this itself — the
 	// mission package cannot import internal/hook without cycling.
@@ -155,17 +156,14 @@ func runMissionCorrect(cmd *cobra.Command, idOrPrefix string) error {
 	// field, matching runMissionShow/runMissionResults: a scriptable
 	// caller reading only stdout must not be blind to a durability
 	// warning that a human running interactively would see on stderr.
-	var warnings []string
-	if loc := currentRoots(); loc.CheckoutErr != nil {
-		msg := fmt.Sprintf("sealing mission log: locating the checkout: %v", loc.CheckoutErr)
-		fmt.Fprintf(os.Stderr, "ethos: mission correct: %s\n", msg)
-		warnings = append(warnings, msg)
-	} else if repoRoot := loc.Checkout; repoRoot != "" {
-		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
+	if p, ok := ms.RepositoryPolicy(); ok {
+		if _, sErr := hook.SealMissionWithPolicy(p, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			msg := fmt.Sprintf("sealing mission log: %v", sErr)
-			fmt.Fprintf(os.Stderr, "ethos: mission correct: %s\n", msg)
-			warnings = append(warnings, msg)
+			addMissionSealWarning(&outcome, "mission correct: "+msg)
 		}
+	} else {
+		msg := "sealing mission log: repository policy unavailable"
+		addMissionSealWarning(&outcome, "mission correct: "+msg)
 	}
 
 	if jsonOutput {
@@ -175,12 +173,10 @@ func runMissionCorrect(cmd *cobra.Command, idOrPrefix string) error {
 			"round":      c.Round,
 			"author":     c.Author,
 		}
-		if len(warnings) > 0 {
-			payload["warnings"] = warnings
-		}
-		printJSON(payload)
+		printMissionMutationJSON(outcome, payload)
 		return nil
 	}
+	printMissionMutationWarnings(outcome)
 	fmt.Printf("corrected: %s kind=%s round=%d by %s\n", id, c.Kind, c.Round, c.Author)
 	return nil
 }

@@ -1695,8 +1695,12 @@ func TestHandleMission_Reflections_EmptyReturnsArray(t *testing.T) {
 		"contract": validContractYAML,
 	}))
 	require.NoError(t, err)
+	require.False(t, createResult.IsError)
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	// This standalone fixture omits authority; it is not initialized v1
+	// authority with an empty decision list. Missing detail stays unknown.
+	require.Nil(t, created.RoundDecisions)
 
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflections",
@@ -1704,7 +1708,14 @@ func TestHandleMission_Reflections_EmptyReturnsArray(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "[]", resultText(t, result))
+	var states []mission.ReflectionRead
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &states))
+	require.Len(t, states, 1)
+	assert.Equal(t, 1, states[0].Round)
+	assert.Equal(t, "legacy_unknown", states[0].DecisionState)
+	assert.Equal(t, "absent", states[0].DetailState)
+	assert.Nil(t, states[0].Decision)
+	assert.Nil(t, states[0].Reflection)
 }
 
 func TestHandleMission_Reflections_ReturnsAfterReflect(t *testing.T) {
@@ -1729,11 +1740,12 @@ func TestHandleMission_Reflections_ReturnsAfterReflect(t *testing.T) {
 		"mission_id": created.MissionID,
 	}))
 	require.NoError(t, err)
-	var rs []mission.Reflection
+	var rs []mission.ReflectionRead
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &rs))
 	require.Len(t, rs, 1)
 	assert.Equal(t, 1, rs[0].Round)
-	assert.Equal(t, "continue", rs[0].Recommendation)
+	require.NotNil(t, rs[0].Reflection)
+	assert.Equal(t, "continue", rs[0].Reflection.Recommendation)
 }
 
 func TestHandleMission_Advance_RequiresReflection(t *testing.T) {

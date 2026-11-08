@@ -120,6 +120,7 @@ func missionTestEnv(t *testing.T) string {
 	missionResultVerify = false
 	missionResultBase = "main"
 	missionExportDir = ".ethos/missions"
+	missionExportFull = false
 	resetDispatchFlags()
 	resetCorrectFlags()
 	t.Cleanup(func() {
@@ -131,6 +132,7 @@ func missionTestEnv(t *testing.T) string {
 		missionResultVerify = false
 		missionResultBase = "main"
 		missionExportDir = ".ethos/missions"
+		missionExportFull = false
 		resetDispatchFlags()
 		resetCorrectFlags()
 	})
@@ -1839,21 +1841,36 @@ func TestMissionReflections_JSON(t *testing.T) {
 	require.NoError(t, err)
 	id := ids[0]
 
-	// Empty case — no reflections yet, must produce "[]" (not "null").
+	// An undecided current round is explicit, not indistinguishable from
+	// accepted authority whose optional detail was lost.
 	jsonOutput = true
 	out := captureStdoutE(t, func() error { return runMissionReflections(id) })
-	assert.Equal(t, "[]", strings.TrimSpace(out))
+	var states []mission.ReflectionRead
+	require.NoError(t, json.Unmarshal([]byte(out), &states))
+	require.Len(t, states, 1)
+	assert.Equal(t, "absent", states[0].DecisionState)
 
 	// Submit a reflection and re-fetch.
 	missionReflectFile = writeReflectionFile(t, id, 1, "continue", "ok")
 	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	out = captureStdoutE(t, func() error { return runMissionReflections(id) })
-	var got []mission.Reflection
+	var got []mission.ReflectionRead
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	require.Len(t, got, 1)
 	assert.Equal(t, 1, got[0].Round)
-	assert.Equal(t, "continue", got[0].Recommendation)
+	assert.Equal(t, "present", got[0].DecisionState)
+	require.NotNil(t, got[0].Reflection)
+	assert.Equal(t, "continue", got[0].Reflection.Recommendation)
+	p, ok := ms.RepositoryPolicy()
+	require.True(t, ok)
+	require.NoError(t, os.RemoveAll(p.LocalRoot()))
+	out = captureStdoutE(t, func() error { return runMissionReflections(id) })
+	got = nil
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, "present", got[0].DecisionState)
+	assert.Equal(t, "unavailable_here", got[0].DetailState)
+	assert.Nil(t, got[0].Reflection)
 }
 
 // --- 3.6: result submission and close gate ---
@@ -3099,10 +3116,8 @@ budget:
 }
 
 func TestMissionLog_CorruptLineSurfacesAsWarning(t *testing.T) {
-	// Drive a clean mission, then plant a corrupt line in the middle
-	// of the JSONL log. Reading it back via --json must surface a
-	// warnings field naming the bad line and still return the
-	// parseable events.
+	// A malformed legacy source refuses explicitly rather than presenting
+	// a partial tolerant decode as complete history.
 	missionTestEnv(t)
 	id := seedMissionWithEvents(t)
 
@@ -3113,16 +3128,9 @@ func TestMissionLog_CorruptLineSurfacesAsWarning(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdoutE(t, func() error {
-		return runMissionLog(id, "", "")
-	})
-	var payload mission.LogPayload
-	require.NoError(t, json.Unmarshal([]byte(out), &payload))
-	// The three good lines still decode.
-	assert.Len(t, payload.Events, 3)
-	// Warnings name the corrupt line number.
-	require.Len(t, payload.Warnings, 1)
-	assert.Contains(t, payload.Warnings[0], "line 2")
+	err = runMissionLog(id, "", "")
+	require.ErrorContains(t, err, "legacy audit")
+	assert.Contains(t, err.Error(), "line 2")
 }
 
 func TestMissionLog_HelpListsSubcommand(t *testing.T) {
@@ -3183,17 +3191,9 @@ func TestMissionLog_HumanMode_WarningsFooterOnStdout(t *testing.T) {
 	plantCorruptFrozenLog(t, repoRoot, id)
 
 	jsonOutput = false
-	out := captureStdoutE(t, func() error {
-		return runMissionLog(id, "", "")
-	})
-	// The events section still renders the three good lines.
-	assert.Contains(t, out, "Events:")
-	assert.Contains(t, out, "create")
-	// The warnings footer must appear on stdout, naming the bad line.
-	assert.Contains(t, out, "Warnings:")
-	assert.Contains(t, out, "line 2")
-	// Warnings bullets must use the same prefix as the events.
-	assert.Regexp(t, `(?m)^  - line 2`, out)
+	err = runMissionLog(id, "", "")
+	require.ErrorContains(t, err, "legacy audit")
+	assert.Contains(t, err.Error(), "line 2")
 }
 
 // TestMissionLog_InvalidSinceFlag_HumanReadableError covers L1:
@@ -5394,14 +5394,8 @@ func TestWarnIfGlobalFallback(t *testing.T) {
 // sees a different store," so reads must not be silent.
 func TestMissionStore_ReadWarnsOnGlobalFallback(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", "")
-	// /tmp has no .git ancestor, so StoreRootIfAny resolves empty.
-	nonRepo, err := os.MkdirTemp("/tmp", "ethos-mission-norepo-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
-	orig, err := os.Getwd()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.Chdir(orig) })
-	require.NoError(t, os.Chdir(nonRepo))
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(testhelpers.OutsideRepo(t))
 
 	out := captureStderrFn(t, func() { _ = missionStore() })
 	assert.Contains(t, out, "no git repository found")
@@ -5448,13 +5442,7 @@ func TestRefuseBadStoreOverride(t *testing.T) {
 		t.Setenv("ETHOS_REPO_ROOT", "")
 		// Not in a repo (unset override) → no error; the caller's
 		// warn+global path handles the legitimate global mission mode.
-		nonRepo, err := os.MkdirTemp("/tmp", "ethos-refuse-norepo-*")
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
-		orig, err := os.Getwd()
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = os.Chdir(orig) })
-		require.NoError(t, os.Chdir(nonRepo))
+		t.Chdir(testhelpers.OutsideRepo(t))
 		assert.NoError(t, refuseBadStoreOverride("create"),
 			"a genuinely unset override must not error (global mission mode is supported)")
 	})

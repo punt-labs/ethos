@@ -8,8 +8,9 @@
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-validated-blue)](./prfaq.pdf)
 
 Ethos runs typed mission contracts for AI agents — a write-set, a frozen
-evaluator, bounded review rounds, and a per-tool-call audit trail that
-git-trailer-links every commit back to the prompt that authorized it.
+evaluator, bounded review rounds, and a per-tool-call audit trail.
+Commit trailers link recorded mission/delegation associations; full prompts
+and tool traces need not be shared with the code.
 Missions dispatch against a persistent layer of identities and teams that
 give each agent a role, tool restrictions, and a delegation graph. It ships
 as a single Go binary with a Claude Code plugin, an MCP server, and a
@@ -21,7 +22,7 @@ telemetry, no cloud.
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e3a246b/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8ebb77f5/install.sh | sh
 ~/.local/bin/ethos setup
 ```
 
@@ -41,13 +42,13 @@ For a non-Claude harness, or a Claude install where org policy blocks
 plugins:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e3a246b/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8ebb77f5/install.sh | sh -s -- --no-plugin
 ```
 
 Where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e3a246b/install.sh | ETHOS_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8ebb77f5/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 `--no-plugin` skips only the marketplace-register and plugin-install
@@ -74,11 +75,18 @@ a remedy rather than creating an identity nothing can resolve.
 
 ## Features
 
+**Storage repair status:** DES-080 redaction shipped in v4.20.0. DES-079's
+source/local boundary, shared decisions, publication and squash provenance
+remain pending final entry-point acceptance. The
+[storage and publication contract](docs/storage-layout.md) defines the required
+behavior and maps each promise to implementation and outstanding acceptance.
+An ADR's settled status is not a release claim.
+
 | Feature | What it does |
 |---------|-------------|
 | Mission contracts | Typed delegation with write-sets, frozen evaluators, bounded rounds, success criteria |
 | Audit trail | Per-tool-call log tagged with delegation ID + contract ID; PII-redacted paths |
-| Git trailers | `Mission:`/`Delegation:` on every commit; blame chain from line to prompt |
+| Git trailers | `Mission:`/`Delegation:` associations on locally hooked commits; DES-079 squash manifests and actual-commit verification pending |
 | Traceability UI | Browse code with ethos blame; mission + delegation detail views |
 | Preconditions | Gate tool calls on prior reads ("must read DESIGN.md before editing") |
 | Expert identities | Personalities, writing styles, talents bound to named agents |
@@ -96,9 +104,10 @@ a remedy rather than creating an identity nothing can resolve.
 
 ### Traceability: Line of Code to Full History
 
-When commits carry `Mission:`/`Delegation:` git trailers (appended
-automatically by the commit-msg hook), the blame chain works like
-this:
+For a single recorded association, local commit-msg hooks append
+`Mission:`/`Delegation:` trailers. This example also assumes the full prompt
+and audit detail are available locally; a fresh blame-only clone need not have
+them. Under the pending DES-079 layout, resolve the canonical store root S first:
 
 ```text
 $ git blame -L 42,42 internal/hook/generate_agents.go
@@ -108,7 +117,7 @@ $ git log --format='%(trailers)' abc1234
 Mission: m-2026-05-25-002
 Delegation: d-2026-05-25-011
 
-$ cat .punt-labs/ethos/missions/m-2026-05-25-002/delegations/d-2026-05-25-011/prompt.md
+$ cat "$S/.punt-labs/local/ethos/trace/missions/m-2026-05-25-002/delegations/d-2026-05-25-011/prompt.md"
 "Fix the hardcoded Go file-extension patterns. Detect project type
 at generation time (go.mod → Go, pyproject.toml → Python)..."
 
@@ -122,19 +131,26 @@ $ ethos audit show --delegation d-2026-05-25-011 --format text
 
 Illustrative — actual SHAs and IDs vary per repo.
 
-The audit log is written to a machine-local, gitignored live file while a
-session runs, so a repo with an active session keeps a clean `git status`.
-A `pre-commit` hook runs `ethos audit seal`, which copies the pending lines
-into immutable, timestamp-named chunk files under the tracked tree so the
-audit record lands in the same commit as the work. Chunks are never
-modified after creation, so branch merges are conflict-free. Hook
-mechanics, marker sections, and `ethos doctor`'s currency checks: see
-[Enable / Disable](#enable--disable) and DES-054/DES-058 in
-[DESIGN.md](DESIGN.md).
+DES-079 requires live logs and immutable archives under
+`S/.punt-labs/local/ethos/` in **both** recording modes. Default `record: blame`
+archives without querying or changing the index; `record: full` adds eligible
+published copies, including sealed session audits, while retaining the local
+copy. Eligibility is captured per immutable entry. Switching modes neither
+promotes old private history nor removes published history. Invalid `record`
+values fail visibly; omitted means `blame`. These are pending repair requirements,
+superseding the historical tracked-by-default seal in DES-058.
 
-Or visually: `ethos ui` opens a localhost dashboard where you browse
-the repo, click a line, and see the agent who wrote it, the prompt
-they received, and every tool call they made.
+For multi-mission/delegation squash merges, selected `mission publish`,
+`provenance message` and `provenance verify` are pending command contracts.
+The supported route supplies a generated body and pins the reviewed head to
+GitHub's squash command, then fetches and verifies the actual merge commit.
+Local hooks do not run remotely. Attribution must preserve ambiguity rather
+than guess the first delegation. See the [merge example](docs/example/07-pr-and-merge.md).
+
+`ethos ui` opens a localhost dashboard for code and mission detail. DES-079
+requires it to distinguish unavailable local detail from non-submission or
+unreadable data. Shared round decisions still govern advancement when full
+reflection prose is unavailable here.
 
 ### Contract-Bound Delegation
 
@@ -191,7 +207,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos mission claim` / `release` | Bind session to mission for Tier B dispatch |
 | `ethos mission show <id>` | Show contract, results, reflections |
 | `ethos audit show --delegation <id>` | Full tool-call trace for a delegation |
-| `ethos audit seal [--dry-run]` | Seal pending live audit lines into tracked chunks (run by the pre-commit hook) |
+| `ethos audit seal [--dry-run]` | Seal pending lines into immutable chunks; DES-079 requires local archives by default (acceptance pending) |
 | `ethos audit quarantine <chunk>` | Retire a corrupt sealed chunk and recover what the live file holds |
 | `ethos session purge [--force] [--ack <id>]` | Clean up stale sessions; guard/acknowledge unsealed audit lines |
 | `ethos find missions` | Query closed missions by date, worker, status |
@@ -246,18 +262,23 @@ ethos vendor --team engineering --apply --prune
 Then set `resolution: repo-only` in `.punt-labs/ethos.yaml` to drop
 the global layer — missing references become hard errors naming each
 one, instead of silently resolving from a home directory a CI runner
-or fresh clone does not have. `ethos doctor` is the gate. Secrets in
-`<handle>.ext/<namespace>.local.yaml` (vendor never copies, `.gitignore`
-covers). Full walkthrough: [Team Setup](docs/team-setup.md).
+or fresh clone does not have. `ethos doctor` is the gate. DES-079 requires
+repository overlays at `S/.punt-labs/local/ethos/identities/<handle>.ext/<namespace>.local.yaml`,
+preserving local precedence and base-only writes. Global sibling overlays stay
+unchanged. Vendor never copies overlays; they are not a vault and can reach model
+context. Full walkthrough: [Team Setup](docs/team-setup.md).
 
 ### Git Worktrees
 
-The repo-layer store lives at `<repo>/.punt-labs/ethos/`. Ethos resolves
-it through the git common dir, so an agent in a linked worktree still
-addresses the store in the main work tree — a mission created from either
-checkout is visible from the other. Only the mission store crosses to
-the main tree; per-checkout state (enable marker, generated agents,
-audit trail) stays in the worktree. Override with `ETHOS_REPO_ROOT`.
+Ethos resolves the canonical store root **S** through Git's common directory,
+separately from the invoking checkout **C**. Missions share S's record tree.
+DES-079 additionally requires all repository live logs, retained trace, locks,
+overlays, receipts, scratch and staging under `S/.punt-labs/local/ethos/`.
+Generated agents, enablement deposits, host-file edits and publication/index
+effects target C; publication copies are not another mutable mission authority.
+Removing a linked C distinct from S must preserve prompts, reflections, chunks
+and unsealed tails even without SessionEnd. Deleting S or its local data is not
+covered. Override store resolution with validated `ETHOS_REPO_ROOT`.
 
 ### Enable / Disable
 
@@ -283,10 +304,14 @@ that gate tool calls on prior reads, and delegation depth limits.
 The agent can only do what the contract authorizes.
 
 **Auditability.** Every delegation produces artifacts on disk —
-contract, delegation record, the exact dispatch prompt, a
-per-tool-call audit trail tagged with the delegation ID, and
-`Mission:`/`Delegation:` git trailers on commits. `git blame` any
-line → commit → trailer → contract → prompt → audit trail.
+contract, results, delegation records, the exact dispatch prompt and a
+per-tool-call trail tagged with the delegation ID. DES-079 requires shared
+compact round decisions and corrections, retained local detail, and explicit
+complete blame publication. A blame-only clone must retain demonstrable
+attribution after the supported squash route, without depending on another
+machine's archive. Full export explicitly shares one mission's retained trace,
+including its unsealed tail, but excludes session audits, agent artifacts and
+transcripts. Publication and full-export acceptance remain pending.
 
 **Performance.** Named specialist agents with encapsulated domain
 expertise — a Go specialist grounded in Kernighan's principles, a
@@ -319,6 +344,7 @@ markdown cannot represent it).
 | [Enable / Disable](docs/enable-disable.md) | Per-repo enable/disable, hook chaining, `ethos doctor` |
 | [Audited Delegation](docs/audited-delegation.md) | Tier A/B dispatch, claim/release, audit trail, git trailers |
 | [Traceability Data Assets](docs/traceability-data-assets.md) | Every artifact ethos produces, organized by scope |
+| [Storage and Publication Contract](docs/storage-layout.md) | DES-079 S/C ownership, decisions, mode switches, publication/export and pending acceptance; supersedes older path claims |
 | [Traceability Use Cases](docs/traceability-use-cases.md) | 10 forensic/compliance scenarios with query paths |
 | [Archetypes and Pipelines](docs/archetypes-and-pipelines.md) | Mission templates and multi-stage workflows |
 | [Architecture](docs/architecture.tex) | System design (LaTeX) |

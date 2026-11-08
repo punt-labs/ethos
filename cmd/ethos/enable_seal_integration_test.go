@@ -16,7 +16,7 @@ import (
 // chained pre-commit hook with the built ethos binary on PATH and asserts the
 // seal's observable effect at each phase of the enable/disable lifecycle.
 //
-//	enabled + commit   → live audit lines seal into a tracked chunk
+//	enabled + commit   → live audit lines seal into a retained local chunk
 //	disabled + commit  → no new chunk, and the foreign host hook still runs
 //	re-enabled + commit → the lines stranded while disabled seal on the next
 //	                      commit (the seal unions the live tail past the
@@ -71,7 +71,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sealedGlob := filepath.Join(se.repo, ".punt-labs", "ethos", "sessions", "*", "audit-*.jsonl")
+	sealedGlob := filepath.Join(se.repo, ".punt-labs", "local", "ethos", "trace", "sessions", "*", "audit-*.jsonl")
 
 	// --- Phase 1: enabled + commit → the two live lines seal. ---
 	if _, stderr, code := runCLI(t, se, "enable"); code != 0 {
@@ -84,6 +84,9 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 	afterSeal := countGlob(t, sealedGlob)
 	if afterSeal != 1 {
 		t.Fatalf("sealed chunks after an enabled commit = %d, want 1 — the seal did not fire", afterSeal)
+	}
+	if got := countGlob(t, filepath.Join(se.repo, ".punt-labs", "ethos", "sessions", "*", "audit-*.jsonl")); got != 0 {
+		t.Fatalf("default-blame commit published %d audit chunks, want none", got)
 	}
 
 	// --- Phase 2: disabled + commit → no new chunk, host hook still runs. ---
@@ -115,8 +118,7 @@ func TestCLI_SealLifecycleAcrossEnableDisable(t *testing.T) {
 }
 
 // commit stages fileName with content and commits, requiring exit 0. The
-// pre-commit hook runs before git snapshots the index, so any chunk the seal
-// git-adds lands in this same commit.
+// pre-commit hook archives locally before Git snapshots the index.
 func commit(t *testing.T, repo string, env []string, fileName, content, msg string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repo, fileName), []byte(content), 0o644); err != nil {
