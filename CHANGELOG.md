@@ -260,6 +260,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Clear 1 open Dependabot alert (high, GHSA-7hp6-4w63-5g45) by bumping the
+  E2E harness pin `litellm[proxy]` 1.99.0 → 1.100.4 in `tests/e2e/pyproject.toml`
+  and `tests/e2e/uv.lock` (E2E harness only; the Go binary is unaffected).
+
 - **Mission records and audit lines are redacted before they reach disk
   (DES-080, ethos-3e3f).** Contracts, results, reflections, delegation
   records and prompts, the mission event log, `missions.jsonl`, plain
