@@ -136,7 +136,7 @@ func runFindMissions(out, errOut io.Writer) error {
 	case "table":
 		return renderFindTable(out, traces)
 	case "paths":
-		return renderFindPaths(out, repoRoot, traces)
+		return renderFindPaths(out, errOut, repoRoot, traces)
 	}
 	return nil
 }
@@ -205,10 +205,18 @@ func renderFindTable(out io.Writer, traces []mission.TraceSummary) error {
 	return nil
 }
 
-// renderFindPaths writes one mission directory path per line.
-func renderFindPaths(out io.Writer, repoRoot string, traces []mission.TraceSummary) error {
+// renderFindPaths writes one mission directory path per line. The index is a
+// historical summary and can list missions whose directory was purged; those
+// are reported on errOut and omitted, so a consumer piping the paths never
+// receives one that does not exist.
+func renderFindPaths(out, errOut io.Writer, repoRoot string, traces []mission.TraceSummary) error {
 	for _, ts := range traces {
 		dir := mission.RepoStatePath(repoRoot, "missions", ts.ID)
+		fi, err := os.Stat(dir)
+		if err != nil || !fi.IsDir() {
+			fmt.Fprintf(errOut, "ethos: find missions: %s: mission directory not found (index entry retained)\n", ts.ID)
+			continue
+		}
 		fmt.Fprintln(out, dir)
 	}
 	return nil

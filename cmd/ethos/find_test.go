@@ -220,7 +220,11 @@ func TestFindMissions_FormatTable(t *testing.T) {
 
 func TestFindMissions_FormatPaths(t *testing.T) {
 	_, repo := findMissionsEnv(t)
-	seedMissionsJSONL(t, repo, sampleTraces())
+	traces := sampleTraces()
+	seedMissionsJSONL(t, repo, traces)
+	for _, ts := range traces {
+		require.NoError(t, os.MkdirAll(mission.RepoStatePath(repo, "missions", ts.ID), 0o700))
+	}
 
 	stdout, _, err := execHandler(t, "find", "missions", "--format", "paths")
 	require.NoError(t, err)
@@ -232,6 +236,20 @@ func TestFindMissions_FormatPaths(t *testing.T) {
 			"path should start with repo root: %s", line)
 		assert.Contains(t, line, ".punt-labs/ethos/missions/m-")
 	}
+}
+
+func TestFindMissions_FormatPathsOmitsPurgedDirs(t *testing.T) {
+	_, repo := findMissionsEnv(t)
+	traces := sampleTraces()[:2]
+	seedMissionsJSONL(t, repo, traces)
+	kept := mission.RepoStatePath(repo, "missions", traces[0].ID)
+	require.NoError(t, os.MkdirAll(kept, 0o700))
+
+	stdout, stderr, err := execHandler(t, "find", "missions", "--format", "paths")
+	require.NoError(t, err)
+	assert.Equal(t, []string{kept}, splitNonEmpty(stdout))
+	assert.Contains(t, stderr, "ethos: find missions: "+traces[1].ID+": mission directory not found (index entry retained)")
+	assert.NotContains(t, stderr, traces[0].ID)
 }
 
 func TestFindMissions_EmptyFile(t *testing.T) {

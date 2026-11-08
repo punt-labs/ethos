@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `ethos find missions --format paths` omits missions whose directory was purged and reports each on stderr; `json` and `table` still list them.
+
 ## [4.21.0] - 2026-11-07
 
 ### Added
