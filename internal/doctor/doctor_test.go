@@ -1632,6 +1632,40 @@ func TestCheckHookCurrencyOneByteDriftIsStale(t *testing.T) {
 	assert.Contains(t, r.Detail, "current sha256:")
 }
 
+// TestCheckHookCurrencyStaleSeverity: a stale section of a hook whose staleness
+// can block commits (the seal hook) is FAIL with the commit-blocking remedy; a
+// stale section of any other hook stays WARN.
+func TestCheckHookCurrencyStaleSeverity(t *testing.T) {
+	pre421Seal := []byte("#!/bin/sh\n# " + hooks.SealIdent + "\nethos audit seal || exit 2\n")
+	pre415 := []byte("#!/bin/sh\n# " + hooks.TrailerIdent + "\n" + pre415TrailerLoop)
+	tests := []struct {
+		name       string
+		spec       HookSpec
+		file       string
+		stale      []byte
+		wantStatus string
+		wantDetail string
+	}{
+		{"seal is FAIL", sealHookSpec, "pre-commit", pre421Seal, "FAIL",
+			"stale section may block commits — run `ethos enable` (SessionStart also refreshes it)"},
+		{"trailer stays WARN", trailerHookSpec, "commit-msg", pre415, "WARN",
+			"run `ethos enable` to refresh"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := currencyRepo(t)
+			hookPath := filepath.Join(dir, ".git", "hooks", tt.file)
+			_, err := githook.Chain(hookPath, tt.stale, tt.spec.Tag, tt.spec.Ident)
+			require.NoError(t, err)
+
+			r := CheckHookCurrency(dir, tt.spec)
+			assert.Equal(t, tt.wantStatus, r.Status, "detail: %s", r.Detail)
+			assert.Contains(t, r.Detail, tt.wantDetail)
+			assert.Contains(t, r.Detail, "differs from what this ethos build would install")
+		})
+	}
+}
+
 // pre415TrailerLoop is the pre-#415 commit-msg session-resolution loop,
 // quoted verbatim from docs/design-hook-drift-detection.md's Problem
 // section: the reverse-sort fallback PR #415 (5b80bff, merged 2026-07-31)

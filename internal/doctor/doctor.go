@@ -1031,6 +1031,10 @@ type HookSpec struct {
 	// passed as $1 in the sandbox — the commit-msg hook refuses to do
 	// anything without one.
 	NeedsMsgArg bool
+	// StaleBlocksCommit marks a hook whose stale section can stop commits (the
+	// seal hook: an old section made commits fail on legacy audit data). A stale
+	// section of such a hook is FAIL; for the others it stays WARN.
+	StaleBlocksCommit bool
 }
 
 // hookSpecs is every hook doctor verifies, one per layout.HookNames entry.
@@ -1044,6 +1048,8 @@ var sealHookSpec = HookSpec{
 	Ident:      hooks.SealIdent,
 	Canonical:  hooks.PreCommit,
 	InvokeArgs: []string{"audit", "seal"},
+
+	StaleBlocksCommit: true,
 }
 
 var trailerHookSpec = HookSpec{
@@ -1160,6 +1166,11 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	if installedDigest == expectedDigest {
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf(
 			"%s section matches this ethos build (sha256:%s)", spec.Name, shortHex(installedDigest))}
+	}
+	if spec.StaleBlocksCommit {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+			"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — stale section may block commits — run `ethos enable` (SessionStart also refreshes it)",
+			spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 	}
 	return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
 		"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — run `ethos enable` to refresh",
