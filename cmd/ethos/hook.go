@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -135,16 +137,30 @@ func init() {
 	rootCmd.AddCommand(hookCmd)
 }
 
+// refreshGitHooks adapts enable.RefreshHooksTo to the SessionStart dependency:
+// it returns the names of the hooks whose sections were rewritten.
+func refreshGitHooks(checkout, store string) ([]string, error) {
+	rep, err := enable.RefreshHooksTo(checkout, store)
+	var names []string
+	if rep != nil {
+		for _, st := range rep.Steps {
+			names = append(names, strings.TrimPrefix(st.Step, "hook:"))
+		}
+	}
+	return names, err
+}
+
 func runHookSessionStart() error {
 	loc := currentRoots().Located
 	is := identityStore()
 	deps := hook.SessionStartDeps{
-		Located:  &loc,
-		Store:    is,
-		Sessions: sessionStore(),
-		Teams:    layeredTeamStore(is),
-		Roles:    layeredRoleStore(is),
-		Issue:    currentRoots().configIssue(),
+		Located:      &loc,
+		Store:        is,
+		Sessions:     sessionStore(),
+		Teams:        layeredTeamStore(is),
+		Roles:        layeredRoleStore(is),
+		Issue:        currentRoots().configIssue(),
+		RefreshHooks: refreshGitHooks,
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)

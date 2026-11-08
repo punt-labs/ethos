@@ -43,6 +43,11 @@ type SessionStartDeps struct {
 	// Issue is why the repository's bundle or policy could not be honoured, if
 	// so (bundle.ConfigIssue): the session is told in its systemMessage.
 	Issue error
+	// RefreshHooks re-chains git hook sections that differ from this build and
+	// returns the names of the hooks it rewrote (checkout, store: the roots).
+	// Nil disables the refresh. It runs only in a located repository; an error
+	// is reported on stderr and never fails the session.
+	RefreshHooks func(checkout, store string) ([]string, error)
 }
 
 // HandleSessionStart reads the SessionStart hook payload from stdin,
@@ -107,6 +112,12 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
+	}
+	if refreshed := refreshStaleHooks(deps.RefreshHooks, storeFailure, loc); refreshed != "" {
+		if note != "" {
+			note += " "
+		}
+		note += refreshed
 	}
 	agentPersona := ""
 	if storeFailure == nil && loc.Config != nil {
@@ -205,6 +216,27 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 
 	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
+}
+
+// refreshStaleHooks runs refresh for the located repository and returns the
+// sentence telling the session which hook sections it rewrote; "" when none
+// were stale, when refresh is nil, or when the repository was not located. A
+// stale seal section can block every commit, so a refresh is worth saying; a
+// failure goes to stderr only, because a session must start regardless.
+func refreshStaleHooks(refresh func(checkout, store string) ([]string, error), storeFailure error, loc resolve.Located) string {
+	if refresh == nil || storeFailure != nil || loc.Checkout == "" || loc.Store == "" {
+		return ""
+	}
+	names, err := refresh(loc.Checkout, loc.Store)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: refreshing git hook sections: %v\n", err)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	list := strings.Join(names, ", ")
+	fmt.Fprintf(os.Stderr, "ethos: session-start: refreshed stale git hook section(s): %s\n", list)
+	return fmt.Sprintf("Ethos refreshed stale git hook section(s) at session start: %s.", list)
 }
 
 // planSessionAgents resolves bundle skills using the same config that selected

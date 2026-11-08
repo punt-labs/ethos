@@ -862,3 +862,62 @@ func TestHandleSessionStart_FailuresReachAdditionalContext(t *testing.T) {
 		assert.Contains(t, out, `agent identity \"ghost\" could not be loaded`)
 	})
 }
+
+func TestHandleSessionStart_RefreshHooks(t *testing.T) {
+	setup := func(t *testing.T) (*identity.Store, *session.Store) {
+		dir := t.TempDir()
+		repoRoot := t.TempDir()
+		testhelpers.MakeGitDir(t, repoRoot)
+		t.Chdir(repoRoot)
+		isolateGitConfig(t, "test-human")
+		return identity.NewStore(dir), session.NewStore(dir)
+	}
+	tests := []struct {
+		name        string
+		refresh     func(checkout, store string) ([]string, error)
+		wantContext string
+		wantNone    bool
+		wantErr     bool
+	}{
+		{
+			name:        "stale sections are reported to the session",
+			refresh:     func(_, _ string) ([]string, error) { return []string{"pre-commit"}, nil },
+			wantContext: "refreshed stale git hook section(s) at session start: pre-commit",
+		},
+		{
+			name:     "current sections say nothing",
+			refresh:  func(_, _ string) ([]string, error) { return nil, nil },
+			wantNone: true,
+		},
+		{
+			name:     "refresh error never fails the session",
+			refresh:  func(_, _ string) ([]string, error) { return nil, errors.New("boom") },
+			wantNone: true,
+		},
+		{
+			name:     "nil dependency disables the refresh",
+			refresh:  nil,
+			wantNone: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, ss := setup(t)
+			var calls int
+			refresh := tt.refresh
+			if refresh != nil {
+				inner := refresh
+				refresh = func(c, st string) ([]string, error) { calls++; return inner(c, st) }
+			}
+			out := captureSessionStartOutput(t, `{"session_id":"s-refresh"}`, SessionStartDeps{Store: s, Sessions: ss, RefreshHooks: refresh})
+			if tt.refresh != nil {
+				assert.Equal(t, 1, calls)
+			}
+			if tt.wantNone {
+				assert.NotContains(t, out, "refreshed stale git hook")
+				return
+			}
+			assert.Contains(t, out, tt.wantContext)
+		})
+	}
+}
