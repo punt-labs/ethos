@@ -149,6 +149,29 @@ func TestReadWithTimeout_OpenPipeWithData(t *testing.T) {
 		"should return as soon as data is read, not wait for timeout")
 }
 
+// ReadFromFile is what drainAuditStdin delegates to. A payload past one 64KiB
+// read, written in pieces to a pipe left open, must come back whole: the single
+// Read it replaced truncated at 65536 bytes and the entry parsed as invalid.
+func TestReadFromFile_LargePayloadNotTruncated(t *testing.T) {
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	defer wFd.Close()
+	payload := bigPayload(t)
+	require.Greater(t, len(payload), 65536)
+	go writeSlowly(wFd, payload)
+
+	const timeout = 10 * time.Second
+	start := time.Now()
+	data, err := ReadFromFile(rFd, timeout)
+	require.NoError(t, err)
+	assert.Equal(t, len(payload), len(data), "the whole payload is read, not truncated at 65536 bytes")
+	parsed, err := parseJSON(data)
+	require.NoError(t, err, "the full payload parses as JSON")
+	assert.Equal(t, "Edit", parsed["tool_name"])
+	assert.Less(t, time.Since(start), timeout/2, "returns when the payload is whole, not at the timeout")
+}
+
 func TestReadInput_NestedJSON(t *testing.T) {
 	r := bytes.NewReader([]byte(`{"tool_input": {"command": "ls"}, "tool_name": "Bash"}`))
 	data, err := ReadInput(r, 100*time.Millisecond)

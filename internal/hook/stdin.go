@@ -59,6 +59,16 @@ func readRaw(r io.Reader, timeout time.Duration) ([]byte, error) {
 	return data, nil
 }
 
+// ReadFromFile reads a hook payload from an open file, typically os.Stdin,
+// with a timeout and returns the raw bytes. It accumulates reads until the
+// buffer holds one complete JSON object, the file reaches EOF, or the timeout
+// fires, so a payload larger than one 64KiB read is read in full and an open
+// pipe the writer never closes does not block the process. On timeout it
+// returns the bytes read so far wrapped in ErrInputTimeout.
+func ReadFromFile(f *os.File, timeout time.Duration) ([]byte, error) {
+	return readFromFile(f, timeout)
+}
+
 // readFromFile reads from an *os.File using SetReadDeadline to avoid
 // blocking forever when Claude Code leaves the pipe open.
 func readFromFile(f *os.File, timeout time.Duration) ([]byte, error) {

@@ -368,73 +368,21 @@ func writeAuditLog(sessionsDir string) error {
 
 // drainAuditStdin reads the hook payload bytes from os.Stdin with a
 // short deadline so an open pipe without EOF (the shape Claude Code
-// produces) does not block the process. Returns an empty slice on
-// every failure mode — the caller routes empty input through the
-// unlocked legacy HandleAuditLog path.
+// produces) does not block the process. It delegates to the hook
+// package's reader, which accumulates reads until the buffer holds one
+// complete JSON object, EOF arrives, or the timeout fires — so a payload
+// larger than one 64KiB read (every Edit of a large file) is read in
+// full rather than truncated to 65536 bytes. Returns the bytes read so
+// far on timeout or error; the caller routes an empty or unparseable
+// payload through the unlocked legacy HandleAuditLog path, which surfaces
+// the failure on stderr rather than dropping it silently here.
 func drainAuditStdin() []byte {
-	if err := os.Stdin.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		// Deadlines unsupported (Linux pipes that the parent did
-		// not close) — race a single Read of a 64KiB buffer against
-		// a 1-second timer so we do not block on an open pipe.
-		//
-		// Single-Read truncates payloads larger than 64KiB on this
-		// platform path; a loop here would block in producers that
-		// never close the writer (the subprocess test exercise this
-		// shape — see TestSubprocess_AuditLog). Multi-chunk fallback
-		// without a per-read deadline is a deferred follow-up
-		// (Copilot on PR #327).
-		//
-		// On timeout (the 1-second outer case) the goroutine
-		// remains blocked on os.Stdin.Read; the parent hook process
-		// is single-shot per audit-log invocation and exits within
-		// seconds of this function returning, so the goroutine is
-		// cleaned up at process teardown. The leak is bounded by
-		// process lifetime, not a per-call accumulation (Bugbot LOW
-		// on PR #327).
-		ch := make(chan []byte, 1)
-		go func() {
-			buf := make([]byte, 65536)
-			n, err := os.Stdin.Read(buf)
-			if err != nil && !errors.Is(err, io.EOF) {
-				fmt.Fprintf(os.Stderr,
-					"ethos: audit-log: stdin read error: %v\n", err)
-			}
-			ch <- buf[:n]
-		}()
-		select {
-		case b := <-ch:
-			return b
-		case <-time.After(time.Second):
-			return nil
-		}
+	data, err := hook.ReadFromFile(os.Stdin, time.Second)
+	if err != nil && !errors.Is(err, hook.ErrInputTimeout) {
+		fmt.Fprintf(os.Stderr,
+			"ethos: audit-log: stdin read error: %v\n", err)
 	}
-	defer os.Stdin.SetReadDeadline(time.Time{}) //nolint:errcheck
-	var buf []byte
-	chunk := make([]byte, 65536)
-	for {
-		n, err := os.Stdin.Read(chunk)
-		if n > 0 {
-			buf = append(buf, chunk[:n]...)
-			if sdErr := os.Stdin.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); sdErr != nil {
-				break
-			}
-		}
-		if err != nil {
-			// EOF and deadline-exceeded are both normal terminators —
-			// silent. The Claude Code hook protocol leaves the pipe open
-			// without EOF, so the per-chunk SetReadDeadline above is the
-			// expected termination signal once the producer goes idle.
-			// Any other error (EBADF, EIO) is a real failure that should
-			// be visible on stderr so the operator can correlate a
-			// truncated audit entry with the underlying fault.
-			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrDeadlineExceeded) {
-				fmt.Fprintf(os.Stderr,
-					"ethos: audit-log: stdin read error: %v\n", err)
-			}
-			break
-		}
-	}
-	return buf
+	return data
 }
 
 // peekSessionID extracts session_id from a JSON-encoded audit hook
