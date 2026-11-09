@@ -379,6 +379,7 @@ dist: clean ## Cross-compile for all platforms
 # "fix" into an actual break in either direction, so the prose moves up
 # here as ordinary Make comments and the recipe body keeps only
 # executable statements.
+# The fetches retry HTTP 5xx from the release CDN for up to five minutes (10 attempts, 10s apart); --retry-all-errors needs curl 7.71+ (ubuntu-latest and macos-latest runners are newer).
 tools: ## Install development tools
 	@if [ -z "$(GOBIN)" ]; then \
 	  echo "error: could not determine GOBIN — is Go installed and on PATH? ('go env GOBIN' and 'go env GOPATH' both came back empty)" >&2; \
@@ -403,8 +404,8 @@ tools: ## Install development tools
 	tmpdir=$$(mktemp -d "$${TMPDIR:-/tmp}/ethos-tools.XXXXXXXXXX"); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
-	curl -sSfL -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
-	curl -sSfL -o "$$tmpdir/$$checksums" "$$base/$$checksums"; \
+	curl -sSfL --retry 10 --retry-delay 10 --retry-max-time 300 --retry-all-errors -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
+	curl -sSfL --retry 10 --retry-delay 10 --retry-max-time 300 --retry-all-errors -o "$$tmpdir/$$checksums" "$$base/$$checksums"; \
 	line=$$(awk -v n="$$tarball" '$$2 == n {print}' "$$tmpdir/$$checksums" || true); \
 	count=$$(printf '%s\n' "$$line" | grep -c . || true); \
 	if [ "$$count" -ne 1 ]; then \
