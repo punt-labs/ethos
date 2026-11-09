@@ -57,14 +57,35 @@ func oldBinDir(t *testing.T, rev string) string {
 	require.NotNil(t, b, "unknown old revision %s", rev)
 	b.once.Do(func() { b.dir, b.err = buildAt(rev) })
 	if b.err != nil {
-		t.Skipf("cannot build the binary at %s (a shallow clone has no such commit): %v", rev, b.err)
+		missingHistory(t, "cannot build the binary at "+rev, b.err)
 	}
 	return b.dir
 }
 
+// missingHistory reports that the old revisions are unavailable. Locally that
+// is a skip, since a shallow clone has no such commit. In CI the test job
+// fetches full history, so it is a failure: these cases carry the fail-closed
+// ruling and must not quietly stop running.
+func missingHistory(t *testing.T, what string, err error) {
+	t.Helper()
+	if os.Getenv("CI") != "" {
+		t.Fatalf("%s: %v (CI must fetch full history)", what, err)
+	}
+	t.Skipf("%s (a shallow clone lacks it): %v", what, err)
+}
+
+// removeOldBuilds deletes the old binaries after the last test. They are built
+// once per test binary, so no single test owns their lifetime.
+func removeOldBuilds() {
+	for _, b := range oldBuilds {
+		if b.dir != "" {
+			_ = os.RemoveAll(b.dir)
+		}
+	}
+}
+
 // buildAt builds ./cmd/ethos as it was at rev and returns the directory holding
-// the binary. The directory is left for the OS to reap: it must outlive any one
-// test, and a package-level once has no test to own it.
+// the binary.
 func buildAt(rev string) (string, error) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -305,7 +326,7 @@ func TestShimOldCopiedSectionStillWorksAndRefreshRewritesIt(t *testing.T) {
 		show := testhelpers.GitCommand("-C", mustAbs(t, "../.."), "show", oldBinaryRev+":plugin/hooks/"+file)
 		oldText, err := show.Output()
 		if err != nil {
-			t.Skipf("no %s in this clone: %v", oldBinaryRev, err)
+			missingHistory(t, "no "+oldBinaryRev+":plugin/hooks/"+file, err)
 		}
 		section := fmt.Sprintf("#!/bin/sh\n# --- BEGIN %s ---\n%s# --- END %s ---\n", tagFor(name), stripShebang(string(oldText)), tagFor(name))
 		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, name), []byte(section), 0o755))

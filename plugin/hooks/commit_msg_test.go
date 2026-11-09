@@ -39,6 +39,7 @@ func TestMain(m *testing.M) {
 	if ethosDir != "" {
 		_ = os.RemoveAll(ethosDir)
 	}
+	removeOldBuilds()
 	os.Exit(code)
 }
 
