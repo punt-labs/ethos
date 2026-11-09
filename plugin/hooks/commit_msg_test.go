@@ -3,6 +3,7 @@
 package hooks
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -334,14 +335,12 @@ func TestCommitMsgHook_ResolvesCommittingSession(t *testing.T) {
 	}
 }
 
-// TestCommitMsgHook_OldBinaryPrintsHelp pins the version-skew hole
-// rsc found: an ethos predating `hook commit-trailers` answers the
-// unknown subcommand by printing the hook group's HELP on stdout and
-// exiting 0. The `||` fallback never fires, no KEY=value line is
-// found, and the trailer disappears without a word — the silent drop
-// the fallback exists to prevent. The hook must recognize help-shaped
-// output as failure and say so.
-func TestCommitMsgHook_OldBinaryPrintsHelp(t *testing.T) {
+// TestCommitMsgHook_OldBinaryBlocks pins the version-skew case. An ethos
+// predating `hook commit-msg` rejects the unknown subcommand (a usage
+// error), and answers --help with the hook group's help, which does not
+// name it. The shim must block the commit (exit 2) and name the remedy,
+// never pass with the trailer silently missing.
+func TestCommitMsgHook_OldBinaryBlocks(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not found on PATH; skipping")
 	}
@@ -349,9 +348,12 @@ func TestCommitMsgHook_OldBinaryPrintsHelp(t *testing.T) {
 	home := t.TempDir()
 	stageSession(t, home, sessionID, "m-2026-07-29-007", "d-2026-07-29-042")
 
-	// A stub standing in for the old binary: help on stdout, exit 0.
+	// A stub standing in for the old binary: it rejects the subcommand, and
+	// its --help is the group's help.
 	binDir := t.TempDir()
 	writeFile(t, filepath.Join(binDir, "ethos"), `#!/bin/sh
+case "$*" in
+*--help*)
 cat <<'HELP'
 Internal hook dispatcher (not for direct use)
 
@@ -361,7 +363,10 @@ Usage:
 Available Commands:
   audit-log       PostToolUse audit logger
 HELP
-exit 0
+exit 0 ;;
+esac
+echo 'ethos: unknown command "commit-msg" for "ethos hook"' >&2
+exit 2
 `)
 	if err := os.Chmod(filepath.Join(binDir, "ethos"), 0o755); err != nil {
 		t.Fatal(err)
@@ -384,8 +389,9 @@ exit 0
 	cmd.Dir = repo
 	cmd.Env = hookEnv(home, binDir, sessionID)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("hook failed: %v\n%s", err, out)
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("an old binary must block with exit 2, got %v\n%s", err, out)
 	}
 
 	data, err := os.ReadFile(msgFile)
@@ -396,8 +402,8 @@ exit 0
 	if strings.Contains(msg, "Mission: ") || strings.Contains(msg, "Usage:") {
 		t.Errorf("help output must not reach the commit message:\n%s", msg)
 	}
-	if !strings.Contains(string(out), "does not support") {
-		t.Errorf("the version mismatch must be reported, got:\n%s", out)
+	if !strings.Contains(string(out), "upgrade ethos: make install") {
+		t.Errorf("the version mismatch must name the remedy, got:\n%s", out)
 	}
 }
 
@@ -633,7 +639,7 @@ func TestEnabledInstalledCommitMessageRenderWriteFailure(t *testing.T) {
 	// write supplies the in-memory original to Git's stdin. A failed pipe write
 	// must be reported rather than installing partial output or plain-appending.
 	// Git's stdout, the shell root probe and session lookup are not faulted.
-	wrapper := "#!/bin/sh\nif [ \"$1 $2\" = 'hook commit-message' ]; then\nexec '" + strace + "' -f -b execve -o '" + trace + "' -e trace=write,fsync,renameat -e inject=write:error=ENOSPC:when=1 '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\nfi\nexec '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\n"
+	wrapper := "#!/bin/sh\nif [ \"$1 $2\" = 'hook commit-msg' ]; then\nexec '" + strace + "' -f -b execve -o '" + trace + "' -e trace=write,fsync,renameat -e inject=write:error=ENOSPC:when=1 '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\nfi\nexec '" + filepath.Join(ethosBinDir(t), "ethos") + "' \"$@\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(wrapper), 0o700))
 	msg := filepath.Join(checkout, "MSG")
 	writeFile(t, msg, "original bytes\n")

@@ -74,7 +74,7 @@ func TestProvenanceCLIVerifiesActualPartialCommitIndex(t *testing.T) {
 	hook := publicationGitCLI(t, se, "rev-parse", "--path-format=absolute", "--git-path", "hooks/pre-commit")
 	hookData, err := os.ReadFile(hook)
 	require.NoError(t, err)
-	require.Contains(t, string(hookData), "provenance verify-index --staged")
+	require.Contains(t, string(hookData), "hook pre-commit")
 	assert.FileExists(t, filepath.Join(se.repo, ".punt-labs", "ethos", "enabled"))
 	require.NoError(t, os.WriteFile(filepath.Join(se.repo, "only.txt"), []byte("unrelated source\n"), 0o600))
 	publicationGitCLI(t, se, "add", "only.txt")

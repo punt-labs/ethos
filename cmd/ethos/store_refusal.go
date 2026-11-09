@@ -88,6 +88,9 @@ var storeUses = map[string]storeUse{
 	"ethos hook session-end": storeHandlesError, "ethos hook session-start": storeHandlesError,
 	"ethos hook subagent-start": storeHandlesError, "ethos hook subagent-stop": storeHandlesError,
 	"ethos hook commit-message": storeRefuses,
+	// The shim subcommands report store failures themselves: pre-commit as
+	// audit seal does (exit 2), commit-msg when it has a trailer to write.
+	"ethos hook pre-commit": storeHandlesError, "ethos hook commit-msg": storeHandlesError,
 
 	"ethos adr create": storeRefuses, "ethos create": storeRefuses, "ethos export": storeRefuses,
 	"ethos adr list": storeRefuses, "ethos adr show": storeRefuses,

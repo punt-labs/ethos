@@ -76,7 +76,8 @@ func TestPreCommitSealsDespiteRevParseStderrNoise(t *testing.T) {
 }
 
 // When git interpret-trailers fails, commit-msg prints git's error and exits
-// 1: the trailer is never silently replaced by a plain append.
+// 2 (the shim maps any binary failure to ethos's blocked code): the trailer is
+// never silently replaced by a plain append.
 func TestCommitMsgInterpretTrailersFailureBlocks(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-q")
@@ -102,8 +103,9 @@ exec "$REAL_GIT" "$@"
 	err = cmd.Run()
 	var ee *exec.ExitError
 	require.ErrorAs(t, err, &ee)
-	assert.Equal(t, 1, ee.ExitCode())
+	assert.Equal(t, 2, ee.ExitCode())
 	assert.Contains(t, stderr.String(), "interpret-trailers exploded")
+	assert.NotContains(t, stderr.String(), "upgrade ethos", "a current binary's failure is not a version mismatch")
 	got, rerr := os.ReadFile(msg)
 	require.NoError(t, rerr)
 	assert.Equal(t, "subject\n", string(got), "no trailer was appended behind git's back")
@@ -182,7 +184,11 @@ exit 2
 	// without replacing the message. Actual write/EXDEV injections live in the
 	// installed-helper tests in commit_msg_test.go.
 	helper := `#!/bin/sh
-if [ "$#" -ne 3 ] || [ "$1 $2" != 'hook commit-message' ] || [ "$3" != "$MESSAGE_FILE" ]; then
+if [ "$1 $2 $3" = 'hook commit-msg --help' ]; then
+  echo "  ethos hook commit-msg <message-file>"
+  exit 0
+fi
+if [ "$#" -ne 3 ] || [ "$1 $2" != 'hook commit-msg' ] || [ "$3" != "$MESSAGE_FILE" ]; then
   echo "unexpected ethos invocation" >&2
   exit 2
 fi
@@ -199,7 +205,7 @@ exit 1
 	err := cmd.Run()
 	var ee *exec.ExitError
 	require.ErrorAs(t, err, &ee, stderr.String())
-	assert.Equal(t, 1, ee.ExitCode())
+	assert.Equal(t, 2, ee.ExitCode())
 	assert.Contains(t, stderr.String(), "staging commit message: injected staging refusal")
 	assert.NotContains(t, stderr.String(), "interpret-trailers failed")
 	got, err := os.ReadFile(msg)
@@ -283,7 +289,7 @@ func TestHooksBlockOnAnUnreadableStorePath(t *testing.T) {
 			out, err := run("commit", "-m", "x")
 			require.Error(t, err, "the commit is blocked: %s", out)
 			assert.Contains(t, out, ".punt-labs")
-			assert.True(t, strings.Contains(out, "dangling link") || strings.Contains(out, "not a directory") || strings.Contains(out, "not a regular file") || strings.Contains(out, "cannot be read"), out)
+			assert.True(t, strings.Contains(out, "dangling link") || strings.Contains(out, "not a directory") || strings.Contains(out, "not a regular file") || strings.Contains(out, "not a readable directory"), out)
 		})
 	}
 	t.Run("really absent is dormant", func(t *testing.T) {
@@ -360,14 +366,13 @@ func TestHooksIgnoreATraceOnStdout(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(setup.cfg), 0o644))
 			}
 			marker := filepath.Join(t.TempDir(), "sealed")
-			// Stub sealing and session discovery, but let the real message helper
-			// render and install trailers under the caller's trace configuration.
+			// Stub the pre-commit policy, but let the real commit-msg subcommand
+			// render and install trailers under the caller's trace configuration:
+			// the shim no longer shields the binary's own git calls from it.
 			ethos := `#!/bin/sh
 case "$1 $2" in
-'audit seal') echo sealed >> '` + marker + `';;
-'provenance verify-index') ;;
-'hook commit-trailers') echo MISSION_ID=m-2026-01-01-001;;
-'hook commit-message') exec '` + filepath.Join(ethosBinDir(t), "ethos") + `' "$@";;
+'hook pre-commit') echo sealed >> '` + marker + `';;
+'hook commit-msg') MISSION_ID=m-2026-01-01-001 exec '` + filepath.Join(ethosBinDir(t), "ethos") + `' "$@";;
 *) echo "unexpected ethos invocation" >&2; exit 2;;
 esac
 exit 0

@@ -11,13 +11,16 @@ package hooks
 import _ "embed"
 
 // PreCommit is the DES-058 audit-seal pre-commit hook, gated on the §2.7
-// enabled marker.
+// enabled marker. Since DES-083 it is a thin shim that finds the binary and
+// runs `ethos hook pre-commit`; the seal policy lives in the binary, so a
+// release changes it without rewriting any installed copy.
 //
 //go:embed pre-commit.sh
 var PreCommit []byte
 
 // CommitMsg is the DES-054 Mission/Delegation trailer commit-msg hook, gated
-// on the §2.7 enabled marker.
+// on the §2.7 enabled marker. Since DES-083 it is a thin shim that runs
+// `ethos hook commit-msg <message-file>`.
 //
 //go:embed commit-msg.sh
 var CommitMsg []byte

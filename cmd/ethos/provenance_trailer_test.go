@@ -49,7 +49,7 @@ func TestProvenanceCLIInstalledHookConfiguredTrailersSquashClone(t *testing.T) {
 			hook := publicationGitCLI(t, se, "rev-parse", "--path-format=absolute", "--git-path", "hooks/commit-msg")
 			data, err = os.ReadFile(hook)
 			require.NoError(t, err)
-			require.Contains(t, string(data), "hook commit-message")
+			require.Contains(t, string(data), "hook commit-msg")
 			publicationGitCLI(t, se, "config", "trailer.separators", "%")
 			missionKey, delegationKey := "Mission", "Delegation"
 			if aliases {

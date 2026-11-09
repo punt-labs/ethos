@@ -1,36 +1,9 @@
 #!/bin/sh
-# hooks/pre-commit.sh — Seal pending live audit lines into the local archive. Under
-# record: full, publish eligible chunks before git snapshots the index.
-#
-# --commit-context lets blame-mode archival errors warn while retaining live
-# data. Invalid configuration and full-mode failures still block with exit 2.
-# Manual audit seal/query/quarantine retain visible errors in every mode.
-# Newly staged provenance snapshots are verified after archival; incomplete
-# required publication is always blocking, never an advisory archive failure.
-#
-# Exit status on the non-failure paths (success, nothing-to-seal, gitlink
-# deferral) is the captured host status $_host_status:
-# 0 when this runs standalone (git starts the hook with $? = 0), or the host
-# hook's fall-through status when this is chained after a foreign hook. So a
-# clean seal is transparent — it never turns a host's failing fall-through
-# into a passing commit, and never blocks a commit the host would have passed.
-#
-# Passthrough when ethos is not enabled in the repo — a missing binary must
-# never block a commit in an unrelated repo. Where ethos IS enabled, a missing
-# binary blocks: the commit would carry unsealed audit lines.
-
-# Preserve a chained host hook's fall-through status. When install.sh appends
-# this script after a foreign hook's content, $? here is that hook's last
-# command status; returning it on passthrough keeps chaining from masking a
-# host hook that signals failure by fall-through. Standalone, git invokes us
-# fresh with $? = 0, so this is exit 0 as before. Captured before any command
-# runs (a later assignment would reset $?).
+# hooks/pre-commit.sh — Seal pending live audit lines into the local archive.
+# Thin shim (DES-083): finds the binary and delegates; policy lives in
+# `ethos hook pre-commit`. Passes through unless ethos is enabled here.
 _host_status=$?
-
-# _git runs git with every trace variable cleared and trace2 switched off by the
-# environment (which overrides a target set in the user's config): a trace on
-# stdout, from `trace2.normalTarget=/dev/stdout` or GIT_TRACE=/dev/stdout, would
-# otherwise become part of what the hook reads or writes.
+_hook=pre-commit
 _git() {
   (
     for _v in $(env | sed -n 's/^\(GIT_TRACE[A-Za-z0-9_]*\)=.*/\1/p'); do
@@ -42,15 +15,6 @@ _git() {
     exec git "$@"
   )
 }
-
-# Dormant fast path. git runs a hook at the top of the work tree, so the marker
-# is tested relative to the current directory first, before git runs:
-# a dormant repository is never blocked by a probe failure. The shortcut is
-# taken only when this directory has its own .git (it is a top level, so the
-# marker there is the marker that counts) and every path component is either
-# absent or a plain readable directory. Anywhere else (a hook run by hand from
-# a subdirectory, a link, an unreadable store) the full resolution below
-# decides and reports as before.
 _ethos_dormant=1
 for _component in .punt-labs .punt-labs/ethos; do
   if [ -L "$_component" ]; then
@@ -65,32 +29,13 @@ fi
 if [ -n "$_ethos_dormant" ] && [ -e .git ]; then
   exit "$_host_status"
 fi
-
-# §2.7 marker gate: ethos does no commit-time work unless it is enabled in
-# this repo. REPO_ROOT is resolved inside the hook (worktree-safe: a worktree
-# resolves to its own work-tree root, where its .punt-labs/ethos/ lives), not
-# baked in at install time. Absent marker → exit with the captured host status,
-# never a bare exit 0, so a chained host that signals failure by fall-through
-# still blocks the commit even when ethos is dormant. The gate sits before the
-# binary is ever resolved, so a dormant repo does no ethos work at commit time.
-# A git that fails here (dubious ownership, a corrupt .git) is not "ethos is
-# dormant": the hook prints git's own error and exits 1, so the commit is
-# blocked and the operator sees why, rather than skipping with the host status.
-# Capture only stdout. Git's diagnostics remain directly visible, including
-# success warnings, without polluting the root or creating temporary files.
-# Probe once: a second lookup could answer for a different repository state.
 if ! REPO_ROOT=$(_git rev-parse --show-toplevel); then
-  printf 'ethos: pre-commit: git rev-parse --show-toplevel failed\n' >&2
+  printf 'ethos: %s: git rev-parse --show-toplevel failed\n' "$_hook" >&2
   exit 1
 fi
-# The root must be one absolute line (a / path, or a Windows drive path under
-# MINGW, MSYS or CYGWIN) naming a
-# directory; anything else (a trace line that got through, a relative path) is
-# not a root to trust.
 case "$REPO_ROOT" in
 /*) ;;
 [A-Za-z]:/*)
-  # A drive path is a root only where git for Windows runs this shell.
   case "$(uname -s 2>/dev/null)" in
   MINGW* | MSYS* | CYGWIN*) ;;
   *) _revparse_bad=1 ;;
@@ -103,62 +48,46 @@ case "$REPO_ROOT" in
 "*) _revparse_bad=1 ;;
 esac
 if [ -n "${_revparse_bad:-}" ] || [ ! -d "$REPO_ROOT" ]; then
-  printf 'ethos: pre-commit: git rev-parse --show-toplevel did not print one absolute directory: %s\n' "$REPO_ROOT" >&2
+  printf 'ethos: %s: git rev-parse --show-toplevel did not print one absolute directory: %s\n' "$_hook" "$REPO_ROOT" >&2
   exit 1
 fi
-# "Marker absent" means only that every component of the path exists and the
-# marker file does not. A .punt-labs or .punt-labs/ethos that is a dangling
-# link, is not a directory, or cannot be searched is a store ethos cannot read:
-# say so and block, never treat it as dormant.
 _ethos_path="$REPO_ROOT/.punt-labs"
 for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enabled"; do
   if [ -L "$_component" ] && [ ! -e "$_component" ]; then
-    printf 'ethos: pre-commit: %s is a dangling link; repair or remove it\n' "$_component" >&2
+    printf 'ethos: %s: %s is a dangling link; repair or remove it\n' "$_hook" "$_component" >&2
     exit 1
   fi
   [ -e "$_component" ] || break
   case "$_component" in
   */enabled)
     if [ ! -f "$_component" ]; then
-      printf 'ethos: pre-commit: the enabled marker %s is not a regular file\n' "$_component" >&2
+      printf 'ethos: %s: the enabled marker %s is not a regular file\n' "$_hook" "$_component" >&2
       exit 1
     fi
     ;;
   *)
-    if [ ! -d "$_component" ]; then
-      printf 'ethos: pre-commit: %s is not a directory\n' "$_component" >&2
-      exit 1
-    fi
-    if [ ! -r "$_component" ] || [ ! -x "$_component" ]; then
-      printf 'ethos: pre-commit: %s cannot be read\n' "$_component" >&2
+    if [ ! -d "$_component" ] || [ ! -r "$_component" ] || [ ! -x "$_component" ]; then
+      printf 'ethos: %s: %s is not a readable directory\n' "$_hook" "$_component" >&2
       exit 1
     fi
     ;;
   esac
 done
 [ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
-
-# Resolve the ethos binary: PATH first, then the default install dir.
-ethos_bin=""
 if command -v ethos >/dev/null 2>&1; then
   ethos_bin="ethos"
 elif [ -x "$HOME/.local/bin/ethos" ]; then
   ethos_bin="$HOME/.local/bin/ethos"
 else
-  # Enabled here, and no binary: the commit would carry audit lines that were
-  # never sealed. Say so and block, rather than pass quietly.
-  printf 'ethos: pre-commit: ethos is enabled here but not installed; the commit is not sealed\n' >&2
+  printf 'ethos: %s: ethos is enabled here but not installed; the commit is not sealed\n' "$_hook" >&2
   exit 1
 fi
-
-# The binary validates one canonical configuration snapshot and decides which
-# failures may warn. Do not infer recording mode from ignore rules in this hook.
-if ! "$ethos_bin" audit seal --commit-context; then
-  exit 2
-fi
-# Let the binary discover only new/modified manifests in the actual committing
-# index (including Git's partial-commit GIT_INDEX_FILE), not historical manifests.
-if ! "$ethos_bin" provenance verify-index --staged; then
+if ! "$ethos_bin" hook pre-commit; then
+  # A binary that predates the subcommand answers its --help with the group
+  # help, which never names it. Say how to fix that; any other failure is
+  # policy and has already explained itself.
+  "$ethos_bin" hook pre-commit --help 2>/dev/null | grep -q 'ethos hook pre-commit' ||
+    printf 'ethos: %s: %s does not support "hook pre-commit"; upgrade ethos: make install (or run install.sh)\n' "$_hook" "$ethos_bin" >&2
   exit 2
 fi
 exit "$_host_status"

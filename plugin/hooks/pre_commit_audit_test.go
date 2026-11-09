@@ -19,32 +19,44 @@ func TestPreCommitAuditInstallerFingerprint(t *testing.T) {
 	assert.Contains(t, lines[1], SealIdent, "standalone and chained hook ownership must remain recognizable to the installer")
 }
 
-func TestPreCommitAuditCommitContextAndExit(t *testing.T) {
+// The shim makes one call, `ethos hook pre-commit`, and maps its status: a
+// failure blocks with exit 2 whatever the binary exited with, success returns
+// the captured host status. A binary that predates the subcommand fails
+// argument validation, and the shim names the remedy.
+func TestPreCommitShimDelegatesAndMapsExit(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		sealExit   string
-		verifyExit string
+		hookExit   string
 		hostExit   string
 		wantExit   int
+		wantStderr string
+		wantCalls  string
 	}{
-		{"archive warning proceeds to verifier", "0", "0", "0", 0},
-		{"archive failure stops before verifier", "1", "0", "0", 2},
-		{"publication verification failure blocks", "0", "1", "0", 2},
-		{"successful verification preserves host failure", "0", "0", "7", 7},
+		{"success", "0", "0", 0, "fixture policy note", "hook\npre-commit\n"},
+		{"policy failure blocks with 2", "2", "0", 2, "fixture policy note", "hook\npre-commit\nhook\npre-commit\n--help\n"},
+		{"internal failure blocks with 2", "1", "0", 2, "fixture policy note", "hook\npre-commit\nhook\npre-commit\n--help\n"},
+		{"success preserves host failure", "0", "7", 7, "fixture policy note", "hook\npre-commit\n"},
+		{"old binary blocks and names the remedy", "unknown", "0", 2, "upgrade ethos: make install", "hook\npre-commit\nhook\npre-commit\n--help\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, bin := t.TempDir(), t.TempDir()
 			require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o700))
 			require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o600))
 			require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nprintf '%s\\n' \"$FIXTURE_ROOT\"\n"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$FIXTURE_CALL\"\nif [ \"$1\" = audit ]; then\n  printf 'fixture retained-data warning\\n' >&2\n  exit \"$FIXTURE_SEAL_EXIT\"\nfi\nexit \"$FIXTURE_VERIFY_EXIT\"\n"), 0o700))
+			// The stub plays the new binary, which prints its help naming the
+			// subcommand, or an old one, which rejects it as an unknown command.
+			stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$FIXTURE_CALL\"\n" +
+				"if [ \"$FIXTURE_HOOK_EXIT\" = unknown ]; then\n  printf 'ethos: unknown command \"pre-commit\" for \"ethos hook\"\\n' >&2\n  exit 2\nfi\n" +
+				"case \"$*\" in *--help*) printf 'Usage:\\n  ethos hook pre-commit [flags]\\n'; exit 0 ;; esac\n" +
+				"printf 'fixture policy note\\n' >&2\nexit \"$FIXTURE_HOOK_EXIT\"\n"
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(stub), 0o700))
 			call := filepath.Join(root, "call")
 			script := filepath.Join(t.TempDir(), "pre-commit")
 			body := append([]byte("#!/bin/sh\n/bin/sh -c 'exit "+tc.hostExit+"'\n"), PreCommit...)
 			require.NoError(t, os.WriteFile(script, body, 0o700))
 			cmd := exec.Command("/bin/sh", script)
 			cmd.Dir = root
-			cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + bin + ":/usr/bin:/bin", "FIXTURE_ROOT=" + root, "FIXTURE_CALL=" + call, "FIXTURE_SEAL_EXIT=" + tc.sealExit, "FIXTURE_VERIFY_EXIT=" + tc.verifyExit}
+			cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + bin + ":/usr/bin:/bin", "FIXTURE_ROOT=" + root, "FIXTURE_CALL=" + call, "FIXTURE_HOOK_EXIT=" + tc.hookExit}
 			out, err := cmd.CombinedOutput()
 			if tc.wantExit != 0 {
 				var exit *exec.ExitError
@@ -53,14 +65,10 @@ func TestPreCommitAuditCommitContextAndExit(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			assert.Contains(t, string(out), "retained-data warning")
+			assert.Contains(t, string(out), tc.wantStderr)
 			args, err := os.ReadFile(call)
 			require.NoError(t, err)
-			want := "audit\nseal\n--commit-context\n"
-			if tc.sealExit == "0" {
-				want += "provenance\nverify-index\n--staged\n"
-			}
-			assert.Equal(t, want, string(args))
+			assert.Equal(t, tc.wantCalls, string(args))
 		})
 	}
 }
