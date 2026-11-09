@@ -15,6 +15,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          # plugin/hooks builds old binaries (93c9f82, v4.8.0) with git archive
+          # to prove the shims block an old ethos. A depth-1 clone has neither.
+          fetch-depth: 0
 
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
