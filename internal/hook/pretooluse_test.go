@@ -3297,3 +3297,20 @@ func testStoreRoot(t *testing.T) tierBRoots {
 	require.NoError(t, err)
 	return roots
 }
+
+// A payload past the input bound cannot be checked against the allowlist, so
+// the hook denies it instead of failing open.
+func TestHandlePreToolUse_InputTooLargeDenies(t *testing.T) {
+	old := maxHookInput
+	maxHookInput = 100
+	t.Cleanup(func() { maxHookInput = old })
+
+	payload := `{"tool_name":"Write","tool_input":{"file_path":"x","content":"` + strings.Repeat("a", 500) + `"}}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var res PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &res))
+	assert.Equal(t, decisionDeny, res.HookSpecificOutput.PermissionDecision)
+	assert.Contains(t, res.HookSpecificOutput.PermissionDecisionReason, "hook input too large")
+}

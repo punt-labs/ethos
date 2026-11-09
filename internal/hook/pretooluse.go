@@ -2,6 +2,7 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -140,6 +141,12 @@ func HandlePreToolUseWithLocated(r io.Reader, w io.Writer, loc resolve.Located) 
 	var input map[string]any
 	if err == nil {
 		input, err = parseJSON(raw)
+	}
+	if errors.Is(err, ErrInputTooLarge) {
+		// An oversized payload cannot be inspected, so the write-set allowlist
+		// cannot be applied to it. Deny rather than fail open.
+		return json.NewEncoder(w).Encode(preToolUseDeny(
+			"hook input too large; refusing rather than bypassing the write-set allowlist"))
 	}
 	if err != nil {
 		return refuseUnreadable(raw, w, fmt.Errorf("pre-tool-use: %w", err))
