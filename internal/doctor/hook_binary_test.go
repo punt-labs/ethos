@@ -30,7 +30,10 @@ func stubEthos(t *testing.T, body string) string {
 }
 
 func TestCheckHookBinary(t *testing.T) {
-	const knowsSubcommand = "echo 'Usage:'; echo '  ethos hook pre-commit [flags]'\n"
+	// A binary that knows both subcommands answers --help for whichever it is asked.
+	const knowsSubcommand = "echo 'Usage:'; echo \"  ethos hook $2 [flags]\"\n"
+	// A binary from before commit-msg existed: pre-commit only.
+	const onlyPreCommit = "if [ \"$2\" = pre-commit ]; then echo '  ethos hook pre-commit [flags]'; else echo '  ethos hook [command]'; fi\n"
 	const groupHelp = "echo 'Usage:'; echo '  ethos hook [command]'\n"
 
 	t.Run("not in a repo", func(t *testing.T) {
@@ -132,6 +135,16 @@ func TestCheckHookBinary(t *testing.T) {
 		t.Setenv("PATH", onPath)
 		r := CheckHookBinary(enabledRepoDir(t))
 		assert.Equal(t, "PASS", r.Status, r.Detail)
+	})
+
+	t.Run("a binary with pre-commit but not commit-msg FAILs naming commit-msg", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv("PATH", stubEthos(t, onlyPreCommit))
+		r := CheckHookBinary(enabledRepoDir(t))
+		assert.Equal(t, "FAIL", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "ethos hook commit-msg")
+		assert.NotContains(t, r.Detail, "ethos hook pre-commit`")
+		assert.Contains(t, r.Detail, "upgrade ethos")
 	})
 
 	t.Run("a binary that cannot be executed is not reported as needing an upgrade", func(t *testing.T) {

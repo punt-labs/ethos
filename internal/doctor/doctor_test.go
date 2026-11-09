@@ -1610,6 +1610,45 @@ func TestCheckHookCurrencyCRLFHostNotStale(t *testing.T) {
 	assert.Contains(t, r.Detail, "matches this ethos build")
 }
 
+// A hand-written or framework-managed hook that calls the public command the
+// shim replaced is active, not unchained: in an enabled repo it PASSes, and in a
+// dormant repo it WARNs as chained-but-not-enabled. Only a MARKER section's
+// staleness is CheckHookCurrency's byte comparison.
+func TestCheckHookPresenceAcceptsLegacyArgv(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spec  HookSpec
+		file  string
+		body  string
+		check func(string) Result
+	}{
+		{"audit seal", sealHookSpec, "pre-commit", "#!/bin/sh\nethos audit seal --commit-context || exit 2\n", CheckSealHook},
+		{"hook commit-trailers", trailerHookSpec, "commit-msg", "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n", CheckTrailerHook},
+		{"hook commit-message", trailerHookSpec, "commit-msg", "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-message \"$1\"\n", CheckTrailerHook},
+	} {
+		t.Run(tc.name+"/enabled PASSes", func(t *testing.T) {
+			dir := repoTemp(t)
+			hooksDir := filepath.Join(dir, ".git", "hooks")
+			require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(hooksDir, tc.file), []byte(tc.body), 0o755))
+			zone := filepath.Join(dir, ".punt-labs", "ethos")
+			require.NoError(t, os.MkdirAll(zone, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+			r := tc.check(dir)
+			assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		})
+		t.Run(tc.name+"/dormant WARNs", func(t *testing.T) {
+			dir := repoTemp(t)
+			hooksDir := filepath.Join(dir, ".git", "hooks")
+			require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(hooksDir, tc.file), []byte(tc.body), 0o755))
+			r := tc.check(dir)
+			assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+			assert.Contains(t, r.Detail, "chained but ethos not enabled here")
+		})
+	}
+}
+
 // TestCheckHookCurrencyShims runs CheckHookCurrency on the real DES-083 shims:
 // an installed shim is current, also behind a foreign CRLF host, and a section
 // copied before the shim existed is stale. The sha now moves only when the

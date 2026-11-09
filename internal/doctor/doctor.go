@@ -748,17 +748,22 @@ func CheckHookBinary(repoRoot string) Result {
 	// process's, so what follows is about the binary doctor resolves.
 	resolved := fmt.Sprintf("resolved via doctor's PATH to %s; git may resolve differently", bin)
 
-	ctx, cancel := context.WithTimeout(context.Background(), hookBinaryTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "hook", "pre-commit", "--help").CombinedOutput()
-	var exitErr *exec.ExitError
-	switch {
-	case ctx.Err() != nil:
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s did not answer hook pre-commit --help within %s (%s)", bin, hookBinaryTimeout, resolved)}
-	case err != nil && !errors.As(err, &exitErr):
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot run %s: %v (%s)", bin, err, resolved)}
-	case err != nil || !strings.Contains(string(out), "ethos hook pre-commit"):
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook pre-commit`, so the installed hooks block every commit — upgrade ethos: make install (%s)", bin, resolved)}
+	// Both shims must find their subcommand: a binary with one and not the other
+	// passes the pre-commit shim and blocks every commit at commit-msg.
+	for _, sub := range []string{"pre-commit", "commit-msg"} {
+		ctx, cancel := context.WithTimeout(context.Background(), hookBinaryTimeout)
+		out, err := exec.CommandContext(ctx, bin, "hook", sub, "--help").CombinedOutput()
+		timedOut := ctx.Err() != nil
+		cancel()
+		var exitErr *exec.ExitError
+		switch {
+		case timedOut:
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s did not answer hook %s --help within %s (%s)", bin, sub, hookBinaryTimeout, resolved)}
+		case err != nil && !errors.As(err, &exitErr):
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot run %s: %v (%s)", bin, err, resolved)}
+		case err != nil || !strings.Contains(string(out), "ethos hook "+sub):
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook %s`, so the installed hooks block every commit — upgrade ethos: make install (%s)", bin, sub, resolved)}
+		}
 	}
 	if onPath != "" && local != "" && !sameFile(onPath, local) {
 		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf("two ethos binaries: %s on PATH and %s in ~/.local/bin; the hooks run whichever git's PATH finds first, and only %s was checked (%s)", onPath, local, bin, resolved)}
@@ -899,7 +904,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	// variable holding the command) is invisible to both scans the same
 	// way it is invisible to every lexical scan, and still reads PASS.
 	if !markerPresent {
-		chained := statErr == nil && (hasMarkerSection(body, spec.Tag) || looksLikeInvocation(body, spec.InvokeArgs))
+		chained := statErr == nil && (hasMarkerSection(body, spec.Tag) || looksLikeInvocation(body, spec.accepted()...))
 		if chained {
 			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
 		}
@@ -938,7 +943,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	shellHook := statErr == nil && textscan.IsShellHook(body)
 	var active bool
 	if shellHook {
-		observed, err := hookInvocationObserved(body, spec.InvokeArgs, spec.NeedsMsgArg)
+		observed, err := hookInvocationObservedAny(body, spec.accepted(), spec.NeedsMsgArg)
 		if err != nil {
 			if errors.Is(err, errSandboxGitUnavailable) {
 				return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
@@ -975,7 +980,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 				// indistinguishable from one that never calls ethos at
 				// all, since only execution (unavailable on this
 				// platform) could tell them apart.
-				if !looksLikeInvocation(body, spec.InvokeArgs) {
+				if !looksLikeInvocation(body, spec.accepted()...) {
 					return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 						"the %s hook shows no textual evidence of the required call, and this platform cannot verify by execution", spec.ShortName) + remedy}
 				}
@@ -1017,7 +1022,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		// message (present-but-wrong-interpreter vs section-but-no-call)
 		// purely for wording — it never grants a PASS, which comes only
 		// from hookInvocationObserved above.
-		if !shellHook && looksLikeInvocation(body, spec.InvokeArgs) {
+		if !shellHook && looksLikeInvocation(body, spec.accepted()...) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 				"%s call present but the hook's shebang is not a shell — git runs it under another interpreter", spec.ShortName) + remedy}
 		}
@@ -1090,11 +1095,13 @@ func invocationPattern(argv []string) *regexp.Regexp {
 // it was never executed (checkHookPresence attempts execution only for a
 // shell hook). A false positive or negative here changes only which FAIL
 // detail string is shown, never the PASS/FAIL verdict.
-func looksLikeInvocation(body []byte, argv []string) bool {
-	pat := invocationPattern(argv)
-	for _, line := range strings.Split(string(body), "\n") {
-		if pat.MatchString(line) {
-			return true
+func looksLikeInvocation(body []byte, argvs ...[]string) bool {
+	for _, argv := range argvs {
+		pat := invocationPattern(argv)
+		for _, line := range strings.Split(string(body), "\n") {
+			if pat.MatchString(line) {
+				return true
+			}
 		}
 	}
 	return false
@@ -1109,9 +1116,14 @@ type HookSpec struct {
 	Tag       string // hooks.SealTag / hooks.TrailerTag
 	Ident     string // hooks.SealIdent / hooks.TrailerIdent
 	Canonical []byte // hooks.PreCommit / hooks.CommitMsg
-	// InvokeArgs is the ethos subcommand checkHookPresence looks for by
-	// executing the hook, e.g. []string{"audit", "seal"}.
+	// InvokeArgs is the ethos subcommand the DES-083 shim calls, which
+	// checkHookPresence looks for by executing the hook.
 	InvokeArgs []string
+	// LegacyArgs are the public commands a hand-written or framework-managed
+	// hook calls to do the same job, and a section copied before the shim
+	// called. Such a hook is active, not unchained; whether a marker section is
+	// current is CheckHookCurrency's byte comparison, not this list.
+	LegacyArgs [][]string
 	// NeedsMsgArg requests a scratch commit-message file be created and
 	// passed as $1 in the sandbox — the commit-msg hook refuses to do
 	// anything without one.
@@ -1133,6 +1145,7 @@ var sealHookSpec = HookSpec{
 	Ident:      hooks.SealIdent,
 	Canonical:  hooks.PreCommit,
 	InvokeArgs: []string{"hook", "pre-commit"},
+	LegacyArgs: [][]string{{"audit", "seal"}},
 
 	StaleBlocksCommit: true,
 }
@@ -1145,7 +1158,14 @@ var trailerHookSpec = HookSpec{
 	Ident:       hooks.TrailerIdent,
 	Canonical:   hooks.CommitMsg,
 	InvokeArgs:  []string{"hook", "commit-msg"},
+	LegacyArgs:  [][]string{{"hook", "commit-trailers"}, {"hook", "commit-message"}},
 	NeedsMsgArg: true,
+}
+
+// accepted returns every argv that counts as the hook calling ethos: the shim's
+// first, then the legacy ones.
+func (s HookSpec) accepted() [][]string {
+	return append([][]string{s.InvokeArgs}, s.LegacyArgs...)
 }
 
 // hashPrefixLen truncates a sha256 hex digest for Detail so a currency
