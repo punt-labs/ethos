@@ -77,7 +77,17 @@ func bundleDiagnosticMkdirPaths(trace string) ([]string, error) {
 			continue
 		}
 		if start, split, found := strings.Cut(text, "<unfinished ...>"); found {
-			if split != "" || pending[tid] != "" || (!strings.HasPrefix(start, "mkdir(") && !strings.HasPrefix(start, "mkdirat(")) {
+			isMkdir := strings.HasPrefix(start, "mkdir(") || strings.HasPrefix(start, "mkdirat(")
+			if !isMkdir {
+				// A non-mkdir syscall left unfinished is irrelevant to the
+				// mkdir paths this observer extracts, so skip it the same way
+				// a completed non-mkdir record is skipped. strace renders a
+				// syscall interrupted by a signal (Go's SIGURG async
+				// preemption) as `<tid> ???( <unfinished ...>`; without this
+				// skip that record is spuriously rejected.
+				continue
+			}
+			if split != "" || pending[tid] != "" {
 				return nil, fmt.Errorf("unsupported split record: %q", line)
 			}
 			pending[tid] = start
@@ -85,9 +95,15 @@ func bundleDiagnosticMkdirPaths(trace string) ([]string, error) {
 		}
 		if strings.HasPrefix(text, "<... ") {
 			start := pending[tid]
+			if start == "" {
+				// Resume of a non-mkdir unfinished record that was skipped
+				// above (e.g. a SIGURG-interrupted syscall); nothing pending
+				// for this tid means there is no mkdir to complete.
+				continue
+			}
 			name, _, _ := strings.Cut(start, "(")
 			marker := "<... " + name + " resumed>"
-			if start == "" || !strings.HasPrefix(text, marker) {
+			if !strings.HasPrefix(text, marker) {
 				return nil, fmt.Errorf("unsupported resume: %q", line)
 			}
 			text = start + strings.TrimPrefix(text, marker)
@@ -138,6 +154,14 @@ func TestBundleDiagnosticMkdirObserver(t *testing.T) {
 	paths, err := bundleDiagnosticMkdirPaths("12 mkdirat(AT_FDCWD</fixture>, \"record/transient\", 0700 <unfinished ...>\n12 <... mkdirat resumed>) = 0\n13 mkdir(\"/removed/transient\", 0700) = 0\n")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/fixture/record/transient", "/removed/transient"}, paths)
+
+	// A syscall interrupted by a signal (Go's SIGURG async preemption) is
+	// rendered by strace as `<tid> ???( <unfinished ...>` and later resumed.
+	// It is not a mkdir, so it must be skipped, not rejected — otherwise an
+	// unrelated preemption fails the whole observation nondeterministically.
+	paths, err = bundleDiagnosticMkdirPaths("69649 ???( <unfinished ...>\n13 mkdir(\"/kept\", 0700) = 0\n69649 <... clock_nanosleep resumed>) = 0\n")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/kept"}, paths)
 	for _, input := range []string{
 		"12 mkdir(\"relative\", 0700) = 0\n",
 		"12 mkdirat(AT_FDCWD, \"relative\", 0700) = 0\n",
