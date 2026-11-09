@@ -99,7 +99,10 @@ class BoundaryTests(unittest.TestCase):
         data = gate.inventory(self.repo)
         self.assertEqual(data["hidden/.ignored"]["sha256"], gate.digest(b"contents"))
         self.assertEqual(data["hidden/.ignored"]["mode"], 0o600)
-        self.assertEqual(data["link"], {"kind": "symlink", "mode": 0o777, "target": "hidden/.ignored"})
+        # A symlink's own mode is the platform's: Linux reports 0o777, macOS the
+        # umask-derived mode. The inventory must record what lstat says.
+        link_mode = gate.stat.S_IMODE((self.repo / "link").lstat().st_mode)
+        self.assertEqual(data["link"], {"kind": "symlink", "mode": link_mode, "target": "hidden/.ignored"})
 
     def test_source_section_cannot_borrow_next_sources_association(self):
         text = ("sources:\n    - path: ambiguous.txt\n      candidates: []\n      unknown: ambiguous\n"
