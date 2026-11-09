@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +60,9 @@ func runHookOpenPipeWith(t *testing.T, se *cliSubprocessEnv, name string, write 
 		}
 		require.NoError(t, waitErr)
 		return outb.String(), errb.String(), 0
-	case <-time.After(10 * time.Second):
+	// The watchdog must outlast the reader's own timeout, or a slow run is
+	// reported as a hang instead of the hook finishing at its deadline.
+	case <-time.After(hook.InputTimeout + 10*time.Second):
 		_ = cmd.Process.Kill()
 		<-done
 		t.Fatalf("hook %s hung on an open pipe: stderr %s", name, errb.String())
