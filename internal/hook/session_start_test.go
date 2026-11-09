@@ -999,9 +999,10 @@ func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
 		got := refreshStaleHooks(refresh, resolve.Located{Checkout: root, Store: root, StoreErr: errors.New("store unreadable")})
 		assert.Empty(t, got)
 	})
-	t.Run("unlocated checkout says nothing more", func(t *testing.T) {
+	t.Run("unlocated checkout is told, naming the cause", func(t *testing.T) {
 		got := refreshStaleHooks(refresh, resolve.Located{Checkout: "/c", Store: "/s", CheckoutErr: errors.New("no checkout")})
-		assert.Empty(t, got)
+		assert.Contains(t, got, "Git hook refresh skipped: checkout not located: no checkout.")
+		assert.Contains(t, got, "run `ethos doctor`")
 	})
 	assert.False(t, called, "refresh must not run against an unlocated store or checkout")
 }

@@ -237,37 +237,47 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
 }
 
-// noHookNote is the refresh's answer when there is nothing to tell the session.
-const noHookNote = ""
+// hookRefreshSkipped is the sentence for a refresh that did not run because of
+// cause (a located failure).
+func hookRefreshSkipped(cause string, err error) string {
+	return fmt.Sprintf("Git hook refresh skipped: %s%v. A stale seal section may block commits; run `ethos doctor`.", cause, err)
+}
 
 // skippedHookNote tells an enabled repo's session that the refresh was skipped
 // for storeFailure. A dormant repo has no hooks worth refreshing and hears
 // nothing.
 func skippedHookNote(checkout string, storeFailure error) string {
 	if on, _ := resolve.EnabledMarker(checkout); !on {
-		return noHookNote
+		return ""
 	}
-	return fmt.Sprintf("Git hook refresh skipped: %v. A stale seal section may block commits; run `ethos doctor`.", storeFailure)
+	return hookRefreshSkipped("", storeFailure)
 }
 
 // refreshStaleHooks runs refresh for the located repository and returns the
 // sentence telling the session what happened to its git hook sections; "" when
 // nothing was stale, when refresh is nil, or when there is no repository. A
+// failure to locate the checkout or the store skips the refresh and says so. A
 // stale seal section can block every commit, so a failure or a section that
 // could not be refreshed is told to the session, not only logged: the shell
 // wrapper sends stderr to a log file the session never reads. A store failure
 // skips the refresh, and the session is told that too.
 func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error), loc resolve.Located) string {
-	// A checkout that could not be located is already reported by
-	// storeUnlocatedNote and the roster notice; this says nothing more.
-	if refresh == nil || loc.CheckoutErr != nil || loc.Checkout == "" {
-		return noHookNote
+	if refresh == nil {
+		return ""
+	}
+	// Without a checkout there is no way to tell whether ethos is enabled, so
+	// the session is told: a stale seal section would block its commits.
+	if loc.CheckoutErr != nil {
+		return hookRefreshSkipped("checkout not located: ", loc.CheckoutErr)
+	}
+	if loc.Checkout == "" {
+		return ""
 	}
 	if storeFailure := loc.StoreFailure(); storeFailure != nil {
 		return skippedHookNote(loc.Checkout, storeFailure)
 	}
 	if loc.Store == "" {
-		return noHookNote
+		return ""
 	}
 	r, err := refresh(loc.Checkout, loc.Store)
 	for _, w := range r.Warnings {
