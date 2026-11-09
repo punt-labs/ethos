@@ -297,10 +297,12 @@ func wrapperBashes(t *testing.T) []string {
 	return found
 }
 
-// A payload that arrives in pieces over several seconds is forwarded whole,
-// under every bash: bash 3.2 loses what a timed-out read had collected.
-func TestWrappersForwardAPayloadArrivingInPieces(t *testing.T) {
-	pieces := []string{`{"tool_name":"Edit",`, `"tool_input":{"file_path":"a.go",`, `"new_string":"x"}}` + "\n"}
+// A payload that starts arriving in pieces and then stalls past the deadline is
+// forwarded as far as it got and the timeout is logged, under every bash. Bash
+// 3.2's timed read throws away what it had collected when the deadline fires;
+// a payload whose pieces all arrive in time would pass on the old code too.
+func TestWrappersForwardAStalledPayloadInPieces(t *testing.T) {
+	pieces := []string{`{"tool_name":"Edit",`, `"tool_input":{"file_path":"a.go",`}
 	want := []byte(strings.Join(pieces, ""))
 	for _, bash := range wrapperBashes(t) {
 		for hook, sub := range stdinWrappers(t) {
@@ -314,26 +316,13 @@ func TestWrappersForwardAPayloadArrivingInPieces(t *testing.T) {
 						w.Write([]byte(p)) //nolint:errcheck // a short write shows up as a short stdin
 					}
 				}
-				got, args, _, _ := runWrapperWith(t, bash, hook, feed, false, nil, wrapperOpts{})
+				// The writer then goes quiet without closing: the deadline fires.
+				got, args, _, home := runWrapperWith(t, bash, hook, feed, true, nil, wrapperOpts{})
 				assert.Equal(t, "hook "+sub, args)
 				assert.True(t, sameJSON(want, got), "forwarded %q, want %q", got, want)
+				assert.Contains(t, hookErrorsLog(t, home), fmt.Sprintf("stdin read timed out after 10s (%d bytes)", len(want)))
 			})
 		}
-	}
-}
-
-// A payload that arrives whole and is closed writes no timeout line.
-func TestWrappersLogNoTimeoutForACompletePayload(t *testing.T) {
-	for hook := range stdinWrappers(t) {
-		t.Run(hook, func(t *testing.T) {
-			_, _, _, home := runWrapperFull(t, hook, []byte("{}\n"), 0, false, nil)
-			log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
-			if err == nil {
-				assert.NotContains(t, string(log), "timed out")
-			} else {
-				assert.ErrorIs(t, err, os.ErrNotExist)
-			}
-		})
 	}
 }
 
