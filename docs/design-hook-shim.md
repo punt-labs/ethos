@@ -1,6 +1,6 @@
 # Thin-shim git hooks: the binary owns seal and trailer policy
 
-**Status**: Proposed. Bead `ethos-1xp6`. Design only.
+**Status**: Implemented on branch `feat/hook-shim` (DES-083). Bead `ethos-1xp6`.
 
 Read first: DES-055 (exit 2 blocks), DES-058 as amended by DES-079,
 DES-054 phase 3, DES-061 R4, DES-074, DES-081 (moves storage, not the hook
@@ -163,11 +163,11 @@ group in `cmd/ethos/hook.go`.
 |---|---|---|
 | Args | none | the message file git passes |
 | Environment read | `GIT_INDEX_FILE` (partial commits), config snapshot | `MISSION_ID`, `DELEGATION_ID`, `ETHOS_SESSION`, Claude process tree |
-| Does | `runAuditSeal` with commit-context on, then verify-index on the staged index | env else `resolve.SessionID` sidecars, then `hook.ApplyCommitMessage` |
+| Does | `sealRepository` with commit-context on (the code `audit seal` runs), then verify-index on the staged index | env else `resolve.SessionID` sidecars, then `hook.ApplyCommitMessage` |
 | Exit 0 | sealed, nothing pending, or blame-mode retained-data warning | trailers added, or none to add |
-| Exit 2 | invalid policy, non-excepted archival failure, full-mode publication failure, verify-index failure (`failClosed`) | usage error |
-| Exit 1 | internal error (cannot locate roots) | trailer render or install failure |
-| stderr | what `audit seal` and `verify-index` print today, unchanged | `ethos: commit-trailers: <err>; no trailer added` when under Claude Code with no resolvable session (DES-074), unchanged; `ethos: commit-message: <err>` on exit 1 |
+| Exit 2 | invalid policy, non-excepted archival failure, full-mode publication failure, cannot locate the checkout or store (outside a repository, a refused root), verify-index failure (`failClosed`) | usage error |
+| Exit 1 | none | trailer render or install failure |
+| stderr | what `audit seal` prints today, unchanged; a verify-index failure is prefixed `ethos: provenance verify-index:` | `ethos: commit-trailers: <err>; no trailer added` when under Claude Code with no resolvable session (DES-074), unchanged; `ethos: commit-message: <err>` on exit 1 |
 
 Neither reads stdin; both print nothing on stdout. The shim's `_git` no
 longer protects the binary's git calls, so a test must show
