@@ -197,7 +197,8 @@ func ShimGit(t testing.TB, hang ...string) {
 	// than the 200ms deadline below, which would make the first git call time
 	// out whatever it is. Run the shim once, on a command that never hangs, so
 	// only the commands named in hang hit the deadline.
-	if out, err := exec.Command(filepath.Join(dir, "git"), "--version").CombinedOutput(); err != nil {
+	shim := filepath.Join(dir, "git")
+	if out, err := exec.Command(shim, "--version").CombinedOutput(); err != nil {
 		t.Fatalf("warming the git shim: %v: %s", err, out)
 	}
 	GitTimeout(t, 200*time.Millisecond)

@@ -71,7 +71,7 @@ var allowedProcessUses = map[string][]string{
 	"cmd/ethos/uninstall.go": {"exec.Command(claude)", "(*exec.Cmd).Run"},                                                    // the claude CLI
 
 	// A test helper compiled into a non-test file: its callers set the bound.
-	"internal/testhelpers/gitenv.go": {`exec.Command("git")`, "exec.Command(real)", "(*exec.Cmd).CombinedOutput"},
+	"internal/testhelpers/gitenv.go": {`exec.Command("git")`, "exec.Command(real)", "exec.Command(shim)", "(*exec.Cmd).CombinedOutput", "(*exec.Cmd).CombinedOutput"},
 }
 
 // rawSyscalls are the raw system-call entry points; the number is the first
