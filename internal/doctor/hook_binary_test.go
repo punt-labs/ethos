@@ -98,6 +98,54 @@ func TestCheckHookBinary(t *testing.T) {
 		assert.Contains(t, r.Detail, filepath.Join(localBin, "ethos"))
 	})
 
+	t.Run("the detail names the resolved path and that git may differ", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		bin := stubEthos(t, knowsSubcommand)
+		t.Setenv("PATH", bin)
+		r := CheckHookBinary(enabledRepoDir(t))
+		assert.Equal(t, "PASS", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "resolved via doctor's PATH to "+filepath.Join(bin, "ethos"))
+		assert.Contains(t, r.Detail, "git may resolve differently")
+	})
+
+	t.Run("two different binaries WARN and name both", func(t *testing.T) {
+		home := t.TempDir()
+		localBin := filepath.Join(home, ".local", "bin")
+		require.NoError(t, os.MkdirAll(localBin, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(localBin, "ethos"), []byte("#!/bin/sh\n"+knowsSubcommand), 0o755))
+		onPath := stubEthos(t, knowsSubcommand)
+		t.Setenv("HOME", home)
+		t.Setenv("PATH", onPath)
+		r := CheckHookBinary(enabledRepoDir(t))
+		assert.Equal(t, "WARN", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, filepath.Join(onPath, "ethos"))
+		assert.Contains(t, r.Detail, filepath.Join(localBin, "ethos"))
+	})
+
+	t.Run("one binary reached by two names does not WARN", func(t *testing.T) {
+		home := t.TempDir()
+		localBin := filepath.Join(home, ".local", "bin")
+		require.NoError(t, os.MkdirAll(localBin, 0o755))
+		onPath := stubEthos(t, knowsSubcommand)
+		require.NoError(t, os.Symlink(filepath.Join(onPath, "ethos"), filepath.Join(localBin, "ethos")))
+		t.Setenv("HOME", home)
+		t.Setenv("PATH", onPath)
+		r := CheckHookBinary(enabledRepoDir(t))
+		assert.Equal(t, "PASS", r.Status, r.Detail)
+	})
+
+	t.Run("a binary that cannot be executed is not reported as needing an upgrade", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		bin := t.TempDir()
+		// Executable bit set, but no interpreter and no ELF/Mach-O header: exec fails.
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("not a program\n"), 0o755))
+		t.Setenv("PATH", bin)
+		r := CheckHookBinary(enabledRepoDir(t))
+		assert.Equal(t, "FAIL", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "cannot run")
+		assert.NotContains(t, r.Detail, "upgrade ethos")
+	})
+
 	t.Run("a non-executable file in the default directory is not a binary", func(t *testing.T) {
 		home := t.TempDir()
 		localBin := filepath.Join(home, ".local", "bin")

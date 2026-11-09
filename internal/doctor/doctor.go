@@ -736,35 +736,61 @@ func CheckHookBinary(repoRoot string) Result {
 	if !enabled {
 		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
 	}
-	bin := resolveHookBinary()
+	onPath, local := hookBinaryCandidates()
+	bin := onPath
+	if bin == "" {
+		bin = local
+	}
 	if bin == "" {
 		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked — install ethos"}
 	}
+	// Git runs the hooks with its own PATH, which may differ from this
+	// process's, so what follows is about the binary doctor resolves.
+	resolved := fmt.Sprintf("resolved via doctor's PATH to %s; git may resolve differently", bin)
+
 	ctx, cancel := context.WithTimeout(context.Background(), hookBinaryTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "hook", "pre-commit", "--help").Output()
-	if err != nil {
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s hook pre-commit --help failed: %v — upgrade ethos: make install", bin, err)}
+	out, err := exec.CommandContext(ctx, bin, "hook", "pre-commit", "--help").CombinedOutput()
+	var exitErr *exec.ExitError
+	switch {
+	case ctx.Err() != nil:
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s did not answer hook pre-commit --help within %s (%s)", bin, hookBinaryTimeout, resolved)}
+	case err != nil && !errors.As(err, &exitErr):
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot run %s: %v (%s)", bin, err, resolved)}
+	case err != nil || !strings.Contains(string(out), "ethos hook pre-commit"):
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook pre-commit`, so the installed hooks block every commit — upgrade ethos: make install (%s)", bin, resolved)}
 	}
-	if !strings.Contains(string(out), "ethos hook pre-commit") {
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook pre-commit`, so the installed hooks block every commit — upgrade ethos: make install", bin)}
+	if onPath != "" && local != "" && !sameFile(onPath, local) {
+		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf("two ethos binaries: %s on PATH and %s in ~/.local/bin; the hooks run whichever git's PATH finds first, and only %s was checked (%s)", onPath, local, bin, resolved)}
 	}
-	return Result{Name: name, Status: "PASS", Detail: bin}
+	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("%s (%s)", bin, resolved)}
 }
 
-// resolveHookBinary returns the ethos binary the git hook shims would run, or
-// "" when there is none: PATH first, then the default install directory.
-func resolveHookBinary() string {
+// hookBinaryCandidates returns the ethos binary on PATH and the one in the
+// default install directory, each "" when absent. The shims try them in that
+// order.
+func hookBinaryCandidates() (onPath, local string) {
 	if p, err := exec.LookPath("ethos"); err == nil {
-		return p
+		onPath = p
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		p := filepath.Join(home, ".local", "bin", "ethos")
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode().Perm()&0o111 != 0 {
-			return p
+			local = p
 		}
 	}
-	return ""
+	return onPath, local
+}
+
+// sameFile reports whether a and b are one file, so a symlink from one install
+// location to the other is not two binaries.
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	return err == nil && os.SameFile(ai, bi)
 }
 
 // CheckSealHook reports on the DES-058 audit-seal pre-commit hook.

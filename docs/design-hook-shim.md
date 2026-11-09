@@ -167,7 +167,7 @@ group in `cmd/ethos/hook.go`.
 | Exit 0 | sealed, nothing pending, or blame-mode retained-data warning | trailers added, or none to add |
 | Exit 2 | invalid policy, non-excepted archival failure, full-mode publication failure, cannot locate the checkout or store (outside a repository, a refused root), verify-index failure (`failClosed`) | usage error |
 | Exit 1 | none | trailer render or install failure |
-| stderr | what `audit seal` prints today, unchanged; a verify-index failure is prefixed `ethos: provenance verify-index:` | `ethos: commit-trailers: <err>; no trailer added` when under Claude Code with no resolvable session (DES-074), unchanged; `ethos: commit-message: <err>` on exit 1 |
+| stderr | what `audit seal` prints today, unchanged; a verify-index failure is prefixed `ethos: provenance verify-index:` | `ethos: commit-msg: <err>; no trailer added` when under Claude Code with no resolvable session (DES-074; the prefix names the subcommand the user ran, not the old `commit-trailers`); `ethos: commit-message: <err>` on exit 1 |
 
 Neither reads stdin; both print nothing on stdout. The shim's `_git` no
 longer protects the binary's git calls, so a test must show

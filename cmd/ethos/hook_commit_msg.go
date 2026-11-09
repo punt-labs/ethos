@@ -44,7 +44,7 @@ func runHookCommitMsg(errOut io.Writer, msgFile string) error {
 		var err error
 		missionID, delegationID, err = sessionTrailerIDs()
 		if err != nil {
-			fmt.Fprintf(errOut, "ethos: commit-trailers: %v; no trailer added\n", err)
+			fmt.Fprintf(errOut, "ethos: commit-msg: %v; no trailer added\n", err)
 			return nil
 		}
 	}

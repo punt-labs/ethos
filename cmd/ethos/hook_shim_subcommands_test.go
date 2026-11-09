@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -138,4 +140,25 @@ func TestHookSubcommandsIgnoreGitTrace(t *testing.T) {
 			assert.Empty(t, tracedOut)
 		})
 	}
+}
+
+// Under Claude Code with no resolvable session, commit-msg adds no trailer and
+// says so under its own name, not under the retired commit-trailers helper the
+// user never ran. It does not block the commit.
+func TestHookCommitMsgUnresolvableSessionNamesItself(t *testing.T) {
+	se := enabledHookRepo(t)
+	p := filepath.Join(se.home, "MSG")
+	require.NoError(t, os.WriteFile(p, []byte("subject\n"), 0o600))
+	cmd := exec.Command(ethosBinary, "hook", "commit-msg", p)
+	cmd.Dir = se.repo
+	cmd.Env = append(append([]string{}, se.env...), "CLAUDECODE=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	require.NoError(t, cmd.Run(), stderr.String())
+	assert.Contains(t, stderr.String(), "ethos: commit-msg: ")
+	assert.Contains(t, stderr.String(), "no trailer added")
+	assert.NotContains(t, stderr.String(), "commit-trailers")
+	got, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "subject\n", string(got))
 }

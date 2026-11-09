@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ethos hook pre-commit` and `ethos hook commit-msg <file>` run the commit-time
   seal and trailer policy the git hook shims delegate to; `ethos doctor` gains a
-  "Hook binary" row that FAILs an enabled repo whose binary predates them.
+  "Hook binary" row that FAILs an enabled repo whose binary predates them and
+  WARNs when `~/.local/bin/ethos` and a different `ethos` on PATH both exist.
+  `hook commit-msg` reports store failures itself, so an unusable bundle or
+  policy no longer refuses the trailer step as the old `hook commit-message`
+  did; a trailer that cannot be written still blocks.
 
 - SessionStart now rewrites a stale ethos git hook section in an enabled repo
   and tells the session which hooks it refreshed or installed, so a release
