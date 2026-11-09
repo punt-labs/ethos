@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `make docs` ignores the machine-local `.punt-labs/local/` tree, so worker prompts from a mission run on the host no longer fail `make check` at the markdown lint stage.
 - `make` pins `GOTOOLCHAIN` to the `toolchain` line in `go.mod`, so `make lint` and `make test` run the Go that CI runs, even when the host's system Go is newer; golangci-lint v2.13.1 cannot read the export data (format version 5) a go1.27 standard library emits.
 
+### Security
+
+- oauthlib 4.0.0 -> 4.0.1 in the e2e harness lockfile (`tests/e2e/uv.lock`) clears GHSA-3jp2-3mrg-2vxc (Dependabot #61); the Go binary does not use oauthlib and is unaffected.
+
 ## [4.21.0] - 2026-11-07
 
 ### Added
