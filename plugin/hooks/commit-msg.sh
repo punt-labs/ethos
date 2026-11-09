@@ -90,10 +90,16 @@ fi
 _out=$("$ethos_bin" hook commit-msg "$1")
 _rc=$?
 if [ "$_rc" -ne 0 ] || [ -n "$_out" ]; then
-  # Say how to fix a binary that predates the subcommand: its --help never
-  # names it. Any other failure has already explained itself.
-  "$ethos_bin" hook commit-msg --help 2>/dev/null | grep -q 'ethos hook commit-msg' ||
+  if ! "$ethos_bin" hook commit-msg --help 2>/dev/null | grep -q 'ethos hook commit-msg'; then
+    # A binary that predates the subcommand: its --help never names it, and any
+    # stdout is its group help, which would only bury the remedy.
     printf 'ethos: %s: %s does not support "hook commit-msg"; upgrade ethos: make install (or run install.sh)\n' "$_hook" "$ethos_bin" >&2
+  else
+    [ -n "$_out" ] && printf '%s\n' "$_out" >&2
+    # Exit 0 with output is a broken binary, not a policy block that explained itself.
+    [ "$_rc" -eq 0 ] &&
+      printf 'ethos: %s: unexpected output from "ethos hook commit-msg"; the commit is blocked\n' "$_hook" >&2
+  fi
   exit 2
 fi
 exit "$_host_status"

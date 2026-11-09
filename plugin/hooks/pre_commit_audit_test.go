@@ -3,6 +3,7 @@
 package hooks
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,6 +111,58 @@ func TestHooksRootProbeHasNoTemporaryWritesOrRetry(t *testing.T) {
 				data, err := os.ReadFile(calls)
 				require.NoError(t, err)
 				assert.Equal(t, "probe\n", string(data), "exactly one stdout-only root probe")
+			})
+		}
+	}
+}
+
+// A current binary that prints on stdout is broken: both subcommands print
+// nothing on success. The shim must block and say why, never exit 2 silently,
+// and a failing binary's stdout must reach the operator too.
+func TestShimsExplainUnexpectedStdout(t *testing.T) {
+	for _, tc := range []struct {
+		hook   string
+		body   []byte
+		args   []string
+		stderr string
+	}{
+		{"pre-commit", PreCommit, nil, `unexpected output from "ethos hook pre-commit"`},
+		{"commit-msg", CommitMsg, []string{"MSG"}, `unexpected output from "ethos hook commit-msg"`},
+	} {
+		for _, exit := range []string{"0", "1"} {
+			t.Run(tc.hook+"/exit "+exit, func(t *testing.T) {
+				root, bin := t.TempDir(), t.TempDir()
+				require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(root, "MSG"), []byte("subject\n"), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nprintf '%s\\n' \"$FIXTURE_ROOT\"\n"), 0o700))
+				// A binary that knows the subcommand (its --help names it) but
+				// prints a stray line on stdout.
+				stub := "#!/bin/sh\ncase \"$*\" in *--help*) echo '  ethos hook " + tc.hook + "'; exit 0;; esac\n" +
+					"echo stray-stdout-line\nexit " + exit + "\n"
+				require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(stub), 0o700))
+				script := filepath.Join(t.TempDir(), tc.hook)
+				require.NoError(t, os.WriteFile(script, tc.body, 0o700))
+				args := tc.args
+				if len(args) > 0 {
+					args = []string{filepath.Join(root, "MSG")}
+				}
+				cmd := exec.Command("/bin/sh", append([]string{script}, args...)...)
+				cmd.Dir = root
+				cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + bin + ":/usr/bin:/bin", "FIXTURE_ROOT=" + root}
+				var stdout, stderr bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &stdout, &stderr
+				err := cmd.Run()
+				var ee *exec.ExitError
+				require.ErrorAs(t, err, &ee, "the commit must be blocked")
+				assert.Equal(t, 2, ee.ExitCode())
+				assert.Empty(t, stdout.String(), "the shim's own stdout stays empty")
+				assert.Contains(t, stderr.String(), "stray-stdout-line", "the binary's output is not dropped")
+				if exit == "0" {
+					assert.Contains(t, stderr.String(), tc.stderr)
+				} else {
+					assert.NotContains(t, stderr.String(), "unexpected output", "a failing binary has already explained itself")
+				}
 			})
 		}
 	}
