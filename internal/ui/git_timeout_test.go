@@ -42,7 +42,7 @@ blame)
 log)
   case "$2" in --format=%s) echo 'no ticket here'; exit 0;; esac
   echo x >> ` + count + `
-  if [ "$(wc -l < ` + count + `)" = 1 ]; then echo 'fatal: transient' >&2; exit 128; fi
+  if [ "$(wc -l < ` + count + ` | tr -d ' ')" = 1 ]; then echo 'fatal: transient' >&2; exit 128; fi
   printf 'm-2026-01-01-001\nd-1\n\n' ;;
 esac
 `
@@ -85,6 +85,12 @@ esac
 `
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
 	t.Setenv("PATH", bin)
+	// The first run of a new script can take 300ms on macOS, which would time
+	// out the blame call itself before any log call. Run it once, on blame,
+	// before the deadline is shortened.
+	warm := exec.Command(filepath.Join(bin, "git"), "blame")
+	warmOut, werr := warm.CombinedOutput()
+	require.NoError(t, werr, "warming the fake git: %s", warmOut)
 	testhelpers.GitTimeout(t, 200*time.Millisecond)
 	s := &Server{repoRoot: t.TempDir(), storeRoot: t.TempDir()}
 	testhelpers.CaptureStderr(t, func() { _, _ = s.gitBlameWithTrailers("a.go") })

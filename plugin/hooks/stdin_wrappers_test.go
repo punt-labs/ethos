@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -86,6 +88,35 @@ func runWrapper(t *testing.T, hook string, payload []byte, stall time.Duration, 
 // HOME the wrapper ran with, so a test can read the log it wrote there.
 func runWrapperFull(t *testing.T, hook string, payload []byte, stall time.Duration, hold bool, setup func(home string)) (stdin []byte, args, kind, home string) {
 	t.Helper()
+	feed := func(w *os.File) {
+		// A stall after the first 8 KiB is a writer that is busy between
+		// writes; the wrapper gives up on it at its deadline and keeps what it has.
+		first := payload
+		if stall > 0 && len(payload) > 8192 {
+			first = payload[:8192]
+		}
+		w.Write(first) //nolint:errcheck // a short write shows up as a short stdin
+		if len(first) < len(payload) {
+			time.Sleep(stall)
+			w.Write(payload[len(first):]) //nolint:errcheck // as above
+		}
+	}
+	return runWrapperWith(t, "/bin/bash", hook, feed, hold, setup, wrapperOpts{})
+}
+
+// wrapperOpts are the knobs a failure-path test needs on top of runWrapperWith.
+type wrapperOpts struct {
+	env     []string          // extra KEY=VALUE entries for the wrapper
+	bin     map[string]string // fake commands, by name, placed first on PATH
+	started func(*os.Process) // called once the wrapper is running
+	killed  bool              // the test ends the wrapper itself: a non-zero exit is expected
+}
+
+// runWrapperWith runs hook under the given bash, with feed writing the payload
+// to the wrapper's stdin. When hold is true the writer's end stays open after
+// feed returns, until the wrapper has exited.
+func runWrapperWith(t *testing.T, bash, hook string, feed func(w *os.File), hold bool, setup func(home string), o wrapperOpts) (stdin []byte, args, kind, home string) {
+	t.Helper()
 	script, err := filepath.Abs(hook)
 	require.NoError(t, err)
 	home = t.TempDir()
@@ -102,8 +133,11 @@ func runWrapperFull(t *testing.T, hook string, payload []byte, stall time.Durati
 		"cat > '" + out + "'\n"
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(fake), 0o755))
 
-	cmd := exec.Command("/bin/bash", script)
-	cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
+	cmd := exec.Command(bash, script)
+	for name, body := range o.bin {
+		require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755))
+	}
+	cmd.Env = append([]string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}, o.env...)
 	// Claude Code is a Node process, and Node gives a child's stdin a
 	// socketpair, not a pipe; the 8 KiB truncation appears on that fd.
 	// Close-on-exec, under ForkLock as os.Pipe does: a concurrent test's child
@@ -121,23 +155,18 @@ func runWrapperFull(t *testing.T, hook string, payload []byte, stall time.Durati
 	cmd.Stdin = child
 	require.NoError(t, cmd.Start())
 	require.NoError(t, child.Close())
+	if o.started != nil {
+		o.started(cmd.Process)
+	}
 	go func() {
-		// A stall after the first 8 KiB is a writer that is busy between
-		// writes; bash read -t 1 gives up on it and keeps what it has.
-		first := payload
-		if stall > 0 && len(payload) > 8192 {
-			first = payload[:8192]
-		}
-		parent.Write(first) //nolint:errcheck // a short write shows up as a short stdin
-		if len(first) < len(payload) {
-			time.Sleep(stall)
-			parent.Write(payload[len(first):]) //nolint:errcheck // as above
-		}
+		feed(parent)
 		if !hold {
 			parent.Close()
 		}
 	}()
-	require.NoError(t, cmd.Wait())
+	if werr := cmd.Wait(); !o.killed {
+		require.NoError(t, werr)
+	}
 	if hold {
 		parent.Close()
 	}
@@ -239,30 +268,255 @@ func TestWrappersBypasses(t *testing.T) {
 // records what it was given; the log is what the test is about.
 func TestWrappersLogAStdinReadTimeout(t *testing.T) {
 	partial := []byte(`{"tool_name":"mcp__plugin_ethos_self__identity","tool_in`)
-	for hook, sub := range stdinWrappers(t) {
-		t.Run(hook, func(t *testing.T) {
-			t.Parallel()
-			got, args, _, home := runWrapperFull(t, hook, partial, 0, true, nil)
-			assert.Equal(t, "hook "+sub, args, "the fragment is still forwarded")
-			assert.True(t, sameJSON(partial, got), "forwarded %q", got)
-			log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
-			require.NoError(t, err)
-			assert.Equal(t, fmt.Sprintf("ethos %s: stdin read timed out after 10s (%d bytes)\n", sub, len(partial)), string(log))
-		})
+	for _, bash := range wrapperBashes(t) {
+		for hook, sub := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				feed := func(w *os.File) { w.Write(partial) } //nolint:errcheck // a short write shows up as a short stdin
+				got, args, _, home := runWrapperWith(t, bash, hook, feed, true, nil, wrapperOpts{})
+				assert.Equal(t, "hook "+sub, args, "the fragment is still forwarded")
+				assert.True(t, sameJSON(partial, got), "forwarded %q", got)
+				log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
+				require.NoError(t, err)
+				assert.Equal(t, fmt.Sprintf("ethos %s: stdin read timed out after 10s (%d bytes)\n", sub, len(partial)), string(log))
+			})
+		}
 	}
 }
 
-// A payload that arrives whole and is closed writes no timeout line.
-func TestWrappersLogNoTimeoutForACompletePayload(t *testing.T) {
+// wrapperBashes returns every bash this host has that the wrappers can meet:
+// the system one (3.2 on macOS) and, where installed, Homebrew's.
+func wrapperBashes(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	for _, b := range []string{"/bin/bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash"} {
+		if _, err := os.Stat(b); err == nil {
+			found = append(found, b)
+		}
+	}
+	require.NotEmpty(t, found, "no bash found")
+	return found
+}
+
+// A payload that starts arriving in pieces and then stalls past the deadline is
+// forwarded as far as it got and the timeout is logged, under every bash. Bash
+// 3.2's timed read throws away what it had collected when the deadline fires;
+// a payload whose pieces all arrive in time would pass on the old code too.
+func TestWrappersForwardAStalledPayloadInPieces(t *testing.T) {
+	pieces := []string{`{"tool_name":"Edit",`, `"tool_input":{"file_path":"a.go",`}
+	want := []byte(strings.Join(pieces, ""))
+	for _, bash := range wrapperBashes(t) {
+		for hook, sub := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				feed := func(w *os.File) {
+					for i, p := range pieces {
+						if i > 0 {
+							time.Sleep(time.Second)
+						}
+						w.Write([]byte(p)) //nolint:errcheck // a short write shows up as a short stdin
+					}
+				}
+				// The writer then goes quiet without closing: the deadline fires.
+				got, args, _, home := runWrapperWith(t, bash, hook, feed, true, nil, wrapperOpts{})
+				assert.Equal(t, "hook "+sub, args)
+				assert.True(t, sameJSON(want, got), "forwarded %q, want %q", got, want)
+				assert.Contains(t, hookErrorsLog(t, home), fmt.Sprintf("stdin read timed out after 10s (%d bytes)", len(want)))
+			})
+		}
+	}
+}
+
+// The stdin read block is copied into every wrapper, so it must not drift: one
+// wrapper that kept the old read would lose a partial payload on bash 3.2.
+func TestWrappersShareOneStdinReadBlock(t *testing.T) {
+	blocks := map[string][]string{}
 	for hook := range stdinWrappers(t) {
-		t.Run(hook, func(t *testing.T) {
-			_, _, _, home := runWrapperFull(t, hook, []byte("{}\n"), 0, false, nil)
-			log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
-			if err == nil {
-				assert.NotContains(t, string(log), "timed out")
-			} else {
-				assert.ErrorIs(t, err, os.ErrNotExist)
-			}
-		})
+		src, err := os.ReadFile(hook)
+		require.NoError(t, err)
+		start := strings.Index(string(src), "# This block is identical")
+		end := strings.Index(string(src), "# read returns >128")
+		require.True(t, start >= 0 && end > start, "%s: stdin read block not found", hook)
+		block := string(src)[start:end]
+		blocks[block] = append(blocks[block], hook)
+	}
+	assert.Len(t, blocks, 1, "the wrappers carry different stdin read blocks: %v", blocks)
+}
+
+// bashMajor is the major version of bash.
+func bashMajor(t *testing.T, bash string) int {
+	t.Helper()
+	out, err := exec.Command(bash, "-c", "echo ${BASH_VERSINFO[0]}").Output()
+	require.NoError(t, err)
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	require.NoError(t, err)
+	return n
+}
+
+func hookErrorsLog(t *testing.T, home string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
+	if os.IsNotExist(err) {
+		return ""
+	}
+	require.NoError(t, err)
+	return string(b)
+}
+
+func holdPartial(w *os.File) { w.Write([]byte(`{"tool_name":"x"`)) } //nolint:errcheck // a short write shows up as a short stdin
+
+// A capture that fails (disk full, EIO) before the deadline is logged, not
+// forwarded as if the payload were empty. The capture exists only under bash 3.2.
+func TestWrappersLogAFailedStdinCapture(t *testing.T) {
+	for _, bash := range wrapperBashes(t) {
+		for hook, sub := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				// The capture is the cat with no arguments; reading the file back is not.
+				cat := "#!/bin/sh\n[ $# -eq 0 ] && exit 3\nexec /bin/cat \"$@\"\n"
+				_, _, _, home := runWrapperWith(t, bash, hook, func(w *os.File) { w.Write([]byte("{}\n")) }, false, nil, //nolint:errcheck // as above
+					wrapperOpts{bin: map[string]string{"cat": cat}})
+				log := hookErrorsLog(t, home)
+				if bashMajor(t, bash) < 4 {
+					assert.Contains(t, log, "stdin capture failed (cat exit 3)")
+					assert.Contains(t, log, "ethos ")
+				} else {
+					assert.NotContains(t, log, "capture failed")
+				}
+				_ = sub
+			})
+		}
+	}
+}
+
+// With no temp file to be had, the wrapper says so before it falls back to the
+// read that loses a partial payload; with only TMPDIR unusable it uses /tmp and
+// loses nothing.
+func TestWrappersReportAnUnavailableTempFile(t *testing.T) {
+	for _, bash := range wrapperBashes(t) {
+		old := bashMajor(t, bash) < 4
+		for hook := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				_, _, _, home := runWrapperWith(t, bash, hook, func(w *os.File) { w.Write([]byte("{}\n")) }, false, nil, //nolint:errcheck // as above
+					wrapperOpts{bin: map[string]string{"mktemp": "#!/bin/sh\nexit 1\n"}})
+				log := hookErrorsLog(t, home)
+				if old {
+					assert.Contains(t, log, "mktemp failed in")
+					assert.Contains(t, log, "a partial payload will be lost")
+				} else {
+					assert.Empty(t, log)
+				}
+
+				missing := filepath.Join(t.TempDir(), "gone")
+				got, _, _, home := runWrapperWith(t, bash, hook, func(w *os.File) { w.Write([]byte("{}\n")) }, false, nil, //nolint:errcheck // as above
+					wrapperOpts{env: []string{"TMPDIR=" + missing}})
+				assert.True(t, sameJSON([]byte("{}"), got), "forwarded %q", got)
+				assert.Empty(t, hookErrorsLog(t, home))
+			})
+		}
+	}
+}
+
+// A wrapper cancelled mid-capture leaves no copy of the payload behind.
+func TestWrappersRemoveTheCaptureFileWhenKilled(t *testing.T) {
+	for _, bash := range wrapperBashes(t) {
+		for hook := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				tmp := t.TempDir()
+				started := func(p *os.Process) {
+					go func() {
+						time.Sleep(1500 * time.Millisecond)
+						p.Signal(syscall.SIGTERM) //nolint:errcheck // the wrapper may already be gone
+					}()
+				}
+				runWrapperWith(t, bash, hook, holdPartial, true, nil,
+					wrapperOpts{env: []string{"TMPDIR=" + tmp}, started: started, killed: true})
+				left, err := filepath.Glob(filepath.Join(tmp, "ethos-hook.*"))
+				require.NoError(t, err)
+				assert.Empty(t, left, "the payload was left on disk")
+			})
+		}
+	}
+}
+
+// A wrapper whose payload arrives promptly leaves no capture or handshake file
+// behind. (That no watchdog process is left running is checked by hand in the
+// commit message: matching a sleep by name is flaky beside parallel tests.)
+func TestWrappersLeaveNoCaptureFilesAfterAPromptPayload(t *testing.T) {
+	for _, bash := range wrapperBashes(t) {
+		if bashMajor(t, bash) >= 4 {
+			continue // the watchdog exists only under bash 3.2
+		}
+		for hook := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				tmp := t.TempDir()
+				for range 5 {
+					runWrapperWith(t, bash, hook, func(w *os.File) { w.Write([]byte("{}\n")) }, false, nil, //nolint:errcheck // as above
+						wrapperOpts{env: []string{"TMPDIR=" + tmp}})
+				}
+				left, err := filepath.Glob(filepath.Join(tmp, "ethos-hook*"))
+				require.NoError(t, err)
+				assert.Empty(t, left, "a capture or handshake file was left behind")
+			})
+		}
+	}
+}
+
+// A wrapper cancelled at any moment after it starts leaves no capture file and
+// no running cat: cancellation stops the capture before it removes the file.
+// cat being dead is shown by the writer's pipe breaking, which is what its
+// read end closing does; matching a process by name would be flaky.
+func TestWrappersCancelledDuringTheLaunchLeaveNothing(t *testing.T) {
+	for _, bash := range wrapperBashes(t) {
+		if bashMajor(t, bash) >= 4 {
+			continue // the capture exists only under bash 3.2
+		}
+		for hook := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				script, err := filepath.Abs(hook)
+				require.NoError(t, err)
+				home := t.TempDir()
+				require.NoError(t, os.MkdirAll(filepath.Join(home, ".punt-labs", "ethos"), 0o755))
+				bin := t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755))
+				tmp := t.TempDir()
+				for i := range 50 {
+					r, w, err := os.Pipe()
+					require.NoError(t, err)
+					cmd := exec.Command(bash, script)
+					cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin", "TMPDIR=" + tmp}
+					cmd.Stdin = r
+					require.NoError(t, cmd.Start())
+					require.NoError(t, r.Close())
+					// After the shell is up, so the signal meets a running script
+					// rather than a process the OS has not yet given a handler.
+					time.Sleep(30*time.Millisecond + time.Duration(rand.IntN(90))*time.Millisecond)
+					require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+					done := make(chan struct{})
+					go func() { _ = cmd.Wait(); close(done) }()
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						_ = cmd.Process.Kill()
+						t.Fatalf("run %d: the wrapper did not exit after SIGTERM", i)
+					}
+					broken := false
+					for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+						if _, err := w.Write([]byte("x")); err != nil {
+							broken = true
+							break
+						}
+					}
+					_ = w.Close()
+					assert.True(t, broken, "run %d: the capture is still reading the writer's pipe", i)
+					left, err := filepath.Glob(filepath.Join(tmp, "ethos-hook*"))
+					require.NoError(t, err)
+					assert.Empty(t, left, "run %d: a capture or handshake file was left behind", i)
+				}
+			})
+		}
 	}
 }

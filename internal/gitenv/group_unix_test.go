@@ -18,13 +18,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// warmShell runs the shell once so the first exec of a fresh script does not
+// spend the deadline. The deadline is also long enough for the script to have
+// installed its traps before it fires: a TERM that lands first kills the shell
+// with no cleanup, and the test would fail for a reason it is not about.
+func warmShell(t *testing.T) {
+	t.Helper()
+	out, err := exec.Command("/bin/sh", "-c", "exit 0").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+}
+
 // On a timeout the whole process group dies: a clean or smudge filter that git
 // started, and that ignores TERM, does not outlive git.
 func TestTimeoutKillsTheProcessGroup(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "filter.pid")
 	git := fakeGitScript(t, "trap '' TERM\nsh -c \"trap '' TERM; echo \\$\\$ > '"+pidFile+"'; exec sleep 60\" &\nwhile [ ! -s '"+pidFile+"' ]; do sleep 0.05; done\nwait\n")
-	testhelpersTimeout(t, 500*time.Millisecond)
+	warmShell(t)
+	testhelpersTimeout(t, 2*time.Second)
 	_, err := OutputEnv(dir, git, nil, "add")
 	require.ErrorIs(t, err, ErrTimeout)
 	data, rerr := os.ReadFile(pidFile)
@@ -41,7 +52,8 @@ func TestTimeoutGivesTheGroupItsGrace(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "cleaned")
 	git := fakeGitScript(t, "(trap 'sleep 0.4; echo cleaned > '\""+marker+"\"'; exit 0' TERM; sleep 30 & wait) >/dev/null 2>&1 &\ntrap 'exit 0' TERM\nsleep 30 &\nwait\n")
-	testhelpersTimeout(t, 300*time.Millisecond)
+	warmShell(t)
+	testhelpersTimeout(t, 2*time.Second)
 	_, err := OutputEnv(dir, git, nil, "add")
 	require.ErrorIs(t, err, ErrTimeout)
 	require.Eventually(t, func() bool { _, serr := os.Stat(marker); return serr == nil },

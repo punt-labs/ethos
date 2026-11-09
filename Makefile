@@ -110,8 +110,15 @@ clean-latex: ## Remove LaTeX build intermediates (keeps .pdf/.tex/.bib)
 		done; \
 	done
 
+# Several packages run real git and subprocesses against wall-clock deadlines.
+# Running every package at once (go test's default -p is GOMAXPROCS) on a
+# developer machine starves those deadlines and times out the long packages
+# under -race; cmd/ethos alone takes minutes. CI's job budget is 30 minutes, and
+# the default per-package timeout is 10. Raise TEST_PARALLEL on a quiet host.
+TEST_PARALLEL ?= 2
+
 test: ## Run tests with race detection and write coverage to coverage.out
-	go test -race -count=1 -coverprofile=coverage.out ./...
+	go test -race -count=1 -timeout 30m -p $(TEST_PARALLEL) -coverprofile=coverage.out ./...
 
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content

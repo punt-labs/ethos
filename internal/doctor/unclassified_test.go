@@ -445,15 +445,17 @@ func TestCheckUnclassifiedFiles_DegradedKeepsTheScanResult(t *testing.T) {
 
 // TestDropSameFile: paths are matched by file identity, not spelling; a hard
 // link stands in for the second spelling a case-insensitive file system gives.
+// The link's name differs from the original by more than case, so the test
+// can create it on case-insensitive and case-sensitive hosts alike.
 func TestDropSameFile(t *testing.T) {
 	root := t.TempDir()
 	touch(t, root, "a/hook")
 	touch(t, root, "a/other")
-	require.NoError(t, os.Link(filepath.Join(root, "a", "hook"), filepath.Join(root, "a", "Hook")))
+	require.NoError(t, os.Link(filepath.Join(root, "a", "hook"), filepath.Join(root, "a", "hook-link")))
 	info, err := os.Lstat(filepath.Join(root, "a", "hook"))
 	require.NoError(t, err)
 
-	files := map[string]bool{"a/Hook": true, "a/other": true, "a/vanished": true}
+	files := map[string]bool{"a/hook-link": true, "a/other": true, "a/vanished": true}
 	require.NoError(t, dropSameFile(files, root, info))
 	assert.Equal(t, map[string]bool{"a/other": true, "a/vanished": true}, files)
 }

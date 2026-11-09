@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // Keep filename output byte-exact: pluginReleaseRepo.git trims whitespace and is
@@ -186,6 +188,7 @@ func TestRestoreDevPluginCollisionScope(t *testing.T) {
 		t.Run(map[bool]string{false: "automatic", true: "explicit prep"}[explicit], func(t *testing.T) {
 			// Quotes, tabs, newline, wildcard characters, whitespace and invalid
 			// UTF-8 must survive Git -z inventories and subprocess arguments.
+			testhelpers.RequireNonUTF8Names(t)
 			path := "plugin/commands/ \t'[*?\xff]\n/ odd \t-dev.md"
 			r, source, prep := newRestoreCollisionRepo(t, path)
 			r.write(t, ".git/info/exclude", "/.punt-labs/local/\n/plugin/commands/ignored/\n")

@@ -29,6 +29,12 @@ import (
 // the number in this comment.
 var sandboxTimeout = 10 * time.Second
 
+// sandboxSetupTimeout bounds each git call that builds the sandbox (init, the
+// containment self-test). It is separate from sandboxTimeout so that shrinking
+// the hook's bound in a test cannot make the setup time out on a loaded host
+// before the hook runs.
+const sandboxSetupTimeout = 30 * time.Second
+
 // sandboxGrace is how long a sandboxed command that got SIGTERM on its
 // deadline has to exit before it is killed.
 const sandboxGrace = time.Second
@@ -142,9 +148,6 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	}
 	defer removeSandbox(dir)
 
-	ctx, cancel := context.WithTimeout(context.Background(), sandboxTimeout)
-	defer cancel()
-
 	// sandboxEnv is the ONLY environment every sandbox git invocation and
 	// the hook execution itself see — assigning cmd.Env (never appending to
 	// os.Environ()) means everything is absent by default and only what is
@@ -182,7 +185,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	var initOut bytes.Buffer
 	if _, err := gitenv.Run(gitenv.Spec{
 		Git: "git", Args: []string{"-C", dir, "init", "-q", "--template="}, Env: sandboxEnv,
-		Stdout: &initOut, Stderr: &initOut, Limit: sandboxTimeout,
+		Stdout: &initOut, Stderr: &initOut, Limit: sandboxSetupTimeout,
 	}); err != nil {
 		return false, fmt.Errorf("sandbox git init: %w: %s", err, initOut.String())
 	}
@@ -199,7 +202,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	// entirely. Refuse to execute anything if the sandbox cannot vouch for
 	// itself — this is the property that makes the exact enumeration above
 	// unnecessary to keep complete.
-	top, topErr := gitInSandbox(ctx, dir, sandboxEnv, "rev-parse", "--show-toplevel")
+	top, topErr := gitInSandbox(dir, sandboxEnv, "rev-parse", "--show-toplevel")
 	if topErr != nil || !textscan.SamePath(top, dir) {
 		return false, fmt.Errorf("sandbox containment self-test failed (resolved toplevel %q, want %q): %v", top, dir, topErr)
 	}
@@ -261,6 +264,13 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		}
 		args = append(args, msgPath)
 	}
+
+	// The deadline starts here, not at the top of the function: sandboxTimeout
+	// bounds the hook, and the git init and file setup above must not spend it.
+	// On a slow or loaded host that setup alone can outlast a short timeout and
+	// the hook would be cancelled before it ran.
+	ctx, cancel := context.WithTimeout(context.Background(), sandboxTimeout)
+	defer cancel()
 
 	cmd := exec.CommandContext(ctx, hookPath, args...)
 	cmd.Dir = dir
@@ -447,9 +457,9 @@ func (e *hookExitedEarlyError) Error() string {
 // self-test (S1) — a targeted, read-only git query, not a general-purpose
 // runner, which is why it always attaches Output()'s stderr on failure
 // rather than exposing a broader interface.
-func gitInSandbox(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+func gitInSandbox(dir string, env []string, args ...string) (string, error) {
 	out, err := gitenv.Run(gitenv.Spec{
-		Git: "git", Args: append([]string{"-C", dir}, args...), Env: env, Limit: sandboxTimeout,
+		Git: "git", Args: append([]string{"-C", dir}, args...), Env: env, Limit: sandboxSetupTimeout,
 	})
 	if err != nil {
 		var exitErr *exec.ExitError

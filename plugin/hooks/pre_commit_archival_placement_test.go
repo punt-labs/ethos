@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // Seed through the real PostToolUse CLI entry point, not a fabricated archive
@@ -175,6 +177,7 @@ func TestArchivalIndexEntryBytes(t *testing.T) {
 	runGit(t, repo, "init", "-q")
 	// -z and literal pathspecs must preserve tabs, newlines, leading pathspec
 	// syntax and non-UTF-8 filename bytes, not trim or C-quote them.
+	testhelpers.RequireNonUTF8Names(t)
 	path := ":(glob)odd\tname\n\xff"
 	writeFile(t, filepath.Join(repo, path), "staged A\n")
 	runGit(t, repo, "--literal-pathspecs", "add", "--", path)
