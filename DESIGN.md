@@ -14119,8 +14119,10 @@ The section tags and idents are unchanged, so every existing section is still
 recognised and refreshed.
 
 Both shims exit 2 when the binary fails, DES-055's "ethos blocked this" code.
-A binary that predates the subcommands fails argument validation, so the commit
-blocks; the shim then asks the binary for `--help` and, finding no mention of the
+A binary that predates the subcommands either rejects them with a non-zero exit
+or, at v4.8.0 and earlier, prints the hook group's help on stdout and exits 0.
+Both subcommands print nothing on stdout, so the shim treats a non-zero exit or
+any stdout as failure and the commit blocks; the shim then asks the binary for `--help` and, finding no mention of the
 subcommand, names the remedy (`upgrade ethos: make install`). Fail-closed is
 the operator's ruling: an old binary must never let a commit pass unsealed. A
 section copied before the shim keeps working with a new binary, because
@@ -14137,7 +14139,8 @@ dormant tree never reaches the binary, an enabled tree with no usable binary
 never passes, and the verdict has no input for the installed text.
 
 **Verification.** Real `git commit` runs through the installed shims against a
-binary built from the branch, with a build of 93c9f82 as the old binary:
+binary built from the branch, with builds of 93c9f82 and v4.8.0 as the old
+binaries (one rejects the subcommand, the other prints help and exits 0):
 dormant with no binary, invalid configuration, blame archival error, mission
 trailers, `GIT_TRACE=/dev/stdout`, enabled with no binary, enabled with the old
 binary, and a section copied before the shim. The subcommands are tested for

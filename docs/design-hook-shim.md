@@ -185,9 +185,12 @@ skips (shared or tracked `core.hooksPath`) keeps the old section and
 `doctor` reports it stale.
 
 **Old binary, new shim.** The shim calls `hook pre-commit`. A binary
-without it fails argument validation (non-zero, `unknown command` on
-stderr), so the commit blocks with a readable cause rather than passing
-unsealed. Three things cover this: (a) a binary containing #583 refreshes
+without it answers in one of two ways. From v4.9 (#415) the `hook` group
+rejects an unknown subcommand: non-zero, `unknown command` on stderr. Before
+that the group had no `RunE` or `Args`, so v4.8.0 and earlier print the group
+help on stdout and exit 0. Both subcommands print nothing on stdout, so the
+shim treats a non-zero exit or any stdout as failure, and the commit blocks
+with a readable cause rather than passing unsealed. Three things cover this: (a) a binary containing #583 refreshes
 at SessionStart, sees the shim differs from its own section, and rewrites
 it to the form that binary expects; (b) `doctor` from the old binary
 reports the section stale; (c) the fail-closed block. Binaries of

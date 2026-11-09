@@ -82,10 +82,14 @@ else
   printf 'ethos: %s: ethos is enabled here but not installed; the commit is not sealed\n' "$_hook" >&2
   exit 1
 fi
-if ! "$ethos_bin" hook pre-commit; then
-  # A binary that predates the subcommand answers its --help with the group
-  # help, which never names it. Say how to fix that; any other failure is
-  # policy and has already explained itself.
+# The subcommand prints nothing on stdout. A binary before v4.9 does not know
+# it and answers with the hook group's help on stdout and exit 0, so output is
+# a failure too, never a pass.
+_out=$("$ethos_bin" hook pre-commit)
+_rc=$?
+if [ "$_rc" -ne 0 ] || [ -n "$_out" ]; then
+  # Say how to fix a binary that predates the subcommand: its --help never
+  # names it. Any other failure is policy and has already explained itself.
   "$ethos_bin" hook pre-commit --help 2>/dev/null | grep -q 'ethos hook pre-commit' ||
     printf 'ethos: %s: %s does not support "hook pre-commit"; upgrade ethos: make install (or run install.sh)\n' "$_hook" "$ethos_bin" >&2
   exit 2

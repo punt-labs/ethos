@@ -823,7 +823,10 @@ ShimOutcome ::= shimPass | shimBlock
 \field{.punt-labs/ethos/enabled} marker is absent. \field{binAbsent} is
 no \field{ethos} on \field{PATH} and none in
 \field{\$HOME/.local/bin}. \field{binOld} is a binary that predates the
-\field{hook pre-commit} and \field{hook commit-msg} subcommands.
+\field{hook pre-commit} and \field{hook commit-msg} subcommands. Such a
+binary either rejects them with a non-zero exit or, at v4.8.0 and earlier,
+prints the hook group's help on stdout and exits 0; the shim treats a
+non-zero exit or any stdout as failure, so both read as \field{binOld}.
 \field{shimPass} is exit with the captured host status when that status
 is zero; \field{shimBlock} is any non-zero exit.
 
@@ -870,9 +873,9 @@ Three properties follow from the definition by inspection, as in
   \item \field{EnabledWithoutUsableBinaryNeverPasses}: for
     \field{treeEnabled} with \field{bin} $\in$ \{\field{binAbsent},
     \field{binOld}\} the verdict is \field{shimBlock} for every
-    \field{hostFails} and \field{policyBlocks}. An old binary fails
-    argument validation on the new subcommand, so it blocks rather than
-    passing unsealed.
+    \field{hostFails} and \field{policyBlocks}. An old binary
+    either fails on the new subcommand or prints help on stdout; the shim
+    counts both as failure, so it blocks rather than passing unsealed.
   \item \field{PolicyIgnoresInstalledText}: \field{ShimState} has no
     field for the installed section, so no verdict depends on it.
 \end{itemize}

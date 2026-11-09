@@ -29,56 +29,72 @@ import (
 // no `hook pre-commit` or `hook commit-msg`.
 const oldBinaryRev = "93c9f82"
 
+// preHelpRev is the last release whose `hook` group had no RunE and no Args
+// (before #415): it answers an unknown subcommand with the group help on stdout
+// and exit 0, so a shim that trusted the exit status alone would pass unsealed.
+const preHelpRev = "v4.8.0"
+
+// builtBinary is one old binary, built once per test binary.
+type builtBinary struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
 var (
-	oldOnce sync.Once
-	oldDir  string
-	oldErr  error
+	oldBuilds   = map[string]*builtBinary{oldBinaryRev: {}, preHelpRev: {}}
+	oldBuildsMu sync.Mutex
 )
 
-// oldBinDir builds the ethos binary at oldBinaryRev once and returns its
-// directory. The source is exported with git archive into a scratch directory,
-// so the checkout under development is never touched.
-func oldBinDir(t *testing.T) string {
+// oldBinDir builds the ethos binary at rev once and returns its directory. The
+// source is exported with git archive into a scratch directory, so the checkout
+// under development is never touched.
+func oldBinDir(t *testing.T, rev string) string {
 	t.Helper()
-	oldOnce.Do(func() {
-		root, err := filepath.Abs("../..")
-		if err != nil {
-			oldErr = err
-			return
-		}
-		src, err := os.MkdirTemp("", "ethos-old-src")
-		if err != nil {
-			oldErr = err
-			return
-		}
-		defer os.RemoveAll(src)
-		oldDir, err = os.MkdirTemp("", "ethos-old-bin")
-		if err != nil {
-			oldErr = err
-			return
-		}
-		archive := testhelpers.GitCommand("-C", root, "archive", oldBinaryRev)
-		tarball, err := archive.Output()
-		if err != nil {
-			oldErr = fmt.Errorf("git archive %s: %w", oldBinaryRev, err)
-			return
-		}
-		untar := exec.Command("tar", "-x", "-C", src)
-		untar.Stdin = bytes.NewReader(tarball)
-		if out, err := untar.CombinedOutput(); err != nil {
-			oldErr = fmt.Errorf("extracting %s: %w\n%s", oldBinaryRev, err, out)
-			return
-		}
-		build := exec.Command("go", "build", "-o", filepath.Join(oldDir, "ethos"), "./cmd/ethos")
-		build.Dir = src
-		if out, err := build.CombinedOutput(); err != nil {
-			oldErr = fmt.Errorf("building %s: %w\n%s", oldBinaryRev, err, out)
-		}
-	})
-	if oldErr != nil {
-		t.Skipf("cannot build the binary at %s (a shallow clone has no such commit): %v", oldBinaryRev, oldErr)
+	oldBuildsMu.Lock()
+	b := oldBuilds[rev]
+	oldBuildsMu.Unlock()
+	require.NotNil(t, b, "unknown old revision %s", rev)
+	b.once.Do(func() { b.dir, b.err = buildAt(rev) })
+	if b.err != nil {
+		t.Skipf("cannot build the binary at %s (a shallow clone has no such commit): %v", rev, b.err)
 	}
-	return oldDir
+	return b.dir
+}
+
+// buildAt builds ./cmd/ethos as it was at rev and returns the directory holding
+// the binary. The directory is left for the OS to reap: it must outlive any one
+// test, and a package-level once has no test to own it.
+func buildAt(rev string) (string, error) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		return "", err
+	}
+	src, err := os.MkdirTemp("", "ethos-old-src")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(src)
+	tarball, err := testhelpers.GitCommand("-C", root, "archive", rev).Output()
+	if err != nil {
+		return "", fmt.Errorf("git archive %s: %w", rev, err)
+	}
+	untar := exec.Command("tar", "-x", "-C", src)
+	untar.Stdin = bytes.NewReader(tarball)
+	if out, err := untar.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("extracting %s: %w\n%s", rev, err, out)
+	}
+	dir, err := os.MkdirTemp("", "ethos-old-bin")
+	if err != nil {
+		return "", err
+	}
+	build := exec.Command("go", "build", "-o", filepath.Join(dir, "ethos"), "./cmd/ethos")
+	build.Dir = src
+	if out, err := build.CombinedOutput(); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("building %s: %w\n%s", rev, err, out)
+	}
+	return dir, nil
 }
 
 // shimRepo is a repository with the shims installed by `ethos enable`.
@@ -242,20 +258,40 @@ func TestShimEnabledNoBinaryBlocks(t *testing.T) {
 }
 
 // Enabled with a binary built before the subcommands existed: both hooks block
-// (fail closed) and the message names the remedy.
+// (fail closed) and the message names the remedy. The two builds differ in how
+// they refuse: 93c9f82 rejects the unknown subcommand with a non-zero exit,
+// while v4.8.0 prints the hook group's help on stdout and exits 0, which a shim
+// that trusted the exit status alone would let through unsealed.
 func TestShimEnabledOldBinaryBlocks(t *testing.T) {
-	old := oldBinDir(t)
-	r := newShimRepo(t, true)
-	out, err := r.commit(t, r.withPath(old), "old binary")
-	require.Error(t, err, out)
-	assert.Contains(t, out, "unknown command")
-	assert.Contains(t, out, "upgrade ethos: make install")
+	for _, tc := range []struct {
+		name, rev, refusal string
+	}{
+		{"rejects the subcommand", oldBinaryRev, "unknown command"},
+		{"prints help and exits 0", preHelpRev, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := oldBinDir(t, tc.rev)
+			r := newShimRepo(t, true)
+			out, err := r.commit(t, r.withPath(old), "old binary")
+			require.Error(t, err, "the commit must not land: %s", out)
+			assert.Contains(t, out, tc.refusal)
+			assert.Contains(t, out, "pre-commit")
+			assert.Contains(t, out, "upgrade ethos: make install")
+			assert.NotContains(t, out, "Available Commands", "the old binary's help must not be left looking like a pass")
+			cmd := exec.Command("git", "-C", r.dir, "rev-parse", "--verify", "-q", "HEAD")
+			cmd.Env = r.env
+			require.Error(t, cmd.Run(), "no commit was created")
 
-	require.NoError(t, os.Remove(filepath.Join(r.dir, ".git", "hooks", "pre-commit")))
-	out, err = r.commit(t, r.withPath(old), "old binary, commit-msg only")
-	require.Error(t, err, out)
-	assert.Contains(t, out, "commit-msg")
-	assert.Contains(t, out, "upgrade ethos: make install")
+			require.NoError(t, os.Remove(filepath.Join(r.dir, ".git", "hooks", "pre-commit")))
+			out, err = r.commit(t, r.withPath(old), "old binary, commit-msg only")
+			require.Error(t, err, "the commit must not land: %s", out)
+			assert.Contains(t, out, "commit-msg")
+			assert.Contains(t, out, "upgrade ethos: make install")
+			cmd = exec.Command("git", "-C", r.dir, "rev-parse", "--verify", "-q", "HEAD")
+			cmd.Env = r.env
+			require.Error(t, cmd.Run(), "no commit was created")
+		})
+	}
 }
 
 // A section copied before the shim keeps working with the new binary, and a

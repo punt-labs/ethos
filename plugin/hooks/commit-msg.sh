@@ -84,10 +84,14 @@ else
 fi
 [ -z "$1" ] && exit "$_host_status"
 [ -f "$1" ] || exit "$_host_status"
-if ! "$ethos_bin" hook commit-msg "$1"; then
-  # A binary that predates the subcommand answers its --help with the group
-  # help, which never names it. Say how to fix that; any other failure has
-  # already explained itself.
+# The subcommand prints nothing on stdout. A binary before v4.9 does not know
+# it and answers with the hook group's help on stdout and exit 0, so output is
+# a failure too, never a pass.
+_out=$("$ethos_bin" hook commit-msg "$1")
+_rc=$?
+if [ "$_rc" -ne 0 ] || [ -n "$_out" ]; then
+  # Say how to fix a binary that predates the subcommand: its --help never
+  # names it. Any other failure has already explained itself.
   "$ethos_bin" hook commit-msg --help 2>/dev/null | grep -q 'ethos hook commit-msg' ||
     printf 'ethos: %s: %s does not support "hook commit-msg"; upgrade ethos: make install (or run install.sh)\n' "$_hook" "$ethos_bin" >&2
   exit 2
