@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 // Seed through the real PostToolUse CLI entry point, not a fabricated archive
@@ -175,12 +177,8 @@ func TestArchivalIndexEntryBytes(t *testing.T) {
 	runGit(t, repo, "init", "-q")
 	// -z and literal pathspecs must preserve tabs, newlines, leading pathspec
 	// syntax and non-UTF-8 filename bytes, not trim or C-quote them.
-	// A volume that refuses a non-UTF-8 file name (macOS APFS) gets the same
-	// name without that byte; every other hazard stays.
-	path := ":(glob)odd\tname\n"
-	if probe := filepath.Join(t.TempDir(), "probe\xff"); os.WriteFile(probe, nil, 0o600) == nil {
-		path += "\xff"
-	}
+	testhelpers.RequireNonUTF8Names(t)
+	path := ":(glob)odd\tname\n\xff"
 	writeFile(t, filepath.Join(repo, path), "staged A\n")
 	runGit(t, repo, "--literal-pathspecs", "add", "--", path)
 	env := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
