@@ -103,11 +103,20 @@ func refreshHooks(repoRoot, storeRoot string, rep *Report, allowTracked bool) er
 				errs = append(errs, fmt.Errorf("resolving %s: %w", path, err))
 				continue
 			}
-			if target != "" && l.IsInWorkTree(target) {
-				rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-					"%s is a symlink to %s, a tracked file inside the work tree, and its ethos section is stale; not rewriting it — run `ethos enable` to update it", path, target))
-				rep.step("hook:"+name, StatusSkippedTracked, path)
-				continue
+			if target != "" {
+				inTree, shared := l.TargetPlace(target, storeRoot)
+				if inTree {
+					rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+						"%s is a symlink to %s, a tracked file inside the work tree, and its ethos section is stale; not rewriting it — run `ethos enable` to update it", path, target))
+					rep.step("hook:"+name, StatusSkippedTracked, path)
+					continue
+				}
+				if shared {
+					rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+						"%s is a symlink to %s, outside this repo and shared with others; not rewriting it — run `ethos enable` to update it", path, target))
+					rep.step("hook:"+name, StatusSkippedShared, path)
+					continue
+				}
 			}
 		}
 		if l.InWorkTree && !allowTracked {

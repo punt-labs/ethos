@@ -990,16 +990,20 @@ func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
 		root := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o644))
-		got := refreshStaleHooks(refresh, errors.New("store unreadable"), resolve.Located{Checkout: root, Store: root})
+		got := refreshStaleHooks(refresh, resolve.Located{Checkout: root, Store: root, StoreErr: errors.New("store unreadable")})
 		assert.Contains(t, got, "Git hook refresh skipped: store unreadable.")
 		assert.Contains(t, got, "run `ethos doctor`")
 	})
 	t.Run("dormant repo hears nothing", func(t *testing.T) {
 		root := t.TempDir()
-		got := refreshStaleHooks(refresh, errors.New("store unreadable"), resolve.Located{Checkout: root, Store: root})
+		got := refreshStaleHooks(refresh, resolve.Located{Checkout: root, Store: root, StoreErr: errors.New("store unreadable")})
 		assert.Empty(t, got)
 	})
-	assert.False(t, called, "refresh must not run against an unlocated store")
+	t.Run("unlocated checkout says nothing more", func(t *testing.T) {
+		got := refreshStaleHooks(refresh, resolve.Located{Checkout: "/c", Store: "/s", CheckoutErr: errors.New("no checkout")})
+		assert.Empty(t, got)
+	})
+	assert.False(t, called, "refresh must not run against an unlocated store or checkout")
 }
 
 // A bundle or policy problem alone does not stop the hook refresh: the store

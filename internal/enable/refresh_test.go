@@ -219,4 +219,53 @@ func TestRefreshHooks(t *testing.T) {
 		assert.True(t, recorded, "steps: %+v", rep.Steps)
 		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "outside this repo")
 	})
+
+	t.Run("a symlinked hook to a file outside the repo is untouched", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		outside := filepath.Join(physicalTempDir(t), "dotfiles-pre-commit")
+		require.NoError(t, os.WriteFile(outside, []byte(staleSeal), 0o755))
+		hookPath := filepath.Join(root, ".git", "hooks", "pre-commit")
+		require.NoError(t, os.Remove(hookPath))
+		require.NoError(t, os.Symlink(outside, hookPath))
+
+		rep, err := RefreshHooks(root)
+		require.NoError(t, err)
+		assert.Equal(t, staleSeal, readFile(t, outside))
+		var recorded bool
+		for _, st := range rep.Steps {
+			if st.Step == "hook:pre-commit" && st.Status == StatusSkippedShared {
+				recorded = true
+			}
+		}
+		assert.True(t, recorded, "steps: %+v", rep.Steps)
+		assert.Contains(t, strings.Join(rep.Warnings, "\n"), outside)
+	})
+
+	t.Run("a linked worktree's hook symlinked into the main checkout is untouched", func(t *testing.T) {
+		main := gitRepo(t)
+		gitRun(t, main, "commit", "--allow-empty", "-q", "-m", "init")
+		wt := filepath.Join(physicalTempDir(t), "wt")
+		gitRun(t, main, "worktree", "add", "-q", wt)
+		_, err := EnableTo(wt, main)
+		require.NoError(t, err)
+		tracked := filepath.Join(main, "tools", "pre-commit")
+		require.NoError(t, os.MkdirAll(filepath.Dir(tracked), 0o755))
+		require.NoError(t, os.WriteFile(tracked, []byte(staleSeal), 0o755))
+		hookPath := filepath.Join(main, ".git", "hooks", "pre-commit")
+		require.NoError(t, os.Remove(hookPath))
+		require.NoError(t, os.Symlink(tracked, hookPath))
+
+		rep, err := RefreshHooksTo(wt, main)
+		require.NoError(t, err)
+		assert.Equal(t, staleSeal, readFile(t, tracked))
+		var recorded bool
+		for _, st := range rep.Steps {
+			if st.Step == "hook:pre-commit" && st.Status == StatusSkippedTracked {
+				recorded = true
+			}
+		}
+		assert.True(t, recorded, "steps: %+v", rep.Steps)
+	})
 }

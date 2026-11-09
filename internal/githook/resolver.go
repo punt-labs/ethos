@@ -295,6 +295,26 @@ func evalPath(p string) string {
 	return filepath.Clean(p)
 }
 
-// IsInWorkTree reports whether path, with symlinks resolved, lies inside the
-// work tree this lookup was made for.
-func (l Lookup) IsInWorkTree(path string) bool { return isUnder(path, l.root) }
+// TargetPlace classifies a resolved symlink target the way the hooks directory
+// is classified: under the git common dir it is private to the repo; under the
+// work tree (or under extra, such as the main checkout of a linked worktree) it
+// is a tracked file; anywhere else it is shared across repos. The common dir is
+// tested first because a linked worktree's common dir sits inside the main
+// checkout's tree.
+func (l Lookup) TargetPlace(target string, extra ...string) (inWorkTree, shared bool) {
+	common, err := gitOut(l.root, "rev-parse", "--git-common-dir")
+	if err != nil || common == "" {
+		common = filepath.Join(l.root, ".git")
+	} else if !filepath.IsAbs(common) {
+		common = filepath.Join(l.root, common)
+	}
+	if isUnder(target, common) {
+		return false, false
+	}
+	for _, top := range append([]string{l.root}, extra...) {
+		if top != "" && isUnder(target, top) {
+			return true, false
+		}
+	}
+	return false, true
+}

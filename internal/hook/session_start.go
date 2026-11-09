@@ -132,7 +132,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
 	}
-	if refreshed := refreshStaleHooks(deps.RefreshHooks, loc.StoreFailure(), loc); refreshed != "" {
+	if refreshed := refreshStaleHooks(deps.RefreshHooks, loc); refreshed != "" {
 		if note != "" {
 			note += " "
 		}
@@ -237,6 +237,19 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	return emitAgentContext(agentID, agentPersona, store, deps, loc.Checkout, note)
 }
 
+// noHookNote is the refresh's answer when there is nothing to tell the session.
+const noHookNote = ""
+
+// skippedHookNote tells an enabled repo's session that the refresh was skipped
+// for storeFailure. A dormant repo has no hooks worth refreshing and hears
+// nothing.
+func skippedHookNote(checkout string, storeFailure error) string {
+	if on, _ := resolve.EnabledMarker(checkout); !on {
+		return noHookNote
+	}
+	return fmt.Sprintf("Git hook refresh skipped: %v. A stale seal section may block commits; run `ethos doctor`.", storeFailure)
+}
+
 // refreshStaleHooks runs refresh for the located repository and returns the
 // sentence telling the session what happened to its git hook sections; "" when
 // nothing was stale, when refresh is nil, or when there is no repository. A
@@ -244,20 +257,17 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 // could not be refreshed is told to the session, not only logged: the shell
 // wrapper sends stderr to a log file the session never reads. A store failure
 // skips the refresh, and the session is told that too.
-func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error), storeFailure error, loc resolve.Located) string {
-	if refresh == nil || loc.Checkout == "" {
-		return ""
+func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error), loc resolve.Located) string {
+	// A checkout that could not be located is already reported by
+	// storeUnlocatedNote and the roster notice; this says nothing more.
+	if refresh == nil || loc.CheckoutErr != nil || loc.Checkout == "" {
+		return noHookNote
 	}
-	if storeFailure != nil {
-		// Only an enabled repo has hooks worth refreshing; say nothing in a
-		// dormant one.
-		if on, _ := resolve.EnabledMarker(loc.Checkout); on {
-			return fmt.Sprintf("Git hook refresh skipped: %v. A stale seal section may block commits; run `ethos doctor`.", storeFailure)
-		}
-		return ""
+	if storeFailure := loc.StoreFailure(); storeFailure != nil {
+		return skippedHookNote(loc.Checkout, storeFailure)
 	}
 	if loc.Store == "" {
-		return ""
+		return noHookNote
 	}
 	r, err := refresh(loc.Checkout, loc.Store)
 	for _, w := range r.Warnings {
