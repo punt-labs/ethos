@@ -323,7 +323,7 @@ def default_seal(f: Fixture) -> None:
     foreign.chmod(0o755)
     f.cli("enable")
     first = inventory(f.repo / RECORD)
-    require(b"audit seal" in foreign.read_bytes(), "enable did not install pre-commit seal")
+    require(b"hook pre-commit" in foreign.read_bytes(), "enable did not install the pre-commit shim")
     write(f.repo / "source.txt", "staged-A\n")
     f.git("add", "source.txt")
     write(f.repo / "source.txt", "working-B\n")
