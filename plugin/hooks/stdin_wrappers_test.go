@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -458,6 +459,63 @@ func TestWrappersLeaveNoCaptureFilesAfterAPromptPayload(t *testing.T) {
 				left, err := filepath.Glob(filepath.Join(tmp, "ethos-hook*"))
 				require.NoError(t, err)
 				assert.Empty(t, left, "a capture or handshake file was left behind")
+			})
+		}
+	}
+}
+
+// A wrapper cancelled at any moment after it starts leaves no capture file and
+// no running cat: cancellation stops the capture before it removes the file.
+// cat being dead is shown by the writer's pipe breaking, which is what its
+// read end closing does; matching a process by name would be flaky.
+func TestWrappersCancelledDuringTheLaunchLeaveNothing(t *testing.T) {
+	for _, bash := range wrapperBashes(t) {
+		if bashMajor(t, bash) >= 4 {
+			continue // the capture exists only under bash 3.2
+		}
+		for hook := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				script, err := filepath.Abs(hook)
+				require.NoError(t, err)
+				home := t.TempDir()
+				require.NoError(t, os.MkdirAll(filepath.Join(home, ".punt-labs", "ethos"), 0o755))
+				bin := t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755))
+				tmp := t.TempDir()
+				for i := range 50 {
+					r, w, err := os.Pipe()
+					require.NoError(t, err)
+					cmd := exec.Command(bash, script)
+					cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin", "TMPDIR=" + tmp}
+					cmd.Stdin = r
+					require.NoError(t, cmd.Start())
+					require.NoError(t, r.Close())
+					// After the shell is up, so the signal meets a running script
+					// rather than a process the OS has not yet given a handler.
+					time.Sleep(30*time.Millisecond + time.Duration(rand.IntN(90))*time.Millisecond)
+					require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+					done := make(chan struct{})
+					go func() { _ = cmd.Wait(); close(done) }()
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						_ = cmd.Process.Kill()
+						t.Fatalf("run %d: the wrapper did not exit after SIGTERM", i)
+					}
+					broken := false
+					for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+						if _, err := w.Write([]byte("x")); err != nil {
+							broken = true
+							break
+						}
+					}
+					_ = w.Close()
+					assert.True(t, broken, "run %d: the capture is still reading the writer's pipe", i)
+					left, err := filepath.Glob(filepath.Join(tmp, "ethos-hook*"))
+					require.NoError(t, err)
+					assert.Empty(t, left, "run %d: a capture or handshake file was left behind", i)
+				}
 			})
 		}
 	}

@@ -17,16 +17,22 @@ else
   # fragment would be lost: let cat collect stdin into a file under the same
   # 10s deadline and read the file back. The file is mode 0600 and lives at
   # most 10s; it follows TMPDIR, with /tmp as the fallback.
+  _f=""
+  _p=""
+  _d=""
+  _r=""
+  # A hook cancelled mid-read must not leave the payload (it can hold secrets)
+  # on disk, or cat or the watchdog running. The handler is armed before any
+  # child exists and stops every job the shell has, so no signal finds a child
+  # whose pid is not yet recorded; it reaps them before removing the file, since
+  # cat reopening its redirection after an unlink would recreate the file with
+  # default permissions. Not covered: a signal during the mktemp call itself,
+  # when the file's name is not yet known (an empty file, no payload).
+  trap 'trap - EXIT; kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; rm -f "$_f" "$_r"' EXIT
+  trap 'exit 143' INT TERM
   _f=$(mktemp "${TMPDIR:-/tmp}/ethos-hook.XXXXXX" 2>/dev/null) ||
     _f=$(mktemp /tmp/ethos-hook.XXXXXX 2>/dev/null) || _f=""
   if [[ -n $_f ]]; then
-    _p=""
-    _d=""
-    _r=""
-    # A hook cancelled mid-read must not leave the payload (it can hold
-    # secrets) on disk, or cat or the watchdog running.
-    trap 'rm -f "$_f" "$_r"; kill "$_p" "$_d" 2>/dev/null' EXIT
-    trap 'exit 143' INT TERM
     cat <&0 >"$_f" &
     _p=$!
     # The deadline is a watchdog shell around sleep, not a poll: it costs one
