@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `ethos doctor` hook sandbox starts its timeout when the hook starts and
   gives its own `git init` a separate bound, so a short hook timeout no longer
   cancels the hook, or the setup, before it runs.
+- `make tools` retries transient release-download errors (HTTP 5xx) on both the golangci-lint tarball and checksums fetches, bounds each attempt at two minutes (retries stop starting after five), and falls back to the GitHub API asset route when `releases/download` keeps failing, so a GitHub release-download outage no longer fails the required `verify make tools` job. Checksum verification is the same on either route.
 - `ethos enable` refreshes the git hook sections of an already-enabled repo
   even when it then refuses to retire legacy ignore rules, so a repo with
   legacy data no longer keeps a stale hook that blocks every commit. A
@@ -44,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the stale section can block commits, or WARN in a repo where ethos is
   not enabled and the hook passes through; a stale trailer section stays WARN.
 - `ethos find missions --format paths` omits missions whose directory was purged or is not a directory and notes each on stderr, and fails on any other stat error; `json` and `table` still list them.
+- `make docs` ignores the machine-local `.punt-labs/local/` tree, so worker prompts from a mission run on the host no longer fail `make check` at the markdown lint stage.
+- `make` pins `GOTOOLCHAIN` to the `toolchain` line in `go.mod`, so `make lint` and `make test` run the Go that CI runs, even when the host's system Go is newer; golangci-lint v2.13.1 cannot read the export data (format version 5) a go1.27 standard library emits.
 
 ## [4.21.0] - 2026-11-07
 

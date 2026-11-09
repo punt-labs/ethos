@@ -29,6 +29,25 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # Resolve the install dir the way `go install` does: GOBIN if set, else
 # GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
 GOLANGCI_LINT_VERSION := v2.13.1
+
+# Every recipe runs the Go toolchain named by go.mod's `toolchain` line, not
+# whatever Go is first on the developer's PATH. golangci-lint v2.13.1's
+# go/types export-data reader accepts format version 4 at most, while a
+# go1.27.x standard library emits version 5, so under GOTOOLCHAIN=auto a newer
+# system Go (e.g. go1.27.3 against `toolchain go1.26.5`) wins and the linter
+# fails with "export data version 5 is greater than maximum supported version
+# 4". go1.26 emits version 4. go.mod's toolchain line is the Go that CI runs
+# (actions/setup-go reads go.mod) and the Go this linter can read, so
+# exporting it here makes a local `make lint`, `make test`, and `make build`
+# run the same Go as CI. The awk takes only a `toolchain go1.x` line, so
+# `toolchain default` or a missing line leaves GOTOOLCHAIN unset (Go's own
+# default applies), and it strips a trailing CR so a CRLF go.mod cannot export
+# an invalid value that would break every recipe.
+GO_TOOLCHAIN := $(shell awk '$$1=="toolchain" && $$2 ~ /^go1\./ {sub(/\r$$/,"",$$2); print $$2}' go.mod)
+ifneq ($(GO_TOOLCHAIN),)
+export GOTOOLCHAIN := $(GO_TOOLCHAIN)
+endif
+
 GOBIN := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
@@ -367,6 +386,10 @@ dist: clean ## Cross-compile for all platforms
 # "fix" into an actual break in either direction, so the prose moves up
 # here as ordinary Make comments and the recipe body keeps only
 # executable statements.
+# The fetches retry HTTP 5xx from the release CDN (10 attempts, 10s apart); each attempt is bounded at two minutes and retries stop starting after five; --retry-all-errors needs curl 7.71+ (ubuntu-latest and macos-latest runners are newer).
+# If releases/download still fails after the retries, each file is fetched through the GitHub API asset route instead, because the two routes are served from
+# different edges and one can stay down for hours while the other works. Verification is route-independent: the checksums file is fetched the same way and the
+# tarball is checked against it exactly as before, so the trust root does not change with the route.
 tools: ## Install development tools
 	@if [ -z "$(GOBIN)" ]; then \
 	  echo "error: could not determine GOBIN — is Go installed and on PATH? ('go env GOBIN' and 'go env GOPATH' both came back empty)" >&2; \
@@ -391,8 +414,27 @@ tools: ## Install development tools
 	tmpdir=$$(mktemp -d "$${TMPDIR:-/tmp}/ethos-tools.XXXXXXXXXX"); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
-	curl -sSfL -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
-	curl -sSfL -o "$$tmpdir/$$checksums" "$$base/$$checksums"; \
+	retry="--connect-timeout 30 --max-time 120 --retry 10 --retry-delay 10 --retry-max-time 300 --retry-all-errors"; \
+	api=https://api.github.com/repos/golangci/golangci-lint/releases; \
+	api_curl() { \
+	  if [ -n "$${GITHUB_TOKEN:-}" ]; then \
+	    curl -sSfL $$retry -H "Authorization: Bearer $$GITHUB_TOKEN" "$$@"; \
+	  else \
+	    curl -sSfL $$retry "$$@"; \
+	  fi; \
+	}; \
+	fetch() { \
+	  f=$$1; \
+	  if curl -sSfL $$retry -o "$$tmpdir/$$f" "$$base/$$f"; then return 0; fi; \
+	  echo "releases/download failed for $$f; falling back to the GitHub API asset route" >&2; \
+	  command -v jq >/dev/null 2>&1 || { echo "jq not found; cannot use the API fallback for $$f" >&2; return 1; }; \
+	  meta=$$(api_curl "$$api/tags/$$ver") || { echo "API release lookup failed for $$ver" >&2; return 1; }; \
+	  id=$$(printf '%s' "$$meta" | jq -r --arg n "$$f" '[.assets[] | select(.name == $$n) | .id][0] // empty') || { echo "could not parse the API release metadata for $$ver" >&2; return 1; }; \
+	  if [ -z "$$id" ]; then echo "asset $$f not found in release $$ver via the API" >&2; return 1; fi; \
+	  api_curl -H 'Accept: application/octet-stream' -o "$$tmpdir/$$f" "$$api/assets/$$id" || { echo "API asset download failed for $$f" >&2; return 1; }; \
+	}; \
+	fetch "$$tarball"; \
+	fetch "$$checksums"; \
 	line=$$(awk -v n="$$tarball" '$$2 == n {print}' "$$tmpdir/$$checksums" || true); \
 	count=$$(printf '%s\n' "$$line" | grep -c . || true); \
 	if [ "$$count" -ne 1 ]; then \
