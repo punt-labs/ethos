@@ -229,7 +229,13 @@ func TestPreconditions_ReadsMatchWithThePathPassCaseRule(t *testing.T) {
 	canonical := filepath.Join(repo, "a.go")
 	require.NoError(t, os.WriteFile(canonical, []byte("x"), 0o600))
 	// repodir is the same directory as RepoDir, as on a case-insensitive volume.
-	require.NoError(t, os.Symlink(repo, filepath.Join(home, "repodir")))
+	// On such a volume the name already resolves to RepoDir and a symlink would
+	// collide with it; on a case-sensitive one the symlink stands in for it.
+	if _, err := os.Lstat(filepath.Join(home, "repodir")); os.IsNotExist(err) {
+		require.NoError(t, os.Symlink(repo, filepath.Join(home, "repodir")))
+	} else {
+		require.NoError(t, err)
+	}
 	variant := filepath.Join(home, "repodir", "a.go")
 	require.NotEqual(t, canonical, variant)
 
