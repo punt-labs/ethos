@@ -379,7 +379,7 @@ dist: clean ## Cross-compile for all platforms
 # "fix" into an actual break in either direction, so the prose moves up
 # here as ordinary Make comments and the recipe body keeps only
 # executable statements.
-# The fetches retry HTTP 5xx from the release CDN for up to five minutes (10 attempts, 10s apart); --retry-all-errors needs curl 7.71+ (ubuntu-latest and macos-latest runners are newer).
+# The fetches retry HTTP 5xx from the release CDN (10 attempts, 10s apart); each attempt is bounded at two minutes and retries stop starting after five; --retry-all-errors needs curl 7.71+ (ubuntu-latest and macos-latest runners are newer).
 # If releases/download still fails after the retries, each file is fetched through the GitHub API asset route instead, because the two routes are served from
 # different edges and one can stay down for hours while the other works. Verification is route-independent: the checksums file is fetched the same way and the
 # tarball is checked against it exactly as before, so the trust root does not change with the route.
@@ -407,7 +407,7 @@ tools: ## Install development tools
 	tmpdir=$$(mktemp -d "$${TMPDIR:-/tmp}/ethos-tools.XXXXXXXXXX"); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
-	retry="--retry 10 --retry-delay 10 --retry-max-time 300 --retry-all-errors"; \
+	retry="--connect-timeout 30 --max-time 120 --retry 10 --retry-delay 10 --retry-max-time 300 --retry-all-errors"; \
 	api=https://api.github.com/repos/golangci/golangci-lint/releases; \
 	api_curl() { \
 	  if [ -n "$${GITHUB_TOKEN:-}" ]; then \
