@@ -4,6 +4,7 @@ package hooks
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -47,6 +48,8 @@ var archivalCallPattern = regexp.MustCompile(`^([a-z0-9_]+)\((.*)\)\s+=\s+(.*)$`
 
 func parseArchivalCalls(trace string) ([]archivalCall, error) {
 	pending := map[int]archivalCall{}
+	ended := map[int]bool{}
+	exitGroup := false
 	var calls []archivalCall
 	finish := func(c archivalCall, text string) error {
 		m := archivalCallPattern.FindStringSubmatch(text)
@@ -54,6 +57,7 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			return fmt.Errorf("unsupported syscall record %q", text)
 		}
 		c.name, c.args, c.result = m[1], m[2], m[3]
+		exitGroup = exitGroup || c.name == "exit_group"
 		calls = append(calls, c)
 		return nil
 	}
@@ -67,7 +71,13 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			return nil, fmt.Errorf("missing numeric tid on line %d: %q", n+1, line)
 		}
 		text = strings.TrimSpace(text)
-		if strings.HasPrefix(text, "+++") || strings.HasPrefix(text, "---") {
+		if strings.HasPrefix(text, "+++") {
+			if strings.HasPrefix(text, "+++ exited") || strings.HasPrefix(text, "+++ killed") {
+				ended[tid] = true
+			}
+			continue
+		}
+		if strings.HasPrefix(text, "---") {
 			continue
 		}
 		if strings.HasPrefix(text, "<... ") {
@@ -102,7 +112,16 @@ func parseArchivalCalls(trace string) ([]archivalCall, error) {
 			return nil, err
 		}
 	}
-	for _, c := range pending {
+	for tid, c := range pending {
+		// When exit_group tears down sibling threads, strace may print a thread's
+		// in-flight syscall as "???" because the kernel destroyed its registers
+		// before strace read them. Such a record has no decodable operands and
+		// the thread ends without resuming, so it cannot be a namespace mutation
+		// we could classify. Accept it only with that exact evidence; any other
+		// undecodable record still refuses below.
+		if c.name == "???" && ended[tid] && exitGroup {
+			continue
+		}
 		// A killed task may never resume. Still classify all printed destination
 		// operands; if any required operand is missing, the later parser refuses.
 		if err := finish(c, strings.TrimSuffix(strings.TrimSpace(c.args), ")")+") = ?"); err != nil {
@@ -697,6 +716,60 @@ func TestArchivalTraceOperandContract(t *testing.T) {
 		{"open zero create mode", `1 open("/s/local/tmp/stage", O_WRONLY|O_CREAT, 0) = 3`, ""},
 		{"openat zero create mode", `1 openat(AT_FDCWD, "/s/local/tmp/stage", O_WRONLY|O_CREAT, 0) = 3`, ""},
 		{"openat2 zero create mode", `1 openat2(AT_FDCWD, "/s/local/tmp/stage", {flags=O_WRONLY|O_CREAT, mode=0, resolve=0}, 24) = 3`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := checkArchivalTrace(tc.trace, p)
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+		})
+	}
+}
+
+// linkedFullPolicy is the policy for the linked-worktree, full-record retry:
+// store S is /t/001, checkout C is /t/003/feature, so publication lands in C
+// while the archive, local staging, index and objects live under S.
+func linkedFullPolicy() archivalTracePolicy {
+	return archivalTracePolicy{
+		checkout:  "/t/003/feature",
+		local:     "/t/001/.punt-labs/local/ethos",
+		archive:   "/t/001/.punt-labs/local/ethos/trace/sessions/d/audit-1.jsonl",
+		published: "/t/003/feature/.punt-labs/ethos/sessions/d/audit-1.jsonl",
+		index:     "/t/001/.git/worktrees/feature/index",
+		objects:   "/t/001/.git/objects",
+		full:      true,
+	}
+}
+
+// TestArchivalTraceLinkedFullRetry replays a real strace of the retry run, in
+// which publication happens. It ends with an exit_group that interrupts a
+// sibling thread, which strace prints as "???".
+func TestArchivalTraceLinkedFullRetry(t *testing.T) {
+	data, err := os.ReadFile("testdata/archival_linked_full_retry.strace")
+	require.NoError(t, err)
+	summary, err := checkArchivalTrace(string(data), linkedFullPolicy())
+	require.NoError(t, err)
+	assert.True(t, summary.archiveInstall)
+	assert.True(t, summary.indexLocked)
+	assert.True(t, summary.publicationInstall)
+
+	// A destination in the checkout's source tree must still be refused.
+	bad := strings.Replace(string(data), "/t/003/feature/.punt-labs/ethos/sessions/d/audit-1.jsonl", "/t/003/feature/src/audit-1.jsonl", 1)
+	require.NotEqual(t, string(data), bad)
+	_, err = checkArchivalTrace(bad, linkedFullPolicy())
+	assert.ErrorContains(t, err, "destination not permitted")
+}
+
+func TestArchivalTraceUndecodableRecord(t *testing.T) {
+	p := linkedFullPolicy()
+	for _, tc := range []struct {
+		name, trace, wantError string
+	}{
+		{"torn down by exit_group", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n1 exit_group(0 <unfinished ...>\n2 ???( <unfinished ...>\n1 <... exit_group resumed>) = ?\n2 +++ exited with 0 +++", ""},
+		{"no exit_group", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n2 ???( <unfinished ...>\n2 +++ exited with 0 +++", "unsupported syscall record"},
+		{"thread never ended", "1 clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD) = 2\n1 exit_group(0) = ?\n2 ???( <unfinished ...>", "unsupported syscall record"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := checkArchivalTrace(tc.trace, p)
