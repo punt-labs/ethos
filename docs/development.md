@@ -199,8 +199,8 @@ and are inert there; Claude Code ignores files it does not recognize.
 
 ### Storage Layout
 
-DES-079 requires the following repository boundary; final entry-point acceptance
-is pending. Resolve canonical store root **S** through Git's common directory
+DES-079 shipped the following repository boundary in v4.21.0; release
+acceptance is pending. Resolve canonical store root **S** through Git's common directory
 separately from invoking checkout **C**. Repository paths below are relative to S
 unless marked C. "Yes" means intended for Git, not automatically staged/committed.
 See [storage and publication contract](storage-layout.md) for the full roots,

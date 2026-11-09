@@ -107,7 +107,7 @@ An ADR's settled status is not a release claim.
 For a single recorded association, local commit-msg hooks append
 `Mission:`/`Delegation:` trailers. This example also assumes the full prompt
 and audit detail are available locally; a fresh blame-only clone need not have
-them. Under the pending DES-079 layout, resolve the canonical store root S first:
+them. Under the DES-079 layout (shipped in v4.21.0; release acceptance pending), resolve the canonical store root S first:
 
 ```text
 $ git blame -L 42,42 internal/hook/generate_agents.go
@@ -141,7 +141,8 @@ values fail visibly; omitted means `blame`. These are pending repair requirement
 superseding the historical tracked-by-default seal in DES-058.
 
 For multi-mission/delegation squash merges, selected `mission publish`,
-`provenance message` and `provenance verify` are pending command contracts.
+`provenance message` and `provenance verify` shipped in v4.21.0; release
+acceptance is pending.
 The supported route supplies a generated body and pins the reviewed head to
 GitHub's squash command, then fetches and verifies the actual merge commit.
 Local hooks do not run remotely. Attribution must preserve ambiguity rather

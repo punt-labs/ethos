@@ -525,7 +525,8 @@ var missionReflectCmd = &cobra.Command{
 	Short: "Submit a structured reflection for the current round",
 	Long: `Submit a structured reflection for the mission's current round.
 
-The reflection is read from a YAML file containing round, author,
+The reflection is read from a YAML file containing mission (the mission
+ID, which must match the argument), round, author,
 converging, signals, recommendation, and (when the recommendation is
 stop or escalate) reason. The round number must equal the mission's
 current round; reflections are append-only and a duplicate is refused.
@@ -543,6 +544,7 @@ Examples:
 
   # Minimal valid reflection (YAML file body):
   #
+  #   mission: m-2026-04-08-005
   #   round: 1
   #   author: claude
   #   converging: true

@@ -38,7 +38,8 @@ Preserve blame through squash merges and fresh clones, mandatory mission round
 decisions, and usable local audit history. Shared store roots and checkout roots
 are different in linked worktrees; use the established resolver. Preserve
 identity/extension semantics, redaction, atomic writes, and lock ordering.
-The approved storage repair is still work to implement, not a current guarantee.
+The approved storage repair shipped in v4.21.0; release acceptance is pending,
+so it is not yet a guarantee.
 
 ## Working method
 

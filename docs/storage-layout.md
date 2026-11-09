@@ -1,15 +1,13 @@
 # Storage and publication contract
 
-**Status:** DES-079 is implemented and shipped in v4.21.0 and later (see
-`CHANGELOG.md`, `## [4.21.0] - 2026-11-07`: `ethos mission publish`,
-`ethos provenance message|verify`, `ethos mission export --full`,
-`ethos repair`, and the local zone). The placements in the Paths table were
-observed on v4.22.1 through real entry points on 2026-11-09. What remains
-unproven is the specific acceptance list in the last table; rows stay
-**Pending** where no evidence exists. `make check` includes `check-storage`
-(`scripts/storage_acceptance.py`), which drives the real CLI, hook wrappers and
-Git hooks; the last table names the scenarios it covers. DES-080 redaction
-shipped in v4.20.0; that does not establish DES-079 acceptance.
+**Status:** The DES-079 features listed under 4.21.0 in `CHANGELOG.md` shipped
+in v4.21.0; release acceptance is pending. The placements in the Paths table
+were observed on v4.22.1 through real entry points on 2026-11-09. Every row in
+"Promise to implementation to acceptance" stays **Pending**. "Shipped versus
+proven" lists the partial `check-storage` evidence per row.
+`make check` includes `check-storage` (`scripts/storage_acceptance.py`), which
+drives the real CLI, hook wrappers and Git hooks. DES-080 redaction shipped in
+v4.20.0; that does not establish DES-079 acceptance.
 
 ## Roots and ownership
 
@@ -57,13 +55,15 @@ Paths in the first column are relative to S unless C is explicit.
 | Identity graph and base extensions | `.punt-labs/ethos/{identities,talents,personalities,writing-styles,roles,teams,agents,...}/` | Source, ordinary Git staging |
 | Configuration | `.punt-labs/ethos.yaml` | Source; documented exception to the record-tree location |
 | Contract, including inline decisions | `.punt-labs/ethos/missions/<id>/contract.yaml` (with the `round_decisions` v1 block, written at dispatch) | Shared workflow authority |
-| All accepted results, delegation records, corrections | `.punt-labs/ethos/missions/<id>/{results.yaml,delegations/<d>/record.yaml,corrections.yaml}`. `corrections.yaml` is written at mission create as an initialized empty file (`version`, `mission`, `entries: []`); `results.yaml` on result; `record.yaml` when the Agent spawn passes pre-tool-use | Blame records |
+| All accepted results, delegation records, corrections | `.punt-labs/ethos/missions/<id>/{results.yaml,delegations/<d>/record.yaml,corrections.yaml}`. in repository (two-tree) mode `corrections.yaml` is initialized at mission create as an empty file (`version`, `mission`, `entries: []`); `results.yaml` on result; `record.yaml` when the Agent spawn passes pre-tool-use | Blame records |
 | Mission summaries; repo ADRs | `.punt-labs/ethos/{missions.jsonl,adrs/<id>.yaml}`; `missions.jsonl` is written on close; `ethos adr create` writes `adrs/<id>.yaml` in the repository store (`S/.punt-labs/ethos/adrs/`) | Blame records; ADR reads repo-first, legacy global fallback |
 | Immutable publication manifest | `C/.punt-labs/ethos/provenance/<sha256>.yaml` (written by `ethos mission publish`, which also stages it and the published records into C's index) | Committed snapshot inventory and attribution evidence |
-| Plain export | `missions/<id>.contract.yaml` and `missions/<id>.result.yaml` under the export directory (default relative to C's root) | Unstaged |
-| Full export additions | `missions/<id>/log-<sid>-<t0>-<t1>.jsonl` under the export directory, alongside retained prompts and reflections | Unstaged |
-| Published reflection aggregate (`record: full`) | `.punt-labs/ethos/missions/<id>/reflections.yaml`; under `record: blame`, `ethos mission reflect` writes only the local envelope | Blame records only under full |
-| Published session audit chunk (`record: full`) | `.punt-labs/ethos/sessions/<date>-<sid>/audit-<t0>-<t1>.jsonl`; the pre-commit seal adds it to the commit automatically | Eligible entries only |
+| Plain export | `<dir>/<id>.contract.yaml` and `<dir>/<id>.result.yaml`. Default `<dir>` is `C/.punt-labs/ethos/missions` (`cmd/ethos/mission.go`, `missionExportDefaultDir`); `--dir` is cwd-relative | Unstaged |
+| Full export additions | `<dir>/<id>/log-<sid>-<t0>-<t1>.jsonl`, alongside retained prompts and reflections, same `<dir>` rule | Unstaged |
+| Published reflection aggregate (`record: full`) | `C/.punt-labs/ethos/missions/<id>/reflections.yaml` (`CheckoutRecordRoot`, `internal/mission/reflection_authority.go:569`); under `record: blame`, `ethos mission reflect` writes only the local envelope | Trace publication copy, eligible entries only |
+| Published session audit chunk (`record: full`) | `C/.punt-labs/ethos/sessions/<date>-<sid>/audit-<t0>-<t1>.jsonl` (`internal/hook/audit_repository.go:250`); the pre-commit seal adds it to the commit automatically | Trace publication copy, eligible entries only |
+| Published delegation prompt (`record: full`) | `C/.punt-labs/ethos/missions/<id>/delegations/<d>/prompt.md` (`internal/mission/prompt_record.go:231`) | Trace publication copy, eligible entries only |
+| Published mission event chunk (`record: full`) | `C/.punt-labs/ethos/missions/<id>/log-<sid>-<t0>-<t1>.jsonl` | Trace publication copy, eligible entries only |
 | Session audit live file | `.punt-labs/local/ethos/sessions/<sid>.audit.jsonl` | Local in both modes |
 | Mission event live file | `.punt-labs/local/ethos/missions/<id>/<sid>.log.jsonl` | Local in both modes |
 | Retained prompts and chunks | `.punt-labs/local/ethos/trace/` plus record-relative path | Local in both modes |
@@ -74,10 +74,16 @@ Paths in the first column are relative to S unless C is explicit.
 | Mission event stream with no resolvable session | `.punt-labs/local/ethos/missions/<id>/no-session.log.jsonl` | Local in both modes |
 | Sealed mission event chunks | `.punt-labs/local/ethos/trace/missions/<id>/log-<sid>-<t0>-<t1>.jsonl` (sealed at close and at commit) | Local in both modes |
 | Sealed session audit chunks | `.punt-labs/local/ethos/trace/sessions/<date>-<sid>/audit-<t0>-<t1>.jsonl` (sealed at commit) | Local in both modes |
-| Locks | `.punt-labs/local/ethos/locks/<domain>/<sha256>.lock`; domains observed: `mission-state`, `claudemd`, `mission-delegations`, `audit-stream`, `delegation`, `delegation-prompt`, `mission-create`, `mission-summary` (the ADR store lock is `locks/adr/<sha256>.lock`) | Never published |
-| Staging and quarantine | `.punt-labs/local/ethos/tmp/` (`Policy.TempDir`) and `.punt-labs/local/ethos/quarantine/` | Never published |
+| Locks | `.punt-labs/local/ethos/locks/<domain>/<sha256>.lock`. Domains come from the `LockPath` calls that take a lock: `adr`, `audit-stream`, `claudemd`, `commit-message`, `delegation`, `delegation-prompt`, `identity`, `mission-create`, `mission-delegations`, `mission-state`, `mission-summary`. Calls that only validate a domain (`audit-publication`, `repair`, and `"validate"` keys) are excluded | Never published |
+| Staging and quarantine | `.punt-labs/local/ethos/tmp/` (`Policy.TempDir`) and `.punt-labs/local/ethos/quarantine/`. Staging files carry the `.ethos-tmp` marker in their names (`internal/layout/temp.go`: `TmpPattern` gives `<base>-*<ext>.ethos-tmp`, `DotTmp` gives `.<name>.ethos-tmp`) | Never published |
+| Mission summary live logs | `.punt-labs/local/ethos/missions/*.jsonl` | Never published |
 | Repository extension overlay | `.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml` | Local; base remains in the identity's source layer |
-| Locks, preparation receipts, eligibility metadata, scratch and temporary staging | `.punt-labs/local/ethos/` | Never published |
+| Other local state not listed above | `.punt-labs/local/ethos/` | Never published |
+| Team bundles in the repository | `.punt-labs/ethos-bundles/**` | Source |
+| Submodule registration | `.gitmodules` (written by `team add-bundle`) | Source |
+| Vendor manifest | `.punt-labs/ethos/.vendor.yaml` | Source |
+| Git hook files | hook files under an in-tree `core.hooksPath` | Source |
+| Legacy, read-only | record-tree locks (`missions/**/*.lock`, `missions.jsonl.lock`, `identities/*.yaml.lock`), `missions/*/log.jsonl`, `log-*.quarantine`, `*.corrupt*`, `missions/*/artifacts/**`, `sessions/*/audit.jsonl`, `.punt-labs/ethos/config.yaml`, singular `reflection-intent.yaml` | Compatibility inputs; new writes go elsewhere |
 | New worker artifacts | `.punt-labs/local/ethos/artifacts/missions/<id>/delegations/<d>/`, the value pre-tool-use exports as `MISSION_ARTIFACTS_DIR` (`internal/mission/delegation.go`, `internal/hook/pretooluse_dispatch.go`) | Agent-owned, not automatically exported or redacted |
 | Generated agents and enablement guides | C's `.claude/agents/*.md` (generated plus the three seeded review agents), the `CLAUDE.md` `@`-import, the `.gitignore` rule `.punt-labs/local/`, and `.punt-labs/ethos/{CLAUDE.md,ETHOS-SETUP.md,enabled,.vendored-manifest}` | Intended source; staging still local to S |
 
@@ -92,21 +98,28 @@ writes use `reflection-intents/<round>.yaml`.
 Under `~/.punt-labs/ethos/` (not part of S or C):
 
 - Session roster: `sessions/<sid>.yaml` and `.lock`; session pointer
-  `sessions/current/<claude-pid>`; per-session mission state
+  `sessions/current/<claude-pid>` (staged as `sessions/current/current-*.tmp`,
+  `internal/session/store.go:900`); per-session mission state
   `sessions/<sid>/{active-mission,active-mission-origin,delegation-binding,dispatch-pending/}`
-  (`internal/session/store.go`, `internal/mission/active.go`).
+  with `dispatch-pending/.lock` (`internal/session/store.go`,
+  `internal/mission/active.go`).
+- Delegation locks: `delegations/<d>.lock` (`internal/mission/delegation.go:206,256`).
 - ID allocation: `counters/missions-<date>` and `counters/delegations-<date>`,
   each with a `.lock` (`internal/mission/id.go`).
 - Identities written by `ethos setup --file`: the human and agent identity
-  files go to the **global** `identities/<handle>.yaml`, not the repository.
-  The repository receives only `.punt-labs/ethos.yaml` and
-  `.punt-labs/ethos/teams/<bundle>.yaml`.
+  files go to the **global** `identities/<handle>.yaml`, not the repository
+  (`cmd/ethos/setup.go:193-194`). The repository receives
+  `.punt-labs/ethos.yaml`, the `.gitignore` local-zone rule (`setup.go:276`),
+  `C/.claude/agents/*.md` (`setup.go:401-406`), and
+  `.punt-labs/ethos/teams/<bundle>.yaml` only when leadership seats are rebound
+  (`setup.go:459-477`).
 - Seed content from `ethos seed`: `roles/`, `talents/`, `personalities/`,
   `writing-styles/`, `archetypes/`, `pipelines/`, `bundles/`, skills, and
   `.seed-manifest.json`; skills are also placed at `~/.claude/skills/<name>`.
 - Legacy ADRs `adrs/<id>.yaml` (read-only fallback). In repository mode the
   ADR mutation takes the legacy store's lock `adrs/.adr.lock` in this directory
-  first, then the repository lock `L/locks/adr/<sha256>.lock`
+  first, then the repository lock
+  `S/.punt-labs/local/ethos/locks/adr/<sha256>.lock`
   (`internal/adr/persistence.go`); no global ADR is written.
 
 Prompt and chunk archives mirror paths relative to `.punt-labs/ethos/`, for
@@ -228,7 +241,7 @@ of a prepared correction event; unreadable authority leaves acceptance unknown.
 
 ## Publication, squash and exports
 
-These are DES-079 command contracts pending entry-point acceptance:
+These commands shipped in v4.21.0; entry-point acceptance is pending:
 
 | Operation | Contract |
 |---|---|
@@ -466,19 +479,6 @@ row.
 | Bounded legacy repair; generated content | `ethos repair`, `internal/repair`, enable, doctor | None for `repair` or `doctor`; `default_seal` covers `enable` idempotence only | Everything listed in the row |
 | Independent integration surfaces | Filesystem contract | None | Everything listed in the row |
 | Redaction shipped; repair still required | DES-080 writers, v4.20.0 | `full_export` checks one synthetic credential is absent from the export | New destinations, ADR sinks, legacy-tail handling |
-
-### Observed defects (v4.22.1)
-
-1. `ethos mission reflect --help` prints a "minimal valid reflection" with no
-   `mission:` field. The command rejects that body with
-   `invalid mission ""` (`internal/mission/reflection.go:139`; the help text is
-   in `cmd/ethos/mission.go`, "Minimal valid reflection").
-
-A second observation, that `ethos mission close` closed a mission at round 1
-with no reflection submitted, is intended and not listed:
-`docs/spec-mission-lifecycle.tex` states that only Close needs a result for the
-current round and that Reflect and Advance permit progression without one, and
-no reflection precondition appears on `Close`.
 
 Required release proof includes `make check` (race tests and applicable formal
 checks), real entry-point acceptance, independent product/code/security/formal

@@ -52,8 +52,8 @@ an edit outside it fails the mission.
 
 ## Storage and sharing (DES-079; acceptance pending)
 
-DES-080 redaction shipped in v4.20.0. The DES-079 requirements below are
-pending final entry-point acceptance, not guarantees of an installed binary.
+DES-080 redaction shipped in v4.20.0. The DES-079 features below shipped in
+v4.21.0; release acceptance is pending.
 The [storage contract](https://github.com/punt-labs/ethos/blob/main/docs/storage-layout.md)
 supersedes older tracked-by-default and checkout-local audit guidance.
 
@@ -102,13 +102,13 @@ backstop: contracts and commands must not contain credentials.
 - Worker files, including `MISSION_ARTIFACTS_DIR`, target local scratch, not
   the tracked delegation directory. Ethos does not automatically move, export
   or redact agent-owned files; legacy cleanup is operator-directed.
-- Pending `mission publish <id>...` snapshots complete selected blame records
+- `mission publish <id>...` (shipped in v4.21.0; release acceptance pending) snapshots complete selected blame records
   into C and its actual index. `provenance message <ref>` supplies the
   generated body for the head-pinned GitHub squash route; fetch and
   `provenance verify <mergeSHA>` afterward. Local hooks do not run remotely.
   See the [merge procedure](https://github.com/punt-labs/ethos/blob/main/docs/example/07-pr-and-merge.md).
 - Plain `mission export` remains contract + final result, without staging.
-  Pending `mission export <id> --full` explicitly shares that mission's
+  `mission export <id> --full` (shipped in v4.21.0; release acceptance pending) explicitly shares that mission's
   retained prompts, reflections and event chunks, including a locally sealed
   unsealed tail, regardless of original mode. Missing expected history is
   incomplete. It excludes session audits, scratch, overlays, artifacts and

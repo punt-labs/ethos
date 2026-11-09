@@ -13081,7 +13081,8 @@ Full writeups, including two historical exploit traces, are in
 tier 2026-10-24. Beads `ethos-g3g3` (implementation), `ethos-yjh0` (ADR
 store in the repository) and `ethos-3e3f` (redaction, DES-080).
 DES-080 redaction shipped in v4.20.0 (see `CHANGELOG.md`). DES-079's storage,
-authority, publication and upgrade repair is in progress, **not release-accepted**.
+authority, publication and repair features shipped in v4.21.0 (see
+`CHANGELOG.md`); release acceptance is pending.
 Earlier path-class/doctor work is not proof of physical-boundary compliance.
 The [storage contract](docs/storage-layout.md) maps promises to implementation
 surfaces and still-pending executable acceptance.
