@@ -70,7 +70,9 @@ var allowedProcessUses = map[string][]string{
 	"cmd/ethos/attribute.go": {"exec.Command(editor)", "(*exec.Cmd).Run"},                                                    // $EDITOR
 	"cmd/ethos/uninstall.go": {"exec.Command(claude)", "(*exec.Cmd).Run"},                                                    // the claude CLI
 
-	// A test helper compiled into a non-test file: its callers set the bound.
+	// A test helper compiled into a non-test file: its callers set the bound
+	// on the git calls it shims. The one warm-up run of the shim itself
+	// (exec.Command(shim)) has none; it runs a script this helper just wrote.
 	"internal/testhelpers/gitenv.go": {`exec.Command("git")`, "exec.Command(real)", "exec.Command(shim)", "(*exec.Cmd).CombinedOutput", "(*exec.Cmd).CombinedOutput"},
 }
 

@@ -344,7 +344,10 @@ func TestHookInvocationObserved_TermBeforeKill(t *testing.T) {
 		t.Skip("no sandbox on this platform")
 	}
 	orig := sandboxTimeout
-	sandboxTimeout = 300 * time.Millisecond
+	// Long enough that the hook shell has installed its trap before the
+	// deadline, even on a loaded host under -race: SIGTERM before the trap
+	// kills the shell with no evidence written.
+	sandboxTimeout = 2 * time.Second
 	t.Cleanup(func() { sandboxTimeout = orig })
 	marker := filepath.Join(t.TempDir(), "termed")
 	body := "#!/bin/sh\ntrap 'echo termed > '\"" + marker + "\"'; exit 0' TERM\nsleep 30 &\nwait\n"
@@ -361,7 +364,10 @@ func TestHookInvocationObserved_GroupGetsGraceBeforeKill(t *testing.T) {
 		t.Skip("no sandbox on this platform")
 	}
 	orig := sandboxTimeout
-	sandboxTimeout = 300 * time.Millisecond
+	// Long enough that the hook shell has installed its trap before the
+	// deadline, even on a loaded host under -race: SIGTERM before the trap
+	// kills the shell with no evidence written.
+	sandboxTimeout = 2 * time.Second
 	t.Cleanup(func() { sandboxTimeout = orig })
 	marker := filepath.Join(t.TempDir(), "cleaned")
 	// The leader exits at once on TERM; a child in its group needs 400ms to
