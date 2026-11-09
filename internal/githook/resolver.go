@@ -26,7 +26,13 @@ type Lookup struct {
 	Warnings []string
 	Degraded bool
 	Reason   string
-	cause    error // why the lookup is degraded; Remedy classifies it
+	// InWorkTree says git runs hooks from a directory inside the work tree, so
+	// each hook there is a tracked file a refresh must not rewrite unasked.
+	InWorkTree bool
+	// Shared says the hooks directory is outside the repo, so its hooks serve
+	// every repo that uses that core.hooksPath.
+	Shared bool
+	cause  error // why the lookup is degraded; Remedy classifies it
 }
 
 // Display returns the hooks directory for a message or a read-only scan. Do not
@@ -169,8 +175,8 @@ func gitHooksPath(repoRoot string) (Lookup, error) {
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
 	}
-	warns, err := classifyHooksPath(repoRoot, top, hdRaw)
-	l := Lookup{dir: hd, root: repoRoot, Warnings: warns}
+	warns, kind, err := classifyHooksPath(repoRoot, top, hdRaw)
+	l := Lookup{dir: hd, root: repoRoot, Warnings: warns, InWorkTree: kind == hooksInWorkTree, Shared: kind == hooksShared}
 	if err != nil {
 		l.Degraded = true
 		l.Reason = err.Error()
@@ -195,13 +201,22 @@ func sameFile(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
+// hooksPlace is where a hooks directory sits relative to the repo.
+type hooksPlace int
+
+const (
+	hooksPrivate    hooksPlace = iota // under the git dir
+	hooksInWorkTree                   // inside the work tree: tracked files
+	hooksShared                       // outside the repo
+)
+
 // classifyHooksPath warns when the resolved hooks dir is not under the git
 // dir: inside the work tree (a tracked file) or outside the repo (shared).
 // Comparison is done on symlink-resolved paths so a symlinked temp root
 // (macOS /tmp → /private/tmp) does not defeat the prefix test. When git cannot
 // name the common dir it classifies against <top>/.git, the default location,
 // and returns the failure so the caller can report the lookup unverified.
-func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
+func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, hooksPlace, error) {
 	hd := hdRaw
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
@@ -219,13 +234,13 @@ func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
 	}
 	switch {
 	case isUnder(hd, common):
-		return nil, err // under the git dir — private, not tracked
+		return nil, hooksPrivate, err // under the git dir — private, not tracked
 	case isUnder(hd, top):
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}, err
+			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}, hooksInWorkTree, err
 	default:
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}, err
+			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}, hooksShared, err
 	}
 }
 
@@ -278,4 +293,28 @@ func evalPath(p string) string {
 		return r
 	}
 	return filepath.Clean(p)
+}
+
+// TargetPlace classifies a resolved symlink target the way the hooks directory
+// is classified: under the git common dir it is private to the repo; under the
+// work tree (or under extra, such as the main checkout of a linked worktree) it
+// is a tracked file; anywhere else it is shared across repos. The common dir is
+// tested first because a linked worktree's common dir sits inside the main
+// checkout's tree.
+func (l Lookup) TargetPlace(target string, extra ...string) (inWorkTree, shared bool) {
+	common, err := gitOut(l.root, "rev-parse", "--git-common-dir")
+	if err != nil || common == "" {
+		common = filepath.Join(l.root, ".git")
+	} else if !filepath.IsAbs(common) {
+		common = filepath.Join(l.root, common)
+	}
+	if isUnder(target, common) {
+		return false, false
+	}
+	for _, top := range append([]string{l.root}, extra...) {
+		if top != "" && isUnder(target, top) {
+			return true, false
+		}
+	}
+	return false, true
 }

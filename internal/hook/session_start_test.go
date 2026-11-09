@@ -862,3 +862,167 @@ func TestHandleSessionStart_FailuresReachAdditionalContext(t *testing.T) {
 		assert.Contains(t, out, `agent identity \"ghost\" could not be loaded`)
 	})
 }
+
+func TestHandleSessionStart_RefreshHooks(t *testing.T) {
+	setup := func(t *testing.T) (*identity.Store, *session.Store) {
+		dir := t.TempDir()
+		repoRoot := t.TempDir()
+		testhelpers.MakeGitDir(t, repoRoot)
+		t.Chdir(repoRoot)
+		isolateGitConfig(t, "test-human")
+		return identity.NewStore(dir), session.NewStore(dir)
+	}
+	tests := []struct {
+		name        string
+		refresh     func(checkout, store string) (HookRefresh, error)
+		wantContext []string
+		wantNone    bool
+	}{
+		{
+			name: "stale sections are reported to the session",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Refreshed: []string{"pre-commit"}}, nil
+			},
+			wantContext: []string{"refreshed stale git hook section(s) at session start: pre-commit"},
+		},
+		{
+			name: "a missing hook is said to be installed, not refreshed",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Installed: []string{"commit-msg"}}, nil
+			},
+			wantContext: []string{"installed missing git hook(s) at session start: commit-msg"},
+		},
+		{
+			name:     "current sections say nothing",
+			refresh:  func(_, _ string) (HookRefresh, error) { return HookRefresh{}, nil },
+			wantNone: true,
+		},
+		{
+			name: "refresh error does not fail the session but is told to it",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{}, errors.New("boom")
+			},
+			wantContext: []string{
+				"Ethos could not refresh stale git hook section(s): boom.",
+				"Commits may be blocked; run `ethos enable` or `ethos doctor`.",
+			},
+		},
+		{
+			name: "a partial refresh names both what worked and what failed",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Refreshed: []string{"pre-commit"}}, errors.New("commit-msg is truncated")
+			},
+			wantContext: []string{
+				"refreshed stale git hook section(s) at session start: pre-commit; could not refresh git hook section(s): commit-msg is truncated",
+				"Commits may be blocked",
+			},
+		},
+		{
+			name: "a non-shell hook is told to the session and warnings go to stderr",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{NonShell: []string{"pre-commit"}, Warnings: []string{"non-shell shebang"}}, nil
+			},
+			wantContext: []string{"did not chain the seal section into pre-commit: non-shell hook; run `ethos doctor`."},
+		},
+		{
+			name: "a tracked hook left stale is told to the session",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Tracked: []string{"pre-commit"}}, nil
+			},
+			wantContext: []string{"did not rewrite the stale pre-commit hook"},
+		},
+		{
+			name: "a chained foreign hook is worded as chained",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Chained: []string{"pre-commit"}}, nil
+			},
+			wantContext: []string{"chained the ethos section into git hook(s): pre-commit"},
+		},
+		{
+			name: "a shared hooksPath hook left stale is told to the session",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Shared: []string{"pre-commit"}}, nil
+			},
+			wantContext: []string{"core.hooksPath is shared outside this repo"},
+		},
+		{
+			name: "a missing tracked hook says not installed",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{TrackedMissing: []string{"commit-msg"}}, nil
+			},
+			wantContext: []string{"did not install the commit-msg hook"},
+		},
+		{
+			name:     "nil dependency disables the refresh",
+			refresh:  nil,
+			wantNone: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, ss := setup(t)
+			var calls int
+			refresh := tt.refresh
+			if refresh != nil {
+				inner := refresh
+				refresh = func(c, st string) (HookRefresh, error) { calls++; return inner(c, st) }
+			}
+			out := captureSessionStartOutput(t, `{"session_id":"s-refresh"}`, SessionStartDeps{Store: s, Sessions: ss, RefreshHooks: refresh})
+			if tt.refresh != nil {
+				assert.Equal(t, 1, calls)
+			}
+			if tt.wantNone {
+				assert.NotContains(t, out, "git hook")
+				return
+			}
+			for _, w := range tt.wantContext {
+				assert.Contains(t, out, w)
+			}
+		})
+	}
+}
+
+func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
+	called := false
+	refresh := func(_, _ string) (HookRefresh, error) { called = true; return HookRefresh{}, nil }
+
+	t.Run("enabled repo is told", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+		got := refreshStaleHooks(refresh, resolve.Located{Checkout: root, Store: root, StoreErr: errors.New("store unreadable")})
+		assert.Contains(t, got, "Git hook refresh skipped: store unreadable.")
+		assert.Contains(t, got, "run `ethos doctor`")
+	})
+	t.Run("dormant repo hears nothing", func(t *testing.T) {
+		root := t.TempDir()
+		got := refreshStaleHooks(refresh, resolve.Located{Checkout: root, Store: root, StoreErr: errors.New("store unreadable")})
+		assert.Empty(t, got)
+	})
+	t.Run("unlocated checkout is told, naming the cause", func(t *testing.T) {
+		got := refreshStaleHooks(refresh, resolve.Located{Checkout: "/c", Store: "/s", CheckoutErr: errors.New("no checkout")})
+		assert.Contains(t, got, "Git hook refresh skipped: checkout not located: no checkout.")
+		assert.Contains(t, got, "run `ethos doctor`")
+	})
+	assert.False(t, called, "refresh must not run against an unlocated store or checkout")
+}
+
+// A bundle or policy problem alone does not stop the hook refresh: the store
+// was located, so its hooks are still this repo's to repair.
+func TestHandleSessionStart_PolicyIssueDoesNotSkipRefresh(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	testhelpers.MakeGitDir(t, repoRoot)
+	t.Chdir(repoRoot)
+	isolateGitConfig(t, "test-human")
+	calls := 0
+	refresh := func(_, _ string) (HookRefresh, error) {
+		calls++
+		return HookRefresh{Refreshed: []string{"pre-commit"}}, nil
+	}
+	issue := &resolve.ConfigError{Err: errors.New("bad bundle"), Policy: true}
+	out := captureSessionStartOutput(t, `{"session_id":"s-policy"}`, SessionStartDeps{
+		Store: identity.NewStore(dir), Sessions: session.NewStore(dir), Issue: issue, RefreshHooks: refresh})
+	assert.Equal(t, 1, calls)
+	assert.Contains(t, out, "refreshed stale git hook section(s) at session start: pre-commit")
+}

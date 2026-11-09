@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
@@ -134,16 +136,48 @@ func init() {
 	rootCmd.AddCommand(hookCmd)
 }
 
+// refreshGitHooks adapts enable.RefreshHooksTo to the SessionStart dependency.
+// The result is filled even when err is not nil, so a partial refresh is told.
+func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
+	rep, err := enable.RefreshHooksTo(checkout, store)
+	var r hook.HookRefresh
+	if rep == nil {
+		return r, err
+	}
+	r.Warnings = rep.Warnings
+	for _, st := range rep.Steps {
+		name := strings.TrimPrefix(st.Step, "hook:")
+		switch st.Status {
+		case "installed":
+			r.Installed = append(r.Installed, name)
+		case enable.StatusSkippedNonShell:
+			r.NonShell = append(r.NonShell, name)
+		case "chained":
+			r.Chained = append(r.Chained, name)
+		case enable.StatusSkippedTracked:
+			r.Tracked = append(r.Tracked, name)
+		case enable.StatusSkippedShared:
+			r.Shared = append(r.Shared, name)
+		case enable.StatusSkippedTrackedMissing:
+			r.TrackedMissing = append(r.TrackedMissing, name)
+		default:
+			r.Refreshed = append(r.Refreshed, name)
+		}
+	}
+	return r, err
+}
+
 func runHookSessionStart() error {
 	loc := currentRoots().Located
 	is := identityStore()
 	deps := hook.SessionStartDeps{
-		Located:  &loc,
-		Store:    is,
-		Sessions: sessionStore(),
-		Teams:    layeredTeamStore(is),
-		Roles:    layeredRoleStore(is),
-		Issue:    currentRoots().configIssue(),
+		Located:      &loc,
+		Store:        is,
+		Sessions:     sessionStore(),
+		Teams:        layeredTeamStore(is),
+		Roles:        layeredRoleStore(is),
+		Issue:        currentRoots().configIssue(),
+		RefreshHooks: refreshGitHooks,
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)

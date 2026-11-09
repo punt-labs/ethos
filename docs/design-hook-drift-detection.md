@@ -273,21 +273,23 @@ established (`doctor.go:245`):
 | Not ours | BEGIN found, ident fingerprint on the next line fails | FAIL | ``"<name> section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`"`` |
 | Truncated | BEGIN found, no matching END | FAIL | `"<name> section has a BEGIN with no matching END — hand-truncated; fix it by hand"` (same wording `githook.Chain`/`Unchain` already use for this case) |
 | Current | fingerprint OK, normalized hash matches `ExpectedSection(spec.Tag, spec.Canonical)` | PASS | `"<name> section matches this ethos build (sha256:a1b2c3d4…)"` |
-| Stale | fingerprint OK, normalized hash differs | WARN | ``"<name> section content differs from what this ethos build would install (installed sha256:a1b2c3d4…, current sha256:e5f6a7b8…) — run `ethos enable` to refresh"`` |
+| Stale (seal hook) | fingerprint OK, normalized hash differs | FAIL | ``"<name> section content differs from what this ethos build would install (installed sha256:a1b2c3d4…, current sha256:e5f6a7b8…) — stale section may block commits — run `ethos enable` (SessionStart also refreshes it)"`` |
+| Stale (trailer hook) | fingerprint OK, normalized hash differs | WARN | ``"<name> section content differs from what this ethos build would install (installed sha256:a1b2c3d4…, current sha256:e5f6a7b8…) — run `ethos enable` to refresh"`` |
 
-**Stale is `WARN`, not `FAIL`.** `Result.Passed()` already treats `WARN`
-as advisory (`doctor.go:30`) — the same tier as "gated-but-unenabled."
-Staleness is not necessarily brokenness: most releases don't touch hook
-content, and a repo running last month's — still-correct — hook body is
-not in a faulted state. Making this `FAIL` would turn every unrelated
-release into a fleet-wide red `doctor` the moment it ships, for repos
-whose hooks are working fine; that is disproportionate to what the check
-actually knows (content differs), versus what it doesn't know (whether
-the difference matters to this repo). `WARN` surfaces it with a remedy
-without blocking. "Not ours" and "truncated" stay `FAIL` because those
-are not staleness — they are a section that isn't safely ethos-managed
-at all, the same severity `githook`'s own refuse-on-ambiguity guards
-already assign.
+**Stale is `FAIL` for the seal hook and `WARN` for the trailer hook.**
+Staleness alone is not brokenness: most releases do not touch hook
+content, and a trailer section from last month still works. A stale seal
+section is different. v4.21.0 changed the pre-commit seal policy, and a
+repo still carrying the older section had every commit blocked by legacy
+audit data while `doctor` said only `WARN`. A section whose staleness can
+stop commits is `FAIL` (`HookSpec.StaleBlocksCommit`), and its remedy is
+`ethos enable`, which SessionStart now runs for the hook sections
+automatically (`enable.RefreshHooksTo`). The trailer hook cannot block a
+commit when stale, so it stays `WARN`: it surfaces the difference with a
+remedy without turning every release into a fleet-wide red `doctor`.
+"Not ours" and "truncated" stay `FAIL` because those are not staleness;
+they are a section that isn't safely ethos-managed at all, the same
+severity `githook`'s own refuse-on-ambiguity guards already assign.
 
 `RunAll` (`doctor.go:51`) gains two calls, run unconditionally alongside
 the existing `CheckSealHook`:
@@ -326,7 +328,7 @@ follows once the constant move and second `CheckHookCurrency` call ship):
 
 ```text
   Audit seal hook          PASS   chained seal section active
-  Seal hook currency       WARN   Seal hook section content differs from what this ethos build would install (installed sha256:a1b2c3d4, current sha256:e5f6a7b8) — run `ethos enable` to refresh
+  Seal hook currency       FAIL   Seal hook section content differs from what this ethos build would install (installed sha256:a1b2c3d4, current sha256:e5f6a7b8) — stale section may block commits — run `ethos enable` (SessionStart also refreshes it)
   Trailer hook currency    WARN   Trailer hook section content differs from what this ethos build would install (installed sha256:9f8e7d6c, current sha256:e5f6a7b8) — run `ethos enable` to refresh
 ```
 
@@ -360,8 +362,9 @@ Table-driven, one fixture per state, in `internal/githook` and
   incident, turned into a test that fails if the mechanism regresses.
 - `CheckHookCurrency`: no hook file present → PASS "no section
   installed"; hook file present, no matching tag → PASS; matching tag,
-  current → PASS; matching tag, stale → WARN; tampered fingerprint →
-  FAIL; truncated section → FAIL.
+  current → PASS; matching tag, stale → FAIL for the seal hook, WARN for
+  the trailer hook; tampered fingerprint → FAIL; truncated section →
+  FAIL.
 - `doctor.RunAll` wiring: both currency `Result`s appear in the slice,
   independent of the `enabled` marker's state (dormant repo with a
   leftover chained-but-current hook still reports PASS, not skipped).
@@ -370,8 +373,9 @@ Table-driven, one fixture per state, in `internal/githook` and
 
 No fleet-wide manual convergence step is required, unlike the
 `enable`/`disable` marker rollout (`docs/enable-disable.md` §Migration).
-`WARN` is non-blocking and the remedy is the already-idempotent `ethos
-enable`, so this check can ship and immediately surface every drifted
+A stale trailer section is a non-blocking `WARN`, a stale seal section a
+`FAIL`, and the remedy for both is the already-idempotent `ethos
+enable` (SessionStart also runs it for the hook sections), so this check can ship and immediately surface every drifted
 repo in the fleet — including `punt-kit` — without anyone having
 pre-staged anything. There is no residual-window problem the way the
 marker rollout had one: the check needs no prior `enable` run to become

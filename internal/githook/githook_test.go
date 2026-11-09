@@ -1010,7 +1010,10 @@ func TestClassifyHooksPathCommonDirFailureStillWarns(t *testing.T) {
 		t.Skip("git not available")
 	}
 	root := filepath.Join(t.TempDir(), "gone") // git -C fails here
-	warns, err := classifyHooksPath(root, root, ".husky")
+	warns, place, err := classifyHooksPath(root, root, ".husky")
+	if place != hooksInWorkTree {
+		t.Errorf("place = %v, want hooksInWorkTree for a hooksPath inside the work tree", place)
+	}
 	if err == nil {
 		t.Fatal("err = nil, want the --git-common-dir failure")
 	}

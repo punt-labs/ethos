@@ -69,9 +69,11 @@ func (r *Report) step(name, status, detail string) {
 }
 
 // Enable turns ethos on in the repo at repoRoot. It is idempotent;
-// re-running is the upgrade path. Steps run in order: gitlink guard, vendored
-// deposit, marker (written only after a complete deposit), import line, hook
-// chaining. It ends with a next-step hint when the repo has no ethos config.
+// re-running is the upgrade path. Steps run in order: gitlink guard,
+// legacy-ignore preflight (a refusal still chains the hooks), vendored deposit,
+// hook chaining, gitignore protection, marker (written only after a complete
+// deposit and verified protection), import line. It ends with a next-step hint
+// when the repo has no ethos config.
 func Enable(repoRoot string) (*Report, error) {
 	return EnableTo(repoRoot, repoRoot)
 }
@@ -127,12 +129,18 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	// Preflight both hosts before any ignore mutation (or deposit). Old rules
 	// may be the only protection for private overlays or another tool's data;
 	// enable is not permission to move or expose those files.
+	//
+	// A refusal here still refreshes the hook sections of an already-enabled
+	// repo before returning. A stale seal section can block every commit in the
+	// repo, so the refresh must never wait on an unrelated migration (legacy
+	// ignore retirement) that needs operator cleanup. A repo with no marker is
+	// left untouched.
 	if err := preflightLegacyIgnores(repoRoot); err != nil {
-		return rep, err
+		return rep, refreshHooksThen(err, repoRoot, storeRoot, rep)
 	}
 	if !textscan.SamePath(repoRoot, storeRoot) {
 		if err := preflightLegacyIgnores(storeRoot); err != nil {
-			return rep, err
+			return rep, refreshHooksThen(err, repoRoot, storeRoot, rep)
 		}
 	}
 
@@ -142,6 +150,14 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	}
 	rep.Warnings = append(rep.Warnings, depositWarns...)
 	rep.step("vendored", "done", "deposited "+guideRel+", "+setupRel+", and "+manifestRel)
+
+	// Hooks go before gitignore protection, which can still refuse (an
+	// unwritable or unprotectable ignore file). The sections are stateless
+	// templates, so chaining them first does not create an enabled-but-
+	// unprotected state: the marker below is still written last.
+	if err := chainHooks(lk, hooksDir, rep, p); err != nil {
+		return rep, err
+	}
 
 	// Protect before marking enabled, so "enabled implies protected" holds: a
 	// rare .gitignore write error must not leave an enabled-but-unprotected
@@ -202,10 +218,6 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 		rep.step("import", "done", "added "+CanonicalImport)
 	} else {
 		rep.step("import", "already", CanonicalImport+" already present")
-	}
-
-	if err := chainHooks(lk, hooksDir, rep, p); err != nil {
-		return rep, err
 	}
 
 	hint, warning := configStatus(storeRoot)
@@ -338,6 +350,29 @@ func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 		return l, "", fmt.Errorf("cannot install hooks: %w", l.Refusal())
 	}
 	return l, dir, nil
+}
+
+// refreshHooksThen returns cause. When cause is a legacy-retirement refusal in
+// a repo that is already enabled, it first refreshes the hook sections, joining
+// any refresh failure so neither is lost. A first-time enable that refuses
+// leaves the repo untouched: chaining hooks with no marker is the "hook chained
+// but ethos not enabled here" state doctor tells the operator to clean up.
+// Every other refusal mutates nothing.
+func refreshHooksThen(cause error, repoRoot, storeRoot string, rep *Report) error {
+	if !errors.Is(cause, errRetirementRefused) {
+		return cause // other refusals (hazardous files, git failures) mutate nothing
+	}
+	present, err := resolve.EnabledMarker(repoRoot)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("refreshing hooks: %w", err))
+	}
+	if !present {
+		return cause
+	}
+	if err := refreshHooks(repoRoot, storeRoot, rep, true); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
 }
 
 // chainHooks chains the seal and trailer sections into pre-commit and
