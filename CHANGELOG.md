@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Hook stdin is framed incrementally instead of re-validated after every read, and input past 64 MiB is refused with `ErrInputTooLarge`. The pre-tool-use hook denies an oversized payload instead of failing open.
+- The audit-log hook waits the reader's 10s input timeout (was 1s) and reports a stdin read failure as the cause of the dropped entry.
+
+### Fixed
+
+- `ethos find missions --format paths` omits missions whose directory was purged or is not a directory and notes each on stderr, and fails on any other stat error; `json` and `table` still list them.
+
 ## [4.21.0] - 2026-11-07
 
 ### Added
