@@ -394,9 +394,11 @@ func TestReadFromFile_NonObjectPrefixReadsToEOF(t *testing.T) {
 				time.Sleep(50 * time.Millisecond)
 				wFd.Close()
 			}()
+			start := time.Now()
 			data, err := ReadFromFile(rFd, 10*time.Second)
 			require.NoError(t, err)
 			assert.Equal(t, in, string(data))
+			assert.GreaterOrEqual(t, time.Since(start), 40*time.Millisecond, "waited for EOF, not completed early")
 		})
 	}
 }
@@ -453,7 +455,7 @@ func TestRead_InputBound(t *testing.T) {
 			require.ErrorIs(t, err, ErrInputTooLarge)
 			assert.NotErrorIs(t, err, ErrInputTimeout)
 			assert.LessOrEqual(t, len(data), maxHookInput)
-			assert.NotEmpty(t, data)
+			assert.Greater(t, len(data), maxHookInput-65536, "the bound was hit near the limit, not at the first read")
 		})
 	}
 }
@@ -478,4 +480,48 @@ func TestRead_TooLargeOnGoroutineAndPlainReaderPaths(t *testing.T) {
 	// Non-file readers are bounded too.
 	_, err = readRaw(strings.NewReader(strings.Repeat("a", 2000)), time.Second)
 	require.ErrorIs(t, err, ErrInputTooLarge)
+}
+
+// objectFrame must not be fooled by a backslash or quote at a chunk boundary:
+// split at every byte, in two feeds and one byte at a time, it reports complete
+// only after the final brace.
+func TestObjectFrame_EscapesAcrossEverySplit(t *testing.T) {
+	payload := []byte(`{"a":"x\\","b":"\"}","c":["\\\"]"]}`)
+	require.True(t, json.Valid(payload))
+
+	for i := 1; i < len(payload); i++ {
+		var f objectFrame
+		assert.False(t, f.feed(payload[:i]), "first feed of %d bytes", i)
+		assert.True(t, f.feed(payload[i:]), "second feed completes at split %d", i)
+	}
+
+	var f objectFrame
+	for i, c := range payload {
+		done := f.feed([]byte{c})
+		if i < len(payload)-1 {
+			require.False(t, done, "complete early at byte %d", i)
+		} else {
+			require.True(t, done, "not complete after the final brace")
+		}
+	}
+}
+
+// A frame that balances but is not valid JSON is never accepted early: on an
+// open pipe the read ends at the deadline with the timeout error and every byte
+// that arrived, on both read paths.
+func TestRead_BalancedButInvalidIsNotComplete(t *testing.T) {
+	for _, in := range []string{`{"a":tru}`, `{]`} {
+		t.Run(in+"/deadline", func(t *testing.T) {
+			r := writeThenHold(t, []byte(in))
+			data, err := ReadFromFile(r, 150*time.Millisecond)
+			require.ErrorIs(t, err, ErrInputTimeout)
+			assert.Equal(t, in, string(data))
+		})
+		t.Run(in+"/goroutine", func(t *testing.T) {
+			r := writeThenHold(t, []byte(in))
+			data, err := readWithTimeout(r, 150*time.Millisecond)
+			require.ErrorIs(t, err, ErrInputTimeout)
+			assert.Equal(t, in, string(data))
+		})
+	}
 }
