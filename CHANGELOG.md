@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The release workflow, and the behavioral and end-to-end CI jobs, now fetch
+  full git history, so the shim old-binary tests in `plugin/hooks` run in the
+  tag-triggered build instead of failing on a depth-1 clone. v4.22.0 was tagged
+  but never published: its release job failed on those tests, so no GitHub
+  release or binaries exist for it. 4.22.1 is the first release carrying the
+  4.22.0 changes. A new test in `test/` fails any workflow job that runs the
+  Go tests without `fetch-depth: 0`.
+
 ## [4.22.0] - 2026-11-09
 
 ### Added
