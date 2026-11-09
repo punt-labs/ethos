@@ -206,7 +206,8 @@ func TestRestoreDevPluginCollisionScope(t *testing.T) {
 			require.NoError(t, err, out)
 			assert.Contains(t, out, source[:12])
 			assert.Equal(t, prep, r.git(t, "rev-parse", "HEAD"))
-			r.assertManifest(t, "ethos-dev", "1.0.0")
+			// The version comes from HEAD (2.0.0), not from the older snapshot.
+			r.assertManifest(t, "ethos-dev", "2.0.0")
 			assert.Equal(t, "historical command\x00\xff\n", r.read(t, path))
 			info, err := os.Stat(filepath.Join(r.root, path))
 			require.NoError(t, err)
