@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,43 +62,91 @@ func checksOutThisRepo(s workflowStep) bool {
 	return !ok || repo == "punt-labs/ethos"
 }
 
-func TestWorkflowsFetchFullHistoryWhenRunningTests(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", ".github", "workflows", "*.yml"))
-	require.NoError(t, err)
-	require.NotEmpty(t, files, "no workflow files found")
-
-	for _, file := range files {
-		data, err := os.ReadFile(file)
+// workflowFiles returns every workflow file in dir. GitHub loads both .yml and
+// .yaml, so both extensions are scanned.
+func workflowFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	var files []string
+	for _, ext := range []string{"*.yml", "*.yaml"} {
+		matches, err := filepath.Glob(filepath.Join(dir, ext))
 		require.NoError(t, err)
-		var wf workflowFile
-		require.NoError(t, yaml.Unmarshal(data, &wf), file)
+		files = append(files, matches...)
+	}
+	return files
+}
 
-		for id, job := range wf.Jobs {
-			var runLine string
-			for _, s := range job.Steps {
-				if line, ok := testRunLine(s.Run); ok {
-					runLine = line
-					break
-				}
+// fetchDepthViolations returns one message per job in the workflow file that
+// runs tests without a full-history checkout of this repo.
+func fetchDepthViolations(t *testing.T, file string) []string {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	require.NoError(t, err)
+	var wf workflowFile
+	require.NoError(t, yaml.Unmarshal(data, &wf), file)
+
+	var out []string
+	for id, job := range wf.Jobs {
+		var runLine string
+		for _, s := range job.Steps {
+			if line, ok := testRunLine(s.Run); ok {
+				runLine = line
+				break
 			}
-			if runLine == "" {
+		}
+		if runLine == "" {
+			continue
+		}
+		var checkouts int
+		for _, s := range job.Steps {
+			if !checksOutThisRepo(s) {
 				continue
 			}
-			var checkouts int
-			for _, s := range job.Steps {
-				if !checksOutThisRepo(s) {
-					continue
-				}
-				checkouts++
-				depth, ok := s.With["fetch-depth"]
-				require.Truef(t, ok && depth == 0,
+			checkouts++
+			if depth, ok := s.With["fetch-depth"]; !ok || depth != 0 {
+				out = append(out, fmt.Sprintf(
 					"%s: job %q runs %q but its actions/checkout step does not set fetch-depth: 0 "+
 						"(plugin/hooks tests build old binaries from git history; a depth-1 clone fails them in CI)",
-					filepath.Base(file), id, runLine)
+					filepath.Base(file), id, runLine))
 			}
-			require.NotZerof(t, checkouts,
+		}
+		if checkouts == 0 {
+			out = append(out, fmt.Sprintf(
 				"%s: job %q runs %q but has no actions/checkout step for this repo",
-				filepath.Base(file), id, runLine)
+				filepath.Base(file), id, runLine))
 		}
 	}
+	return out
+}
+
+func TestWorkflowsFetchFullHistoryWhenRunningTests(t *testing.T) {
+	files := workflowFiles(t, filepath.Join("..", ".github", "workflows"))
+	require.NotEmpty(t, files, "no workflow files found")
+	for _, file := range files {
+		require.Empty(t, fetchDepthViolations(t, file))
+	}
+}
+
+// TestFetchDepthGuardScansYamlExtension proves the guard sees a .yaml workflow:
+// a depth-1 job running make test, written with the .yaml extension, must be
+// discovered by workflowFiles and rejected by fetchDepthViolations.
+func TestFetchDepthGuardScansYamlExtension(t *testing.T) {
+	dir := t.TempDir()
+	workflow := `name: shallow
+on: push
+jobs:
+  shallow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - run: make test
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shallow.yaml"), []byte(workflow), 0o600))
+
+	files := workflowFiles(t, dir)
+	require.Len(t, files, 1, ".yaml workflow was not discovered")
+	violations := fetchDepthViolations(t, files[0])
+	require.Len(t, violations, 1)
+	require.Contains(t, violations[0], "does not set fetch-depth: 0")
+	require.Contains(t, violations[0], `job "shallow"`)
+	require.Contains(t, violations[0], "shallow.yaml")
 }
