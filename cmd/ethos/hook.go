@@ -152,8 +152,12 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 			r.Installed = append(r.Installed, name)
 		case enable.StatusSkippedNonShell:
 			r.NonShell = append(r.NonShell, name)
+		case "chained":
+			r.Chained = append(r.Chained, name)
 		case enable.StatusSkippedTracked:
 			r.Tracked = append(r.Tracked, name)
+		case enable.StatusSkippedTrackedMissing:
+			r.TrackedMissing = append(r.TrackedMissing, name)
 		default:
 			r.Refreshed = append(r.Refreshed, name)
 		}

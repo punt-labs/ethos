@@ -272,3 +272,32 @@ func TestEnableRefusalWithoutMarkerInstallsNoHooks(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(root, ".git", "hooks", "commit-msg"))
 	assert.NoFileExists(t, filepath.Join(root, markerRel))
 }
+
+// An explicit enable that refuses retirement still rewrites a stale hook inside
+// the work tree (core.hooksPath), as a successful enable would; only the
+// SessionStart refresh leaves a tracked hook alone.
+func TestEnableRefusalRewritesInTreeHook(t *testing.T) {
+	clean := gitRepo(t)
+	_, err := Enable(clean)
+	require.NoError(t, err)
+	want := readFile(t, filepath.Join(clean, ".git", "hooks", "pre-commit"))
+
+	root := gitRepo(t)
+	gitRun(t, root, "config", "core.hooksPath", ".husky")
+	husky := filepath.Join(root, ".husky")
+	require.NoError(t, os.MkdirAll(husky, 0o755))
+	hookPath := filepath.Join(husky, "pre-commit")
+	require.NoError(t, os.WriteFile(hookPath, []byte(staleSeal), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, markerRel), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"),
+		[]byte(legacyGitignoreMarker+"\n.punt-labs/**/*.local.*\n"), 0o600))
+	private := filepath.Join(root, ".punt-labs", "vox", "creds.local.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(private), 0o700))
+	require.NoError(t, os.WriteFile(private, []byte("private fixture\n"), 0o600))
+
+	rep, err := Enable(root)
+	require.ErrorContains(t, err, "refusing to retire legacy ignore rules")
+	assert.Equal(t, want, readFile(t, hookPath), "the in-tree hook is current after the refusal")
+	assert.Contains(t, strings.Join(rep.Warnings, "\n"), "inside the work tree")
+}

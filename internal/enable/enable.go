@@ -369,7 +369,7 @@ func refreshHooksThen(cause error, repoRoot, storeRoot string, rep *Report) erro
 	if !present {
 		return cause
 	}
-	if err := refreshHooks(repoRoot, storeRoot, rep); err != nil {
+	if err := refreshHooks(repoRoot, storeRoot, rep, true); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause

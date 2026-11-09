@@ -142,4 +142,19 @@ func TestRefreshHooks(t *testing.T) {
 		require.Len(t, rep.Steps, 1)
 		assert.Equal(t, "installed", rep.Steps[0].Status)
 	})
+
+	t.Run("a missing in-tree hook is not installed and is reported as such", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		gitRun(t, root, "config", "core.hooksPath", ".husky")
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".husky"), 0o755))
+
+		rep, err := RefreshHooks(root)
+		require.NoError(t, err)
+		assert.NoFileExists(t, filepath.Join(root, ".husky", "pre-commit"))
+		require.Len(t, rep.Steps, 2)
+		assert.Equal(t, StatusSkippedTrackedMissing, rep.Steps[0].Status)
+		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "not installing it")
+	})
 }

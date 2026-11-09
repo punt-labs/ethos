@@ -932,6 +932,20 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			wantContext: []string{"did not rewrite the stale pre-commit hook"},
 		},
 		{
+			name: "a chained foreign hook is worded as chained",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Chained: []string{"pre-commit"}}, nil
+			},
+			wantContext: []string{"chained the ethos section into git hook(s): pre-commit"},
+		},
+		{
+			name: "a missing tracked hook says not installed",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{TrackedMissing: []string{"commit-msg"}}, nil
+			},
+			wantContext: []string{"did not install the commit-msg hook"},
+		},
+		{
 			name:     "nil dependency disables the refresh",
 			refresh:  nil,
 			wantNone: true,
@@ -961,11 +975,21 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 	}
 }
 
-func TestRefreshStaleHooks_StoreFailureIsToldNotSilent(t *testing.T) {
+func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
 	called := false
 	refresh := func(_, _ string) (HookRefresh, error) { called = true; return HookRefresh{}, nil }
-	loc := resolve.Located{Checkout: "/c", Store: "/s"}
-	got := refreshStaleHooks(refresh, errors.New("store unreadable"), loc)
+
+	t.Run("enabled repo is told", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o644))
+		got := refreshStaleHooks(refresh, errors.New("store unreadable"), resolve.Located{Checkout: root, Store: root})
+		assert.Contains(t, got, "Git hook refresh skipped")
+	})
+	t.Run("dormant repo hears nothing", func(t *testing.T) {
+		root := t.TempDir()
+		got := refreshStaleHooks(refresh, errors.New("store unreadable"), resolve.Located{Checkout: root, Store: root})
+		assert.Empty(t, got)
+	})
 	assert.False(t, called, "refresh must not run against an unlocated store")
-	assert.Contains(t, got, "Git hook refresh skipped")
 }

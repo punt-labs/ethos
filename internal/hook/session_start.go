@@ -55,12 +55,16 @@ type SessionStartDeps struct {
 type HookRefresh struct {
 	Refreshed []string // stale sections rewritten in an existing hook
 	Installed []string // hooks that did not exist and were created
+	Chained   []string // foreign shell hooks that had no ethos section and got one
 	// NonShell names hooks whose host is not a shell script: the section was
 	// not chained in, so the seal never runs from them.
 	NonShell []string
 	// Tracked names stale hooks inside the work tree, left unrewritten.
-	Tracked  []string
-	Warnings []string // advisory lines for stderr
+	Tracked []string
+	// TrackedMissing names hooks inside the work tree that do not exist and
+	// were not created.
+	TrackedMissing []string
+	Warnings       []string // advisory lines for stderr
 }
 
 // HandleSessionStart reads the SessionStart hook payload from stdin,
@@ -243,7 +247,12 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 		return ""
 	}
 	if storeFailure != nil {
-		return "Git hook refresh skipped."
+		// Only an enabled repo has hooks worth refreshing; say nothing in a
+		// dormant one.
+		if on, _ := resolve.EnabledMarker(loc.Checkout); on {
+			return "Git hook refresh skipped."
+		}
+		return ""
 	}
 	r, err := refresh(loc.Checkout, loc.Store)
 	for _, w := range r.Warnings {
@@ -256,6 +265,9 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	if len(r.Installed) > 0 {
 		parts = append(parts, "installed missing git hook(s) at session start: "+strings.Join(r.Installed, ", "))
 	}
+	if len(r.Chained) > 0 {
+		parts = append(parts, "chained the ethos section into git hook(s): "+strings.Join(r.Chained, ", ")+" at session start")
+	}
 	var problems []string
 	for _, h := range r.NonShell {
 		problems = append(problems, fmt.Sprintf(
@@ -264,6 +276,10 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	for _, h := range r.Tracked {
 		problems = append(problems, fmt.Sprintf(
 			"Ethos did not rewrite the stale %s hook: core.hooksPath places it in a tracked file; run `ethos enable` to update it.", h))
+	}
+	for _, h := range r.TrackedMissing {
+		problems = append(problems, fmt.Sprintf(
+			"Ethos did not install the %s hook: core.hooksPath places it in the work tree; run `ethos enable` to install it.", h))
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: refreshing git hook sections: %v\n", err)

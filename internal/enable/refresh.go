@@ -28,6 +28,9 @@ const (
 	// StatusSkippedTracked: core.hooksPath puts the hook inside the work tree,
 	// a tracked file a refresh must not rewrite unasked.
 	StatusSkippedTracked = "skipped-tracked"
+	// StatusSkippedTrackedMissing is StatusSkippedTracked for a hook that does
+	// not exist yet: nothing was installed.
+	StatusSkippedTrackedMissing = "skipped-tracked-missing"
 )
 
 // RefreshHooksTo is the hook-only slice of EnableTo: it deposits nothing,
@@ -50,11 +53,14 @@ func RefreshHooksTo(repoRoot, storeRoot string) (*Report, error) {
 	if !present {
 		return rep, nil
 	}
-	return rep, refreshHooks(repoRoot, storeRoot, rep)
+	return rep, refreshHooks(repoRoot, storeRoot, rep, false)
 }
 
-// refreshHooks is RefreshHooksTo past the marker check.
-func refreshHooks(repoRoot, storeRoot string, rep *Report) error {
+// refreshHooks is RefreshHooksTo past the marker check. allowTracked says the
+// caller is an explicit `ethos enable`, which rewrites a hook inside the work
+// tree as chainHooks does (its lookup warning names the tracked file); a
+// SessionStart refresh passes false and leaves such a hook alone.
+func refreshHooks(repoRoot, storeRoot string, rep *Report, allowTracked bool) error {
 	p, err := layout.NewRepository(storeRoot, repoRoot, layout.RecordBlame)
 	if err != nil {
 		return fmt.Errorf("refresh hooks layout: %w", err)
@@ -80,7 +86,13 @@ func refreshHooks(repoRoot, storeRoot string, rep *Report) error {
 		if current {
 			continue
 		}
-		if l.InWorkTree {
+		if l.InWorkTree && !allowTracked {
+			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+					"%s would sit inside the work tree (core.hooksPath) and has no ethos section; not installing it — run `ethos enable` to install it", path))
+				rep.step("hook:"+name, StatusSkippedTrackedMissing, path)
+				continue
+			}
 			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
 				"%s is a tracked file inside the work tree (core.hooksPath) and its ethos section is stale; not rewriting it — run `ethos enable` to update it", path))
 			rep.step("hook:"+name, StatusSkippedTracked, path)
