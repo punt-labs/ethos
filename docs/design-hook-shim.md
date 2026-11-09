@@ -1,6 +1,6 @@
 # Thin-shim git hooks: the binary owns seal and trailer policy
 
-**Status**: Proposed. Bead `ethos-1xp6`. Design only.
+**Status**: Implemented on branch `feat/hook-shim` (DES-083). Bead `ethos-1xp6`.
 
 Read first: DES-055 (exit 2 blocks), DES-058 as amended by DES-079,
 DES-054 phase 3, DES-061 R4, DES-074, DES-081 (moves storage, not the hook
@@ -145,9 +145,13 @@ The commit-msg shim sets `_hook=commit-msg` and ends with:
 ```sh
 [ -z "$1" ] && exit "$_host_status"
 [ -f "$1" ] || exit "$_host_status"
-"$ethos_bin" hook commit-msg "$1" || exit 1
+"$ethos_bin" hook commit-msg "$1" || exit 2
 exit "$_host_status"
 ```
+
+Both shims exit 2 on binary failure (operator ruling, DES-055's "ethos blocked
+this" code). On failure the shipped shims also probe `--help` and print `upgrade
+ethos: make install` when the binary does not know the subcommand.
 
 ### CLI contract
 
@@ -159,11 +163,11 @@ group in `cmd/ethos/hook.go`.
 |---|---|---|
 | Args | none | the message file git passes |
 | Environment read | `GIT_INDEX_FILE` (partial commits), config snapshot | `MISSION_ID`, `DELEGATION_ID`, `ETHOS_SESSION`, Claude process tree |
-| Does | `runAuditSeal` with commit-context on, then verify-index on the staged index | env else `resolve.SessionID` sidecars, then `hook.ApplyCommitMessage` |
+| Does | `sealRepository` with commit-context on (the code `audit seal` runs), then verify-index on the staged index | env else `resolve.SessionID` sidecars, then `hook.ApplyCommitMessage` |
 | Exit 0 | sealed, nothing pending, or blame-mode retained-data warning | trailers added, or none to add |
-| Exit 2 | invalid policy, non-excepted archival failure, full-mode publication failure, verify-index failure (`failClosed`) | usage error |
-| Exit 1 | internal error (cannot locate roots) | trailer render or install failure |
-| stderr | what `audit seal` and `verify-index` print today, unchanged | `ethos: commit-trailers: <err>; no trailer added` when under Claude Code with no resolvable session (DES-074), unchanged; `ethos: commit-message: <err>` on exit 1 |
+| Exit 2 | invalid policy, non-excepted archival failure, full-mode publication failure, cannot locate the checkout or store (outside a repository, a refused root), verify-index failure (`failClosed`) | usage error |
+| Exit 1 | none | trailer render or install failure |
+| stderr | what `audit seal` prints today, unchanged; a verify-index failure is prefixed `ethos: provenance verify-index:` | `ethos: commit-msg: <err>; no trailer added` when under Claude Code with no resolvable session (DES-074; the prefix names the subcommand the user ran, not the old `commit-trailers`); `ethos: commit-message: <err>` on exit 1 |
 
 Neither reads stdin; both print nothing on stdout. The shim's `_git` no
 longer protects the binary's git calls, so a test must show
@@ -181,9 +185,12 @@ skips (shared or tracked `core.hooksPath`) keeps the old section and
 `doctor` reports it stale.
 
 **Old binary, new shim.** The shim calls `hook pre-commit`. A binary
-without it fails argument validation (non-zero, `unknown command` on
-stderr), so the commit blocks with a readable cause rather than passing
-unsealed. Three things cover this: (a) a binary containing #583 refreshes
+without it answers in one of two ways. From v4.9 (#415) the `hook` group
+rejects an unknown subcommand: non-zero, `unknown command` on stderr. Before
+that the group had no `RunE` or `Args`, so v4.8.0 and earlier print the group
+help on stdout and exit 0. Both subcommands print nothing on stdout, so the
+shim treats a non-zero exit or any stdout as failure, and the commit blocks
+with a readable cause rather than passing unsealed. Three things cover this: (a) a binary containing #583 refreshes
 at SessionStart, sees the shim differs from its own section, and rewrites
 it to the form that binary expects; (b) `doctor` from the old binary
 reports the section stale; (c) the fail-closed block. Binaries of

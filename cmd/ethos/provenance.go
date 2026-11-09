@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -22,24 +23,13 @@ func newProvenanceCommand() *cobra.Command {
 			return cobra.MinimumNArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := provenanceRepository()
-			if err != nil {
-				return err
-			}
-			r.Env, err = gitenv.ActualIndexEnv()
-			if err != nil {
-				return err
-			}
+			var err error
 			if staged {
-				args, err = r.StagedManifests(cmd.Context())
-				if err != nil {
-					return err
+				args, err = verifyStagedIndex(cmd.Context())
+				if err != nil || len(args) == 0 {
+					return err // Ordinary commits make no provenance claim.
 				}
-				if len(args) == 0 {
-					return nil // Ordinary commits make no provenance claim.
-				}
-			}
-			if err := r.VerifyIndex(cmd.Context(), args); err != nil {
+			} else if err = verifyIndexManifests(cmd.Context(), args); err != nil {
 				return err
 			}
 			if jsonOutput {
@@ -97,6 +87,45 @@ not call GitHub. It refuses a ref that does not add a publication manifest.`,
 		},
 	})
 	return command
+}
+
+// verifyIndexManifests verifies the named manifests in the actual committing
+// index.
+func verifyIndexManifests(ctx context.Context, manifests []string) error {
+	r, err := indexRepository()
+	if err != nil {
+		return err
+	}
+	return r.VerifyIndex(ctx, manifests)
+}
+
+// verifyStagedIndex verifies the manifests added or modified in the actual
+// committing index against HEAD, and returns them. It returns none when the
+// commit stages no provenance snapshot.
+func verifyStagedIndex(ctx context.Context) ([]string, error) {
+	r, err := indexRepository()
+	if err != nil {
+		return nil, err
+	}
+	manifests, err := r.StagedManifests(ctx)
+	if err != nil || len(manifests) == 0 {
+		return nil, err
+	}
+	if err := r.VerifyIndex(ctx, manifests); err != nil {
+		return nil, err
+	}
+	return manifests, nil
+}
+
+// indexRepository is provenanceRepository bound to the committing index, which
+// differs from the default one during a partial commit (GIT_INDEX_FILE).
+func indexRepository() (provenance.Repository, error) {
+	r, err := provenanceRepository()
+	if err != nil {
+		return r, err
+	}
+	r.Env, err = gitenv.ActualIndexEnv()
+	return r, err
 }
 
 func provenanceRepository() (provenance.Repository, error) {

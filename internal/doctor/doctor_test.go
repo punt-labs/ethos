@@ -670,7 +670,7 @@ func TestCheckSealHook(t *testing.T) {
 	// see a standalone, unmarked call, and djb's review explicitly rejected
 	// executing every foreign hook in every dormant repo just to tell PASS
 	// from WARN. That reasoning was never about lexical detection — a
-	// literal, textually-visible `ethos audit seal` needs no execution to
+	// literal, textually-visible `ethos hook pre-commit` needs no execution to
 	// see. The dormant branch now also runs looksLikeInvocation (a pure
 	// regex scan, same as the "gated-but-unenabled" marked-section case
 	// already used), so this same fixture now WARNs. What P5's trade-off
@@ -686,7 +686,7 @@ func TestCheckSealHook(t *testing.T) {
 		// this real (dormant) repo would actually invoke ethos, and the
 		// call is visible to a lexical scan without running anything.
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
-			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+			[]byte("#!/bin/sh\nethos hook pre-commit || exit 2\n"), 0o755))
 
 		r := CheckSealHook(dir)
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
@@ -704,7 +704,7 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
-			[]byte("#!/bin/sh\ncmd='ethos audit seal'\neval \"$cmd\"\n"), 0o755))
+			[]byte("#!/bin/sh\ncmd='ethos hook pre-commit'\neval \"$cmd\"\n"), 0o755))
 
 		r := CheckSealHook(dir)
 		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
@@ -730,7 +730,7 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
-			"ethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+			"ethos hook pre-commit || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
 		r := CheckSealHook(dir)
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
@@ -776,7 +776,7 @@ func TestCheckSealHook(t *testing.T) {
 		simulateWindows(t)
 
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
-			"ethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+			"ethos hook pre-commit || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
@@ -807,7 +807,7 @@ func TestCheckSealHook(t *testing.T) {
 	// --- Enabled: seal-call detection (marker present) ---
 
 	t.Run("standalone seal hook", func(t *testing.T) {
-		dir := writeEnabledHook(t, "#!/bin/sh\n# DES-058\nethos audit seal || exit 2\n")
+		dir := writeEnabledHook(t, "#!/bin/sh\n# DES-058\nethos hook pre-commit || exit 2\n")
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "standalone")
@@ -815,7 +815,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("chained seal section", func(t *testing.T) {
 		body := "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n" +
-			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n" +
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos hook pre-commit || exit 2\n" +
 			"# --- END ETHOS DES-058 SEAL ---\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
@@ -836,7 +836,7 @@ func TestCheckSealHook(t *testing.T) {
 		// A disabled invocation must not read as active — that is exactly
 		// the silent-absence recurrence the check exists to catch.
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
-			"# if ! ethos audit seal; then exit 2; fi\n" +
+			"# if ! ethos hook pre-commit; then exit 2; fi\n" +
 			"# --- END ETHOS DES-058 SEAL ---\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
@@ -845,7 +845,7 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("mention in a foreign comment is not active", func(t *testing.T) {
-		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
+		body := "#!/bin/sh\n# TODO: wire up ethos hook pre-commit here\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -854,7 +854,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("inline trailing comment mention is not active", func(t *testing.T) {
 		// The phrase in an inline comment after code must not read as a call.
-		body := "#!/bin/sh\necho ok # ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
+		body := "#!/bin/sh\necho ok # ethos hook pre-commit\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -862,8 +862,8 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("phrase as arguments to another command is not active", func(t *testing.T) {
-		// `ethos audit seal` passed as args to echo is not a call (C1).
-		body := "#!/bin/sh\necho ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
+		// `ethos hook pre-commit` passed as args to echo is not a call (C1).
+		body := "#!/bin/sh\necho ethos hook pre-commit\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -873,8 +873,8 @@ func TestCheckSealHook(t *testing.T) {
 	t.Run("comment after a word-break char is not active", func(t *testing.T) {
 		// Shell starts a comment after ';' or '&', not just whitespace (C2).
 		for _, body := range []string{
-			"#!/bin/sh\ntrue;# ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
-			"#!/bin/sh\ntrue &# ethos audit seal\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
+			"#!/bin/sh\ntrue;# ethos hook pre-commit\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
+			"#!/bin/sh\ntrue &# ethos hook pre-commit\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n",
 		} {
 			dir := writeEnabledHook(t, body)
 			r := CheckSealHook(dir)
@@ -889,7 +889,7 @@ func TestCheckSealHook(t *testing.T) {
 		// `precheck`) — CheckSealHook now proves activity by executing the
 		// hook (ethos-kcbv), and a real shell honors `&&` short-circuiting:
 		// a failing left side means the right side never runs.
-		body := "#!/bin/sh\ntrue && ethos audit seal\n"
+		body := "#!/bin/sh\ntrue && ethos hook pre-commit\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -914,7 +914,7 @@ func TestCheckSealHook(t *testing.T) {
 	// happened instead.
 	t.Run("H3: a host section that exits before the chained ethos call gets a specific message, not a bare stale", func(t *testing.T) {
 		body := "#!/bin/sh\n[ -f /nonexistent-marker-ethos-doctor-h3-probe ] || exit 1\n" +
-			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos hook pre-commit || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed(), "detail: %s", r.Detail)
@@ -960,7 +960,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("seal call in a non-shell hook fails", func(t *testing.T) {
 		// A shell seal call pasted into a Python hook can never run as sh.
-		dir := writeEnabledHook(t, "#!/usr/bin/env python3\nethos audit seal\n")
+		dir := writeEnabledHook(t, "#!/usr/bin/env python3\nethos hook pre-commit\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "not a shell")
@@ -981,7 +981,7 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
-			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o644))
+			[]byte("#!/bin/sh\nethos hook pre-commit || exit 2\n"), 0o644))
 		mark(t, dir)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
@@ -1006,7 +1006,7 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		witness := filepath.Join(t.TempDir(), "witness")
-		body := "#!/bin/sh\ntouch " + shQuote(witness) + "\nethos audit seal || exit 2\n"
+		body := "#!/bin/sh\ntouch " + shQuote(witness) + "\nethos hook pre-commit || exit 2\n"
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o644))
 		mark(t, dir)
 
@@ -1037,7 +1037,7 @@ func TestCheckSealHook(t *testing.T) {
 		}{
 			{
 				name:       "textual evidence of the call → WARN cannot verify",
-				section:    "ethos audit seal || exit 2\n",
+				section:    "ethos hook pre-commit || exit 2\n",
 				wantStatus: "WARN",
 				wantDetail: "cannot verify",
 			},
@@ -1084,7 +1084,7 @@ func TestCheckSealHook(t *testing.T) {
 		// seal section must not FAIL "stale": the arithmetic's second line
 		// must not be misread as opening a heredoc that masks the seal call.
 		body := "#!/bin/sh\nx=$((1 +\n2 << 3))\n" +
-			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos hook pre-commit || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -1095,7 +1095,7 @@ func TestCheckSealHook(t *testing.T) {
 		// A hook that only documents the seal in a heredoc body (usage/help
 		// text) never runs it — CheckSealHook must NOT return PASS, or the
 		// silent-absence bug this branch exists to close reopens.
-		body := "#!/bin/sh\ncat <<'EOF'\nethos audit seal\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
+		body := "#!/bin/sh\ncat <<'EOF'\nethos hook pre-commit\nEOF\ntrue # stand-in for a foreign host hook's own logic — must not depend on any real external command being installed\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed(), "detail: %s", r.Detail)
@@ -1117,7 +1117,7 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(real, "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
-			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+			[]byte("#!/bin/sh\nethos hook pre-commit || exit 2\n"), 0o755))
 		mark(t, wt)
 		r := CheckSealHook(wt)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -1133,7 +1133,7 @@ func TestCheckSealHook(t *testing.T) {
 		commonHooks := filepath.Join(mainGit, "hooks")
 		require.NoError(t, os.MkdirAll(commonHooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(commonHooks, "pre-commit"),
-			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+			[]byte("#!/bin/sh\nethos hook pre-commit || exit 2\n"), 0o755))
 
 		wtAdmin := filepath.Join(mainGit, "worktrees", "wt")
 		require.NoError(t, os.MkdirAll(filepath.Join(wtAdmin, "hooks"), 0o755))
@@ -1180,7 +1180,7 @@ func TestCheckSealHook(t *testing.T) {
 		hooks := filepath.Join(mainDir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
-			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+			[]byte("#!/bin/sh\nethos hook pre-commit || exit 2\n"), 0o755))
 
 		wtDir := filepath.Join(t.TempDir(), "wt")
 		gitRun(mainDir, "worktree", "add", "-q", wtDir, "-b", "b")
@@ -1209,7 +1209,7 @@ func TestCheckSealHook(t *testing.T) {
 		husky := filepath.Join(repo, ".husky")
 		require.NoError(t, os.MkdirAll(husky, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(husky, "pre-commit"),
-			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+			[]byte("#!/bin/sh\nethos hook pre-commit || exit 2\n"), 0o755))
 		// A seal in .git/hooks must NOT satisfy the check — git never runs it.
 		defaultHooks := filepath.Join(repo, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(defaultHooks, 0o755))
@@ -1243,7 +1243,7 @@ func TestCheckSealHook(t *testing.T) {
 		husky := filepath.Join(repo, ".husky")
 		require.NoError(t, os.MkdirAll(husky, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(husky, "pre-commit"),
-			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+			[]byte("#!/bin/sh\nethos hook pre-commit || exit 2\n"), 0o755))
 		mark(t, repo)
 
 		r := CheckSealHook(repo)
@@ -1305,7 +1305,7 @@ func TestCheckTrailerHook(t *testing.T) {
 		// The commit-msg hook itself refuses to call ethos without $1; the
 		// sandbox in hookInvocationObserved supplies that argument via
 		// spec.NeedsMsgArg, not the test fixture.
-		body := "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n"
+		body := "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-msg\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckTrailerHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -1315,7 +1315,7 @@ func TestCheckTrailerHook(t *testing.T) {
 	t.Run("chained trailer section active", func(t *testing.T) {
 		body := "#!/bin/sh\ntrue # stand-in for a foreign host hook's own logic\n" +
 			"# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
-			"[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n" +
+			"[ -z \"$1\" ] && exit 0\nethos hook commit-msg\n" +
 			"# --- END ETHOS DES-054 TRAILER ---\n"
 		dir := writeEnabledHook(t, body)
 		r := CheckTrailerHook(dir)
@@ -1337,7 +1337,7 @@ func TestCheckTrailerHook(t *testing.T) {
 		hooksDir := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooksDir, 0o755))
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-054 TRAILER ---\n" +
-			"[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n" +
+			"[ -z \"$1\" ] && exit 0\nethos hook commit-msg\n" +
 			"# --- END ETHOS DES-054 TRAILER ---\n"
 		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "commit-msg"), []byte(body), 0o755))
 		r := CheckTrailerHook(dir)
@@ -1610,6 +1610,86 @@ func TestCheckHookCurrencyCRLFHostNotStale(t *testing.T) {
 	assert.Contains(t, r.Detail, "matches this ethos build")
 }
 
+// A hand-written or framework-managed hook that calls the public command the
+// shim replaced is active, not unchained: in an enabled repo it PASSes, and in a
+// dormant repo it WARNs as chained-but-not-enabled. Only a MARKER section's
+// staleness is CheckHookCurrency's byte comparison.
+func TestCheckHookPresenceAcceptsLegacyArgv(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spec  HookSpec
+		file  string
+		body  string
+		check func(string) Result
+	}{
+		{"audit seal", sealHookSpec, "pre-commit", "#!/bin/sh\nethos audit seal --commit-context || exit 2\n", CheckSealHook},
+		{"hook commit-trailers", trailerHookSpec, "commit-msg", "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-trailers\n", CheckTrailerHook},
+		{"hook commit-message", trailerHookSpec, "commit-msg", "#!/bin/sh\n[ -z \"$1\" ] && exit 0\nethos hook commit-message \"$1\"\n", CheckTrailerHook},
+	} {
+		t.Run(tc.name+"/enabled PASSes", func(t *testing.T) {
+			dir := repoTemp(t)
+			hooksDir := filepath.Join(dir, ".git", "hooks")
+			require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(hooksDir, tc.file), []byte(tc.body), 0o755))
+			zone := filepath.Join(dir, ".punt-labs", "ethos")
+			require.NoError(t, os.MkdirAll(zone, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+			r := tc.check(dir)
+			assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		})
+		t.Run(tc.name+"/dormant WARNs", func(t *testing.T) {
+			dir := repoTemp(t)
+			hooksDir := filepath.Join(dir, ".git", "hooks")
+			require.NoError(t, os.MkdirAll(hooksDir, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(hooksDir, tc.file), []byte(tc.body), 0o755))
+			r := tc.check(dir)
+			assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+			assert.Contains(t, r.Detail, "chained but ethos not enabled here")
+		})
+	}
+}
+
+// TestCheckHookCurrencyShims runs CheckHookCurrency on the real DES-083 shims:
+// an installed shim is current, also behind a foreign CRLF host, and a section
+// copied before the shim existed is stale. The sha now moves only when the
+// shim moves, so this is the migration path, not policy delivery.
+func TestCheckHookCurrencyShims(t *testing.T) {
+	for _, spec := range []HookSpec{sealHookSpec, trailerHookSpec} {
+		t.Run(spec.ShortName+"/current", func(t *testing.T) {
+			dir := currencyRepo(t)
+			hookPath := filepath.Join(dir, ".git", "hooks", spec.File)
+			_, err := githook.Chain(hookPath, spec.Canonical, spec.Tag, spec.Ident)
+			require.NoError(t, err)
+			r := CheckHookCurrency(dir, spec)
+			assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+			assert.Contains(t, r.Detail, "matches this ethos build")
+		})
+		t.Run(spec.ShortName+"/behind a CRLF host", func(t *testing.T) {
+			dir := currencyRepo(t)
+			hookPath := filepath.Join(dir, ".git", "hooks", spec.File)
+			require.NoError(t, os.WriteFile(hookPath, []byte("#!/bin/sh\r\nrun_something || exit 1\r\n"), 0o755))
+			_, err := githook.Chain(hookPath, spec.Canonical, spec.Tag, spec.Ident)
+			require.NoError(t, err)
+			r := CheckHookCurrency(dir, spec)
+			assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+			assert.Contains(t, r.Detail, "matches this ethos build")
+		})
+		t.Run(spec.ShortName+"/copied before the shim is stale", func(t *testing.T) {
+			dir := currencyRepo(t)
+			zone := filepath.Join(dir, ".punt-labs", "ethos")
+			require.NoError(t, os.MkdirAll(zone, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+			hookPath := filepath.Join(dir, ".git", "hooks", spec.File)
+			old := []byte("#!/bin/sh\n# " + spec.Ident + "\nethos audit seal --commit-context || exit 2\n")
+			_, err := githook.Chain(hookPath, old, spec.Tag, spec.Ident)
+			require.NoError(t, err)
+			r := CheckHookCurrency(dir, spec)
+			assert.NotEqual(t, "PASS", r.Status, "detail: %s", r.Detail)
+			assert.Contains(t, r.Detail, "differs from what this ethos build would install")
+		})
+	}
+}
+
 // TestCheckHookCurrencyOneByteDriftIsStale is the drift-positive case: a
 // single hand-edited byte inside an otherwise-valid section, simulating an
 // older release's content, must report Stale with both hash prefixes in
@@ -1771,7 +1851,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", nil, "", nil, nil)
-	require.Len(t, results, 18)
+	require.Len(t, results, 19)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1789,6 +1869,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Audit trailer hook",
 		"Seal hook currency",
 		"Trailer hook currency",
+		"Hook binary",
 		"Repo-only completeness",
 		"Local extension files",
 		"Extension key names",
@@ -1799,14 +1880,14 @@ func TestRunAllAndHelpers(t *testing.T) {
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 18, PassedCount(results))
+	assert.Equal(t, 19, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", nil, "", nil, nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 17)
+	assert.Less(t, PassedCount(results), 18)
 
 	// At least one result should name the identity directory failure.
 	var found bool

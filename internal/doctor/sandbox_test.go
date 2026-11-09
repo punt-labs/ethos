@@ -69,22 +69,35 @@ func TestHookInvocationObserved(t *testing.T) {
 		assert.False(t, observed, "without $1 the hook must exit before ever calling ethos")
 	})
 
-	t.Run("the real DES-058 pre-commit hook is observed calling audit seal", func(t *testing.T) {
+	t.Run("the real DES-083 pre-commit shim is observed calling hook pre-commit", func(t *testing.T) {
 		// P3: assert against sealHookSpec's own fields, not independent
-		// literals — a literal ["audit", "seal"] passes this test even if
+		// literals — a literal argv passes this test even if
 		// sealHookSpec.InvokeArgs drifts from it, which is exactly the gap
 		// this test looks like it closes but does not. spec.Canonical is
 		// hooks.PreCommit; using the spec field keeps the body tied to the
 		// same source of truth as the argv it is checked against.
+		require.Equal(t, []string{"hook", "pre-commit"}, sealHookSpec.InvokeArgs)
 		observed, err := hookInvocationObserved(sealHookSpec.Canonical, sealHookSpec.InvokeArgs, sealHookSpec.NeedsMsgArg)
 		require.NoError(t, err)
-		assert.True(t, observed, "the production hook body must be seen invoking ethos audit seal")
+		assert.True(t, observed, "the production shim must be seen invoking ethos hook pre-commit")
 	})
 
-	t.Run("the real DES-054 commit-msg hook is observed calling hook commit-trailers", func(t *testing.T) {
+	t.Run("the real DES-083 commit-msg shim is observed calling hook commit-msg", func(t *testing.T) {
+		require.Equal(t, []string{"hook", "commit-msg"}, trailerHookSpec.InvokeArgs)
 		observed, err := hookInvocationObserved(trailerHookSpec.Canonical, trailerHookSpec.InvokeArgs, trailerHookSpec.NeedsMsgArg)
 		require.NoError(t, err)
-		assert.True(t, observed, "the production hook body must be seen invoking ethos hook commit-trailers")
+		assert.True(t, observed, "the production shim must be seen invoking ethos hook commit-msg")
+	})
+
+	t.Run("a section copied before the shim calls audit seal and is not observed", func(t *testing.T) {
+		// An old copied section runs the policy itself. It is not the shim, so
+		// the shim's argv is never seen: doctor reads it as stale, which is the
+		// right verdict (DES-083 §4).
+		observed, err := hookInvocationObserved(
+			[]byte("#!/bin/sh\nethos audit seal --commit-context || exit 2\nethos provenance verify-index --staged || exit 2\n"),
+			sealHookSpec.InvokeArgs, sealHookSpec.NeedsMsgArg)
+		require.NoError(t, err)
+		assert.False(t, observed)
 	})
 
 	t.Run("extra trailing argv words still count as the invocation (M2)", func(t *testing.T) {

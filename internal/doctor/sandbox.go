@@ -135,6 +135,13 @@ var sandboxGOOS = runtime.GOOS
 // file be created and passed as $1, which the commit-msg hook requires
 // before it will do anything.
 func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool, error) {
+	return hookInvocationObservedAny(body, [][]string{argv}, needsMsgArg)
+}
+
+// hookInvocationObservedAny is hookInvocationObserved for a hook that may call
+// any one of several argvs: the hook runs once and the observed calls are
+// matched against each.
+func hookInvocationObservedAny(body []byte, argvs [][]string, needsMsgArg bool) (bool, error) {
 	if !sandboxSupported {
 		return false, errSandboxUnsupportedPlatform
 	}
@@ -354,7 +361,12 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 		}
 		return false, fmt.Errorf("reading sandbox log: %w", err)
 	}
-	return matchesInvocation(string(data), nonce, argv), nil
+	for _, argv := range argvs {
+		if matchesInvocation(string(data), nonce, argv) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // reapGroup ends a sandboxed command's process group; a test replaces it.

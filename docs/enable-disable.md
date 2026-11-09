@@ -288,6 +288,18 @@ and **execution-based verification** — doctor confirms the seal is present
 the lexical scope rather than growing it keeps a hand-rolled recognizer from
 drifting toward a half-parser that is wrong in new ways.
 
+#### The embedded hooks are thin shims (DES-083)
+
+The sections chained into `pre-commit` and `commit-msg` carry no policy. After
+the gate below they run `ethos hook pre-commit` and `ethos hook commit-msg
+<message-file>`, which hold the seal and trailer decisions, so a release changes
+commit-time behaviour without rewriting any installed section. Both shims exit 2
+when the binary fails. An enabled repo whose binary predates those subcommands
+blocks every commit and the shim names the remedy (`upgrade ethos: make
+install`); `doctor` reports it on the "Hook binary" row. A section copied before
+the shim still works with a new binary and is rewritten to the shim by the next
+refresh. See `docs/design-hook-shim.md`.
+
 #### The §2.7 marker gate in the embedded hook scripts
 
 Per §2.7, "hook shell gates test the marker, not the directory." Both

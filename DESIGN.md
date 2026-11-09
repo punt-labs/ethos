@@ -14085,3 +14085,71 @@ Points wholesale imports different models, workflow policies and stale runtime
 assumptions. Waiting for the full DES-078 adapter would make harness setup
 depend on another product feature. Native configuration plus measured smoke
 checks provides the required development capability directly.
+
+---
+
+## DES-083: Thin-shim git hooks — the binary owns seal and trailer policy (SETTLED)
+
+**Status:** Design merged in #585; the fail-closed old-binary behaviour and
+exit 2 on both shims are operator rulings. Amends DES-058 and DES-054
+(where the hooks run what), DES-055 (exit 2 blocks) and DES-079 (the
+`--commit-context` policy). Detail in `docs/design-hook-shim.md`.
+
+**Context.** `ethos enable` copied `plugin/hooks/pre-commit.sh` into
+`.git/hooks/pre-commit`. The copy held the seal policy: which `audit seal`
+flags to pass and what ran after it. A policy change reached a repo only when
+something rewrote that copy. v4.21.0 made `--commit-context` the flag that
+lets a blame-mode archival error warn; repos enabled before 4.21 kept a section
+without it, so every commit there failed closed on legacy audit data. The
+SessionStart refresh of a stale section repairs this after the fact, but it
+cannot reach a shared or tracked `core.hooksPath`, runs only inside a Claude
+session, and leaves a window after every release.
+
+**Decision.** Nothing a release needs to change stays in `.git/hooks`. The
+installed section is a shim that keeps only what must work with the binary
+absent, old or broken: the host-status capture, the dormant fast path, the
+trace-clearing `rev-parse` probe, the marker gate, and binary resolution with
+the "enabled but not installed" block. The policy moves into two subcommands of
+the hidden `hook` group. `ethos hook pre-commit` runs the seal in commit
+context and then verifies the staged provenance snapshots; `ethos hook
+commit-msg <file>` decides the trailers from `MISSION_ID` and `DELEGATION_ID`,
+else from the committing session, and applies them. `audit seal` and
+`provenance verify-index` stay public and the subcommands call the same code.
+The section tags and idents are unchanged, so every existing section is still
+recognised and refreshed.
+
+Both shims exit 2 when the binary fails, DES-055's "ethos blocked this" code.
+A binary that predates the subcommands either rejects them with a non-zero exit
+or, at v4.8.0 and earlier, prints the hook group's help on stdout and exits 0.
+Both subcommands print nothing on stdout, so the shim treats a non-zero exit or
+any stdout as failure and the commit blocks; the shim then asks the binary for `--help` and, finding no mention of the
+subcommand, names the remedy (`upgrade ethos: make install`). Fail-closed is
+the operator's ruling: an old binary must never let a commit pass unsealed. A
+section copied before the shim keeps working with a new binary, because
+`audit seal --commit-context` and `provenance verify-index --staged` still
+exist. A later change that needs the shim to pass something new adds a new
+subcommand name, never a flag on these two.
+
+`ethos doctor` reads the new argv through `HookSpec.InvokeArgs`, so a section
+copied before the shim, which calls `audit seal`, is reported stale. A new "Hook
+binary" row resolves the binary the shim would run (PATH, then
+`~/.local/bin`) and FAILs an enabled repo whose binary predates the subcommand.
+`docs/spec-hook-gates.tex` models the one decision the shim still makes: a
+dormant tree never reaches the binary, an enabled tree with no usable binary
+never passes, and the verdict has no input for the installed text.
+
+**Verification.** Real `git commit` runs through the installed shims against a
+binary built from the branch, with builds of 93c9f82 and v4.8.0 as the old
+binaries (one rejects the subcommand, the other prints help and exits 0):
+dormant with no binary, invalid configuration, blame archival error, mission
+trailers, `GIT_TRACE=/dev/stdout`, enabled with no binary, enabled with the old
+binary, and a section copied before the shim. The subcommands are tested for
+each exit code and for output unchanged under a git trace.
+
+**Alternatives considered.** Versioning the copied section needs a hand bump on
+each release that changes policy and a refresh before it applies; the drift
+design already rejected stamps. SessionStart refresh alone is the mechanism
+this replaces. Policy in a configuration file needs a second parser in shell and
+bypasses the binary's single validated snapshot. `exec` of the binary breaks
+chaining, because a section after foreign content cannot `exec` away the host's
+status.

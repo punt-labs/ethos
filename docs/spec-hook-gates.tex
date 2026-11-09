@@ -800,6 +800,98 @@ what the counter-example trace above reports as
 input to step 1.
 
 % ===================================================================
+\section{The git hook shim (DES-083)}
+\label{sec:shim}
+% ===================================================================
+
+The sections above model the SubagentStart gate and the PreToolUse
+write decision. They say nothing about the git hooks.
+\fpath{design-hook-shim.md} (DES-083) turns the installed
+\field{pre-commit} and \field{commit-msg} sections into thin shims: the
+shim finds the binary and delegates, and commit policy lives in the
+binary. This section models the one decision the shim still makes
+itself, and states what it may and may not depend on. It is independent
+of \field{GateState}; no earlier schema changes.
+
+\begin{zed}
+ShimTree ::= treeDormant | treeEnabled \\
+ShimBinary ::= binAbsent | binOld | binCurrent \\
+ShimOutcome ::= shimPass | shimBlock
+\end{zed}
+
+\field{treeDormant} is a repository whose
+\field{.punt-labs/ethos/enabled} marker is absent. \field{binAbsent} is
+no \field{ethos} on \field{PATH} and none in
+\field{\$HOME/.local/bin}. \field{binOld} is a binary that predates the
+\field{hook pre-commit} and \field{hook commit-msg} subcommands. Such a
+binary either rejects them with a non-zero exit or, at v4.8.0 and earlier,
+prints the hook group's help on stdout and exits 0; the shim treats a
+non-zero exit or any stdout as failure, so both read as \field{binOld}.
+\field{shimPass} is exit with the captured host status when that status
+is zero; \field{shimBlock} is any non-zero exit.
+
+\begin{zed}
+ShimState \defs [ tree : ShimTree; bin : ShimBinary;
+  hostFails : ZBOOL; policyBlocks : ZBOOL ]
+\end{zed}
+
+\field{hostFails} is \field{\$\_host\_status} $\neq$ 0: the status of a
+foreign hook this section was chained after. \field{policyBlocks} is the
+current binary's own verdict (invalid configuration, a non-excepted
+archival failure, a failed verify-index). The state has no field for the
+installed section's text. That omission is the model of the incident:
+the verdict cannot depend on which release wrote the shim.
+
+\begin{axdef}
+ShimVerdict : ShimState \fun ShimOutcome
+\where
+\forall s : ShimState \spot \\
+\t1 (s.tree = treeDormant \land s.hostFails = zfalse \implies
+  ShimVerdict~s = shimPass) \land \\
+\t1 (s.tree = treeDormant \land s.hostFails = ztrue \implies
+  ShimVerdict~s = shimBlock) \land \\
+\t1 (s.tree = treeEnabled \land s.bin = binAbsent \implies
+  ShimVerdict~s = shimBlock) \land \\
+\t1 (s.tree = treeEnabled \land s.bin = binOld \implies
+  ShimVerdict~s = shimBlock) \land \\
+\t1 (s.tree = treeEnabled \land s.bin = binCurrent \land
+  s.policyBlocks = zfalse \land s.hostFails = zfalse \implies
+  ShimVerdict~s = shimPass) \land \\
+\t1 (s.tree = treeEnabled \land s.bin = binCurrent \land
+  (s.policyBlocks = ztrue \lor s.hostFails = ztrue) \implies
+  ShimVerdict~s = shimBlock)
+\end{axdef}
+
+Three properties follow from the definition by inspection, as in
+\S\ref{sec:theorems}; none is a claim fuzz discharges.
+
+\begin{itemize}
+  \item \field{DormantNeverReachesBinary}: for \field{treeDormant} the
+    verdict mentions only \field{hostFails}, never \field{bin} or
+    \field{policyBlocks}. A dormant repository pays no probe and cannot
+    be blocked by a missing or broken binary.
+  \item \field{EnabledWithoutUsableBinaryNeverPasses}: for
+    \field{treeEnabled} with \field{bin} $\in$ \{\field{binAbsent},
+    \field{binOld}\} the verdict is \field{shimBlock} for every
+    \field{hostFails} and \field{policyBlocks}. An old binary
+    either fails on the new subcommand or prints help on stdout; the shim
+    counts both as failure, so it blocks rather than passing unsealed.
+  \item \field{PolicyIgnoresInstalledText}: \field{ShimState} has no
+    field for the installed section, so no verdict depends on it.
+\end{itemize}
+
+fuzz type-checks this section with 0 errors. The verdict was also
+animated with probcli on a standalone one-shot machine: a state with
+\field{decided}, the four \field{ShimState} fields, and the outcome,
+carrying the six implications of \field{ShimVerdict} as its invariant,
+and one \field{Decide} operation that takes the four fields as inputs
+and fixes the outcome. \texttt{-model\_check} fires \field{Decide} from
+every input combination (24 transitions, 2 states) with no invariant
+violation. The one reported deadlock is the state after \field{Decide}
+has fired, where no operation is enabled by design, as with
+\field{SubagentStartOneShot} above.
+
+% ===================================================================
 \section{Traceability}
 \label{sec:trace}
 % ===================================================================
