@@ -250,6 +250,17 @@ check-storage: ## Exercise offline storage boundaries through the real CLI, wrap
 
 check: lint docs test validate-content fuzz-check check-opencode check-storage ## Run all quality gates
 
+# The legacy corpus (internal/autorepair/testdata) is real on-disk state written
+# by nine released binaries. Regenerating it builds each from its git tag, so it
+# needs full tag history and takes minutes; it is deliberately not part of check.
+.PHONY: legacy-corpus test-legacy-corpus
+
+legacy-corpus: ## Regenerate internal/autorepair/testdata from the released tags (slow; not in check)
+	scripts/legacy-corpus.sh
+
+test-legacy-corpus: ## Check the committed legacy corpus reproduces and is free of real paths and emails (not in check)
+	scripts/legacy_corpus_test.sh
+
 format: ## Format code (applies the formatters golangci-lint gates)
 	$(GOLANGCI_LINT) fmt
 
