@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.22.1] - 2026-11-09
+
 ### Fixed
 
 - The release workflow, and the behavioral and end-to-end CI jobs, now fetch
