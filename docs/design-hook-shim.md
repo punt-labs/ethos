@@ -145,9 +145,13 @@ The commit-msg shim sets `_hook=commit-msg` and ends with:
 ```sh
 [ -z "$1" ] && exit "$_host_status"
 [ -f "$1" ] || exit "$_host_status"
-"$ethos_bin" hook commit-msg "$1" || exit 1
+"$ethos_bin" hook commit-msg "$1" || exit 2
 exit "$_host_status"
 ```
+
+Both shims exit 2 on binary failure (operator ruling, DES-055's "ethos blocked
+this" code). On failure the shipped shims also probe `--help` and print `upgrade
+ethos: make install` when the binary does not know the subcommand.
 
 ### CLI contract
 

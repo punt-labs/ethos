@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ethos hook pre-commit` and `ethos hook commit-msg <file>` run the commit-time
+  seal and trailer policy the git hook shims delegate to; `ethos doctor` gains a
+  "Hook binary" row that FAILs an enabled repo whose binary predates them.
+
 - SessionStart now rewrites a stale ethos git hook section in an enabled repo
   and tells the session which hooks it refreshed or installed, so a release
   that changes the pre-commit seal takes effect without re-running
@@ -24,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The pre-commit and commit-msg git hooks are thin shims that call the binary, so a release changes seal and trailer policy without rewriting any installed hook; they exit 2 when the binary fails, and a binary too old for them blocks the commit and names `make install`.
 - Hook stdin is framed incrementally instead of re-validated after every read, and input past 64 MiB is refused with `ErrInputTooLarge`. The pre-tool-use hook denies an oversized payload instead of failing open.
 - The audit-log hook waits the reader's 10s input timeout (was 1s) and reports a stdin read failure as the cause of the dropped entry.
 
