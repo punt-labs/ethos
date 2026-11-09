@@ -316,6 +316,21 @@ func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
 // repository stream locally. Full mode adds eligible publication copies. Manual
 // failures exit 2; only blame commit-context archival errors may warn/proceed.
 func runAuditSeal(out, errOut io.Writer) error {
+	return sealRepository(out, errOut, sealFlags{
+		dryRun:        auditSealDryRun,
+		verbose:       auditSealVerbose,
+		commitContext: auditSealCommitContext,
+	})
+}
+
+// sealFlags are the options of one seal run. The audit seal command fills them
+// from its flags; the pre-commit hook passes commitContext alone.
+type sealFlags struct {
+	dryRun, verbose, commitContext bool
+}
+
+// sealRepository seals every repository stream under the given options.
+func sealRepository(out, errOut io.Writer, f sealFlags) error {
 	// The seal is classed as handling its own errors, so nothing refused it
 	// before: it applies the full refusal itself — the store, its
 	// .punt-labs/ethos path and config, as well as the checkout. A broken store
@@ -337,8 +352,8 @@ func runAuditSeal(out, errOut io.Writer) error {
 		return failClosed{}
 	}
 	opts := hook.SealOptions{
-		DryRun:    auditSealDryRun,
-		Verbose:   auditSealVerbose,
+		DryRun:    f.dryRun,
+		Verbose:   f.verbose,
 		Out:       out,
 		StartDate: sessionStartDateResolver(),
 	}
@@ -348,7 +363,7 @@ func runAuditSeal(out, errOut io.Writer) error {
 		// Captured full-consent publication is not an optional archival warning,
 		// even after switching to blame or when joined with an archive error.
 		var promptRetry *hook.PromptPublicationRetryError
-		if auditSealCommitContext && p.RecordMode() == layout.RecordBlame && !errors.As(err, &promptRetry) {
+		if f.commitContext && p.RecordMode() == layout.RecordBlame && !errors.As(err, &promptRetry) {
 			fmt.Fprintln(errOut, "ethos: audit seal: retained-data warning: local archival incomplete; live data retained; allowing the source commit; inspect with ethos audit seal and recover with ethos audit quarantine <chunk>")
 			return nil
 		}
@@ -362,7 +377,7 @@ func runAuditSeal(out, errOut io.Writer) error {
 	// operator acks it (DES-058 §Seal failure policy); gating on a total no-op
 	// skipped it whenever anything sealed — i.e. on nearly every real commit,
 	// precisely when the repo is busiest. Warn-only; never blocks the commit.
-	if !auditSealDryRun {
+	if !f.dryRun {
 		if home, hErr := os.UserHomeDir(); hErr == nil {
 			globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 			if vErr := hook.VacuumCrossCheckWithPolicy(p, globalRoot, activeRepoSessions(repoRoot, errOut), errOut); vErr != nil {
@@ -372,11 +387,11 @@ func runAuditSeal(out, errOut io.Writer) error {
 			fmt.Fprintf(errOut, "ethos: audit seal: skipping vacuum cross-check: cannot resolve home dir: %v\n", hErr)
 		}
 	}
-	if auditSealDryRun {
+	if f.dryRun {
 		fmt.Fprintf(out, "audit seal: dry-run complete (%d line(s) pending)\n", res.LinesSealed)
 		return nil
 	}
-	if auditSealVerbose {
+	if f.verbose {
 		fmt.Fprintf(out,
 			"audit seal: sealed %d line(s) across %d session(s), staged %d chunk(s)\n",
 			res.LinesSealed, res.SessionsSealed, res.ChunksStaged)
