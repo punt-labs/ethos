@@ -86,6 +86,27 @@ func runWrapper(t *testing.T, hook string, payload []byte, stall time.Duration, 
 // HOME the wrapper ran with, so a test can read the log it wrote there.
 func runWrapperFull(t *testing.T, hook string, payload []byte, stall time.Duration, hold bool, setup func(home string)) (stdin []byte, args, kind, home string) {
 	t.Helper()
+	feed := func(w *os.File) {
+		// A stall after the first 8 KiB is a writer that is busy between
+		// writes; the wrapper gives up on it at its deadline and keeps what it has.
+		first := payload
+		if stall > 0 && len(payload) > 8192 {
+			first = payload[:8192]
+		}
+		w.Write(first) //nolint:errcheck // a short write shows up as a short stdin
+		if len(first) < len(payload) {
+			time.Sleep(stall)
+			w.Write(payload[len(first):]) //nolint:errcheck // as above
+		}
+	}
+	return runWrapperWith(t, "/bin/bash", hook, feed, hold, setup)
+}
+
+// runWrapperWith runs hook under the given bash, with feed writing the payload
+// to the wrapper's stdin. When hold is true the writer's end stays open after
+// feed returns, until the wrapper has exited.
+func runWrapperWith(t *testing.T, bash, hook string, feed func(w *os.File), hold bool, setup func(home string)) (stdin []byte, args, kind, home string) {
+	t.Helper()
 	script, err := filepath.Abs(hook)
 	require.NoError(t, err)
 	home = t.TempDir()
@@ -102,7 +123,7 @@ func runWrapperFull(t *testing.T, hook string, payload []byte, stall time.Durati
 		"cat > '" + out + "'\n"
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte(fake), 0o755))
 
-	cmd := exec.Command("/bin/bash", script)
+	cmd := exec.Command(bash, script)
 	cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
 	// Claude Code is a Node process, and Node gives a child's stdin a
 	// socketpair, not a pipe; the 8 KiB truncation appears on that fd.
@@ -122,17 +143,7 @@ func runWrapperFull(t *testing.T, hook string, payload []byte, stall time.Durati
 	require.NoError(t, cmd.Start())
 	require.NoError(t, child.Close())
 	go func() {
-		// A stall after the first 8 KiB is a writer that is busy between
-		// writes; bash read -t 1 gives up on it and keeps what it has.
-		first := payload
-		if stall > 0 && len(payload) > 8192 {
-			first = payload[:8192]
-		}
-		parent.Write(first) //nolint:errcheck // a short write shows up as a short stdin
-		if len(first) < len(payload) {
-			time.Sleep(stall)
-			parent.Write(payload[len(first):]) //nolint:errcheck // as above
-		}
+		feed(parent)
 		if !hold {
 			parent.Close()
 		}
@@ -239,16 +250,58 @@ func TestWrappersBypasses(t *testing.T) {
 // records what it was given; the log is what the test is about.
 func TestWrappersLogAStdinReadTimeout(t *testing.T) {
 	partial := []byte(`{"tool_name":"mcp__plugin_ethos_self__identity","tool_in`)
-	for hook, sub := range stdinWrappers(t) {
-		t.Run(hook, func(t *testing.T) {
-			t.Parallel()
-			got, args, _, home := runWrapperFull(t, hook, partial, 0, true, nil)
-			assert.Equal(t, "hook "+sub, args, "the fragment is still forwarded")
-			assert.True(t, sameJSON(partial, got), "forwarded %q", got)
-			log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
-			require.NoError(t, err)
-			assert.Equal(t, fmt.Sprintf("ethos %s: stdin read timed out after 10s (%d bytes)\n", sub, len(partial)), string(log))
-		})
+	for _, bash := range wrapperBashes(t) {
+		for hook, sub := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				feed := func(w *os.File) { w.Write(partial) } //nolint:errcheck // a short write shows up as a short stdin
+				got, args, _, home := runWrapperWith(t, bash, hook, feed, true, nil)
+				assert.Equal(t, "hook "+sub, args, "the fragment is still forwarded")
+				assert.True(t, sameJSON(partial, got), "forwarded %q", got)
+				log, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "hook-errors.log"))
+				require.NoError(t, err)
+				assert.Equal(t, fmt.Sprintf("ethos %s: stdin read timed out after 10s (%d bytes)\n", sub, len(partial)), string(log))
+			})
+		}
+	}
+}
+
+// wrapperBashes returns every bash this host has that the wrappers can meet:
+// the system one (3.2 on macOS) and, where installed, Homebrew's.
+func wrapperBashes(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	for _, b := range []string{"/bin/bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash"} {
+		if _, err := os.Stat(b); err == nil {
+			found = append(found, b)
+		}
+	}
+	require.NotEmpty(t, found, "no bash found")
+	return found
+}
+
+// A payload that arrives in pieces over several seconds is forwarded whole,
+// under every bash: bash 3.2 loses what a timed-out read had collected.
+func TestWrappersForwardAPayloadArrivingInPieces(t *testing.T) {
+	pieces := []string{`{"tool_name":"Edit",`, `"tool_input":{"file_path":"a.go",`, `"new_string":"x"}}` + "\n"}
+	want := []byte(strings.Join(pieces, ""))
+	for _, bash := range wrapperBashes(t) {
+		for hook, sub := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				t.Parallel()
+				feed := func(w *os.File) {
+					for i, p := range pieces {
+						if i > 0 {
+							time.Sleep(time.Second)
+						}
+						w.Write([]byte(p)) //nolint:errcheck // a short write shows up as a short stdin
+					}
+				}
+				got, args, _, _ := runWrapperWith(t, bash, hook, feed, false, nil)
+				assert.Equal(t, "hook "+sub, args)
+				assert.True(t, sameJSON(want, got), "forwarded %q, want %q", got, want)
+			})
+		}
 	}
 }
 
@@ -265,4 +318,20 @@ func TestWrappersLogNoTimeoutForACompletePayload(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The stdin read block is copied into every wrapper, so it must not drift: one
+// wrapper that kept the old read would lose a partial payload on bash 3.2.
+func TestWrappersShareOneStdinReadBlock(t *testing.T) {
+	blocks := map[string][]string{}
+	for hook := range stdinWrappers(t) {
+		src, err := os.ReadFile(hook)
+		require.NoError(t, err)
+		start := strings.Index(string(src), "# This block is identical")
+		end := strings.Index(string(src), "# read returns >128")
+		require.True(t, start >= 0 && end > start, "%s: stdin read block not found", hook)
+		block := string(src)[start:end]
+		blocks[block] = append(blocks[block], hook)
+	}
+	assert.Len(t, blocks, 1, "the wrappers carry different stdin read blocks: %v", blocks)
 }

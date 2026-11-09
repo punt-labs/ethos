@@ -22,6 +22,8 @@ command -v ethos >/dev/null 2>&1 || exit 0
 # reliably on Linux (DES-029): bash reads the whole payload, ethos gets a fresh pipe.
 HOOK_INPUT=""
 _rc=0
+# This block is identical in every stdin wrapper in this directory
+# (TestWrappersShareOneStdinReadBlock enforces it); change all of them together.
 if [[ ${BASH_VERSINFO[0]} -ge 4 ]]; then
   IFS= read -r -d "" -t 10 HOOK_INPUT 2>/dev/null || _rc=$?
 else
