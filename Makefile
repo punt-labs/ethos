@@ -31,21 +31,24 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 GOLANGCI_LINT_VERSION := v2.13.1
 
 # Every recipe runs the Go toolchain named by go.mod's `toolchain` line, not
-# whatever Go is first on the developer's PATH. The prebuilt golangci-lint
-# artifact above is tied to one Go minor: with GOTOOLCHAIN=auto a newer system
-# Go (e.g. go1.27.3 against `toolchain go1.26.5`) wins, and the linter then
-# fails reading export data ("export data version 5 is greater than maximum
-# supported version 4"). CI is unaffected because actions/setup-go reads
-# go.mod; exporting the same value here makes a local `make lint`, `make test`,
-# and `make build` run the Go that CI and the artifact were built for. If
-# go.mod has no toolchain line the variable stays unset and Go's default
-# applies.
-GO_TOOLCHAIN := $(shell awk '/^toolchain /{print $$2}' go.mod)
+# whatever Go is first on the developer's PATH. golangci-lint v2.13.1's
+# go/types export-data reader accepts format version 4 at most, while a
+# go1.27.x standard library emits version 5, so under GOTOOLCHAIN=auto a newer
+# system Go (e.g. go1.27.3 against `toolchain go1.26.5`) wins and the linter
+# fails with "export data version 5 is greater than maximum supported version
+# 4". go1.26 emits version 4. go.mod's toolchain line is the Go that CI runs
+# (actions/setup-go reads go.mod) and the Go this linter can read, so
+# exporting it here makes a local `make lint`, `make test`, and `make build`
+# run the same Go as CI. The awk takes only a `toolchain go1.x` line, so
+# `toolchain default` or a missing line leaves GOTOOLCHAIN unset (Go's own
+# default applies), and it strips a trailing CR so a CRLF go.mod cannot export
+# an invalid value that would break every recipe.
+GO_TOOLCHAIN := $(shell awk '$$1=="toolchain" && $$2 ~ /^go1\./ {sub(/\r$$/,"",$$2); print $$2}' go.mod)
 ifneq ($(GO_TOOLCHAIN),)
 export GOTOOLCHAIN := $(GO_TOOLCHAIN)
 endif
 
-GOBIN :=$(shell go env GOBIN)
+GOBIN := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
