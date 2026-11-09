@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -207,17 +209,31 @@ func renderFindTable(out io.Writer, traces []mission.TraceSummary) error {
 
 // renderFindPaths writes one mission directory path per line. The index is a
 // historical summary and can list missions whose directory was purged; those
-// are reported on errOut and omitted, so a consumer piping the paths never
-// receives one that does not exist.
+// are noted on errOut and omitted, so a consumer piping the paths never
+// receives one that does not exist. A path that exists but is not a directory
+// is noted and omitted. Any other stat failure (permissions, I/O) is returned:
+// the listing would otherwise look complete when it is not.
 func renderFindPaths(out, errOut io.Writer, repoRoot string, traces []mission.TraceSummary) error {
 	for _, ts := range traces {
 		dir := mission.RepoStatePath(repoRoot, "missions", ts.ID)
 		fi, err := os.Stat(dir)
-		if err != nil || !fi.IsDir() {
-			fmt.Fprintf(errOut, "ethos: find missions: %s: mission directory not found (index entry retained)\n", ts.ID)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			if _, werr := fmt.Fprintf(errOut, "ethos: find missions: %s: mission directory not found (index entry retained)\n", ts.ID); werr != nil {
+				return fmt.Errorf("find missions: writing note: %w", werr)
+			}
+			continue
+		case err != nil:
+			return fmt.Errorf("find missions: checking %s: %w", dir, err)
+		case !fi.IsDir():
+			if _, werr := fmt.Fprintf(errOut, "ethos: find missions: %s: not a directory: %s\n", ts.ID, dir); werr != nil {
+				return fmt.Errorf("find missions: writing note: %w", werr)
+			}
 			continue
 		}
-		fmt.Fprintln(out, dir)
+		if _, werr := fmt.Fprintln(out, dir); werr != nil {
+			return fmt.Errorf("find missions: writing path: %w", werr)
+		}
 	}
 	return nil
 }

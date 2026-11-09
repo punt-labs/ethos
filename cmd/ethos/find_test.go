@@ -252,6 +252,41 @@ func TestFindMissions_FormatPathsOmitsPurgedDirs(t *testing.T) {
 	assert.NotContains(t, stderr, traces[0].ID)
 }
 
+// A stat failure other than "not found" must fail the command: an unreadable
+// missions directory would otherwise look like an empty, purged one.
+func TestFindMissions_FormatPathsStatErrorFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	_, repo := findMissionsEnv(t)
+	traces := sampleTraces()[:1]
+	seedMissionsJSONL(t, repo, traces)
+	parent := mission.RepoStatePath(repo, "missions")
+	require.NoError(t, os.MkdirAll(filepath.Join(parent, traces[0].ID), 0o700))
+	require.NoError(t, os.Chmod(parent, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+
+	stdout, _, err := execHandler(t, "find", "missions", "--format", "paths")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking")
+	assert.Empty(t, stdout)
+}
+
+// An index entry whose path is a file is noted and skipped, not listed.
+func TestFindMissions_FormatPathsNotADirectory(t *testing.T) {
+	_, repo := findMissionsEnv(t)
+	traces := sampleTraces()[:1]
+	seedMissionsJSONL(t, repo, traces)
+	parent := mission.RepoStatePath(repo, "missions")
+	require.NoError(t, os.MkdirAll(parent, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(parent, traces[0].ID), []byte("x"), 0o600))
+
+	stdout, stderr, err := execHandler(t, "find", "missions", "--format", "paths")
+	require.NoError(t, err)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, traces[0].ID+": not a directory:")
+}
+
 func TestFindMissions_EmptyFile(t *testing.T) {
 	_, repo := findMissionsEnv(t)
 	seedMissionsJSONL(t, repo, nil)
