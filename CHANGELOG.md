@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seal could not be chained into, and a stale hook inside the work tree (via
   `core.hooksPath`, never rewritten) are told to the session instead of only
   logged, and a skipped refresh after a store failure is said too. One
-  malformed hook no longer stops the check of the other.
+  malformed hook no longer stops the check of the other. The automatic
+  refresh never writes outside the repo's private hooks area: a shared
+  `core.hooksPath` outside the repo and a hook symlinked into the work tree are
+  left alone and reported, and a bundle or policy problem no longer skips the
+  refresh.
 
 ### Changed
 
@@ -30,8 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legacy data no longer keeps a stale hook that blocks every commit. A
   first-time enable that refuses installs no hooks.
 - `ethos doctor` reports a stale seal hook section as FAIL instead of WARN,
-  because the stale section can block commits; a stale trailer section stays
-  WARN.
+  because the stale section can block commits, or WARN in a repo where ethos is
+  not enabled and the hook passes through; a stale trailer section stays WARN.
 - `ethos find missions --format paths` omits missions whose directory was purged or is not a directory and notes each on stderr, and fails on any other stat error; `json` and `table` still list them.
 
 ## [4.21.0] - 2026-11-07

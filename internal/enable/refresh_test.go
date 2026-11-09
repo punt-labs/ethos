@@ -157,4 +157,66 @@ func TestRefreshHooks(t *testing.T) {
 		assert.Equal(t, StatusSkippedTrackedMissing, rep.Steps[0].Status)
 		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "not installing it")
 	})
+
+	t.Run("a symlinked hook into the work tree is not rewritten", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		tracked := filepath.Join(root, "tools", "pre-commit")
+		require.NoError(t, os.MkdirAll(filepath.Dir(tracked), 0o755))
+		require.NoError(t, os.WriteFile(tracked, []byte(staleSeal), 0o755))
+		hookPath := filepath.Join(root, ".git", "hooks", "pre-commit")
+		require.NoError(t, os.Remove(hookPath))
+		require.NoError(t, os.Symlink(tracked, hookPath))
+
+		rep, err := RefreshHooks(root)
+		require.NoError(t, err)
+		assert.Equal(t, staleSeal, readFile(t, tracked), "the tracked target is byte-identical")
+		var recorded bool
+		for _, st := range rep.Steps {
+			if st.Step == "hook:pre-commit" && st.Status == StatusSkippedTracked {
+				recorded = true
+			}
+		}
+		assert.True(t, recorded, "steps: %+v", rep.Steps)
+	})
+
+	t.Run("a dangling symlinked hook is an error and the other hook is still refreshed", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		hooksDir := filepath.Join(root, ".git", "hooks")
+		commitMsg := filepath.Join(hooksDir, "commit-msg")
+		want := readFile(t, commitMsg)
+		require.NoError(t, os.WriteFile(commitMsg, []byte("#!/bin/sh\n# --- BEGIN "+hooks.TrailerTag+" ---\n# "+hooks.TrailerIdent+"\nexit 0\n# --- END "+hooks.TrailerTag+" ---\n"), 0o755))
+		hookPath := filepath.Join(hooksDir, "pre-commit")
+		require.NoError(t, os.Remove(hookPath))
+		require.NoError(t, os.Symlink(filepath.Join(root, "missing"), hookPath))
+
+		_, err = RefreshHooks(root)
+		require.Error(t, err)
+		assert.Equal(t, want, readFile(t, commitMsg))
+	})
+
+	t.Run("a hooks dir outside the repo is untouched", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		shared := physicalTempDir(t)
+		hookPath := filepath.Join(shared, "pre-commit")
+		require.NoError(t, os.WriteFile(hookPath, []byte(staleSeal), 0o755))
+		gitRun(t, root, "config", "core.hooksPath", shared)
+
+		rep, err := RefreshHooks(root)
+		require.NoError(t, err)
+		assert.Equal(t, staleSeal, readFile(t, hookPath))
+		var recorded bool
+		for _, st := range rep.Steps {
+			if st.Step == "hook:pre-commit" && st.Status == StatusSkippedShared {
+				recorded = true
+			}
+		}
+		assert.True(t, recorded, "steps: %+v", rep.Steps)
+		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "outside this repo")
+	})
 }

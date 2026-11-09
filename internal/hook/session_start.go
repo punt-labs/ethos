@@ -61,6 +61,8 @@ type HookRefresh struct {
 	NonShell []string
 	// Tracked names stale hooks inside the work tree, left unrewritten.
 	Tracked []string
+	// Shared names hooks in a core.hooksPath outside the repo, left alone.
+	Shared []string
 	// TrackedMissing names hooks inside the work tree that do not exist and
 	// were not created.
 	TrackedMissing []string
@@ -130,7 +132,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
 	}
-	if refreshed := refreshStaleHooks(deps.RefreshHooks, storeFailure, loc); refreshed != "" {
+	if refreshed := refreshStaleHooks(deps.RefreshHooks, loc.StoreFailure(), loc); refreshed != "" {
 		if note != "" {
 			note += " "
 		}
@@ -243,15 +245,18 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 // wrapper sends stderr to a log file the session never reads. A store failure
 // skips the refresh, and the session is told that too.
 func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error), storeFailure error, loc resolve.Located) string {
-	if refresh == nil || loc.Checkout == "" || loc.Store == "" {
+	if refresh == nil || loc.Checkout == "" {
 		return ""
 	}
 	if storeFailure != nil {
 		// Only an enabled repo has hooks worth refreshing; say nothing in a
 		// dormant one.
 		if on, _ := resolve.EnabledMarker(loc.Checkout); on {
-			return "Git hook refresh skipped."
+			return fmt.Sprintf("Git hook refresh skipped: %v. A stale seal section may block commits; run `ethos doctor`.", storeFailure)
 		}
+		return ""
+	}
+	if loc.Store == "" {
 		return ""
 	}
 	r, err := refresh(loc.Checkout, loc.Store)
@@ -276,6 +281,10 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	for _, h := range r.Tracked {
 		problems = append(problems, fmt.Sprintf(
 			"Ethos did not rewrite the stale %s hook: core.hooksPath places it in a tracked file; run `ethos enable` to update it.", h))
+	}
+	for _, h := range r.Shared {
+		problems = append(problems, fmt.Sprintf(
+			"Ethos did not rewrite the stale %s hook: core.hooksPath is shared outside this repo; run `ethos enable`.", h))
 	}
 	for _, h := range r.TrackedMissing {
 		problems = append(problems, fmt.Sprintf(

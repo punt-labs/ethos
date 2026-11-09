@@ -1654,6 +1654,9 @@ func TestCheckHookCurrencyStaleSeverity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := currencyRepo(t)
+			zone := filepath.Join(dir, ".punt-labs", "ethos") // enabled: a stale seal blocks commits
+			require.NoError(t, os.MkdirAll(zone, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
 			hookPath := filepath.Join(dir, ".git", "hooks", tt.file)
 			_, err := githook.Chain(hookPath, tt.stale, tt.spec.Tag, tt.spec.Ident)
 			require.NoError(t, err)
@@ -1664,6 +1667,25 @@ func TestCheckHookCurrencyStaleSeverity(t *testing.T) {
 			assert.Contains(t, r.Detail, "differs from what this ethos build would install")
 		})
 	}
+}
+
+// A stale seal section in a repo where ethos is not enabled passes through, so
+// it is a WARN; enabled, it blocks commits and is a FAIL.
+func TestCheckHookCurrencyStaleSealDormantIsWarn(t *testing.T) {
+	pre421Seal := []byte("#!/bin/sh\n# " + hooks.SealIdent + "\nethos audit seal || exit 2\n")
+	dir := currencyRepo(t)
+	hookPath := filepath.Join(dir, ".git", "hooks", "pre-commit")
+	_, err := githook.Chain(hookPath, pre421Seal, sealHookSpec.Tag, sealHookSpec.Ident)
+	require.NoError(t, err)
+
+	r := CheckHookCurrency(dir, sealHookSpec)
+	assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+	assert.Contains(t, r.Detail, "dormant repo: hook passes through")
+
+	zone := filepath.Join(dir, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(zone, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+	assert.Equal(t, "FAIL", CheckHookCurrency(dir, sealHookSpec).Status)
 }
 
 // pre415TrailerLoop is the pre-#415 commit-msg session-resolution loop,

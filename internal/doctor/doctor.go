@@ -1092,11 +1092,13 @@ func shortHex(sum [sha256.Size]byte) string {
 }
 
 // CheckHookCurrency compares spec's installed section against what this
-// ethos build would install today (docs/design-hook-drift-detection.md). It
-// never reads the enabled marker: a section that doesn't exist is not this
-// check's concern (PASS, nothing installed); a section that exists is
-// checked for currency regardless of whether ethos is enabled in this repo
-// right now, because `ethos enable` is the remedy for both problems.
+// ethos build would install today (docs/design-hook-drift-detection.md). A
+// section that doesn't exist is not this check's concern (PASS, nothing
+// installed); a section that exists is checked for currency regardless of
+// whether ethos is enabled in this repo right now, because `ethos enable` is
+// the remedy for both problems. The marker is read for one thing only: how bad
+// a stale section is. A stale seal section blocks commits only where ethos is
+// enabled; in a dormant repo the hook passes through, so it is a WARN.
 func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	name := spec.Name + " currency"
 
@@ -1168,6 +1170,13 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 			"%s section matches this ethos build (sha256:%s)", spec.Name, shortHex(installedDigest))}
 	}
 	if spec.StaleBlocksCommit {
+		on, markErr := resolve.EnabledMarker(repoRoot)
+		if markErr == nil && !on {
+			return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+				"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) (dormant repo: hook passes through; run `ethos enable` to refresh or remove the stale section)",
+				spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
+		}
+		// An unreadable marker is not proof of a dormant repo: keep the FAIL.
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 			"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — stale section may block commits — run `ethos enable` (SessionStart also refreshes it)",
 			spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}

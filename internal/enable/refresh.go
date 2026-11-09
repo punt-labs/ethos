@@ -28,6 +28,9 @@ const (
 	// StatusSkippedTracked: core.hooksPath puts the hook inside the work tree,
 	// a tracked file a refresh must not rewrite unasked.
 	StatusSkippedTracked = "skipped-tracked"
+	// StatusSkippedShared: core.hooksPath is outside the repo, so the hook is
+	// shared by every repo using it and a refresh must not rewrite it.
+	StatusSkippedShared = "skipped-shared"
 	// StatusSkippedTrackedMissing is StatusSkippedTracked for a hook that does
 	// not exist yet: nothing was installed.
 	StatusSkippedTrackedMissing = "skipped-tracked-missing"
@@ -85,6 +88,27 @@ func refreshHooks(repoRoot, storeRoot string, rep *Report, allowTracked bool) er
 		}
 		if current {
 			continue
+		}
+		if !allowTracked && l.Shared {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+				"%s lives in %s, outside this repo (core.hooksPath is shared); not touching it — run `ethos enable` to update it", name, dir))
+			rep.step("hook:"+name, StatusSkippedShared, path)
+			continue
+		}
+		if !allowTracked && !l.InWorkTree {
+			// A hook that is a symlink into the work tree is a tracked file in
+			// disguise, even when the hooks directory is private.
+			target, err := symlinkTarget(path)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("resolving %s: %w", path, err))
+				continue
+			}
+			if target != "" && l.IsInWorkTree(target) {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+					"%s is a symlink to %s, a tracked file inside the work tree, and its ethos section is stale; not rewriting it — run `ethos enable` to update it", path, target))
+				rep.step("hook:"+name, StatusSkippedTracked, path)
+				continue
+			}
 		}
 		if l.InWorkTree && !allowTracked {
 			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
@@ -145,4 +169,21 @@ func normalizeEOL(b []byte) []byte {
 		out.WriteByte('\n')
 	}
 	return out.Bytes()
+}
+
+// symlinkTarget returns the fully resolved target of path when path is a
+// symlink, and "" when it is not (or does not exist). A symlink that cannot be
+// resolved is an error: its destination is unknown, so it must not be written.
+func symlinkTarget(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return "", nil
+	}
+	return filepath.EvalSymlinks(path)
 }

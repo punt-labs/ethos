@@ -29,7 +29,10 @@ type Lookup struct {
 	// InWorkTree says git runs hooks from a directory inside the work tree, so
 	// each hook there is a tracked file a refresh must not rewrite unasked.
 	InWorkTree bool
-	cause      error // why the lookup is degraded; Remedy classifies it
+	// Shared says the hooks directory is outside the repo, so its hooks serve
+	// every repo that uses that core.hooksPath.
+	Shared bool
+	cause  error // why the lookup is degraded; Remedy classifies it
 }
 
 // Display returns the hooks directory for a message or a read-only scan. Do not
@@ -172,8 +175,8 @@ func gitHooksPath(repoRoot string) (Lookup, error) {
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
 	}
-	warns, inTree, err := classifyHooksPath(repoRoot, top, hdRaw)
-	l := Lookup{dir: hd, root: repoRoot, Warnings: warns, InWorkTree: inTree}
+	warns, kind, err := classifyHooksPath(repoRoot, top, hdRaw)
+	l := Lookup{dir: hd, root: repoRoot, Warnings: warns, InWorkTree: kind == hooksInWorkTree, Shared: kind == hooksShared}
 	if err != nil {
 		l.Degraded = true
 		l.Reason = err.Error()
@@ -198,13 +201,22 @@ func sameFile(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
+// hooksPlace is where a hooks directory sits relative to the repo.
+type hooksPlace int
+
+const (
+	hooksPrivate    hooksPlace = iota // under the git dir
+	hooksInWorkTree                   // inside the work tree: tracked files
+	hooksShared                       // outside the repo
+)
+
 // classifyHooksPath warns when the resolved hooks dir is not under the git
 // dir: inside the work tree (a tracked file) or outside the repo (shared).
 // Comparison is done on symlink-resolved paths so a symlinked temp root
 // (macOS /tmp → /private/tmp) does not defeat the prefix test. When git cannot
 // name the common dir it classifies against <top>/.git, the default location,
 // and returns the failure so the caller can report the lookup unverified.
-func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, bool, error) {
+func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, hooksPlace, error) {
 	hd := hdRaw
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
@@ -222,13 +234,13 @@ func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, bool, error) {
 	}
 	switch {
 	case isUnder(hd, common):
-		return nil, false, err // under the git dir — private, not tracked
+		return nil, hooksPrivate, err // under the git dir — private, not tracked
 	case isUnder(hd, top):
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}, true, err
+			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}, hooksInWorkTree, err
 	default:
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}, false, err
+			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}, hooksShared, err
 	}
 }
 
@@ -282,3 +294,7 @@ func evalPath(p string) string {
 	}
 	return filepath.Clean(p)
 }
+
+// IsInWorkTree reports whether path, with symlinks resolved, lies inside the
+// work tree this lookup was made for.
+func (l Lookup) IsInWorkTree(path string) bool { return isUnder(path, l.root) }

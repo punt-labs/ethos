@@ -156,6 +156,8 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 			r.Chained = append(r.Chained, name)
 		case enable.StatusSkippedTracked:
 			r.Tracked = append(r.Tracked, name)
+		case enable.StatusSkippedShared:
+			r.Shared = append(r.Shared, name)
 		case enable.StatusSkippedTrackedMissing:
 			r.TrackedMissing = append(r.TrackedMissing, name)
 		default:
