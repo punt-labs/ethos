@@ -8,6 +8,9 @@ set -euo pipefail
 #
 # CONTRACT: stage the manifest and dev commands only; do not commit. The release
 # engine re-stamps the version, then makes one hook-checked restore commit.
+# The manifest restore is name-only: HEAD's plugin.json with `name` taken from
+# the snapshot; version, description, and the rest stay as HEAD has them. The
+# dev command files are restored wholesale from the snapshot.
 # Without an argument, use the most recent first-parent snapshot with a dev
 # plugin name. Release PRs are squash-merged, so their prep subject is not kept.
 # An explicit release-prep commit still selects its first parent for compatibility.
@@ -100,6 +103,16 @@ for path in paths:
                      "preserve or move it before retrying")
 
 print(f"Staging dev state from {source[:12]}", flush=True)
+# Restore first: git refuses atomically (for example on a locked index) before
+# touching the worktree. The manifest is then rewritten name-only below.
 subprocess.run(["git", "--literal-pathspecs", "-C", root, "restore", "--source=" + source,
                 "--staged", "--worktree", "--", *paths], check=True)
+# Manifest: HEAD's manifest with only `name` taken from the snapshot, written
+# with release-plugin.sh's json.dumps(indent=2) style so escaping round-trips.
+snapshot_name = json.loads(git("show", source + ":" + manifest))["name"]
+merged = json.loads(git("show", "HEAD:" + manifest))
+merged["name"] = snapshot_name
+with open(os.path.join(root, manifest), "w") as f:
+    f.write(json.dumps(merged, indent=2) + "\n")
+subprocess.run(["git", "--literal-pathspecs", "-C", root, "add", "--", manifest], check=True)
 PY

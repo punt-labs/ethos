@@ -183,7 +183,7 @@ func TestRestoreDevPluginAfterSquash(t *testing.T) {
 	assert.Contains(t, out, devHead[:12])
 	assert.Equal(t, head, r.git(t, "rev-parse", "HEAD"))
 	assert.NoFileExists(t, filepath.Join(r.root, ".git/hook-runs"))
-	r.assertManifest(t, "ethos-dev", "1.0.0")
+	r.assertManifest(t, "ethos-dev", "2.0.0")
 	assert.Equal(t, "latest development command\n", r.read(t, devCommand))
 	assert.NoFileExists(t, filepath.Join(r.root, "plugin/commands/identity-dev.md"))
 	assert.Equal(t, "updated production command\n", r.read(t, "plugin/commands/identity.md"))
@@ -200,6 +200,28 @@ func TestRestoreDevPluginAfterSquash(t *testing.T) {
 	assert.Equal(t, count, r.git(t, "rev-list", "--count", "HEAD^"))
 	assert.Equal(t, head, r.git(t, "rev-parse", "HEAD^"))
 	assert.Empty(t, r.git(t, "status", "--porcelain"))
+}
+
+// The manifest restore is name-only: version and description bytes (including
+// the escaping release-plugin.sh's json.dumps wrote) come from HEAD, not from
+// the older dev snapshot.
+func TestRestoreDevPluginManifestNameOnly(t *testing.T) {
+	r := newPluginReleaseRepo(t, false)
+	r.write(t, pluginManifest, "{\n  \"name\": \"ethos-dev\",\n  \"version\": \"4.21.0\",\n"+
+		"  \"description\": \"Identity — binding\"\n}\n")
+	r.git(t, "add", pluginManifest)
+	r.git(t, "commit", "-m", "dev snapshot 4.21.0")
+	released := "{\n  \"name\": \"ethos\",\n  \"version\": \"4.22.0\",\n" +
+		"  \"description\": \"Identity \\u2014 binding\"\n}\n"
+	r.write(t, pluginManifest, released)
+	r.git(t, "add", pluginManifest)
+	r.git(t, "commit", "-m", "chore: release v4.22.0 (#1)")
+	out, err := r.script(t, "restore-dev")
+	require.NoError(t, err, out)
+	want := strings.Replace(released, `"name": "ethos"`, `"name": "ethos-dev"`, 1)
+	assert.Equal(t, want, r.read(t, pluginManifest))
+	assert.Equal(t, want, r.git(t, "show", ":"+pluginManifest)+"\n")
+	assert.Contains(t, r.read(t, pluginManifest), "\\u2014")
 }
 
 func TestRestoreDevPluginFirstParent(t *testing.T) {
