@@ -29,6 +29,12 @@ import (
 // the number in this comment.
 var sandboxTimeout = 10 * time.Second
 
+// sandboxSetupTimeout bounds each git call that builds the sandbox (init, the
+// containment self-test). It is separate from sandboxTimeout so that shrinking
+// the hook's bound in a test cannot make the setup time out on a loaded host
+// before the hook runs.
+const sandboxSetupTimeout = 30 * time.Second
+
 // sandboxGrace is how long a sandboxed command that got SIGTERM on its
 // deadline has to exit before it is killed.
 const sandboxGrace = time.Second
@@ -179,7 +185,7 @@ func hookInvocationObserved(body []byte, argv []string, needsMsgArg bool) (bool,
 	var initOut bytes.Buffer
 	if _, err := gitenv.Run(gitenv.Spec{
 		Git: "git", Args: []string{"-C", dir, "init", "-q", "--template="}, Env: sandboxEnv,
-		Stdout: &initOut, Stderr: &initOut, Limit: sandboxTimeout,
+		Stdout: &initOut, Stderr: &initOut, Limit: sandboxSetupTimeout,
 	}); err != nil {
 		return false, fmt.Errorf("sandbox git init: %w: %s", err, initOut.String())
 	}
@@ -453,7 +459,7 @@ func (e *hookExitedEarlyError) Error() string {
 // rather than exposing a broader interface.
 func gitInSandbox(dir string, env []string, args ...string) (string, error) {
 	out, err := gitenv.Run(gitenv.Spec{
-		Git: "git", Args: append([]string{"-C", dir}, args...), Env: env, Limit: sandboxTimeout,
+		Git: "git", Args: append([]string{"-C", dir}, args...), Env: env, Limit: sandboxSetupTimeout,
 	})
 	if err != nil {
 		var exitErr *exec.ExitError
