@@ -181,12 +181,25 @@ func TestRestoreDevPluginManifestCollision(t *testing.T) {
 	}
 }
 
+// rawByteIfAllowed returns "\xff" when the temp volume accepts a file name
+// that is not valid UTF-8, and "" when it refuses one (macOS APFS).
+func rawByteIfAllowed(t *testing.T) string {
+	t.Helper()
+	probe := filepath.Join(t.TempDir(), "probe\xff")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		return ""
+	}
+	return "\xff"
+}
+
 func TestRestoreDevPluginCollisionScope(t *testing.T) {
 	for _, explicit := range []bool{false, true} {
 		t.Run(map[bool]string{false: "automatic", true: "explicit prep"}[explicit], func(t *testing.T) {
 			// Quotes, tabs, newline, wildcard characters, whitespace and invalid
 			// UTF-8 must survive Git -z inventories and subprocess arguments.
-			path := "plugin/commands/ \t'[*?\xff]\n/ odd \t-dev.md"
+			// Some volumes (APFS) refuse a file name that is not valid UTF-8;
+			// there the name keeps every other hazard and drops that byte.
+			path := "plugin/commands/ \t'[*?" + rawByteIfAllowed(t) + "]\n/ odd \t-dev.md"
 			r, source, prep := newRestoreCollisionRepo(t, path)
 			r.write(t, ".git/info/exclude", "/.punt-labs/local/\n/plugin/commands/ignored/\n")
 			r.write(t, ".punt-labs/local/ethos/runtime", "local runtime\x00\xff\n")

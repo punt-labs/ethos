@@ -175,7 +175,12 @@ func TestArchivalIndexEntryBytes(t *testing.T) {
 	runGit(t, repo, "init", "-q")
 	// -z and literal pathspecs must preserve tabs, newlines, leading pathspec
 	// syntax and non-UTF-8 filename bytes, not trim or C-quote them.
-	path := ":(glob)odd\tname\n\xff"
+	// A volume that refuses a non-UTF-8 file name (macOS APFS) gets the same
+	// name without that byte; every other hazard stays.
+	path := ":(glob)odd\tname\n"
+	if probe := filepath.Join(t.TempDir(), "probe\xff"); os.WriteFile(probe, nil, 0o600) == nil {
+		path += "\xff"
+	}
 	writeFile(t, filepath.Join(repo, path), "staged A\n")
 	runGit(t, repo, "--literal-pathspecs", "add", "--", path)
 	env := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
