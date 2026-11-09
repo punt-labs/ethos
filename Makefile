@@ -29,7 +29,23 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # Resolve the install dir the way `go install` does: GOBIN if set, else
 # GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
 GOLANGCI_LINT_VERSION := v2.13.1
-GOBIN := $(shell go env GOBIN)
+
+# Every recipe runs the Go toolchain named by go.mod's `toolchain` line, not
+# whatever Go is first on the developer's PATH. The prebuilt golangci-lint
+# artifact above is tied to one Go minor: with GOTOOLCHAIN=auto a newer system
+# Go (e.g. go1.27.3 against `toolchain go1.26.5`) wins, and the linter then
+# fails reading export data ("export data version 5 is greater than maximum
+# supported version 4"). CI is unaffected because actions/setup-go reads
+# go.mod; exporting the same value here makes a local `make lint`, `make test`,
+# and `make build` run the Go that CI and the artifact were built for. If
+# go.mod has no toolchain line the variable stays unset and Go's default
+# applies.
+GO_TOOLCHAIN := $(shell awk '/^toolchain /{print $$2}' go.mod)
+ifneq ($(GO_TOOLCHAIN),)
+export GOTOOLCHAIN := $(GO_TOOLCHAIN)
+endif
+
+GOBIN :=$(shell go env GOBIN)
 ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
