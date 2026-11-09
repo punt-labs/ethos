@@ -31,12 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The hook wrappers keep a partial stdin payload under bash 3.2 (macOS
   `/bin/bash`), where a timed-out `read` discarded it, so a stalled payload is
-  forwarded and its timeout logged on every host.
-- The doctor hook sandbox starts its timeout when the hook starts and gives its
-  own `git init` a separate bound, so a short hook timeout no longer cancels
-  the hook, or the setup, before it runs. Host-sensitive tests no longer fail on
-  case-insensitive, non-UTF-8-rejecting, BSD-userland or loaded hosts
-  (ethos-oq01).
+  forwarded and its timeout logged. The capture logs its own failures (cat
+  failing, no temp file) and removes its temp file when the hook is cancelled.
+- The `ethos doctor` hook sandbox starts its timeout when the hook starts and
+  gives its own `git init` a separate bound, so a short hook timeout no longer
+  cancels the hook, or the setup, before it runs.
 - `ethos enable` refreshes the git hook sections of an already-enabled repo
   even when it then refuses to retire legacy ignore rules, so a repo with
   legacy data no longer keeps a stale hook that blocks every commit. A
