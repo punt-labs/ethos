@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `make tools` retries transient release-download errors (HTTP 5xx) on both the golangci-lint tarball and checksums fetches, bounds each attempt at two minutes (retries stop starting after five), and falls back to the GitHub API asset route when `releases/download` keeps failing, so a GitHub release-download outage no longer fails the required `verify make tools` job. Checksum verification is the same on either route.
 - `ethos enable` refreshes the git hook sections of an already-enabled repo
   even when it then refuses to retire legacy ignore rules, so a repo with
   legacy data no longer keeps a stale hook that blocks every commit. A

@@ -1,0 +1,20 @@
+1 clone(child_stack=NULL, flags=CLONE_VM|CLONE_FS|SIGCHLD) = 2
+1 linkat(AT_FDCWD</t/003/feature>, "/t/001/.punt-labs/local/ethos/tmp/audit-1.jsonl.ethos-tmp", AT_FDCWD</t/003/feature>, "/t/001/.punt-labs/local/ethos/trace/sessions/d/audit-1.jsonl", 0) = 0
+1 unlinkat(AT_FDCWD</t/003/feature>, "/t/001/.punt-labs/local/ethos/tmp/audit-1.jsonl.ethos-tmp", 0) = 0
+1 mkdirat(AT_FDCWD</t/003/feature>, "/", 0700) = -1 EEXIST (File exists)
+1 mkdirat(AT_FDCWD</t/003/feature>, "/t", 0700) = -1 EEXIST (File exists)
+1 mkdirat(AT_FDCWD</t/003/feature>, "/t/003", 0700) = -1 EEXIST (File exists)
+1 mkdirat(AT_FDCWD</t/003/feature>, "/t/003/feature", 0700) = -1 EEXIST (File exists)
+1 mkdirat(AT_FDCWD</t/003/feature>, "/t/003/feature/.punt-labs", 0700) = -1 EEXIST (File exists)
+1 mkdirat(AT_FDCWD</t/003/feature>, "/t/003/feature/.punt-labs/ethos", 0700) = -1 EEXIST (File exists)
+1 mkdirat(AT_FDCWD</t/003/feature>, "/t/003/feature/.punt-labs/ethos/sessions", 0700) = 0
+1 mkdirat(AT_FDCWD</t/003/feature>, "/t/003/feature/.punt-labs/ethos/sessions/d", 0700) = 0
+1 linkat(AT_FDCWD</t/003/feature>, "/t/001/.punt-labs/local/ethos/tmp/audit-2.jsonl.ethos-tmp", AT_FDCWD</t/003/feature>, "/t/003/feature/.punt-labs/ethos/sessions/d/audit-1.jsonl", 0) = 0
+1 unlinkat(AT_FDCWD</t/003/feature>, "/t/001/.punt-labs/local/ethos/tmp/audit-2.jsonl.ethos-tmp", 0) = 0
+1 openat(AT_FDCWD</t/003/feature>, "/t/001/.git/worktrees/feature/index.lock", O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC, 0600) = 6</t/001/.git/worktrees/feature/index.lock>
+1 renameat(AT_FDCWD</t/003/feature>, "/t/001/.punt-labs/local/ethos/tmp/audit-index-3.ethos-tmp", AT_FDCWD</t/003/feature>, "/t/001/.git/worktrees/feature/index", 0) = 0
+1 exit_group(0 <unfinished ...>
+2 ???( <unfinished ...>
+1 <... exit_group resumed>)         = ?
+1 +++ exited with 0 +++
+2 +++ exited with 0 +++
