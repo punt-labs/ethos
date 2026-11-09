@@ -457,3 +457,25 @@ func TestRead_InputBound(t *testing.T) {
 		})
 	}
 }
+
+// A single write past the bound is refused as too large on the goroutine path
+// and on the plain-reader path.
+func TestRead_TooLargeOnGoroutineAndPlainReaderPaths(t *testing.T) {
+	old := maxHookInput
+	maxHookInput = 1000
+	t.Cleanup(func() { maxHookInput = old })
+
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	defer wFd.Close()
+	_, err = wFd.Write([]byte(`{"x":"` + strings.Repeat("a", 2000)))
+	require.NoError(t, err)
+
+	_, err = readWithTimeout(rFd, 5*time.Second)
+	require.ErrorIs(t, err, ErrInputTooLarge)
+
+	// Non-file readers are bounded too.
+	_, err = readRaw(strings.NewReader(strings.Repeat("a", 2000)), time.Second)
+	require.ErrorIs(t, err, ErrInputTooLarge)
+}

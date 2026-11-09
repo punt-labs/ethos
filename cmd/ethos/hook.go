@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -327,12 +326,18 @@ func writeAuditLog(sessionsDir string) error {
 		if err != nil {
 			return fmt.Errorf("%w: %w", hook.ErrAuditDropped, err)
 		}
-		data := drainAuditStdin()
+		data, err := drainAuditStdin()
+		if err != nil {
+			return auditInputDropped(err)
+		}
 		// The policy-aware handler owns the shared stream lock. An outer
 		// WithLiveAuditLock would both rediscover policy and take it twice.
 		return hook.HandleAuditLogWithPolicy(bytes.NewReader(data), policy, sessionsDir)
 	}
-	data := drainAuditStdin()
+	data, err := drainAuditStdin()
+	if err != nil {
+		return auditInputDropped(err)
+	}
 	sessionID := peekSessionID(data)
 	record := func() error { return hook.HandleAuditLog(bytes.NewReader(data), "", sessionsDir) }
 	if sessionID == "" {
@@ -367,23 +372,29 @@ func writeAuditLog(sessionsDir string) error {
 	return dropErr
 }
 
-// drainAuditStdin reads the hook payload bytes from os.Stdin with a
-// short deadline so an open pipe without EOF (the shape Claude Code
-// produces) does not block the process. It delegates to the hook
-// package's reader, which accumulates reads until the buffer holds one
-// complete JSON object, EOF arrives, or the timeout fires — so a payload
-// larger than one 64KiB read (every Edit of a large file) is read in
-// full rather than truncated to 65536 bytes. Returns the bytes read so
-// far on timeout or error; the caller routes an empty or unparseable
-// payload through the unlocked legacy HandleAuditLog path, which surfaces
-// the failure on stderr rather than dropping it silently here.
-func drainAuditStdin() []byte {
-	data, err := hook.ReadFromFile(os.Stdin, time.Second)
-	if err != nil && !errors.Is(err, hook.ErrInputTimeout) {
-		fmt.Fprintf(os.Stderr,
-			"ethos: audit-log: stdin read error: %v\n", err)
+// drainAuditStdin reads the hook payload bytes from os.Stdin with the hook
+// package's input timeout, so an open pipe without EOF (the shape Claude Code
+// produces) does not block the process. It delegates to the hook package's
+// reader, which accumulates reads until the buffer holds one complete JSON
+// object, EOF arrives, or the timeout fires, so a payload larger than one 64KiB
+// read (every Edit of a large file) is read in full rather than truncated.
+// The timeout is the reader's own: Claude Code can pause longer than a second
+// between the pieces of a large payload. On error the partial bytes are
+// discarded; a payload that did not arrive whole is not parsed.
+func drainAuditStdin() ([]byte, error) {
+	data, err := hook.ReadFromFile(os.Stdin, hook.InputTimeout)
+	if err != nil {
+		return nil, err
 	}
-	return data
+	return data, nil
+}
+
+// auditInputDropped reports a stdin read failure on stderr and returns the
+// error wrapping hook.ErrAuditDropped, so the session notice names the cause
+// (too large, timed out) instead of an invalid-JSON parse of partial bytes.
+func auditInputDropped(err error) error {
+	fmt.Fprintf(os.Stderr, "ethos: audit-log: reading input: %v\n", err)
+	return fmt.Errorf("%w: reading input: %w", hook.ErrAuditDropped, err)
 }
 
 // peekSessionID extracts session_id from a JSON-encoded audit hook

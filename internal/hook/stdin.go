@@ -19,6 +19,10 @@ import (
 // never completes: a hook that is given no input and an open stdin.
 const hookInputTimeout = 10 * time.Second
 
+// InputTimeout is hookInputTimeout for callers outside the package that read a
+// hook payload with ReadFromFile.
+const InputTimeout = hookInputTimeout
+
 // ErrInputTimeout is the error ReadInput wraps when the payload is not a
 // complete JSON value by the time the deadline fires. The caller cannot tell a
 // stalled writer from an empty payload except by this error, so no timeout is
@@ -67,9 +71,12 @@ func readRaw(r io.Reader, timeout time.Duration) ([]byte, error) {
 	if f, ok := r.(*os.File); ok {
 		return readFromFile(f, timeout)
 	}
-	data, err := io.ReadAll(r)
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxHookInput)+1))
 	if err != nil {
 		return data, fmt.Errorf("reading input: %w", err)
+	}
+	if len(data) > maxHookInput {
+		return data[:maxHookInput], inputTooLarge()
 	}
 	return data, nil
 }
@@ -184,7 +191,10 @@ func readWithTimeout(f *os.File, timeout time.Duration) ([]byte, error) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		data, _ := snapshot()
+		data, err := snapshot()
+		if errors.Is(err, ErrInputTooLarge) {
+			return data, err
+		}
 		return data, inputTimeout(timeout, len(data))
 	}
 	data, err := snapshot()
