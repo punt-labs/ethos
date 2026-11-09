@@ -65,6 +65,11 @@ var allowedProcessUses = map[string][]string{
 	// ENOEXEC; each gets SIGTERM on the process group, then a grace, then KILL.
 	"internal/doctor/sandbox.go": {"exec.CommandContext(hookPath)", `exec.CommandContext("sh")`, "(*exec.Cmd).Run", "(*exec.Cmd).Run"},
 
+	// Not git. The Hook binary row asks the ethos binary the git hook shims would
+	// run whether it knows their subcommands (hook pre-commit --help), bounded by
+	// hookBinaryTimeout.
+	"internal/doctor/doctor.go": {"exec.CommandContext(bin)", "(*exec.Cmd).CombinedOutput"},
+
 	// Not git.
 	"cmd/ethos/ui.go":        {`exec.Command("open")`, `exec.Command("xdg-open")`, "(*exec.Cmd).Start", "(*exec.Cmd).Start"}, // opens the browser
 	"cmd/ethos/attribute.go": {"exec.Command(editor)", "(*exec.Cmd).Run"},                                                    // $EDITOR
