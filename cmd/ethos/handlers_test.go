@@ -186,8 +186,9 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
-	// DES-079 adds physical placement and exact agent-file currency checks.
-	require.Len(t, results, 18)
+	// DES-079 adds physical placement and exact agent-file currency checks;
+	// DES-083 adds the hook binary check.
+	require.Len(t, results, 19)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]

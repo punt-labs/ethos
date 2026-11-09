@@ -4,16 +4,19 @@ package doctor
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/agentmark"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
@@ -186,6 +189,10 @@ func runAll(s identity.IdentityStore, ss *session.Store, repoRoot string, rootEr
 	for _, spec := range hookSpecs {
 		results = append(results, checkout(CheckHookCurrency(repoRoot, spec)))
 	}
+
+	// DES-083: the shim runs whichever binary it resolves, not the one running
+	// this check, so the row asks that one whether it knows the subcommand.
+	results = append(results, checkout(CheckHookBinary(repoRoot)))
 
 	// DES-057. The completeness gate reads the shared store (storeRoot),
 	// matching every other resolution consumer; the git-boundary check
@@ -708,6 +715,58 @@ func checklistAgentNames(fsys fs.FS, root string) (map[string]bool, error) {
 	return names, nil
 }
 
+// hookBinaryTimeout bounds the --help probe of the binary the shims run.
+const hookBinaryTimeout = 10 * time.Second
+
+// CheckHookBinary reports whether the binary the installed git hook shims
+// resolve implements the subcommands they call (DES-083). The shims look for
+// ethos on PATH, then in $HOME/.local/bin, exactly as resolveHookBinary does.
+// An enabled repo whose resolved binary predates `ethos hook pre-commit` FAILs,
+// because every commit there is blocked until ethos is upgraded. A repo where
+// ethos is not enabled is never blocked by a missing or old binary, so it PASSes.
+func CheckHookBinary(repoRoot string) Result {
+	const name = "Hook binary"
+	if repoRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+	enabled, err := resolve.EnabledMarker(repoRoot)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
+	}
+	if !enabled {
+		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
+	}
+	bin := resolveHookBinary()
+	if bin == "" {
+		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked — install ethos"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hookBinaryTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "hook", "pre-commit", "--help").Output()
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s hook pre-commit --help failed: %v — upgrade ethos: make install", bin, err)}
+	}
+	if !strings.Contains(string(out), "ethos hook pre-commit") {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook pre-commit`, so the installed hooks block every commit — upgrade ethos: make install", bin)}
+	}
+	return Result{Name: name, Status: "PASS", Detail: bin}
+}
+
+// resolveHookBinary returns the ethos binary the git hook shims would run, or
+// "" when there is none: PATH first, then the default install directory.
+func resolveHookBinary() string {
+	if p, err := exec.LookPath("ethos"); err == nil {
+		return p
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		p := filepath.Join(home, ".local", "bin", "ethos")
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode().Perm()&0o111 != 0 {
+			return p
+		}
+	}
+	return ""
+}
+
 // CheckSealHook reports on the DES-058 audit-seal pre-commit hook.
 func CheckSealHook(repoRoot string) Result { return checkHookPresence(repoRoot, sealHookSpec) }
 
@@ -1047,7 +1106,7 @@ var sealHookSpec = HookSpec{
 	Tag:        hooks.SealTag,
 	Ident:      hooks.SealIdent,
 	Canonical:  hooks.PreCommit,
-	InvokeArgs: []string{"audit", "seal"},
+	InvokeArgs: []string{"hook", "pre-commit"},
 
 	StaleBlocksCommit: true,
 }
@@ -1059,7 +1118,7 @@ var trailerHookSpec = HookSpec{
 	Tag:         hooks.TrailerTag,
 	Ident:       hooks.TrailerIdent,
 	Canonical:   hooks.CommitMsg,
-	InvokeArgs:  []string{"hook", "commit-trailers"},
+	InvokeArgs:  []string{"hook", "commit-msg"},
 	NeedsMsgArg: true,
 }
 
