@@ -450,3 +450,26 @@ func TestWrappersRemoveTheCaptureFileWhenKilled(t *testing.T) {
 		}
 	}
 }
+
+// A wrapper whose payload arrives promptly leaves no capture or handshake file
+// behind. (That no watchdog process is left running is checked by hand in the
+// commit message: matching a sleep by name is flaky beside parallel tests.)
+func TestWrappersLeaveNoCaptureFilesAfterAPromptPayload(t *testing.T) {
+	for _, bash := range wrapperBashes(t) {
+		if bashMajor(t, bash) >= 4 {
+			continue // the watchdog exists only under bash 3.2
+		}
+		for hook := range stdinWrappers(t) {
+			t.Run(strings.ReplaceAll(strings.TrimPrefix(bash, "/"), "/", "_")+"/"+hook, func(t *testing.T) {
+				tmp := t.TempDir()
+				for range 5 {
+					runWrapperWith(t, bash, hook, func(w *os.File) { w.Write([]byte("{}\n")) }, false, nil, //nolint:errcheck // as above
+						wrapperOpts{env: []string{"TMPDIR=" + tmp}})
+				}
+				left, err := filepath.Glob(filepath.Join(tmp, "ethos-hook*"))
+				require.NoError(t, err)
+				assert.Empty(t, left, "a capture or handshake file was left behind")
+			})
+		}
+	}
+}

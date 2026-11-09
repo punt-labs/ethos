@@ -36,24 +36,35 @@ else
     _f=$(mktemp /tmp/ethos-hook.XXXXXX 2>/dev/null) || _f=""
   if [[ -n $_f ]]; then
     _p=""
+    _d=""
+    _r=""
     # A hook cancelled mid-read must not leave the payload (it can hold
-    # secrets) on disk or cat running.
-    trap 'rm -f "$_f"; kill "$_p" 2>/dev/null' EXIT
+    # secrets) on disk, or cat or the watchdog running.
+    trap 'rm -f "$_f" "$_r"; kill "$_p" "$_d" 2>/dev/null' EXIT
     trap 'exit 143' INT TERM
     cat <&0 >"$_f" &
     _p=$!
-    _end=$((SECONDS + 10))
-    while kill -0 "$_p" 2>/dev/null; do
-      if [[ $SECONDS -ge $_end ]]; then _rc=142; kill "$_p" 2>/dev/null; break; fi
-      sleep 0.05
-    done
+    # The deadline is a watchdog shell around sleep, not a poll: it costs one
+    # fork when stdin closes promptly. It traps TERM and forwards it to its
+    # sleep, and says so through a fifo before we may kill it, so no kill can
+    # land before the trap exists and orphan the sleep.
+    _r=$(mktemp -u "${TMPDIR:-/tmp}/ethos-hook-rdy.XXXXXX") && mkfifo "$_r" || _r=""
+    ( trap 'kill "$_s" 2>/dev/null; exit 0' TERM; sleep 10 & _s=$!; [[ -n $_r ]] && echo ready >"$_r"; wait "$_s" && kill "$_p" 2>/dev/null ) >/dev/null 2>&1 &
+    _d=$!
+    # Without the fifo there is no handshake: give the watchdog a moment to arm.
+    if [[ -n $_r ]]; then read -r _ <"$_r"; else sleep 0.1; fi
+    rm -f "$_r"
     wait "$_p" 2>/dev/null
-    _w=$?
-    if [[ $_rc -eq 0 && $_w -ne 0 ]]; then
-      { printf 'ethos %s: stdin capture failed (cat exit %s)\n' "$_hook" "$_w" >>"$HOME/.punt-labs/ethos/hook-errors.log"; } 2>/dev/null
+    _st=$?
+    kill "$_d" 2>/dev/null
+    wait "$_d" 2>/dev/null
+    _d=""
+    if [[ $_st -gt 128 ]]; then
+      _rc=142
+    elif [[ $_st -ne 0 ]]; then
+      { printf 'ethos %s: stdin capture failed (cat exit %s)\n' "$_hook" "$_st" >>"$HOME/.punt-labs/ethos/hook-errors.log"; } 2>/dev/null
     fi
-    HOOK_INPUT=$(cat "$_f"; printf x)
-    HOOK_INPUT=${HOOK_INPUT%x}
+    IFS= read -r -d "" HOOK_INPUT <"$_f" 2>/dev/null
     rm -f "$_f"
     trap - EXIT INT TERM
   else
