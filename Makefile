@@ -29,6 +29,25 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # Resolve the install dir the way `go install` does: GOBIN if set, else
 # GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
 GOLANGCI_LINT_VERSION := v2.13.1
+
+# Every recipe runs the Go toolchain named by go.mod's `toolchain` line, not
+# whatever Go is first on the developer's PATH. golangci-lint v2.13.1's
+# go/types export-data reader accepts format version 4 at most, while a
+# go1.27.x standard library emits version 5, so under GOTOOLCHAIN=auto a newer
+# system Go (e.g. go1.27.3 against `toolchain go1.26.5`) wins and the linter
+# fails with "export data version 5 is greater than maximum supported version
+# 4". go1.26 emits version 4. go.mod's toolchain line is the Go that CI runs
+# (actions/setup-go reads go.mod) and the Go this linter can read, so
+# exporting it here makes a local `make lint`, `make test`, and `make build`
+# run the same Go as CI. The awk takes only a `toolchain go1.x` line, so
+# `toolchain default` or a missing line leaves GOTOOLCHAIN unset (Go's own
+# default applies), and it strips a trailing CR so a CRLF go.mod cannot export
+# an invalid value that would break every recipe.
+GO_TOOLCHAIN := $(shell awk '$$1=="toolchain" && $$2 ~ /^go1\./ {sub(/\r$$/,"",$$2); print $$2}' go.mod)
+ifneq ($(GO_TOOLCHAIN),)
+export GOTOOLCHAIN := $(GO_TOOLCHAIN)
+endif
+
 GOBIN := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
