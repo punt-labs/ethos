@@ -4,6 +4,7 @@ package hooks
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -165,5 +166,78 @@ func TestShimsExplainUnexpectedStdout(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// runShimWithBinary runs hook's shim in an enabled fixture against a fake ethos
+// whose body is stub, and returns its exit code and streams.
+func runShimWithBinary(t *testing.T, hook string, body []byte, stub string) (code int, stdout, stderr string) {
+	t.Helper()
+	root, bin := t.TempDir(), t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "MSG"), []byte("subject\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nprintf '%s\\n' \"$FIXTURE_ROOT\"\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "ethos"), []byte("#!/bin/sh\n"+stub), 0o700))
+	script := filepath.Join(t.TempDir(), hook)
+	require.NoError(t, os.WriteFile(script, body, 0o700))
+	args := []string{script}
+	if hook == "commit-msg" {
+		args = append(args, filepath.Join(root, "MSG"))
+	}
+	cmd := exec.Command("/bin/sh", args...)
+	cmd.Dir = root
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + bin + ":/usr/bin:/bin", "FIXTURE_ROOT=" + root}
+	var so, se bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &so, &se
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), so.String(), se.String()
+	}
+	require.NoError(t, err)
+	return 0, so.String(), se.String()
+}
+
+// A current binary whose only output is a newline exits 0 with output: command
+// substitution would read that as silence, so the shim compares bytes instead.
+func TestShimsBlockNewlineOnlyStdout(t *testing.T) {
+	for _, tc := range []struct {
+		hook string
+		body []byte
+	}{{"pre-commit", PreCommit}, {"commit-msg", CommitMsg}} {
+		t.Run(tc.hook, func(t *testing.T) {
+			stub := "case \"$*\" in *--help*) echo '  ethos hook " + tc.hook + "'; exit 0;; esac\nprintf '\\n'\nexit 0\n"
+			code, stdout, stderr := runShimWithBinary(t, tc.hook, tc.body, stub)
+			assert.Equal(t, 2, code, stderr)
+			assert.Empty(t, stdout)
+			assert.Contains(t, stderr, `unexpected output from "ethos hook `+tc.hook+`"`)
+		})
+	}
+}
+
+// A binary that reports its failure on stdout and whose --help also fails must
+// not lose the diagnostic: it is shown before the upgrade line. The old group
+// help is the one stdout that is not shown, since it would bury the remedy.
+func TestShimsKeepDiagnosticWhenHelpProbeFails(t *testing.T) {
+	for _, tc := range []struct {
+		hook string
+		body []byte
+	}{{"pre-commit", PreCommit}, {"commit-msg", CommitMsg}} {
+		t.Run(tc.hook+"/diagnostic", func(t *testing.T) {
+			stub := "case \"$*\" in *--help*) exit 1;; esac\necho DIAG\nexit 1\n"
+			code, _, stderr := runShimWithBinary(t, tc.hook, tc.body, stub)
+			assert.Equal(t, 2, code, stderr)
+			require.Contains(t, stderr, "DIAG")
+			require.Contains(t, stderr, "upgrade ethos: make install")
+			assert.Less(t, strings.Index(stderr, "DIAG"), strings.Index(stderr, "upgrade ethos"), "diagnostic first")
+		})
+		t.Run(tc.hook+"/old group help is not echoed", func(t *testing.T) {
+			stub := "echo 'Usage:'; echo '  ethos hook [command]'\nexit 0\n"
+			code, _, stderr := runShimWithBinary(t, tc.hook, tc.body, stub)
+			assert.Equal(t, 2, code, stderr)
+			assert.Contains(t, stderr, "upgrade ethos: make install")
+			assert.NotContains(t, stderr, "ethos hook [command]")
+		})
 	}
 }

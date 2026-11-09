@@ -87,12 +87,21 @@ fi
 # The subcommand prints nothing on stdout. A binary before v4.9 does not know
 # it and answers with the hook group's help on stdout and exit 0, so output is
 # a failure too, never a pass.
-_out=$("$ethos_bin" hook commit-msg "$1")
-_rc=$?
+# Command substitution strips trailing newlines, so a binary that prints only
+# newlines would read as silent. Append the exit status after a marker byte and
+# split it off again: the output keeps every byte it printed.
+_cap=$("$ethos_bin" hook commit-msg "$1"; printf 'x%s' "$?")
+_rc=${_cap##*x}
+_out=${_cap%x*}
 if [ "$_rc" -ne 0 ] || [ -n "$_out" ]; then
   if ! "$ethos_bin" hook commit-msg --help 2>/dev/null | grep -q 'ethos hook commit-msg'; then
-    # A binary that predates the subcommand: its --help never names it, and any
-    # stdout is its group help, which would only bury the remedy.
+    # A binary that predates the subcommand: its --help never names it. Its
+    # stdout is the group help, which would only bury the remedy; anything
+    # else is a diagnostic the operator needs before the remedy.
+    case "$_out" in
+    *"ethos hook [command]"*) ;;
+    *) [ -n "$_out" ] && printf '%s\n' "$_out" >&2 ;;
+    esac
     printf 'ethos: %s: %s does not support "hook commit-msg"; upgrade ethos: make install (or run install.sh)\n' "$_hook" "$ethos_bin" >&2
   else
     [ -n "$_out" ] && printf '%s\n' "$_out" >&2
