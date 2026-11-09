@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The doctor hook sandbox starts its timeout when the hook starts, not before `git init`, so a short timeout no longer cancels the hook before it runs; five tests no longer fail on case-insensitive or slow hosts (ethos-oq01).
 - `ethos enable` refreshes the git hook sections of an already-enabled repo
   even when it then refuses to retire legacy ignore rules, so a repo with
   legacy data no longer keeps a stale hook that blocks every commit. A
