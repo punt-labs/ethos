@@ -10,14 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - SessionStart now rewrites a stale ethos git hook section in an enabled repo
-  and tells the session which hooks it refreshed, so a release that changes
-  the pre-commit seal takes effect without re-running `ethos enable`.
+  and tells the session which hooks it refreshed or installed, so a release
+  that changes the pre-commit seal takes effect without re-running
+  `ethos enable`. A refresh failure, a partial refresh, a non-shell hook the
+  seal could not be chained into, and a stale hook inside the work tree (via
+  `core.hooksPath`, never rewritten) are told to the session instead of only
+  logged, and a skipped refresh after a store failure is said too. One
+  malformed hook no longer stops the check of the other.
 
 ### Fixed
 
-- `ethos enable` refreshes the git hook sections even when it then refuses to
-  retire legacy ignore rules, so a repo with legacy data no longer keeps a
-  stale hook that blocks every commit.
+- `ethos enable` refreshes the git hook sections of an already-enabled repo
+  even when it then refuses to retire legacy ignore rules, so a repo with
+  legacy data no longer keeps a stale hook that blocks every commit. A
+  first-time enable that refuses installs no hooks.
 - `ethos doctor` reports a stale seal hook section as FAIL instead of WARN,
   because the stale section can block commits; a stale trailer section stays
   WARN.

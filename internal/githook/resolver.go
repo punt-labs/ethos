@@ -26,7 +26,10 @@ type Lookup struct {
 	Warnings []string
 	Degraded bool
 	Reason   string
-	cause    error // why the lookup is degraded; Remedy classifies it
+	// InWorkTree says git runs hooks from a directory inside the work tree, so
+	// each hook there is a tracked file a refresh must not rewrite unasked.
+	InWorkTree bool
+	cause      error // why the lookup is degraded; Remedy classifies it
 }
 
 // Display returns the hooks directory for a message or a read-only scan. Do not
@@ -169,8 +172,8 @@ func gitHooksPath(repoRoot string) (Lookup, error) {
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
 	}
-	warns, err := classifyHooksPath(repoRoot, top, hdRaw)
-	l := Lookup{dir: hd, root: repoRoot, Warnings: warns}
+	warns, inTree, err := classifyHooksPath(repoRoot, top, hdRaw)
+	l := Lookup{dir: hd, root: repoRoot, Warnings: warns, InWorkTree: inTree}
 	if err != nil {
 		l.Degraded = true
 		l.Reason = err.Error()
@@ -201,7 +204,7 @@ func sameFile(a, b string) bool {
 // (macOS /tmp → /private/tmp) does not defeat the prefix test. When git cannot
 // name the common dir it classifies against <top>/.git, the default location,
 // and returns the failure so the caller can report the lookup unverified.
-func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
+func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, bool, error) {
 	hd := hdRaw
 	if !filepath.IsAbs(hd) {
 		hd = filepath.Join(repoRoot, hd)
@@ -219,13 +222,13 @@ func classifyHooksPath(repoRoot, top, hdRaw string) ([]string, error) {
 	}
 	switch {
 	case isUnder(hd, common):
-		return nil, err // under the git dir — private, not tracked
+		return nil, false, err // under the git dir — private, not tracked
 	case isUnder(hd, top):
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}, err
+			"core.hooksPath places hooks at %s inside the work tree — the seal will be written into a tracked file", hd)}, true, err
 	default:
 		return []string{fmt.Sprintf(
-			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}, err
+			"core.hooksPath places hooks outside the repo at %s — shared across every repo using this hooksPath", hd)}, false, err
 	}
 }
 

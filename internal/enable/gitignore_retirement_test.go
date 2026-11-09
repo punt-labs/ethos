@@ -211,9 +211,9 @@ func TestPhysicalTemporaryRootAliasForDirectStaging(t *testing.T) {
 	assert.False(t, strings.Contains(readFile(t, filepath.Join(root, ".gitignore")), ".local.*"))
 }
 
-// A refused legacy-ignore retirement must not strand a stale seal section:
-// the hook refresh is the remedy for commits a stale section blocks, so it runs
-// before the preflight and survives the refusal.
+// A refused legacy-ignore retirement must not strand a stale seal section in an
+// already-enabled repo: the hook refresh is the remedy for commits a stale
+// section blocks, so it survives the refusal.
 func TestEnableRefreshesStaleHookBeforeRetirementRefusal(t *testing.T) {
 	// The expected bytes: what a clean enable chains into pre-commit.
 	clean := gitRepo(t)
@@ -231,6 +231,8 @@ func TestEnableRefreshesStaleHookBeforeRetirementRefusal(t *testing.T) {
 		"# --- END " + hooks.SealTag + " ---\n"
 	hookPath := filepath.Join(hooksDir, "pre-commit")
 	require.NoError(t, os.WriteFile(hookPath, []byte(stale), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, markerRel), nil, 0o644))
 
 	rel := ".punt-labs/vox/creds.local.json"
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"),
@@ -244,7 +246,6 @@ func TestEnableRefreshesStaleHookBeforeRetirementRefusal(t *testing.T) {
 	got := readFile(t, hookPath)
 	assert.NotContains(t, got, "ethos audit seal || exit 2", "stale section must be replaced")
 	assert.Equal(t, want, got, "hook must match a clean enable")
-	assert.NoFileExists(t, filepath.Join(root, markerRel), "marker stays last")
 	require.NotNil(t, rep)
 	var reported bool
 	for _, s := range rep.Steps {
@@ -253,4 +254,21 @@ func TestEnableRefreshesStaleHookBeforeRetirementRefusal(t *testing.T) {
 		}
 	}
 	assert.True(t, reported, "hook step must be reported despite the refusal: %+v", rep.Steps)
+}
+
+// A first-time enable that refuses retirement must leave the repo untouched:
+// hook sections with no marker are the "chained but not enabled here" state.
+func TestEnableRefusalWithoutMarkerInstallsNoHooks(t *testing.T) {
+	root := gitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"),
+		[]byte(legacyGitignoreMarker+"\n.punt-labs/**/*.local.*\n"), 0o600))
+	private := filepath.Join(root, ".punt-labs", "vox", "creds.local.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(private), 0o700))
+	require.NoError(t, os.WriteFile(private, []byte("private fixture\n"), 0o600))
+
+	_, err := Enable(root)
+	require.ErrorContains(t, err, "refusing to retire legacy ignore rules")
+	assert.NoFileExists(t, filepath.Join(root, ".git", "hooks", "pre-commit"))
+	assert.NoFileExists(t, filepath.Join(root, ".git", "hooks", "commit-msg"))
+	assert.NoFileExists(t, filepath.Join(root, markerRel))
 }

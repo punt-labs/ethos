@@ -3,6 +3,7 @@ package enable
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -63,5 +64,82 @@ func TestRefreshHooks(t *testing.T) {
 		assert.Empty(t, rep.Steps)
 		assert.Equal(t, staleSeal, readFile(t, hookPath))
 		assert.NoFileExists(t, filepath.Join(root, guideRel))
+	})
+
+	t.Run("hooksPath inside the work tree is not rewritten and is reported", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		gitRun(t, root, "config", "core.hooksPath", ".husky")
+		husky := filepath.Join(root, ".husky")
+		require.NoError(t, os.MkdirAll(husky, 0o755))
+		hookPath := filepath.Join(husky, "pre-commit")
+		require.NoError(t, os.WriteFile(hookPath, []byte(staleSeal), 0o755))
+
+		rep, err := RefreshHooks(root)
+		require.NoError(t, err)
+		assert.Equal(t, staleSeal, readFile(t, hookPath), "a tracked hook is never rewritten by a refresh")
+		var tracked bool
+		for _, st := range rep.Steps {
+			if st.Step == "hook:pre-commit" && st.Status == StatusSkippedTracked {
+				tracked = true
+			}
+		}
+		assert.True(t, tracked, "steps: %+v", rep.Steps)
+		assert.Contains(t, strings.Join(rep.Warnings, "\n"), hookPath)
+		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "ethos enable")
+	})
+
+	t.Run("a non-shell hook is reported as skipped", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		hookPath := filepath.Join(root, ".git", "hooks", "pre-commit")
+		py := "#!/usr/bin/env python3\nprint('hi')\n"
+		require.NoError(t, os.WriteFile(hookPath, []byte(py), 0o755))
+
+		rep, err := RefreshHooks(root)
+		require.NoError(t, err)
+		assert.Equal(t, py, readFile(t, hookPath))
+		require.Len(t, rep.Steps, 1)
+		assert.Equal(t, StatusSkippedNonShell, rep.Steps[0].Status)
+	})
+
+	t.Run("a malformed hook does not stop the check of the next", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		hooksDir := filepath.Join(root, ".git", "hooks")
+		require.NoError(t, os.WriteFile(filepath.Join(hooksDir, "pre-commit"),
+			[]byte("#!/bin/sh\n# --- BEGIN "+hooks.SealTag+" ---\n# "+hooks.SealIdent+"\n"+
+				"# --- END "+hooks.SealTag+" ---\n# --- BEGIN "+hooks.SealTag+" ---\n# "+hooks.SealIdent+"\n"+
+				"# --- END "+hooks.SealTag+" ---\n"), 0o755))
+		commitMsg := filepath.Join(hooksDir, "commit-msg")
+		want := readFile(t, commitMsg)
+		stale := "#!/bin/sh\n# --- BEGIN " + hooks.TrailerTag + " ---\n# " + hooks.TrailerIdent + "\nexit 0\n# --- END " + hooks.TrailerTag + " ---\n"
+		require.NoError(t, os.WriteFile(commitMsg, []byte(stale), 0o755))
+
+		rep, err := RefreshHooks(root)
+		require.Error(t, err, "the duplicated seal section is reported")
+		assert.Equal(t, want, readFile(t, commitMsg), "the second hook is still refreshed")
+		var refreshed bool
+		for _, st := range rep.Steps {
+			if st.Step == "hook:commit-msg" {
+				refreshed = true
+			}
+		}
+		assert.True(t, refreshed, "steps: %+v", rep.Steps)
+	})
+
+	t.Run("a missing hook is reported as installed", func(t *testing.T) {
+		root := gitRepo(t)
+		_, err := Enable(root)
+		require.NoError(t, err)
+		require.NoError(t, os.Remove(filepath.Join(root, ".git", "hooks", "commit-msg")))
+
+		rep, err := RefreshHooks(root)
+		require.NoError(t, err)
+		require.Len(t, rep.Steps, 1)
+		assert.Equal(t, "installed", rep.Steps[0].Status)
 	})
 }

@@ -137,17 +137,29 @@ func init() {
 	rootCmd.AddCommand(hookCmd)
 }
 
-// refreshGitHooks adapts enable.RefreshHooksTo to the SessionStart dependency:
-// it returns the names of the hooks whose sections were rewritten.
-func refreshGitHooks(checkout, store string) ([]string, error) {
+// refreshGitHooks adapts enable.RefreshHooksTo to the SessionStart dependency.
+// The result is filled even when err is not nil, so a partial refresh is told.
+func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 	rep, err := enable.RefreshHooksTo(checkout, store)
-	var names []string
-	if rep != nil {
-		for _, st := range rep.Steps {
-			names = append(names, strings.TrimPrefix(st.Step, "hook:"))
+	var r hook.HookRefresh
+	if rep == nil {
+		return r, err
+	}
+	r.Warnings = rep.Warnings
+	for _, st := range rep.Steps {
+		name := strings.TrimPrefix(st.Step, "hook:")
+		switch st.Status {
+		case "installed":
+			r.Installed = append(r.Installed, name)
+		case enable.StatusSkippedNonShell:
+			r.NonShell = append(r.NonShell, name)
+		case enable.StatusSkippedTracked:
+			r.Tracked = append(r.Tracked, name)
+		default:
+			r.Refreshed = append(r.Refreshed, name)
 		}
 	}
-	return names, err
+	return r, err
 }
 
 func runHookSessionStart() error {

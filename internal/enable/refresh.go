@@ -2,6 +2,7 @@ package enable
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,17 @@ func RefreshHooks(repoRoot string) (*Report, error) {
 	return RefreshHooksTo(repoRoot, repoRoot)
 }
 
+// Step statuses RefreshHooksTo records beyond githook's write actions. Neither
+// changed the hook: the section is still stale, and the caller should say so.
+const (
+	// StatusSkippedNonShell is githook's action for a Python/Node/binary hook the
+	// section cannot be chained into, so the seal never runs from it.
+	StatusSkippedNonShell = "skipped-non-shell"
+	// StatusSkippedTracked: core.hooksPath puts the hook inside the work tree,
+	// a tracked file a refresh must not rewrite unasked.
+	StatusSkippedTracked = "skipped-tracked"
+)
+
 // RefreshHooksTo is the hook-only slice of EnableTo: it deposits nothing,
 // touches no .gitignore, writes no marker, and adds no import. A release that
 // changes a hook section otherwise has no effect until the operator re-runs
@@ -26,7 +38,9 @@ func RefreshHooks(repoRoot string) (*Report, error) {
 //
 // It does nothing in a repo without the enabled marker, and nothing for a hook
 // whose section already matches this build. The report carries one step per
-// hook it changed, so an empty Steps means nothing was stale.
+// hook it changed or could not change (see the Status constants), so an empty
+// Steps means nothing was stale. A failure on one hook does not stop the other;
+// the errors are joined, and the report still lists what was written.
 func RefreshHooksTo(repoRoot, storeRoot string) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
 	present, err := resolve.EnabledMarker(repoRoot)
@@ -36,42 +50,58 @@ func RefreshHooksTo(repoRoot, storeRoot string) (*Report, error) {
 	if !present {
 		return rep, nil
 	}
+	return rep, refreshHooks(repoRoot, storeRoot, rep)
+}
+
+// refreshHooks is RefreshHooksTo past the marker check.
+func refreshHooks(repoRoot, storeRoot string, rep *Report) error {
 	p, err := layout.NewRepository(storeRoot, repoRoot, layout.RecordBlame)
 	if err != nil {
-		return rep, fmt.Errorf("refresh hooks layout: %w", err)
+		return fmt.Errorf("refresh hooks layout: %w", err)
 	}
 	l, dir, err := hooksTarget(repoRoot)
 	if err != nil {
-		return rep, err
+		return err
 	}
 	rep.Warnings = append(rep.Warnings, l.Warnings...)
+	var errs []error
 	for _, name := range layout.HookNames() {
 		s, ok := hookSpecs[name]
 		if !ok {
-			return rep, fmt.Errorf("no hook template for %s", name)
+			errs = append(errs, fmt.Errorf("no hook template for %s", name))
+			continue
 		}
 		path := filepath.Join(dir, name)
 		current, err := sectionCurrent(path, s.src, s.tag, s.ident)
 		if err != nil {
-			return rep, fmt.Errorf("checking %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("checking %s: %w", name, err))
+			continue
 		}
 		if current {
 			continue
 		}
+		if l.InWorkTree {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+				"%s is a tracked file inside the work tree (core.hooksPath) and its ethos section is stale; not rewriting it — run `ethos enable` to update it", path))
+			rep.step("hook:"+name, StatusSkippedTracked, path)
+			continue
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return rep, fmt.Errorf("creating hooks dir %s: %w", dir, err)
+			errs = append(errs, fmt.Errorf("creating hooks dir %s: %w", dir, err))
+			continue
 		}
 		res, err := githook.Chain(path, s.src, s.tag, s.ident, githook.WithRepository(p))
-		if err != nil {
-			return rep, fmt.Errorf("chaining %s: %w", name, err)
-		}
 		rep.Warnings = append(rep.Warnings, res.Warnings...)
-		if res.Action == "skipped-non-shell" {
-			continue // Chain left the host untouched; nothing was refreshed.
+		// A durability failure still wrote the bytes: record the step so a
+		// partial refresh is not read as nothing refreshed.
+		if res.Action != "" {
+			rep.step("hook:"+name, res.Action, res.Path)
 		}
-		rep.step("hook:"+name, res.Action, res.Path)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("chaining %s: %w", name, err))
+		}
 	}
-	return rep, nil
+	return errors.Join(errs...)
 }
 
 // sectionCurrent reports whether the hook at path holds exactly one section for

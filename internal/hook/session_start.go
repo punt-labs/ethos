@@ -44,10 +44,23 @@ type SessionStartDeps struct {
 	// so (bundle.ConfigIssue): the session is told in its systemMessage.
 	Issue error
 	// RefreshHooks re-chains git hook sections that differ from this build and
-	// returns the names of the hooks it rewrote (checkout, store: the roots).
-	// Nil disables the refresh. It runs only in a located repository; an error
-	// is reported on stderr and never fails the session.
-	RefreshHooks func(checkout, store string) ([]string, error)
+	// reports what it did (checkout, store: the roots). Nil disables the
+	// refresh. It runs only in a located repository; an error never fails the
+	// session, but is told to it, because a stale seal section blocks commits.
+	RefreshHooks func(checkout, store string) (HookRefresh, error)
+}
+
+// HookRefresh is what a git hook refresh did, by hook name. A failed refresh
+// may still return a partial result alongside its error.
+type HookRefresh struct {
+	Refreshed []string // stale sections rewritten in an existing hook
+	Installed []string // hooks that did not exist and were created
+	// NonShell names hooks whose host is not a shell script: the section was
+	// not chained in, so the seal never runs from them.
+	NonShell []string
+	// Tracked names stale hooks inside the work tree, left unrewritten.
+	Tracked  []string
+	Warnings []string // advisory lines for stderr
 }
 
 // HandleSessionStart reads the SessionStart hook payload from stdin,
@@ -219,24 +232,60 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 }
 
 // refreshStaleHooks runs refresh for the located repository and returns the
-// sentence telling the session which hook sections it rewrote; "" when none
-// were stale, when refresh is nil, or when the repository was not located. A
-// stale seal section can block every commit, so a refresh is worth saying; a
-// failure goes to stderr only, because a session must start regardless.
-func refreshStaleHooks(refresh func(checkout, store string) ([]string, error), storeFailure error, loc resolve.Located) string {
-	if refresh == nil || storeFailure != nil || loc.Checkout == "" || loc.Store == "" {
+// sentence telling the session what happened to its git hook sections; "" when
+// nothing was stale, when refresh is nil, or when there is no repository. A
+// stale seal section can block every commit, so a failure or a section that
+// could not be refreshed is told to the session, not only logged: the shell
+// wrapper sends stderr to a log file the session never reads. A store failure
+// skips the refresh, and the session is told that too.
+func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error), storeFailure error, loc resolve.Located) string {
+	if refresh == nil || loc.Checkout == "" || loc.Store == "" {
 		return ""
 	}
-	names, err := refresh(loc.Checkout, loc.Store)
+	if storeFailure != nil {
+		return "Git hook refresh skipped."
+	}
+	r, err := refresh(loc.Checkout, loc.Store)
+	for _, w := range r.Warnings {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: git hooks: %s\n", w)
+	}
+	var parts []string
+	if len(r.Refreshed) > 0 {
+		parts = append(parts, "refreshed stale git hook section(s) at session start: "+strings.Join(r.Refreshed, ", "))
+	}
+	if len(r.Installed) > 0 {
+		parts = append(parts, "installed missing git hook(s) at session start: "+strings.Join(r.Installed, ", "))
+	}
+	var problems []string
+	for _, h := range r.NonShell {
+		problems = append(problems, fmt.Sprintf(
+			"Ethos did not chain the seal section into %s: non-shell hook; run `ethos doctor`.", h))
+	}
+	for _, h := range r.Tracked {
+		problems = append(problems, fmt.Sprintf(
+			"Ethos did not rewrite the stale %s hook: core.hooksPath places it in a tracked file; run `ethos enable` to update it.", h))
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: refreshing git hook sections: %v\n", err)
+		fail := "could not refresh git hook section(s)"
+		if len(parts) > 0 {
+			parts = append(parts, fail+": "+err.Error())
+		} else {
+			problems = append(problems, fmt.Sprintf(
+				"Ethos could not refresh stale git hook section(s): %v. Commits may be blocked; run `ethos enable` or `ethos doctor`.", err))
+		}
 	}
-	if len(names) == 0 {
-		return ""
+	var out []string
+	if len(parts) > 0 {
+		joined := strings.Join(parts, "; ")
+		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", joined)
+		sentence := "Ethos " + joined + "."
+		if err != nil {
+			sentence += " Commits may be blocked; run `ethos enable` or `ethos doctor`."
+		}
+		out = append(out, sentence)
 	}
-	list := strings.Join(names, ", ")
-	fmt.Fprintf(os.Stderr, "ethos: session-start: refreshed stale git hook section(s): %s\n", list)
-	return fmt.Sprintf("Ethos refreshed stale git hook section(s) at session start: %s.", list)
+	return strings.Join(append(out, problems...), " ")
 }
 
 // planSessionAgents resolves bundle skills using the same config that selected

@@ -130,17 +130,17 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	// may be the only protection for private overlays or another tool's data;
 	// enable is not permission to move or expose those files.
 	//
-	// A refusal here still refreshes the hook sections before returning. A stale
-	// seal section can block every commit in the repo, so the hook refresh must
-	// never wait on an unrelated migration (legacy ignore retirement) that needs
-	// operator cleanup. Hook sections are stateless templates and nothing else
-	// has been written, so this creates no enabled-but-unprotected state.
+	// A refusal here still refreshes the hook sections of an already-enabled
+	// repo before returning. A stale seal section can block every commit in the
+	// repo, so the refresh must never wait on an unrelated migration (legacy
+	// ignore retirement) that needs operator cleanup. A repo with no marker is
+	// left untouched.
 	if err := preflightLegacyIgnores(repoRoot); err != nil {
-		return rep, refreshHooksThen(err, lk, hooksDir, rep, p)
+		return rep, refreshHooksThen(err, repoRoot, storeRoot, rep)
 	}
 	if !textscan.SamePath(repoRoot, storeRoot) {
 		if err := preflightLegacyIgnores(storeRoot); err != nil {
-			return rep, refreshHooksThen(err, lk, hooksDir, rep, p)
+			return rep, refreshHooksThen(err, repoRoot, storeRoot, rep)
 		}
 	}
 
@@ -352,14 +352,24 @@ func hooksTarget(repoRoot string) (githook.Lookup, string, error) {
 	return l, dir, nil
 }
 
-// refreshHooksThen returns cause. When cause is a legacy-retirement refusal it
-// first chains the hook sections, joining any chaining failure so neither is
-// lost; every other refusal leaves the repo untouched.
-func refreshHooksThen(cause error, l githook.Lookup, dir string, rep *Report, p layout.Policy) error {
+// refreshHooksThen returns cause. When cause is a legacy-retirement refusal in
+// a repo that is already enabled, it first refreshes the hook sections, joining
+// any refresh failure so neither is lost. A first-time enable that refuses
+// leaves the repo untouched: chaining hooks with no marker is the "hook chained
+// but ethos not enabled here" state doctor tells the operator to clean up.
+// Every other refusal mutates nothing.
+func refreshHooksThen(cause error, repoRoot, storeRoot string, rep *Report) error {
 	if !errors.Is(cause, errRetirementRefused) {
 		return cause // other refusals (hazardous files, git failures) mutate nothing
 	}
-	if err := chainHooks(l, dir, rep, p); err != nil {
+	present, err := resolve.EnabledMarker(repoRoot)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("refreshing hooks: %w", err))
+	}
+	if !present {
+		return cause
+	}
+	if err := refreshHooks(repoRoot, storeRoot, rep); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause

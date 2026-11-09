@@ -54,7 +54,7 @@ func TestCLI_SessionStartRefreshesStaleHook(t *testing.T) {
 
 		require.NoError(t, os.WriteFile(hookPath, []byte(stale), 0o755))
 		out, errOut = execHookSessionStart(t, se)
-		assert.Contains(t, errOut, "ethos: session-start: refreshed stale git hook section(s): pre-commit")
+		assert.Contains(t, errOut, "ethos: session-start: refreshed stale git hook section(s) at session start: pre-commit")
 		assert.Contains(t, out, "refreshed stale git hook section(s) at session start: pre-commit")
 		after, err := os.ReadFile(hookPath)
 		require.NoError(t, err)
