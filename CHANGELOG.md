@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the stale section can block commits, or WARN in a repo where ethos is
   not enabled and the hook passes through; a stale trailer section stays WARN.
 - `ethos find missions --format paths` omits missions whose directory was purged or is not a directory and notes each on stderr, and fails on any other stat error; `json` and `table` still list them.
+- `make docs` ignores the machine-local `.punt-labs/local/` tree, so worker prompts from a mission run on the host no longer fail `make check` at the markdown lint stage.
 
 ## [4.21.0] - 2026-11-07
 
