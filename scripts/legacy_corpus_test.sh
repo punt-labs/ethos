@@ -33,6 +33,7 @@ normalize() {
     s/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/TIME/g;
     s/\d{4}-\d{2}-\d{2}/DATE/g;
     s/\b[0-9a-f]{64}\b/HASH64/g;
+    s/\b[0-9a-f]{32}\b/ID32/g;
     s/\b\d{13,}\b/NANOS/g;
   '
 }

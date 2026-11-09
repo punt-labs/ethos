@@ -70,7 +70,7 @@ lint: ## Lint (golangci-lint + windows vet + shellcheck + ruff + mypy)
 	cd tests/e2e && uv run pytest tests/ -m "not e2e"
 
 docs: ## Lint markdown
-	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
+	npx --yes markdownlint-cli2 "**/*.md" "#node_modules" "#internal/autorepair/testdata/corpus" "#internal/autorepair/testdata/damage"
 
 # LaTeX PDFs are checked in (prfaq.pdf, docs/*.pdf). Regenerating them
 # is opt-in — `make docs-pdf` — not part of `make check`, so CI doesn't

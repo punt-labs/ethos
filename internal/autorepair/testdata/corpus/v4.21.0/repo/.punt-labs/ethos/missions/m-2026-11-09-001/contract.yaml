@@ -1,0 +1,31 @@
+mission_id: m-2026-11-09-001
+status: closed
+type: implement
+created_at: "2026-11-09T23:03:10Z"
+updated_at: "2026-11-09T23:03:11Z"
+closed_at: "2026-11-09T23:03:11Z"
+leader: claude
+worker: wperson
+evaluator:
+    handle: eperson
+    pinned_at: "2026-11-09T23:03:10Z"
+    hash: 135f3610d2add0f51848cd7918e8a0314a2f915b8be5903deddc5f0445d52456
+inputs:
+    ticket: ethos-0001
+write_set:
+    - src/
+success_criteria:
+    - tests pass
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+round_decisions:
+    version: 1
+    entries:
+        - id: 36d24c1586272cc3666890aea681a448
+          round: 1
+          created_at: "2026-11-09T23:03:11Z"
+          author: claude
+          recommendation: continue
+context: corpus scenario, mission created from a contract file

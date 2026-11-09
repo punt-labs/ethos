@@ -774,7 +774,7 @@ participants:
 EOF
   : >"$d/roster-without-checkout/home/.punt-labs/ethos/sessions/$sid.lock"
   printf '%s\n' "$sid" >"$d/roster-without-checkout/home/.punt-labs/ethos/sessions/current/2147483646"
-  readme "$d/roster-without-checkout" "A session roster with no checkout field whose claude participant pid (2147483646) is not running, plus its current/<pid> pointer."
+  readme "$d/roster-without-checkout" "A session roster with no checkout field whose claude participant pid (2147483646) is not running, plus the sessions/current pointer file named for that pid."
 
   # 10. repo .gitignore ignoring .punt-labs/ethos/sessions (ethos-7ax7)
   mkdir -p "$d/gitignore-ignores-sessions"; base_repo "$d/gitignore-ignores-sessions"

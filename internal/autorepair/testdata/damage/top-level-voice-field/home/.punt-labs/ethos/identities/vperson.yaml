@@ -1,0 +1,7 @@
+name: Voice Person
+handle: vperson
+kind: human
+email: voice@example.com
+voice:
+  provider: say
+  voice: Samantha

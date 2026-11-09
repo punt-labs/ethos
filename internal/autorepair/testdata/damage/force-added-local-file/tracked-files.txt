@@ -1,0 +1,4 @@
+.punt-labs/local/ethos/sessions/sess-damage-0001.audit.jsonl
+.punt-labs/ethos/enabled
+.punt-labs/ethos.yaml
+.gitignore

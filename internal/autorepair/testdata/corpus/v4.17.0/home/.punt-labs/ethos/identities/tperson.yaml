@@ -1,0 +1,6 @@
+name: Test Person
+handle: tperson
+kind: human
+email: person@example.com
+github: tperson
+personality: principal-engineer

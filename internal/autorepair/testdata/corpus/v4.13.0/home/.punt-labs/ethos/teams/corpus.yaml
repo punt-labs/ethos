@@ -1,0 +1,8 @@
+name: corpus
+members:
+    - identity: tperson
+      role: architect
+    - identity: wperson
+      role: implementer
+    - identity: eperson
+      role: reviewer
