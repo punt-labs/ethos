@@ -1,0 +1,54 @@
+mission: m-2026-11-10-005
+round: 1
+created_at: "2026-11-10T20:32:10Z"
+author: mdm
+verdict: pass
+confidence: 0.8
+files_changed:
+    - path: docs/storage-layout.md
+      added: 0
+      removed: 0
+    - path: docs/agent-guide.md
+      added: 0
+      removed: 0
+    - path: internal/enable/guide/CLAUDE.md
+      added: 0
+      removed: 0
+    - path: docs/ETHOS-SETUP.md
+      added: 0
+      removed: 0
+    - path: internal/enable/setup/ETHOS-SETUP.md
+      added: 0
+      removed: 0
+    - path: docs/audit-seal.md
+      added: 0
+      removed: 0
+    - path: docs/enable-disable.md
+      added: 0
+      removed: 0
+    - path: prfaq.tex
+      added: 0
+      removed: 0
+    - path: docs/spec-mission-lifecycle.tex
+      added: 0
+      removed: 0
+evidence:
+    - name: 'markdownlint-cli2 on each changed .md: Summary 0 issues in 0 files'
+      status: pass
+    - name: 'make validate-content: all checks passed (20 identities, 3 teams, 81 attributes)'
+      status: pass
+    - name: 'GOTOOLCHAIN=go1.26.5 go test -count=1 ./internal/enable/...: ok 45.670s'
+      status: pass
+    - name: make sync-embed; diff -q docs/ETHOS-SETUP.md internal/enable/setup/ETHOS-SETUP.md exits 0
+      status: pass
+    - name: 'prfaq.pdf compiled: Output written on prfaq.pdf (21 pages, 217536 bytes), no LaTeX errors'
+      status: pass
+    - name: make fuzz-check exit 0 after the spec amendment
+      status: pass
+open_questions:
+    - 'Commits: 3f22ce2 storage-layout; 445cda4 agent-guide + guide; 5d4540f ETHOS-SETUP + embed; 74b8c4c audit-seal + enable-disable; d6a60b1 prfaq.tex + prfaq.pdf; 5b8af57 spec-mission-lifecycle.tex.'
+    - 'Files outside the write set were also committed because validate-content requires byte-identical copies: .punt-labs/ethos/CLAUDE.md (copy of the guide) in 445cda4, .punt-labs/ethos/ETHOS-SETUP.md (copy of the embed) in 5d4540f, and prfaq.pdf (tracked, rebuilt) in d6a60b1.'
+    - 'make docs-pdf exits 1 on docs/spec-hook-gates.tex line 849 (\t1 in math mode: Please use \mathaccent). The file is outside the write set and untouched; prfaq.tex itself compiles. Not fixed.'
+    - docs/example/07-pr-and-merge.md line 73 heading 'DES-079 squash route (acceptance pending)' is outside the write set and still says pending. agent-guide links to its anchor, so the anchor was left unchanged. Leader decides.
+    - 'Spec grep: docs/spec-mission-lifecycle.tex named legacyUnknown (lines 1210, 1224) and ''supported legacy sources'' (1227). The code still emits legacy_unknown for a mission with incomplete round history (internal/mission/reflection_read.go:40), so the state stays; its description now says the upgrade could not import it, and the legacy-source join clause is dropped.'
+    - 'Ambiguity picked: Legacy read-only rows in storage-layout became an Older layouts row naming the upgrade. Proof-table Go test names were chosen from existing tests by name; I did not run each individually. The upgrade acceptance case does not assert the overlay move, so overlay rows cite Go tests.'
