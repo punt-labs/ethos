@@ -40,6 +40,7 @@ func minimalRepo(t *testing.T, resolution string) (repoRoot, ethosRoot string) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "docs"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "docs", "ETHOS-SETUP.md"), enable.Setup, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(ethosRoot, "CLAUDE.md"), enable.Guide, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosRoot, "ETHOS-SETUP.md"), enable.Setup, 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(ethosRoot, "identities", "alice.yaml"), []byte(
 		"name: Alice\nhandle: alice\nkind: human\n"), 0o644))
 

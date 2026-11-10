@@ -28,7 +28,6 @@ make check                              # All quality gates (vet, staticcheck, s
 ./ethos doctor                          # Check installation health
 ./ethos setup                           # Interactive repo setup wizard
 ./ethos whoami                          # Show caller's identity (iam/git/OS)
-./ethos resolve-agent                   # Show default agent from repo config
 ./ethos serve                           # Start MCP server (stdio transport)
 ./ethos session iam <persona>           # Declare persona in current session
 ./ethos session                         # Show current session participants
