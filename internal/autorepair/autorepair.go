@@ -10,6 +10,7 @@ package autorepair
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -25,7 +26,10 @@ const LayoutVersion = 5
 // Env is what a step needs: the located roots and the repository policy,
 // both zero unless the repository pass is active (a repository was located
 // cleanly and has used ethos), the global root (~/.punt-labs/ethos), and a
-// Logger. Steps never resolve roots or policy themselves.
+// Logger. Steps never resolve roots or policy themselves. A step reads the
+// repository's roots only through StoreRoot and CheckoutRoot, never through
+// Roots.Store or Roots.Checkout: those helpers check the located error and the
+// active pass, which the located-use scanner requires of every reader.
 type Env struct {
 	Roots  resolve.Located
 	Policy layout.Policy
@@ -42,6 +46,33 @@ type Env struct {
 // The engine sets or zeroes Roots and Policy together, so this agrees with
 // Roots.Store being set.
 func (e Env) InRepository() bool { return e.Policy.LocalRoot() != "" }
+
+// ErrNotInRepository is what StoreRoot and CheckoutRoot return while the
+// repository pass is not active.
+var ErrNotInRepository = errors.New("the repository pass is not active")
+
+// StoreRoot is the repository's shared store root S. It returns an error
+// unless the repository pass is active and the location carries none.
+func (e Env) StoreRoot() (string, error) {
+	if !e.InRepository() {
+		return "", ErrNotInRepository
+	}
+	if err := e.Roots.Err(); err != nil {
+		return "", fmt.Errorf("reading the store root: %w", err)
+	}
+	return e.Roots.Store, nil
+}
+
+// CheckoutRoot is the invoking checkout root C, with StoreRoot's conditions.
+func (e Env) CheckoutRoot() (string, error) {
+	if !e.InRepository() {
+		return "", ErrNotInRepository
+	}
+	if err := e.Roots.Err(); err != nil {
+		return "", fmt.Errorf("reading the checkout root: %w", err)
+	}
+	return e.Roots.Checkout, nil
+}
 
 // Outcome is one step's result. Items counts conversions applied. Deferred
 // is true when the step stopped early (busy lock, index lock, budget) and
@@ -62,7 +93,10 @@ type Residual struct {
 	Reason string `yaml:"reason"`
 	// Scope names the store the condition is in. A ScopeBoth step sets it; the
 	// zero value means the store the step was running for. It places the
-	// residual and is not recorded.
+	// residual and is not recorded. A residual is never written into a stamp
+	// of a different scope: when the pass serves no stamp of this scope, it is
+	// carried in Result.Residuals only, and the owning store's own pass records
+	// it when it runs.
 	Scope Scope `yaml:"-"`
 }
 

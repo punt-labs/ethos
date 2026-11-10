@@ -107,7 +107,11 @@ func hookEnv(roots resolve.Located, global string, o options) (Env, error) {
 		return Env{}, errors.New("building the hook environment: no global store root")
 	}
 	r, policy := repositoryTarget(roots)
-	env := Env{Global: global, Now: o.now(), Log: newFileLog(global, roots.Store, roots.Checkout, o.ethos)}
+	var store, checkout string
+	if roots.Err() == nil {
+		store, checkout = roots.Store, roots.Checkout
+	}
+	env := Env{Global: global, Now: o.now(), Log: newFileLog(global, store, checkout, o.ethos)}
 	if r != nil {
 		env.Roots, env.Policy = roots, policy
 	}
@@ -383,8 +387,9 @@ func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layou
 			t.items += out.Items
 		}
 		for _, rs := range out.Residuals {
-			t := residualTarget(rs, served, r)
-			t.residual = append(t.residual, rs)
+			if t := residualTarget(rs, served, r); t != nil {
+				t.residual = append(t.residual, rs)
+			}
 		}
 		res.Items += out.Items
 		res.Residuals = append(res.Residuals, out.Residuals...)
@@ -483,18 +488,19 @@ func repositoryLock(p layout.Policy, wait time.Duration) (func(), error) {
 	return acquire(path, wait)
 }
 
-// residualTarget is the stamp a residual belongs to. A residual that names its
-// Scope goes to that store's stamp. One that does not goes to the repository's
-// when the step ran for it, else to the first target served; a step that runs
-// for one store has only that store to name.
+// residualTarget is the stamp a residual belongs to, or nil when this pass
+// serves no stamp of its scope. A residual that names its Scope goes only to
+// that store's stamp. One that does not goes to the repository's when the step
+// ran for it, else to the first target served; a step that runs for one store
+// has only that store to name.
 func residualTarget(rs Residual, served []*target, r *target) *target {
-	for _, t := range served {
-		switch {
-		case rs.Scope == ScopeRepository && t == r:
-			return t
-		case rs.Scope == ScopeGlobal && t != r:
-			return t
+	if rs.Scope == ScopeRepository || rs.Scope == ScopeGlobal {
+		for _, t := range served {
+			if (rs.Scope == ScopeRepository) == (t == r) {
+				return t
+			}
 		}
+		return nil
 	}
 	for _, t := range served {
 		if t == r {

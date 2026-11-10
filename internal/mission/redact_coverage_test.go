@@ -277,6 +277,12 @@ var writerRegistry = map[string]writerEntry{
 
 	"internal/repair.Plan.Apply": exempt("opens existing lock files with O_RDWR to tryLock, then deletes explicitly selected obsolete files; writes no new record content"),
 
+	// internal/autorepair: the repair log, the step and repair locks, the stamp.
+	"internal/autorepair.FileLog.Logf":   checkpoint("Prose"),
+	"internal/autorepair.FileLog.rotate": exempt("renames the repair log to repair.log.1; writes no content"),
+	"internal/autorepair.acquire":        exempt("creates and flocks an empty lock file; writes no content"),
+	"internal/autorepair.WriteStamp":     exempt("local-zone or global layout stamp (version, ethos version, timestamp, item count, residual step/id/reason); never tracked, never published: " + reasonGlobal),
+
 	// cmd/ethos.
 	"cmd/ethos.editContent":           exempt("identity graph: operator edits an attribute file by hand"),
 	"cmd/ethos.ensureLocalExtIgnored": checkpoint("EnsureLocalIgnored"),

@@ -50,3 +50,50 @@ func TestHookEnvWritesNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before, treeOf(t, g), "HookEnv wrote the log on a locate error")
 }
+
+// A residual never lands in a stamp of a different scope: a repository-scoped
+// residual from a pass serving only the global target travels in
+// Result.Residuals alone.
+func TestResidualNeverCrossesStampScope(t *testing.T) {
+	r := newRig(t, true)
+	r.step("both", ScopeBoth, Outcome{}, nil)
+	r.ensure()
+	require.NoError(t, os.Remove(GlobalStampPath(r.global)))
+	r.opts.steps, r.opts.order = nil, nil
+	repoRes := Residual{Step: "both", ID: "repo-thing", Reason: "repo", Scope: ScopeRepository}
+	globalRes := Residual{Step: "both", ID: "global-thing", Reason: "global", Scope: ScopeGlobal}
+	r.step("both", ScopeBoth, Outcome{Residuals: []Residual{repoRes, globalRes}}, nil)
+	res := r.ensure()
+	g, err := r.globalStamp()
+	require.NoError(t, err)
+	assert.Equal(t, []Residual{{Step: "both", ID: "global-thing", Reason: "global"}}, g.Residual)
+	assert.Len(t, res.Residuals, 2)
+}
+
+// StoreRoot and CheckoutRoot answer only while the repository pass is active
+// and the location is clean.
+func TestEnvRootsRequireActivePass(t *testing.T) {
+	r := newRig(t, true)
+	var got Env
+	r.bothProbe(&got)
+	r.ensure()
+	s, err := got.StoreRoot()
+	require.NoError(t, err)
+	assert.Equal(t, r.store, s)
+	c, err := got.CheckoutRoot()
+	require.NoError(t, err)
+	assert.Equal(t, r.store, c)
+
+	for name, e := range map[string]Env{
+		"zero":          {},
+		"located error": {Roots: resolve.Located{Store: r.store, StoreErr: errors.New("boom")}, Policy: got.Policy},
+		"no policy":     {Roots: got.Roots},
+	} {
+		s, err := e.StoreRoot()
+		assert.Error(t, err, name)
+		assert.Empty(t, s, name)
+		c, err := e.CheckoutRoot()
+		assert.Error(t, err, name)
+		assert.Empty(t, c, name)
+	}
+}
