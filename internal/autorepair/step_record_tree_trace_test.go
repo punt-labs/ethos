@@ -364,12 +364,25 @@ func legacyAggregateFor(t *testing.T, root string) string {
 	return agg
 }
 
+// dropLiveEnvelope removes the round-1 envelope the v4.22.1 snapshot's live
+// reflect wrote. Each caller simulates a state in which no live reflect ran
+// for that round (a legacy import, or a mission whose aggregate is judged on
+// its own), and a true legacy mission has no local envelope; leaving it would
+// make the archiver correctly see a conflict and keep the aggregate.
+func dropLiveEnvelope(t *testing.T, env Env) {
+	t.Helper()
+	p := filepath.Join(env.Policy.TraceArchiveRoot(), "missions", "m-2026-11-09-001", "reflection-1.yaml")
+	require.FileExists(t, p, "the v4.22.1 corpus holds the live envelope")
+	require.NoError(t, os.Remove(p))
+}
+
 // importedAggregateFor plants the same aggregate and rewrites the contract's
 // round-1 decision id to the legacy-import hash of that entry, the state step
 // 3 (round-decisions) leaves a pre-v4.21 mission in.
 func importedAggregateFor(t *testing.T, env Env) string {
 	t.Helper()
 	const id = "m-2026-11-09-001"
+	dropLiveEnvelope(t, env)
 	agg := legacyAggregateFor(t, env.Policy.RecordRoot())
 	b, err := os.ReadFile(agg)
 	require.NoError(t, err)
@@ -402,6 +415,7 @@ func TestRecordTreeTraceFullModePublicationKept(t *testing.T) {
 	require.NoError(t, err)
 	env.Policy = p
 	const id = "m-2026-11-09-001"
+	dropLiveEnvelope(t, env)
 	agg := legacyAggregateFor(t, p.CheckoutRecordRoot())
 	before := hashFiles(t, p.RecordRoot(), p.LocalRoot())
 	out := run5(t, env)
@@ -510,6 +524,7 @@ func TestRecordTreeTraceLinkedCheckoutVerifiesTheFileDeleted(t *testing.T) {
 func TestRecordTreeTraceReflectionsRejectsLiveDecisionAtDeletion(t *testing.T) {
 	env := corpusEnv(t, "v4.22.1")
 	const id = "m-2026-11-09-001"
+	dropLiveEnvelope(t, env)
 	agg := legacyAggregateFor(t, env.Policy.RecordRoot()) // contract keeps the live reflect's id
 	data, err := os.ReadFile(agg)
 	require.NoError(t, err)
