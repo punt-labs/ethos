@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
 // StampName is the file name of both layout stamps.
@@ -65,6 +66,17 @@ func WriteStamp(path string, s Stamp, ensureDir func(dir string) error) error {
 	dir := filepath.Dir(path)
 	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("creating stamp directory %s: %w", dir, err)
+	}
+	// A step's raw error carries absolute paths and sometimes credentials, and
+	// the stamp is a file other tools read.
+	if s.Residual != nil {
+		rs := make([]Residual, len(s.Residual))
+		for i, r := range s.Residual {
+			r.ID = redact.Prose(r.ID)
+			r.Reason = redact.Prose(r.Reason)
+			rs[i] = r
+		}
+		s.Residual = rs
 	}
 	data, err := yaml.Marshal(s)
 	if err != nil {

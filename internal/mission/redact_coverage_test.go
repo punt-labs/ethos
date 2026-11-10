@@ -281,7 +281,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/autorepair.FileLog.Logf":   checkpoint("Prose"),
 	"internal/autorepair.FileLog.rotate": exempt("renames the repair log to repair.log.1; writes no content"),
 	"internal/autorepair.acquire":        exempt("creates and flocks an empty lock file; writes no content"),
-	"internal/autorepair.WriteStamp":     exempt("local-zone or global layout stamp (version, ethos version, timestamp, item count, residual step/id/reason); never tracked, never published: " + reasonGlobal),
+	"internal/autorepair.WriteStamp":     checkpoint("Prose"),
 
 	// cmd/ethos.
 	"cmd/ethos.editContent":           exempt("identity graph: operator edits an attribute file by hand"),
