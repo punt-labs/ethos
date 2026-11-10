@@ -140,3 +140,28 @@ func TestHookEnvEqualsEnsureEnv(t *testing.T) {
 	_, err = HookEnv(r.roots, "")
 	assert.Error(t, err)
 }
+
+// A cheap pass with no named, registered step that serves a store takes no
+// lock and writes no file, matching Ensure's zero-step rule.
+func TestCheapPassWithNothingToRunLeavesTreesIdentical(t *testing.T) {
+	r := newRig(t, true)
+	r.step("sessions", ScopeGlobal, Outcome{Items: 1}, nil)
+	require.NoError(t, os.MkdirAll(r.global, 0o700))
+	for name, names := range map[string][]string{
+		"unregistered name": {"hook-sections"},
+		"unnamed step":      {"live-tails"},
+	} {
+		gb, rb := treeOf(t, r.global), treeOf(t, r.store)
+		res := r.cheap(names...)
+		assert.Equal(t, Result{}, res, name)
+		assert.Equal(t, gb, treeOf(t, r.global), name+": global tree")
+		assert.Equal(t, rb, treeOf(t, r.store), name+": repository tree")
+	}
+
+	out := newRig(t, false)
+	out.step("live-tails", ScopeRepository, Outcome{Items: 1}, nil)
+	require.NoError(t, os.MkdirAll(out.global, 0o700))
+	gb := treeOf(t, out.global)
+	assert.Equal(t, Result{}, out.cheap("live-tails"))
+	assert.Equal(t, gb, treeOf(t, out.global), "repository step outside a repository")
+}

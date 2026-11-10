@@ -272,16 +272,24 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 			res, err = Result{}, nil
 		}
 	}()
+	// Every located store is served; the targets only carry scope here, no
+	// stamp is read or written.
+	g := &target{needed: true}
+	r, policy := repositoryTarget(roots)
+	if r != nil {
+		r.needed = true
+	}
+	if !namedStepServes(names, o, g, r) {
+		// Nothing named would run: take no lock and leave no file, as Ensure
+		// does when no registered step serves a needed target.
+		return Result{}, nil
+	}
 	release, lerr := acquire(o.globalLockPath(global), 0)
 	if lerr != nil {
 		return Result{}, nil // a hook never waits on a repair
 	}
 	defer release()
 
-	// Every located store is served; the targets only carry scope here, no
-	// stamp is read or written.
-	g := &target{needed: true}
-	r, policy := repositoryTarget(roots)
 	log = openLog(global, roots, o.ethos)
 	if r != nil {
 		r.needed = true
@@ -332,6 +340,21 @@ func unregistered(o options) []string {
 		}
 	}
 	return out
+}
+
+// namedStepServes reports whether a registered step in o.order, one of names,
+// would run against a needed target.
+func namedStepServes(names []string, o options, g, r *target) bool {
+	for _, name := range o.order {
+		if !slices.Contains(names, name) {
+			continue
+		}
+		i := slices.IndexFunc(o.steps, func(s Step) bool { return s.Name == name })
+		if i >= 0 && len(serves(o.steps[i].Scope, g, r)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // anyRegisteredServes reports whether a registered step in o.order would run
