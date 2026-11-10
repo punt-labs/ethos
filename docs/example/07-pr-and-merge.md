@@ -70,7 +70,7 @@ The historical PR used one review cycle and zero rework pushes. The finding
 was an accepted tradeoff, not a code change. Its timing below is historical
 evidence, **not** DES-079 publication or squash acceptance.
 
-### DES-079 squash route (acceptance pending)
+### DES-079 squash route
 
 The required replacement route publishes complete selected blame records and
 an immutable provenance manifest, explicitly carries its reference into the

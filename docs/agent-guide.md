@@ -860,7 +860,7 @@ paths, blob identities, ranges and branch-derived evidence sufficient after
 branch deletion. Historical reads use the manifest-bearing commit; later blame
 uses that commit's original filename and line. Ambiguity stays ambiguous, never
 a first-delegation or ticket guess. Changed source blobs require regeneration.
-The supported [GitHub squash route](example/07-pr-and-merge.md#des-079-squash-route-acceptance-pending)
+The supported [GitHub squash route](example/07-pr-and-merge.md#des-079-squash-route)
 supplies the generated body, pins the reviewed head, then fetches and verifies
 the actual merge SHA. Local hooks do not run on GitHub's squash server; failed
 verification is failed provenance.
