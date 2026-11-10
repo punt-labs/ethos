@@ -453,7 +453,7 @@ func (s *Store) Purge() (purged, refused []string, err error) {
 			if err != nil {
 				// Corrupt roster — delete under lock.
 				if dErr := s.deleteFiles(id); dErr != nil {
-					s.warnf("ethos:purge: deleting %s: %v\n", id, dErr)
+					s.warnf("ethos: purge: deleting %s: %v\n", id, dErr)
 					didRefuse = true
 					return nil
 				}
@@ -462,7 +462,7 @@ func (s *Store) Purge() (purged, refused []string, err error) {
 			}
 			if isStale(roster) {
 				if dErr := s.deleteFiles(id); dErr != nil {
-					s.warnf("ethos:purge: deleting %s: %v\n", id, dErr)
+					s.warnf("ethos: purge: deleting %s: %v\n", id, dErr)
 					didRefuse = true
 					return nil
 				}
@@ -470,7 +470,7 @@ func (s *Store) Purge() (purged, refused []string, err error) {
 			}
 			return nil
 		}); lockErr != nil {
-			s.warnf("ethos:purge: failed to lock session %s: %v\n", id, lockErr)
+			s.warnf("ethos: purge: failed to lock session %s: %v\n", id, lockErr)
 		}
 		if didPurge {
 			os.Remove(s.lockPath(id))
@@ -596,7 +596,7 @@ func (s *Store) PurgeTombstonedExcept(repoRoot, repoID string, force bool, keep 
 					if cErr := mission.WithDispatchPendingLock(s.root, id, func() error {
 						return mission.ClearDispatchPending(s.root, id)
 					}); cErr != nil {
-						s.warnf("ethos:purge: clearing dispatch-pending for %s: %v\n", id, cErr)
+						s.warnf("ethos: purge: clearing dispatch-pending for %s: %v\n", id, cErr)
 					}
 					s.warnf(
 						"ethos: purge: kept %s: roster unreadable (%v), so its unsealed audit lines cannot be ruled out\n", id, lErr)
@@ -604,7 +604,7 @@ func (s *Store) PurgeTombstonedExcept(repoRoot, repoID string, force bool, keep 
 					return nil
 				}
 				if dErr := s.deleteFiles(id); dErr != nil {
-					s.warnf("ethos:purge: deleting %s: %v\n", id, dErr)
+					s.warnf("ethos: purge: deleting %s: %v\n", id, dErr)
 					didRefuse = true
 					return nil
 				}
@@ -630,7 +630,7 @@ func (s *Store) PurgeTombstonedExcept(repoRoot, repoID string, force bool, keep 
 			didPurge, didRefuse = s.purgeOneTombstoned(roster, repoRoot, repoID, force)
 			return nil
 		}); lockErr != nil {
-			s.warnf("ethos:purge: failed to lock session %s: %v\n", id, lockErr)
+			s.warnf("ethos: purge: failed to lock session %s: %v\n", id, lockErr)
 			continue
 		}
 		if didPurge {
@@ -664,7 +664,7 @@ func (s *Store) purgeUnresolved(roster *Roster, force bool) (didPurge, didRefuse
 		return false, false, &SkippedSession{Session: roster.Session, Reason: roster.RepoUnresolved}, nil
 	}
 	if err := s.deleteFiles(roster.Session); err != nil {
-		s.warnf("ethos:purge: deleting %s: %v\n", roster.Session, err)
+		s.warnf("ethos: purge: deleting %s: %v\n", roster.Session, err)
 		return false, true, nil, nil
 	}
 	s.warnf(
@@ -730,7 +730,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	if liveRoot != "" {
 		if n, cErr := audit.SessionUnsealedCountAcross(trackedRoot, liveRoot, roster.Session); cErr != nil {
 			probeFailed = true
-			s.warnf("ethos:purge: probing %s unsealed audit lines: %v\n", roster.Session, cErr)
+			s.warnf("ethos: purge: probing %s unsealed audit lines: %v\n", roster.Session, cErr)
 		} else {
 			unsealed = n
 		}
@@ -744,12 +744,12 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		bound, bErr := mission.SessionBoundMissions(s.root, trackedRoot, roster.Session)
 		if bErr != nil {
 			probeFailed = true
-			s.warnf("ethos:purge: resolving %s mission bindings: %v\n", roster.Session, bErr)
+			s.warnf("ethos: purge: resolving %s mission bindings: %v\n", roster.Session, bErr)
 		}
 		expected, eErr := audit.ExpectedMissionLiveFiles(trackedRoot, writer, roster.Session, bound)
 		if eErr != nil {
 			probeFailed = true
-			s.warnf("ethos:purge: enumerating %s mission live files: %v\n", roster.Session, eErr)
+			s.warnf("ethos: purge: enumerating %s mission live files: %v\n", roster.Session, eErr)
 		}
 		for _, ml := range expected {
 			if ml.Lost() {
@@ -764,7 +764,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 			}
 			if n, cErr := audit.MissionUnsealedCount(trackedRoot, liveRoot, ml.MissionID, roster.Session); cErr != nil {
 				probeFailed = true
-				s.warnf("ethos:purge: probing mission %s unsealed lines for %s: %v\n",
+				s.warnf("ethos: purge: probing mission %s unsealed lines for %s: %v\n",
 					ml.MissionID, roster.Session, cErr)
 			} else {
 				unsealed += n
@@ -799,7 +799,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		if cErr := mission.WithDispatchPendingLock(s.root, roster.Session, func() error {
 			return mission.ClearDispatchPending(s.root, roster.Session)
 		}); cErr != nil {
-			s.warnf("ethos:purge: clearing dispatch-pending for %s: %v\n", roster.Session, cErr)
+			s.warnf("ethos: purge: clearing dispatch-pending for %s: %v\n", roster.Session, cErr)
 		}
 		if probeFailed {
 			s.warnf(
@@ -834,7 +834,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		}
 	}
 	if dErr := s.deleteFiles(roster.Session); dErr != nil {
-		s.warnf("ethos:purge: deleting %s: %v\n", roster.Session, dErr)
+		s.warnf("ethos: purge: deleting %s: %v\n", roster.Session, dErr)
 		return false, true
 	}
 	return true, false
@@ -877,7 +877,7 @@ func (s *Store) PurgeCurrent() ([]string, error) {
 			path := filepath.Join(dir, name)
 			if removeErr := os.Remove(path); removeErr != nil {
 				if !os.IsNotExist(removeErr) {
-					s.warnf("ethos:failed to remove PID file %s: %v\n", path, removeErr)
+					s.warnf("ethos: failed to remove PID file %s: %v\n", path, removeErr)
 				}
 			} else {
 				purged = append(purged, name)
