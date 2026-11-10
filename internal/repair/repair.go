@@ -21,6 +21,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // Item names one permanent deletion, not a migration or index operation.
@@ -319,34 +320,79 @@ const (
 )
 
 // ClassifyReflections says what a mission's missions/<id>/reflections.yaml
-// is, accounting for round_decisions and record mode. retainMissionTrace's
-// rule alone (round_decisions present means current) is right for logs and
-// prompts, which only full mode publishes; the reflections aggregate is
-// different because the blame-mode reflect path still reads it as round
-// authority when round_decisions are absent, and the full-mode reflect path
-// still writes it as a publication when they are present
-// (internal/mission/reflection_authority.go). Mode switches never remove
-// published history, so a full-mode repository's aggregate is a publication
-// whatever the contract says.
+// is. It decides from the aggregate and the contract, never from the current
+// record mode: mode changes affect future eligibility only, and never delete
+// published history (docs/storage-layout.md).
+//
+// Two writers leave two different shared decision ids. The legacy import
+// (importLegacyDecisions) derives each id from the aggregate entry itself,
+// hex(sha256(json(entry))[:16]); a live reflect allocates a random operation
+// id, and in full mode also publishes the aggregate. So the aggregate is
+// legacy detail only when every round it holds has a contract decision whose
+// id is that round's legacy-import hash. Any other id means a live reflect
+// decided that round: the aggregate is its publication and stays.
+//
+// A contract without round_decisions (absent or null) makes the aggregate
+// the mission's round authority; an export record beside the mission makes
+// it a publication; a missing or unreadable contract is an error.
 func ClassifyReflections(p layout.Policy, root, id string) (TraceClass, error) {
 	exported, err := HasExport(p, id)
 	if err != nil {
 		return 0, err
 	}
-	if exported || p.RecordMode() == layout.RecordFull {
+	if exported {
 		return TraceCurrentPublication, nil
 	}
-	retain, err := retainMissionTrace(p, root, id)
-	if err != nil {
+	roots := []string{p.RecordRoot()}
+	if root != p.RecordRoot() {
+		roots = append(roots, root)
+	}
+	var contract *mission.Contract
+	for _, dir := range roots {
+		path := filepath.Join(dir, "missions", filepath.Base(id), "contract.yaml")
+		if err := safePath(path); err != nil {
+			return 0, err
+		}
+		b, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("reading publication authority %s: %w", path, err)
+		}
+		c, err := mission.DecodeContract(b)
+		if err != nil {
+			return 0, fmt.Errorf("cannot distinguish current publication from legacy detail; left in place: %s", path)
+		}
+		if contract == nil || c.RoundDecisions != nil && contract.RoundDecisions == nil {
+			contract = c
+		}
+	}
+	if contract == nil {
+		return 0, fmt.Errorf("mission %s has no contract in either record root; reflections.yaml cannot be classified", id)
+	}
+	if contract.RoundDecisions == nil {
+		return TraceAuthority, nil
+	}
+	aggPath := filepath.Join(root, "missions", filepath.Base(id), "reflections.yaml")
+	if err := safePath(aggPath); err != nil {
 		return 0, err
 	}
-	if retain {
-		// Blame mode, no export: the only way retainMissionTrace retains is a
-		// contract with round_decisions, which is the state in which the
-		// aggregate is detail that local envelopes can carry.
-		return TraceLegacyDetail, nil
+	data, err := os.ReadFile(aggPath)
+	if err != nil {
+		return 0, fmt.Errorf("reading %s: %w", aggPath, err)
 	}
-	return TraceAuthority, nil
+	rs, err := mission.DecodeLegacyReflections(data, id)
+	if err != nil {
+		return 0, fmt.Errorf("cannot distinguish current publication from legacy detail; left in place: %s", aggPath)
+	}
+	for _, r := range rs {
+		d := contract.DecisionFor(r.Round)
+		if d == nil || d.ID != mission.LegacyDecisionID(r) {
+			return TraceCurrentPublication, nil
+		}
+	}
+	return TraceLegacyDetail, nil
 }
 
 // HasExport reports whether mission id has an explicit export record

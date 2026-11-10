@@ -3,7 +3,6 @@ package mission
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -620,12 +619,11 @@ func (s *Store) importLegacyDecisions(c *Contract) error {
 	}
 	d := &RoundDecisions{Version: 1, Entries: []RoundDecision{}}
 	for _, r := range rs {
-		b, err := json.Marshal(r)
-		if err != nil {
-			return err
+		id := LegacyDecisionID(r)
+		if id == "" {
+			return fmt.Errorf("encoding legacy reflection for round %d", r.Round)
 		}
-		hash := sha256.Sum256(b)
-		d.Entries = append(d.Entries, RoundDecision{hex.EncodeToString(hash[:16]), r.Round, r.CreatedAt, r.Author, r.Recommendation})
+		d.Entries = append(d.Entries, RoundDecision{id, r.Round, r.CreatedAt, r.Author, r.Recommendation})
 	}
 	c.RoundDecisions = d
 	if err := c.validateDecisions(); err != nil {

@@ -1,6 +1,9 @@
 package mission
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -56,4 +59,28 @@ func RedactReflection(repoRoot string, r Reflection) (Reflection, error) {
 // nil when round_decisions are absent or do not cover it.
 func (c *Contract) DecisionFor(round int) *RoundDecision {
 	return c.decision(round)
+}
+
+// LegacyDecisionID is the shared decision id importLegacyDecisions derives
+// for a reflection that predates round decisions: the first 16 bytes of the
+// sha256 of the entry's JSON. A contract decision with any other id for that
+// round was made by a live reflect.
+func LegacyDecisionID(r Reflection) string {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256(b)
+	return hex.EncodeToString(hash[:16])
+}
+
+// DecodeContract decodes one contract.yaml the way Store.Load does, without a
+// store: strict YAML, no second document. A round_decisions key that is
+// present but null decodes to nil, as Load reads it.
+func DecodeContract(data []byte) (*Contract, error) {
+	var c Contract
+	if err := strictYAML(data, &c); err != nil {
+		return nil, err
+	}
+	return &c, nil
 }
