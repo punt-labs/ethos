@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,8 +16,9 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
-	"github.com/punt-labs/ethos/v4/internal/redact"
 	"github.com/punt-labs/ethos/v4/internal/repair"
 )
 
@@ -32,9 +32,19 @@ func init() {
 // record tree (frozen audit and log files, sealed chunks, delegation prompts
 // and reflections) into the local archive as redacted copies, then deletes the
 // record-tree original. repair.Inventory decides what is obsolete: explicit
-// exports, full-mode publications and agent artifacts are never listed. A file
-// whose redacted copy cannot be made is left in place and recorded as a
-// residual.
+// exports, full-mode publications and agent artifacts are never listed.
+//
+// Each original is deleted only under the lock a current writer takes for
+// the same data (the mission-state lock, or the audit stream lock for a
+// session chunk), only after the archived copy has been read back and found
+// byte-equal to the redacted payload, and only if the original's bytes still
+// hash to what the inventory read. Anything else is left in place and
+// recorded as a residual.
+//
+// A mission's reflections.yaml is the only source of its round authority
+// until step 3 (round-decisions) has installed round_decisions in the
+// contract. Until then it stays; afterwards each round becomes a local
+// envelope that joins the contract's own decision, and the aggregate goes.
 func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 	var out Outcome
 	plan, err := repair.Inventory(ctx, env.Policy)
@@ -54,6 +64,9 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: "redactor", Reason: err.Error()})
 		return out, nil
 	}
+	a.sessionGuard = hook.SessionLineGuard(a.repo)
+	a.missionGuard = hook.MissionLineGuard(a.repo)
+	a.store = mission.NewStoreWithRoots(env.Roots.Store, env.Global)
 	for _, path := range plan.Unreadable {
 		rel, _, ok := a.relative(path)
 		if !ok {
@@ -62,33 +75,111 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf(stepRecordTreeTrace, "unreadable", []string{path}, nil)
 		out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: filepath.ToSlash(rel), Reason: "cannot be read; left in place"})
 	}
+	record := func(path, rel string, deferred bool, err error) {
+		switch {
+		case deferred:
+			env.Log.Logf(stepRecordTreeTrace, "skip-busy-lock", []string{path}, nil)
+			out.Deferred = true
+		case err != nil:
+			env.Log.Logf(stepRecordTreeTrace, "archive", []string{path}, err)
+			out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: filepath.ToSlash(rel), Reason: err.Error()})
+		default:
+			out.Items++
+		}
+	}
+	seen := map[string]bool{}
 	for _, item := range plan.Items {
 		if ctx.Err() != nil {
 			out.Deferred = true
 			return out, nil
 		}
-		rel, root, ok := a.relative(item.Path)
+		rel, _, ok := a.relative(item.Path)
 		if !ok {
 			continue
 		}
 		kind, ok := classifyTrace(rel)
-		if !ok {
+		if !ok || kind == kindReflections {
 			continue
 		}
-		if err := a.archive(kind, rel, root, item.Path); err != nil {
-			env.Log.Logf(stepRecordTreeTrace, "archive", []string{item.Path}, err)
-			out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: filepath.ToSlash(rel), Reason: err.Error()})
+		seen[item.Path] = true
+		deferred, err := a.archiveAndDelete(kind, rel, item)
+		record(item.Path, rel, deferred, err)
+	}
+	// Reflections aggregates are enumerated here, not taken from the
+	// inventory: repair lists one only while the contract has no
+	// round_decisions, which is exactly when it must stay (it is the
+	// mission's round authority until step round-decisions). Once the
+	// decisions exist the aggregate is detail the envelopes carry, and goes.
+	for _, root := range []string{env.Policy.RecordRoot(), env.Policy.CheckoutRecordRoot()} {
+		if root == "" {
 			continue
 		}
-		err = os.Remove(item.Path)
-		env.Log.Logf(stepRecordTreeTrace, "archive-and-delete", []string{item.Path}, err)
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: filepath.ToSlash(rel), Reason: "archived but not deleted: " + err.Error()})
-			continue
+		matches, _ := filepath.Glob(filepath.Join(root, "missions", "*", "reflections.yaml"))
+		for _, path := range matches {
+			if ctx.Err() != nil {
+				out.Deferred = true
+				return out, nil
+			}
+			rel, _, ok := a.relative(path)
+			if !ok || seen[path] {
+				continue
+			}
+			seen[path] = true // S and C are one directory in a plain checkout
+			deferred, err := a.archiveReflections(path, rel)
+			record(path, rel, deferred, err)
 		}
-		out.Items++
 	}
 	return out, nil
+}
+
+// archiveReflections handles one missions/<id>/reflections.yaml. The file
+// stays, as a residual naming step 3, while the contract has no
+// round_decisions. It also stays beside an explicit export record. Otherwise
+// each round becomes an envelope joining the contract's decision and the
+// aggregate is deleted under the mission-state lock, the lock the reflect
+// path holds while it publishes the same file in full mode
+// (Store.withMissionLock, reflection_authority.go).
+func (a *archiver) archiveReflections(path, rel string) (deferred bool, err error) {
+	id := strings.Split(filepath.ToSlash(rel), "/")[1]
+	if exported, err := repair.HasExport(a.env.Policy, id); err != nil || exported {
+		if err != nil {
+			return false, err
+		}
+		return false, nil // export trace is retained; not a residual
+	}
+	lock, err := a.env.Policy.LockPath("mission-state", id)
+	if err != nil {
+		return false, err
+	}
+	if err := layout.EnsureLocalDir(a.env.Policy, filepath.Dir(lock)); err != nil {
+		return false, err
+	}
+	f, err := os.OpenFile(lock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, fmt.Errorf("opening lock: %w", err)
+	}
+	defer f.Close()
+	if repair.TryLock(f) != nil {
+		return true, nil
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading: %w", err)
+	}
+	if !utf8.Valid(data) {
+		return false, errors.New("not valid UTF-8; left in place")
+	}
+	if err := a.reflections(id, data); err != nil {
+		return false, err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("archived but not deleted: %w", err)
+	}
+	a.env.Log.Logf(stepRecordTreeTrace, "archive-and-delete", []string{path}, nil)
+	return false, nil
 }
 
 type traceKind int
@@ -132,10 +223,15 @@ func classifyChunk(base string, ns audit.Namespace, frozen string, k traceKind) 
 	return 0, false
 }
 
+type lineGuard = func(line []byte) (out []byte, rule string, marker bool)
+
 type archiver struct {
-	env  Env
-	repo string
-	red  mission.PathRedactor
+	env          Env
+	repo         string
+	red          mission.PathRedactor
+	sessionGuard lineGuard
+	missionGuard lineGuard
+	store        *mission.Store
 }
 
 // relative returns path relative to the record root that holds it.
@@ -151,14 +247,61 @@ func (a *archiver) relative(path string) (rel, root string, ok bool) {
 	return "", "", false
 }
 
-func (a *archiver) archive(kind traceKind, rel, root, path string) error {
-	data, err := os.ReadFile(path)
+// archiveAndDelete archives one item and deletes the original under the lock
+// that guards it. deferred reports a lock another process holds.
+func (a *archiver) archiveAndDelete(kind traceKind, rel string, item repair.Item) (deferred bool, err error) {
+	lock, err := a.lockFor(kind, rel)
 	if err != nil {
-		return fmt.Errorf("reading: %w", err)
+		return false, err
+	}
+	if err := layout.EnsureLocalDir(a.env.Policy, filepath.Dir(lock)); err != nil {
+		return false, err
+	}
+	f, err := os.OpenFile(lock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, fmt.Errorf("opening lock: %w", err)
+	}
+	defer f.Close()
+	if repair.TryLock(f) != nil {
+		return true, nil
+	}
+	data, err := os.ReadFile(item.Path)
+	if err != nil {
+		return false, fmt.Errorf("reading: %w", err)
+	}
+	if sha256.Sum256(data) != item.SHA256() {
+		return false, errors.New("changed since the inventory; left in place")
 	}
 	if !utf8.Valid(data) {
-		return errors.New("not valid UTF-8; left in place")
+		return false, errors.New("not valid UTF-8; left in place")
 	}
+	if err := a.archive(kind, rel, data); err != nil {
+		return false, err
+	}
+	if err := os.Remove(item.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("archived but not deleted: %w", err)
+	}
+	a.env.Log.Logf(stepRecordTreeTrace, "archive-and-delete", []string{item.Path}, nil)
+	return false, nil
+}
+
+// lockFor names the lock a current writer takes for the data at rel: the
+// mission-state lock for a mission's files, the audit stream lock for a
+// session chunk.
+func (a *archiver) lockFor(kind traceKind, rel string) (string, error) {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	switch kind {
+	case kindSessionLog:
+		return repair.StreamLockPath(a.env.Policy, rel)
+	case kindDiagnostic:
+		if parts[0] == "sessions" {
+			return repair.StreamLockPath(a.env.Policy, rel)
+		}
+	}
+	return a.env.Policy.LockPath("mission-state", parts[1])
+}
+
+func (a *archiver) archive(kind traceKind, rel string, data []byte) error {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	id := parts[1]
 	switch kind {
@@ -168,18 +311,22 @@ func (a *archiver) archive(kind traceKind, rel, root, path string) error {
 		return a.prompt(id, parts[3], data)
 	case kindMissionLog:
 		dest := filepath.Join(a.env.Policy.TraceArchiveRoot(), "missions", id, parts[2])
-		return a.jsonl(dest, data, parts[2] == "log.jsonl")
+		return a.jsonl(dest, data, parts[2] == "log.jsonl", a.missionGuard)
 	case kindSessionLog:
-		s := audit.Stream{Namespace: audit.SessionNS, Session: sessionOfDir(parts[1])}
-		dir, err := audit.ArchiveDir(a.env.Policy, s, parts[1][:len(audit.SessionDateFormat)])
+		dir, err := a.sessionArchiveDir(parts[1])
 		if err != nil {
 			return err
 		}
-		return a.jsonl(filepath.Join(dir, parts[2]), data, parts[2] == "audit.jsonl")
+		return a.jsonl(filepath.Join(dir, parts[2]), data, parts[2] == "audit.jsonl", a.sessionGuard)
 	case kindDiagnostic:
 		return a.diagnostic(parts, data)
 	}
 	return nil
+}
+
+func (a *archiver) sessionArchiveDir(dir string) (string, error) {
+	s := audit.Stream{Namespace: audit.SessionNS, Session: sessionOfDir(dir)}
+	return audit.ArchiveDir(a.env.Policy, s, dir[:len(audit.SessionDateFormat)])
 }
 
 func sessionOfDir(dir string) string {
@@ -189,23 +336,47 @@ func sessionOfDir(dir string) string {
 	return dir
 }
 
-// install writes data to dest unless an archived copy is already there. An
-// existing copy is a redacted archive written earlier (by this step or by the
-// current writers) and is kept.
+// install puts data at dest and proves it is there. An existing destination
+// must already hold exactly data: another copy of the same trace (S and C
+// both holding a frozen file, an earlier run, step 2's import) is verified
+// by its bytes, never assumed. A different file at dest is a collision, and
+// the original stays. After a write the file is read back before the caller
+// deletes anything.
 func (a *archiver) install(dest string, data []byte) error {
-	if _, err := os.Lstat(dest); err == nil {
-		return nil
+	if existing, err := os.ReadFile(dest); err == nil {
+		if bytes.Equal(existing, data) {
+			return nil
+		}
+		return fmt.Errorf("archive %s already holds different content; left in place", filepath.Base(dest))
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	if err := audit.ReplaceLocalFile(a.env.Policy, dest, data); err != nil {
 		return fmt.Errorf("archiving to %s: %w", dest, err)
 	}
+	back, err := os.ReadFile(dest)
+	if err != nil {
+		return fmt.Errorf("reading back %s: %w", dest, err)
+	}
+	if !bytes.Equal(back, data) {
+		return fmt.Errorf("archive %s read back differently; left in place", filepath.Base(dest))
+	}
 	a.env.Log.Logf(stepRecordTreeTrace, "archive", []string{dest}, nil)
 	return nil
 }
 
+// reflections turns the aggregate into one envelope per round, each carrying
+// the shared decision the contract already holds for that round. Without
+// round_decisions the aggregate is the mission's only round authority and is
+// left for step 3.
 func (a *archiver) reflections(id string, data []byte) error {
+	c, err := a.store.Load(id)
+	if err != nil {
+		return fmt.Errorf("loading contract: %w", err)
+	}
+	if c.RoundDecisions == nil {
+		return errors.New("contract has no round_decisions yet; reflections.yaml is its round authority until step round-decisions installs them")
+	}
 	rs, err := mission.DecodeLegacyReflections(data, id)
 	if err != nil {
 		return fmt.Errorf("decoding reflections: %w", err)
@@ -216,18 +387,22 @@ func (a *archiver) reflections(id string, data []byte) error {
 	}
 	var envs []envelope
 	for _, r := range rs {
+		d := c.DecisionFor(r.Round)
+		if d == nil {
+			return fmt.Errorf("round %d has no shared decision in the contract; left in place", r.Round)
+		}
 		red, err := mission.RedactReflection(a.repo, r)
 		if err != nil {
 			return err
 		}
-		round, b, err := mission.LegacyReflectionEnvelope(r, red)
+		b, err := mission.LegacyReflectionEnvelope(*d, red)
 		if err != nil {
 			return err
 		}
 		if rule := mission.LeakRule(string(b)); rule != "" {
-			return fmt.Errorf("round %d still %s after redaction", round, rule)
+			return fmt.Errorf("round %d still %s after redaction", r.Round, rule)
 		}
-		envs = append(envs, envelope{filepath.Join(a.env.Policy.TraceArchiveRoot(), "missions", id, fmt.Sprintf("reflection-%d.yaml", round)), b})
+		envs = append(envs, envelope{filepath.Join(a.env.Policy.TraceArchiveRoot(), "missions", id, fmt.Sprintf("reflection-%d.yaml", r.Round)), b})
 	}
 	for _, e := range envs {
 		if err := a.install(e.dest, e.data); err != nil {
@@ -265,19 +440,18 @@ func (a *archiver) prompt(id, delegation string, data []byte) error {
 	return a.install(filepath.Join(dir, "prompt.md"), body)
 }
 
-// jsonl redacts every line of a frozen or sealed log and archives it. A sealed
-// chunk must decode line by line (a damaged one belongs to step 7 and is left
-// in place); a frozen file's undecodable line becomes a loss marker.
-func (a *archiver) jsonl(dest string, data []byte, frozen bool) error {
+// jsonl passes every line of a frozen or sealed log through the same guard
+// the seal and quarantine paths use (credentials, addresses, paths; the
+// tool_input_hash recomputed over the stored tool_input) and archives the
+// result. A sealed chunk must still decode strictly afterwards; a damaged
+// one is step 7's and stays in place.
+func (a *archiver) jsonl(dest string, data []byte, frozen bool, guard lineGuard) error {
 	var out bytes.Buffer
-	for n, raw := range bytes.Split(data, []byte{'\n'}) {
+	for _, raw := range audit.SplitLines(data) {
 		if len(bytes.TrimSpace(raw)) == 0 {
 			continue
 		}
-		line, err := a.redactLine(raw, frozen)
-		if err != nil {
-			return fmt.Errorf("line %d: %w", n+1, err)
-		}
+		line, _, _ := guard(raw)
 		out.Write(line)
 		out.WriteByte('\n')
 	}
@@ -287,85 +461,6 @@ func (a *archiver) jsonl(dest string, data []byte, frozen bool) error {
 		}
 	}
 	return a.install(dest, out.Bytes())
-}
-
-// redactLine returns raw with credentials, addresses and home paths removed
-// from every string. ts is kept so chunk names and watermarks stay true.
-func (a *archiver) redactLine(raw []byte, frozen bool) ([]byte, error) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil || m == nil {
-		if !frozen {
-			return nil, errors.New("not a JSON object")
-		}
-		return lossMarker(raw), nil
-	}
-	if _, _, dup := redact.DuplicateJSONKey(raw); dup {
-		m["redacted"] = true
-	}
-	ts, hasTS := m["ts"]
-	changed := false
-	for k, v := range m {
-		if k == "ts" {
-			continue
-		}
-		r, c := a.redactValue(v)
-		m[k], changed = r, changed || c
-	}
-	if hasTS {
-		m["ts"] = ts
-	}
-	if changed {
-		m["redacted"] = true
-	}
-	out, err := json.Marshal(m)
-	if err != nil {
-		return nil, err
-	}
-	if mission.LeakRule(string(out)) != "" {
-		return lossMarker(raw), nil
-	}
-	return out, nil
-}
-
-func (a *archiver) redactValue(v any) (any, bool) {
-	switch x := v.(type) {
-	case string:
-		r := a.red.Content(x)
-		return r, r != x
-	case map[string]any:
-		changed := false
-		for k, e := range x {
-			r, c := a.redactValue(e)
-			x[k], changed = r, changed || c
-		}
-		return x, changed
-	case []any:
-		changed := false
-		for i, e := range x {
-			r, c := a.redactValue(e)
-			x[i], changed = r, changed || c
-		}
-		return x, changed
-	}
-	return v, false
-}
-
-// lossMarker stands for a line that could not be redacted safely; it keeps ts
-// when the line had a clean one.
-func lossMarker(raw []byte) []byte {
-	m := map[string]any{"audit_error": "line could not be redacted", "redacted": true}
-	var h struct {
-		TS string `json:"ts"`
-	}
-	if json.Unmarshal(raw, &h) == nil && h.TS != "" && mission.LeakRule(h.TS) == "" {
-		if _, err := audit.ParseLineTS(h.TS); err == nil {
-			m["ts"] = h.TS
-		}
-	}
-	b, _ := json.Marshal(m)
-	return b
 }
 
 // diagnostic archives a retired chunk or quarantine marker as redacted text.
@@ -378,8 +473,7 @@ func (a *archiver) diagnostic(parts []string, data []byte) error {
 	if parts[0] == "missions" {
 		dest = filepath.Join(a.env.Policy.TraceArchiveRoot(), "missions", parts[1], parts[2])
 	} else {
-		s := audit.Stream{Namespace: audit.SessionNS, Session: sessionOfDir(parts[1])}
-		dir, err := audit.ArchiveDir(a.env.Policy, s, parts[1][:len(audit.SessionDateFormat)])
+		dir, err := a.sessionArchiveDir(parts[1])
 		if err != nil {
 			return err
 		}
