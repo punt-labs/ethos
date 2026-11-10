@@ -529,6 +529,12 @@ type SkippedSession struct {
 // as well: a roster whose repository identity was never resolved is skipped,
 // stale or not, and removed under force, stale or not.
 func (s *Store) PurgeTombstonedReport(repoRoot, repoID string, force bool) (PurgeReport, error) {
+	return s.PurgeTombstonedExcept(repoRoot, repoID, force, nil)
+}
+
+// PurgeTombstonedExcept is PurgeTombstonedReport that leaves alone every
+// readable roster for which keep returns true. A nil keep keeps none.
+func (s *Store) PurgeTombstonedExcept(repoRoot, repoID string, force bool, keep func(*Roster) bool) (PurgeReport, error) {
 	var rep PurgeReport
 	ids, err := s.List()
 	if err != nil {
@@ -595,6 +601,9 @@ func (s *Store) PurgeTombstonedReport(repoRoot, repoID string, force bool) (Purg
 			// matched to no checkout, so it is dealt with before the stale
 			// check: nothing else would ever remove it while its session
 			// still looks alive.
+			if keep != nil && keep(roster) {
+				return nil
+			}
 			if roster.RepoUnresolved != "" {
 				didPurge, didRefuse, skip, forced = s.purgeUnresolved(roster, force)
 				return nil
