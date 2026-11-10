@@ -97,3 +97,17 @@ func TestCheckStorageOnWindowsSaysNotSupported(t *testing.T) {
 	assert.Contains(t, r.Detail, "not supported")
 	assert.NotContains(t, r.Detail, "repairs it")
 }
+
+// The row states what it found and points at the log; it never promises what a
+// later command will do, because a step may defer.
+func TestCheckStorageMessagesPromiseNothing(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	missing := CheckStorage(resolve.Located{}, filepath.Join(d, "g"))
+	assert.Equal(t, "no layout stamp for the global store; see ~/.punt-labs/ethos/logs/repair.log", missing.Detail)
+
+	g := filepath.Join(d, "old")
+	writeGlobalStamp(t, g, autorepair.Stamp{Version: 4})
+	old := CheckStorage(resolve.Located{}, g)
+	assert.Equal(t, "the global store is at layout v4, not v5; see ~/.punt-labs/ethos/logs/repair.log", old.Detail)
+}
