@@ -170,7 +170,8 @@ func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir s
 }
 
 // permanentScanReason classifies a scan error no later run can change: a
-// malformed chunk name or a non-regular file where an artifact belongs. Any
+// malformed chunk name, a non-regular file where an artifact belongs, or a
+// marker that is unreadable or covers another chunk. Any
 // other error (a permission or I/O failure) may pass, and is left transient.
 // The reason names the class, never a path.
 func permanentScanReason(err error) (string, bool) {
@@ -181,6 +182,10 @@ func permanentScanReason(err error) (string, bool) {
 		return "archive directory holds a malformed chunk name", true
 	case errors.As(err, &file):
 		return "archive directory holds an artifact that is not a regular file", true
+	case errors.Is(err, audit.ErrTornMarker):
+		return "a marker at this name is unreadable; chunk left in place", true
+	case errors.Is(err, audit.ErrMarkerCoversOtherChunk):
+		return "a marker at this name covers another chunk", true
 	}
 	return "", false
 }
@@ -319,10 +324,14 @@ func salvage(env Env, out *Outcome, s audit.Stream, source string, cn audit.Chun
 // (permission, ENOSPC, EXDEV, EIO, a conflict a later pass resolves) may pass:
 // deferred. It stops work on the directory either way.
 func failed(env Env, out *Outcome, path, reason string, err error) bool {
-	if _, ok := permanentScanReason(err); !ok {
+	class, ok := permanentScanReason(err)
+	if !ok {
 		logf(env, stepCorruptChunks, "defer-transient", []string{path}, err)
 		out.Deferred = true
 		return false
+	}
+	if errors.Is(err, audit.ErrTornMarker) || errors.Is(err, audit.ErrMarkerCoversOtherChunk) {
+		reason = class
 	}
 	return residual(env, out, path, reason, err)
 }

@@ -38,6 +38,15 @@ type Marker struct {
 	RetiredSHA256 string `json:"retired_sha256,omitempty"`
 }
 
+// ErrTornMarker is returned when a marker already at the path cannot be
+// decoded. It may have recorded a loss whose range is now unknown, so no writer
+// replaces it.
+var ErrTornMarker = errors.New("marker is unreadable")
+
+// ErrMarkerCoversOtherChunk is returned when the marker at a stem's name
+// covers a different chunk.
+var ErrMarkerCoversOtherChunk = errors.New("marker covers another chunk")
+
 // HasGap reports whether the marker records an unrecovered sub-range.
 func (m Marker) HasGap() bool {
 	return m.UnrecoveredFirst != 0 || m.UnrecoveredLast != 0
@@ -107,15 +116,16 @@ func MergeMarkers(old, next Marker) Marker {
 // recorded loss or drops a completion digest. clearRetired drops the digest from
 // the result: a repeated retirement must invalidate the old completion before
 // its source is removed, and a published marker never carries one. An existing
-// marker that is torn or undecodable reads as absent, as everywhere else; one
-// that cannot be read, or that covers another chunk, is an error.
+// marker that is torn or undecodable may have recorded a loss of unknown range,
+// so it is never replaced: ErrTornMarker. One that cannot be read, or that
+// covers another chunk (ErrMarkerCoversOtherChunk), is also an error.
 func writeMarker(p layout.Policy, path string, next Marker, clearRetired bool) error {
 	old, err := ReadMarker(path)
 	var pathErr *os.PathError
 	switch {
 	case err == nil:
 		if old.Chunk != next.Chunk {
-			return fmt.Errorf("marker %s covers chunk %s, not %s", path, old.Chunk, next.Chunk)
+			return fmt.Errorf("marker %s covers chunk %s, not %s: %w", path, old.Chunk, next.Chunk, ErrMarkerCoversOtherChunk)
 		}
 		if clearRetired {
 			old.RetiredSHA256 = ""
@@ -124,6 +134,8 @@ func writeMarker(p layout.Policy, path string, next Marker, clearRetired bool) e
 	case errors.Is(err, os.ErrNotExist):
 	case errors.As(err, &pathErr):
 		return err
+	default:
+		return fmt.Errorf("marker %s: %w: %v", path, ErrTornMarker, err)
 	}
 	if clearRetired {
 		next.RetiredSHA256 = ""
