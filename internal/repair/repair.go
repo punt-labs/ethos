@@ -302,6 +302,53 @@ func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) 
 	return !retain, false, err
 }
 
+// TraceClass is one verdict on a mission's record-tree trace file.
+type TraceClass int
+
+const (
+	// TraceLegacyDetail: an older release wrote it and nothing current
+	// publishes it. Archiving it locally and deleting it loses nothing.
+	TraceLegacyDetail TraceClass = iota + 1
+	// TraceCurrentPublication: the current writers publish this file in this
+	// repository, or an explicit export sits beside it. It is never deleted.
+	TraceCurrentPublication
+	// TraceAuthority: the mission's only round authority (a reflections
+	// aggregate beside a contract without round_decisions). It stays until
+	// shared authority exists.
+	TraceAuthority
+)
+
+// ClassifyReflections says what a mission's missions/<id>/reflections.yaml
+// is, accounting for round_decisions and record mode. retainMissionTrace's
+// rule alone (round_decisions present means current) is right for logs and
+// prompts, which only full mode publishes; the reflections aggregate is
+// different because the blame-mode reflect path still reads it as round
+// authority when round_decisions are absent, and the full-mode reflect path
+// still writes it as a publication when they are present
+// (internal/mission/reflection_authority.go). Mode switches never remove
+// published history, so a full-mode repository's aggregate is a publication
+// whatever the contract says.
+func ClassifyReflections(p layout.Policy, root, id string) (TraceClass, error) {
+	exported, err := HasExport(p, id)
+	if err != nil {
+		return 0, err
+	}
+	if exported || p.RecordMode() == layout.RecordFull {
+		return TraceCurrentPublication, nil
+	}
+	retain, err := retainMissionTrace(p, root, id)
+	if err != nil {
+		return 0, err
+	}
+	if retain {
+		// Blame mode, no export: the only way retainMissionTrace retains is a
+		// contract with round_decisions, which is the state in which the
+		// aggregate is detail that local envelopes can carry.
+		return TraceLegacyDetail, nil
+	}
+	return TraceAuthority, nil
+}
+
 // HasExport reports whether mission id has an explicit export record
 // (<id>.contract.yaml or <id>.result.yaml) in either record tree. Exports and
 // the trace beside them are never claimed.
