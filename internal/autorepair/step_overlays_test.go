@@ -1,6 +1,7 @@
 package autorepair
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -289,4 +290,53 @@ func TestOverlaysStepPartialOverlapLogsDroppedKeys(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{overlayHandle + "/vox/api_key", overlayHandle + "/vox/token"}, got)
+}
+
+// readOnlyLocalDir makes the local overlay directory unwritable so the rename
+// into it fails with EACCES, a transient condition.
+func readOnlyLocalDir(t *testing.T, local string) {
+	t.Helper()
+	dir := filepath.Dir(local)
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+func assertNoMoveLogged(t *testing.T, tr s81113Tree) {
+	t.Helper()
+	for _, e := range tr.Log.entries {
+		if e.step == "overlays" && (e.action == "move" || e.action == "replace-empty") {
+			assert.Error(t, e.err, "a %s logged without error claims a move that did not happen", e.action)
+		}
+	}
+}
+
+func TestOverlaysStepFailedRenameOverEmptyNewIsNotAMove(t *testing.T) {
+	tr := s81113Copy(t, "damage/overlay-both-locations")
+	_, legacy, local := overlayPaths(tr)
+	s81113Write(t, legacy, "api_key: sk-RODIRabcdefghijkl\n")
+	s81113Write(t, local, "")
+	readOnlyLocalDir(t, local)
+	o, err := runOverlays(context.Background(), tr.Env(t))
+	assert.Error(t, err, "EACCES is transient: the engine must retry")
+	assert.Equal(t, 0, o.Items)
+	assert.Empty(t, o.Residuals)
+	assert.Equal(t, "api_key: sk-RODIRabcdefghijkl\n", string(s81113Read(t, legacy)))
+	for _, e := range tr.Log.entries {
+		assert.NotEqual(t, "replace-empty", e.action)
+		assert.NotEqual(t, "move", e.action)
+	}
+}
+
+func TestOverlaysStepFailedRenamePlainMoveIsNotAMove(t *testing.T) {
+	tr := s81113Copy(t, "damage/overlay-both-locations")
+	_, legacy, local := overlayPaths(tr)
+	before := s81113Read(t, legacy)
+	require.NoError(t, os.Remove(local))
+	readOnlyLocalDir(t, local)
+	o, err := runOverlays(context.Background(), tr.Env(t))
+	assert.Error(t, err, "EACCES is transient: the engine must retry")
+	assert.Equal(t, 0, o.Items)
+	assert.Empty(t, o.Residuals)
+	assert.Equal(t, before, s81113Read(t, legacy))
+	assertNoMoveLogged(t, tr)
 }

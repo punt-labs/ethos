@@ -254,17 +254,20 @@ func withoutVoiceKey(data []byte) ([]byte, error) {
 	end := len(lines)
 	if i+2 < len(m.Content) {
 		end = m.Content[i+2].Line - 1
-		// Only comments at the next key's column are its head comment; a more
-		// indented one sits inside the voice block and goes with it.
-		col := m.Content[i].Column - 1
-		for end > start+1 {
-			l := lines[end-1]
-			trimmed := strings.TrimLeft(l, " \t")
-			if !strings.HasPrefix(trimmed, "#") || len(l)-len(trimmed) > col {
-				break
-			}
-			end--
+	} else if end > 0 && lines[end-1] == "" {
+		end-- // SplitAfter leaves an empty final element after a trailing newline
+	}
+	// Only comments at the key's column or left of it belong to what follows
+	// (the next key's head comment, or the document's foot); a more indented
+	// one sits inside the voice block and goes with it.
+	col := m.Content[i].Column - 1
+	for end > start+1 {
+		l := lines[end-1]
+		trimmed := strings.TrimLeft(l, " \t")
+		if !strings.HasPrefix(trimmed, "#") || len(l)-len(trimmed) > col {
+			break
 		}
+		end--
 	}
 	for end > start+1 && strings.TrimSpace(lines[end-1]) == "" {
 		end--

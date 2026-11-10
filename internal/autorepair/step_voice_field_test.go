@@ -227,3 +227,11 @@ func TestVoiceFieldStepLogsKeysItDropped(t *testing.T) {
 		assert.NotContains(t, p, "Alex")
 	}
 }
+
+func TestVoiceFieldStepLastKeyKeepsColumnZeroFootComment(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	path := filepath.Join(tr.Home, "identities", "vperson.yaml")
+	s81113Write(t, path, "name: Voice Person\nhandle: vperson\nkind: human\nvoice:\n  provider: say\n# file tail comment\n")
+	s81113Run(t, "voice-field", tr.Env(t))
+	assert.Equal(t, "name: Voice Person\nhandle: vperson\nkind: human\n# file tail comment\n", string(s81113Read(t, path)))
+}
