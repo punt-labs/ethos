@@ -14,7 +14,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The race suite's wall time on one runner is over 30 minutes now that
+    # cmd/ethos and internal/mission each run past 10; the per-package
+    # -timeout below is 30m, so the job ceiling sits above the sum.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
