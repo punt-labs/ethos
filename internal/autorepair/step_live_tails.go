@@ -64,10 +64,16 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 		var res audit.LiveRepair
 		busy, err := audit.TryWithStreamLock(env.Policy, s, func() error {
 			var err error
-			res, err = audit.RedactLive(env.Policy, s, liveLineGuard(env.Policy, s.Namespace))
+			res, err = redactLiveChunks(ctx, env.Policy, s, liveGuard(env.Policy, s.Namespace))
 			return err
 		})
 		switch {
+		case ctx.Err() != nil && err != nil:
+			// The budget ran out inside the stream. The chunks finished so
+			// far are on disk and recorded, so the next run resumes past them.
+			logf(env, stepLiveTails, "defer-budget", []string{live}, nil)
+			out.Deferred = true
+			return out, nil
 		case busy:
 			out.Deferred = true
 			logf(env, stepLiveTails, "defer-busy-stream", []string{live}, nil)
@@ -89,6 +95,29 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 		out.Items += res.Rewritten + len(res.Dropped)
 	}
 	return out, nil
+}
+
+// liveGuard builds a stream's guard; a test replaces it with a slow stub.
+var liveGuard = liveLineGuard
+
+// liveChunkLines is how many live lines one RedactLive call judges. The guard
+// costs milliseconds a line, so a chunk is well under a step budget and the
+// work a budget cuts short is small.
+var liveChunkLines = 100
+
+// redactLiveChunks redacts the stream's live file chunk by chunk until the
+// file is complete or ctx is done. Each finished chunk is already on disk.
+func redactLiveChunks(ctx context.Context, p layout.Policy, s audit.Stream, guard audit.LineGuard) (audit.LiveRepair, error) {
+	var total audit.LiveRepair
+	for {
+		res, err := audit.RedactLive(ctx, p, s, guard, liveChunkLines)
+		total.Rewritten += res.Rewritten
+		total.Dropped = append(total.Dropped, res.Dropped...)
+		if err != nil || res.Complete {
+			total.Complete = res.Complete
+			return total, err
+		}
+	}
 }
 
 // liveLineGuard is the redaction guard for lines of a stream's live file: the

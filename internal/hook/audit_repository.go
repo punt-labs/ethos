@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,7 +131,7 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 	// another payload is dropped (the archive wins), before the union read
 	// would refuse it and before anything immutable is written.
 	if !opts.DryRun {
-		if _, err := audit.RedactLive(p, s, guard); err != nil {
+		if _, err := audit.RedactLive(context.Background(), p, s, guard, 0); err != nil {
 			return 0, nil, err
 		}
 	}
