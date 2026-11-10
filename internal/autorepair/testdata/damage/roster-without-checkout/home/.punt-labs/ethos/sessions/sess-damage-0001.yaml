@@ -1,0 +1,11 @@
+session: sess-damage-0001
+started: "2026-11-04T10:00:00Z"
+host: @HOST@
+participants:
+    - agent_id: tperson
+      persona: tperson
+      joined: "2026-11-04T10:00:00Z"
+    - agent_id: "2147483646"
+      persona: claude
+      parent: tperson
+      joined: "2026-11-04T10:00:00Z"

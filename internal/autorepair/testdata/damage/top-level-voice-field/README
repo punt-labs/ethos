@@ -1,0 +1,1 @@
+A global identity file with a top-level voice: field (pre-v2.0); hand-made because every released binary migrates the field into the vox extension on write.

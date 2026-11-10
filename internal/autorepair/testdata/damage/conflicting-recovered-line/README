@@ -1,0 +1,1 @@
+A corrupt chunk whose only decodable line has the same ts as a line in a surviving valid chunk but a different payload (ethos-h5z8 shape); recovery must not install the conflicting line.

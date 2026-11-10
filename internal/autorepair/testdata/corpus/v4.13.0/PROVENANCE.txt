@@ -1,0 +1,33 @@
+tag: v4.13.0
+commit: 448015ccfae7fb72a6686c8c8361056aedd3c69b
+go_toolchain: go1.26.1
+go_version: go version go1.26.1 darwin/arm64
+ethos_version: ethos 4.13.0
+steps:
+  git init: ok
+  seed: ok
+  setup --file (solo): ok
+  identity create worker: ok
+  identity create evaluator: ok
+  identity create voice: ok
+  voice field: skipped: this version moves a top-level voice field into the vox extension on write, so no top-level voice: reaches disk (see damage/top-level-voice-field)
+  ext set (base): ok
+  ext set --local (overlay): ok
+  team create: ok
+  enable: ok
+  session-start hook: ok
+  mission create (inputs.bead): ok
+  mission dispatch: ok
+  mission result r1: ok
+  mission reflect r1: ok
+  mission advance: ok
+  mission result r2: ok
+  mission close: ok
+  mission claim: ok
+  delegation (pre-tool-use Agent): ok
+  adr create: ok
+  audit-log hook 1: ok
+  audit-log hook 2: ok
+  audit-log hook 3: ok
+  git add: ok
+  git commit (installed hooks): ok

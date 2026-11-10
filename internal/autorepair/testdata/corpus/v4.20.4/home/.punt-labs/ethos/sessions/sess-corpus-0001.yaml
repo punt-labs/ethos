@@ -1,0 +1,12 @@
+session: sess-corpus-0001
+started: "2026-11-09T23:02:56Z"
+checkout: @REPO@
+host: @HOST@
+participants:
+    - agent_id: unknown
+      persona: unknown
+      joined: "2026-11-09T23:02:56Z"
+    - agent_id: "@PID@"
+      persona: claude
+      parent: unknown
+      joined: "2026-11-09T23:02:56Z"

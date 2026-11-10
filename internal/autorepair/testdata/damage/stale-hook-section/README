@@ -1,0 +1,1 @@
+A commit-msg hook section from before DES-083 that calls ethos hook commit-trailers (the retired subcommand) instead of the hook commit-msg shim; under git/hooks.
