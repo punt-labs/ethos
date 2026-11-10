@@ -281,11 +281,11 @@ func NoticeMigratedFile(session string, notes []*Note, total int, dry bool) {
 	lead := ""
 	if dry {
 		lead, verb = "would rewrite", "before they are stored"
-		fmt.Fprintf(os.Stderr, "ethos: audit migrate: %s: %s %d of %d line(s) %s: %s\n",
+		fmt.Fprintf(os.Stderr, "ethos: audit import: %s: %s %d of %d line(s) %s: %s\n",
 			lineguard.QuoteUnlessLeak(session), lead, count, total, verb, strings.Join(parts, "; "))
 		return
 	}
-	fmt.Fprintf(os.Stderr, "ethos: audit migrate: %s: %d of %d line(s) %s: %s\n",
+	fmt.Fprintf(os.Stderr, "ethos: audit import: %s: %d of %d line(s) %s: %s\n",
 		lineguard.QuoteUnlessLeak(session), count, total, verb, strings.Join(parts, "; "))
 }
 

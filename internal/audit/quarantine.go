@@ -153,7 +153,7 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 		} else if err := WriteChunkAtomic(sealedDir, re.TempFile(), re.ChunkFile(), reseal); err != nil {
 			return Marker{}, err
 		} else {
-			for _, n := range tally.Notices("ethos: audit quarantine:") {
+			for _, n := range tally.Notices("ethos: audit:") {
 				fmt.Fprintln(os.Stderr, n)
 			}
 		}

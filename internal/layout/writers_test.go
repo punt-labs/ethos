@@ -1,7 +1,6 @@
 package layout_test
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/fs"
@@ -293,6 +292,10 @@ func quarantineOnce(t *testing.T, root, dir string, cn audit.ChunkName) {
 	t.Helper()
 
 	require.NoError(t, os.MkdirAll(dir, 0o755))
+	// The classification pass above planted an empty file at the marker path.
+	// An empty marker is a torn loss record, which no writer replaces, so the
+	// stand-in goes before the first quarantine writes the real one.
+	require.NoError(t, os.RemoveAll(filepath.Join(dir, cn.MarkerFile())))
 	chunk := filepath.Join(dir, cn.ChunkFile())
 	require.NoError(t, os.WriteFile(chunk, []byte("not json\n"), 0o644))
 	_, err := hook.QuarantineChunk(root, chunk, "test corruption")
@@ -302,17 +305,19 @@ func quarantineOnce(t *testing.T, root, dir string, cn audit.ChunkName) {
 	_, err = hook.QuarantineChunk(root, chunk, "new corruption")
 	require.NoError(t, err)
 	require.NoFileExists(t, chunk)
-	for _, body := range []string{"not json\n", "still not json\n"} {
-		digest := sha256.Sum256([]byte(body))
-		copies, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "quarantine", "*", fmt.Sprintf("%x.corrupt", digest)))
-		require.NoError(t, err)
-		require.NotEmpty(t, copies, "every damaged payload must retain distinct content-addressed local evidence")
-		for _, path := range copies {
-			data, err := os.ReadFile(path)
-			require.NoError(t, err)
-			require.Equal(t, body, string(data))
-		}
-	}
+	// Neither damaged payload decoded, so neither is kept as bytes: the loss
+	// is recorded in the marker, which the second quarantine merged into the
+	// first (ranges only widen, never narrow), and nothing raw remains under
+	// local/ for a reader to mistake for evidence.
+	marker, err := audit.ReadMarker(filepath.Join(dir, cn.MarkerFile()))
+	require.NoError(t, err)
+	require.Equal(t, cn.Stem(), marker.Chunk)
+	require.True(t, marker.HasGap(), "the undecodable bytes are recorded as a loss")
+	require.LessOrEqual(t, marker.UnrecoveredFirst, cn.First)
+	require.GreaterOrEqual(t, marker.UnrecoveredLast, cn.Last)
+	raw, err := filepath.Glob(filepath.Join(root, ".punt-labs", "local", "ethos", "quarantine", "*", "*.corrupt"))
+	require.NoError(t, err)
+	require.Empty(t, raw, "no raw copy of undecodable bytes survives a completed quarantine")
 }
 
 // writeAgents runs the three writers of .claude/agents/<name>.md: the

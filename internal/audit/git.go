@@ -335,7 +335,7 @@ func GitRmCached(repoRoot, path string) error {
 	if err != nil {
 		return err
 	}
-	_, err = gitRun(repoRoot, "git rm --cached", "rm", "--cached", "-f", "-q", "--", spec)
+	_, err = gitRun(repoRoot, "git rm", "rm", "--cached", "-f", "-q", "--", spec)
 	return err
 }
 

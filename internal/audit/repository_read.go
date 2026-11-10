@@ -56,10 +56,10 @@ func ReadStream(p layout.Policy, s Stream) (StreamData, error) {
 			}
 			marker, err := ReadMarker(filepath.Join(dir, e.Name()))
 			if err != nil {
-				return StreamData{}, fmt.Errorf("reading audit quarantine marker %s: %w", filepath.Join(dir, e.Name()), err)
+				return StreamData{}, fmt.Errorf("reading audit marker %s: %w", filepath.Join(dir, e.Name()), err)
 			}
 			if marker.Chunk != cn.Stem() {
-				return StreamData{}, fmt.Errorf("audit quarantine marker %s covers a different chunk", filepath.Join(dir, e.Name()))
+				return StreamData{}, fmt.Errorf("audit marker %s covers a different chunk", filepath.Join(dir, e.Name()))
 			}
 			if marker.VerifiedLast > data.Floor {
 				data.Floor = marker.VerifiedLast
