@@ -7,6 +7,8 @@ import (
 	"syscall"
 )
 
-func tryLock(f *os.File) error {
+// TryLock takes an exclusive whole-file lock without waiting. It fails when
+// another process holds the lock.
+func TryLock(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 }

@@ -130,7 +130,7 @@ func (p *Plan) Apply(ctx context.Context) (removed []string, err error) {
 			return removed, fmt.Errorf("opening lock %s: %w", path, err)
 		}
 		held = append(held, f)
-		if lerr := tryLock(f); lerr != nil {
+		if lerr := TryLock(f); lerr != nil {
 			busy[path] = true
 		}
 	}
