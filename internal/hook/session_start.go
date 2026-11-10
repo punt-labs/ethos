@@ -48,6 +48,10 @@ type SessionStartDeps struct {
 	// refresh. It runs only in a located repository; an error never fails the
 	// session, but is told to it, because a stale seal section blocks commits.
 	RefreshHooks func(checkout, store string) (HookRefresh, error)
+	// Notice is the one line autorepair.Ensure earned on this start, "" when
+	// nothing was repaired. It goes into systemMessage and additionalContext
+	// because this hook's stderr goes to an unread log (DES-084 Output).
+	Notice string
 }
 
 // HookRefresh is what a git hook refresh did, by hook name. A failed refresh
@@ -131,6 +135,12 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
+	}
+	if deps.Notice != "" {
+		if note != "" {
+			note += " "
+		}
+		note += deps.Notice
 	}
 	if refreshed := refreshStaleHooks(deps.RefreshHooks, loc); refreshed != "" {
 		if note != "" {
