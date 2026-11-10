@@ -153,3 +153,29 @@ func TestLocksReleaseWhenAbandonedStepReturns(t *testing.T) {
 	_, serr := r.globalStamp()
 	require.NoError(t, serr)
 }
+
+// TestEnsureDoesNotWaitUnboundedlyForAbandonedStep: a step that ignores its
+// context is abandoned at its budget, and Ensure stops waiting for it once the
+// Ensure budget is spent. The step keeps its lock while its goroutine lives.
+func TestEnsureDoesNotWaitUnboundedlyForAbandonedStep(t *testing.T) {
+	r := newRig(t, true)
+	r.opts.stepBudget = 50 * time.Millisecond
+	r.opts.ensureBudget = 300 * time.Millisecond
+	h := r.hangSteps(t, ScopeRepository)
+	defer close(h.release)
+
+	start := time.Now()
+	done := r.ensureAsync()
+	select {
+	case <-done:
+	case <-time.After(r.opts.ensureBudget + time.Second):
+		t.Fatal("Ensure still waiting for the abandoned step after EnsureBudget+1s")
+	}
+	assert.GreaterOrEqual(t, time.Since(start), r.opts.stepBudget)
+	assert.True(t, h.aLive.Load(), "the abandoned step is still running")
+	release, err := acquire(stepLockPath(r.global, "a"), 0)
+	if err == nil {
+		release()
+	}
+	assert.ErrorIs(t, err, errBusy, "the step lock is held while the goroutine lives")
+}

@@ -74,11 +74,12 @@ func defaultOptions() options {
 // The global and repository repair locks belong to the Ensure until every
 // goroutine it started has returned, an abandoned step's included: an
 // abandoned step keeps the Env it was given, so the repository must stay
-// locked while it runs. After the Ensure budget is spent the wait is unbounded
-// by design. A step that never returns holds the locks; the next entry point
-// defers at the lock wait and converts nothing, which is the correct
-// degradation. The first abandonment also ends the pass: no later step runs,
-// since the abandoned one may hold inner locks the next would contend for.
+// locked while it runs, up to the Ensure budget. After that the command stops
+// waiting, logs the abandoned step and returns; the step goroutine keeps its
+// step lock until it finishes, which is what stops the next run starting it
+// again, and the process exit ends it. The first abandonment also ends the
+// pass: no later step runs, since the abandoned one may hold inner locks the
+// next would contend for.
 func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, error) {
 	return ensure(ctx, roots, global, defaultOptions())
 }
@@ -239,7 +240,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 	}
 	env := Env{Global: global, Now: o.now(), Log: log}
 	var live liveSteps
-	defer live.wait(log) // registered last, so it runs before either lock is released
+	defer live.wait(log, time.Now().Add(o.ensureBudget)) // registered last, so it runs before either lock is released
 	res = runSteps(ctx, env, roots, policy, o, log, g, r, nil, &live)
 	for _, t := range targets {
 		if !t.needed || t.blocked {
@@ -306,7 +307,7 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 		only[n] = true
 	}
 	var live liveSteps
-	defer live.wait(log) // registered last, so it runs before either lock is released
+	defer live.wait(log, time.Now().Add(o.ensureBudget)) // registered last, so it runs before either lock is released
 	return runSteps(ctx, env, roots, policy, o, log, g, r, only, &live), nil
 }
 
@@ -487,16 +488,32 @@ func (l *liveSteps) isAbandoned(name string) bool {
 	return l.abandoned == name
 }
 
-// wait blocks until every started step has returned, logging once when an
-// abandoned one makes it wait.
-func (l *liveSteps) wait(log *FileLog) {
+// wait blocks until every started step has returned or the deadline passes. A
+// step still running at the deadline is left to finish on its own: it keeps its
+// step lock, which is what keeps the next run from starting it twice, and the
+// process exit ends it. The abandonment is logged once.
+func (l *liveSteps) wait(log *FileLog, deadline time.Time) {
 	l.mu.Lock()
 	name := l.abandoned
 	l.mu.Unlock()
 	if name != "" {
 		log.Logf(name, "wait", nil, fmt.Errorf("waiting for abandoned step %s", name))
 	}
-	l.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		l.wg.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(time.Until(deadline))
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		if name == "" {
+			name = "a step"
+		}
+		log.Logf(name, "abandon", nil, fmt.Errorf("abandoned step still running: %s", name))
+	}
 }
 
 type stepResult struct {

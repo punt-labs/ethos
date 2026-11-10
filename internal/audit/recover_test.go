@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -146,7 +147,7 @@ func TestRedactLiveRedactedDuplicateIsNotAConflict(t *testing.T) {
 	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
 	require.NoError(t, WriteLocalAtomic(p, filepath.Join(dir, cn.ChunkFile()), []byte(sessLine(100, "Masked"))))
 	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(sessLine(100, "Secret"))))
-	res, err := RedactLive(p, s, maskGuard)
+	res, err := RedactLive(context.Background(), p, s, maskGuard, 0)
 	require.NoError(t, err)
 	assert.Empty(t, res.Dropped, "not a conflict: its redacted form is what the archive holds")
 	assert.Equal(t, 1, res.Rewritten, "the live copy is brought to the archived form")

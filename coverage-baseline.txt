@@ -17,7 +17,7 @@ internal/agentmark 100.0
 internal/attribute 88.5
 internal/audit 76.7
 internal/auditimport 0.0
-internal/autorepair 81.1
+internal/autorepair 81.2
 internal/bundle 84.6
 internal/claudemd 88.8
 internal/doctor 91.6

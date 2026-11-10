@@ -196,3 +196,16 @@ func TestGlobalAuditOutsideRepository(t *testing.T) {
 	assert.Equal(t, 0, out.Items)
 	assert.FileExists(t, globalAuditFile(env))
 }
+
+// TestGlobalAuditDefersWhenContextDone: a context that is done before the
+// first file leaves every file for the next run and marks the step deferred.
+func TestGlobalAuditDefersWhenContextDone(t *testing.T) {
+	env, _ := corpusEnvLogged(t, "v3.11.0")
+	rosterCheckout(t, env, corpusSession, env.Roots.Checkout)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out, err := runGlobalAudit(ctx, env)
+	require.NoError(t, err)
+	assert.True(t, out.Deferred)
+	assert.FileExists(t, globalAuditFile(env), "nothing was attempted")
+}

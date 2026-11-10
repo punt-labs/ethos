@@ -2,7 +2,9 @@ package audit
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,10 +36,43 @@ type LiveConflict struct {
 type LiveRepair struct {
 	Rewritten int            // lines replaced by their redacted form
 	Dropped   []LiveConflict // lines removed because the archive wins
+	// Complete is true when every complete line of the file has been judged.
+	// It is false only after a chunked call (limit > 0) that stopped early.
+	Complete bool
 }
 
 // Changed reports whether the live file was rewritten.
 func (r LiveRepair) Changed() bool { return r.Rewritten > 0 || len(r.Dropped) > 0 }
+
+// liveCursor records how much of a live file RedactLive has judged: the byte
+// length of the prefix and its SHA-256. A later call skips the prefix only if
+// the file still begins with exactly those bytes, so a replaced or truncated
+// file is judged again from the start.
+type liveCursor struct {
+	Offset int    `json:"offset"`
+	SHA256 string `json:"sha256"`
+}
+
+func liveCursorPath(p layout.Policy, s Stream) string {
+	return filepath.Join(p.LocalRoot(), "cursors", fmt.Sprintf("live-%x.json", sha256.Sum256([]byte(s.Key()))))
+}
+
+// readLiveCursor returns the byte length of the prefix of b already judged, or
+// 0 when there is no cursor or b no longer begins with the prefix it names.
+func readLiveCursor(p layout.Policy, s Stream, b []byte) int {
+	raw, err := os.ReadFile(liveCursorPath(p, s))
+	if err != nil {
+		return 0
+	}
+	var c liveCursor
+	if json.Unmarshal(raw, &c) != nil || c.Offset <= 0 || c.Offset > len(b) {
+		return 0
+	}
+	if digest(b[:c.Offset]) != c.SHA256 {
+		return 0
+	}
+	return c.Offset
+}
 
 // RedactLive makes a stream's live file safe to archive. Each complete line
 // whose ts is archived with another payload is dropped (the archive wins);
@@ -46,26 +81,63 @@ func (r LiveRepair) Changed() bool { return r.Rewritten > 0 || len(r.Dropped) > 
 // archived with an equal payload is left alone: the archive already holds it.
 // The caller holds the stream lock. The file is replaced atomically, and only
 // when something changed.
-func RedactLive(p layout.Policy, s Stream, guard LineGuard) (LiveRepair, error) {
+//
+// The guard costs milliseconds a line, so ctx is checked before each line;
+// when it is done RedactLive writes nothing and returns ctx.Err(). With
+// limit > 0 it judges at most limit lines past the prefix an earlier call
+// recorded, rewrites that much, and records the new prefix, so a stream too
+// large for one budget is finished across calls. Complete says whether any
+// lines remain. limit == 0 judges the whole file and keeps no record.
+func RedactLive(ctx context.Context, p layout.Policy, s Stream, guard LineGuard, limit int) (LiveRepair, error) {
 	var res LiveRepair
 	live, err := ReadLiveLines(p, s)
-	if err != nil || len(live) == 0 {
-		return res, err
-	}
-	archived, err := archivedPayloads(p, s)
 	if err != nil {
 		return res, err
 	}
+	if len(live) == 0 {
+		res.Complete = true
+		return res, nil
+	}
+	path := s.LivePath(p)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return LiveRepair{}, fmt.Errorf("reading live audit %s: %w", path, err)
+	}
+	ends := liveLineEnds(b)
+	if len(ends) != len(live) {
+		return LiveRepair{}, fmt.Errorf("live audit %s changed while it was read", path)
+	}
+	start, end := 0, len(live)
+	if limit > 0 {
+		skip := readLiveCursor(p, s, b)
+		for start < len(live) && ends[start] <= skip {
+			start++
+		}
+		if start+limit < end {
+			end = start + limit
+		}
+	}
+	res.Complete = end == len(live)
+	if start == end {
+		return res, nil
+	}
+	archived, err := archivedPayloads(p, s)
+	if err != nil {
+		return LiveRepair{}, err
+	}
 	replace := map[string][]byte{} // raw live line -> its redacted form; nil drops it
-	for _, l := range live {
+	for _, l := range live[start:end] {
+		if err := ctx.Err(); err != nil {
+			return LiveRepair{}, err
+		}
 		got, err := CanonicalPayload(l.Raw)
 		if err != nil {
-			return res, err
+			return LiveRepair{}, err
 		}
 		out, _, _ := guard(l.Raw)
 		after, err := CanonicalPayload(out)
 		if err != nil {
-			return res, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
+			return LiveRepair{}, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
 		}
 		if want, ok := archived[l.TS]; ok {
 			// Compare the guarded form: a live line whose redaction is what
@@ -86,19 +158,52 @@ func RedactLive(p layout.Policy, s Stream, guard LineGuard) (LiveRepair, error) 
 			res.Rewritten++
 		}
 	}
-	if !res.Changed() {
-		return res, nil
+	out := b
+	if res.Changed() {
+		out = rewriteLive(b, replace)
+		if err := ReplaceLocalFile(p, path, out); err != nil {
+			return LiveRepair{}, fmt.Errorf("replacing live audit %s with its redacted lines: %w", path, err)
+		}
 	}
-	path := s.LivePath(p)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return LiveRepair{}, fmt.Errorf("reading live audit %s: %w", path, err)
+	if limit > 0 {
+		// The prefix through the last judged line, in its stored form.
+		n := len(rewriteLive(b[:ends[end-1]], replace))
+		c, err := json.Marshal(liveCursor{Offset: n, SHA256: digest(out[:n])})
+		if err != nil {
+			return LiveRepair{}, fmt.Errorf("encoding the live audit cursor: %w", err)
+		}
+		if err := ReplaceLocalFile(p, liveCursorPath(p, s), c); err != nil {
+			return LiveRepair{}, fmt.Errorf("recording the live audit cursor: %w", err)
+		}
 	}
+	return res, nil
+}
+
+// liveLineEnds returns, for each complete non-blank line of b in order, the
+// offset just past its newline. It mirrors readCompleteLive's choice of lines.
+func liveLineEnds(b []byte) []int {
+	var ends []int
+	for pos := 0; pos < len(b); {
+		i := bytes.IndexByte(b[pos:], '\n')
+		if i < 0 {
+			break
+		}
+		if len(bytes.TrimSpace(b[pos:pos+i])) != 0 {
+			ends = append(ends, pos+i+1)
+		}
+		pos += i + 1
+	}
+	return ends
+}
+
+// rewriteLive applies replace to the complete lines of b; a nil value drops
+// the line. A torn tail stays for the writer's reopen repair.
+func rewriteLive(b []byte, replace map[string][]byte) []byte {
 	var out bytes.Buffer
 	for len(b) > 0 {
 		i := bytes.IndexByte(b, '\n')
 		if i < 0 {
-			out.Write(b) // torn tail stays for the writer's reopen repair
+			out.Write(b)
 			break
 		}
 		if r, ok := replace[string(b[:i])]; !ok {
@@ -109,10 +214,7 @@ func RedactLive(p layout.Policy, s Stream, guard LineGuard) (LiveRepair, error) 
 		}
 		b = b[i+1:]
 	}
-	if err := ReplaceLocalFile(p, path, out.Bytes()); err != nil {
-		return LiveRepair{}, fmt.Errorf("replacing live audit %s with its redacted lines: %w", path, err)
-	}
-	return res, nil
+	return out.Bytes()
 }
 
 func digest(b []byte) string { return fmt.Sprintf("%x", sha256.Sum256(b)) }

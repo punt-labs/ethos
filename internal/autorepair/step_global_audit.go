@@ -45,7 +45,7 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 		return out, fmt.Errorf("importing global session audit: %w", err)
 	}
 	dir := filepath.Join(env.Global, "sessions")
-	res, err := auditimport.ImportGlobalAudit(env.Policy, dir, checkout, store)
+	res, err := auditimport.ImportGlobalAudit(ctx, env.Policy, dir, checkout, store)
 	if err != nil {
 		return out, fmt.Errorf("importing global session audit: %w", err)
 	}
@@ -67,6 +67,11 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 	for _, f := range res.Failed {
 		env.Log.Logf(stepGlobalAudit, "import-failed", []string{file(f.Session)}, fmt.Errorf("%s", f.Reason))
 		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalAudit, ID: f.Session, Reason: f.Reason})
+	}
+	if res.Remaining > 0 {
+		// The budget ran out; the files not attempted are the next run's.
+		logf(env, stepGlobalAudit, fmt.Sprintf("defer-remaining files=%d", res.Remaining), nil, nil)
+		out.Deferred = true
 	}
 	return out, nil
 }

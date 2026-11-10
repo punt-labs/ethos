@@ -17,6 +17,8 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
+const fakeToken = "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+
 // recLog records every Logf call so tests can assert a step logged.
 type recLog struct {
 	mu    sync.Mutex

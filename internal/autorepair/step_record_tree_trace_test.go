@@ -22,8 +22,6 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/repair"
 )
 
-const fakeToken = "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
-
 // traceFiles lists record-tree files this step owns.
 func traceFiles(t *testing.T, env Env) []string {
 	t.Helper()
