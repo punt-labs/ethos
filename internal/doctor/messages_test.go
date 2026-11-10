@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -18,6 +19,14 @@ var promiseTerms = []string{
 	"retires it", "removes them", "repairs it", "repairs a file",
 	"storage upgrade", "re-run", "rerun", "inspect before", "add it before",
 	"file a bug", "check file", "install ", "upgrade ethos", "move each",
+	"ethos mission correct",
+}
+
+// userChoices are the literals (file:line) that may name a command because
+// the command is a genuine user choice (plan section 7). Recording a
+// correction is a human decision ethos never makes on its own.
+var userChoices = map[string]bool{
+	"hand_edit.go:108": true,
 }
 
 // TestDoctorMessages walks the string literals of this package and of the
@@ -36,7 +45,8 @@ func TestDoctorMessages(t *testing.T) {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
-		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
@@ -51,8 +61,9 @@ func TestDoctorMessages(t *testing.T) {
 			}
 			// "would install" describes a comparison; it does not tell the reader to act.
 			low := strings.ReplaceAll(strings.ToLower(v), "would install", "")
+			at := fmt.Sprintf("%s:%d", filepath.Base(path), fset.Position(lit.Pos()).Line)
 			for _, term := range promiseTerms {
-				if strings.Contains(low, term) {
+				if strings.Contains(low, term) && !userChoices[at] {
 					t.Errorf("%s: message %q contains %q", path, v, term)
 				}
 			}

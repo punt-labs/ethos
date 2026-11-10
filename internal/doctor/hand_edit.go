@@ -105,7 +105,7 @@ func CheckNoHandEditedMissionFiles(storeRoot string) Result {
 	}
 	sort.Strings(flagged)
 	return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-		"comment found in machine-written file(s) — these are yaml.Marshal output and never contain comments, so they were edited outside ethos: %s; `ethos mission correct` records a correction",
+		"comment found in machine-written file(s) — these are yaml.Marshal output and never contain comments, so they were edited outside ethos: %s; `ethos mission correct` records a correction", // msgguard: allow plan §7 user choice: recording a correction
 		strings.Join(flagged, ", "))}
 }
 

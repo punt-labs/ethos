@@ -718,6 +718,12 @@ func checklistAgentNames(fsys fs.FS, root string) (map[string]bool, error) {
 // hookBinaryTimeout bounds the --help probe of the binary the shims run.
 const hookBinaryTimeout = 10 * time.Second
 
+// sandboxUnavailableDetail words the FAIL for a hook that cannot be run because
+// the sandbox found no git. err already names the cause.
+func sandboxUnavailableDetail(short string, err error) string {
+	return fmt.Sprintf("cannot verify the %s hook by execution: %v; check skipped", short, err)
+}
+
 // CheckHookBinary reports whether the binary the installed git hook shims
 // resolve implements the subcommands they call (DES-083). The shims look for
 // ethos on PATH, then in $HOME/.local/bin, exactly as resolveHookBinary does.
@@ -742,7 +748,7 @@ func CheckHookBinary(repoRoot string) Result {
 		bin = local
 	}
 	if bin == "" {
-		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked; ethos binary not found on PATH"}
+		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked"}
 	}
 	// Git runs the hooks with its own PATH, which may differ from this
 	// process's, so what follows is about the binary doctor resolves.
@@ -944,8 +950,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		observed, err := hookInvocationObservedAny(body, spec.accepted(), spec.NeedsMsgArg)
 		if err != nil {
 			if errors.Is(err, errSandboxGitUnavailable) {
-				return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-					"cannot verify the %s hook by execution: %v; git not found on PATH, check skipped", spec.ShortName, err)}
+				return Result{Name: name, Status: "FAIL", Detail: sandboxUnavailableDetail(spec.ShortName, err)}
 			}
 			if errors.Is(err, errSandboxUnsupportedPlatform) {
 				// M4: this build cannot exercise the sandbox on this GOOS.

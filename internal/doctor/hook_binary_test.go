@@ -5,6 +5,7 @@ package doctor
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,6 +63,7 @@ func TestCheckHookBinary(t *testing.T) {
 		r := CheckHookBinary(enabledRepoDir(t))
 		assert.Equal(t, "FAIL", r.Status, r.Detail)
 		assert.Contains(t, r.Detail, "no ethos binary")
+		assert.True(t, strings.HasSuffix(r.Detail, "~/.local/bin; every commit is blocked"), r.Detail)
 	})
 
 	t.Run("enabled with a current binary on PATH PASSes", func(t *testing.T) {
