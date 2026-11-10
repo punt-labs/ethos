@@ -20,7 +20,7 @@ func runOverlays(ctx context.Context, env Env) (Outcome, error) {
 		return Outcome{Deferred: true}, nil
 	}
 	s := identity.NewStore(env.Policy.RecordRoot(), identity.RepositoryPolicy(env.Policy))
-	moves, busy, err := s.RelocateLegacyOverlays()
+	moves, residuals, busy, err := s.RelocateLegacyOverlays()
 	for _, m := range moves {
 		action := "move"
 		if m.Kept {
@@ -29,6 +29,10 @@ func runOverlays(ctx context.Context, env Env) (Outcome, error) {
 		env.Log.Logf("overlays", action, []string{m.Legacy, m.Local}, nil)
 	}
 	out := Outcome{Items: len(moves), Deferred: busy}
+	for _, r := range residuals {
+		env.Log.Logf("overlays", "residual", []string{r.ID}, errors.New(r.Reason))
+		out.Residuals = append(out.Residuals, Residual{Step: "overlays", ID: r.ID, Reason: r.Reason})
+	}
 	if err != nil {
 		env.Log.Logf("overlays", "relocate", nil, err)
 		var pub *identity.PublicationError

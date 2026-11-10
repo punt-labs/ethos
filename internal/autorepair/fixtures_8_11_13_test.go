@@ -147,6 +147,39 @@ func s81113Exists(path string) bool {
 	return err == nil
 }
 
+// s81113Snapshot records every entry under the tree's roots: path, kind and
+// bytes. A second run of an idempotent step must leave it identical.
+func s81113Snapshot(t *testing.T, tr s81113Tree) map[string]string {
+	t.Helper()
+	snap := map[string]string{}
+	for _, root := range []string{tr.Repo, tr.Home} {
+		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			switch {
+			case d.IsDir():
+				snap[p] = "dir"
+			case d.Type()&fs.ModeSymlink != 0:
+				target, err := os.Readlink(p)
+				if err != nil {
+					return err
+				}
+				snap[p] = "link:" + target
+			default:
+				b, err := os.ReadFile(p)
+				if err != nil {
+					return err
+				}
+				snap[p] = "file:" + string(b)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
+	return snap
+}
+
 // s81113Write creates path (and parents) holding data.
 func s81113Write(t *testing.T, path, data string) {
 	t.Helper()

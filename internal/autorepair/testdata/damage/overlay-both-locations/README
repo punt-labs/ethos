@@ -1,1 +1,1 @@
-A repository extension overlay present both beside the identity (legacy v4.10-v4.20 location) and under .punt-labs/local/ethos/identities (new location), with different values.
+A repository extension overlay present both beside the identity (legacy v4.10-v4.20 location) and under .punt-labs/local/ethos/identities (new location), with different values (legacy: notify "y"; new: notify "n", voice "newer").
