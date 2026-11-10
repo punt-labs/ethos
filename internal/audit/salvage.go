@@ -1,7 +1,9 @@
 package audit
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,15 +42,12 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 	if err != nil {
 		return res, fmt.Errorf("reading chunk %s: %w", source, err)
 	}
-	if _, err := ReadChunkVerified(source, cn.Last); err == nil {
+	_, kind := Classify(filepath.Base(source), cn.Namespace)
+	// A retired file is never "left alone": its bytes are deleted under a
+	// covering marker even when they happen to decode.
+	if _, err := ReadChunkVerified(source, cn.Last); err == nil && kind != KindCorrupt {
 		return res, nil
 	}
-	r, err := recoverLines(p, s, data, cn, source, guard)
-	if err != nil {
-		return res, err
-	}
-	res.Conflicts, res.Salvaged, res.Lost = r.conflicts, len(r.keep), r.lost
-
 	date := filepath.Base(filepath.Dir(source))
 	if len(date) > len(SessionDateFormat) {
 		date = date[:len(SessionDateFormat)]
@@ -57,18 +56,42 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 	if err != nil {
 		return res, err
 	}
+	return salvageBytes(p, s, salvageInput{source: source, dir: dir, cn: cn, data: data, retired: kind == KindCorrupt, published: publishedSource(p, source)}, guard)
+}
+
+// salvageInput is the damaged bytes salvageBytes recovers and where they sit.
+type salvageInput struct {
+	source    string
+	dir       string // archive directory the replacement and markers go to
+	cn        ChunkName
+	data      []byte
+	retired   bool // a marker is written whether or not a line was lost
+	published bool // a shared availability marker is written beside source
+}
+
+// salvageBytes is the recovery behind SalvageChunk and RecoverHeldQuarantine.
+// Nothing of the damaged bytes is deleted until the replacement reads back and
+// every marker that records a loss is durable.
+func salvageBytes(p layout.Policy, s Stream, in salvageInput, guard LineGuard) (SalvageResult, error) {
+	var res SalvageResult
+	source, dir, cn := in.source, in.dir, in.cn
+	r, err := recoverLines(p, s, in.data, cn, source, guard)
+	if err != nil {
+		return res, err
+	}
+	res.Conflicts, res.Salvaged, res.Lost = r.conflicts, len(r.keep), r.lost
+
 	m := Marker{Chunk: cn.Stem(), Reason: "chunk bytes were damaged; surviving lines were recovered", VerifiedLast: r.verifiedLast}
 	// A retired file (<stem>.jsonl.corrupt) is covered by nothing once its
 	// bytes are gone; its marker is written whether or not a line was lost,
 	// so the stem stays accounted for.
-	_, kind := Classify(filepath.Base(source), cn.Namespace)
-	if res.Lost || kind == KindCorrupt {
+	if res.Lost || in.retired {
 		m.UnrecoveredFirst, m.UnrecoveredLast = r.lo, r.hi
 	}
 	// writeMarkers makes every record of a loss durable. A replacement that
 	// keeps the source's name overwrites the raw bytes, so it runs first.
 	writeMarkers := func() error {
-		if m.HasGap() || kind == KindCorrupt {
+		if m.HasGap() || in.retired {
 			mb, err := MarshalMarker(m)
 			if err != nil {
 				return err
@@ -77,7 +100,7 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 				return fmt.Errorf("writing gap marker for chunk %s: %w", source, err)
 			}
 		}
-		if publishedSource(p, source) {
+		if in.published {
 			// The published copy loses the whole named range whatever was
 			// recovered locally; a reader of that copy alone sees the hole.
 			shared := m
@@ -97,14 +120,96 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 		if err := writeMarkers(); err != nil {
 			return res, err
 		}
-	}
-	if dest != source {
 		if err := removeSource(source); err != nil {
 			return res, err
 		}
 	}
 	res.Replaced = true
 	return res, nil
+}
+
+// RecoverHeldQuarantine recovers raw bytes QuarantineLocal held under
+// local/ethos/quarantine/<key>/ whose retirement record is gone or unusable.
+// The chunk is named from the lines that parse (the sidecar's verified range,
+// then the file's mtime, when none do), recovered through guard into the
+// local archive under a marker that records the loss, and only then are the
+// held bytes and their sidecar deleted.
+func RecoverHeldQuarantine(p layout.Policy, s Stream, held string, guard LineGuard) (SalvageResult, error) {
+	var res SalvageResult
+	if err := s.Validate(); err != nil {
+		return res, err
+	}
+	data, err := os.ReadFile(held)
+	if err != nil {
+		return res, fmt.Errorf("reading held quarantine bytes %s: %w", held, err)
+	}
+	var first, last int64
+	for _, raw := range SplitLines(data) {
+		var h tsHolder
+		if json.Unmarshal(raw, &h) != nil {
+			continue
+		}
+		ts, err := ParseLineTS(h.TS)
+		if err != nil {
+			continue
+		}
+		if first == 0 || ts < first {
+			first = ts
+		}
+		if ts > last {
+			last = ts
+		}
+	}
+	if first == 0 {
+		if side, err := os.ReadFile(held + ".json"); err == nil {
+			var rec localRetirement
+			if json.Unmarshal(side, &rec) == nil && rec.VerifiedLast > 0 {
+				first, last = rec.VerifiedFirst, rec.VerifiedLast
+				if first == 0 {
+					first = last
+				}
+			}
+		}
+	}
+	if first == 0 {
+		info, err := os.Stat(held)
+		if err != nil {
+			return res, fmt.Errorf("examining held quarantine bytes %s: %w", held, err)
+		}
+		first = info.ModTime().UnixNano()
+		last = first
+	}
+	cn := ChunkName{Namespace: s.Namespace, First: first, Last: last}
+	if s.Namespace == MissionNS {
+		cn.Session = s.Session
+	}
+	dir, err := ArchiveDir(p, s, timeFromUnixNanoDate(first))
+	if err != nil {
+		return res, err
+	}
+	res, err = salvageBytes(p, s, salvageInput{source: held, dir: dir, cn: cn, data: data, retired: true}, guard)
+	if err != nil {
+		return res, err
+	}
+	if err := os.Remove(held + ".json"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return res, fmt.Errorf("deleting held quarantine sidecar %s: %w", held+".json", err)
+	}
+	return res, nil
+}
+
+// RetirementRecordSHA returns the digest a valid local retirement record
+// names, and false when b is not one (legacy raw bytes, a truncated record).
+func RetirementRecordSHA(b []byte) (string, bool) {
+	var rec localRetirement
+	if json.Unmarshal(b, &rec) != nil || rec.validate() != nil {
+		return "", false
+	}
+	return rec.SHA256, true
+}
+
+// HeldQuarantineDir is where QuarantineLocal holds a stream's raw bytes.
+func HeldQuarantineDir(p layout.Policy, s Stream) string {
+	return filepath.Join(p.LocalRoot(), "quarantine", fmt.Sprintf("%x", sha256.Sum256([]byte(s.Key()))))
 }
 
 // decodeSalvageLine returns the guarded form of raw when raw is a decodable

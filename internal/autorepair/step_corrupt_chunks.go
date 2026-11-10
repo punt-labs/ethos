@@ -2,14 +2,13 @@ package autorepair
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
-	"github.com/punt-labs/ethos/v4/internal/hook"
 )
 
 const stepCorruptChunks = "corrupt-chunks"
@@ -22,19 +21,22 @@ const orphanReason = "interrupted quarantine completed by the storage upgrade"
 
 // maxRepairPasses bounds the scan-repair loop per stream directory; every
 // pass that makes progress removes at least one offending artifact, so a
-// directory needs at most as many passes as it has artifacts.
-const maxRepairPasses = 64
+// directory needs at most as many passes as it has artifacts. A variable so a
+// test can lower it.
+var maxRepairPasses = 64
 
 // runCorruptChunks is step 7. For every stream it repairs each archive
 // directory until audit.ScanSealedDir reads it cleanly: a sealed chunk whose
 // bytes no longer decode is replaced by a chunk of its redacted, decodable
 // lines; a retirement an interrupted quarantine left without its final marker
-// is completed; a legacy raw .corrupt is salvaged, covered by a marker and
-// deleted; a stale .corrupt beside a valid chunk of the same stem is covered
-// and deleted. A recovered line that conflicts with surviving evidence is not
-// installed; both digests are logged. Items counts repairs applied. A busy
-// stream lock defers; a directory still dirty after the pass budget is a
-// residual.
+// is completed; a legacy raw .corrupt is recovered through the guard (a valid
+// chunk of the same stem is evidence for it), covered by a marker and deleted;
+// raw bytes held under quarantine/<key>/ with no usable retirement record are
+// recovered the same way. A recovered line that conflicts with surviving
+// evidence is not installed; both digests are logged. Items counts repairs
+// applied. A busy stream lock, a dirty scan and an unfinished pass budget
+// defer; a malformed name, a non-regular file and a pass that changes nothing
+// are residuals.
 func runCorruptChunks(ctx context.Context, env Env) (Outcome, error) {
 	var out Outcome
 	if !env.InRepository() {
@@ -60,19 +62,30 @@ func runCorruptChunks(ctx context.Context, env Env) (Outcome, error) {
 			d, err := dirNeedsRepair(dir, s)
 			if err != nil {
 				logf(env, stepCorruptChunks, "scan-chunks", []string{dir}, err)
-				out.Deferred = true
+				if reason, ok := permanentScanReason(err); ok {
+					out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
+				} else {
+					out.Deferred = true
+				}
 				continue
 			}
 			dirty = dirty || d
 		}
-		if !dirty {
+		held, err := heldOrphans(env, s, dirs)
+		if err != nil {
+			logf(env, stepCorruptChunks, "scan-held-quarantine", nil, err)
+			out.Deferred = true
 			continue
 		}
-		guard := hook.LiveLineGuard(env.Policy, s.Namespace)
+		if !dirty && len(held) == 0 {
+			continue
+		}
+		guard := lineGuard(env.Policy, s.Namespace)
 		busy, err := audit.TryWithStreamLock(env.Policy, s, func() error {
 			for _, dir := range dirs {
 				repairDir(ctx, env, &out, s, dir, guard)
 			}
+			recoverHeld(env, &out, s, dirs, guard)
 			return nil
 		})
 		if err != nil {
@@ -105,13 +118,16 @@ func dirNeedsRepair(dir string, s audit.Stream) (bool, error) {
 	return len(damaged) > 0, err
 }
 
-// repairDir drives one directory to a clean scan under the stream lock.
+// repairDir drives one directory to a clean scan under the stream lock. A pass
+// that repairs nothing is permanent (a residual); running out of passes while
+// each made progress is transient (deferred).
 func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir string, guard audit.LineGuard) {
 	for pass := 0; pass < maxRepairPasses; pass++ {
 		if ctx.Err() != nil {
 			out.Deferred = true
 			return
 		}
+		before := out.Items
 		_, err := audit.ScanSealedDir(dir, s.Namespace, s.Session)
 		var orphan *audit.OrphanCorruptError
 		switch {
@@ -136,16 +152,109 @@ func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir s
 			}
 		default:
 			logf(env, stepCorruptChunks, "scan-chunks", []string{dir}, err)
-			out.Deferred = true
+			if reason, ok := permanentScanReason(err); ok {
+				out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
+			} else {
+				out.Deferred = true
+			}
+			return
+		}
+		if out.Items == before {
+			logf(env, stepCorruptChunks, "repair-pass-no-progress", []string{dir}, nil)
+			out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: "archive directory still refused after a repair pass that changed nothing"})
 			return
 		}
 	}
 	logf(env, stepCorruptChunks, "repair-passes-exhausted", []string{dir}, nil)
-	out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: "archive directory still refused after repair"})
+	out.Deferred = true
 }
 
-// repairOrphan resolves one OrphanCorruptError by what is on disk. It returns
-// false when the step must stop on this directory (the condition is recorded).
+// permanentScanReason classifies a scan error no later run can change: a
+// malformed chunk name or a non-regular file where an artifact belongs. Any
+// other error (a permission or I/O failure) may pass, and is left transient.
+// The reason names the class, never a path.
+func permanentScanReason(err error) (string, bool) {
+	var name *audit.MalformedChunkNameError
+	var file *audit.NotRegularFileError
+	switch {
+	case errors.As(err, &name):
+		return "archive directory holds a malformed chunk name", true
+	case errors.As(err, &file):
+		return "archive directory holds an artifact that is not a regular file", true
+	}
+	return "", false
+}
+
+// heldOrphans lists the raw bytes QuarantineLocal held for s that no valid
+// retirement record in dirs references: their retirement record is gone or
+// unusable, and nothing else will ever recover them.
+func heldOrphans(env Env, s audit.Stream, dirs []string) ([]string, error) {
+	heldDir := audit.HeldQuarantineDir(env.Policy, s)
+	entries, err := os.ReadDir(heldDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	referenced := map[string]bool{}
+	for _, dir := range dirs {
+		des, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range des {
+			if _, kind := audit.Classify(e.Name(), s.Namespace); kind != audit.KindCorrupt || !e.Type().IsRegular() {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			if sha, ok := audit.RetirementRecordSHA(b); ok {
+				referenced[sha] = true
+			}
+		}
+	}
+	var out []string
+	for _, e := range entries {
+		sha, ok := strings.CutSuffix(e.Name(), ".corrupt")
+		if ok && e.Type().IsRegular() && !referenced[sha] {
+			out = append(out, filepath.Join(heldDir, e.Name()))
+		}
+	}
+	return out, nil
+}
+
+// recoverHeld recovers every orphaned held raw file of s through the guard and
+// deletes it only once its redacted replacement and marker exist.
+func recoverHeld(env Env, out *Outcome, s audit.Stream, dirs []string, guard audit.LineGuard) {
+	held, err := heldOrphans(env, s, dirs)
+	if err != nil {
+		logf(env, stepCorruptChunks, "scan-held-quarantine", nil, err)
+		out.Deferred = true
+		return
+	}
+	for _, h := range held {
+		res, err := audit.RecoverHeldQuarantine(env.Policy, s, h, guard)
+		if err != nil {
+			residual(env, out, h, "held quarantine bytes could not be recovered", err)
+			continue
+		}
+		logf(env, stepCorruptChunks, fmt.Sprintf("recover-held-quarantine salvaged=%d gap=%t", res.Salvaged, res.Lost), []string{h, res.Replacement}, nil)
+		out.Items++
+	}
+}
+
+// repairOrphan resolves one OrphanCorruptError by what is on disk. A valid
+// retirement record always resumes QuarantineLocal, whatever the source is
+// (absent, a same-name replacement, damaged): that is the only path that
+// knows the raw bytes it holds. Anything else is legacy raw bytes, recovered
+// through the guard with the surviving chunks as evidence. It returns false
+// when the step must stop on this directory (the condition is recorded).
 func repairOrphan(env Env, out *Outcome, s audit.Stream, e *audit.OrphanCorruptError, guard audit.LineGuard) bool {
 	cn, kind := audit.Classify(filepath.Base(e.Chunk), s.Namespace)
 	if kind != audit.KindValid {
@@ -160,21 +269,11 @@ func repairOrphan(env Env, out *Outcome, s audit.Stream, e *audit.OrphanCorruptE
 	if sourcePresent && !sourceInfo.Mode().IsRegular() {
 		return residual(env, out, e.Chunk, "source chunk is not a regular file", nil)
 	}
-	if sourcePresent {
-		if _, err := audit.ReadChunkVerified(e.Chunk, cn.Last); err != nil {
-			// Damaged source beside a retirement artifact: recover the source;
-			// the artifact is handled on the next pass.
-			return salvage(env, out, s, e.Chunk, cn, guard)
-		}
-		// A valid source is the authority for its stem; the stale .corrupt is
-		// covered with a no-gap marker and deleted.
-		return coverStaleCorrupt(env, out, s, corrupt, cn)
-	}
 	b, err := os.ReadFile(corrupt)
 	if err != nil {
 		return residual(env, out, corrupt, "retired bytes cannot be read", err)
 	}
-	if isRetirementRecord(b) {
+	if _, ok := audit.RetirementRecordSHA(b); ok {
 		// An interrupted QuarantineLocal (pending or missing marker): resume it.
 		_, err := audit.QuarantineLocal(env.Policy, s, e.Chunk, e.Dir, cn, orphanReason, guard)
 		if err != nil {
@@ -184,8 +283,17 @@ func repairOrphan(env Env, out *Outcome, s audit.Stream, e *audit.OrphanCorruptE
 		out.Items++
 		return true
 	}
-	// Legacy raw .corrupt from the old rename-based quarantine: salvage its
-	// bytes into the local archive under a covering marker and delete it.
+	if sourcePresent {
+		if _, err := audit.ReadChunkVerified(e.Chunk, cn.Last); err != nil {
+			// Damaged source beside legacy bytes: recover the source; the
+			// legacy bytes are handled on the next pass.
+			return salvage(env, out, s, e.Chunk, cn, guard)
+		}
+	}
+	// Legacy raw .corrupt (the old rename-based quarantine, or a retirement
+	// record that does not parse): recover its decodable lines into the local
+	// archive, record what is lost, and delete it. A valid same-stem chunk is
+	// evidence, not a reason to skip the recovery.
 	return salvage(env, out, s, corrupt, cn, guard)
 }
 
@@ -204,34 +312,6 @@ func salvage(env Env, out *Outcome, s audit.Stream, source string, cn audit.Chun
 		out.Items++
 	}
 	return true
-}
-
-// coverStaleCorrupt writes a no-gap marker for a .corrupt whose valid source is
-// present, then deletes the stale bytes.
-func coverStaleCorrupt(env Env, out *Outcome, s audit.Stream, corrupt string, cn audit.ChunkName) bool {
-	m := audit.Marker{Chunk: cn.Stem(), VerifiedLast: cn.Last, Reason: "stale retirement artifact beside its valid chunk"}
-	b, err := audit.MarshalMarker(m)
-	if err != nil {
-		return residual(env, out, corrupt, "marker could not be encoded", err)
-	}
-	if err := audit.ReplaceLocalFile(env.Policy, filepath.Join(filepath.Dir(corrupt), cn.MarkerFile()), b); err != nil {
-		return residual(env, out, corrupt, "covering marker could not be written", err)
-	}
-	if err := os.Remove(corrupt); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return residual(env, out, corrupt, "stale .corrupt could not be deleted", err)
-	}
-	logf(env, stepCorruptChunks, "cover-stale-corrupt", []string{corrupt}, nil)
-	out.Items++
-	return true
-}
-
-// isRetirementRecord reports whether b is the JSON record QuarantineLocal
-// writes in place of retired bytes, as opposed to legacy raw bytes.
-func isRetirementRecord(b []byte) bool {
-	var rec struct {
-		Withheld string `json:"withheld"`
-	}
-	return json.Unmarshal(b, &rec) == nil && rec.Withheld != ""
 }
 
 // residual records a permanent condition and stops work on its directory.

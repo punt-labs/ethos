@@ -90,7 +90,7 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 			}
 			corrupts = append(corrupts, cn)
 		case KindNearMiss:
-			return ScannedDir{}, fmt.Errorf("malformed chunk name %q in %s", e.Name(), dir)
+			return ScannedDir{}, &MalformedChunkNameError{Name: e.Name(), Dir: dir}
 		case KindTemp, KindOther:
 			// Stale temps are swept elsewhere; siblings are never the seal's concern.
 		}
@@ -103,6 +103,14 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 		}
 	}
 	return sc, nil
+}
+
+// MalformedChunkNameError is an entry that carries the chunk prefix but does
+// not parse. No repair changes the name, so it is permanent.
+type MalformedChunkNameError struct{ Name, Dir string }
+
+func (e *MalformedChunkNameError) Error() string {
+	return fmt.Sprintf("malformed chunk name %q in %s", e.Name, e.Dir)
 }
 
 // OrphanCorruptError is a .corrupt whose quarantine never finished. Chunk is

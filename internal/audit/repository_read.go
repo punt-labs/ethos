@@ -423,6 +423,14 @@ func readAuditArtifactDir(dir string, ns Namespace, session string) ([]os.DirEnt
 	return entries, nil
 }
 
+// NotRegularFileError is a symlink, directory or special file where an audit
+// artifact belongs. It is a property of the tree, not a passing condition.
+type NotRegularFileError struct{ Path string }
+
+func (e *NotRegularFileError) Error() string {
+	return fmt.Sprintf("audit read file %s is not a physical regular file", e.Path)
+}
+
 // auditReadFilePresent accepts only a readable physical regular file. Lstat
 // distinguishes a genuinely missing leaf from a dangling link before an open
 // could turn the latter into absence. Opening read-only also checks permission
@@ -441,7 +449,7 @@ func auditReadFilePresent(path string) (bool, error) {
 		return false, fmt.Errorf("examining audit read file %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("audit read file %s is not a physical regular file", path)
+		return false, &NotRegularFileError{Path: path}
 	}
 	f, err := os.Open(path)
 	if err != nil {

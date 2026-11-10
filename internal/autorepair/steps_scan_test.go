@@ -46,9 +46,20 @@ func treeSnapshot(t *testing.T, root string) map[string]string {
 // outcome is empty and the local tree's file list and bytes are unchanged.
 func assertSecondRunChangesNothing(t *testing.T, run func(context.Context, Env) (Outcome, error), env Env) {
 	t.Helper()
-	before := treeSnapshot(t, env.Policy.LocalRoot())
+	roots := []string{env.Policy.LocalRoot(), env.Roots.Store}
+	if env.Roots.Checkout != env.Roots.Store {
+		roots = append(roots, env.Roots.Checkout)
+	}
+	snap := func() []map[string]string {
+		var out []map[string]string
+		for _, r := range roots {
+			out = append(out, treeSnapshot(t, r))
+		}
+		return out
+	}
+	before := snap()
 	assert.Equal(t, Outcome{}, runStep(t, run, env), "second run reports nothing")
-	assert.Equal(t, before, treeSnapshot(t, env.Policy.LocalRoot()), "second run changes no file")
+	assert.Equal(t, before, snap(), "second run changes no file in the local root, the store or the checkout")
 }
 
 func assertStreamClean(t *testing.T, env Env, s audit.Stream, dir string) {

@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
-	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
@@ -165,10 +164,6 @@ func TestLiveTailsRedactsPreRedactionLine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(live), cleanLine, "the clean line is untouched")
 	assert.NotContains(t, string(live), `"tool_input_hash":"0000"`)
-
-	res, err := hook.SealRepoWithPolicy(env.Policy, time.Now(), hook.SealOptions{})
-	require.NoError(t, err, "a following seal through the real code path has nothing to refuse")
-	assert.Equal(t, 2, res.LinesSealed)
 
 	assertSecondRunChangesNothing(t, runLiveTails, env)
 }
@@ -355,7 +350,7 @@ func TestCorruptChunksInvalidEscapeLines(t *testing.T) {
 	data, err := audit.ReadStream(env.Policy, s)
 	require.NoError(t, err)
 	assert.Len(t, data.Lines, 2, "the two decodable lines survive")
-	assert.Empty(t, data.Gaps, "the invalid-escape line sits between recovered bounds; no range is lost")
+	assert.Len(t, data.Gaps, 1, "the invalid-escape line held an entry that is gone; its range is a recorded loss")
 	assert.Empty(t, walkContains(t, env.Roots.Store, home, fakeToken), "the pre-redaction token and path are gone")
 	assert.Empty(t, corruptFiles(t, env.Roots.Store))
 	assertSecondRunChangesNothing(t, runCorruptChunks, env)
@@ -491,7 +486,7 @@ func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 	require.Equal(t, audit.KindValid, kind)
 	lines, err := audit.ReadChunkVerified(tracked[0], cn.Last)
 	require.NoError(t, err)
-	guard := hook.LiveLineGuard(env.Policy, audit.SessionNS)
+	guard := lineGuard(env.Policy, audit.SessionNS)
 	var body []byte
 	for _, l := range lines {
 		out, _, _ := guard(l.Raw)

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 const stepLiveTails = "live-tails"
@@ -18,8 +20,9 @@ func init() { Register(Step{Name: stepLiveTails, Scope: ScopeRepository, Run: ru
 // redaction (before v4.20.0) are rewritten through the guard, and a line whose
 // ts is already archived with another payload is dropped because the archive
 // wins. Items counts lines rewritten plus lines dropped. A stream whose
-// archive the scan refuses, or whose lock is held, is deferred to the next
-// Ensure; this step records no residuals.
+// archive the scan transiently refuses, or whose lock is held, is deferred to
+// the next Ensure; a malformed chunk name or non-regular file in the archive
+// is a residual, because no later run changes it.
 func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 	var out Outcome
 	if !env.InRepository() {
@@ -46,7 +49,11 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 		clean, err := archiveScansClean(env, s)
 		if err != nil {
 			logf(env, stepLiveTails, "scan-archive", []string{live}, err)
-			out.Deferred = true
+			if reason, ok := permanentScanReason(err); ok {
+				out.Residuals = append(out.Residuals, Residual{Step: stepLiveTails, ID: filepath.Base(live), Reason: reason})
+			} else {
+				out.Deferred = true
+			}
 			continue
 		}
 		if !clean {
@@ -57,7 +64,7 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 		var res audit.LiveRepair
 		busy, err := audit.TryWithStreamLock(env.Policy, s, func() error {
 			var err error
-			res, err = audit.RedactLive(env.Policy, s, hook.LiveLineGuard(env.Policy, s.Namespace))
+			res, err = audit.RedactLive(env.Policy, s, lineGuard(env.Policy, s.Namespace))
 			return err
 		})
 		switch {
@@ -82,6 +89,13 @@ func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
 		out.Items += res.Rewritten + len(res.Dropped)
 	}
 	return out, nil
+}
+
+// lineGuard is the one place this package names the hook package's guard; the
+// integration retargets it to internal/lineguard so autorepair never imports
+// internal/hook.
+func lineGuard(p layout.Policy, ns audit.Namespace) audit.LineGuard {
+	return hook.LiveLineGuard(p, ns)
 }
 
 // logf records one action when the engine supplied a logger.
