@@ -249,10 +249,10 @@ var writerRegistry = map[string]writerEntry{
 	"internal/audit.StagePublication": exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
 
 	// Repository ADRs are in scope; standalone global ADRs share these helpers.
-	"internal/adr.Store.withLock": exempt(reasonLock),
-	"internal/adr.Store.prepare":  checkpoint("Record", "Prose", "LeakRule"),
-	"internal/adr.Store.write":    checkpoint("prepare", "Marshal", "publish"),
-	"internal/adr.Store.publish":  sink(1, "data is argument 1; Store.write marshals only Store.prepare output after shared redaction and leak checking"),
+	"internal/adr.Store.withLock":   exempt(reasonLock),
+	"internal/adr.Store.prepare":    checkpoint("Record", "Prose", "LeakRule"),
+	"internal/adr.Store.writeQuiet": checkpoint("prepare", "Marshal", "publish"),
+	"internal/adr.Store.publish":    sink(1, "data is argument 1; Store.write marshals only Store.prepare output after shared redaction and leak checking"),
 
 	// Publication's selected records are guarded by RedactPublicationSnapshot.
 	// Do not classify publishLocked as downstream: it also merges existing

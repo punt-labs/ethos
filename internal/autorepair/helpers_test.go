@@ -1,6 +1,9 @@
 package autorepair
 
 import (
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -58,6 +61,37 @@ func copyTree(t *testing.T, src, dst string) {
 		return out.Close()
 	})
 	require.NoError(t, err)
+}
+
+// treeDigest maps every regular file under root (relative path) to the hex
+// SHA-256 of its bytes, so a test can assert a second run changed nothing.
+// Lock files are excluded: step 15 owns them and a lock may be recreated.
+func treeDigest(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || filepath.Ext(p) == ".lock" {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		out[rel] = fmt.Sprintf("%x", sha256.Sum256(b))
+		return nil
+	})
+	require.NoError(t, err)
+	return out
 }
 
 // corpusEnv copies one corpus snapshot into a temp dir and returns an Env
