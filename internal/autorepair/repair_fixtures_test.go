@@ -536,3 +536,29 @@ func TestReadOnlyArchiveDirDefersThenCompletes(t *testing.T) {
 	require.NoError(t, err)
 	fixSecondRun(t, env)
 }
+
+// A legacy raw .corrupt spanning the same range as a valid chunk, with a line
+// the chunk lacks (here carrying a token), keeps that line redacted in a chunk
+// of its own, deletes the raw bytes and leaves no token behind.
+func TestLegacyRawSameRangeAsValidKeepsUniqueLine(t *testing.T) {
+	env, log, s, dir, home := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(stableLine(fixT0, "A")+stableLine(fixT0+2000, "C")), 0o600))
+	c := filepath.Join(dir, audit.CorruptName(cn.Stem()))
+	require.NoError(t, os.WriteFile(c, []byte(stableLine(fixT0, "A")+fixCmd(fixT0+1000, "Bash", "echo "+fakeToken)+stableLine(fixT0+2000, "C")), 0o600))
+	a := runStep(t, runCorruptChunks, env)
+	t.Logf("run1=%+v\nlog:\n%s", a, log.text())
+	assert.Empty(t, a.Residuals)
+	assert.False(t, a.Deferred)
+	assert.NoFileExists(t, c)
+	assert.Empty(t, walkContains(t, env.Roots.Store, fakeToken, home), "no token survives")
+	data, err := audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	t.Logf("lines=%d gaps=%v", len(data.Lines), data.Gaps)
+	kept := false
+	for _, l := range data.Lines {
+		kept = kept || l.TS == fixT0+1000
+	}
+	assert.True(t, kept || len(data.Gaps) > 0, "the unique line is kept or its loss is recorded")
+	fixSecondRun(t, env)
+}

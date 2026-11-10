@@ -3,6 +3,7 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,6 +154,13 @@ func installRecovered(p layout.Policy, dir string, cn ChunkName, keep []Line, so
 	}
 	re := ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: keep[0].TS, Last: keep[len(keep)-1].TS}
 	dest := filepath.Join(dir, re.ChunkFile())
+	if dest != source {
+		if rest, ok, err := linesMissingFromHeldChunk(dest, keep); err != nil {
+			return "", err
+		} else if ok {
+			return installEachLine(p, dir, cn, rest, source, dest)
+		}
+	}
 	var body bytes.Buffer
 	for _, l := range keep {
 		body.Write(l.Raw)
@@ -179,6 +187,75 @@ func installRecovered(p layout.Policy, dir string, cn ChunkName, keep []Line, so
 		return "", fmt.Errorf("replacement %s for chunk %s does not read back: %w", dest, source, err)
 	}
 	return dest, nil
+}
+
+// linesMissingFromHeldChunk handles a replacement whose name is already taken
+// by a readable chunk with different content: it returns ok and the lines of
+// keep that chunk lacks. When dest is absent, or holds exactly the replacement,
+// ok is false and the ordinary install applies.
+func linesMissingFromHeldChunk(dest string, keep []Line) ([]Line, bool, error) {
+	info, err := os.Lstat(dest)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("examining %s: %w", dest, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	existing, err := os.ReadFile(dest)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", dest, err)
+	}
+	var body bytes.Buffer
+	for _, l := range keep {
+		body.Write(l.Raw)
+		body.WriteByte('\n')
+	}
+	if bytes.Equal(existing, body.Bytes()) {
+		return nil, false, nil
+	}
+	lines, err := DecodeChunkStrict(existing, dest)
+	if err != nil {
+		return nil, false, nil // damaged: the ordinary install reports the conflict
+	}
+	held := map[int64]bool{}
+	for _, l := range lines {
+		held[l.TS] = true
+	}
+	var rest []Line
+	for _, l := range keep {
+		if !held[l.TS] {
+			rest = append(rest, l)
+		}
+	}
+	return rest, true, nil
+}
+
+// installEachLine installs every line of rest as its own one-line chunk, so no
+// name can collide with the chunk that already holds the neighbors. It returns
+// the path of the chunk that took the place of the replacement: first of rest,
+// or existing when rest is empty (the existing chunk already holds every line).
+func installEachLine(p layout.Policy, dir string, cn ChunkName, rest []Line, source, existing string) (string, error) {
+	if len(rest) == 0 {
+		return existing, nil
+	}
+	first := ""
+	for _, l := range rest {
+		one := ChunkName{Namespace: cn.Namespace, Session: cn.Session, First: l.TS, Last: l.TS}
+		path := filepath.Join(dir, one.ChunkFile())
+		if err := WriteLocalAtomic(p, path, append(append([]byte{}, l.Raw...), '\n')); err != nil {
+			return "", fmt.Errorf("installing replacement for chunk %s: %w", source, err)
+		}
+		if _, err := ReadChunkVerified(path, one.Last); err != nil {
+			return "", fmt.Errorf("replacement %s for chunk %s does not read back: %w", path, source, err)
+		}
+		if first == "" {
+			first = path
+		}
+	}
+	return first, nil
 }
 
 // publishedSource reports whether source lies outside the local archive, in
