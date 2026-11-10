@@ -336,8 +336,8 @@ func TestRepositoryQuarantineIsLocalAndResumable(t *testing.T) {
 		t.Fatal("inspection corruption failure hidden")
 	}
 	marker, err := QuarantineChunkWithPolicy(p, paths[0], "fixture corruption")
-	if err != nil || marker.HasGap() {
-		t.Fatalf("quarantine=%+v %v", marker, err)
+	if err != nil || !marker.HasGap() {
+		t.Fatalf("quarantine=%+v %v: the undecodable bytes are a recorded loss", marker, err)
 	}
 	if _, err := QuarantineChunkWithPolicy(p, paths[0], "fixture corruption"); err != nil {
 		t.Fatal(err)

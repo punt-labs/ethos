@@ -98,7 +98,7 @@ func TestRepositoryQuarantineSameByteRetirementResumes(t *testing.T) {
 			}
 			m, err := QuarantineLocal(p, s, source, dir, cn, "second", guard)
 			require.NoError(t, err)
-			require.False(t, m.HasGap(), "pending retirement must not invent a permanent gap")
+			require.True(t, m.HasGap(), "the same undecodable damage is recorded as a loss again; the retry never narrows it")
 			require.Equal(t, int64(200), m.VerifiedLast)
 			require.Equal(t, prior.RetiredSHA256, m.RetiredSHA256, "evidence remains content-addressed")
 			recovered, err = os.ReadFile(source)
@@ -107,7 +107,7 @@ func TestRepositoryQuarantineSameByteRetirementResumes(t *testing.T) {
 			data, err := ReadStream(p, s)
 			require.NoError(t, err)
 			require.Len(t, data.Lines, 2)
-			require.Empty(t, data.Gaps)
+			require.NotEmpty(t, data.Gaps, "the loss stays recorded")
 			files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
 			require.NoError(t, err)
 			require.Empty(t, files, "the damaged bytes are deleted once recovery completes")
