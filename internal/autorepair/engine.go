@@ -384,7 +384,9 @@ func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layou
 		case errors.Is(err, errAbandoned):
 			log.Logf(s.Name, "defer", nil, err)
 			log.Logf(s.Name, "stop", nil, fmt.Errorf("pass stopped after abandoned step %s", s.Name))
-			block(served)
+			// The steps after this one are skipped, so every target the pass
+			// could serve stays unstamped, not just this step's.
+			block(serves(ScopeBoth, g, r))
 			res.Repaired = res.Items > 0
 			return res
 		case errors.Is(err, errInFlight):
