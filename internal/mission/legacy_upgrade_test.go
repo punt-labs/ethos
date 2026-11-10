@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -169,6 +170,10 @@ func TestLoadReportContractWithoutWriteSetOnAHostWithoutTheArchetype(t *testing.
 	p, err := layout.NewRepository(root, root, layout.RecordBlame)
 	require.NoError(t, err)
 	s := NewRepositoryStore(p, t.TempDir()) // no archetypes dir in either tree
+	// The mission test binary does not link internal/seed; register the one
+	// archetype this test needs the way seed does at init.
+	SetEmbeddedArchetypes(fstest.MapFS{"sidecar/archetypes/report.yaml": &fstest.MapFile{Data: []byte("name: report\nallow_empty_write_set: true\n")}})
+	t.Cleanup(func() { SetEmbeddedArchetypes(nil) })
 	c := newContract("m-2026-09-06-009")
 	c.Type = "report"
 	c.WriteSet = nil

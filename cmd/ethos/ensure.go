@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/seed"
 	"slices"
 	"sync/atomic"
 
@@ -85,3 +87,10 @@ func ensureForCommand(cmd *cobra.Command, r *repoRoots) *repoRoots {
 	fresh.Global = r.Global
 	return fresh
 }
+
+// The archetypes ethos ships are the last layer of mission archetype
+// resolution: a contract keeps the rules its type carried when created, on a
+// host whose repository and global trees never seeded that archetype.
+// Registered here because internal/seed and internal/mission each have tests
+// that import the other, so neither may import the other in production.
+func init() { mission.SetEmbeddedArchetypes(seed.Archetypes) }
