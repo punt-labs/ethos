@@ -87,6 +87,8 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 		"PATH=" + os.Getenv("PATH"),
 	}
 
+	stampFixture(t, home, repo)
+
 	return &cliSubprocessEnv{home: home, repo: repo, env: env}
 }
 

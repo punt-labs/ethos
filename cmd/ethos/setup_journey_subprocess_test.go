@@ -37,6 +37,7 @@ func freshCLIEnv(t *testing.T, humanHandle string) *cliSubprocessEnv {
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
+	stampFixture(t, home, repo)
 	return &cliSubprocessEnv{home: home, repo: repo, env: env}
 }
 
