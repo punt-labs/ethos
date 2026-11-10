@@ -20,6 +20,12 @@ type localRetirement struct {
 	VerifiedLast  int64  `json:"verified_last"`
 }
 
+// NewLocalRetirementRecord returns the bytes of a local retirement record for
+// raw bytes with the given digest, size and newest verified ts.
+func NewLocalRetirementRecord(sumHex string, size int, verifiedLast int64) ([]byte, error) {
+	return json.Marshal(localRetirement{Withheld: localRetirementWithheld, SHA256: sumHex, Size: size, VerifiedLast: verifiedLast})
+}
+
 const localRetirementWithheld = "raw corrupt bytes retained locally"
 
 func (r localRetirement) validate() error {

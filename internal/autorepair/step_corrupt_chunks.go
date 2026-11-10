@@ -360,7 +360,7 @@ type damagedChunk struct {
 }
 
 // legacyCorrupts lists the regular-file .corrupt files in dir whose bytes are
-// not a valid local retirement record: raw bytes an older binary left behind,
+// not a retirement or withheld record: raw bytes an older binary left behind,
 // which a covering marker does not make safe to keep.
 func legacyCorrupts(dir string, s audit.Stream) ([]damagedChunk, error) {
 	entries, err := os.ReadDir(dir)
@@ -381,7 +381,7 @@ func legacyCorrupts(dir string, s audit.Stream) ([]damagedChunk, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := audit.RetirementRecordSHA(b); !ok {
+		if _, ok := audit.RetirementRecordSHA(b); !ok && !audit.IsWithheldRecord(b) {
 			out = append(out, damagedChunk{path, cn})
 		}
 	}

@@ -509,6 +509,13 @@ func IsWithheldRecord(b []byte) bool {
 	return err == nil && bytes.Equal(b, rebuilt)
 }
 
+// NewWithheldRecord returns the bytes of a tracked-tree withheld record for
+// raw bytes with the given digest and size; ts is the newest ts they held, or
+// negative for none.
+func NewWithheldRecord(sumHex string, size int, ts int64) ([]byte, error) {
+	return recordBytes(sumHex, size, WithheldRule, ts)
+}
+
 // recordBytes is the one encoding of a record: the fields, ts only when it is
 // not negative, as one line.
 func recordBytes(sumHex string, size int, rule string, ts int64) ([]byte, error) {
