@@ -70,7 +70,7 @@ func TestCLI_SessionStart_ThenIam(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	id := startedSessionID(t, se)
 
-	_, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+id), "iam", "test-agent")
+	_, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+id), "session", "iam", "test-agent")
 	assert.Equal(t, 0, code, "iam under ETHOS_SESSION should exit 0; stderr=%s", stderr)
 }
 

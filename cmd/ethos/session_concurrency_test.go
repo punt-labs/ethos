@@ -97,7 +97,7 @@ func TestCLI_ConcurrentIam_FlockNoLoss(t *testing.T) {
 			defer wg.Done()
 			// Distinct agent id per join, so each is a separate participant.
 			sh := withSession(se, id, "agent-"+string(rune('a'+i)))
-			_, _, codes[i], errs[i] = spawnCLI(sh, "iam", "persona-"+string(rune('a'+i)))
+			_, _, codes[i], errs[i] = spawnCLI(sh, "session", "iam", "persona-"+string(rune('a'+i)))
 		}(i)
 	}
 	wg.Wait()
