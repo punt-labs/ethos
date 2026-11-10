@@ -15,7 +15,7 @@ on demand, close it when done.
    - **"No identity resolved"**: run `ethos setup` (below).
 
 Seed, enable and setup below can be re-run to refresh integration/content.
-The separately confirmed legacy repair is destructive, not a migration.
+Older storage layouts need no step here: ethos upgrades them itself.
 
 ## `ethos seed` — populate global starter content (once per machine)
 
@@ -73,12 +73,11 @@ ethos setup --file config.yaml     # non-interactive, from a config file
 The wizard's identity graph and configuration are intended for Git — stage
 and commit them explicitly so they are shared with the rest of the team.
 
-## Storage policy (DES-079; acceptance pending)
+## Storage policy (DES-079)
 
-DES-080 redaction shipped in v4.20.0. DES-079 storage-boundary behavior is a
-required repair contract, not yet a verified release guarantee. See the
+See the
 [storage and publication contract](https://github.com/punt-labs/ethos/blob/main/docs/storage-layout.md)
-for paths and outstanding acceptance.
+for paths and the test that proves each promise.
 
 Resolve the canonical store root **S** through Git's common directory,
 separately from the invoking checkout **C**. S owns shared source/blame records
@@ -117,15 +116,23 @@ record: blame   # default if omitted; full opts in prospectively
 
 ### Automatic storage upgrade
 
-Ethos upgrades its own storage. On the first run after an upgrade it relocates
-recognized legacy data into the shared local zone and records what it did in a
-repair log under `~/.punt-labs/ethos/`. No command is needed, and none exists.
+Ethos upgrades its own storage. Every CLI command, hook and MCP call first
+checks a stamp (`S/.punt-labs/local/ethos/layout.yaml` and
+`~/.punt-labs/ethos/layout.yaml`); when a stamp is missing, ethos converts
+older layouts into the shared local zone and appends what it did to
+`~/.punt-labs/ethos/logs/repair.log`. The only output is one line, and only
+when something changed:
+
+`ethos: upgraded storage (N items; see ~/.punt-labs/ethos/logs/repair.log)`
+
+No command is needed, and none exists. A busy lock defers the upgrade to the
+next run. Losses are logged, never fatal.
 
 Shared identities, contracts, results, corrections, provenance and ADRs,
-private credentials and overlays, configuration, global data and agent-owned
-files are never moved or deleted. Ethos performs no Git staging or commit;
-review tracked changes and commit normally. Reconnect long-lived MCP servers
-after an upgrade so they run the new binary.
+private credentials, configuration, global data and agent-owned files are never
+moved or deleted. Ethos performs no Git staging or commit; review tracked
+changes and commit normally. Reconnect long-lived MCP servers after installing
+a new binary so they run it.
 
 ## Verify
 
