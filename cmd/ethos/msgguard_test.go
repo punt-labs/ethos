@@ -31,7 +31,7 @@ var bannedMessageTerms = []string{
 	// Instructions to the user, whatever the command.
 	"re-run", "rerun", "inspect before", "add it before", "file a bug", "check file",
 	// Remedies git lookups once appended to their cause.
-	"install git", "fix safe.directory", "point ETHOS_REPO_ROOT", "and repair it",
+	"install git", "fix safe.directory", "point ethos_repo_root", "and repair it",
 }
 
 // bannedExtraPatterns are banned shapes a plain term cannot express.
@@ -76,12 +76,19 @@ var bannedPatterns = func() []*regexp.Regexp {
 	return out
 }()
 
-// spaceClass is what a space in a term matches: whitespace, any Unicode
-// space (non-breaking, ideographic), any dash (hyphen, en, em), underscore,
-// quotes, backtick, parentheses, a backslash, format characters, or a bare
-// colon ("ethos:repair"; "ethos: seed" is an error prefix and passes). regexp's \s is
+// spaceClass is what a space in a term matches: one or more of whitespace,
+// any Unicode space (non-breaking, ideographic), any dash (hyphen, en, em),
+// underscore, quotes, backtick, parentheses, a backslash, format characters,
+// or a colon, in any order and count ("ethos:repair", "ethos :repair",
+// "ethos::repair", "ethos: repair"). The error-prefix form "ethos: <word>:" at
+// the start of a literal is exempted by errorPrefix, not here. regexp's \s is
 // ASCII-only, so the Unicode classes are spelled out.
-const spaceClass = `(?:[\s\p{Z}\p{Pd}\p{Cf}_'"` + "`" + `()\\]+|:)`
+const spaceClass = `(?:[\s\p{Z}\p{Pd}\p{Cf}_'"` + "`" + `()\\:])+`
+
+// errorPrefix is the one colon form a message may carry: a literal that opens
+// with "ethos: <word>:" is an error prefix (program: context: what failed), so
+// the prefix is dropped before the terms are matched.
+var errorPrefix = regexp.MustCompile(`^ethos: [a-z][a-z-]*:`)
 
 // termPattern quotes term for a regexp, except that each space in the term
 // matches spaceClass. "ethos repair" then matches "ethos  repair",
@@ -201,7 +208,7 @@ func stripFormat(s string) string {
 }
 
 func bannedIn(s string) string {
-	norm := normalize(s)
+	norm := errorPrefix.ReplaceAllString(normalize(s), "")
 	for _, low := range []string{norm, stripFormat(norm)} {
 		for i, re := range bannedPatterns {
 			if re.MatchString(low) {
@@ -435,7 +442,7 @@ func TestMessageGuardMatchesBannedTerms(t *testing.T) {
 			t.Errorf("%q has no reason and must not be allowed", line)
 		}
 	}
-	for _, ok := range []string{"restart Claude Code to load new agents", "searching identities by handle", "handheld", "handle-based", "Manage session roster. Methods: roster, join", "show the session roster"} {
+	for _, ok := range []string{"ethos: seed: failed to write", "restart Claude Code to load new agents", "searching identities by handle", "handheld", "handle-based", "Manage session roster. Methods: roster, join", "show the session roster"} {
 		if bannedIn(ok) != "" {
 			t.Errorf("%q must pass", ok)
 		}
@@ -455,6 +462,10 @@ func TestMessageGuardUnicodeAndPunctuation(t *testing.T) {
 		"please re\ufeffrun the command",
 		"ethos \\\nrepair",
 		"ethos:repair",
+		"ethos: repair",
+		"ethos :repair",
+		"ethos::repair",
+		"run ethos: seed",
 	} {
 		if bannedIn(s) == "" {
 			t.Errorf("%q evades the guard", s)
@@ -471,7 +482,7 @@ func TestMessageGuardEvasionsInSource(t *testing.T) {
 		want int
 	}{
 		{"function-local const", "package p\nfunc f() string {\n\tconst hint = \"hooks stale; run ethos repair\"\n\treturn hint\n}\n", 1},
-		{"exported const used via selector", "package p\nconst ProbeRemedy = \"hooks stale; run ethos repair\"\n", 1},
+		{"exported const declaration", "package p\nconst ProbeRemedy = \"hooks stale; run ethos repair\"\n", 1},
 		{"marker inside the literal", "package p\nvar s = \"run ethos repair (msgguard: allow anything)\"\n", 1},
 		{"marker on first line of a chain", "package p\nvar s = \"fine\" + // msgguard: allow first line only\n\t\" now run ethos repair\"\n", 1},
 		{"marker comment on the line", "package p\nvar s = \"ethos repair\" // msgguard: allow user choice\n", 0},
@@ -481,5 +492,31 @@ func TestMessageGuardEvasionsInSource(t *testing.T) {
 		if len(got) != c.want {
 			t.Errorf("%s: want %d hits, got %v", c.name, c.want, got)
 		}
+	}
+}
+
+// TestMessageGuardExportedConstAcrossPackages: a const declared in one package
+// and used as doctor.X in another is caught where it is declared. Resolving the
+// use site across packages is out of scope because the declaration is judged:
+// the user-facing text lives in the const, wherever it is printed.
+func TestMessageGuardExportedConstAcrossPackages(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, src string) string {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	decl := write("internal/doctor/hint.go", "package doctor\n\nconst Remedy = \"hooks stale; run ethos repair\"\n")
+	use := write("cmd/ethos/use.go", "package main\n\nimport \"example.com/internal/doctor\"\n\nvar msg = doctor.Remedy\n")
+	if got := goLiteralHits(t, decl, "internal/doctor/hint.go"); len(got) != 1 {
+		t.Errorf("declaration: want 1 hit, got %v", got)
+	}
+	if got := goLiteralHits(t, use, "cmd/ethos/use.go"); len(got) != 0 {
+		t.Errorf("use site: want 0 hits (judged at the declaration), got %v", got)
 	}
 }
