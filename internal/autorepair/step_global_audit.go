@@ -10,6 +10,10 @@ import (
 
 const stepGlobalAudit = "global-audit"
 
+// reasonSharedOwnership is the residual reason for a session whose global
+// copy stays because this repository cannot prove it is the only owner.
+const reasonSharedOwnership = "shared ownership; global copy kept"
+
 func init() {
 	Register(Step{Name: stepGlobalAudit, Scope: ScopeBoth, Run: runGlobalAudit})
 }
@@ -59,6 +63,9 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 			reason = hook.ReasonNoAuditOwner
 		}
 		out.Residuals = append(out.Residuals, Residual{Step: stepGlobalAudit, ID: d.Session, Reason: reason})
+	}
+	for _, id := range res.Unowned {
+		env.Log.Logf(stepGlobalAudit, "other-checkout", []string{file(id)}, nil)
 	}
 	for _, f := range res.Failed {
 		env.Log.Logf(stepGlobalAudit, "import-failed", []string{file(f.Session)}, fmt.Errorf("%s", f.Reason))

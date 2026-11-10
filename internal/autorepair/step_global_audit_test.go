@@ -129,7 +129,7 @@ func TestGlobalAuditStreamOnlyImportsButKeepsGlobal(t *testing.T) {
 // TestGlobalAuditOtherCheckoutStaysGlobal: a roster naming another checkout
 // is another repository's session; nothing is imported and nothing deleted.
 func TestGlobalAuditOtherCheckoutStaysGlobal(t *testing.T) {
-	env, _ := corpusEnv(t, "v3.11.0")
+	env, log := corpusEnv(t, "v3.11.0")
 	rosterCheckout(t, env, corpusSession, filepath.Join(t.TempDir(), "other"))
 	out, err := runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
@@ -137,6 +137,7 @@ func TestGlobalAuditOtherCheckoutStaysGlobal(t *testing.T) {
 	assert.Empty(t, out.Residuals)
 	assert.Empty(t, archivedAudit(t, env, corpusSession))
 	assert.FileExists(t, globalAuditFile(env))
+	assert.Contains(t, log.steps, "global-audit:other-checkout", "the operator has a record of the skipped session")
 }
 
 // TestGlobalAuditNoSignalIsResidual: the v3.11.0 corpus as it is. Its roster

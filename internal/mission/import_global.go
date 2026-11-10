@@ -11,34 +11,36 @@ import (
 	"strings"
 )
 
-// ImportFailure names a global mission ImportGlobalMissions could not move.
+// ImportFailure names a global mission ImportGlobalMissions could not copy.
 // Reason names the file and the cause, never a value from the file.
 type ImportFailure struct {
 	ID     string
 	Reason string
 }
 
+// ReasonRepoCopyDiverged is the reason for a mission already in the
+// repository whose copy no longer equals the redaction of the global files:
+// it was edited after the import, which is legitimate and changes nothing.
+const ReasonRepoCopyDiverged = "repository copy has diverged; global copy kept"
+
 // ImportResult is what ImportGlobalMissions did. Imported lists missions
-// copied into the repository store and verified; Deleted lists the subset
-// whose global files were removed, which requires exclusive ownership;
-// Shared lists imported or already-present missions whose global copy was
-// kept because another repository may own them too; Failed lists missions
-// left in place; Warnings are the non-fatal notes of the ownership scan.
+// newly copied into the repository store and verified; Present lists
+// missions already there whose copy still equals the redacted global files
+// (nothing to do); Diverged lists missions already there whose copy differs
+// from that redaction; Failed lists missions that could not be copied or
+// whose fresh copy did not read back as written; Warnings are the non-fatal
+// notes of the ownership scan. The global files are never changed.
 type ImportResult struct {
 	Imported []string
-	Deleted  []string
-	Shared   []string
+	Present  []string
+	Diverged []string
 	Failed   []ImportFailure
 	Warnings []string
 }
 
-// Test seams. importVerifyHook runs after the rename and before the
-// repository copy is verified; importDeleteHook runs before each global
-// file is removed. Both are nil in production.
-var (
-	importVerifyHook func(repoMissionDir string)
-	importDeleteHook func(path string)
-)
+// importVerifyHook is a test seam that runs after the rename and before the
+// repository copy is verified, inside the lock nest. Nil in production.
+var importVerifyHook func(repoMissionDir string)
 
 // SetImportVerifyHook installs a function that runs between the rename and
 // the verification of each imported mission. It returns the restore.
@@ -48,28 +50,21 @@ func SetImportVerifyHook(fn func(repoMissionDir string)) func() {
 	return func() { importVerifyHook = prev }
 }
 
-// SetImportDeleteHook installs a function that runs before each global file
-// of an imported mission is deleted. It returns the restore.
-func SetImportDeleteHook(fn func(path string)) func() {
-	prev := importDeleteHook
-	importDeleteHook = fn
-	return func() { importDeleteHook = prev }
-}
-
-// ImportGlobalMissions imports every global mission this repository owns
-// (see repoMissionIDs) into the repository store through the redactor and,
-// where the ownership is exclusive, deletes the global copies. It is
+// ImportGlobalMissions copies every global mission this repository owns (see
+// repoMissionIDs) into the repository store through the redactor. It never
+// deletes or changes a global file: a mission may be in use by another
+// repository, and nothing in a global record says which. It is
 // MigrateMission without its output: it prints nothing, keeps going past a
-// mission it cannot move and reports each one in Failed.
+// mission it cannot copy and reports each one in Failed.
 //
-// exclusive is the set of mission IDs whose ownership the caller has proved
-// belongs to this repository alone; a mission owned here but not in that
-// set is imported as a copy and its global files are kept, reported in
-// Shared. A global file is deleted only after the repository copy has been
-// read back and found equal to the redacted bytes that were staged; a
-// mismatch is a Failure and the global files stay. The contract is deleted
-// last so a crash between deletes leaves a candidate the next run finishes.
-func ImportGlobalMissions(globalRoot, repoRoot, checkoutRoot string, exclusive map[string]bool) (ImportResult, error) {
+// Each copy is verified under the same lock nest as the rename: the redacted
+// expectation is computed, the copy staged and renamed, and every artifact
+// read back and compared, all while the global and repository mission locks
+// are held, so a writer to the global mission cannot change it between the
+// read and the check. A fresh copy that does not read back as written is a
+// Failure. A copy already present is compared the same way: equal is
+// Present, different is Diverged.
+func ImportGlobalMissions(globalRoot, repoRoot, checkoutRoot string) (ImportResult, error) {
 	var res ImportResult
 	if repoRoot == "" || globalRoot == "" {
 		return res, fmt.Errorf("import global missions: roots must be set")
@@ -97,51 +92,65 @@ func ImportGlobalMissions(globalRoot, repoRoot, checkoutRoot string, exclusive m
 		if _, ok := owned[id]; !ok {
 			continue
 		}
-		expected, err := expectedImport(r, legacyDir, id)
-		if err != nil {
-			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
-			continue
-		}
-		decision, err := migrateOneMissionQ(legacyDir, repoDir, repoRoot, id, owned, false, true)
-		if err != nil {
-			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
-			continue
-		}
-		repoMissionDir := filepath.Join(repoDir, id)
-		moved := false
+		var verdict importVerdict
+		decision, err := migrateOneMissionQ(legacyDir, repoDir, repoRoot, id, owned, false, true,
+			func(repoMissionDir string, fresh bool) error {
+				v, err := verifyUnderLock(r, legacyDir, id, repoMissionDir, fresh)
+				verdict = v
+				return err
+			})
 		switch {
-		case strings.HasPrefix(decision, "migrate "):
-			moved = true
-			if importVerifyHook != nil {
-				importVerifyHook(repoMissionDir)
-			}
-		case strings.HasPrefix(decision, "noop "):
-			// Already in the repository: the global files are stale only if
-			// the repository copy is the redaction of them.
+		case err != nil:
+			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
 		case strings.HasPrefix(decision, "skip "):
 			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: strings.TrimPrefix(decision, "skip "+id+": ")})
-			continue
-		}
-		if err := verifyImport(repoMissionDir, expected); err != nil {
-			// A copy that does not read back as expected is not an import,
-			// whichever branch produced it; the global files stay.
-			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
-			continue
-		}
-		if moved {
+		case verdict == verdictImported:
 			res.Imported = append(res.Imported, id)
+		case verdict == verdictPresent:
+			res.Present = append(res.Present, id)
+		case verdict == verdictDiverged:
+			res.Diverged = append(res.Diverged, id)
 		}
-		if !exclusive[id] {
-			res.Shared = append(res.Shared, id)
-			continue
-		}
-		if err := removeLegacyMission(legacyDir, id, importDeleteHook); err != nil {
-			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
-			continue
-		}
-		res.Deleted = append(res.Deleted, id)
 	}
 	return res, nil
+}
+
+type importVerdict int
+
+const (
+	verdictNone importVerdict = iota
+	verdictImported
+	verdictPresent
+	verdictDiverged
+)
+
+// verifyUnderLock runs inside the mission lock nest. It computes the
+// redacted expectation from the global files and compares every artifact of
+// the repository copy to it. For a fresh copy a difference is an error (the
+// copy did not read back as written); for a copy that was already present a
+// difference is divergence, which is a verdict, not an error.
+func verifyUnderLock(r PathRedactor, legacyDir, id, repoMissionDir string, fresh bool) (importVerdict, error) {
+	expected, err := expectedImport(r, legacyDir, id)
+	if err != nil {
+		return verdictNone, err
+	}
+	if importVerifyHook != nil {
+		importVerifyHook(repoMissionDir)
+	}
+	artifact, err := compareImport(repoMissionDir, expected)
+	if err != nil {
+		return verdictNone, err
+	}
+	switch {
+	case artifact == "" && fresh:
+		return verdictImported, nil
+	case artifact == "":
+		return verdictPresent, nil
+	case fresh:
+		return verdictNone, fmt.Errorf("verifying the repository copy: %s differs from the redacted source; global files retained", artifact)
+	default:
+		return verdictDiverged, nil
+	}
 }
 
 // expectedImport computes, for every artifact of global mission id, the
@@ -176,10 +185,11 @@ func expectedImport(r PathRedactor, legacyDir, id string) (map[string][]byte, er
 	return out, nil
 }
 
-// verifyImport reads every expected artifact back from the repository copy
-// and requires it byte-equal to the redacted expectation. It names the
-// artifact that differs, never its content.
-func verifyImport(repoMissionDir string, expected map[string][]byte) error {
+// compareImport reads every expected artifact back from the repository copy
+// and returns the name of the first one that is not byte-equal to the
+// expectation, or "" when all match. An unreadable artifact is an error.
+// Names, never content, are reported.
+func compareImport(repoMissionDir string, expected map[string][]byte) (string, error) {
 	for _, a := range missionArtifacts {
 		want, ok := expected[a.repoName]
 		if !ok {
@@ -187,11 +197,11 @@ func verifyImport(repoMissionDir string, expected map[string][]byte) error {
 		}
 		got, err := os.ReadFile(filepath.Join(repoMissionDir, a.repoName))
 		if err != nil {
-			return fmt.Errorf("verifying the repository copy: %s: %w; global files retained", a.repoName, err)
+			return "", fmt.Errorf("verifying the repository copy: %s: %w; global files retained", a.repoName, err)
 		}
 		if !bytes.Equal(got, want) {
-			return fmt.Errorf("verifying the repository copy: %s differs from the redacted source; global files retained", a.repoName)
+			return a.repoName, nil
 		}
 	}
-	return nil
+	return "", nil
 }

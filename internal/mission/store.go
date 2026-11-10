@@ -2931,15 +2931,12 @@ func (s *Store) withCreateLock(fn func() error) error {
 		absRepo, absRepoErr := filepath.Abs(repoLockPath)
 		absGlobal, absGlobalErr := filepath.Abs(s.createLockPath())
 		if absRepoErr != nil || absGlobalErr != nil {
-			// Abs failed (deleted cwd or unresolvable path). Log and
-			// proceed to acquire the second lock unconditionally —
-			// double-locking the same inode with LOCK_EX from the
-			// same goroutine is a no-op on macOS/Linux, so this is
-			// safe even if the paths actually collide.
-			fmt.Fprintf(os.Stderr,
-				"ethos: withCreateLock: filepath.Abs failed (repo=%v global=%v); acquiring second lock unconditionally\n",
-				absRepoErr, absGlobalErr)
-		} else if absRepo == absGlobal {
+			// Abs failed (deleted cwd or unresolvable path). The two lock
+			// paths cannot be compared, so whether the second acquire would
+			// block on the same inode is unknown; refuse rather than guess.
+			return fmt.Errorf("resolving create lock paths (repo=%v global=%v)", absRepoErr, absGlobalErr)
+		}
+		if absRepo == absGlobal {
 			return fn()
 		}
 		if err := os.MkdirAll(filepath.Dir(repoLockPath), 0o700); err != nil {

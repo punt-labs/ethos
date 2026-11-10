@@ -438,12 +438,18 @@ var missionArtifacts = []migrateArtifact{
 // On any error before step 5, the staging directory is removed and
 // the legacy tree is untouched.
 func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissions map[string]struct{}, dryRun bool) (string, error) {
-	return migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID, repoMissions, dryRun, false)
+	return migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID, repoMissions, dryRun, false, nil)
 }
 
+// underLock runs inside the mission lock nest once the repository copy is
+// in place: after the rename of a fresh copy (fresh true) or on finding a
+// copy already present (fresh false). An error fails the migration.
+type underLock func(repoMissionDir string, fresh bool) error
+
 // migrateOneMissionQ is migrateOneMission; quiet suppresses every stderr
-// notice, for the automatic import that logs instead.
-func migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID string, repoMissions map[string]struct{}, dryRun, quiet bool) (string, error) {
+// notice, for the automatic import that logs instead, and after, when set,
+// runs under the locks with the repository copy.
+func migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID string, repoMissions map[string]struct{}, dryRun, quiet bool, after underLock) (string, error) {
 	id := filepath.Base(missionID)
 	if id == "" || id == "." || id == ".." {
 		return "", fmt.Errorf("invalid mission id %q", missionID)
@@ -451,7 +457,7 @@ func migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID string, repoMiss
 	if dryRun {
 		// Informational only: preserve the existing no-write dry run, including
 		// no new lock files. A real move rechecks everything under both locks.
-		return migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, true, quiet)
+		return migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, true, quiet, after)
 	}
 	// Existing migration changes the selected authority layer. Coordinate with
 	// repository creates and both repository/global writers before inspecting
@@ -467,7 +473,7 @@ func migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID string, repoMiss
 			return s.withStateFileLock(path, true, func() error {
 				return s.withStateFileLock(s.globalLockPath(id), false, func() error {
 					var err error
-					decision, err = migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun, quiet)
+					decision, err = migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun, quiet, after)
 					return err
 				})
 			})
@@ -477,10 +483,10 @@ func migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID string, repoMiss
 }
 
 func migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id string, repoMissions map[string]struct{}, dryRun bool) (string, error) {
-	return migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun, false)
+	return migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun, false, nil)
 }
 
-func migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id string, repoMissions map[string]struct{}, dryRun, quiet bool) (string, error) {
+func migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id string, repoMissions map[string]struct{}, dryRun, quiet bool, after underLock) (string, error) {
 
 	legacyContract := filepath.Join(legacyDir, id+".yaml")
 	if _, err := os.Stat(legacyContract); err != nil {
@@ -497,6 +503,11 @@ func migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id string, repoMissi
 	repoMissionDir := filepath.Join(repoDir, id)
 	repoContract := filepath.Join(repoMissionDir, "contract.yaml")
 	if _, err := os.Stat(repoContract); err == nil {
+		if after != nil && !dryRun {
+			if err := after(repoMissionDir, false); err != nil {
+				return "", err
+			}
+		}
 		return fmt.Sprintf("noop %s: already migrated", id), nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", ioErr("stat", repoContract, err)
@@ -563,9 +574,16 @@ func migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id string, repoMissi
 		return "", err
 	}
 
+	if after != nil {
+		// The automatic import verifies the repository copy here, under
+		// the same locks as the rename; see ImportGlobalMissions.
+		if err := after(repoMissionDir, true); err != nil {
+			return "", err
+		}
+	}
 	if quiet {
-		// The automatic import verifies the repository copy before it
-		// deletes anything; see ImportGlobalMissions.
+		// The automatic import never deletes a global mission: another
+		// repository may use it, and nothing in a global record says which.
 		return fmt.Sprintf("migrate %s -> %s", id, relRepoPath(repoMissionDir)), nil
 	}
 
