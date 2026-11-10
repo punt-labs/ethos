@@ -4,6 +4,8 @@ package autorepair
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/repair"
 )
@@ -233,6 +236,12 @@ func TestRecordTreeTraceExistingArchiveMustMatch(t *testing.T) {
 		b, err := os.ReadFile(dest)
 		require.NoError(t, err)
 		assert.Equal(t, "someone else's prompt\n", string(b), "the existing archive is never overwritten")
+
+		snapshot := hashFiles(t, env.Policy.RecordRoot(), env.Policy.LocalRoot())
+		again := run5(t, env)
+		assert.Equal(t, out.Residuals, again.Residuals, "the same single residual on the second run")
+		assert.Equal(t, 0, again.Items)
+		assert.Equal(t, snapshot, hashFiles(t, env.Policy.RecordRoot(), env.Policy.LocalRoot()), "nothing written on the second run")
 	})
 }
 
@@ -330,12 +339,68 @@ func TestRecordTreeTraceRedactsLinesLikeTheSeal(t *testing.T) {
 	var first map[string]any
 	require.NoError(t, json.Unmarshal([]byte(lines[0]), &first))
 	assert.Equal(t, "2026-11-09T23:02:21Z", first["ts"])
-	assert.NotEqual(t, strings.Repeat("0", 64), first["tool_input_hash"], "hash is recomputed over the stored tool_input")
-	ti, _ := json.Marshal(first["tool_input"])
+	ti, err := json.Marshal(first["tool_input"])
+	require.NoError(t, err)
 	assert.Contains(t, string(ti), "~/secret/notes.md")
+	sum := sha256.Sum256(ti)
+	assert.Equal(t, hex.EncodeToString(sum[:]), first["tool_input_hash"], "hash is sha256 of the stored tool_input's JSON")
 
 	var second map[string]any
 	require.NoError(t, json.Unmarshal([]byte(lines[1]), &second))
 	assert.Equal(t, "2026-11-09T23:02:22Z", second["ts"])
 	assert.NotEmpty(t, second["audit_error"], "an unclearable line is a loss marker")
+}
+
+// legacyAggregateFor plants the v4.8.0 aggregate for m-2026-11-09-001 with
+// its created_at aligned to the decision the v4.22.1 contract holds.
+func legacyAggregateFor(t *testing.T, root string) string {
+	t.Helper()
+	const id = "m-2026-11-09-001"
+	agg := filepath.Join(root, "missions", id, "reflections.yaml")
+	src := filepath.Join("testdata", "corpus", "v4.8.0", "repo", ".punt-labs", "ethos", "missions", id, "reflections.yaml")
+	b, err := os.ReadFile(src)
+	require.NoError(t, err)
+	b = []byte(strings.ReplaceAll(string(b), "2026-11-09T23:02:27Z", "2026-11-09T23:03:22Z"))
+	require.NoError(t, os.MkdirAll(filepath.Dir(agg), 0o700))
+	require.NoError(t, os.WriteFile(agg, b, 0o600))
+	return agg
+}
+
+// (1) A record:full repository publishes reflections.yaml as a current
+// publication (reflection_authority.go). Step 5 leaves it: no item, no
+// residual, and nothing written for it.
+func TestRecordTreeTraceFullModePublicationKept(t *testing.T) {
+	env := corpusEnv(t, "v4.22.1")
+	p, err := layout.NewRepository(env.Roots.Store, env.Roots.Store, layout.RecordFull)
+	require.NoError(t, err)
+	env.Policy = p
+	const id = "m-2026-11-09-001"
+	agg := legacyAggregateFor(t, p.CheckoutRecordRoot())
+	before := hashFiles(t, p.RecordRoot(), p.LocalRoot())
+	out := run5(t, env)
+	assert.FileExists(t, agg, "full-mode published reflections.yaml must survive")
+	assert.Empty(t, out.Residuals)
+	assert.Equal(t, 0, out.Items)
+	assert.NoFileExists(t, filepath.Join(p.TraceArchiveRoot(), "missions", id, "reflection-1.yaml"))
+	assert.Equal(t, before, hashFiles(t, p.RecordRoot(), p.LocalRoot()), "nothing written")
+}
+
+// (3) In blame mode, an aggregate whose round already has an envelope a live
+// reflect wrote is that reflect's publication: left in place, no residual,
+// and the live envelope is not touched.
+func TestRecordTreeTraceAggregateWithLiveEnvelopeKept(t *testing.T) {
+	env := corpusEnv(t, "v4.22.1")
+	const id = "m-2026-11-09-001"
+	agg := legacyAggregateFor(t, env.Policy.RecordRoot())
+	dest := filepath.Join(env.Policy.TraceArchiveRoot(), "missions", id, "reflection-1.yaml")
+	live := "version: 1\nkind: reflect\nmission: " + id + "\nevent_session: sess-real-0001\npublish: true\n"
+	require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o700))
+	require.NoError(t, os.WriteFile(dest, []byte(live), 0o600))
+	out := run5(t, env)
+	assert.FileExists(t, agg)
+	assert.Empty(t, out.Residuals)
+	assert.Equal(t, 0, out.Items)
+	b, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, live, string(b), "the live envelope is never rewritten")
 }

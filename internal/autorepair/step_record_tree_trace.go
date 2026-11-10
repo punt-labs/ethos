@@ -16,6 +16,13 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	// hook supplies the seal's line guards. Their closure is the live audit
+	// writer's own redaction (redactToolInputQuiet, hashToolInput, the
+	// sensitive-content sweep) across five files, so it is not a mechanical
+	// move into a leaf package. The import direction is therefore fixed:
+	// autorepair imports hook; hook must never import autorepair. When the
+	// engine is wired into the session-start hook, the wiring goes in
+	// cmd/ethos, which imports both.
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -80,6 +87,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		case deferred:
 			env.Log.Logf(stepRecordTreeTrace, "skip-busy-lock", []string{path}, nil)
 			out.Deferred = true
+		case errors.Is(err, errKept):
 		case err != nil:
 			env.Log.Logf(stepRecordTreeTrace, "archive", []string{path}, err)
 			out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: filepath.ToSlash(rel), Reason: err.Error()})
@@ -108,8 +116,10 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 	// Reflections aggregates are enumerated here, not taken from the
 	// inventory: repair lists one only while the contract has no
 	// round_decisions, which is exactly when it must stay (it is the
-	// mission's round authority until step round-decisions). Once the
-	// decisions exist the aggregate is detail the envelopes carry, and goes.
+	// mission's round authority until step round-decisions). Which of the
+	// others may go is repair.ClassifyReflections's decision, never this
+	// step's: a full-mode repository publishes the aggregate, and published
+	// history is never removed by a mode switch or a repair.
 	for _, root := range []string{env.Policy.RecordRoot(), env.Policy.CheckoutRecordRoot()} {
 		if root == "" {
 			continue
@@ -132,20 +142,27 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 	return out, nil
 }
 
-// archiveReflections handles one missions/<id>/reflections.yaml. The file
-// stays, as a residual naming step 3, while the contract has no
-// round_decisions. It also stays beside an explicit export record. Otherwise
-// each round becomes an envelope joining the contract's decision and the
-// aggregate is deleted under the mission-state lock, the lock the reflect
-// path holds while it publishes the same file in full mode
-// (Store.withMissionLock, reflection_authority.go).
+// archiveReflections handles one missions/<id>/reflections.yaml by
+// repair.ClassifyReflections's verdict: a current publication (full mode, or
+// an export beside it) is left alone with no residual; the mission's round
+// authority (no round_decisions yet) is left with a residual naming step 3;
+// legacy detail becomes one envelope per round, joining the contract's
+// decision, and the aggregate is deleted under the mission-state lock, the
+// lock the reflect path holds while it writes the same file
+// (Store.withMissionLock, reflection_authority.go). A round whose envelope a
+// live reflect already wrote means the aggregate is that reflect's
+// publication, and it stays too.
 func (a *archiver) archiveReflections(path, rel string) (deferred bool, err error) {
 	id := strings.Split(filepath.ToSlash(rel), "/")[1]
-	if exported, err := repair.HasExport(a.env.Policy, id); err != nil || exported {
-		if err != nil {
-			return false, err
-		}
-		return false, nil // export trace is retained; not a residual
+	class, err := repair.ClassifyReflections(a.env.Policy, a.env.Policy.RecordRoot(), id)
+	if err != nil {
+		return false, err
+	}
+	switch class {
+	case repair.TraceCurrentPublication:
+		return false, errKept
+	case repair.TraceAuthority:
+		return false, errors.New("contract has no round_decisions yet; reflections.yaml is its round authority until step round-decisions installs them")
 	}
 	lock, err := a.env.Policy.LockPath("mission-state", id)
 	if err != nil {
@@ -172,7 +189,10 @@ func (a *archiver) archiveReflections(path, rel string) (deferred bool, err erro
 	if !utf8.Valid(data) {
 		return false, errors.New("not valid UTF-8; left in place")
 	}
-	if err := a.reflections(id, data); err != nil {
+	if err := a.reflections(id, data); errors.Is(err, errPublishedEnvelope) {
+		a.env.Log.Logf(stepRecordTreeTrace, "keep-published", []string{path}, nil)
+		return false, errKept
+	} else if err != nil {
 		return false, err
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -180,6 +200,30 @@ func (a *archiver) archiveReflections(path, rel string) (deferred bool, err erro
 	}
 	a.env.Log.Logf(stepRecordTreeTrace, "archive-and-delete", []string{path}, nil)
 	return false, nil
+}
+
+// errKept says a file was examined and deliberately left: not an item, not a
+// residual.
+var errKept = errors.New("kept")
+
+// liveEnvelopeExists reports whether dest holds an envelope a live reflect
+// wrote (its event_session names a real session, not the legacy-import
+// placeholder). A missing file is false; an unreadable one is an error.
+func liveEnvelopeExists(dest string) (bool, error) {
+	b, err := os.ReadFile(dest)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var head struct {
+		EventSession string `yaml:"event_session"`
+	}
+	if err := yaml.Unmarshal(b, &head); err != nil {
+		return false, fmt.Errorf("reading envelope %s: %w", filepath.Base(dest), err)
+	}
+	return head.EventSession != "" && head.EventSession != mission.LegacyEventSession, nil
 }
 
 type traceKind int
@@ -369,6 +413,10 @@ func (a *archiver) install(dest string, data []byte) error {
 // the shared decision the contract already holds for that round. Without
 // round_decisions the aggregate is the mission's only round authority and is
 // left for step 3.
+// errPublishedEnvelope marks an aggregate a live reflect already paired with
+// a local envelope: it is that reflect's publication, not legacy detail.
+var errPublishedEnvelope = errors.New("a live reflect already wrote this round's envelope")
+
 func (a *archiver) reflections(id string, data []byte) error {
 	c, err := a.store.Load(id)
 	if err != nil {
@@ -391,6 +439,12 @@ func (a *archiver) reflections(id string, data []byte) error {
 		if d == nil {
 			return fmt.Errorf("round %d has no shared decision in the contract; left in place", r.Round)
 		}
+		dest := filepath.Join(a.env.Policy.TraceArchiveRoot(), "missions", id, fmt.Sprintf("reflection-%d.yaml", r.Round))
+		if live, err := liveEnvelopeExists(dest); err != nil {
+			return err
+		} else if live {
+			return errPublishedEnvelope
+		}
 		red, err := mission.RedactReflection(a.repo, r)
 		if err != nil {
 			return err
@@ -402,7 +456,7 @@ func (a *archiver) reflections(id string, data []byte) error {
 		if rule := mission.LeakRule(string(b)); rule != "" {
 			return fmt.Errorf("round %d still %s after redaction", r.Round, rule)
 		}
-		envs = append(envs, envelope{filepath.Join(a.env.Policy.TraceArchiveRoot(), "missions", id, fmt.Sprintf("reflection-%d.yaml", r.Round)), b})
+		envs = append(envs, envelope{dest, b})
 	}
 	for _, e := range envs {
 		if err := a.install(e.dest, e.data); err != nil {
