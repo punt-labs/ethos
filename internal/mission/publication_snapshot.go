@@ -147,7 +147,7 @@ func (s *Store) snapshotMission(ctx context.Context, id string, snapshot *Public
 		return err
 	}
 	if c.RoundDecisions == nil {
-		return fmt.Errorf("shared round decisions required (upgrade legacy mission)")
+		return fmt.Errorf("shared round decisions unavailable: the mission's legacy history is incomplete and it is fenced from publication")
 	}
 	add := func(rel string, data []byte) {
 		snapshot.Records = append(snapshot.Records, PublicationRecord{Path: ".punt-labs/ethos/missions/" + id + "/" + rel, Data: data})
@@ -197,7 +197,7 @@ func (s *Store) snapshotMission(ctx context.Context, id string, snapshot *Public
 	// mission missing the shared projection must be upgraded, not guessed empty.
 	corrections, err := publicationRead(filepath.Join(dir, "corrections.yaml"))
 	if err != nil {
-		return fmt.Errorf("shared corrections projection required (upgrade legacy mission): %w", err)
+		return fmt.Errorf("shared corrections projection unavailable: the mission's legacy history is incomplete and it is fenced from publication: %w", err)
 	}
 	if err := validatePublicationCorrections(c, corrections); err != nil {
 		return err

@@ -320,7 +320,7 @@ func (s *Store) ApplyReflection(id string, r *Reflection) (OperationResult, erro
 			return err
 		}
 		if layer != layerRepo {
-			return fmt.Errorf("reflection authority requires a repository-owned mission; migrate the legacy global mission first")
+			return fmt.Errorf("reflection authority requires a repository-owned mission; this mission is still in the global store and is fenced from lifecycle writes")
 		}
 		if staged.Mission != id {
 			return fmt.Errorf("reflection mission %q does not match target mission %q", staged.Mission, id)
