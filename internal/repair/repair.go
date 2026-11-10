@@ -37,8 +37,11 @@ type Item struct {
 type Plan struct {
 	Items   []Item   `json:"items"`
 	Skipped []string `json:"skipped,omitempty"`
-	policy  layout.Policy
-	locks   []string
+	// Unreadable lists obsolete-looking files Inventory could not read. They
+	// are not Items: nothing is claimed about what they hold.
+	Unreadable []string `json:"unreadable,omitempty"`
+	policy     layout.Policy
+	locks      []string
 }
 
 var capturedFull = regexp.MustCompile(`"record"\s*:\s*"full"`)
@@ -73,7 +76,8 @@ func Inventory(ctx context.Context, p layout.Policy) (*Plan, error) {
 			}
 			b, err := os.ReadFile(path)
 			if err != nil {
-				return err
+				plan.Unreadable = append(plan.Unreadable, path)
+				return nil
 			}
 			// Even damaged published logs with visible full consent are retained.
 			if strings.Contains(filepath.Base(path), ".jsonl") && capturedFull.Match(b) {
