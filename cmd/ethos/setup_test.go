@@ -47,6 +47,7 @@ func setupTestEnv(t *testing.T) (home, repo string) {
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	t.Chdir(repo)
+	stampFixture(t, home, repo)
 
 	// Run seed to deploy bundles, personalities, writing styles, etc.
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")

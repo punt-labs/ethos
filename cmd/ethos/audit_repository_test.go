@@ -19,7 +19,8 @@ import (
 
 func repositoryAuditCLI(t *testing.T, mode string) (layout.Policy, audit.Stream) {
 	t.Helper()
-	_, root, _ := auditMigrateEnv(t)
+	home, root, _ := auditMigrateEnv(t)
+	stampFixture(t, home, root)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o700))
 	if mode != "" {
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("record: "+mode+"\n"), 0o600))

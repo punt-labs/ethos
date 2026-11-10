@@ -32,6 +32,7 @@ func publicationFixtureCLI(t *testing.T) (*cliSubprocessEnv, string, string) {
 	se := &cliSubprocessEnv{home: t.TempDir(), repo: root}
 	se.env = []string{"HOME=" + se.home, "PATH=" + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_SYSTEM=" + os.DevNull}
 	publicationGitCLI(t, se, "init", "-b", "main")
+	stampFixture(t, se.home, root)
 	publicationGitCLI(t, se, "config", "user.name", "Fixture")
 	publicationGitCLI(t, se, "config", "user.email", "fixture@example.invalid")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "source.txt"), []byte("base\n"), 0o600))
