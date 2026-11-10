@@ -135,8 +135,8 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.installCommitMessage": checkpoint("CreateLocalTemp"),
 	// internal/mission: records.
 
-	"internal/mission.migrateOneMissionLocked": exempt(
-		"renames the staging directory whose files copyIfExists wrote through the redactor"),
+	"internal/mission.migrateOneMissionLockedQ": exempt(
+		"renames the staging directory whose files copyRedacted wrote through the redactor"),
 
 	"internal/mission.writeContractBytes":            payloadCheckpoint(1, "writeContractBytesWithOutcome"),
 	"internal/mission.writeContractFile":             checkpoint("guardWrite", "writeContractBytes"),

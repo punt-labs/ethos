@@ -432,6 +432,12 @@ var missionArtifacts = []migrateArtifact{
 // On any error before step 5, the staging directory is removed and
 // the legacy tree is untouched.
 func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissions map[string]struct{}, dryRun bool) (string, error) {
+	return migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID, repoMissions, dryRun, false)
+}
+
+// migrateOneMissionQ is migrateOneMission; quiet suppresses every stderr
+// notice, for the automatic import that logs instead.
+func migrateOneMissionQ(legacyDir, repoDir, repoRoot, missionID string, repoMissions map[string]struct{}, dryRun, quiet bool) (string, error) {
 	id := filepath.Base(missionID)
 	if id == "" || id == "." || id == ".." {
 		return "", fmt.Errorf("invalid mission id %q", missionID)
@@ -439,7 +445,7 @@ func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissi
 	if dryRun {
 		// Informational only: preserve the existing no-write dry run, including
 		// no new lock files. A real move rechecks everything under both locks.
-		return migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id, repoMissions, true)
+		return migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, true, quiet)
 	}
 	// Existing migration changes the selected authority layer. Coordinate with
 	// repository creates and both repository/global writers before inspecting
@@ -455,7 +461,7 @@ func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissi
 			return s.withStateFileLock(path, true, func() error {
 				return s.withStateFileLock(s.globalLockPath(id), false, func() error {
 					var err error
-					decision, err = migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun)
+					decision, err = migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun, quiet)
 					return err
 				})
 			})
@@ -465,6 +471,10 @@ func migrateOneMission(legacyDir, repoDir, repoRoot, missionID string, repoMissi
 }
 
 func migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id string, repoMissions map[string]struct{}, dryRun bool) (string, error) {
+	return migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun, false)
+}
+
+func migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id string, repoMissions map[string]struct{}, dryRun, quiet bool) (string, error) {
 
 	legacyContract := filepath.Join(legacyDir, id+".yaml")
 	if _, err := os.Stat(legacyContract); err != nil {
@@ -489,11 +499,10 @@ func migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id string, repoMissio
 	// partial migration that wrote sibling artifacts but never
 	// landed contract.yaml). os.Rename onto an existing dir fails
 	// with a generic "file exists" — surface a clearer skip line
-	// instead so the operator knows to either remove the stray
-	// dir or move it aside manually (Copilot on PR #328).
+	// instead (Copilot on PR #328).
 	if info, err := os.Stat(repoMissionDir); err == nil && info.IsDir() {
 		return fmt.Sprintf(
-			"skip %s: repo-tree dir already present at %s (no contract.yaml; manual cleanup required)",
+			"skip %s: repo-tree dir already present at %s without a contract.yaml",
 			id, relRepoPath(repoMissionDir)), nil
 	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", ioErr("stat", repoMissionDir, err)
@@ -521,15 +530,19 @@ func migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id string, repoMissio
 	committed := false
 	defer func() {
 		if !committed {
-			removeStaging(os.Stderr, staging)
+			removeStaging(stagingSink(quiet), staging)
 		}
 	}()
 
 	for _, a := range missionArtifacts {
 		src := filepath.Join(legacyDir, id+a.legacySuffix)
 		dst := filepath.Join(staging, a.repoName)
-		if err := copyIfExists(r, src, dst); err != nil {
+		rewritten, err := copyRedacted(r, src, dst)
+		if err != nil {
 			return "", fmt.Errorf("staging %s: %w", a.repoName, err)
+		}
+		if rewritten && !quiet {
+			announceRewritten(fmt.Sprintf("the migrated copy of %s", safeFieldName(filepath.Base(src))), redactNoRename).Say()
 		}
 	}
 
@@ -548,7 +561,7 @@ func migrateOneMissionLocked(legacyDir, repoDir, repoRoot, id string, repoMissio
 	// here, contradicting the "non-fatal" intent).
 	for _, a := range missionArtifacts {
 		legacy := filepath.Join(legacyDir, id+a.legacySuffix)
-		if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) && !quiet {
 			fmt.Fprintf(os.Stderr,
 				"ethos: mission migrate: %v (leftover is benign; repo-tree copy is authoritative)\n",
 				ioErr("removing legacy", legacy, err))
@@ -587,19 +600,28 @@ func removeStaging(w io.Writer, staging string) {
 // closing quote and corrupt the file. A file that cannot be parsed
 // cannot be redacted and is not copied.
 func copyIfExists(r PathRedactor, src, dst string) error {
+	rewritten, err := copyRedacted(r, src, dst)
+	if rewritten && err == nil {
+		announceRewritten(fmt.Sprintf("the migrated copy of %s", safeFieldName(filepath.Base(src))), redactNoRename).Say()
+	}
+	return err
+}
+
+// copyRedacted is copyIfExists without the notice: it reports whether the
+// redactor changed the file and leaves saying so to the caller, so the
+// automatic import can stay silent.
+func copyRedacted(r PathRedactor, src, dst string) (bool, error) {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+			return false, nil
 		}
-		return ioErr("reading", src, err)
+		return false, ioErr("reading", src, err)
 	}
-	hint := "fix the file and re-run `ethos mission migrate`"
 	var red []byte
 	var rewritten bool
 	switch {
 	case strings.HasSuffix(src, ".jsonl"):
-		hint = "fix or remove the line and re-run `ethos mission migrate`"
 		red, rewritten, err = redactJSONLines(r.Content, r.Path, reflect.TypeOf(Event{}), data)
 	default:
 		// The record's type gives the modes, as in the writer: enforcement
@@ -611,15 +633,12 @@ func copyIfExists(r PathRedactor, src, dst string) error {
 	}
 	data = red
 	if err != nil {
-		return fmt.Errorf("redacting %s: %w; %s", filepath.Base(src), err, hint)
+		return false, fmt.Errorf("redacting %s: %w", filepath.Base(src), err)
 	}
 	if err := writeSyncedFile(dst, data); err != nil {
-		return err
+		return false, err
 	}
-	if rewritten {
-		announceRewritten(fmt.Sprintf("the migrated copy of %s", safeFieldName(filepath.Base(src))), redactNoRename).Say()
-	}
-	return nil
+	return rewritten, nil
 }
 
 // writeSyncedFile creates path at 0o600 with data, fsynced.
@@ -1280,4 +1299,88 @@ func relRepoPath(absPath string) string {
 		return absPath
 	}
 	return absPath[idx+1:]
+}
+
+// stagingSink is where a staging-cleanup failure is reported: stderr, or
+// nowhere when quiet.
+func stagingSink(quiet bool) io.Writer {
+	if quiet {
+		return io.Discard
+	}
+	return os.Stderr
+}
+
+// ImportFailure names a global mission ImportGlobalMissions could not move.
+// Reason names the file and the cause, never a value from the file.
+type ImportFailure struct {
+	ID     string
+	Reason string
+}
+
+// ImportResult is what ImportGlobalMissions did. Imported lists missions
+// copied into the repository store; Cleaned lists missions already there
+// whose stale global files were removed; Failed lists missions left in place.
+type ImportResult struct {
+	Imported []string
+	Cleaned  []string
+	Failed   []ImportFailure
+}
+
+// ImportGlobalMissions moves every global mission this repository owns (see
+// repoMissionIDs) into the repository store through the redactor and removes
+// the global copies. Missions the repository does not own stay global. It is
+// MigrateMission without its output: it prints nothing, it keeps going past a
+// mission it cannot move, and it reports each such mission in Failed. A run
+// with nothing left to import returns an empty result.
+func ImportGlobalMissions(globalRoot, repoRoot, checkoutRoot string) (ImportResult, error) {
+	var res ImportResult
+	if repoRoot == "" || globalRoot == "" {
+		return res, fmt.Errorf("import global missions: roots must be set")
+	}
+	legacyDir := filepath.Join(globalRoot, "missions")
+	repoDir := RepoStatePath(repoRoot, "missions")
+	ids, err := enumerateMigrateCandidates(legacyDir, "")
+	if err != nil {
+		return res, fmt.Errorf("enumerating global missions in %s: %w", legacyDir, err)
+	}
+	if len(ids) == 0 {
+		return res, nil
+	}
+	owned, err := repoMissionIDs(repoRoot, checkoutRoot)
+	if err != nil {
+		return res, fmt.Errorf("scanning repo sessions for mission references: %w", err)
+	}
+	for _, id := range ids {
+		if _, ok := owned[id]; !ok {
+			continue
+		}
+		decision, err := migrateOneMissionQ(legacyDir, repoDir, repoRoot, id, owned, false, true)
+		switch {
+		case err != nil:
+			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
+		case strings.HasPrefix(decision, "migrate "):
+			res.Imported = append(res.Imported, id)
+		case strings.HasPrefix(decision, "noop "):
+			// The repository copy is authoritative; the global files are stale.
+			if err := removeLegacyMission(legacyDir, id); err != nil {
+				res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: err.Error()})
+				continue
+			}
+			res.Cleaned = append(res.Cleaned, id)
+		case strings.HasPrefix(decision, "skip "):
+			res.Failed = append(res.Failed, ImportFailure{ID: id, Reason: strings.TrimPrefix(decision, "skip "+id+": ")})
+		}
+	}
+	return res, nil
+}
+
+// removeLegacyMission deletes the global files of mission id.
+func removeLegacyMission(legacyDir, id string) error {
+	for _, a := range missionArtifacts {
+		legacy := filepath.Join(legacyDir, id+a.legacySuffix)
+		if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return ioErr("removing legacy", legacy, err)
+		}
+	}
+	return nil
 }

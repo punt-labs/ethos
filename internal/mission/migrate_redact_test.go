@@ -123,7 +123,8 @@ func TestCopyIfExists_TornLogLineErrorIsActionable(t *testing.T) {
 	assert.Contains(t, msg, filepath.Base(src))
 	assert.NotContains(t, msg, dir, "a refusal names the file, not the absolute path")
 	assert.Contains(t, msg, "line 2")
-	assert.Contains(t, msg, "fix or remove the line and re-run `ethos mission migrate`")
+	assert.NotContains(t, msg, "ethos mission migrate", "ethos repairs on its own; the message names no user action")
+	assert.NotContains(t, msg, "re-run")
 }
 
 // TestMigrateMission_ContractEnforcementFieldsKeepTheirValue: the copy
