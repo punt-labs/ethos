@@ -302,11 +302,7 @@ func TestQuarantineChunk_EveryRetiredChunkIsWithheld(t *testing.T) {
 			assert.NotContains(t, string(got), "alice@example.com")
 			assert.NotContains(t, string(got), "hunter2")
 
-			local := quarantineOriginalFiles(t, repo)
-			require.Len(t, local, 1)
-			orig, err := os.ReadFile(local[0])
-			require.NoError(t, err)
-			assert.Equal(t, body, string(orig), "the local copy holds the bytes exactly")
+			assert.Empty(t, quarantineOriginalFiles(t, repo), "no raw copy of the damaged bytes is kept once recovery completes")
 			indexAfter, err := os.ReadFile(indexPath)
 			require.NoError(t, err)
 			assert.Equal(t, indexBefore, indexAfter, "quarantine must not alter the index")
@@ -439,12 +435,7 @@ func TestQuarantineChunk_RecordLookingChunkIsWithheld(t *testing.T) {
 			assert.Contains(t, string(blob), `"sha256"`)
 			assert.NotContains(t, string(blob), "hunter2")
 			assert.NotContains(t, string(blob), "alice@example.com")
-
-			local := quarantineOriginalFiles(t, repo)
-			require.Len(t, local, 1)
-			orig, err := os.ReadFile(local[0])
-			require.NoError(t, err)
-			assert.Equal(t, body, string(orig))
+			assert.Empty(t, quarantineOriginalFiles(t, repo), "no raw copy of the damaged bytes is kept once recovery completes")
 		})
 	}
 }

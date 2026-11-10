@@ -796,7 +796,9 @@ func TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine(t *testing.T) {
 
 	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 	require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
-	lines := chunkLines(t, sealedDir)
+	// The published source gets only a gap marker; the recovered chunk lands
+	// in the local archive.
+	lines := chunkLines(t, archiveSessionDir(t, repo, sid, time.Now().UTC().Format(audit.SessionDateFormat)))
 	require.Len(t, lines, 1)
 	assertRedactedWithMatchingHash(t, []byte(lines[0]))
 }
@@ -915,7 +917,7 @@ func TestSessionLineGuard_RedactsHeadersAndUnknownFields(t *testing.T) {
 		require.NoError(t, os.WriteFile(live, []byte(olderLiveLine(150, sid, extra)), 0o600))
 		_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
 		require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
-		check(t, chunkLines(t, sealedDir))
+		check(t, chunkLines(t, archiveSessionDir(t, repo, sid, time.Now().UTC().Format(audit.SessionDateFormat))))
 	})
 }
 
