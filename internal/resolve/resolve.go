@@ -1199,6 +1199,9 @@ func parseRevParse(start, out string) (top, gitDir, common string, ok bool) {
 // and not when the .git is at or above a GIT_CEILING_DIRECTORIES entry, which
 // git never examined.
 func gitLocateError(start string, err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("running git rev-parse in %s: git not found on PATH", start)
+	}
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
 		return fmt.Errorf("running git rev-parse in %s: %w", start, err)
@@ -1209,10 +1212,22 @@ func gitLocateError(start string, err error) error {
 		// ceiling boundary it stopped at, does not make this a refusal.
 		return fmt.Errorf("%s is %w", start, ErrNotInRepo)
 	}
+	cause := gitCause(msg)
 	if dot := firstDotGit(start); dot != "" && !messageNamesGit(msg, dot) {
-		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, msg)
+		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, cause)
 	}
-	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, msg)
+	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, cause)
+}
+
+// gitCause states what git found without relaying its advice: a dubious-
+// ownership refusal is named, and any other stderr is cut to its first line,
+// since git's later lines are hints and remedies.
+func gitCause(msg string) string {
+	if strings.Contains(msg, "dubious ownership") || strings.Contains(msg, "safe.directory") {
+		return "git refuses this directory (safe.directory)"
+	}
+	first, _, _ := strings.Cut(msg, "\n")
+	return strings.TrimSpace(first)
 }
 
 // messageNamesGit reports whether git's message msg names the work tree that

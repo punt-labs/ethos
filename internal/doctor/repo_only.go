@@ -1,8 +1,10 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -203,6 +205,9 @@ func trackedLocalExt(repoRoot string) ([]string, error) {
 	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "ls-files",
 		"-z", "--", ".punt-labs/")
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("could not ask git for tracked files: git not found on PATH")
+		}
 		return nil, fmt.Errorf("could not ask git for tracked files: %v", err)
 	}
 	var files []string
