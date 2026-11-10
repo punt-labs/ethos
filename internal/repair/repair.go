@@ -333,3 +333,21 @@ func trackedFiles(p layout.Policy, root string) (map[string]bool, error) {
 	}
 	return tracked, nil
 }
+
+// Obsolete reports whether Inventory would list the file at rel, a path relative
+// to root (a record root of p), as obsolete. Callers that remove files from
+// another place, such as the index, use it so both agree on what is retained.
+func Obsolete(p layout.Policy, root, rel string) (bool, error) {
+	remove, _, err := obsolete(p, root, rel)
+	if err != nil || !remove {
+		return false, err
+	}
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		return false, err
+	}
+	if strings.Contains(filepath.Base(rel), ".jsonl") && capturedFull.Match(b) {
+		return false, nil
+	}
+	return true, nil
+}

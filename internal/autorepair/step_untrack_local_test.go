@@ -2,6 +2,7 @@ package autorepair
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
@@ -35,7 +38,11 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 }
 
 func untrackEnv(dir string, l Logger) Env {
-	return Env{Roots: resolve.Located{Store: dir, Checkout: dir}, Log: l}
+	p, err := layout.NewRepository(dir, dir, layout.RecordBlame)
+	if err != nil {
+		panic(err)
+	}
+	return Env{Roots: resolve.Located{Store: dir, Checkout: dir}, Policy: p, Log: l}
 }
 
 func runUntrack(t *testing.T, env Env) Outcome {
@@ -147,19 +154,22 @@ func TestUntrackLocalRepositories(t *testing.T) {
 func TestUntrackLocalKeepsExportsPublicationsAndArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	gitIn(t, dir, "init", "-q", "-b", "main")
+	ts := func(a, b int64) string { return audit.TSToField(a) + "-" + audit.TSToField(b) }
+	m4 := ".punt-labs/ethos/missions/m-4/"
+	sess := ".punt-labs/ethos/sessions/2026-11-09-s/"
 	files := map[string]string{
-		".punt-labs/ethos/missions/m-1.contract.yaml":            "id: m-1\n",
-		".punt-labs/ethos/missions/m-1.result.yaml":              "x: 1\n",
-		".punt-labs/ethos/missions/m-2/artifacts/out.jsonl":      "{}\n",
-		".punt-labs/ethos/missions/m-2/artifacts/audit.jsonl":    "{}\n",
-		".punt-labs/ethos/missions/m-3/contract.yaml":            "id: m-3\nround_decisions: []\n",
-		".punt-labs/ethos/missions/m-3/reflections.yaml":         "r: 1\n",
-		".punt-labs/ethos/missions/m-3/log-s-1-2.jsonl":          "{\"record\":\"full\"}\n",
-		".punt-labs/ethos/missions/m-4/contract.yaml":            "id: m-4\n",
-		".punt-labs/ethos/missions/m-4/log-s-1-2.jsonl":          "{\"record\":\"full\"}\n",
-		".punt-labs/ethos/missions/m-4/log-s-3-4.jsonl":          "{\"record\":\"blame\"}\n",
-		".punt-labs/ethos/sessions/2026-11-09-s/audit-1-2.jsonl": "{\"record\":\"full\"}\n",
-		".punt-labs/ethos/sessions/2026-11-09-s/audit-3-4.jsonl": "{\"record\":\"blame\"}\n",
+		".punt-labs/ethos/missions/m-1.contract.yaml":                "id: m-1\n",
+		".punt-labs/ethos/missions/m-1.result.yaml":                  "x: 1\n",
+		".punt-labs/ethos/missions/m-2/artifacts/out.jsonl":          "{}\n",
+		".punt-labs/ethos/missions/m-2/artifacts/audit.jsonl":        "{}\n",
+		".punt-labs/ethos/missions/m-3/contract.yaml":                "id: m-3\nround_decisions: []\n",
+		".punt-labs/ethos/missions/m-3/reflections.yaml":             "r: 1\n",
+		".punt-labs/ethos/missions/m-3/log-s-" + ts(1, 2) + ".jsonl": "{\"record\":\"blame\"}\n",
+		m4 + "contract.yaml":                                         "id: m-4\n",
+		m4 + "log-s-" + ts(1, 2) + ".jsonl":                          "{\"record\":\"full\"}\n",
+		m4 + "log-s-" + ts(3, 4) + ".jsonl":                          "{\"record\":\"blame\"}\n",
+		sess + "audit-" + ts(1, 2) + ".jsonl":                        "{\"record\":\"full\"}\n",
+		sess + "audit-" + ts(3, 4) + ".jsonl":                        "{\"record\":\"blame\"}\n",
 	}
 	for rel, body := range files {
 		p := filepath.Join(dir, rel)
@@ -171,8 +181,8 @@ func TestUntrackLocalKeepsExportsPublicationsAndArtifacts(t *testing.T) {
 
 	out := runUntrack(t, untrackEnv(dir, &recLog{}))
 	assert.Equal(t, []string{
-		".punt-labs/ethos/missions/m-4/log-s-3-4.jsonl",
-		".punt-labs/ethos/sessions/2026-11-09-s/audit-3-4.jsonl",
+		m4 + "log-s-" + ts(3, 4) + ".jsonl",
+		sess + "audit-" + ts(3, 4) + ".jsonl",
 	}, stagedDeletions(t, dir))
 	assert.Equal(t, 2, out.Items)
 }
@@ -189,4 +199,59 @@ func TestUntrackLocalOutsideRepository(t *testing.T) {
 	out, err := untrackLocal(context.Background(), Env{})
 	require.NoError(t, err)
 	assert.Equal(t, Outcome{}, out)
+}
+
+// writeTracked force-adds each path with the given body and commits them.
+func writeTracked(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		p := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+		gitIn(t, dir, "add", "-f", "--", rel)
+	}
+	gitIn(t, dir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "x")
+}
+
+func trackedPaths(t *testing.T, dir string) []string {
+	t.Helper()
+	return strings.Split(gitIn(t, dir, "ls-files"), "\n")
+}
+
+func TestUntrackLocalKeepsPublishedQuarantineDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	marker, err := json.Marshal(audit.Marker{Chunk: "audit-1-2", VerifiedLast: 2, Reason: "gap"})
+	require.NoError(t, err)
+	const sid = "sess-q-0001"
+	session := ".punt-labs/ethos/sessions/2026-11-09-" + sid + "/"
+	mission := ".punt-labs/ethos/missions/m-2026-11-09-001/"
+	files := map[string]string{
+		mission + "contract.yaml": "id: m-2026-11-09-001\nround_decisions: []\n",
+		mission + "log-" + sid + "-" + audit.TSToField(1) + "-" + audit.TSToField(2) + ".quarantine":    string(marker),
+		mission + "log-" + sid + "-" + audit.TSToField(1) + "-" + audit.TSToField(2) + ".jsonl.corrupt": "x\n",
+		session + "audit-" + audit.TSToField(1) + "-" + audit.TSToField(2) + ".quarantine":              string(marker),
+		session + "audit-" + audit.TSToField(1) + "-" + audit.TSToField(2) + ".jsonl.corrupt":           "x\n",
+	}
+	writeTracked(t, dir, files)
+	before := trackedPaths(t, dir)
+
+	out := runUntrack(t, untrackEnv(dir, &recLog{}))
+	assert.Zero(t, out.Items)
+	assert.Empty(t, stagedDeletions(t, dir))
+	assert.Equal(t, before, trackedPaths(t, dir))
+}
+
+func TestUntrackLocalKeepsLiteralNamedPathApartFromSibling(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	// A lock named with a star is untracked; its glob would also match the
+	// agent-owned artifact below, which must stay tracked.
+	const m = ".punt-labs/ethos/missions/m-1/"
+	star := m + "*.lock"
+	real := m + "artifacts/out.lock"
+	writeTracked(t, dir, map[string]string{star: "x\n", real: "y\n"})
+
+	runUntrack(t, untrackEnv(dir, &recLog{}))
+	assert.Equal(t, []string{star}, stagedDeletions(t, dir))
 }
