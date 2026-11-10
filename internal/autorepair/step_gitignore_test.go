@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/gitenv"
 )
 
 const singleRuleBlock = "# ethos: shared machine-local zone (never track)\n.punt-labs/local/\n"
@@ -81,6 +83,71 @@ func TestGitignoreSessionsIgnoreIsResidual(t *testing.T) {
 	again, err := runGitignore(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 0, again.Items)
+}
+
+// Another tool's local file must stay ignored: retiring the old patterns
+// while vox.local.md and biff/local/state.json depend on them would make a
+// file that can hold secrets stageable.
+func TestGitignoreKeepsPatternsOtherToolsFilesDependOn(t *testing.T) {
+	env := fixtureEnv(t, "corpus/v4.20.4")
+	repo := env.Roots.Checkout
+	vox := filepath.Join(repo, ".punt-labs", "vox", "vox.local.md")
+	biff := filepath.Join(repo, ".punt-labs", "biff", "local", "state.json")
+	for _, p := range []string{vox, biff} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("secret\n"), 0o600))
+	}
+	ignored := func() bool {
+		for _, rel := range []string{".punt-labs/vox/vox.local.md", ".punt-labs/biff/local/state.json"} {
+			if _, err := gitenv.Output(repo, "git", "check-ignore", "-q", rel); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+	require.True(t, ignored(), "both files are ignored before the step")
+
+	out, err := runGitignore(context.Background(), env)
+	require.NoError(t, err)
+	assert.True(t, ignored(), "both files are still ignored after the step")
+	require.Len(t, out.Residuals, 2)
+	ids := out.Residuals[0].ID + "\n" + out.Residuals[1].ID
+	assert.Contains(t, ids, ".punt-labs/**/*.local.*")
+	assert.Contains(t, ids, "vox.local.md")
+	assert.Contains(t, ids, ".punt-labs/**/local/**")
+	assert.Contains(t, ids, filepath.Join("biff", "local", "state.json"))
+
+	again, err := runGitignore(context.Background(), env)
+	require.NoError(t, err)
+	assert.True(t, ignored(), "a second run keeps them ignored")
+	assert.Equal(t, 0, again.Items)
+}
+
+func TestGitignoreSessionsLineInsideBlockIsRetired(t *testing.T) {
+	block := "# ethos runtime (never track) — DES-058 live zone + mission locks\n" +
+		".punt-labs/**/local/**\n" +
+		".punt-labs/ethos/sessions/\n" +
+		".punt-labs/**/*.ethos-tmp*\n"
+	t.Run("inside the block", func(t *testing.T) {
+		env := fixtureEnv(t, "corpus/v4.20.4")
+		path := filepath.Join(env.Roots.Checkout, ".gitignore")
+		require.NoError(t, os.WriteFile(path, []byte(block), 0o644))
+		out, err := runGitignore(context.Background(), env)
+		require.NoError(t, err)
+		assert.Empty(t, out.Residuals)
+		assert.Equal(t, singleRuleBlock, readFixture(t, path), "the whole former block is gone")
+	})
+	t.Run("outside the block", func(t *testing.T) {
+		env := fixtureEnv(t, "corpus/v4.20.4")
+		path := filepath.Join(env.Roots.Checkout, ".gitignore")
+		user := "\n.punt-labs/ethos/sessions/\n"
+		require.NoError(t, os.WriteFile(path, []byte(block[:strings.Index(block, ".punt-labs/ethos/sessions/")]+user), 0o644))
+		out, err := runGitignore(context.Background(), env)
+		require.NoError(t, err)
+		require.Len(t, out.Residuals, 1)
+		assert.Contains(t, out.Residuals[0].ID, ".punt-labs/ethos/sessions/")
+		assert.Contains(t, readFixture(t, path), user, "a user line outside the block stays")
+	})
 }
 
 func TestGitignoreRefreshesHooksFirst(t *testing.T) {

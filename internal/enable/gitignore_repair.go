@@ -17,27 +17,51 @@ import (
 // exist: the caller has already moved or deleted that data, and the shared-zone
 // rule is the boundary that now covers what remains. It reports whether the
 // file was written, even when confirming the result then failed.
-func RepairGitignore(repoRoot string, p layout.Policy) (changed bool, err error) {
+func RepairGitignore(repoRoot string, p layout.Policy) (changed bool, kept []KeptRule, err error) {
 	return repairGitignoreWithIO(repoRoot, p, defaultGitignoreIO())
 }
 
-func repairGitignoreWithIO(repoRoot string, p layout.Policy, io gitignoreIO) (bool, error) {
+// KeptRule is a legacy ignore pattern RepairGitignore left in the file because
+// the file at Path, outside the shared machine-local zone, still depends on it.
+// Retiring it would make that file, which may hold secrets, stageable.
+type KeptRule struct {
+	Pattern string
+	Path    string
+}
+
+func repairGitignoreWithIO(repoRoot string, p layout.Policy, io gitignoreIO) (bool, []KeptRule, error) {
 	path := filepath.Join(repoRoot, ".gitignore")
 	original, err := readIgnoreSource(repoRoot, ".gitignore")
 	if err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("reading %s: %w", path, err)
+		return false, nil, fmt.Errorf("reading %s: %w", path, err)
 	}
-	data, _ := removeLegacyManagedRules(original)
+	_, retiring := removeLegacyManagedRules(original)
+	keep := make(map[string]bool)
+	var kept []KeptRule
+	for _, pattern := range retiring {
+		if keep[pattern] {
+			continue
+		}
+		deps, err := ignoreDependents(repoRoot, []string{pattern})
+		if err != nil {
+			return false, nil, err
+		}
+		if len(deps) > 0 {
+			keep[pattern] = true
+			kept = append(kept, KeptRule{Pattern: pattern, Path: deps[0]})
+		}
+	}
+	data, _ := retireLegacyManagedRules(original, keep)
 	if !presentLines(data)[LocalIgnoreRule] {
 		data = insertLocalRule(data)
 	}
 	if bytes.Equal(original, data) {
-		return false, verifyLocalProtection(repoRoot, p, io)
+		return false, kept, verifyLocalProtection(repoRoot, p, io)
 	}
 	if err := writeGitignoreWithIO(path, data, p, io); err != nil {
-		return false, err
+		return false, kept, err
 	}
-	return true, verifyLocalProtection(repoRoot, p, io)
+	return true, kept, verifyLocalProtection(repoRoot, p, io)
 }
 
 // insertLocalRule adds LocalIgnoreRule under the ethos marker when the file

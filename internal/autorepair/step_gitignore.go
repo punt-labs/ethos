@@ -40,7 +40,14 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 			continue
 		}
 		path := filepath.Join(root, ".gitignore")
-		changed, err := enable.RepairGitignore(root, env.Policy)
+		changed, kept, err := enable.RepairGitignore(root, env.Policy)
+		for _, k := range kept {
+			out.Residuals = append(out.Residuals, Residual{
+				Step:   stepGitignore,
+				ID:     k.Pattern + ": " + k.Path,
+				Reason: "the pattern still ignores another tool's local file; left in place so the file stays untracked",
+			})
+		}
 		if changed {
 			out.Items++
 			env.Log.Logf(stepGitignore, "rewrite", []string{path}, err)
