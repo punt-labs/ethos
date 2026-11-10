@@ -2,6 +2,8 @@ package autorepair
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -506,4 +508,54 @@ func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, walkContains(t, env.Policy.LocalRoot(), fakeToken), "the token survives nowhere under local/")
 	assert.Equal(t, 0, runStep(t, runLiveTails, env).Items)
+}
+
+// An orphan .corrupt (a retirement an interrupted old-style quarantine left
+// without its covering marker) is completed by step 7: the stream reads
+// cleanly afterwards, the marker is final, and the raw bytes are gone.
+func TestCorruptChunksCompletesOrphanCorrupt(t *testing.T) {
+	env, log := damageEnv(t, "corrupt-sealed-chunk")
+	s := audit.Stream{Namespace: audit.SessionNS, Session: damageSession}
+	files := chunkFiles(t, env)
+	require.Len(t, files, 1)
+	source := files[0]
+	dir := filepath.Dir(source)
+	cn, kind := audit.Classify(filepath.Base(source), audit.SessionNS)
+	require.Equal(t, audit.KindValid, kind)
+	// Reproduce an interrupted quarantine: retire the chunk, then lose its
+	// marker before the recovery completed.
+	_, err := audit.QuarantineLocal(env.Policy, s, source, dir, cn, "fixture", func(raw []byte) ([]byte, string, bool) { return raw, "", false })
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(dir, cn.MarkerFile())))
+	// An older binary kept the raw bytes beside their metadata under
+	// quarantine/<stream key>/<sha>.corrupt; re-create that pair.
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(s.Key())))
+	rec, err := os.ReadFile(filepath.Join(dir, audit.CorruptName(cn.Stem())))
+	require.NoError(t, err)
+	var meta struct {
+		SHA256 string `json:"sha256"`
+	}
+	require.NoError(t, json.Unmarshal(rec, &meta))
+	raw := filepath.Join(env.Policy.LocalRoot(), "quarantine", key, meta.SHA256+".corrupt")
+	plant(t, env.Policy, raw, "this is not json\n{\"ts\":\n")
+	plant(t, env.Policy, raw+".json", string(rec))
+	_, err = audit.ScanSealedDir(dir, audit.SessionNS, "")
+	var orphan *audit.OrphanCorruptError
+	require.ErrorAs(t, err, &orphan, "fixture: the scan reports the orphan before the step")
+
+	out := runStep(t, runCorruptChunks, env)
+	assert.Equal(t, 1, out.Items)
+	assert.Empty(t, out.Residuals)
+	_, err = audit.ScanSealedDir(dir, audit.SessionNS, "")
+	require.NoError(t, err, "the scan is clean after the step")
+	_, err = audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	m, err := audit.ReadMarker(filepath.Join(dir, cn.MarkerFile()))
+	require.NoError(t, err)
+	assert.True(t, m.HasGap())
+	assert.NoFileExists(t, raw, "the raw bytes are deleted")
+	assert.NoFileExists(t, raw+".json")
+	assert.FileExists(t, filepath.Join(dir, audit.CorruptName(cn.Stem())), "the retirement record stays beside its final marker")
+	assert.Contains(t, log.text(), "complete-orphan-corrupt")
+	assert.Equal(t, 0, runStep(t, runCorruptChunks, env).Items, "second run changes nothing")
 }
