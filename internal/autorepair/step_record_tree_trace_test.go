@@ -460,3 +460,63 @@ func TestRecordTreeTracePublishedAggregateAfterSwitchToBlameOnClone(t *testing.T
 	assert.Equal(t, before, hashFiles(t, env.Policy.RecordRoot(), env.Policy.LocalRoot()), "nothing written")
 	assert.Empty(t, logLines(env))
 }
+
+// In a linked checkout S and C hold different reflections.yaml files. The
+// contract's decision id is the legacy-import hash of S's entry, so S's file is
+// legacy detail, but cannot be deleted here; C's entry differs only in a credential, which redaction
+// removes, so it archives to the very same envelope and nothing but the
+// decision check stands between C's file and deletion. C's file is not what
+// the decision describes, so it must stay.
+func TestRecordTreeTraceLinkedCheckoutVerifiesTheFileDeleted(t *testing.T) {
+	env := corpusEnv(t, "v4.22.1")
+	p, err := layout.NewRepository(env.Roots.Store, t.TempDir(), layout.RecordBlame)
+	require.NoError(t, err)
+	env.Policy = p
+	plant := func(agg, token string) {
+		b, err := os.ReadFile(agg)
+		require.NoError(t, err)
+		b = []byte(strings.ReplaceAll(string(b), "round 1 finished cleanly", "round 1 finished cleanly "+token))
+		require.NoError(t, os.WriteFile(agg, b, 0o600))
+	}
+	sAgg := legacyAggregateFor(t, p.RecordRoot())
+	plant(sAgg, fakeToken)
+	rs := func(agg string) []mission.Reflection {
+		b, err := os.ReadFile(agg)
+		require.NoError(t, err)
+		rs, err := mission.DecodeLegacyReflections(b, "m-2026-11-09-001")
+		require.NoError(t, err)
+		return rs
+	}
+	contract := filepath.Join(p.RecordRoot(), "missions", "m-2026-11-09-001", "contract.yaml")
+	c, err := os.ReadFile(contract)
+	require.NoError(t, err)
+	c = []byte(strings.Replace(string(c), "id: bf96036b8393d71fc23fadc534e00376", "id: "+mission.LegacyDecisionID(rs(sAgg)[0]), 1))
+	require.NoError(t, os.WriteFile(contract, c, 0o600))
+	cAgg := legacyAggregateFor(t, p.CheckoutRecordRoot())
+	plant(cAgg, strings.Replace(fakeToken, "FAKE", "FAKF", 1))
+
+	// S's deletion fails (read-only directory), so S's file is still there to
+	// supply a stale verdict when C's turn comes.
+	sDir := filepath.Dir(sAgg)
+	require.NoError(t, os.Chmod(sDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(sDir, 0o700) })
+	run5(t, env)
+	assert.FileExists(t, cAgg, "C's file is not the one the decision describes")
+}
+
+// The archiver proves the file it deletes, not a sibling: a round whose
+// contract decision id is not the legacy-import hash of this very entry was
+// made by a live reflect, and its aggregate is a publication.
+func TestRecordTreeTraceReflectionsRejectsLiveDecisionAtDeletion(t *testing.T) {
+	env := corpusEnv(t, "v4.22.1")
+	const id = "m-2026-11-09-001"
+	agg := legacyAggregateFor(t, env.Policy.RecordRoot()) // contract keeps the live reflect's id
+	data, err := os.ReadFile(agg)
+	require.NoError(t, err)
+	a := &archiver{env: env, repo: env.Roots.Store, store: mission.NewStoreWithRoots(env.Roots.Store, env.Global)}
+	a.red, err = mission.NewPathRedactor(a.repo)
+	require.NoError(t, err)
+	err = a.reflections(id, data)
+	require.ErrorIs(t, err, errPublishedEnvelope)
+	assert.NoFileExists(t, filepath.Join(env.Policy.TraceArchiveRoot(), "missions", id, "reflection-1.yaml"))
+}

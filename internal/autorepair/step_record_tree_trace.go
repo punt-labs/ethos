@@ -136,8 +136,8 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 }
 
 // archiveReflections handles one missions/<id>/reflections.yaml by
-// repair.ClassifyReflections's verdict: a current publication (full mode, or
-// an export beside it) is left alone with no residual; the mission's round
+// repair.ClassifyReflections's verdict: a current publication (a decision id a
+// live reflect allocated, or an export beside it) is left alone with no residual; the mission's round
 // authority (no round_decisions yet) is left with a residual naming step 3;
 // legacy detail becomes one envelope per round, joining the contract's
 // decision, and the aggregate is deleted under the mission-state lock, the
@@ -147,7 +147,13 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 // publication, and it stays too.
 func (a *archiver) archiveReflections(path, rel string) (deferred bool, err error) {
 	id := strings.Split(filepath.ToSlash(rel), "/")[1]
-	class, err := repair.ClassifyReflections(a.env.Policy, a.env.Policy.RecordRoot(), id)
+	// Classify the file that will be deleted: in a linked checkout S and C
+	// hold different aggregates.
+	_, root, ok := a.relative(path)
+	if !ok {
+		return false, errors.New("outside the record roots; left in place")
+	}
+	class, err := repair.ClassifyReflections(a.env.Policy, root, id)
 	if err != nil {
 		return false, err
 	}
@@ -431,6 +437,11 @@ func (a *archiver) reflections(id string, data []byte) error {
 		if d == nil {
 			return fmt.Errorf("round %d has no shared decision in the contract; left in place", r.Round)
 		}
+		// Checked again here, under the lock, on the bytes about to be
+		// deleted: only the legacy import's decision describes legacy detail.
+		if d.ID != mission.LegacyDecisionID(r) {
+			return errPublishedEnvelope
+		}
 		dest := filepath.Join(a.env.Policy.TraceArchiveRoot(), "missions", id, fmt.Sprintf("reflection-%d.yaml", r.Round))
 		if live, err := liveEnvelopeExists(dest); err != nil {
 			return err
@@ -487,10 +498,11 @@ func (a *archiver) prompt(id, delegation string, data []byte) error {
 }
 
 // jsonl passes every line of a frozen or sealed log through the same guard
-// the seal and quarantine paths use (internal/lineguard, the leaf package
-// below both this package and internal/hook; this package never imports hook) (credentials, addresses, paths; the
-// tool_input_hash recomputed over the stored tool_input) and archives the
-// result. A sealed chunk must still decode strictly afterwards; a damaged
+// the seal and quarantine paths use and archives the result. The guard lives
+// in internal/lineguard, the leaf package below both this package and
+// internal/hook, which this package never imports. It redacts credentials,
+// addresses and paths, and recomputes tool_input_hash over the stored
+// tool_input. A sealed chunk must still decode strictly afterwards; a damaged
 // one is step 7's and stays in place.
 func (a *archiver) jsonl(dest string, data []byte, frozen bool, guard lineGuard) error {
 	var out bytes.Buffer
