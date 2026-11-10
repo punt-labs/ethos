@@ -173,6 +173,21 @@ class BoundaryTests(unittest.TestCase):
                 home, repo, head = self.restored_snapshot(snapshot.name)
                 home.mkdir()
                 gate.scan_history(self.repo, repo, head)
+                # git records the fetch source's absolute path here; it must be scratch.
+                fetch_head = (repo / ".git/FETCH_HEAD").read_bytes().replace(str(self.repo).encode(), b"")
+                self.assertIsNone(gate.USER_PATH.search(fetch_head), fetch_head)
+
+    def test_scratch_home_path_is_forbidden_whatever_the_home_directory_is_named(self):
+        # The scan strips the scratch prefix, so a leaked HOME path would read
+        # as /home/... only when HOME happens to be named "home".
+        home, repo = self.repo / "scratchhome", self.repo / "repo"
+        home.mkdir()
+        repo.mkdir()
+        gate.write(home / "leak.txt", f"cache at {home}/x\n")
+        with self.assertRaisesRegex(gate.Failure, "scratch HOME path"):
+            gate.scan_files(self.repo, home, repo)
+        gate.write(home / "leak.txt", "clean\n")
+        gate.scan_files(self.repo, home, repo)
 
     def test_history_scan_sees_a_token_committed_to_the_scratch_repo(self):
         home, repo, head = self.restored_snapshot()

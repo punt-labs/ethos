@@ -883,17 +883,20 @@ def scan_for_leaks(scratch: Path, home: Path, repo: Path, restored_head: str) ->
 
     The restored snapshot's own history carries the corpus's fake token by design and an
     upgrade cannot rewrite it, so the history scan covers only commits after `restored_head`."""
-    scan_history(scratch, repo, restored_head)
+    scan_history(scratch, repo, restored_head, home)
     scan_files(scratch, home, repo)
 
 
-def scan_history(scratch: Path, repo: Path, restored_head: str) -> None:
+def scan_history(scratch: Path, repo: Path, restored_head: str, home: Path | None = None) -> None:
     """Commits the upgrade created hold no token and no machine path outside scratch."""
     scratch_bytes = str(scratch).encode()
     # .git objects are zlib-compressed, so the raw-bytes scan below cannot see
     # committed history; git log -p decompresses it and is scanned separately.
     history = f_git_history(repo, restored_head)
     require(not TOKEN.search(history), "credential-shaped token in committed history after upgrade")
+    # The scratch prefix is stripped below, which would turn a leaked HOME path into /home/...
+    # and catch it only because HOME is named "home". Forbid the full HOME path explicitly.
+    require(home is None or str(home).encode() not in history, "scratch HOME path in committed history")
     leaked = USER_PATH.search(history.replace(scratch_bytes, b""))
     require(not leaked, f"machine path {leaked.group(0).decode() if leaked else ''} in committed history")
 
@@ -905,6 +908,9 @@ def scan_files(scratch: Path, home: Path, repo: Path) -> None:
         for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
             data = path.read_bytes()
             require(not TOKEN.search(data), f"credential-shaped token survives upgrade in {path}")
+            # Checked before the scratch prefix is stripped: stripping would make a leaked HOME
+            # path look like /<home-dir-name>/..., flagged only when HOME is literally named "home".
+            require(str(home).encode() not in data, f"scratch HOME path in {path}")
             leaked = USER_PATH.search(data.replace(scratch_bytes, b""))
             require(not leaked, f"machine path {leaked.group(0).decode() if leaked else ''} in {path}")
 
