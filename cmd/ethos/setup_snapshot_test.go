@@ -51,6 +51,9 @@ func TestCLI_SetupSnapshot_LegacyOnlySelectionSurvives(t *testing.T) {
 	require.NoError(t, os.WriteFile(legacy, []byte(initial), 0o600))
 	canonical := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
 	require.NoFileExists(t, canonical)
+	// Stamp after the legacy config is planted: setup, not the storage
+	// upgrade's config step, is what this test exercises against it.
+	stampFixture(t, se.home, se.repo)
 	answers := writeAnswers(t, se.repo, "name: Legacy Human\nhandle: legacy-human\n")
 	_, stderr, code = runCLI(t, se, "setup", "--file", answers)
 	require.Equal(t, 0, code, stderr)

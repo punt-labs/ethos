@@ -20,7 +20,6 @@ import (
 func repositoryAuditCLI(t *testing.T, mode string) (layout.Policy, audit.Stream) {
 	t.Helper()
 	home, root, _ := auditMigrateEnv(t)
-	stampFixture(t, home, root)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".punt-labs", "ethos"), 0o700))
 	if mode != "" {
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos.yaml"), []byte("record: "+mode+"\n"), 0o600))
@@ -31,6 +30,9 @@ func repositoryAuditCLI(t *testing.T, mode string) (layout.Policy, audit.Stream)
 	}
 	p, err := layout.NewRepository(root, root, m)
 	require.NoError(t, err)
+	// Stamp once the repository has used ethos: the planted archive state is
+	// what the seal under test sees, not what the storage upgrade made of it.
+	stampFixture(t, home, root)
 	t.Cleanup(func() { auditSealCommitContext, auditSealVerbose, auditSealDryRun = false, false, false })
 	auditSealCommitContext, auditSealVerbose, auditSealDryRun = false, false, false
 	return p, audit.Stream{Namespace: audit.SessionNS, Session: "fixture"}

@@ -32,7 +32,6 @@ func publicationFixtureCLI(t *testing.T) (*cliSubprocessEnv, string, string) {
 	se := &cliSubprocessEnv{home: t.TempDir(), repo: root}
 	se.env = []string{"HOME=" + se.home, "PATH=" + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_SYSTEM=" + os.DevNull}
 	publicationGitCLI(t, se, "init", "-b", "main")
-	stampFixture(t, se.home, root)
 	publicationGitCLI(t, se, "config", "user.name", "Fixture")
 	publicationGitCLI(t, se, "config", "user.email", "fixture@example.invalid")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "source.txt"), []byte("base\n"), 0o600))
@@ -54,6 +53,10 @@ func publicationFixtureCLI(t *testing.T) (*cliSubprocessEnv, string, string) {
 	data, err = yaml.Marshal(d)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "delegations", "d-one", "record.yaml"), data, 0o600))
+	// Stamp the store root once the mission tree exists: the publication
+	// commands under test see the planted records, not what the storage
+	// upgrade made of them.
+	stampFixture(t, se.home, root)
 	checkout := filepath.Join(t.TempDir(), "linked")
 	publicationGitCLI(t, se, "worktree", "add", "-b", "feature", checkout)
 	se.repo = checkout
