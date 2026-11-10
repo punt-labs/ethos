@@ -1029,6 +1029,29 @@ func TestHandleSessionStart_PolicyIssueDoesNotSkipRefresh(t *testing.T) {
 	assert.Contains(t, out, "refreshed stale git hook section(s) at session start: pre-commit")
 }
 
+// The repair line goes into the session's JSON note only, and a repair error is
+// the repair log's to hold: neither reaches stderr.
+func TestHandleSessionStart_RepairNeverReachesStderr(t *testing.T) {
+	for name, repair := range map[string]func(context.Context) (int, error){
+		"a repaired item": func(context.Context) (int, error) { return 3, nil },
+		"a repair error":  func(context.Context) (int, error) { return 0, errors.New("boom") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, ss := setupIdentityWithAttributes(t, &identity.Identity{Name: "A", Handle: "a", Kind: "human"}, "", "")
+			var stdout string
+			stderr := captureStderr(t, func() {
+				stdout = captureSessionStartOutput(t, `{"session_id":"s-stderr"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair})
+			})
+			assert.NotContains(t, stderr, "upgraded storage")
+			assert.NotContains(t, stderr, "session repair")
+			assert.NotContains(t, stderr, "boom")
+			if name == "a repaired item" {
+				assert.Contains(t, stdout, "upgraded storage (3 items")
+			}
+		})
+	}
+}
+
 func TestHandleSessionStart_RepairNote(t *testing.T) {
 	tests := []struct {
 		name     string

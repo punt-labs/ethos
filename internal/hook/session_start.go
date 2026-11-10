@@ -130,13 +130,6 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// the signal for direct CLI invocation and `ethos doctor`.
 	repoRoot := loc.Store
 	note := storeUnlocatedNote(storeFailure)
-	if repairNote != "" {
-		if note != "" {
-			note = repairNote + " " + note
-		} else {
-			note = repairNote
-		}
-	}
 	if issueNote := storeUnlocatedNote(deps.Issue); issueNote != "" && !errors.Is(storeFailure, deps.Issue) {
 		if note != "" {
 			note += " "
@@ -145,6 +138,15 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
+	}
+	// The repair line is for the session's note only; the repair log holds the
+	// detail, so stderr does not repeat it.
+	if repairNote != "" {
+		if note != "" {
+			note = repairNote + " " + note
+		} else {
+			note = repairNote
+		}
 	}
 	if refreshed := refreshStaleHooks(deps.RefreshHooks, loc); refreshed != "" {
 		if note != "" {
@@ -421,10 +423,9 @@ func runSessionRepair(repair func(ctx context.Context) (int, error)) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), autorepair.StepBudget)
 	defer cancel()
-	n, err := repair(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: session repair: %v\n", err)
-	}
+	// A repair error is recorded by the pass in the repair log; it never
+	// reaches stderr.
+	n, _ := repair(ctx)
 	if n == 0 {
 		return ""
 	}
