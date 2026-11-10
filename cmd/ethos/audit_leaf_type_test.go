@@ -42,6 +42,7 @@ func testRepositoryLeafActualCLI(t *testing.T, kinds []string) {
 						_, root, _ := auditMigrateEnv(t)
 						p, err := layout.NewRepository(root, root, layout.RecordBlame)
 						require.NoError(t, err)
+						stampCurrent(t, p)
 						base := map[string]string{"live": p.LocalRoot(), "archive": audit.ArchiveRoot(p), "record": p.RecordRoot()}[layer]
 						rel, name := "sessions/2026-11-04-fixture", "audit.jsonl"
 						cn := audit.ChunkName{Namespace: audit.SessionNS, First: 100, Last: 100}

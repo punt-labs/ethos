@@ -136,10 +136,17 @@ func newShimRepo(t *testing.T, enable bool) *shimRepo {
 		"PATH=/usr/bin:/bin")
 	runGit(t, r.dir, "init", "-q", "-b", "main")
 	if enable {
-		cmd := exec.Command(filepath.Join(ethosBinDir(t), "ethos"), "enable")
-		cmd.Dir, cmd.Env = r.dir, r.env
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "enable: %s", out)
+		// enable, then one command that reads storage: the storage upgrade
+		// stamps the fresh repository current, so the commit under test runs
+		// no repair and prints no upgrade line (what an upgraded repo sees).
+		for _, args := range [][]string{{"enable"}, {"doctor"}} {
+			cmd := exec.Command(filepath.Join(ethosBinDir(t), "ethos"), args...)
+			cmd.Dir, cmd.Env = r.dir, r.env
+			out, err := cmd.CombinedOutput()
+			if args[0] == "enable" {
+				require.NoError(t, err, "enable: %s", out)
+			}
+		}
 	} else {
 		for _, h := range []string{"pre-commit", "commit-msg"} {
 			body, err := os.ReadFile(h + ".sh")
