@@ -10,6 +10,8 @@ package autorepair
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -123,8 +125,16 @@ var StepOrder = []string{
 	"sessions",          // 17
 }
 
-// Register adds a step. Called from each step file's init.
-func Register(s Step) { Steps = append(Steps, s) }
+var stepNameRE = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// Register adds a step. Called from each step file's init. It panics on a name
+// outside [a-z0-9-]: the name is joined into a lock file path.
+func Register(s Step) {
+	if !stepNameRE.MatchString(s.Name) {
+		panic(fmt.Sprintf("autorepair: invalid step name %q", s.Name))
+	}
+	Steps = append(Steps, s)
+}
 
 // Budgets, initial values from DES-084.
 const (

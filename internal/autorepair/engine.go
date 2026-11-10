@@ -107,7 +107,7 @@ func hookEnv(roots resolve.Located, global string, o options) (Env, error) {
 		return Env{}, errors.New("building the hook environment: no global store root")
 	}
 	r, policy := repositoryTarget(roots)
-	env := Env{Global: global, Now: o.now(), Log: openLog(global, roots, o.ethos)}
+	env := Env{Global: global, Now: o.now(), Log: newFileLog(global, roots.Store, roots.Checkout, o.ethos)}
 	if r != nil {
 		env.Roots, env.Policy = roots, policy
 	}
