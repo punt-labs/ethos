@@ -120,15 +120,9 @@ func TestRecordTreeTraceKeepsReflectionsWithoutDecisions(t *testing.T) {
 func TestRecordTreeTraceArchivesReflectionsAfterDecisions(t *testing.T) {
 	env := corpusEnv(t, "v4.22.1")
 	const id = "m-2026-11-09-001"
-	rec := env.Policy.RecordRoot()
-	agg := filepath.Join(rec, "missions", id, "reflections.yaml")
-	// The v4.8.0 aggregate for the same mission, whose round 1 the v4.22.1
-	// contract already decided (bf96036b...).
-	src := filepath.Join("testdata", "corpus", "v4.8.0", "repo", ".punt-labs", "ethos", "missions", id, "reflections.yaml")
-	b, err := os.ReadFile(src)
-	require.NoError(t, err)
-	b = []byte(strings.ReplaceAll(string(b), "2026-11-09T23:02:27Z", "2026-11-09T23:03:22Z"))
-	require.NoError(t, os.WriteFile(agg, b, 0o600))
+	// The v4.8.0 aggregate under a contract whose round-1 decision id is the
+	// legacy-import hash of that entry: the state step 3 produces.
+	agg := importedAggregateFor(t, env)
 
 	out := run5(t, env)
 	assert.Empty(t, out.Residuals)
@@ -145,7 +139,9 @@ func TestRecordTreeTraceArchivesReflectionsAfterDecisions(t *testing.T) {
 	assert.Equal(t, "round 1 finished cleanly", states[0].Reflection.Reason)
 }
 
-// An aggregate whose round the contract never decided is left in place.
+// An aggregate holding a round the contract never decided cannot be shown to
+// be legacy detail (only the legacy import leaves a matching decision id), so
+// it is treated as a publication: left in place, no item, no residual.
 func TestRecordTreeTraceLeavesReflectionsForUndecidedRound(t *testing.T) {
 	env := corpusEnv(t, "v4.22.1")
 	const id = "m-2026-11-09-001"
@@ -153,8 +149,8 @@ func TestRecordTreeTraceLeavesReflectionsForUndecidedRound(t *testing.T) {
 	body := "reflections:\n  - round: 2\n    created_at: \"2026-11-09T23:05:00Z\"\n    author: claude\n    converging: true\n    signals: [ok]\n    recommendation: continue\n    reason: undecided\n"
 	require.NoError(t, os.WriteFile(agg, []byte(body), 0o600))
 	out := run5(t, env)
-	require.Len(t, out.Residuals, 1)
-	assert.Contains(t, out.Residuals[0].Reason, "no shared decision")
+	assert.Empty(t, out.Residuals)
+	assert.Equal(t, 0, out.Items)
 	assert.FileExists(t, agg)
 }
 
@@ -352,7 +348,9 @@ func TestRecordTreeTraceRedactsLinesLikeTheSeal(t *testing.T) {
 }
 
 // legacyAggregateFor plants the v4.8.0 aggregate for m-2026-11-09-001 with
-// its created_at aligned to the decision the v4.22.1 contract holds.
+// its created_at aligned to the decision the v4.22.1 contract holds. That
+// contract's decision id (bf96036b...) is a live reflect's random operation
+// id, so the aggregate reads as that reflect's publication.
 func legacyAggregateFor(t *testing.T, root string) string {
 	t.Helper()
 	const id = "m-2026-11-09-001"
@@ -364,6 +362,35 @@ func legacyAggregateFor(t *testing.T, root string) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(agg), 0o700))
 	require.NoError(t, os.WriteFile(agg, b, 0o600))
 	return agg
+}
+
+// importedAggregateFor plants the same aggregate and rewrites the contract's
+// round-1 decision id to the legacy-import hash of that entry, the state step
+// 3 (round-decisions) leaves a pre-v4.21 mission in.
+func importedAggregateFor(t *testing.T, env Env) string {
+	t.Helper()
+	const id = "m-2026-11-09-001"
+	agg := legacyAggregateFor(t, env.Policy.RecordRoot())
+	b, err := os.ReadFile(agg)
+	require.NoError(t, err)
+	rs, err := mission.DecodeLegacyReflections(b, id)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	want := mission.LegacyDecisionID(rs[0])
+	contract := filepath.Join(env.Policy.RecordRoot(), "missions", id, "contract.yaml")
+	c, err := os.ReadFile(contract)
+	require.NoError(t, err)
+	require.Contains(t, string(c), "id: bf96036b8393d71fc23fadc534e00376")
+	c = []byte(strings.Replace(string(c), "id: bf96036b8393d71fc23fadc534e00376", "id: "+want, 1))
+	require.NoError(t, os.WriteFile(contract, c, 0o600))
+	return agg
+}
+
+func logLines(env Env) []logEntry {
+	l := env.Log.(*memLog)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]logEntry(nil), l.Entries...)
 }
 
 // (1) A record:full repository publishes reflections.yaml as a current
@@ -383,6 +410,11 @@ func TestRecordTreeTraceFullModePublicationKept(t *testing.T) {
 	assert.Equal(t, 0, out.Items)
 	assert.NoFileExists(t, filepath.Join(p.TraceArchiveRoot(), "missions", id, "reflection-1.yaml"))
 	assert.Equal(t, before, hashFiles(t, p.RecordRoot(), p.LocalRoot()), "nothing written")
+	assert.Empty(t, logLines(env), "a kept publication is not a repair event")
+	again := run5(t, env)
+	assert.Equal(t, Outcome{}, again)
+	assert.Equal(t, before, hashFiles(t, p.RecordRoot(), p.LocalRoot()))
+	assert.Empty(t, logLines(env))
 }
 
 // (3) In blame mode, an aggregate whose round already has an envelope a live
@@ -403,4 +435,28 @@ func TestRecordTreeTraceAggregateWithLiveEnvelopeKept(t *testing.T) {
 	b, err := os.ReadFile(dest)
 	require.NoError(t, err)
 	assert.Equal(t, live, string(b), "the live envelope is never rewritten")
+	assert.Empty(t, logLines(env), "a kept publication is not a repair event")
+	before := hashFiles(t, env.Policy.RecordRoot(), env.Policy.LocalRoot())
+	again := run5(t, env)
+	assert.Equal(t, Outcome{}, again)
+	assert.Equal(t, before, hashFiles(t, env.Policy.RecordRoot(), env.Policy.LocalRoot()))
+	assert.Empty(t, logLines(env))
+}
+
+// A repository ran record:full, published reflections.yaml in C and committed
+// it, then switched ethos.yaml to record:blame. A fresh clone has no live
+// envelope in its local zone. Mode changes never delete published history
+// (docs/storage-layout.md): the file survives, with no item, no residual and
+// no log line. The contract's decision id is a live reflect's, not the
+// legacy-import hash, which is how the step knows.
+func TestRecordTreeTracePublishedAggregateAfterSwitchToBlameOnClone(t *testing.T) {
+	env := corpusEnv(t, "v4.22.1") // blame policy, decisions present for round 1
+	agg := legacyAggregateFor(t, env.Policy.CheckoutRecordRoot())
+	before := hashFiles(t, env.Policy.RecordRoot(), env.Policy.LocalRoot())
+	out := run5(t, env)
+	assert.FileExists(t, agg, "published reflections.yaml must survive a full->blame switch on a clone")
+	assert.Empty(t, out.Residuals)
+	assert.Equal(t, 0, out.Items)
+	assert.Equal(t, before, hashFiles(t, env.Policy.RecordRoot(), env.Policy.LocalRoot()), "nothing written")
+	assert.Empty(t, logLines(env))
 }

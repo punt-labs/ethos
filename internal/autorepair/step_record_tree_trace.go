@@ -16,15 +16,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
-	// hook supplies the seal's line guards. Their closure is the live audit
-	// writer's own redaction (redactToolInputQuiet, hashToolInput, the
-	// sensitive-content sweep) across five files, so it is not a mechanical
-	// move into a leaf package. The import direction is therefore fixed:
-	// autorepair imports hook; hook must never import autorepair. When the
-	// engine is wired into the session-start hook, the wiring goes in
-	// cmd/ethos, which imports both.
-	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/lineguard"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/repair"
 )
@@ -71,8 +64,8 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: "redactor", Reason: err.Error()})
 		return out, nil
 	}
-	a.sessionGuard = hook.SessionLineGuard(a.repo)
-	a.missionGuard = hook.MissionLineGuard(a.repo)
+	a.sessionGuard = lineguard.SessionLineGuardFor(a.repo)
+	a.missionGuard = lineguard.MissionLineGuardFor(a.repo)
 	a.store = mission.NewStoreWithRoots(env.Roots.Store, env.Global)
 	for _, path := range plan.Unreadable {
 		rel, _, ok := a.relative(path)
@@ -190,8 +183,7 @@ func (a *archiver) archiveReflections(path, rel string) (deferred bool, err erro
 		return false, errors.New("not valid UTF-8; left in place")
 	}
 	if err := a.reflections(id, data); errors.Is(err, errPublishedEnvelope) {
-		a.env.Log.Logf(stepRecordTreeTrace, "keep-published", []string{path}, nil)
-		return false, errKept
+		return false, errKept // a publication: no item, no residual, no log line
 	} else if err != nil {
 		return false, err
 	}
@@ -203,7 +195,7 @@ func (a *archiver) archiveReflections(path, rel string) (deferred bool, err erro
 }
 
 // errKept says a file was examined and deliberately left: not an item, not a
-// residual.
+// residual, and nothing in the log (a publication is not a repair event).
 var errKept = errors.New("kept")
 
 // liveEnvelopeExists reports whether dest holds an envelope a live reflect
@@ -495,7 +487,8 @@ func (a *archiver) prompt(id, delegation string, data []byte) error {
 }
 
 // jsonl passes every line of a frozen or sealed log through the same guard
-// the seal and quarantine paths use (credentials, addresses, paths; the
+// the seal and quarantine paths use (internal/lineguard, the leaf package
+// below both this package and internal/hook; this package never imports hook) (credentials, addresses, paths; the
 // tool_input_hash recomputed over the stored tool_input) and archives the
 // result. A sealed chunk must still decode strictly afterwards; a damaged
 // one is step 7's and stays in place.
