@@ -48,9 +48,11 @@ func execHandler(t *testing.T, args ...string) (stdout, stderr string, err error
 	// other via persistent cobra flag bindings.
 	jsonOutput = false
 	whoamiReference = false
+	identityReference = false
 	t.Cleanup(func() {
 		jsonOutput = false
 		whoamiReference = false
+		identityReference = false
 	})
 
 	var outBuf, errBuf bytes.Buffer
@@ -227,7 +229,7 @@ func TestRunWhoami_LoudWhenSessionUnresolvableUnderClaudeCode(t *testing.T) {
 
 	_, _, err := execHandler(t, "whoami")
 	require.Error(t, err, "must not silently resolve via git/OS when a session was expected")
-	assert.Contains(t, err.Error(), "cannot identify the calling session")
+	assert.Contains(t, err.Error(), "no Claude Code session is bound to this process")
 }
 
 func TestRunWhoami_JSON(t *testing.T) {
