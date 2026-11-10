@@ -48,8 +48,25 @@ type silentError struct{}
 
 func (silentError) Error() string { return "" }
 
+// unknownGroupCommand reports a non-flag argument that lands on a command
+// group (a command with subcommands). Cobra turns that into a help request,
+// and --help beats argument validation, so a removed subcommand would print
+// the group's help and exit 0. Groups take no positional arguments, so any
+// such word is an unknown subcommand.
+func unknownGroupCommand(args []string) error {
+	c, rest, err := rootCmd.Find(args)
+	if err != nil || !c.HasSubCommands() || len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
+		return nil
+	}
+	return fmt.Errorf("unknown command %q for %q", rest[0], c.CommandPath())
+}
+
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	err := unknownGroupCommand(os.Args[1:])
+	if err == nil {
+		err = rootCmd.Execute()
+	}
+	if err != nil {
 		if _, ok := err.(silentError); !ok {
 			// A usageError speaks only when it carries a message; the
 			// zero value means the command already printed its own.

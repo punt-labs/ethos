@@ -43,45 +43,52 @@ var keptCommands = [][]string{
 	{"session", "iam"},
 }
 
-func TestRemovedCommandsAreNotInTheTree(t *testing.T) {
-	for _, args := range removedCommands {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			c, rest, err := rootCmd.Find(args)
-			if err == nil && len(rest) == 0 && c != rootCmd {
-				t.Fatalf("%q is still a command (%s)", strings.Join(args, " "), c.CommandPath())
-			}
-		})
-	}
-}
-
-func TestRemovedCommandsFailInTheBinary(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-	for _, args := range [][]string{{"repair"}, {"resolve-agent"}, {"show", "x"}, {"list"}, {"create"}} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			se := setupCLISubprocessEnv(t)
-			cmd := exec.Command(ethosBinary, args...)
-			cmd.Dir = se.repo
-			cmd.Env = withForcedNotUnderClaudeCode(se.env)
-			out, err := cmd.CombinedOutput()
-			require.Error(t, err, string(out))
-			assert.Contains(t, string(out), "unknown command")
-		})
-	}
-}
-
-func TestSessionPurgeIsUnknownInTheBinary(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
+// runEthosStderr runs the built binary and returns stderr and the exit code.
+func runEthosStderr(t *testing.T, args ...string) (string, int) {
+	t.Helper()
 	se := setupCLISubprocessEnv(t)
-	cmd := exec.Command(ethosBinary, "session", "purge")
+	cmd := exec.Command(ethosBinary, args...)
 	cmd.Dir = se.repo
 	cmd.Env = withForcedNotUnderClaudeCode(se.env)
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err, string(out))
-	assert.Contains(t, string(out), "unknown command")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return stderr.String(), 0
+	}
+	var ee *exec.ExitError
+	require.ErrorAs(t, err, &ee)
+	return stderr.String(), ee.ExitCode()
+}
+
+// TestRemovedCommandsFailInTheBinary runs every removed command through the
+// real binary, bare, with an argument and with --help. A script that calls a
+// removed command must see a usage error, not the parent group's help and
+// exit 0.
+func TestRemovedCommandsFailInTheBinary(t *testing.T) {
+	require.NotEmpty(t, ethosBinary, "the CLI binary must build; this test must not skip")
+	for _, removed := range removedCommands {
+		for _, extra := range [][]string{nil, {"x"}, {"--help"}} {
+			args := append(append([]string{}, removed...), extra...)
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				stderr, code := runEthosStderr(t, args...)
+				assert.Equal(t, 2, code, "stderr: %s", stderr)
+				assert.True(t, strings.Contains(stderr, "unknown command") || strings.Contains(stderr, "unknown flag"),
+					"stderr must name an unknown command or flag: %q", stderr)
+			})
+		}
+	}
+}
+
+func TestRemovedVendorFlagsFailInTheBinary(t *testing.T) {
+	require.NotEmpty(t, ethosBinary, "the CLI binary must build; this test must not skip")
+	for _, args := range [][]string{{"vendor", "--no-teams"}, {"vendor", "--from", "x"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			stderr, code := runEthosStderr(t, args...)
+			assert.Equal(t, 2, code, "stderr: %s", stderr)
+			assert.Contains(t, stderr, "unknown flag")
+		})
+	}
 }
 
 func TestKeptCommandsRemain(t *testing.T) {
