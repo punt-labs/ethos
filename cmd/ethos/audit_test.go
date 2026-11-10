@@ -565,17 +565,9 @@ func requarantineOutput(t *testing.T, commitBetween bool) string {
 	})
 	require.NoError(t, err)
 	assert.NoFileExists(t, chunk, "the explicitly selected publication is retired")
-	files, err := filepath.Glob(filepath.Join(repo, ".punt-labs", "local", "ethos", "quarantine", "*", "*.corrupt"))
+	files, err := filepath.Glob(filepath.Join(repo, ".punt-labs", "local", "ethos", "quarantine", "*", "*"))
 	require.NoError(t, err)
-	require.Len(t, files, 2)
-	seen := map[string]bool{}
-	for _, path := range files {
-		body, err := os.ReadFile(path)
-		require.NoError(t, err)
-		seen[string(body)] = true
-	}
-	assert.True(t, seen["not json\n"])
-	assert.True(t, seen["damaged again\n"])
+	require.Empty(t, files, "no raw copy of the damaged bytes remains")
 	marker, err := audit.ReadMarker(strings.TrimSuffix(chunk, ".jsonl") + ".quarantine")
 	require.NoError(t, err)
 	assert.True(t, marker.HasGap(), "local recovery does not prove published availability")
@@ -586,12 +578,12 @@ func requarantineOutput(t *testing.T, commitBetween bool) string {
 
 func TestAuditQuarantine_RerunAfterSourceCommitReportsFreshDamage(t *testing.T) {
 	out := requarantineOutput(t, true)
-	assert.Contains(t, out, "SHARED REPAIR PENDING")
+	assert.Contains(t, out, "retired damaged shared chunk")
 }
 
 func TestAuditQuarantine_RerunWithoutCommitReportsFreshDamage(t *testing.T) {
 	out := requarantineOutput(t, false)
-	assert.Contains(t, out, "SHARED REPAIR PENDING")
+	assert.Contains(t, out, "retired damaged shared chunk")
 }
 
 // Quarantining one chunk does not hide independent damage in another, even

@@ -59,12 +59,9 @@ func quarantineLeafCLIFixture(t *testing.T, namespace, layer string) (root, sour
 	marker, err := audit.ReadMarker(filepath.Join(dir, cn.MarkerFile()))
 	require.NoError(t, err)
 	require.NotEmpty(t, marker.RetiredSHA256)
-	evidence, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*.corrupt"))
+	evidence, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
 	require.NoError(t, err)
-	require.Len(t, evidence, 1)
-	body, err := os.ReadFile(evidence[0])
-	require.NoError(t, err)
-	require.Equal(t, "initial fixture damage\n", string(body))
+	require.Empty(t, evidence, "the damaged bytes are deleted once recovery completes")
 	return root, source, index
 }
 

@@ -154,8 +154,7 @@ func TestRepositoryQuarantineResumesEveryPersistenceBoundary(t *testing.T) {
 			line := func(ts int64) []byte {
 				return []byte(`{"ts":"` + FormatLineTS(ts) + `","tool":"Read","record":"blame"}` + "\n")
 			}
-			original := append(line(300), []byte("corrupt tail\n")...)
-			if err := WriteLocalAtomic(p, source, original); err != nil {
+			if err := WriteLocalAtomic(p, source, append(line(300), []byte("corrupt tail\n")...)); err != nil {
 				t.Fatal(err)
 			}
 			if err := WriteLocalAtomic(p, s.LivePath(p), append(line(100), line(200)...)); err != nil {
@@ -187,19 +186,15 @@ func TestRepositoryQuarantineResumesEveryPersistenceBoundary(t *testing.T) {
 			if _, err := QuarantineLocal(p, s, source, dir, cn, "fixture", guard); err != nil {
 				t.Fatal(err)
 			}
-			files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*.corrupt"))
-			if err != nil || len(files) != 1 {
-				t.Fatalf("originals=%v %v", files, err)
-			}
-			raw, err := os.ReadFile(files[0])
-			if err != nil || !bytes.Equal(raw, original) {
-				t.Fatalf("original corrupt evidence lost: %q %v", raw, err)
+			files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
+			if err != nil || len(files) != 0 {
+				t.Fatalf("damaged bytes retained after recovery completed: %v %v", files, err)
 			}
 		})
 	}
 }
 
-func TestRepositoryQuarantineRepeatedDamageRetainsDistinctEvidence(t *testing.T) {
+func TestRepositoryQuarantineRepeatedDamageDeletesDamagedBytes(t *testing.T) {
 	p := repositoryPolicy(t, layout.RecordBlame)
 	s := Stream{Namespace: SessionNS, Session: "s"}
 	dir, err := ArchiveDir(p, s, "2026-11-04")
@@ -226,20 +221,9 @@ func TestRepositoryQuarantineRepeatedDamageRetainsDistinctEvidence(t *testing.T)
 			t.Fatalf("recovered stream=%+v %v", data, err)
 		}
 	}
-	files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*.corrupt"))
-	if err != nil || len(files) != 2 {
-		t.Fatalf("evidence=%v %v", files, err)
-	}
-	seen := map[string]bool{}
-	for _, path := range files {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		seen[string(b)] = true
-	}
-	if !seen["first damage\n"] || !seen["second damage\n"] {
-		t.Fatalf("raw evidence changed: %v", seen)
+	files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("damaged bytes retained after recovery: %v %v", files, err)
 	}
 }
 

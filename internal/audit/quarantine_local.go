@@ -34,8 +34,10 @@ func (r localRetirement) validate() error {
 }
 
 // QuarantineLocal retires only the selected chunk. The caller holds its stream
-// lock and supplies a redacted reason and recovered-line guard. Raw evidence is
-// content-addressed at S. For a published source a conservative availability
+// lock and supplies a redacted reason and recovered-line guard. Recovered lines
+// are redacted by the guard, and a line that contradicts a surviving chunk is
+// not installed. The damaged bytes are held in S only while recovery runs and
+// are deleted when it completes. For a published source a conservative availability
 // marker is installed at that location BEFORE removal, without touching Git's
 // index. Local recovery never proves that the shared snapshot was repaired.
 func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName, reason string, guard func([]byte) ([]byte, string, bool)) (Marker, error) {
@@ -138,12 +140,14 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			return Marker{}, err
 		}
 	}
+	// The raw bytes are kept only until recovery completes, so a retry that
+	// finds them gone has nothing left to compare against.
 	raw, err := os.ReadFile(rawPath)
-	if err != nil {
-		return Marker{}, fmt.Errorf("reading retained quarantine original: %w", err)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Marker{}, fmt.Errorf("reading quarantine original: %w", err)
 	}
-	if fmt.Sprintf("%x", sha256.Sum256(raw)) != rec.SHA256 || len(raw) != rec.Size {
-		return Marker{}, errors.New("retained quarantine original does not match retirement metadata")
+	if err == nil && (fmt.Sprintf("%x", sha256.Sum256(raw)) != rec.SHA256 || len(raw) != rec.Size) {
+		return Marker{}, errors.New("quarantine original does not match retirement metadata")
 	}
 	body, err := json.Marshal(rec)
 	if err != nil {
@@ -225,16 +229,30 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			continue
 		}
 		out, _, _ := guard(l.Raw)
-		before, err := CanonicalPayload(l.Raw)
+		if _, err := CanonicalPayload(out); err != nil {
+			return Marker{}, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
+		}
+		l.Raw = out
+		lines = append(lines, l)
+	}
+	// A recovered line must not contradict evidence that survives in another
+	// chunk of the stream: the surviving copy wins and the line is not installed.
+	evidence, err := chunkEvidence(p, s, source)
+	if err != nil {
+		return Marker{}, err
+	}
+	kept := lines[:0]
+	for _, l := range lines {
+		got, err := CanonicalPayload(l.Raw)
 		if err != nil {
 			return Marker{}, err
 		}
-		after, err := CanonicalPayload(out)
-		if err != nil || !bytes.Equal(before, after) {
-			return Marker{}, errors.New("quarantine recovery requires redacted migration; original live source retained")
+		if want, ok := evidence[l.TS]; ok && !bytes.Equal(want, got) {
+			continue
 		}
-		lines = append(lines, l)
+		kept = append(kept, l)
 	}
+	lines = kept
 	m := Marker{Chunk: cn.Stem(), VerifiedLast: verifiedLast, Reason: reason, RetiredSHA256: rec.SHA256}
 	if len(lines) > 0 {
 		first, last := lines[0].TS, lines[len(lines)-1].TS
@@ -275,6 +293,13 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 	}
 	if err := ReplaceLocalFile(p, markerPath, append(body, '\n')); err != nil {
 		return Marker{}, err
+	}
+	// Recovery is complete: the damaged bytes are no longer needed, and may hold
+	// text redaction never saw, so they are deleted rather than kept.
+	for _, path := range []string{rawPath, rawPath + ".json"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Marker{}, fmt.Errorf("deleting damaged chunk bytes %s: %w", path, err)
+		}
 	}
 	return m, nil
 }

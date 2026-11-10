@@ -345,8 +345,8 @@ func TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent(t *testing.T) {
 	}
 }
 
-// Seal redacts an unsafe live mission line in place; quarantine recovery still
-// refuses and retains it.
+// Seal redacts an unsafe live mission line in place; quarantine recovery
+// redacts the line it re-seals.
 func TestMissionLine_UnsafeLiveLineIsRedactedOnSealAndRetainedOnRecovery(t *testing.T) {
 	for _, quarantine := range []bool{false, true} {
 		name := "seal"
@@ -377,10 +377,8 @@ func TestMissionLine_UnsafeLiveLineIsRedactedOnSealAndRetainedOnRecovery(t *test
 			path := filepath.Join(dir, audit.MissionChunkFile(sid, 100, 300))
 			require.NoError(t, os.WriteFile(path, []byte("corrupt\n"), 0o600))
 			_, err := QuarantineChunk(repo, path, "bad")
-			require.ErrorContains(t, err, "requires redacted migration")
-			after, err := os.ReadFile(live)
-			require.NoError(t, err)
-			assert.Equal(t, line, after, "refusal must preserve the original identity and source")
+			require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
+			assert.NotContains(t, strings.Join(chunkLines(t, dir), "\n"), "/home/bob", "the recovered chunk is redacted")
 		})
 	}
 }

@@ -108,12 +108,9 @@ func TestRepositoryQuarantineSameByteRetirementResumes(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, data.Lines, 2)
 			require.Empty(t, data.Gaps)
-			files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*.corrupt"))
+			files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
 			require.NoError(t, err)
-			require.Len(t, files, 1, "same-byte retirement reuses its immutable forensic evidence")
-			retained, err := os.ReadFile(files[0])
-			require.NoError(t, err)
-			require.Equal(t, damage, retained)
+			require.Empty(t, files, "the damaged bytes are deleted once recovery completes")
 		})
 	}
 }
@@ -210,16 +207,9 @@ func TestRepositoryQuarantineRepeatedRetirementResumesAfterOldCompletion(t *test
 					require.NoError(t, err)
 					require.Equal(t, int64(300), data.Floor)
 					require.Len(t, data.Lines, 2)
-					files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*.corrupt"))
+					files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
 					require.NoError(t, err)
-					require.Len(t, files, 2)
-					var originals [][]byte
-					for _, path := range files {
-						body, err := os.ReadFile(path)
-						require.NoError(t, err)
-						originals = append(originals, body)
-					}
-					require.ElementsMatch(t, [][]byte{firstDamage, secondDamage}, originals)
+					require.Empty(t, files, "the damaged bytes are deleted once recovery completes")
 				})
 			}
 		}
@@ -293,4 +283,49 @@ func TestRepositoryQuarantineRepeatedRetirementKeepsHighestMarkerBounds(t *testi
 			}
 		})
 	}
+}
+
+// Recovery redacts a live line it re-seals instead of refusing the quarantine,
+// and deletes the damaged bytes once it completes.
+func TestQuarantineLocalRedactsRecoveredLine(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	source := filepath.Join(dir, cn.ChunkFile())
+	require.NoError(t, WriteLocalAtomic(p, s.LivePath(p), []byte(`{"ts":"`+FormatLineTS(100)+`","tool":"Secret"}`+"\n")))
+	require.NoError(t, WriteLocalAtomic(p, source, []byte("damage\n")))
+
+	m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", maskGuard)
+	require.NoError(t, err, "a line the guard changes no longer refuses the recovery")
+	assert.False(t, m.HasGap())
+	b, err := os.ReadFile(source)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"tool":"Masked"`)
+	assert.NotContains(t, string(b), "Secret")
+	files, err := filepath.Glob(filepath.Join(p.LocalRoot(), "quarantine", "*", "*"))
+	require.NoError(t, err)
+	assert.Empty(t, files, "no raw copy of the damaged bytes remains")
+}
+
+// A recovered line that contradicts another surviving chunk is not installed.
+func TestQuarantineLocalRefusesLineConflictingWithSurvivor(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "s"}
+	dir, err := ArchiveDir(p, s, "2026-11-04")
+	require.NoError(t, err)
+	survivor := ChunkName{Namespace: SessionNS, First: 100, Last: 100}
+	require.NoError(t, WriteLocalAtomic(p, filepath.Join(dir, survivor.ChunkFile()), []byte(`{"ts":"`+FormatLineTS(100)+`","tool":"Read"}`+"\n")))
+	cn := ChunkName{Namespace: SessionNS, First: 100, Last: 200}
+	source := filepath.Join(dir, cn.ChunkFile())
+	require.NoError(t, WriteLocalAtomic(p, source, []byte("damage\n")))
+	// The only live line for ts 100 contradicts the surviving chunk.
+	require.NoError(t, ReplaceLocalFile(p, s.LivePath(p), []byte(`{"ts":"`+FormatLineTS(100)+`","tool":"Bash"}`+"\n")))
+
+	m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", func(raw []byte) ([]byte, string, bool) { return raw, "", false })
+	require.NoError(t, err)
+	assert.True(t, m.HasGap(), "the refused line is a recorded gap, not an installed conflict")
+	_, statErr := os.Stat(source)
+	assert.True(t, os.IsNotExist(statErr), "no recovered chunk holds the conflicting line")
 }

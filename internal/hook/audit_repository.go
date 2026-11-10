@@ -124,17 +124,13 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 }
 
 func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealOptions) (int, []string, error) {
-	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
-	guard := sessionLineGuard(checkout)
-	if s.Namespace == audit.MissionNS {
-		guard = missionLineGuard(checkout)
-	}
+	guard := LiveLineGuard(p, s.Namespace)
 	// New writes are guarded before their append. A live line may predate that
 	// guard: it is redacted in place, and a line whose ts is archived with
 	// another payload is dropped (the archive wins), before the union read
 	// would refuse it and before anything immutable is written.
 	if !opts.DryRun {
-		if _, err := audit.RedactLive(p, s, audit.LineGuard(guard)); err != nil {
+		if _, err := audit.RedactLive(p, s, guard); err != nil {
 			return 0, nil, err
 		}
 	}
