@@ -804,10 +804,9 @@ func trackedRuntimeFiles(repoRoot string) ([]string, error) {
 
 // trackedRuntimeWarning states what ethos found for files that are already
 // tracked despite the .gitignore: it names the count and the files, and says
-// they were left tracked. Enable does not untrack them; the storage upgrade
-// does, so the line carries no command.
+// they were left tracked. It states the condition and promises nothing.
 func trackedRuntimeWarning(files []string) string {
 	return fmt.Sprintf(
-		"%d ethos runtime file(s) are already git-tracked (%s); the .gitignore does not untrack them; left tracked; the storage upgrade unstages them on the next ethos run",
+		"%d ethos runtime file(s) are git-tracked (%s); left tracked.",
 		len(files), strings.Join(files, ", "))
 }
