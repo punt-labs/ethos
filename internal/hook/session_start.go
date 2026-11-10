@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -49,9 +51,16 @@ type SessionStartDeps struct {
 	// session, but is told to it, because a stale seal section blocks commits.
 	RefreshHooks func(checkout, store string) (HookRefresh, error)
 	// Notice is the one line autorepair.Ensure earned on this start, "" when
-	// nothing was repaired. It goes into systemMessage and additionalContext
-	// because this hook's stderr goes to an unread log (DES-084 Output).
-	Notice string
+	// nothing was repaired, and NoticeItems its item count. The line goes into
+	// systemMessage and additionalContext because this hook's stderr goes to
+	// an unread log (DES-084 Output).
+	Notice      string
+	NoticeItems int
+	// Repair is the cheap session-start storage pass (DES-084 step 17): it
+	// removes dead session state and returns the items it converted. Nil
+	// disables it. An error never fails the session; it is logged only. Its
+	// count joins Notice in the one "upgraded storage" line the session hears.
+	Repair func(ctx context.Context) (int, error)
 }
 
 // HookRefresh is what a git hook refresh did, by hook name. A failed refresh
@@ -70,7 +79,16 @@ type HookRefresh struct {
 	// TrackedMissing names hooks inside the work tree that do not exist and
 	// were not created.
 	TrackedMissing []string
-	Warnings       []string // advisory lines for stderr
+	// Malformed names hooks whose ethos section is truncated, duplicated or not
+	// ethos-written, with the condition; only an edit to the file changes it.
+	Malformed []HookProblem
+	Warnings  []string // advisory lines for stderr
+}
+
+// HookProblem is a hook the refresh cannot change and why.
+type HookProblem struct {
+	Hook  string
+	Cause string
 }
 
 // HandleSessionStart reads the SessionStart hook payload from stdin,
@@ -116,7 +134,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	} else {
 		resolvedID, humanErr = resolveHumanIdentity(store, loc.Checkout)
 	}
-	purgeStale(ss)
+	repairItems := runSessionRepair(deps.Repair)
 
 	// Resolve agent persona from repo config. A non-nil error means
 	// the config file exists but cannot be read or parsed — a loud
@@ -136,11 +154,20 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	if note != "" {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", note)
 	}
-	if deps.Notice != "" {
+	// The repair line is for the session's note only; the repair log holds the
+	// detail, so stderr does not repeat it. Ensure's notice and the cheap
+	// pass's count become one "upgraded storage" line, so a session never
+	// hears two: with both, the line carries the summed count; with Ensure's
+	// line alone, it is carried as given.
+	repairNote := deps.Notice
+	if repairItems > 0 {
+		repairNote = upgradedStorageLine(deps.NoticeItems + repairItems)
+	}
+	if repairNote != "" {
 		if note != "" {
 			note += " "
 		}
-		note += deps.Notice
+		note += repairNote
 	}
 	if refreshed := refreshStaleHooks(deps.RefreshHooks, loc); refreshed != "" {
 		if note != "" {
@@ -250,7 +277,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 // hookRefreshSkipped is the sentence for a refresh that did not run because of
 // cause (a located failure).
 func hookRefreshSkipped(cause string, err error) string {
-	return fmt.Sprintf("Git hook refresh skipped: %s%v. A stale seal section may block commits; run `ethos doctor`.", cause, err)
+	return fmt.Sprintf("Git hook refresh skipped: %s%v. A stale seal section may block commits.", cause, err)
 }
 
 // skippedHookNote tells an enabled repo's session that the refresh was skipped
@@ -306,19 +333,23 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	var problems []string
 	for _, h := range r.NonShell {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not chain the seal section into %s: non-shell hook; run `ethos doctor`.", h))
+			"Ethos did not chain the seal section into %s: non-shell hook, so the seal never runs from it.", h))
 	}
 	for _, h := range r.Tracked {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not rewrite the stale %s hook: core.hooksPath places it in a tracked file; run `ethos enable` to update it.", h))
+			"Ethos left the stale %s hook in place: core.hooksPath puts it in a tracked file.", h))
 	}
 	for _, h := range r.Shared {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not rewrite the stale %s hook: core.hooksPath is shared outside this repo; run `ethos enable`.", h))
+			"Ethos left the stale %s hook in place: core.hooksPath is shared outside this repo.", h))
+	}
+	for _, m := range r.Malformed {
+		problems = append(problems, fmt.Sprintf(
+			"Ethos could not refresh the %s section: %s; the seal section was not refreshed.", m.Hook, m.Cause))
 	}
 	for _, h := range r.TrackedMissing {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not install the %s hook: core.hooksPath places it in the work tree; run `ethos enable` to install it.", h))
+			"Ethos did not install the %s hook: core.hooksPath places it in the work tree.", h))
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: refreshing git hook sections: %v\n", err)
@@ -327,7 +358,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 			parts = append(parts, fail+": "+err.Error())
 		} else {
 			problems = append(problems, fmt.Sprintf(
-				"Ethos could not refresh stale git hook section(s): %v. Commits may be blocked; run `ethos enable` or `ethos doctor`.", err))
+				"Ethos could not refresh stale git hook section(s): %v. Commits may be blocked.", err))
 		}
 	}
 	var out []string
@@ -336,7 +367,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", joined)
 		sentence := "Ethos " + joined + "."
 		if err != nil {
-			sentence += " Commits may be blocked; run `ethos enable` or `ethos doctor`."
+			sentence += " Commits may be blocked."
 		}
 		out = append(out, sentence)
 	}
@@ -408,13 +439,28 @@ func resolveHumanIdentity(store identity.IdentityStore, checkout string) (*ident
 	return id, nil
 }
 
-// purgeStale cleans stale PID files from previous sessions (fire-and-forget).
-func purgeStale(ss *session.Store) {
-	if purged, err := ss.PurgeCurrent(); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to purge stale PID files: %v\n", err)
-	} else if len(purged) > 0 {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: cleaned %d stale PID file(s)\n", len(purged))
+// runSessionRepair runs the DES-084 session-start pass and returns the items it
+// converted, 0 when nothing was converted or the pass failed.
+func runSessionRepair(repair func(ctx context.Context) (int, error)) int {
+	if repair == nil {
+		return 0
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), autorepair.StepBudget)
+	defer cancel()
+	// A repair error is recorded by the pass in the repair log; it never
+	// reaches stderr.
+	n, _ := repair(ctx)
+	return n
+}
+
+// upgradedStorageLine is the one line the session's note carries for n
+// converted items, "" for none. This hook's stderr is never read, so the line
+// goes in the note.
+func upgradedStorageLine(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("ethos: upgraded storage (%d items; see ~/.punt-labs/ethos/logs/repair.log)", n)
 }
 
 // createSessionRoster creates the session roster entry when a session ID

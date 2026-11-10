@@ -153,8 +153,12 @@ func TestEnsureLineForSessionStartIsHeldNotPrinted(t *testing.T) {
 	errOut := captureStderr(t, c)
 	require.NoError(t, establishRoots(c, nil))
 	assert.Empty(t, errOut.String())
-	assert.Equal(t, 1, strings.Count(takeRepairNotice(), "upgraded storage"))
-	assert.Equal(t, "", takeRepairNotice(), "the notice is taken once")
+	line, items := takeRepairNotice()
+	assert.Equal(t, 1, strings.Count(line, "upgraded storage"))
+	assert.Equal(t, 3, items, "the item count rides with the line so the hook can sum it")
+	line, items = takeRepairNotice()
+	assert.Equal(t, "", line, "the notice is taken once")
+	assert.Equal(t, 0, items)
 }
 
 func TestEnsureSilentWhenNothingRepaired(t *testing.T) {

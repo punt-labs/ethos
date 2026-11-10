@@ -54,6 +54,9 @@ type StepResult struct {
 	Step   string `json:"step"`
 	Status string `json:"status"`
 	Detail string `json:"detail,omitempty"`
+	// Cause states why a skipped step stays skipped, when the reason is a
+	// permanent condition of the file rather than of the run.
+	Cause string `json:"cause,omitempty"`
 }
 
 // Report is the outcome of an enable or disable run.
@@ -66,6 +69,10 @@ type Report struct {
 
 func (r *Report) step(name, status, detail string) {
 	r.Steps = append(r.Steps, StepResult{Step: name, Status: status, Detail: detail})
+}
+
+func (r *Report) stepCause(name, status, detail, cause string) {
+	r.Steps = append(r.Steps, StepResult{Step: name, Status: status, Detail: detail, Cause: cause})
 }
 
 // Enable turns ethos on in the repo at repoRoot. It is idempotent;
@@ -123,7 +130,7 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	// link to nothing) is refused before anything is written: writing through
 	// the link or opening the FIFO would be the wrong answer to it.
 	if _, err := resolve.EnabledMarker(repoRoot); err != nil {
-		return rep, fmt.Errorf("enable: %w; remove it and re-run", err)
+		return rep, fmt.Errorf("enable: %w; marker left unchanged", err)
 	}
 
 	// Preflight both hosts before any ignore mutation (or deposit). Old rules

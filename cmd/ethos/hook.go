@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -161,6 +163,8 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 			r.Shared = append(r.Shared, name)
 		case enable.StatusSkippedTrackedMissing:
 			r.TrackedMissing = append(r.TrackedMissing, name)
+		case enable.StatusSkippedMalformed:
+			r.Malformed = append(r.Malformed, hook.HookProblem{Hook: name, Cause: st.Cause})
 		default:
 			r.Refreshed = append(r.Refreshed, name)
 		}
@@ -168,9 +172,39 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 	return r, err
 }
 
+// repairSessions adapts autorepair.SessionStart to the SessionStart dependency:
+// the cheap pass over dead session state, logged to the repair log.
+func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return 0, fmt.Errorf("locating the global store: %w", err)
+		}
+		global := filepath.Join(home, ".punt-labs", "ethos")
+		// The repair log's rotation and the session purge assume one writer: take
+		// the lock the engine holds. A busy lock means a repair is already
+		// running, so this start leaves the work to it without waiting: a
+		// session start must not stall behind a repair.
+		release, ok, err := autorepair.TryGlobalLock(global, 0)
+		if err != nil {
+			return 0, fmt.Errorf("locking the repair lock: %w", err)
+		}
+		if !ok {
+			return 0, nil
+		}
+		defer release()
+		env, err := autorepair.HookEnv(loc, global)
+		if err != nil {
+			return 0, fmt.Errorf("building the repair environment: %w", err)
+		}
+		return autorepair.SessionStart(ctx, env)
+	}
+}
+
 func runHookSessionStart() error {
 	loc := currentRoots().Located
 	is := identityStore()
+	notice, items := takeRepairNotice()
 	deps := hook.SessionStartDeps{
 		Located:      &loc,
 		Store:        is,
@@ -179,7 +213,9 @@ func runHookSessionStart() error {
 		Roles:        layeredRoleStore(is),
 		Issue:        currentRoots().configIssue(),
 		RefreshHooks: refreshGitHooks,
-		Notice:       takeRepairNotice(),
+		Notice:       notice,
+		NoticeItems:  items,
+		Repair:       repairSessions(loc),
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)

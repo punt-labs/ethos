@@ -838,8 +838,11 @@ func TestInstalledSectionDuplicateSections(t *testing.T) {
 	if body != nil {
 		t.Errorf("body = %q, want nil", body)
 	}
-	if !strings.Contains(err.Error(), "hand-duplicated") {
-		t.Errorf("error = %q, want a hand-duplicated refusal", err)
+	if want := "2 sections found for the same tag; left unchanged"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err, want)
+	}
+	if strings.Contains(err.Error(), "refresh collapses") {
+		t.Errorf("error = %q promises a repair", err)
 	}
 }
 

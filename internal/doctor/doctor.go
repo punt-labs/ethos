@@ -1263,7 +1263,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; ethos leaves it in place", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionDuplicated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"multiple %q sections found — duplicated section", spec.Tag)}
+				"multiple %q sections found", spec.Tag)}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 			"%s section could not be read: %v", spec.Name, err)}

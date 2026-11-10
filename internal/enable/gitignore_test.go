@@ -461,7 +461,7 @@ func TestEnableWarnsOnAlreadyTrackedRuntimeFiles(t *testing.T) {
 	}
 	var warn string
 	for _, w := range rep.Warnings {
-		if strings.Contains(w, "already git-tracked") {
+		if strings.Contains(w, "are git-tracked") {
 			warn = w
 		}
 	}
@@ -471,10 +471,16 @@ func TestEnableWarnsOnAlreadyTrackedRuntimeFiles(t *testing.T) {
 	if !strings.Contains(warn, rel) {
 		t.Errorf("warning does not name the tracked file %q: %s", rel, warn)
 	}
-	// The remedy must be copy-pasteable: the -- separator and the shell-quoted
-	// path guard against paths with spaces or special characters.
-	if !strings.Contains(warn, "git rm -r --cached -- '"+rel+"'") {
-		t.Errorf("warning remedy is not shell-safe (missing -- or quoting): %s", warn)
+	// Repair is automatic: the warning states what ethos did and never hands
+	// the user a command.
+	if strings.Contains(warn, "git rm") || strings.Contains(warn, "untrack with") {
+		t.Errorf("warning tells the user to act: %s", warn)
+	}
+	if !strings.HasSuffix(warn, "); left tracked.") {
+		t.Errorf("warning does not end by saying the files were left tracked: %s", warn)
+	}
+	if strings.Contains(warn, "next ethos run") || strings.Contains(warn, "upgrade") {
+		t.Errorf("warning promises a future repair: %s", warn)
 	}
 }
 

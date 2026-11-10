@@ -22,17 +22,19 @@ func init() {
 	autorepair.BinaryVersion = resolveVersion()
 }
 
-// repairNotice holds the line a repair earned for "hook session-start", which
-// prints JSON on stdout and whose stderr goes to an unread log: the line rides
-// in the JSON instead (DES-084 Output).
-var repairNotice atomic.Pointer[string]
+// repairNotice holds the result a repair earned for "hook session-start",
+// which prints JSON on stdout and whose stderr goes to an unread log: the line
+// rides in the JSON instead (DES-084 Output).
+var repairNotice atomic.Pointer[autorepair.Result]
 
-// takeRepairNotice returns the held line once, "" when there is none.
-func takeRepairNotice() string {
+// takeRepairNotice returns the held line and its item count once, "" and 0
+// when there is none. The hook sums the count with its own cheap pass so the
+// session hears one upgraded-storage line.
+func takeRepairNotice() (string, int) {
 	if p := repairNotice.Swap(nil); p != nil {
-		return *p
+		return p.Line(), p.Items
 	}
-	return ""
+	return "", 0
 }
 
 // noEnsure are the commands, by top-level name, that never read storage.
@@ -75,7 +77,7 @@ func ensureForCommand(cmd *cobra.Command, r *repoRoots) *repoRoots {
 		return r
 	}
 	if cmd.CommandPath() == "ethos hook session-start" {
-		repairNotice.Store(&line)
+		repairNotice.Store(&res)
 	} else {
 		fmt.Fprintln(cmd.ErrOrStderr(), line)
 	}
