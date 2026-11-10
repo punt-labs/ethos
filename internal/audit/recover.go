@@ -16,9 +16,10 @@ import (
 type recovery struct {
 	keep      []Line         // guarded lines to install, ascending ts
 	conflicts []LiveConflict // lines refused because surviving evidence disagrees
-	// lost is true when a decodable line was refused for conflicting, or the
-	// recovered lines do not reach the chunk's named bounds. A line held
-	// identically by another chunk is not lost.
+	// lost is true when a non-empty damaged line does not decode, a decodable
+	// line was refused for conflicting, or the recovered lines do not reach
+	// the chunk's named bounds. A line held identically by another chunk is
+	// not lost.
 	lost   bool
 	lo, hi int64 // the range the damaged bytes and the name span
 	// verifiedLast is the highest parseable ts seen in the damaged bytes, the
@@ -39,16 +40,29 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 	byTS := map[int64]Line{}
 	for _, raw := range SplitLines(damaged) {
 		var h tsHolder
+		var lineTS int64
 		if json.Unmarshal(raw, &h) == nil {
-			if ts, err := ParseLineTS(h.TS); err == nil && ts > r.verifiedLast {
-				r.verifiedLast = ts
+			if ts, err := ParseLineTS(h.TS); err == nil {
+				lineTS = ts
+				if ts > r.verifiedLast {
+					r.verifiedLast = ts
+				}
 			}
 		}
 		l, ok := decodeSalvageLine(raw, guard)
 		if !ok {
-			// Undecodable bytes are a loss only when the recovered lines do
-			// not reach the named bounds: a torn line whose range is covered
-			// from the live file or elsewhere carried no line of its own.
+			// A non-empty line that does not decode held an entry that is
+			// gone, wherever it sat: record the loss, and widen the range to
+			// its own ts when that much of it parses.
+			if len(bytes.TrimSpace(raw)) > 0 {
+				r.lost = true
+				if lineTS > 0 && lineTS < r.lo {
+					r.lo = lineTS
+				}
+				if lineTS > r.hi {
+					r.hi = lineTS
+				}
+			}
 			continue
 		}
 		if l.TS < r.lo {
@@ -128,7 +142,12 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 // installRecovered writes the kept lines as a chunk in dir and reads it back
 // through ReadChunkVerified before reporting success. It returns the path, or
 // "" when there was nothing to install.
-func installRecovered(p layout.Policy, dir string, cn ChunkName, keep []Line, source string) (string, error) {
+//
+// When the replacement keeps the source's own name it overwrites the damaged
+// bytes in place, so the body is verified in memory and beforeReplace (the
+// markers that record what the replacement lacks) runs first: the raw bytes
+// are never destroyed before the loss is durable. beforeReplace may be nil.
+func installRecovered(p layout.Policy, dir string, cn ChunkName, keep []Line, source string, beforeReplace func() error) (string, error) {
 	if len(keep) == 0 {
 		return "", nil
 	}
@@ -141,6 +160,14 @@ func installRecovered(p layout.Policy, dir string, cn ChunkName, keep []Line, so
 	}
 	var err error
 	if dest == source {
+		if _, err := DecodeChunkStrict(body.Bytes(), dest); err != nil {
+			return "", fmt.Errorf("replacement for chunk %s does not decode: %w", source, err)
+		}
+		if beforeReplace != nil {
+			if err := beforeReplace(); err != nil {
+				return "", err
+			}
+		}
 		err = ReplaceLocalFile(p, dest, body.Bytes())
 	} else {
 		err = WriteLocalAtomic(p, dest, body.Bytes())

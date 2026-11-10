@@ -78,8 +78,8 @@ func TestRepositoryQuarantineRecoversCanonicalStoreLive(t *testing.T) {
 	}
 	guard := func(raw []byte) ([]byte, string, bool) { return raw, "", false }
 	m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", guard)
-	if err != nil || m.HasGap() {
-		t.Fatalf("canonical store recovery=%+v %v", m, err)
+	if err != nil || !m.HasGap() {
+		t.Fatalf("canonical store recovery=%+v %v: the undecodable line is a recorded loss", m, err)
 	}
 	data, err := ReadStream(p, s)
 	if err != nil || len(data.Lines) != 1 {
@@ -175,10 +175,10 @@ func TestRepositoryQuarantineResumesEveryPersistenceBoundary(t *testing.T) {
 				t.Fatal("injected persistence failure hidden")
 			}
 			fsyncFile = old
-			// The decodable ts-300 line of the damaged bytes is recovered, so
-			// nothing is lost: no gap, three lines.
+			// The decodable ts-300 line of the damaged bytes is recovered, and
+			// the corrupt tail is recorded as a gap: three lines.
 			m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", guard)
-			if err != nil || m.HasGap() || m.VerifiedLast != 300 {
+			if err != nil || !m.HasGap() || m.VerifiedLast != 300 {
 				t.Fatalf("retry=%+v %v", m, err)
 			}
 			data, err := ReadStream(p, s)
@@ -215,8 +215,8 @@ func TestRepositoryQuarantineRepeatedDamageDeletesDamagedBytes(t *testing.T) {
 			t.Fatal(err)
 		}
 		m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", guard)
-		if err != nil || m.HasGap() {
-			t.Fatalf("recovery=%+v %v", m, err)
+		if err != nil || !m.HasGap() {
+			t.Fatalf("recovery=%+v %v: the undecodable damage is a recorded loss", m, err)
 		}
 		data, err := ReadStream(p, s)
 		if err != nil || len(data.Lines) != 1 {

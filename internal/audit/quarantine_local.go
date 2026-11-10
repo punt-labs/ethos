@@ -233,7 +233,7 @@ func QuarantineLocal(p layout.Policy, s Stream, source, dir string, cn ChunkName
 			return Marker{}, err
 		}
 	}
-	if _, err := installRecovered(p, dir, cn, lines, source); err != nil {
+	if _, err := installRecovered(p, dir, cn, lines, source, nil); err != nil {
 		return Marker{}, err
 	}
 	// Loss is recorded whenever the recovered lines do not account for the

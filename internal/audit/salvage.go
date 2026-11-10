@@ -57,11 +57,6 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 	if err != nil {
 		return res, err
 	}
-	dest, err := installRecovered(p, dir, cn, r.keep, source)
-	if err != nil {
-		return res, err
-	}
-	res.Replacement = dest
 	m := Marker{Chunk: cn.Stem(), Reason: "chunk bytes were damaged; surviving lines were recovered", VerifiedLast: r.verifiedLast}
 	// A retired file (<stem>.jsonl.corrupt) is covered by nothing once its
 	// bytes are gone; its marker is written whether or not a line was lost,
@@ -69,21 +64,38 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 	_, kind := Classify(filepath.Base(source), cn.Namespace)
 	if res.Lost || kind == KindCorrupt {
 		m.UnrecoveredFirst, m.UnrecoveredLast = r.lo, r.hi
-		mb, err := MarshalMarker(m)
-		if err != nil {
-			return res, err
-		}
-		if err := ReplaceLocalFile(p, filepath.Join(dir, cn.MarkerFile()), mb); err != nil {
-			return res, fmt.Errorf("writing gap marker for chunk %s: %w", source, err)
-		}
 	}
-	if publishedSource(p, source) {
-		// The published copy loses the whole named range whatever was
-		// recovered locally; a reader of that copy alone sees the hole.
-		shared := m
-		shared.UnrecoveredFirst, shared.UnrecoveredLast = r.lo, r.hi
-		if err := writeSharedMarker(p, source, cn, shared); err != nil {
-			return res, fmt.Errorf("writing shared marker for chunk %s: %w", source, err)
+	// writeMarkers makes every record of a loss durable. A replacement that
+	// keeps the source's name overwrites the raw bytes, so it runs first.
+	writeMarkers := func() error {
+		if m.HasGap() || kind == KindCorrupt {
+			mb, err := MarshalMarker(m)
+			if err != nil {
+				return err
+			}
+			if err := ReplaceLocalFile(p, filepath.Join(dir, cn.MarkerFile()), mb); err != nil {
+				return fmt.Errorf("writing gap marker for chunk %s: %w", source, err)
+			}
+		}
+		if publishedSource(p, source) {
+			// The published copy loses the whole named range whatever was
+			// recovered locally; a reader of that copy alone sees the hole.
+			shared := m
+			shared.UnrecoveredFirst, shared.UnrecoveredLast = r.lo, r.hi
+			if err := writeSharedMarker(p, source, cn, shared); err != nil {
+				return fmt.Errorf("writing shared marker for chunk %s: %w", source, err)
+			}
+		}
+		return nil
+	}
+	dest, err := installRecovered(p, dir, cn, r.keep, source, writeMarkers)
+	if err != nil {
+		return res, err
+	}
+	res.Replacement = dest
+	if dest != source {
+		if err := writeMarkers(); err != nil {
+			return res, err
 		}
 	}
 	if dest != source {

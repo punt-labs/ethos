@@ -31,7 +31,7 @@ func TestRepositoryQuarantineSameByteRetirementResumes(t *testing.T) {
 			guard := func(raw []byte) ([]byte, string, bool) { return raw, "", false }
 			prior, err := QuarantineLocal(p, s, source, dir, cn, "first", guard)
 			require.NoError(t, err)
-			require.False(t, prior.HasGap())
+			require.True(t, prior.HasGap(), "the undecodable damage is a recorded loss")
 			require.NotEmpty(t, prior.RetiredSHA256)
 			recovered, err := os.ReadFile(source)
 			require.NoError(t, err)
@@ -151,7 +151,7 @@ func TestRepositoryQuarantineRepeatedRetirementResumesAfterOldCompletion(t *test
 					guard := func(raw []byte) ([]byte, string, bool) { return raw, "", false }
 					prior, err := QuarantineLocal(p, s, source, dir, cn, "first", guard)
 					require.NoError(t, err)
-					require.False(t, prior.HasGap())
+					require.True(t, prior.HasGap(), "the undecodable damage is a recorded loss")
 					require.Equal(t, int64(200), prior.VerifiedLast)
 					secondDamage := append(line(300), []byte("second corrupt tail\n")...)
 					if published {
@@ -203,7 +203,7 @@ func TestRepositoryQuarantineRepeatedRetirementResumesAfterOldCompletion(t *test
 					m, err := QuarantineLocal(p, s, source, dir, cn, "second", guard)
 					require.NoError(t, err)
 					require.Equal(t, int64(300), m.VerifiedLast)
-					require.False(t, m.HasGap())
+					require.True(t, m.HasGap(), "the undecodable second tail is a recorded loss")
 					data, err := ReadStream(p, s)
 					require.NoError(t, err)
 					require.Len(t, data.Lines, 3)
@@ -239,7 +239,7 @@ func TestRepositoryQuarantineLegacyCompletionRebindsRetirement(t *testing.T) {
 	m, err = QuarantineLocal(p, s, source, dir, cn, "fixture", guard)
 	require.NoError(t, err)
 	require.NotEmpty(t, m.RetiredSHA256)
-	require.False(t, m.HasGap())
+	require.True(t, m.HasGap(), "the undecodable damage is a recorded loss")
 	data, err := ReadStream(p, s)
 	require.NoError(t, err)
 	require.Equal(t, int64(100), data.Floor)
@@ -299,7 +299,7 @@ func TestQuarantineLocalRedactsRecoveredLine(t *testing.T) {
 
 	m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", maskGuard)
 	require.NoError(t, err, "a line the guard changes no longer refuses the recovery")
-	assert.False(t, m.HasGap(), "the named range is recovered whole from the live file")
+	assert.True(t, m.HasGap(), "the undecodable damaged line is a recorded loss though the live file holds the range")
 	b, err := os.ReadFile(source)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"tool":"Masked"`)

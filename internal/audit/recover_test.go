@@ -30,7 +30,7 @@ func TestQuarantineLocalKeepsDecodableDamagedLines(t *testing.T) {
 
 	m, err := QuarantineLocal(p, s, source, dir, cn, "fixture", maskGuard)
 	require.NoError(t, err)
-	assert.False(t, m.HasGap(), "the named bounds 100 and 300 are both recovered")
+	assert.True(t, m.HasGap(), "the undecodable interior line is a recorded loss even though both bounds are recovered")
 	assert.Equal(t, int64(300), m.VerifiedLast)
 	data, err := ReadStream(p, s)
 	require.NoError(t, err)
