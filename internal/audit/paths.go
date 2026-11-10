@@ -570,7 +570,7 @@ func missionHasAnyChunk(dir string) bool {
 			continue
 		}
 		switch _, kind := Classify(e.Name(), MissionNS); kind {
-		case KindValid, KindNearMiss, KindCorrupt, KindQuarantine:
+		case KindValid, KindNearMiss, KindCorrupt, KindQuarantine, KindHeldLoss:
 			return true
 		case KindOther, KindTemp:
 			// A sibling or a swept temp says nothing about sealing.

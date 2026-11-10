@@ -1,0 +1,134 @@
+package autorepair
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/lineguard"
+)
+
+const stepLiveTails = "live-tails"
+
+func init() { Register(Step{Name: stepLiveTails, Scope: ScopeRepository, Run: runLiveTails}) }
+
+// runLiveTails is step 6: live audit and mission-log lines written before
+// redaction (before v4.20.0) are rewritten through the guard, and a line whose
+// ts is already archived with another payload is dropped because the archive
+// wins. Items counts lines rewritten plus lines dropped. A stream whose
+// archive the scan transiently refuses, or whose lock is held, is deferred to
+// the next Ensure; a malformed chunk name or non-regular file in the archive
+// is a residual, because no later run changes it.
+func runLiveTails(ctx context.Context, env Env) (Outcome, error) {
+	var out Outcome
+	if !env.InRepository() {
+		return out, nil
+	}
+	streams, err := audit.ListStreamsByName(env.Policy)
+	if err != nil {
+		return out, fmt.Errorf("listing audit streams: %w", err)
+	}
+	for _, s := range streams {
+		if ctx.Err() != nil {
+			out.Deferred = true
+			return out, nil
+		}
+		live := s.LivePath(env.Policy)
+		if _, err := os.Lstat(live); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		// The archive is what a live line is compared against; while any of
+		// the stream's archive directories is refused by the scan, the
+		// comparison cannot be trusted. Step 7 (corrupt-chunks) repairs that
+		// and runs after this step in StepOrder, so the stream is deferred to
+		// the next Ensure rather than recorded as a residual.
+		clean, err := archiveScansClean(env, s)
+		if err != nil {
+			logf(env, stepLiveTails, "scan-archive", []string{live}, err)
+			if reason, ok := permanentScanReason(err); ok {
+				out.Residuals = append(out.Residuals, Residual{Step: stepLiveTails, ID: filepath.Base(live), Reason: reason})
+			} else {
+				out.Deferred = true
+			}
+			continue
+		}
+		if !clean {
+			logf(env, stepLiveTails, "defer-dirty-scan", []string{live}, nil)
+			out.Deferred = true
+			continue
+		}
+		var res audit.LiveRepair
+		busy, err := audit.TryWithStreamLock(env.Policy, s, func() error {
+			var err error
+			res, err = audit.RedactLive(env.Policy, s, liveLineGuard(env.Policy, s.Namespace))
+			return err
+		})
+		switch {
+		case busy:
+			out.Deferred = true
+			logf(env, stepLiveTails, "defer-busy-stream", []string{live}, nil)
+			continue
+		case err != nil:
+			// Anything RedactLive refuses is a condition of the archive or the
+			// filesystem at this moment, not a property of the live file that
+			// another run cannot change; it is retried, never left permanent.
+			logf(env, stepLiveTails, "redact-live", []string{live}, err)
+			out.Deferred = true
+			continue
+		}
+		if res.Rewritten > 0 {
+			logf(env, stepLiveTails, fmt.Sprintf("redact-live lines=%d", res.Rewritten), []string{live}, nil)
+		}
+		for _, d := range res.Dropped {
+			logf(env, stepLiveTails, fmt.Sprintf("drop-live-line ts=%d archive-sha256=%s live-sha256=%s", d.TS, d.ArchiveDigest, d.LiveDigest), []string{live}, nil)
+		}
+		out.Items += res.Rewritten + len(res.Dropped)
+	}
+	return out, nil
+}
+
+// liveLineGuard is the redaction guard for lines of a stream's live file: the
+// mission-event guard for a mission log, the session-audit guard otherwise.
+// It mirrors hook.LiveLineGuard over the lineguard leaf so the seal and the
+// storage upgrade rewrite a pre-redaction line the same way, and autorepair
+// never imports internal/hook.
+func liveLineGuard(p layout.Policy, ns audit.Namespace) audit.LineGuard {
+	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
+	if ns == audit.MissionNS {
+		return audit.LineGuard(lineguard.MissionLineGuardFor(checkout))
+	}
+	return audit.LineGuard(lineguard.SessionLineGuardFor(checkout))
+}
+
+// logf records one action when the engine supplied a logger.
+func logf(env Env, step, action string, paths []string, err error) {
+	if env.Log != nil {
+		env.Log.Logf(step, action, paths, err)
+	}
+}
+
+// archiveScansClean reports whether every archive directory of the stream
+// passes audit.ScanSealedDir. A missing directory is clean.
+func archiveScansClean(env Env, s audit.Stream) (bool, error) {
+	dirs, err := audit.StreamDirs(env.Policy, s)
+	if err != nil {
+		return false, err
+	}
+	for _, dir := range dirs {
+		if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if _, err := audit.ScanSealedDir(dir, s.Namespace, s.Session); err != nil {
+			var orphan *audit.OrphanCorruptError
+			if errors.As(err, &orphan) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return true, nil
+}

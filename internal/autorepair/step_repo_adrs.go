@@ -41,7 +41,11 @@ func runRepoADRs(ctx context.Context, env Env) (Outcome, error) {
 	if len(ids) == 0 {
 		return out, nil
 	}
-	missions, linked := missionADRLinks(env, env.Roots.Store)
+	store, err := env.StoreRoot()
+	if err != nil {
+		return out, fmt.Errorf("importing global ADRs: %w", err)
+	}
+	missions, linked := missionADRLinks(env, store)
 	repo, err := adr.NewRepositoryStore(env.Policy, globalDir)
 	if err != nil {
 		return out, fmt.Errorf("opening repository ADR store: %w", err)

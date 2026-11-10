@@ -56,9 +56,17 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 		out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: "inventory", Reason: err.Error()})
 		return out, nil
 	}
-	a := &archiver{env: env, repo: env.Roots.Checkout}
+	store, err := env.StoreRoot()
+	if err != nil {
+		return out, fmt.Errorf("archiving record-tree trace: %w", err)
+	}
+	checkout, err := env.CheckoutRoot()
+	if err != nil {
+		return out, fmt.Errorf("archiving record-tree trace: %w", err)
+	}
+	a := &archiver{env: env, repo: checkout}
 	if a.repo == "" {
-		a.repo = env.Roots.Store
+		a.repo = store
 	}
 	if a.red, err = mission.NewPathRedactor(a.repo); err != nil {
 		out.Residuals = append(out.Residuals, Residual{Step: stepRecordTreeTrace, ID: "redactor", Reason: err.Error()})
@@ -66,7 +74,7 @@ func runRecordTreeTrace(ctx context.Context, env Env) (Outcome, error) {
 	}
 	a.sessionGuard = lineguard.SessionLineGuardFor(a.repo)
 	a.missionGuard = lineguard.MissionLineGuardFor(a.repo)
-	a.store = mission.NewStoreWithRoots(env.Roots.Store, env.Global)
+	a.store = mission.NewStoreWithRoots(store, env.Global)
 	for _, path := range plan.Unreadable {
 		rel, _, ok := a.relative(path)
 		if !ok {

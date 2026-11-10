@@ -795,12 +795,12 @@ func TestQuarantineChunk_RecoveryRedactsACredentialInALiveLine(t *testing.T) {
 	require.NoError(t, os.WriteFile(live, []byte(credentialLiveLine(150, sid)), 0o600))
 
 	_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
-	require.ErrorContains(t, err, "requires redacted migration")
-	b, err := os.ReadFile(live)
-	require.NoError(t, err)
-	assert.Equal(t, credentialLiveLine(150, sid), string(b), "recovery cannot rewrite a retained identity")
-	out, _, _ := sessionLineGuard(repo)(bytes.TrimSpace(b))
-	assertRedactedWithMatchingHash(t, out)
+	require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
+	// The published source gets only a gap marker; the recovered chunk lands
+	// in the local archive.
+	lines := chunkLines(t, archiveSessionDir(t, repo, sid, time.Now().UTC().Format(audit.SessionDateFormat)))
+	require.Len(t, lines, 1)
+	assertRedactedWithMatchingHash(t, []byte(lines[0]))
 }
 
 // olderLiveLine is a live line an older binary wrote with extra top-level fields.
@@ -916,9 +916,8 @@ func TestSessionLineGuard_RedactsHeadersAndUnknownFields(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 		require.NoError(t, os.WriteFile(live, []byte(olderLiveLine(150, sid, extra)), 0o600))
 		_, err = QuarantineChunk(repo, filepath.Join(sealedDir, chunk), "bad")
-		require.ErrorContains(t, err, "requires redacted migration")
-		out, _, _ := sessionLineGuard(repo)([]byte(olderLiveLine(150, sid, extra)))
-		check(t, []string{string(out)})
+		require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
+		check(t, chunkLines(t, archiveSessionDir(t, repo, sid, time.Now().UTC().Format(audit.SessionDateFormat))))
 	})
 }
 

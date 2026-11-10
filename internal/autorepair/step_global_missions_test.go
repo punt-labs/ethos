@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/layout"
 	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
@@ -247,6 +248,7 @@ func TestGlobalMissionsUnparsableIsResidual(t *testing.T) {
 func TestGlobalMissionsOutsideRepository(t *testing.T) {
 	env, _ := corpusEnvLogged(t, "v3.11.0")
 	env.Roots.Store = ""
+	env.Policy = layout.Policy{} // the engine zeroes Roots and Policy together outside the repository pass
 	out, err := runGlobalMissions(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 0, out.Items)

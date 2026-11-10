@@ -88,7 +88,7 @@ func QuarantineChunkWithPolicy(p layout.Policy, chunkPath, reason string) (audit
 				if e != nil {
 					return marker, e
 				}
-				fmt.Fprintf(os.Stderr, "ethos: SHARED REPAIR PENDING; commit the retirement set: git -C %q add -- %q %q (then commit); recovered private lines remain local\n", root, selected, filepath.Join(filepath.Dir(selected), cn.MarkerFile()))
+				fmt.Fprintf(os.Stderr, "ethos: retired damaged shared chunk %s in %s; quarantine marker written at %s; recovered private lines remain local\n", selected, root, filepath.Join(filepath.Dir(selected), cn.MarkerFile()))
 			}
 		}
 		return marker, err

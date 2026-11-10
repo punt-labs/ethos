@@ -1,0 +1,6 @@
+{"ts":"2026-11-09T23:03:22.302088Z","event":"create","actor":"claude","details":{"evaluator":"eperson","ticket":"ethos-0001","worker":"wperson"},"record":"blame"}
+{"ts":"2026-11-09T23:03:22.525273Z","event":"result","actor":"wperson","details":{"confidence":0.9,"evidence_entries":1,"files_changed":1,"round":1,"verdict":"pass"},"record":"blame"}
+{"ts":"2026-11-09T23:03:22.660845Z","event":"reflect","actor":"claude","details":{"converging":true,"recommendation":"continue","round":1,"signal_count":1},"record":"blame","operation_id":"bf96036b8393d71fc23fadc534e00376"}
+{"ts":"2026-11-09T23:03:22.801218Z","event":"round_advanced","actor":"claude","details":{"from_round":1,"recommendation":"continue","to_round":2},"record":"blame"}
+{"ts":"2026-11-09T23:03:22.885017Z","event":"result","actor":"wperson","details":{"confidence":0.95,"evidence_entries":1,"files_changed":1,"round":2,"verdict":"pass"},"record":"blame"}
+{"ts":"2026-11-09T23:03:22.969876Z","event":"close","actor":"claude","details":{"round":2,"status":"closed","verdict":"pass"},"record":"blame"}

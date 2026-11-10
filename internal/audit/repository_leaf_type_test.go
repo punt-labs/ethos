@@ -301,3 +301,18 @@ func TestRepositoryLeafLegacyAndCountReaders(t *testing.T) {
 		})
 	}
 }
+
+// ListStreamsByName names the streams without validating their artifacts: a
+// directory under a chunk's name leaves ListStreams failing and the name-only
+// listing intact.
+func TestListStreamsByNameIgnoresArtifactTypes(t *testing.T) {
+	p := repositoryPolicy(t, layout.RecordBlame)
+	s := Stream{Namespace: SessionNS, Session: "fixture"}
+	path, _ := leafArtifact(t, ArchiveRoot(p), s, "chunk")
+	require.NoError(t, os.MkdirAll(path, 0o700))
+	_, err := ListStreams(p)
+	assert.Error(t, err)
+	streams, err := ListStreamsByName(p)
+	require.NoError(t, err)
+	assert.Contains(t, streams, s)
+}

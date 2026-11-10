@@ -91,7 +91,7 @@ func TestAuditIndexPathActualCLI(t *testing.T) {
 						if assert.ErrorAs(t, err, &exit, "%s", out) {
 							assert.Equal(t, 2, exit.ExitCode())
 						}
-						assert.Contains(t, string(out), "empty/corrupt")
+						assert.Contains(t, string(out), "is empty or corrupt")
 						assert.Contains(t, string(out), index)
 						assert.Contains(t, string(out), "local archive retained")
 						assert.NotContains(t, string(out), "staged 1 chunk(s)")

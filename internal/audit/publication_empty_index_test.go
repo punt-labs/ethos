@@ -62,7 +62,7 @@ func TestPublicationActualIndexStates(t *testing.T) {
 					assert.Error(t, err, "corrupt actual index must not be initialized")
 					if err != nil && state == "empty" {
 						assert.Contains(t, err.Error(), index)
-						assert.Contains(t, err.Error(), "empty/corrupt")
+						assert.Contains(t, err.Error(), "is empty or corrupt")
 						assert.Contains(t, err.Error(), "actual index unchanged")
 					}
 					if err != nil && state == "malformed" {
@@ -115,7 +115,7 @@ func TestPublicationEmptySymlinkIndexPreserved(t *testing.T) {
 	}
 	err = StagePublication(p, []string{path})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty/corrupt")
+	assert.Contains(t, err.Error(), "is empty or corrupt")
 	assert.Contains(t, err.Error(), index)
 	link, err := os.Readlink(index)
 	require.NoError(t, err, "do not replace the existing index symlink")

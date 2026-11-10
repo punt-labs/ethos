@@ -55,11 +55,15 @@ func writeGuardedMissionFixture(t *testing.T, repo, path, line string) {
 	require.NoError(t, os.WriteFile(path, append(out, '\n'), 0o600))
 }
 
-func requireUpdateEvent(t *testing.T, s *mission.Store, id string) {
+func requireUpdateEvent(t *testing.T, s *mission.Store, id string, wantWarnings ...string) {
 	t.Helper()
 	events, warnings, err := s.LoadEvents(id)
 	require.NoError(t, err)
-	assert.Empty(t, warnings, "a sealed event line must decode")
+	if len(wantWarnings) == 0 {
+		assert.Empty(t, warnings, "a sealed event line must decode")
+	} else {
+		assert.Equal(t, wantWarnings, warnings)
+	}
 	var found bool
 	for _, e := range events {
 		if e.Event == "update" {
@@ -91,7 +95,9 @@ func TestQuarantineChunk_RecoveredMissionEventLoads(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(sealed, chunk), []byte("\x00garbage\n"), 0o600))
 	_, err := QuarantineChunk(repo, filepath.Join(sealed, chunk), "bad")
 	require.NoError(t, err)
-	requireUpdateEvent(t, s, id)
+	// The garbage line is a recorded loss, so the history carries a gap
+	// warning; the re-sealed live event still loads.
+	requireUpdateEvent(t, s, id, "mission event history has a recorded gap")
 }
 
 // TestAudit_RelativeHomeSegmentIsNotAHome: a Read of the repo-relative
@@ -345,8 +351,8 @@ func TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent(t *testing.T) {
 	}
 }
 
-// Seal redacts an unsafe live mission line in place; quarantine recovery still
-// refuses and retains it.
+// Seal redacts an unsafe live mission line in place; quarantine recovery
+// redacts the line it re-seals.
 func TestMissionLine_UnsafeLiveLineIsRedactedOnSealAndRetainedOnRecovery(t *testing.T) {
 	for _, quarantine := range []bool{false, true} {
 		name := "seal"
@@ -377,10 +383,8 @@ func TestMissionLine_UnsafeLiveLineIsRedactedOnSealAndRetainedOnRecovery(t *test
 			path := filepath.Join(dir, audit.MissionChunkFile(sid, 100, 300))
 			require.NoError(t, os.WriteFile(path, []byte("corrupt\n"), 0o600))
 			_, err := QuarantineChunk(repo, path, "bad")
-			require.ErrorContains(t, err, "requires redacted migration")
-			after, err := os.ReadFile(live)
-			require.NoError(t, err)
-			assert.Equal(t, line, after, "refusal must preserve the original identity and source")
+			require.NoError(t, err, "recovery redacts the line it re-seals instead of refusing")
+			assert.NotContains(t, strings.Join(chunkLines(t, dir), "\n"), "/home/bob", "the recovered chunk is redacted")
 		})
 	}
 }

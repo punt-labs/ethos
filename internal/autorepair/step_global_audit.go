@@ -40,8 +40,16 @@ func runGlobalAudit(ctx context.Context, env Env) (Outcome, error) {
 		out.Deferred = true
 		return out, nil
 	}
+	store, err := env.StoreRoot()
+	if err != nil {
+		return out, fmt.Errorf("importing global session audit: %w", err)
+	}
+	checkout, err := env.CheckoutRoot()
+	if err != nil {
+		return out, fmt.Errorf("importing global session audit: %w", err)
+	}
 	dir := filepath.Join(env.Global, "sessions")
-	res, err := auditimport.ImportGlobalAudit(env.Policy, dir, env.Roots.Checkout, env.Roots.Store)
+	res, err := auditimport.ImportGlobalAudit(env.Policy, dir, checkout, store)
 	if err != nil {
 		return out, fmt.Errorf("importing global session audit: %w", err)
 	}

@@ -29,7 +29,11 @@ func runScrubRecords(ctx context.Context, env Env) (Outcome, error) {
 		out.Deferred = true
 		return out, nil
 	}
-	rels, err := mission.TrackedRecordFiles(env.Roots.Checkout)
+	checkout, err := env.CheckoutRoot()
+	if err != nil {
+		return out, fmt.Errorf("scrubbing records: %w", err)
+	}
+	rels, err := mission.TrackedRecordFiles(checkout)
 	if err != nil {
 		env.Log.Logf("scrub-records", "list-tracked", nil, err)
 		out.Deferred = true

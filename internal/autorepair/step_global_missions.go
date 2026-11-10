@@ -38,12 +38,20 @@ func runGlobalMissions(ctx context.Context, env Env) (Outcome, error) {
 		out.Deferred = true
 		return out, nil
 	}
-	res, err := mission.ImportGlobalMissions(env.Global, env.Roots.Store, env.Roots.Checkout)
+	store, err := env.StoreRoot()
+	if err != nil {
+		return out, fmt.Errorf("importing global missions: %w", err)
+	}
+	checkout, err := env.CheckoutRoot()
+	if err != nil {
+		return out, fmt.Errorf("importing global missions: %w", err)
+	}
+	res, err := mission.ImportGlobalMissions(env.Global, store, checkout)
 	if err != nil {
 		return out, fmt.Errorf("importing global missions: %w", err)
 	}
 	global := filepath.Join(env.Global, "missions")
-	repo := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions")
+	repo := filepath.Join(store, ".punt-labs", "ethos", "missions")
 	for _, w := range res.Warnings {
 		env.Log.Logf(stepGlobalMissions, "scan-warning", nil, fmt.Errorf("%s", w))
 	}

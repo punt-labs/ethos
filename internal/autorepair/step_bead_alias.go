@@ -110,7 +110,11 @@ func renameReason(err error) string {
 // repositoryMissionIDs lists the mission directories of the repository store
 // that hold a contract, in order.
 func repositoryMissionIDs(env Env) ([]string, error) {
-	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions")
+	store, err := env.StoreRoot()
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(store, ".punt-labs", "ethos", "missions")
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -123,7 +127,7 @@ func repositoryMissionIDs(env Env) ([]string, error) {
 		if !e.IsDir() || !mission.IsMissionID(e.Name()) {
 			continue
 		}
-		if _, err := os.Stat(repositoryContractPath(env, e.Name())); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "contract.yaml")); err == nil {
 			ids = append(ids, e.Name())
 		}
 	}
@@ -131,6 +135,13 @@ func repositoryMissionIDs(env Env) ([]string, error) {
 	return ids, nil
 }
 
+// repositoryContractPath is the contract of mission id in the repository store.
+// Outside the repository pass it is "", which every caller treats as a file
+// that does not exist; the step has already returned on !InRepository.
 func repositoryContractPath(env Env, id string) string {
-	return filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", id, "contract.yaml")
+	store, err := env.StoreRoot()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(store, ".punt-labs", "ethos", "missions", id, "contract.yaml")
 }

@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 func TestPreCommitUnstagesLocalAndRunsNamedSteps(t *testing.T) {
@@ -81,6 +83,7 @@ func TestPreCommitUnstagesWithoutAStoreAndLogsTheSkip(t *testing.T) {
 	l := &untrackLog{}
 	env := untrackEnv(dir, l)
 	env.Roots.Store = ""
+	env.Policy = layout.Policy{} // the engine zeroes Roots and Policy together outside the repository pass
 
 	line, err := PreCommit(context.Background(), env)
 	require.NoError(t, err)

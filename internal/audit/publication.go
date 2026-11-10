@@ -68,7 +68,7 @@ func StagePublication(p layout.Policy, paths []string) error {
 		return err
 	}
 	if !missing && len(data) == 0 {
-		return fmt.Errorf("audit publication: actual index %s is empty/corrupt; repair it explicitly (actual index unchanged)", index)
+		return fmt.Errorf("audit publication: actual index %s is empty or corrupt, so ethos did not publish (actual index unchanged)", index)
 	}
 	candidate, err := layout.CreateLocalTemp(p, "audit-index", "")
 	if err != nil {
