@@ -222,13 +222,7 @@ func noticeMigratedFile(session string, notes []*migrateNote, total int, dry boo
 		quoteUnlessLeak(session), count, total, verb, strings.Join(parts, "; "))
 }
 
-// rawAuditLineKey returns the dedupe key for one audit line, computed from both
-// its decoded entry and its raw bytes. A hashed entry keys on ts + tool +
-// tool_input_hash, so two byte-different encodings of the same logical
-// tool_input dedupe. A hashless line (older v3.11.0 entries, and sentinels,
-// whose ts + empty tool + empty preview is degenerate — a burst of same-second
-// sentinels would collapse to one) keys on ts + tool + a sha256 of the line
-// re-marshalled (the form the guard writes), so only identical lines dedupe// appendRawAuditLines appends each JSONL line (newline-terminated) to path and
+// appendRawAuditLines appends each JSONL line (newline-terminated) to path and
 // fsyncs once, and returns the guard's notices for the caller to print. Used
 // by migration. Each line is written in its canonical
 // guarded form (guardAuditLineNote), not byte for byte: it is decoded into a
@@ -265,6 +259,13 @@ func appendRawAuditLines(path string, lines [][]byte) ([]string, error) {
 	return notes, nil
 }
 
+// rawAuditLineKey returns the dedupe key for one audit line, computed from both
+// its decoded entry and its raw bytes. A hashed entry keys on ts + tool +
+// tool_input_hash, so two byte-different encodings of the same logical
+// tool_input dedupe. A hashless line (older v3.11.0 entries, and sentinels,
+// whose ts + empty tool + empty preview is degenerate — a burst of same-second
+// sentinels would collapse to one) keys on ts + tool + a sha256 of the line
+// re-marshalled (the form the guard writes), so only identical lines dedupe
 // and distinct losses each survive.
 func rawAuditLineKey(e auditEntry, raw []byte) string {
 	key, err := audit.LegacyIdentity(audit.SessionNS, raw)
