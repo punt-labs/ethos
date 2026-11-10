@@ -3,22 +3,25 @@ package autorepair
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/punt-labs/ethos/v4/internal/gitenv"
 	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // preCommitSteps are the registered steps the commit-time pass runs, in order.
+// Every name must be in StepOrder.
 var preCommitSteps = []string{"live-tails", "untrack-local", "hook-sections"}
 
 // PreCommit is the cheap pass the git pre-commit hook runs before sealing. It
 // removes every path under .punt-labs/local/ from the committing index (the
-// files stay on disk), then runs the registered cheap steps. It returns the one
-// line for stderr, or "" when nothing was unstaged. A step failure is logged,
-// never returned; only a git failure while unstaging is an error, because a
-// local path left in the index would be committed.
+// files stay on disk), then runs the registered cheap steps when a store was
+// located. It returns the one line for stderr, or "" when nothing was
+// unstaged. A step failure is logged, never returned; only a git failure while
+// unstaging is an error, because a local path left in the index would be
+// committed.
 func PreCommit(ctx context.Context, env Env) (string, error) {
-	if !env.InRepository() || env.Roots.Checkout == "" {
+	if env.Roots.Checkout == "" {
 		return "", nil
 	}
 	genv, err := gitenv.ActualIndexEnv()
@@ -32,8 +35,12 @@ func PreCommit(ctx context.Context, env Env) (string, error) {
 	if n > 0 {
 		logStep(env, "pre-commit", "unstaged local paths", nil, nil)
 	}
-	for _, name := range preCommitSteps {
-		runNamed(ctx, env, name)
+	if env.InRepository() {
+		for _, name := range preCommitSteps {
+			runNamed(ctx, env, name)
+		}
+	} else {
+		logStep(env, "pre-commit", "skipped repair steps: store not located", nil, nil)
 	}
 	if n == 0 {
 		return "", nil
@@ -41,17 +48,18 @@ func PreCommit(ctx context.Context, env Env) (string, error) {
 	return fmt.Sprintf("ethos: hook pre-commit: unstaged %d path(s) under %s; they stay on disk", n, layout.LocalPrefix), nil
 }
 
-// runNamed runs the registered step called name, if any, within StepBudget.
+// runNamed runs the registered step called name within StepBudget. A name in
+// StepOrder with no registered step is logged: it is a step not built yet, or
+// a registration that went missing.
 func runNamed(ctx context.Context, env Env, name string) {
-	for _, s := range Steps {
-		if s.Name != name {
-			continue
-		}
-		sctx, cancel := context.WithTimeout(ctx, StepBudget)
-		defer cancel()
-		if _, err := s.Run(sctx, env); err != nil {
-			logStep(env, name, "failed", nil, err)
-		}
+	i := slices.IndexFunc(Steps, func(s Step) bool { return s.Name == name })
+	if i < 0 {
+		logStep(env, name, "skipped: step not registered", nil, nil)
 		return
+	}
+	sctx, cancel := context.WithTimeout(ctx, StepBudget)
+	defer cancel()
+	if _, err := Steps[i].Run(sctx, env); err != nil {
+		logStep(env, name, "failed", nil, err)
 	}
 }

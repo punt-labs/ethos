@@ -41,12 +41,7 @@ func repairPreCommit(ctx context.Context, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	roots := currentRoots().Located
-	roots.Checkout = checkout
-	if roots.Store == "" {
-		roots.Store = checkout
-	}
-	line, err := autorepair.PreCommit(ctx, autorepair.Env{Roots: roots, Now: time.Now().UTC()})
+	line, err := autorepair.PreCommit(ctx, preCommitEnv(checkout))
 	if err != nil {
 		fmt.Fprintf(errOut, "ethos: hook pre-commit: %v\n", err)
 		return failClosed{}
@@ -55,6 +50,38 @@ func repairPreCommit(ctx context.Context, errOut io.Writer) error {
 		fmt.Fprintln(errOut, line)
 	}
 	return nil
+}
+
+// preCommitEnv builds the repair Env as the engine does: located roots, the
+// repository policy read from them, the global root, and the repair log. A
+// store that cannot be used is left empty, never replaced by the checkout, so
+// the repair steps are skipped and the unstage of local paths still runs.
+func preCommitEnv(checkout string) autorepair.Env {
+	roots := currentRoots().Located
+	roots.Checkout = checkout
+	env := autorepair.Env{Roots: roots, Global: defaultGlobalRoot(), Now: time.Now().UTC()}
+	if env.Global != "" {
+		env.Log = autorepair.NewFileLog(env.Global, roots.Store, checkout, version)
+	}
+	if err := roots.StoreFailure(); err != nil {
+		env.Roots.Store = ""
+		logPreCommit(env, "store not located", err)
+		return env
+	}
+	policy, err := roots.Layout()
+	if err != nil {
+		env.Roots.Store = ""
+		logPreCommit(env, "repository policy not read", err)
+		return env
+	}
+	env.Policy = policy
+	return env
+}
+
+func logPreCommit(env autorepair.Env, action string, err error) {
+	if env.Log != nil {
+		env.Log.Logf("pre-commit", action, nil, err)
+	}
 }
 
 // runHookPreCommit unstages local data, seals pending live audit lines and then
