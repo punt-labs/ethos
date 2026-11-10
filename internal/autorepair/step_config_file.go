@@ -30,7 +30,7 @@ func runConfigFile(ctx context.Context, env Env) (Outcome, error) {
 	if !env.InRepository() {
 		return Outcome{}, nil
 	}
-	store := env.Roots.Store
+	store := repoStore(env)
 	oldPath := filepath.Join(store, ".punt-labs", "ethos", "config.yaml")
 	newPath := filepath.Join(store, ".punt-labs", "ethos.yaml")
 	oldRel := filepath.ToSlash(filepath.Join(".punt-labs", "ethos", "config.yaml"))
@@ -124,6 +124,17 @@ func syncedOutcome(env Env, action string, paths ...string) (Outcome, error) {
 		}
 	}
 	return Outcome{Items: 1}, nil
+}
+
+// repoStore returns the store root the policy was built from ("" outside a
+// repository). It derives the root from the policy, which is not subject to a
+// located error, so a step never reads a Located part unchecked.
+func repoStore(env Env) string {
+	root := env.Policy.RecordRoot()
+	if root == "" {
+		return ""
+	}
+	return filepath.Dir(filepath.Dir(root))
 }
 
 // storeRel makes every occurrence of the root base in s relative to it, so a

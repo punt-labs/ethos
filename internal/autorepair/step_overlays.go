@@ -34,7 +34,7 @@ func runOverlays(ctx context.Context, env Env) (Outcome, error) {
 	out := Outcome{Items: len(moves), Deferred: busy}
 	for _, r := range residuals {
 		env.Log.Logf("overlays", "residual", []string{r.ID}, errors.New(r.Reason))
-		out.Residuals = append(out.Residuals, Residual{Step: "overlays", ID: r.ID, Reason: storeRel(env.Roots.Store, r.Reason)})
+		out.Residuals = append(out.Residuals, Residual{Step: "overlays", ID: r.ID, Reason: storeRel(repoStore(env), r.Reason)})
 	}
 	if err != nil {
 		env.Log.Logf("overlays", "relocate", nil, err)

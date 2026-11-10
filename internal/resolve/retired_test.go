@@ -93,10 +93,6 @@ func TestNoFunctionTurnsALocateFailureIntoEmpty(t *testing.T) {
 var lossyAllowed = map[string]string{
 	"cmd/ethos/roots.go:storeRoot": "a Global command's explicit choice of the global stores (mustBeUsable refuses the rest)",
 	"cmd/ethos/roots.go:ethosRoot": "a Global command's explicit choice of the global stores (mustBeUsable refuses the rest)",
-
-	"internal/autorepair/step_config_file.go:runConfigFile": "read after env.InRepository(), which the engine sets only with Roots populated under the repository lock",
-	"internal/autorepair/step_overlays.go:runOverlays":      "read after env.InRepository(), which the engine sets only with Roots populated under the repository lock",
-	"internal/autorepair/step_voice_field.go:runVoiceField": "read after env.InRepository(), which the engine sets only with Roots populated under the repository lock",
 }
 
 // allowedLossy reports whether violation v ("<abs path>:line:col: function...")
@@ -104,7 +100,7 @@ var lossyAllowed = map[string]string{
 func allowedLossy(v string) (string, bool) {
 	for key := range lossyAllowed {
 		file, fn, _ := strings.Cut(key, ":")
-		if strings.Contains(v, "/"+file+":") && (strings.HasSuffix(v, ": "+fn) || strings.Contains(v, ": "+fn+": .")) {
+		if strings.Contains(v, "/"+file+":") && strings.HasSuffix(v, ": "+fn) {
 			return key, true
 		}
 	}

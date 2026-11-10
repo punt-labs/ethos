@@ -30,10 +30,10 @@ func runVoiceField(ctx context.Context, env Env) (Outcome, error) {
 	}
 	repo := identity.NewStore(env.Policy.RecordRoot(), identity.RepositoryPolicy(env.Policy))
 	ext := global
-	if env.Roots.Config != nil && env.Roots.Config.Resolution == resolve.ResolutionRepoOnly {
+	if env.Roots.ConfigErr == nil && env.Roots.Config != nil && env.Roots.Config.Resolution == resolve.ResolutionRepoOnly {
 		ext = repo
 	}
-	if err := voiceStore(env, &out, repo, ext, env.Roots.Store); err != nil {
+	if err := voiceStore(env, &out, repo, ext, repoStore(env)); err != nil {
 		return out, err
 	}
 	return out, nil
