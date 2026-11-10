@@ -175,18 +175,47 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 		reportf(opts, "would archive %d line(s) for stream %s\n", len(pending), s.Key())
 		return len(pending), nil, nil
 	}
-	// New writes are guarded before their append. An older live source may
-	// not be safe to copy unchanged; do not rewrite an immutable identity and
+	// New writes are guarded before their append. A pending line still in the
+	// live file may predate that guard: it is redacted in place, and the live
+	// file replaced, before anything immutable is written. Any other source
+	// (frozen legacy, a published copy) is not ours to rewrite; do not
 	// manufacture a conflict with its retained source on the next union read.
-	for _, l := range append(pending[:len(pending):len(pending)], data.Legacy...) {
+	livePath := s.LivePath(p)
+	rewrite := false
+	for i, l := range pending {
 		out, _, _ := guard(l.Raw)
-		before, err := audit.CanonicalPayload(l.Raw)
+		changed, err := payloadChanged(l, out)
 		if err != nil {
 			return 0, nil, err
 		}
-		after, err := audit.CanonicalPayload(out)
-		if err != nil || !bytes.Equal(before, after) {
-			return 0, nil, fmt.Errorf("audit payload at ts %d requires redacted migration or explicit operator cleanup before immutable archival; original source retained", l.TS)
+		if !changed {
+			continue
+		}
+		if l.Source != livePath {
+			return 0, nil, errNeedsMigration(l.TS)
+		}
+		pending[i].Raw = out
+		rewrite = true
+	}
+	for _, l := range data.Legacy {
+		out, _, _ := guard(l.Raw)
+		changed, err := payloadChanged(l, out)
+		if err != nil {
+			return 0, nil, err
+		}
+		if changed {
+			return 0, nil, errNeedsMigration(l.TS)
+		}
+	}
+	if rewrite {
+		var live []audit.Line
+		for _, l := range pending {
+			if l.Source == livePath {
+				live = append(live, l)
+			}
+		}
+		if err := audit.ReplaceLocalFile(p, livePath, auditLinesBytes(live)); err != nil {
+			return 0, nil, fmt.Errorf("replacing live audit %s with its redacted lines: %w", livePath, err)
 		}
 	}
 	if len(pending) > 0 {
@@ -254,6 +283,23 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 		paths = append(paths, path)
 	}
 	return len(pending), paths, nil
+}
+
+// payloadChanged reports whether guarding l produced a different payload.
+func payloadChanged(l audit.Line, guarded []byte) (bool, error) {
+	before, err := audit.CanonicalPayload(l.Raw)
+	if err != nil {
+		return false, err
+	}
+	after, err := audit.CanonicalPayload(guarded)
+	if err != nil {
+		return false, fmt.Errorf("guarded audit payload at ts %d is not a valid line: %w", l.TS, err)
+	}
+	return !bytes.Equal(before, after), nil
+}
+
+func errNeedsMigration(ts int64) error {
+	return fmt.Errorf("audit payload at ts %d requires redacted migration or explicit operator cleanup before immutable archival; original source retained", ts)
 }
 
 func policyChunkName(s audit.Stream, first, last int64) string {
