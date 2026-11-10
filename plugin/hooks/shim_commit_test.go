@@ -420,3 +420,49 @@ func TestShimEnabledUnredactedLiveLineIsMigratedByCommit(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.NotContains(t, out, "audit seal", "the second commit has nothing to warn about")
 }
+
+// A path under .punt-labs/local/ that was force-added, or that HEAD already
+// tracks, is unstaged by the pre-commit hook: the commit lands without it, the
+// file stays on disk, and a tracked one is deleted from the new tree.
+func TestShimEnabledUnstagesLocalPaths(t *testing.T) {
+	r := newShimRepo(t, true)
+	env := r.withPath(ethosBinDir(t))
+	localDir := filepath.Join(r.dir, ".punt-labs", "local", "ethos")
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	forced := filepath.Join(localDir, "forced.txt")
+	require.NoError(t, os.WriteFile(forced, []byte("forced\n"), 0o644))
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-C", r.dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	tree := func() string { return git("ls-tree", "-r", "--name-only", "HEAD") }
+
+	git("add", "-f", ".punt-labs/local/ethos/forced.txt")
+	out, err := r.commit(t, env, "forced add")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "unstaged 1 path(s) under .punt-labs/local/")
+	assert.NotContains(t, tree(), ".punt-labs/local/", "the commit holds no local path")
+	assert.FileExists(t, forced, "the file stays on disk")
+
+	// A path HEAD already tracks under local/ is staged for removal. Plant one
+	// in HEAD with the hook bypassed, as a repository from before the hook has.
+	tracked := filepath.Join(localDir, "tracked.txt")
+	require.NoError(t, os.WriteFile(tracked, []byte("tracked\n"), 0o644))
+	git("add", "-f", ".punt-labs/local/ethos/tracked.txt")
+	git("-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "plant")
+	require.Contains(t, tree(), ".punt-labs/local/ethos/tracked.txt")
+
+	out, err = r.commit(t, env, "remove tracked")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "unstaged 1 path(s) under .punt-labs/local/")
+	assert.NotContains(t, tree(), ".punt-labs/local/", "the tracked local path is deleted from the tree")
+	assert.FileExists(t, tracked, "the file stays on disk")
+
+	out, err = r.commit(t, env, "nothing to unstage")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "unstaged", "a commit with no local path prints nothing")
+}
