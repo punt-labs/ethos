@@ -163,9 +163,12 @@ func TestSeed_InvalidRecordPolicyIsNotConfigRepair(t *testing.T) {
 			require.ErrorAs(t, err, &fieldErr)
 			assert.Equal(t, "record", fieldErr.Field)
 			assert.NotContains(t, stderr, "no bundle-scoped skills")
-			assert.NoDirExists(t, filepath.Join(home, ".punt-labs", "ethos"))
+			// The storage upgrade every command runs first owns the global
+			// store's locks and log and the repository's local zone; seed
+			// itself deposits nothing on an invalid config.
+			assert.NoDirExists(t, filepath.Join(home, ".punt-labs", "ethos", "bundles"))
+			assert.NoDirExists(t, filepath.Join(home, ".punt-labs", "ethos", "roles"))
 			assert.NoDirExists(t, filepath.Join(root, ".claude"))
-			assert.NoDirExists(t, filepath.Join(root, ".punt-labs", "local"))
 		})
 	}
 }

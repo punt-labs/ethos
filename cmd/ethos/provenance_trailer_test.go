@@ -109,7 +109,13 @@ func TestProvenanceCLIInstalledHookConfiguredTrailersSquashClone(t *testing.T) {
 			agent, err := r.AgentAt(t.Context(), merge, pairs[0])
 			require.NoError(t, err)
 			assert.Equal(t, "bwk", agent)
-			assert.NoDirExists(t, filepath.Join(fresh.repo, ".punt-labs", "local"))
+			// The clone carries the publication's tracked records, so the
+			// storage upgrade serves it: it owns .punt-labs/local and the
+			// untracked .gitignore that excludes it. verify itself changes
+			// nothing tracked.
+			status, err := gitenv.OutputEnv(fresh.repo, "git", fresh.env, "status", "--porcelain", "--untracked-files=no")
+			require.NoError(t, err)
+			assert.Empty(t, strings.TrimSpace(string(status)), "verify leaves the clone's tracked tree untouched")
 		})
 	}
 }
