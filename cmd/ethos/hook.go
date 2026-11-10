@@ -113,9 +113,10 @@ var hookAuditLogCmd = &cobra.Command{
 }
 
 var hookCommitTrailersCmd = &cobra.Command{
-	Use:   "commit-trailers",
-	Short: "Mission/Delegation trailer values for the committing session",
-	Args:  cobra.NoArgs,
+	Use:    "commit-trailers",
+	Hidden: true,
+	Short:  "Mission/Delegation trailer values for the committing session",
+	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runHookCommitTrailers(cmd.OutOrStdout())
 	},

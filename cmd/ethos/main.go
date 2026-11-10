@@ -161,56 +161,6 @@ var whoamiCmd = &cobra.Command{
 	},
 }
 
-// --- show ---
-
-var showReference bool
-
-var showCmd = &cobra.Command{
-	Use:    "show <handle>",
-	Short:  "Show identity details",
-	Hidden: true,
-	Args:   cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runShow(cmd, args[0], showReference)
-	},
-}
-
-// --- list ---
-
-var listCmd = &cobra.Command{
-	Use:    "list",
-	Short:  "List all identities",
-	Hidden: true,
-	Args:   cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runList(cmd)
-	},
-}
-
-// --- resolve-agent ---
-
-var resolveAgentCmd = &cobra.Command{
-	Use:    "resolve-agent",
-	Short:  "Show default agent from repo config",
-	Args:   cobra.NoArgs,
-	Hidden: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runResolveAgent(cmd)
-	},
-}
-
-// --- iam ---
-
-var iamCmd = &cobra.Command{
-	Use:    "iam <persona>",
-	Short:  "Declare persona in current session",
-	Hidden: true,
-	Args:   cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runIam(args[0])
-	},
-}
-
 // --- serve ---
 
 var serveCmd = &cobra.Command{
@@ -229,18 +179,12 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	serveCmd.Flags().Bool("opencode-session-metadata", false, "Opt into OpenCode session metadata caller routing (not authentication)")
-	showCmd.Flags().BoolVar(&showReference, "reference", false, "Include reference identity data")
 	whoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
-	iamCmd.Flags().StringVar(&sessionIamSession, "session", "", "Session ID (full or prefix)")
 
 	rootCmd.AddCommand(
 		versionCmd,
 		doctorCmd,
 		whoamiCmd,
-		showCmd,
-		listCmd,
-		resolveAgentCmd,
-		iamCmd,
 		serveCmd,
 	)
 }
@@ -363,21 +307,6 @@ func runWhoami(cmd *cobra.Command) error {
 		return writeJSON(out, id)
 	}
 	fmt.Fprintf(out, "%s (%s)\n", id.Name, id.Handle)
-	return nil
-}
-
-func runResolveAgent(cmd *cobra.Command) error {
-	r := currentRoots()
-	if err := r.StoreFailure(); err != nil {
-		return fmt.Errorf("resolve-agent: locating the repository store: %w", err)
-	}
-	handle := ""
-	if r.Config != nil {
-		handle = r.Config.Agent
-	}
-	if handle != "" {
-		fmt.Fprintln(cmd.OutOrStdout(), handle)
-	}
 	return nil
 }
 

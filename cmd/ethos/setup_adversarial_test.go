@@ -66,7 +66,7 @@ func TestCLI_MissingBundleAttr_FallsThroughThenWarns(t *testing.T) {
 
 	// Now delete the global copy too: the slug is absent from every layer.
 	require.NoError(t, os.Remove(globalAttr))
-	stdout, errOut, code := runCLI(t, se, "show", "foundation-architect")
+	stdout, errOut, code := runCLI(t, se, "identity", "show", "foundation-architect")
 	assert.Equal(t, 0, code, "missing attribute must warn, not crash; stdout=%s stderr=%s", stdout, errOut)
 	assert.Contains(t, errOut, "warning:", "expected a resolution warning; stderr=%s", errOut)
 	assert.Contains(t, errOut, `talent "engineering"`, "warning must name the missing slug")
@@ -91,7 +91,7 @@ func TestCLI_UnreadableGlobalAttr_WarnsGracefully(t *testing.T) {
 	require.NoError(t, os.Remove(attr))
 	require.NoError(t, os.Mkdir(attr, 0o755))
 
-	stdout, errOut, code := runCLI(t, se, "show", "claude")
+	stdout, errOut, code := runCLI(t, se, "identity", "show", "claude")
 	assert.Equal(t, 0, code, "unreadable attribute must warn, not crash; stdout=%s stderr=%s", stdout, errOut)
 	assert.Contains(t, errOut, "warning:", "expected a resolution warning; stderr=%s", errOut)
 	assert.Contains(t, errOut, `personality "principal-engineer"`,

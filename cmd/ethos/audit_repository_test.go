@@ -241,7 +241,7 @@ func TestRepositoryAuditCLICommitContextFailurePolicy(t *testing.T) {
 	}
 }
 
-func TestRepositoryAuditCLIArchivesAndQuarantinesWithoutStaging(t *testing.T) {
+func TestRepositoryAuditCLIArchivesWithoutStaging(t *testing.T) {
 	p, s := repositoryAuditCLI(t, "")
 	raw := []byte(`{"ts":"` + audit.FormatLineTS(time.Now().UnixNano()) + `","session":"fixture","tool":"Read","delegation_id":"d","record":"blame"}` + "\n")
 	require.NoError(t, audit.WriteLocalAtomic(p, s.LivePath(p), raw))
@@ -253,12 +253,8 @@ func TestRepositoryAuditCLIArchivesAndQuarantinesWithoutStaging(t *testing.T) {
 	stdout, _, err := execHandler(t, "audit", "show", "--delegation", "d", "--format", "json")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, `"record":"blame"`)
-	require.NoError(t, os.WriteFile(files[0], []byte("corrupt bytes"), 0o600))
-	stdout, _, err = execHandler(t, "audit", "quarantine", files[0])
-	require.NoError(t, err)
-	assert.Contains(t, stdout, "nothing staged")
 	_, err = os.Stat(filepath.Join(filepath.Dir(filepath.Dir(p.RecordRoot())), ".git", "index"))
-	assert.True(t, os.IsNotExist(err), "default seal/quarantine must not create an index")
+	assert.True(t, os.IsNotExist(err), "default seal must not create an index")
 	stdout, _, err = execHandler(t, "audit", "show", "--delegation", "d", "--format", "json")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, `"tool":"Read"`)

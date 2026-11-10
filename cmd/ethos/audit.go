@@ -25,42 +25,6 @@ var auditCmd = &cobra.Command{
 	Args:    cobra.NoArgs,
 }
 
-// --- audit migrate ---
-
-var (
-	auditMigrateDryRun  bool
-	auditMigrateVerbose bool
-)
-
-var auditMigrateCmd = &cobra.Command{
-	Use:   "migrate",
-	Short: "Copy legacy global audit logs into the shared local archive",
-	Long: `Copy legacy global audit logs into the shared local archive.
-
-Scans ~/.punt-labs/ethos/sessions/*.audit.jsonl (the v3.11 layout) and
-copies associated sessions into the store root's local archive under
-.punt-labs/local/ethos/trace/sessions/<YYYY-MM-DD>-<id>/audit.jsonl.
-Legacy data remains private in every recording mode. Original files are retained
-because an older writer may still have them open for append. Nothing is staged.
-
-Idempotent: a second run on the same machine is a no-op. Cross-repo
-safe: a legacy session whose id has no matching repo-tree directory is
-left in place — it belongs to a different repo's work tree.
-
-Flags:
-  --dry-run   show what would change without writing or deleting
-  --verbose   print one decision line per session to stdout
-
-Exit codes:
-  0  migration completed (including the no-op "nothing to migrate" case)
-  1  one or more sessions failed mid-copy; both sources stayed in place
-  2  must run inside a repo (no <repo>/.punt-labs/ethos/sessions/ destination)`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runAuditMigrate(cmd.OutOrStdout(), cmd.ErrOrStderr())
-	},
-}
-
 // --- audit show ---
 
 var (
@@ -101,8 +65,9 @@ var (
 )
 
 var auditSealCmd = &cobra.Command{
-	Use:   "seal",
-	Short: "Archive live audit lines locally; publish eligible full-mode copies",
+	Use:    "seal",
+	Hidden: true,
+	Short:  "Archive live audit lines locally; publish eligible full-mode copies",
 	Long: `Archive live audit and mission event lines into immutable local chunks.
 
 Retains every stream in the shared store root's .punt-labs/local/ethos/trace/.
@@ -130,40 +95,7 @@ Exit codes:
 	},
 }
 
-// --- audit quarantine ---
-
-var auditQuarantineReason string
-
-var auditQuarantineCmd = &cobra.Command{
-	Use:   "quarantine <chunk-path>",
-	Short: "Retire a corrupt sealed chunk and recover what the live file holds",
-	Long: `Retire a corrupt sealed chunk, the sanctioned alternative to
-git commit --no-verify when a seal or read fails on a corrupt chunk.
-
-Given the chunk path the seal/read error named, retains the original corrupt
-bytes only in the shared local quarantine, recovers safe live lines into the
-local archive, and writes a local marker recording any unrecovered range.
-Nothing is staged in either mode. A later full seal can publish eligible
-recovered lines separately. Inspection continues to show explicit gaps.
-
-Idempotent and crash-resumable: re-running after a mid-verb crash
-completes the quarantine from whichever artifacts exist.
-
-Exit codes:
-  0  quarantined (or already quarantined — idempotent no-op)
-  2  must run inside a repo, or the path is not a recognizable chunk`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runAuditQuarantine(cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0])
-	},
-}
-
 func init() {
-	auditMigrateCmd.Flags().BoolVar(&auditMigrateDryRun, "dry-run", false,
-		"Enumerate what would migrate without making changes")
-	auditMigrateCmd.Flags().BoolVar(&auditMigrateVerbose, "verbose", false,
-		"Print per-session decisions to stdout")
-
 	auditShowCmd.Flags().StringVar(&auditShowDelegation, "delegation", "",
 		"Delegation id to filter on (required)")
 	auditShowCmd.Flags().StringVar(&auditShowFormat, "format", "json",
@@ -177,13 +109,8 @@ func init() {
 	auditSealCmd.Flags().BoolVar(&auditSealCommitContext, "commit-context", false,
 		"Warn and allow a source commit on blame-mode archival failure; configuration and full-publication failures still block")
 
-	auditQuarantineCmd.Flags().StringVar(&auditQuarantineReason, "reason", "corrupt sealed chunk",
-		"Corruption reason recorded in the quarantine marker")
-
-	auditCmd.AddCommand(auditMigrateCmd)
 	auditCmd.AddCommand(auditShowCmd)
 	auditCmd.AddCommand(auditSealCmd)
-	auditCmd.AddCommand(auditQuarantineCmd)
 	rootCmd.AddCommand(auditCmd)
 }
 
@@ -276,42 +203,6 @@ func sameCheckout(a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-// runAuditQuarantine is the audit-quarantine command implementation. It
-// retires a corrupt chunk named by chunkPath and recovers what the live file
-// holds, printing a one-line summary of the marker it wrote.
-func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
-	repoRoot, err := requireCheckout(errOut, "audit quarantine")
-	if err != nil {
-		return err
-	}
-	p, err := currentRoots().Layout()
-	if err != nil {
-		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
-		return failClosed{}
-	}
-	// Resolve a relative path against the repo root so the operator can pass
-	// the path exactly as the seal/read error printed it.
-	if !filepath.IsAbs(chunkPath) {
-		chunkPath = filepath.Join(repoRoot, chunkPath)
-	}
-	marker, err := hook.QuarantineChunkWithPolicy(p, chunkPath, auditQuarantineReason)
-	if err != nil {
-		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
-		return failClosed{}
-	}
-	fate := "retained in the shared local archive; nothing staged"
-	if marker.HasGap() {
-		fmt.Fprintf(out,
-			"quarantined %s: recovered through ts %d, lost [%d,%d] — %s\n",
-			marker.Chunk, marker.VerifiedLast, marker.UnrecoveredFirst, marker.UnrecoveredLast, fate)
-	} else {
-		fmt.Fprintf(out,
-			"quarantined %s: fully recovered through ts %d — %s\n",
-			marker.Chunk, marker.VerifiedLast, fate)
-	}
-	return nil
-}
-
 // runAuditSeal is the audit-seal command implementation. It seals every
 // repository stream locally. Full mode adds eligible publication copies. Manual
 // failures exit 2; only blame commit-context archival errors may warn/proceed.
@@ -395,53 +286,6 @@ func sealRepository(out, errOut io.Writer, f sealFlags) error {
 		fmt.Fprintf(out,
 			"audit seal: sealed %d line(s) across %d session(s), staged %d chunk(s)\n",
 			res.LinesSealed, res.SessionsSealed, res.ChunksStaged)
-	}
-	return nil
-}
-
-// runAuditMigrate is the audit-migrate command implementation.
-// Resolves repoRoot via the standard ancestor walk and the global
-// sessions directory under ~/.punt-labs/ethos/sessions. Surfaces
-// "must run inside a repo" with exit code 2 when no repo root can be
-// found.
-func runAuditMigrate(out, errOut io.Writer) error {
-	_, err := requireCheckout(errOut, "audit migrate")
-	if err != nil {
-		return err
-	}
-	p, err := currentRoots().Layout()
-	if err != nil {
-		return fmt.Errorf("audit migrate: %w", err)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolving home directory: %w", err)
-	}
-	globalDir := filepath.Join(home, ".punt-labs", "ethos", "sessions")
-
-	// In verbose mode the library writes per-session decisions to
-	// the same writer we print to. In non-verbose mode every library
-	// line is discarded; the operator sees only the final
-	// "dry-run complete" or "complete" summary printed by this
-	// command (Copilot on PR #328 — comment previously promised
-	// "still let nothing-to-migrate through" but sink=io.Discard
-	// drops that too; the summary line below covers the empty case).
-	sink := out
-	if !auditMigrateVerbose {
-		sink = io.Discard
-	}
-	if err := hook.MigrateAuditWithPolicy(p, globalDir, auditMigrateDryRun, sink); err != nil {
-		return fmt.Errorf("audit migrate: %w", err)
-	}
-	if !auditMigrateVerbose {
-		// Quiet mode: one terminal status line so the operator knows
-		// the command did something. Dry-run gets a distinct line so
-		// nobody mistakes a dry-run for a real migration.
-		if auditMigrateDryRun {
-			fmt.Fprintln(out, "audit migrate: dry-run complete")
-		} else {
-			fmt.Fprintln(out, "audit migrate: complete")
-		}
 	}
 	return nil
 }

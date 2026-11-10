@@ -54,27 +54,12 @@ func init() {
 	vendorCmd.Flags().StringArrayVar(&vendorAllowExtKeys, "allow-ext-key", nil,
 		"Allow one credential-named extension key, as <namespace>/<key> (repeatable)")
 
-	// Rejected rather than absent: a user who reaches for either is
-	// asking for a snapshot that vendor would still call complete, and a
-	// silent "unknown flag" would not tell them why they cannot have it.
-	vendorCmd.Flags().Bool("no-teams", false, "")
-	vendorCmd.Flags().String("from", "", "")
-	_ = vendorCmd.Flags().MarkHidden("no-teams")
-	_ = vendorCmd.Flags().MarkHidden("from")
-
 	vendorCmd.MarkFlagsMutuallyExclusive("all", "team")
 
 	rootCmd.AddCommand(vendorCmd)
 }
 
 func runVendor(cmd *cobra.Command, args []string) error {
-	for _, name := range []string{"no-teams", "from"} {
-		if cmd.Flags().Changed(name) {
-			return usageError{fmt.Sprintf(
-				"--%s is not supported: it would produce a partial snapshot that vendor still reports as complete. "+
-					"Vendor always follows the full closure; use --dry-run to see its size first", name)}
-		}
-	}
 	if vendorApply && vendorDryRun {
 		return usageError{"--apply and --dry-run are mutually exclusive"}
 	}

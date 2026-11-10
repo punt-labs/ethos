@@ -38,7 +38,7 @@ func TestCLI_Session_NonexistentRoster(t *testing.T) {
 
 	// iam takes the hard chain: the env id resolves, then the roster load
 	// fails — an actionable error, and no roster is created.
-	_, stderr, code = runCLI(t, sh, "iam", "claude")
+	_, stderr, code = runCLI(t, sh, "session", "iam", "claude")
 	require.NotEqual(t, 0, code, "iam against a nonexistent session must fail")
 	assert.Contains(t, stderr, "not found")
 	assert.NoFileExists(t,
@@ -88,7 +88,7 @@ func TestCLI_Session_MalformedID_NoTraversal(t *testing.T) {
 			// write path (iam → withLock + Load). Both must fail safely.
 			_, _, showCode := runCLI(t, sh, "session", "show")
 			assert.NotEqual(t, 0, showCode, "show of %q must fail, not read outside", id)
-			_, _, iamCode := runCLI(t, sh, "iam", "claude")
+			_, _, iamCode := runCLI(t, sh, "session", "iam", "claude")
 			assert.NotEqual(t, 0, iamCode, "iam on %q must fail, not write outside", id)
 
 			// No artifact carrying the token may exist outside sessionsDir.

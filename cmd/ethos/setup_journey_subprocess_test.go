@@ -53,7 +53,7 @@ func writeAnswers(t *testing.T, repo, body string) string {
 // resolved-content fields plus the raw stderr (where warnings land).
 func showJSON(t *testing.T, se *cliSubprocessEnv, handle string) (talents []string, personality string, stderr string, exit int) {
 	t.Helper()
-	stdout, errOut, code := runCLI(t, se, "show", handle, "--json")
+	stdout, errOut, code := runCLI(t, se, "identity", "show", handle, "--json")
 	var parsed struct {
 		TalentContents      []string `json:"talent_contents"`
 		PersonalityContent  string   `json:"personality_content"`

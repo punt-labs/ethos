@@ -100,34 +100,6 @@ var adrSettleCmd = &cobra.Command{
 	},
 }
 
-var adrMigrateApply bool
-
-var adrMigrateCmd = &cobra.Command{
-	Use:   "migrate <id>...",
-	Short: "Copy selected global ADRs into this repository (dry run by default)",
-	Long: "Copy explicitly selected global ADR IDs into this repository after redaction. " +
-		"Without --apply, report the planned copies only. Sources are never deleted; " +
-		"identical copies are unchanged and divergent repository copies refuse migration.",
-	Args: cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		s, err := adrStore()
-		if err != nil {
-			return err
-		}
-		results, err := s.Migrate(args, adrMigrateApply)
-		if err != nil {
-			return err
-		}
-		if jsonOutput {
-			return writeJSON(cmd.OutOrStdout(), results)
-		}
-		for _, result := range results {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", result.ID, result.Action)
-		}
-		return nil
-	},
-}
-
 func init() {
 	adrCreateCmd.Flags().StringVar(&adrCreateTitle, "title", "", "ADR title (required)")
 	adrCreateCmd.Flags().StringVar(&adrCreateContext, "context", "", "What prompted the decision")
@@ -139,8 +111,7 @@ func init() {
 
 	adrListCmd.Flags().StringVar(&adrListStatus, "status", "all", "Filter by status (proposed|settled|superseded|all)")
 
-	adrMigrateCmd.Flags().BoolVar(&adrMigrateApply, "apply", false, "Copy the selected ADRs (default is a dry run)")
-	adrCmd.AddCommand(adrCreateCmd, adrListCmd, adrShowCmd, adrSettleCmd, adrMigrateCmd)
+	adrCmd.AddCommand(adrCreateCmd, adrListCmd, adrShowCmd, adrSettleCmd)
 	rootCmd.AddCommand(adrCmd)
 }
 

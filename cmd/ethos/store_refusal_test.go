@@ -134,7 +134,6 @@ func TestCLI_UnreadableGitRefusesStoreCommands(t *testing.T) {
 		{"adr", "list"},
 		{"adr", "show", "DES-001"},
 		{"adr", "settle", "DES-001"},
-		{"adr", "migrate", "DES-001"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			cmd := exec.Command(ethosBinary, args...)
@@ -159,16 +158,9 @@ func TestCLI_GlobalOnlyCommandsRunOnUnreadableGit(t *testing.T) {
 		{"session"},
 		{"session", "list"},
 		{"session", "show"},
-		{"session", "roster"},
-		{"session", "write-current", "--pid", "1", "--session", "s"},
-		{"session", "purge"},
 		{"session", "end"},
 		{"session", "join", "--agent-id", "a", "--session", "s"},
 		{"session", "leave", "--agent-id", "a", "--session", "s"},
-		{"session", "create", "--session", "s", "--root-id", "r", "--primary-id", "p"},
-		{"session", "delete", "--session", "s"},
-		{"session", "delete-current", "--pid", "1"},
-		{"iam", "x"},
 		{"session", "iam", "x"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -210,14 +202,12 @@ func TestStoreRefusalExemptions(t *testing.T) {
 		storeHandlesError: {{"doctor"}, {"setup"}, {"seed"}, {"enable"}, {"disable"},
 			{"serve"}, {"hook"}, {"hook", "audit-log"}, {"audit", "seal"}},
 		storeGlobalOnly: {{"version"}, {"uninstall"}, {"completion"}, {"role", "schema"},
-			{"session"}, {"session", "list"}, {"session", "show"}, {"session", "roster"},
-			{"session", "write-current"}, {"session", "purge"}, {"session", "end"},
-			{"session", "join"}, {"session", "leave"}, {"session", "create"},
-			{"session", "delete"}, {"session", "delete-current"},
-			{"iam"}, {"session", "iam"}},
+			{"session"}, {"session", "list"}, {"session", "show"},
+			{"session", "end"}, {"session", "join"}, {"session", "leave"},
+			{"session", "iam"}},
 		storeRefuses: {{"identity", "list"}, {"mission", "list"},
 			{"whoami"}, {"identity", "whoami"},
-			{"session", "start"}, {"adr", "create"}, {"adr", "list"}, {"adr", "show"}, {"adr", "settle"}, {"adr", "migrate"}},
+			{"session", "start"}, {"adr", "create"}, {"adr", "list"}, {"adr", "show"}, {"adr", "settle"}},
 	}
 	for want, cmds := range cases {
 		for _, args := range cmds {
