@@ -132,14 +132,14 @@ const (
 func verifyUnderLock(r PathRedactor, legacyDir, id, repoMissionDir string, fresh bool) (importVerdict, error) {
 	expected, err := expectedImport(r, legacyDir, id)
 	if err != nil {
-		return verdictNone, err
+		return verdictNone, discardFresh(repoMissionDir, fresh, err)
 	}
 	if importVerifyHook != nil {
 		importVerifyHook(repoMissionDir)
 	}
 	artifact, err := compareImport(repoMissionDir, expected)
 	if err != nil {
-		return verdictNone, err
+		return verdictNone, discardFresh(repoMissionDir, fresh, err)
 	}
 	switch {
 	case artifact == "" && fresh:
@@ -147,10 +147,27 @@ func verifyUnderLock(r PathRedactor, legacyDir, id, repoMissionDir string, fresh
 	case artifact == "":
 		return verdictPresent, nil
 	case fresh:
-		return verdictNone, fmt.Errorf("verifying the repository copy: %s differs from the redacted source; global files retained", artifact)
+		return verdictNone, discardFresh(repoMissionDir, fresh,
+			fmt.Errorf("verifying the repository copy: %s differs from the redacted source; global files retained", artifact))
 	default:
 		return verdictDiverged, nil
 	}
+}
+
+// discardFresh removes a just-renamed repository copy that failed
+// verification, while the locks are still held, so it cannot shadow the
+// global mission in reads or be mistaken for a legitimate divergence on the
+// next run; the global files stay the only copy and the next run retries. A
+// copy that was already present is never removed. The verify error is
+// returned, joined to a removal failure if there is one.
+func discardFresh(repoMissionDir string, fresh bool, verifyErr error) error {
+	if !fresh {
+		return verifyErr
+	}
+	if err := os.RemoveAll(repoMissionDir); err != nil {
+		return errors.Join(verifyErr, ioErr("removing the unverified copy", repoMissionDir, err))
+	}
+	return verifyErr
 }
 
 // expectedImport computes, for every artifact of global mission id, the

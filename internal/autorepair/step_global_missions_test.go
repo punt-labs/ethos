@@ -141,7 +141,7 @@ func TestGlobalMissionsCorruptCopyIsNotAnImport(t *testing.T) {
 	restore := mission.SetImportVerifyHook(func(dir string) {
 		require.NoError(t, os.Truncate(filepath.Join(dir, "results.yaml"), 3))
 	})
-	defer restore()
+	t.Cleanup(restore)
 
 	out, err := runGlobalMissions(context.Background(), env)
 	require.NoError(t, err)
@@ -151,6 +151,25 @@ func TestGlobalMissionsCorruptCopyIsNotAnImport(t *testing.T) {
 	assert.Contains(t, out.Residuals[0].Reason, "results.yaml")
 	assert.NotEqual(t, "imported; global copy kept", out.Residuals[0].Reason)
 	assert.Equal(t, globalBefore, treeDigest(t, env.Global), "the global files remain")
+	_, statErr := os.Stat(repoMissionDir(env, ownedMission))
+	assert.True(t, os.IsNotExist(statErr), "the unverified copy is removed so it cannot shadow the global one")
+
+	// Run 2 with the fault still present retries the copy and fails the same
+	// way; the corrupt bytes are never relabelled as a legitimate divergence.
+	out, err = runGlobalMissions(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, 0, out.Items)
+	require.Len(t, out.Residuals, 1)
+	assert.Contains(t, out.Residuals[0].Reason, "results.yaml")
+	assert.NotEqual(t, mission.ReasonRepoCopyDiverged, out.Residuals[0].Reason)
+	assert.Equal(t, globalBefore, treeDigest(t, env.Global))
+
+	// With the fault gone the next run imports cleanly.
+	restore()
+	out, err = runGlobalMissions(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, 1, out.Items, "the retry succeeds once the copy reads back as written")
+	assert.FileExists(t, filepath.Join(repoMissionDir(env, ownedMission), "contract.yaml"))
 }
 
 // TestGlobalMissionsDivergedRepositoryCopy: a repository copy that was
