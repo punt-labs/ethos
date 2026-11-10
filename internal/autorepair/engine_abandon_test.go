@@ -162,7 +162,16 @@ func TestEnsureDoesNotWaitUnboundedlyForAbandonedStep(t *testing.T) {
 	r.opts.stepBudget = 50 * time.Millisecond
 	r.opts.ensureBudget = 300 * time.Millisecond
 	h := r.hangSteps(t, ScopeRepository)
-	defer close(h.release)
+	// Release the hung step and wait for its goroutine before the test ends:
+	// the temporary directory is removed at cleanup, and a goroutine still
+	// writing under it makes that removal fail on Linux.
+	t.Cleanup(func() {
+		close(h.release)
+		deadline := time.Now().Add(5 * time.Second)
+		for h.aLive.Load() && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 
 	start := time.Now()
 	done := r.ensureAsync()
