@@ -136,15 +136,42 @@ func errText(err error) string {
 // addTool registers every tool. A tool not declared unguarded is guarded.
 func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn toolMethod) {
 	s.AddTool(tool, func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		// Repair runs before the store is located, so the tool answers from the
+		// converted layout (DES-084 Wiring).
+		line := h.ensureLine(ctx)
 		cur := h.current()
 		call := func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 			return fn(cur, ctx, req)
 		}
+		var result *mcplib.CallToolResult
+		var err error
 		if unguardedTools[tool.Name] {
-			return call(ctx, req)
+			result, err = call(ctx, req)
+		} else {
+			result, err = cur.guardStore(tool.Name, call)(ctx, req)
 		}
-		return cur.guardStore(tool.Name, call)(ctx, req)
+		if err != nil || result == nil || line == "" {
+			return result, err
+		}
+		result.Content = append(result.Content, mcplib.NewTextContent(line))
+		return result, nil
 	})
+}
+
+// WithEnsure installs the repair gate every tool call passes before it reads
+// storage. ensure returns the one-line report of a repair, "" when nothing was
+// repaired. It is a function, not an import of internal/autorepair, so the
+// engine can call back into packages this one imports.
+func WithEnsure(ensure func(context.Context) string) Option {
+	return func(h *Handler) { h.ensure = ensure }
+}
+
+// ensureLine runs the repair gate, if one is installed.
+func (h *Handler) ensureLine(ctx context.Context) string {
+	if h.ensure == nil {
+		return ""
+	}
+	return h.ensure(ctx)
 }
 
 // guardStore wraps fn: when the store could not be located, a declared read

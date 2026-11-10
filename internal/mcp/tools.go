@@ -41,8 +41,9 @@ type Handler struct {
 	adrStore                *adr.Store
 	vendor                  VendorRunner
 	opencodeSessionMetadata bool
-	storeErr                error            // why the repository store could not be located, if so
-	relocation              *storeRelocation // set by RelocateStore
+	storeErr                error                        // why the repository store could not be located, if so
+	relocation              *storeRelocation             // set by RelocateStore
+	ensure                  func(context.Context) string // set by WithEnsure; the repair gate
 }
 
 // Option configures optional Handler fields.
