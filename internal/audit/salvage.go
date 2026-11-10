@@ -131,7 +131,7 @@ func salvageBytes(p layout.Policy, s Stream, in salvageInput, guard LineGuard) (
 // RecoverHeldQuarantine recovers raw bytes QuarantineLocal held under
 // local/ethos/quarantine/<key>/ whose retirement record is gone or unusable.
 // The chunk is named from the lines that parse (the sidecar's verified range,
-// then the file's mtime, when none do), recovered through guard into the
+// then the stream's known bounds, when none do), recovered through guard into the
 // local archive under a marker that records the loss, and only then are the
 // held bytes and their sidecar deleted.
 func RecoverHeldQuarantine(p layout.Policy, s Stream, held string, guard LineGuard) (SalvageResult, error) {
@@ -172,12 +172,14 @@ func RecoverHeldQuarantine(p layout.Policy, s Stream, held string, guard LineGua
 		}
 	}
 	if first == 0 {
-		info, err := os.Stat(held)
+		// No line and no sidecar says when these bytes were written, and a
+		// file's mtime is not evidence: it can lie outside every ts a chunk
+		// name can hold. The loss is recorded over the stream's known bounds.
+		var err error
+		first, last, err = streamBounds(p, s)
 		if err != nil {
-			return res, fmt.Errorf("examining held quarantine bytes %s: %w", held, err)
+			return res, err
 		}
-		first = info.ModTime().UnixNano()
-		last = first
 	}
 	cn := ChunkName{Namespace: s.Namespace, First: first, Last: last}
 	if s.Namespace == MissionNS {
@@ -195,6 +197,47 @@ func RecoverHeldQuarantine(p layout.Policy, s Stream, held string, guard LineGua
 		return res, fmt.Errorf("deleting held quarantine sidecar %s: %w", held+".json", err)
 	}
 	return res, nil
+}
+
+// streamBounds returns the lowest and highest ts the stream is known to hold
+// (its sealed chunks and live lines). A stream that holds nothing yet has no
+// known bounds; the marker then spans the one ts 1, which a marker name can
+// carry and which no line can precede.
+func streamBounds(p layout.Policy, s Stream) (first, last int64, err error) {
+	note := func(lo, hi int64) {
+		if first == 0 || lo < first {
+			first = lo
+		}
+		if hi > last {
+			last = hi
+		}
+	}
+	dirs, err := StreamDirs(p, s)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, dir := range dirs {
+		sc, err := ScanSealedDir(dir, s.Namespace, s.Session)
+		if err != nil {
+			return 0, 0, err
+		}
+		for _, c := range sc.Chunks {
+			note(c.First, c.Last)
+		}
+	}
+	live, err := ReadLiveLines(p, s)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, l := range live {
+		if l.TS > 0 {
+			note(l.TS, l.TS)
+		}
+	}
+	if first == 0 {
+		first, last = 1, 1
+	}
+	return first, last, nil
 }
 
 // RetirementRecordSHA returns the digest a valid local retirement record

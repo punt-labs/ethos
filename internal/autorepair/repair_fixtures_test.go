@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -561,4 +562,42 @@ func TestLegacyRawSameRangeAsValidKeepsUniqueLine(t *testing.T) {
 	}
 	assert.True(t, kept || len(data.Gaps) > 0, "the unique line is kept or its loss is recorded")
 	fixSecondRun(t, env)
+}
+
+// Held raw bytes with no parseable ts and no sidecar are never named from the
+// file's mtime: an mtime outside the range a chunk name holds must neither
+// break the stream's scan nor yield a marker that reads as no gap.
+func TestHeldBytesWithoutTSAreNotNamedFromMtime(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		mtime time.Time
+	}{
+		{"epoch", time.Unix(0, 0)},
+		{"1969", time.Unix(-86400, 0)},
+		{"2500", time.Date(2500, 1, 1, 0, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, log, s, dir, home := fixEnv(t)
+			raw := "garbage with " + fakeToken + " and " + home + "/z\n"
+			sum := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+			held := filepath.Join(audit.HeldQuarantineDir(env.Policy, s), sum+".corrupt")
+			plant(t, env.Policy, held, raw)
+			require.NoError(t, os.Chtimes(held, tc.mtime, tc.mtime))
+			a := runStep(t, runCorruptChunks, env)
+			t.Logf("run1=%+v\nlog:\n%s", a, log.text())
+			assert.Empty(t, a.Residuals)
+			assert.NoFileExists(t, held)
+			assert.Empty(t, walkContains(t, env.Roots.Store, fakeToken, home), "no token survives")
+			_, err := audit.ScanSealedDir(dir, audit.SessionNS, "")
+			require.NoError(t, err, "the repair's own output scans")
+			data, err := audit.ReadStream(env.Policy, s)
+			require.NoError(t, err)
+			t.Logf("gaps=%v", data.Gaps)
+			require.NotEmpty(t, data.Gaps, "the lost bytes are a recorded loss")
+			for _, g := range data.Gaps {
+				assert.Positive(t, g.First)
+			}
+			fixSecondRun(t, env)
+		})
+	}
 }
