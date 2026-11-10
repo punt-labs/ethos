@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -69,6 +70,15 @@ func defaultOptions() options {
 // and two small reads. Otherwise it runs the registered steps in StepOrder
 // under the repair locks. A repair problem is logged and left for the next
 // entry; it never fails the caller, so the error is always nil.
+//
+// The global and repository repair locks belong to the Ensure until every
+// goroutine it started has returned, an abandoned step's included: an
+// abandoned step keeps the Env it was given, so the repository must stay
+// locked while it runs. After the Ensure budget is spent the wait is unbounded
+// by design. A step that never returns holds the locks; the next entry point
+// defers at the lock wait and converts nothing, which is the correct
+// degradation. The first abandonment also ends the pass: no later step runs,
+// since the abandoned one may hold inner locks the next would contend for.
 func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, error) {
 	return ensure(ctx, roots, global, defaultOptions())
 }
@@ -228,7 +238,9 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 		block(serves(ScopeBoth, g, r))
 	}
 	env := Env{Global: global, Now: o.now(), Log: log}
-	res = runSteps(ctx, env, roots, policy, o, log, g, r, nil)
+	var live liveSteps
+	defer live.wait(log) // registered last, so it runs before either lock is released
+	res = runSteps(ctx, env, roots, policy, o, log, g, r, nil, &live)
 	for _, t := range targets {
 		if !t.needed || t.blocked {
 			continue
@@ -285,7 +297,9 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 	for _, n := range names {
 		only[n] = true
 	}
-	return runSteps(ctx, env, roots, policy, o, log, g, r, only), nil
+	var live liveSteps
+	defer live.wait(log) // registered last, so it runs before either lock is released
+	return runSteps(ctx, env, roots, policy, o, log, g, r, only, &live), nil
 }
 
 // openLog opens the repair log tagged with the roots. A repository whose
@@ -337,8 +351,9 @@ func anyRegisteredServes(o options, g, r *target) bool {
 // pass). A name with no registered step is skipped here; ensure has already
 // withheld the stamps for it. A step that errors, defers, runs out of time or
 // is abandoned blocks the stamps it serves and contributes nothing to the
-// result; later steps still run.
-func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layout.Policy, o options, log *FileLog, g, r *target, only map[string]bool) (res Result) {
+// result; later steps still run, except after an abandoned step: the pass
+// stops there.
+func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layout.Policy, o options, log *FileLog, g, r *target, only map[string]bool, live *liveSteps) (res Result) {
 	ctx, cancel := context.WithTimeout(ctx, o.ensureBudget)
 	defer cancel()
 	for _, name := range o.order {
@@ -364,8 +379,14 @@ func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layou
 			// r.needed is true only while this pass holds the repository lock.
 			env.Roots, env.Policy = roots, policy
 		}
-		out, err := runStep(ctx, env, o.stepBudget, s, stepLockPath(base.Global, s.Name))
+		out, err := runStep(ctx, env, o.stepBudget, s, stepLockPath(base.Global, s.Name), live)
 		switch {
+		case errors.Is(err, errAbandoned):
+			log.Logf(s.Name, "defer", nil, err)
+			log.Logf(s.Name, "stop", nil, fmt.Errorf("pass stopped after abandoned step %s", s.Name))
+			block(served)
+			res.Repaired = res.Items > 0
+			return res
 		case errors.Is(err, errInFlight):
 			log.Logf(s.Name, "defer", nil, err)
 			block(served)
@@ -418,6 +439,25 @@ func block(ts []*target) {
 	}
 }
 
+// errAbandoned marks a step still running after its budget; it is an errBudget.
+var errAbandoned = fmt.Errorf("abandoned: %w", errBudget)
+
+// liveSteps tracks the goroutines runStep started, so the Ensure that owns the
+// repair locks can hold them until every one has returned.
+type liveSteps struct {
+	wg        sync.WaitGroup
+	abandoned string
+}
+
+// wait blocks until every started step has returned, logging once when an
+// abandoned one makes it wait.
+func (l *liveSteps) wait(log *FileLog) {
+	if l.abandoned != "" {
+		log.Logf(l.abandoned, "wait", nil, fmt.Errorf("waiting for abandoned step %s", l.abandoned))
+	}
+	l.wg.Wait()
+}
+
 type stepResult struct {
 	out Outcome
 	err error
@@ -442,7 +482,7 @@ func stepLockPath(global, name string) string {
 // errInFlight, without starting s, while an earlier run is still going. A
 // panic in a step is an error: no step can fail the command that triggered
 // the repair.
-func runStep(ctx context.Context, env Env, budget time.Duration, s Step, lockPath string) (Outcome, error) {
+func runStep(ctx context.Context, env Env, budget time.Duration, s Step, lockPath string, live *liveSteps) (Outcome, error) {
 	release, err := acquire(lockPath, 0)
 	if errors.Is(err, errBusy) {
 		return Outcome{}, fmt.Errorf("step %s: %w", s.Name, errInFlight)
@@ -453,7 +493,9 @@ func runStep(ctx context.Context, env Env, budget time.Duration, s Step, lockPat
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	ch := make(chan stepResult, 1) // buffered: an abandoned step's send never blocks
+	live.wg.Add(1)
 	go func() {
+		defer live.wg.Done() // after release: the step lock goes first
 		defer release()
 		defer func() {
 			if p := recover(); p != nil {
@@ -471,7 +513,8 @@ func runStep(ctx context.Context, env Env, budget time.Duration, s Step, lockPat
 		}
 		return r.out, r.err
 	case <-ctx.Done():
-		return Outcome{}, fmt.Errorf("step %s: %s %w, abandoned", s.Name, budget, errBudget)
+		live.abandoned = s.Name
+		return Outcome{}, fmt.Errorf("step %s: %s %w", s.Name, budget, errAbandoned)
 	}
 }
 

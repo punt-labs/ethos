@@ -88,11 +88,13 @@ func TestEnsureGlobalStepNeverSeesRepository(t *testing.T) {
 	assert.Equal(t, r.global, got.Global)
 }
 
-// An abandoned step still runs after Ensure returned; the next Ensure defers
-// that step instead of starting a second instance, and logs why.
+// While an abandoned step runs, its Ensure still holds the repair lock, so the
+// next Ensure defers and starts no second instance; once the step returns, the
+// next Ensure runs it again.
 func TestEnsureAbandonedStepDefersNextEnsure(t *testing.T) {
 	r := newRig(t, false)
 	r.opts.stepBudget = 50 * time.Millisecond
+	r.opts.lockWait = 50 * time.Millisecond
 	var live, maxLive, starts atomic.Int32
 	release := make(chan struct{})
 	r.opts.steps = []Step{{Name: "hang", Scope: ScopeGlobal, Run: func(context.Context, Env) (Outcome, error) {
@@ -109,18 +111,17 @@ func TestEnsureAbandonedStepDefersNextEnsure(t *testing.T) {
 		return Outcome{}, nil
 	}}}
 	r.opts.order = []string{"hang"}
+	first := r.ensureAsync()
+	require.Eventually(t, func() bool { return starts.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	r.ensure()
-	r.ensure()
-	time.Sleep(20 * time.Millisecond)
 	assert.EqualValues(t, 1, maxLive.Load(), "two instances of one step ran at once")
 	assert.EqualValues(t, 1, starts.Load())
 	_, err := r.globalStamp()
 	assert.ErrorIs(t, err, os.ErrNotExist, "a deferred step withholds the stamp")
-	raw, err := os.ReadFile(LogPath(r.global))
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), "previous run still in flight")
 
 	close(release)
+	<-first
 	require.Eventually(t, func() bool { return live.Load() == 0 }, time.Second, 5*time.Millisecond)
 	// The marker is released when the goroutine returns: the step runs again.
 	var again atomic.Bool

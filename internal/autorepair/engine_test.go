@@ -263,8 +263,10 @@ func TestEnsureLocateFailureSkipsRepositoryAndLogsIt(t *testing.T) {
 	assert.Contains(t, string(raw), "dangling store symlink")
 }
 
-// A step that ignores its deadline is abandoned at the budget: Ensure returns,
-// the stamp is blocked, and the step's late result is discarded.
+// A step that ignores its deadline is abandoned at the budget: the stamp is
+// blocked, the pass stops (no later step runs), the step's late result is
+// discarded, and Ensure returns only once the step has, because it owns the
+// locks until then.
 func TestEnsureStepIgnoringDeadlineIsAbandoned(t *testing.T) {
 	r := newRig(t, false)
 	r.opts.stepBudget = 50 * time.Millisecond
@@ -282,21 +284,28 @@ func TestEnsureStepIgnoringDeadlineIsAbandoned(t *testing.T) {
 	done := make(chan Result, 1)
 	go func() { done <- r.ensure() }()
 	select {
+	case <-done:
+		t.Fatal("Ensure returned while the abandoned step still ran")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	select {
 	case res := <-done:
 		assert.Equal(t, 0, res.Items, "the abandoned step's items are discarded")
 		assert.False(t, res.Repaired)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Ensure hung on a step that ignores its deadline")
+		t.Fatal("Ensure did not return after the abandoned step did")
 	}
-	assert.Equal(t, []string{"after"}, r.ran, "later steps still run")
+	assert.Empty(t, r.ran, "no step runs after an abandoned one")
 	_, err := r.globalStamp()
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	raw, err := os.ReadFile(LogPath(r.global))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"step":"hang"`)
 	assert.Contains(t, string(raw), "budget")
-	close(release)
-	<-finished // the step may finish later; its result went nowhere
+	assert.Contains(t, string(raw), "waiting for abandoned step hang")
+	assert.Contains(t, string(raw), "pass stopped after abandoned step hang")
+	<-finished
 }
 
 // Items from a step that errored or deferred are not conversions: they do not
