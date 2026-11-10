@@ -323,8 +323,9 @@ var writerRegistry = map[string]writerEntry{
 	"internal/autorepair.archiver.diagnostic":         checkpoint("Body", "LeakRule", "install"),
 	// internal/autorepair: the step and repair locks, the stamp (the repair log
 	// rows are above).
-	"internal/autorepair.acquire":    exempt("creates and flocks an empty lock file; writes no content"),
-	"internal/autorepair.WriteStamp": checkpoint("Prose"),
+	"internal/autorepair.acquire":       exempt("creates and flocks an empty lock file; writes no content"),
+	"internal/autorepair.WriteStamp":    checkpoint("Prose"),
+	"internal/autorepair.runConfigFile": exempt("rename and directory sync only; no content written"),
 
 	// cmd/ethos.
 	"cmd/ethos.editContent":           exempt("identity graph: operator edits an attribute file by hand"),

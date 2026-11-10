@@ -70,6 +70,18 @@ func (s *Store) lockPath(handle string) (string, error) {
 // namespace-count checks. Locks are never removed: unlinking a held lock would
 // allow a second inode to create an independent critical section.
 func (s *Store) withLock(handle string, fn func() error) error {
+	return s.withLockUsing(handle, flock, fn)
+}
+
+// ErrLockBusy means a non-waiting lock attempt found the lock held elsewhere.
+var ErrLockBusy = errors.New("identity lock is held by another process")
+
+// withTryLock is withLock without the wait: a held lock returns ErrLockBusy.
+func (s *Store) withTryLock(handle string, fn func() error) error {
+	return s.withLockUsing(handle, tryFlock, fn)
+}
+
+func (s *Store) withLockUsing(handle string, lock func(*os.File) error, fn func() error) error {
 	path, err := s.lockPath(handle)
 	if err != nil {
 		return err
@@ -89,7 +101,7 @@ func (s *Store) withLock(handle string, fn func() error) error {
 		return fmt.Errorf("creating identity lock: %w", err)
 	}
 	defer f.Close()
-	if err := flock(f); err != nil {
+	if err := lock(f); err != nil {
 		return fmt.Errorf("acquiring identity lock: %w", err)
 	}
 	defer funlock(f)

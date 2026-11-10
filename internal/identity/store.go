@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -145,48 +146,18 @@ func (s *Store) migrateVoice(handle, path string, data []byte) error {
 	})
 }
 
+// migrateVoiceUnlocked converts a legacy voice field with the shared rule in
+// convertVoice. A field that cannot be converted is an error here: the identity
+// file is left unchanged until the field is a mapping of scalar values.
 func (s *Store) migrateVoiceUnlocked(handle, path string, data []byte) error {
-	var raw map[string]interface{}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil // already validated above; skip migration
+	_, _, reason, err := s.convertVoice(handle, path, data, s)
+	if err != nil {
+		return err
 	}
-	v, ok := raw["voice"]
-	if !ok {
-		return nil
+	if reason != "" {
+		return errors.New(reason)
 	}
-	vm, ok := v.(map[string]interface{})
-	if !ok {
-		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
-		// Leave the YAML untouched; manual fix required.
-		return fmt.Errorf("voice field has unexpected type %T; manual migration required", v)
-	}
-	if len(vm) == 0 {
-		// Empty voice map — just strip the key and rewrite.
-		delete(raw, "voice")
-		return s.rewriteRaw(path, raw)
-	}
-	provider, _ := vm["provider"].(string)
-	voiceID, _ := vm["voice_id"].(string)
-	if provider == "" && voiceID == "" {
-		delete(raw, "voice")
-		return s.rewriteRaw(path, raw)
-	}
-
-	// Write to ext/vox.
-	if provider != "" {
-		if err := s.extSetUnlocked(handle, "vox", "provider", provider, extConfig{}); err != nil {
-			return fmt.Errorf("setting ext/vox/provider: %w", err)
-		}
-	}
-	if voiceID != "" {
-		if err := s.extSetUnlocked(handle, "vox", "voice_id", voiceID, extConfig{}); err != nil {
-			return fmt.Errorf("setting ext/vox/voice_id: %w", err)
-		}
-	}
-
-	// Strip voice from the identity YAML.
-	delete(raw, "voice")
-	return s.rewriteRaw(path, raw)
+	return nil
 }
 
 // rewriteRaw marshals a raw map back to the identity YAML file.

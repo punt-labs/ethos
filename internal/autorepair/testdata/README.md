@@ -110,7 +110,7 @@ them) with one defect each. `README` in each directory states the shape.
 - `gitignore-ignores-sessions`: A repository .gitignore that ignores .punt-labs/ethos/sessions, with an untracked audit file there (ethos-7ax7 shape).
 - `invalid-escape-lines`: A tracked chunk with a line carrying an invalid backslash escape from hand redaction, \[REDACTED:path] (ethos-jn25 shape); the other line is valid.
 - `live-audit-pre-redaction`: A live session audit file whose first line was written before redaction (v4.20.0): it holds a home path and the fake token unredacted; every commit warns and quarantine, repair and scrub refuse it.
-- `overlay-both-locations`: A repository extension overlay present both beside the identity (legacy v4.10-v4.20 location) and under .punt-labs/local/ethos/identities (new location), with different values.
+- `overlay-both-locations`: A repository extension overlay present both beside the identity (legacy v4.10-v4.20 location) and under .punt-labs/local/ethos/identities (new location), with different values (legacy: notify "y"; new: notify "n", voice "newer").
 - `roster-without-checkout`: A session roster with no checkout field whose claude participant pid (2147483646) is not running, plus the sessions/current pointer file named for that pid.
 - `stale-hook-section`: A commit-msg hook section from before DES-083 that calls ethos hook commit-trailers (the retired subcommand) instead of the hook commit-msg shim; under git/hooks.
 - `top-level-voice-field`: A global identity file with a top-level voice: field (pre-v2.0); hand-made because every released binary migrates the field into the vox extension on write.
