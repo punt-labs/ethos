@@ -403,9 +403,6 @@ def audit_recovery(f: Fixture) -> None:
     corrupt = b"{intentionally corrupt acceptance chunk\n"
     write(chunk, corrupt)
     index = f.repo / ".git/index"
-    before = index.read_bytes()
-    f.cli("audit", "seal", ok=False)
-    require(index.read_bytes() == before, "failed manual seal changed index")
     # Archival failure is advisory ONLY in default-blame commit context.
     write(f.repo / "source.txt", "source-despite-old-trace-corruption\n")
     f.git("add", "source.txt")
@@ -413,12 +410,17 @@ def audit_recovery(f: Fixture) -> None:
     require(f.git("show", "HEAD:source.txt") == b"source-despite-old-trace-corruption\n",
             "historical trace corruption blocked unrelated source commit")
     before = index.read_bytes()
-    f.cli("audit", "quarantine", str(chunk), "--reason", "acceptance corruption")
-    f.cli("audit", "quarantine", str(chunk), "--reason", "acceptance corruption")
-    require(index.read_bytes() == before, "blame quarantine changed index")
+    # Recovery is automatic: the user runs nothing. The next entry points (a
+    # session start, then another real commit through the installed hook) must
+    # repair the corrupt chunk without touching the index.
+    f.wrapper("session-start.sh", {"session_id": "acceptance-recovery"})
+    f.wrapper("session-start.sh", {"session_id": "acceptance-recovery"})
+    require(index.read_bytes() == before, "automatic recovery changed index")
     require(any(p.read_bytes() == corrupt for p in (f.repo / LOCAL).rglob("*") if p.is_file()),
-            "quarantine discarded original corrupt bytes")
-    f.cli("audit", "seal")
+            "automatic recovery discarded original corrupt bytes")
+    write(f.repo / "source.txt", "source-after-automatic-recovery\n")
+    f.git("add", "source.txt")
+    f.git("commit", "-m", "commit after automatic recovery")
     # Reader must return recovered content or name the loss; an empty success
     # without diagnostic evidence is not recovery.
     query = f.cli("audit", "show", "--delegation", "acceptance-audit").decode()
@@ -818,8 +820,88 @@ def mcp_modes(f: Fixture) -> None:
     f.snapshot("mcp-modes")
 
 
+CORPUS = ROOT / "internal/autorepair/testdata/corpus"
+UPGRADE_MARKER = "ethos: upgraded storage"
+TOKEN = re.compile(rb"gh[pousr]_[A-Za-z0-9]{36,}")
+USER_PATH = re.compile(rb"/(?:Users|home)/[A-Za-z][A-Za-z0-9._-]*")
+
+
+def restore_corpus_repo(f: Fixture, snapshot: Path, repo: Path, env: dict[str, str]) -> None:
+    """Rebuild a corpus snapshot's repository: files, commit, index and the old release's hooks."""
+    shutil.copytree(snapshot / "repo", repo, symlinks=True)
+    run = lambda *args: f.run.run(["git", *args], repo, env)  # noqa: E731
+    run("init", "-b", "main")
+    run("config", "user.name", "Storage Fixture")
+    run("config", "user.email", "fixture@example.invalid")
+    run("config", "commit.gpgsign", "false")
+    run("config", "core.hooksPath", str(repo / ".git/hooks"))
+    # The bundle is the snapshot's whole history; fetch it, point main at it and
+    # load its tree into the index so the working files are tracked as shipped.
+    run("fetch", str(snapshot / "git/repo.bundle"), "refs/heads/main")
+    run("update-ref", "refs/heads/main", "FETCH_HEAD")
+    run("read-tree", "HEAD")
+    for hook in sorted((snapshot / "git/hooks").glob("*")):
+        target = repo / ".git/hooks" / hook.name
+        shutil.copy2(hook, target)
+        target.chmod(0o755)
+
+
+def scan_for_leaks(scratch: Path, home: Path, repo: Path) -> None:
+    """No credential-shaped token and no machine path other than the scratch tree itself."""
+    scratch_bytes = str(scratch).encode()
+    for root in (repo, home):
+        for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
+            data = path.read_bytes()
+            require(not TOKEN.search(data), f"credential-shaped token survives upgrade in {path}")
+            leaked = USER_PATH.search(data.replace(scratch_bytes, b""))
+            require(not leaked, f"machine path {leaked.group(0).decode() if leaked else ''} in {path}")
+
+
+def upgrade(f: Fixture) -> None:
+    """Every released layout, upgraded by this binary with no user action."""
+    versions = sorted(p for p in CORPUS.iterdir() if p.is_dir())
+    require(len(versions) >= 9, f"legacy corpus has {len(versions)} snapshots, expected at least 9")
+    for snapshot in versions:
+        label = snapshot.name
+        scratch = f.root / "upgrade" / label
+        home, tmp, bindir, repo = scratch / "home", scratch / "tmp", scratch / "bin", scratch / "repo"
+        for path in (tmp, bindir):
+            path.mkdir(parents=True)
+        shutil.copytree(snapshot / "home", home, symlinks=True)
+        (bindir / "ethos").symlink_to(f.binary)
+        env = clean_env(home, tmp, str(bindir) + os.pathsep + os.environ.get("PATH", os.defpath))
+        env["GIT_CEILING_DIRECTORIES"] = str(scratch)
+        restore_corpus_repo(f, snapshot, repo, env)
+
+        def entry(*args: str, data: str | None = None) -> str:
+            result = f.run.run(list(args), repo, env, data=data)
+            return (result.stdout + result.stderr).decode(errors="replace")
+
+        start = entry(str(f.binary), "hook", "session-start",
+                      data=json.dumps({"session_id": "upgrade-" + label, "source": "startup", "cwd": str(repo)}))
+        write(repo / "upgrade-new-file.txt", "new work after upgrade\n")
+        entry("git", "add", "upgrade-new-file.txt")
+        commit = entry("git", "commit", "-m", "work after upgrade")
+        notices = [line for line in (start + commit).splitlines() if UPGRADE_MARKER in line]
+        require(len(notices) <= 1, f"{label}: {len(notices)} upgrade lines across session start and commit: {notices}")
+        write(repo / "upgrade-new-file.txt", "second change\n")
+        entry("git", "add", "upgrade-new-file.txt")
+        again = entry("git", "commit", "-m", "second work after upgrade")
+        chatter = [line for line in again.splitlines() if "ethos" in line.lower()]
+        require(not chatter, f"{label}: second commit printed ethos output: {chatter}")
+        local = entry("git", "ls-files", ".punt-labs/local")
+        require(not local.strip(), f"{label}: tracked machine-local files after upgrade: {local!r}")
+        # doctor refuses to run with the test-harness override set, so it gets the
+        # environment a user's shell has.
+        doctor_env = {k: v for k, v in env.items() if k != "ETHOS_TEST_NOT_UNDER_CLAUDE_CODE"}
+        doctor_env["ETHOS_SESSION"] = "upgrade-" + label
+        doctor = (f.run.run([str(f.binary), "doctor"], repo, doctor_env).stdout).decode(errors="replace")
+        require(re.search(r"^\s*Storage\b", doctor, re.MULTILINE), f"{label}: ethos doctor has no Storage row:\n{doctor}")
+        scan_for_leaks(scratch, home, repo)
+
+
 CASES = (default_seal, modes, audit_recovery, lifecycle, required_event_failure, worktree_retention,
-         full_export, publish_squash, mcp_modes)
+         full_export, publish_squash, mcp_modes, upgrade)
 
 
 def source_evidence(runner: Runner, env: dict[str, str]) -> dict[str, Any]:
@@ -845,7 +927,7 @@ def main() -> int:
         "required_cases": [case.__name__ for case in CASES],
         "coverage_limits": ["Final walks do not prove transient placement; syscall/fault acceptance is separate.",
                             "No crash/fsync/EXDEV injection, competing-index writer, live UI or external-consumer checks.",
-                            "Historical migration/upgrade is outside this fresh-write gate, not a skipped case."]}
+                            "The upgrade case replays the committed legacy corpus; it does not cover layouts absent from it."]}
     runner = Runner(directory / "setup")
     tmp = directory / "build-tmp"
     tmp.mkdir()
