@@ -246,14 +246,16 @@ var writerRegistry = map[string]writerEntry{
 	// WriteLocalAtomic installs via a function-valued os.Link, invisible to the
 	// primitive matcher. Pin its implementation AND discover every payload caller.
 	"internal/audit.WriteLocalAtomic": payloadCheckpoint(2, "CreateLocalTemp", "writeFile", "installLocalFile"),
-	"internal/audit.QuarantineLocal":  checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "WriteLocalAtomic", "ReplaceLocalFile"),
+	"internal/audit.QuarantineLocal":  checkpoint("recoverLines", "installRecovered", "writeMarker", "WriteLocalAtomic", "ReplaceLocalFile"),
 	// The one recovery shared by QuarantineLocal and SalvageChunk: every line it
 	// returns went through the caller's guard inside decodeSalvageLine.
 	"internal/audit.recoverLines":          checkpoint("decodeSalvageLine", "ReadLiveLines", "chunkEvidence", "CanonicalPayload"),
 	"internal/audit.decodeSalvageLine":     checkpoint("guard", "CanonicalPayload"),
 	"internal/audit.SalvageChunk":          checkpoint("salvageBytes"),
-	"internal/audit.salvageBytes":          checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "ReplaceLocalFile"),
-	"internal/audit.RecoverHeldQuarantine": checkpoint("salvageBytes"),
+	"internal/audit.salvageBytes":          checkpoint("recoverLines", "installRecovered", "writeMarker", "writeSharedMarker"),
+	"internal/audit.RecoverHeldQuarantine": checkpoint("salvageBytes", "recoverUnnamedHeld"),
+	"internal/audit.recoverUnnamedHeld":    exempt("writes a held-loss record of the held bytes' digest and size only; none of their content, and the bytes are deleted"),
+	"internal/audit.writeMarker":           sink(3, "the one marker writer: merges into the marker on disk; carries a stem, ts bounds, a digest and the caller's redacted reason, no payload"),
 	"internal/audit.installRecovered":      sink(4, "writes the lines recoverLines returned, each already guarded; reads the result back through ReadChunkVerified"),
 	"internal/audit.installEachLine":       sink(4, "writes the lines recoverLines returned, each already guarded, one chunk per line; reads each back through ReadChunkVerified"),
 	"internal/audit.writeSharedMarker":     sink(4, "availability marker beside a published chunk; its Reason is the caller's redacted reason and it carries no payload"),
