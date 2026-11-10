@@ -89,3 +89,42 @@ func TestCoveredLegacyCorruptIsSalvaged(t *testing.T) {
 	assert.True(t, len(data.Lines) == 1 || len(data.Gaps) > 0, "the line is installed or recorded as lost")
 	fixSecondRun(t, env)
 }
+
+// A torn marker is a Residual whatever else is in the directory, even when no
+// repair would write a marker: ScanSealedDir reads it as absent, so detection
+// must look at it directly.
+func TestTornMarkerWithoutAMarkerWriteIsResidual(t *testing.T) {
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	torn := `{"chunk":"` + cn.Stem() + `","verified_last":1793786400000003000,"unrecovered_first":1793786400000001000,"unrec`
+	other := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0 + 5000, Last: fixT0 + 5000}
+	cases := map[string]map[string]string{
+		"missing final newline": {cn.ChunkFile(): stableLine(fixT0, "A") + stableLine(fixT0+2000, "C")[:len(stableLine(fixT0+2000, "C"))-1]},
+		"alone":                 {other.ChunkFile(): stableLine(fixT0+5000, "Z")},
+	}
+	for name, files := range cases {
+		t.Run(name, func(t *testing.T) {
+			env, _, s, dir, _ := fixEnv(t)
+			markerPath := filepath.Join(dir, cn.MarkerFile())
+			require.NoError(t, os.WriteFile(markerPath, []byte(torn), 0o600))
+			for f, body := range files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte(body), 0o600))
+			}
+			_, rerr := audit.ReadStream(env.Policy, s)
+			require.Error(t, rerr)
+			snap := fixStoreSnap(t, env)
+			for i := 1; i <= 2; i++ {
+				out := runStep(t, runCorruptChunks, env)
+				assert.False(t, out.Deferred, "run %d", i)
+				require.Len(t, out.Residuals, 1, "run %d", i)
+				assert.Zero(t, out.Items, "run %d", i)
+				assert.Contains(t, out.Residuals[0].Reason, "unreadable")
+			}
+			assert.Equal(t, snap, fixStoreSnap(t, env), "nothing in the directory is touched")
+			got, err := os.ReadFile(markerPath)
+			require.NoError(t, err)
+			assert.Equal(t, torn, string(got))
+			_, rerr = audit.ReadStream(env.Policy, s)
+			require.Error(t, rerr, "reads still fail loud")
+		})
+	}
+}

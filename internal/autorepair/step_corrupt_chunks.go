@@ -107,6 +107,9 @@ func dirNeedsRepair(dir string, s audit.Stream) (bool, error) {
 	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
+	if err := markerFault(dir, s); err != nil {
+		return false, err
+	}
 	if _, err := audit.ScanSealedDir(dir, s.Namespace, s.Session); err != nil {
 		var orphan *audit.OrphanCorruptError
 		if errors.As(err, &orphan) {
@@ -132,6 +135,15 @@ func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir s
 			return
 		}
 		before := out.Items
+		if err := markerFault(dir, s); err != nil {
+			logf(env, stepCorruptChunks, "scan-markers", []string{dir}, err)
+			if reason, ok := permanentScanReason(err); ok {
+				out.Residuals = append(out.Residuals, Residual{Step: stepCorruptChunks, ID: filepath.Base(dir), Reason: reason})
+			} else {
+				out.Deferred = true
+			}
+			return
+		}
 		_, err := audit.ScanSealedDir(dir, s.Namespace, s.Session)
 		var orphan *audit.OrphanCorruptError
 		switch {
@@ -357,6 +369,40 @@ func residual(env Env, out *Outcome, path, reason string, err error) bool {
 type damagedChunk struct {
 	path string
 	name audit.ChunkName
+}
+
+// markerFault returns audit.ErrTornMarker for a marker in dir that does not
+// decode, and audit.ErrMarkerCoversOtherChunk for one that names another stem.
+// ScanSealedDir reads such a marker as absent, so it never reports them; the
+// step must not call a directory clean, or touch it, while one exists.
+func markerFault(dir string, s audit.Stream) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		cn, kind := audit.Classify(e.Name(), s.Namespace)
+		if kind != audit.KindQuarantine || !e.Type().IsRegular() || s.Namespace == audit.MissionNS && cn.Session != s.Session {
+			continue
+		}
+		m, err := audit.ReadMarker(filepath.Join(dir, e.Name()))
+		var pathErr *os.PathError
+		switch {
+		case err == nil:
+			if m.Chunk != cn.Stem() {
+				return fmt.Errorf("marker %s names chunk %s: %w", e.Name(), m.Chunk, audit.ErrMarkerCoversOtherChunk)
+			}
+		case errors.Is(err, os.ErrNotExist):
+		case errors.As(err, &pathErr):
+			return err
+		default:
+			return fmt.Errorf("marker %s: %w: %v", e.Name(), audit.ErrTornMarker, err)
+		}
+	}
+	return nil
 }
 
 // legacyCorrupts lists the regular-file .corrupt files in dir whose bytes are
