@@ -277,6 +277,8 @@ var writerRegistry = map[string]writerEntry{
 
 	"internal/repair.Plan.Apply": exempt("opens existing lock files with O_RDWR to tryLock, then deletes explicitly selected obsolete files; writes no new record content"),
 
+	"internal/autorepair.runConfigFile": exempt("rename and directory sync only; no content written"),
+
 	// cmd/ethos.
 	"cmd/ethos.editContent":           exempt("identity graph: operator edits an attribute file by hand"),
 	"cmd/ethos.ensureLocalExtIgnored": checkpoint("EnsureLocalIgnored"),
