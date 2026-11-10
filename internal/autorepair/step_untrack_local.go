@@ -23,6 +23,9 @@ const recordTree = ".punt-labs/ethos/"
 // is machine-local: anything under .punt-labs/local/, any class-4 path, and
 // record-tree trace that repair.Inventory calls obsolete. Files stay on disk.
 func untrackLocal(ctx context.Context, env Env) (Outcome, error) {
+	if err := env.Roots.CheckoutErr; err != nil {
+		return Outcome{}, fmt.Errorf("locating the checkout for untrack-local: %w", err)
+	}
 	if !env.InRepository() || env.Roots.Checkout == "" {
 		return Outcome{}, nil
 	}
@@ -77,6 +80,16 @@ func untrackCandidates(env Env) (paths []string, residuals []Residual, deferred 
 			continue
 		}
 		blob := func() ([]byte, error) {
+			// A non-blob entry (gitlink, mode 160000) has no content: reading
+			// it fails the same way on every run, so it is not transient.
+			ls, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: checkout, Env: genv,
+				Args: []string{"ls-files", "-s", "-z", "--", rel}}, 0)
+			if err != nil {
+				return nil, err
+			}
+			if !strings.HasPrefix(string(ls), "100") && !strings.HasPrefix(string(ls), "120") {
+				return nil, errNotFile
+			}
 			b, _, err := gitenv.Read(gitenv.Spec{Git: "git", Dir: checkout, Env: genv,
 				Args: []string{"cat-file", "blob", ":0:" + rel}}, 0)
 			return b, err
@@ -84,6 +97,14 @@ func untrackCandidates(env Env) (paths []string, residuals []Residual, deferred 
 		untrack, err := shouldUntrack(env.Policy, rel, blob)
 		if err != nil {
 			logStep(env, "untrack-local", "undecided", []string{rel}, err)
+			if errors.Is(err, errNotFile) {
+				residuals = append(residuals, Residual{Step: "untrack-local", ID: rel, Reason: "tracked entry is not a file: " + rel})
+				continue
+			}
+			if errors.Is(err, repair.ErrNotRegular) {
+				residuals = append(residuals, Residual{Step: "untrack-local", ID: rel, Reason: "tracked entry is not a regular file: " + rel})
+				continue
+			}
 			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errUnreadable) {
 				deferred = true
 				continue
@@ -98,6 +119,9 @@ func untrackCandidates(env Env) (paths []string, residuals []Residual, deferred 
 	sort.Strings(paths)
 	return paths, residuals, deferred, nil
 }
+
+// errNotFile marks an index entry that is not a blob (a gitlink): permanent.
+var errNotFile = errors.New("tracked entry is not a file")
 
 // errUnreadable marks a tracked file readable from neither the disk nor the
 // index: possibly a transient condition, so the step defers.
@@ -124,6 +148,9 @@ func shouldUntrack(p layout.Policy, rel string, blob func() ([]byte, error)) (bo
 	if classified && class == layout.Trace {
 		obsolete, err := repair.Obsolete(p, p.CheckoutRecordRoot(), strings.TrimPrefix(rel, recordTree), func() ([]byte, error) {
 			b, err := blob()
+			if errors.Is(err, errNotFile) {
+				return nil, err
+			}
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", errUnreadable, err)
 			}

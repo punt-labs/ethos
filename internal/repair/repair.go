@@ -149,6 +149,32 @@ func (p *Plan) Apply(ctx context.Context) (removed []string, err error) {
 	return removed, nil
 }
 
+// ErrNotRegular is returned by Obsolete for a working entry that is not a plain
+// regular file reached without a symlink.
+var ErrNotRegular = errors.New("not a regular file")
+
+// refuseSymlinkBelow returns ErrNotRegular when a directory component of rel
+// under root is a symlink. root itself is trusted: it may sit below a system
+// symlink such as macOS /var, which safePath (it walks to /) would refuse.
+func refuseSymlinkBelow(root, rel string) error {
+	d := root
+	parts := strings.Split(rel, "/")
+	for _, part := range parts[:len(parts)-1] {
+		d = filepath.Join(d, part)
+		info, err := os.Lstat(d)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s", ErrNotRegular, rel)
+		}
+	}
+	return nil
+}
+
 // retainedByContent reports whether a published log's bytes keep it out of
 // cleanup: even damaged logs with visible full consent are retained. Inventory
 // and Obsolete share this one rule.
@@ -162,12 +188,26 @@ func retainedByContent(b []byte, rel string) bool {
 // When the working file is gone (ErrNotExist) and fallback is non-nil, the
 // retain test runs on the bytes fallback returns, typically the indexed blob;
 // fallback's error is returned as is. Any other read error is returned wrapped.
+// A working entry that is a symlink (or sits below one) or is not a regular
+// file is never opened, since reading a FIFO or /dev/zero through a committed
+// link would block or exhaust memory: Obsolete returns ErrNotRegular.
 func Obsolete(p layout.Policy, root, rel string, fallback func() ([]byte, error)) (bool, error) {
 	remove, _, err := obsolete(p, root, rel)
 	if err != nil || !remove {
 		return false, err
 	}
-	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := refuseSymlinkBelow(root, rel); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(path)
+	if err == nil && !info.Mode().IsRegular() {
+		return false, fmt.Errorf("%w: %s", ErrNotRegular, rel)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) && fallback != nil {
 		b, err = fallback()
 	}
