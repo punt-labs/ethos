@@ -154,7 +154,7 @@ an isolated HOME: one session start + one commit each → one repair line, then
 silence; `ethos doctor` all PASS; `git ls-files .punt-labs/local` empty.
 Operator confirms. PR from `fix/self-repair-integration` to main (Qodo only;
 Devin and every other review bot are fired). Merge gate per WORKFLOW.md.
-Release v5.0.0 via `punt release`. Recap email to jim@punt-labs.com.
+Release v5.0.0 via `punt release`. Recap email to <jim@punt-labs.com>.
 
 ## Known hazards
 
