@@ -316,7 +316,7 @@ func TestCheckExtCredentialNames(t *testing.T) {
 		r := CheckExtCredentialNames(s)
 		assert.Equal(t, "WARN", r.Status)
 		assert.Contains(t, r.Detail, "mal quarry/api_token")
-		assert.Contains(t, r.Detail, "--local")
+		assert.Contains(t, r.Detail, "tracked base identity")
 	})
 
 	// Following the check's own advice must clear it. Reading the merged

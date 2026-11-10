@@ -17,7 +17,7 @@ var promiseTerms = []string{
 	"next ethos run", "reinstalls", "refreshes it", "relocates it",
 	"retires it", "removes them", "repairs it", "repairs a file",
 	"storage upgrade", "re-run", "rerun", "inspect before", "add it before",
-	"file a bug", "check file",
+	"file a bug", "check file", "install ", "upgrade ethos", "move each",
 }
 
 // TestDoctorMessages walks the string literals of this package and of the
@@ -49,7 +49,8 @@ func TestDoctorMessages(t *testing.T) {
 			if err != nil {
 				return true
 			}
-			low := strings.ToLower(v)
+			// "would install" describes a comparison; it does not tell the reader to act.
+			low := strings.ReplaceAll(strings.ToLower(v), "would install", "")
 			for _, term := range promiseTerms {
 				if strings.Contains(low, term) {
 					t.Errorf("%s: message %q contains %q", path, v, term)

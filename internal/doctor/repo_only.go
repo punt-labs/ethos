@@ -268,7 +268,7 @@ func CheckExtCredentialNames(s identity.IdentityStore) Result {
 	var parts []string
 	if len(flagged) > 0 {
 		parts = append(parts, fmt.Sprintf(
-			"credential-named: %s — move each to a <namespace>.local.yaml (`ethos ext set ... --local`); `ethos vendor` will refuse them",
+			"overlay values present in the tracked base identity: %s; `ethos vendor` refuses them",
 			strings.Join(flagged, ", ")))
 	}
 	if len(unread) > 0 {

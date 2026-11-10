@@ -150,7 +150,7 @@ func CheckAgentCurrencyFromConfig(checkout, storeRoot string, cfg *resolve.RepoC
 		} else {
 			detail += "; "
 		}
-		detail += "seeded agents differ from this binary (local edits or older content): " + strings.Join(warnings, ", ") + ""
+		detail += "seeded agents differ from this binary (local edits or older content): " + strings.Join(warnings, ", ")
 	}
 	return Result{Name: name, Status: status, Detail: detail}
 }

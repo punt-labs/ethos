@@ -78,7 +78,7 @@ func TestCheckHookBinary(t *testing.T) {
 		t.Setenv("PATH", stubEthos(t, groupHelp))
 		r := CheckHookBinary(enabledRepoDir(t))
 		assert.Equal(t, "FAIL", r.Status, r.Detail)
-		assert.Contains(t, r.Detail, "upgrade ethos")
+		assert.Contains(t, r.Detail, "predates `ethos hook ")
 	})
 
 	t.Run("a binary that exits non-zero on --help FAILs", func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestCheckHookBinary(t *testing.T) {
 		t.Setenv("PATH", stubEthos(t, "exit 2\n"))
 		r := CheckHookBinary(enabledRepoDir(t))
 		assert.Equal(t, "FAIL", r.Status, r.Detail)
-		assert.Contains(t, r.Detail, "upgrade ethos")
+		assert.Contains(t, r.Detail, "predates `ethos hook ")
 	})
 
 	t.Run("falls back to the default install directory like the shim", func(t *testing.T) {
@@ -144,7 +144,7 @@ func TestCheckHookBinary(t *testing.T) {
 		assert.Equal(t, "FAIL", r.Status, r.Detail)
 		assert.Contains(t, r.Detail, "ethos hook commit-msg")
 		assert.NotContains(t, r.Detail, "ethos hook pre-commit`")
-		assert.Contains(t, r.Detail, "upgrade ethos")
+		assert.Contains(t, r.Detail, "predates `ethos hook ")
 	})
 
 	t.Run("a binary that cannot be executed is not reported as needing an upgrade", func(t *testing.T) {
@@ -156,7 +156,7 @@ func TestCheckHookBinary(t *testing.T) {
 		r := CheckHookBinary(enabledRepoDir(t))
 		assert.Equal(t, "FAIL", r.Status, r.Detail)
 		assert.Contains(t, r.Detail, "cannot run")
-		assert.NotContains(t, r.Detail, "upgrade ethos")
+		assert.NotContains(t, r.Detail, "predates")
 	})
 
 	t.Run("a non-executable file in the default directory is not a binary", func(t *testing.T) {

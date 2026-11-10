@@ -742,7 +742,7 @@ func CheckHookBinary(repoRoot string) Result {
 		bin = local
 	}
 	if bin == "" {
-		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked — install ethos"}
+		return Result{Name: name, Status: "FAIL", Detail: "ethos is enabled here but no ethos binary is on PATH or in ~/.local/bin; every commit is blocked; ethos binary not found on PATH"}
 	}
 	// Git runs the hooks with its own PATH, which may differ from this
 	// process's, so what follows is about the binary doctor resolves.
@@ -762,7 +762,7 @@ func CheckHookBinary(repoRoot string) Result {
 		case err != nil && !errors.As(err, &exitErr):
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot run %s: %v (%s)", bin, err, resolved)}
 		case err != nil || !strings.Contains(string(out), "ethos hook "+sub):
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook %s`, so the installed hooks block every commit — upgrade ethos: make install (%s)", bin, sub, resolved)}
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("%s predates `ethos hook %s`, so the installed hooks block every commit (%s)", bin, sub, resolved)}
 		}
 	}
 	if onPath != "" && local != "" && !sameFile(onPath, local) {
@@ -945,7 +945,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 		if err != nil {
 			if errors.Is(err, errSandboxGitUnavailable) {
 				return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-					"cannot verify the %s hook by execution: %v — install git to run this check", spec.ShortName, err)}
+					"cannot verify the %s hook by execution: %v; git not found on PATH, check skipped", spec.ShortName, err)}
 			}
 			if errors.Is(err, errSandboxUnsupportedPlatform) {
 				// M4: this build cannot exercise the sandbox on this GOOS.
