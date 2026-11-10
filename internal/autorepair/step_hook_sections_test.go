@@ -27,7 +27,9 @@ func TestHookSectionsRefreshed(t *testing.T) {
 		{"corpus/v4.17.0", 2, false},
 		{"corpus/v4.20.4", 2, false},
 		{"corpus/v4.21.0", 2, false},
-		{"corpus/v4.22.1", 0, false},
+		// The restored v4.22.1 snapshot was enabled by a binary that still
+		// wrote the pre-shim section, so both hooks are refreshed.
+		{"corpus/v4.22.1", 2, false},
 		{"damage/stale-hook-section", 2, false},
 	}
 	for _, c := range cases {

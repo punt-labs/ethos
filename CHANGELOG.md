@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Ethos repairs its own storage (DES-084). Every CLI command, MCP call and
+  git hook runs the storage upgrade before reading storage: a store in any
+  layout since v3.11 is converted to the DES-079 layout, stamped, and the
+  user hears at most one line (`ethos: upgraded storage (N items; see
+  ~/.punt-labs/ethos/logs/repair.log)`). The user runs nothing. A repair
+  that cannot finish is retried on the next run; a loss is recorded in the
+  repair log, never fatal, and never blocks a command or a commit.
+- Product messages state what ethos found or did. None tells the user to
+  run a command or promises what a later run will do; a guard test keeps it
+  that way.
+
+### Removed
+
+- `ethos repair`, `ethos audit quarantine`, `ethos audit migrate`,
+  `ethos mission scrub`, `ethos mission migrate`, `ethos adr migrate`,
+  `ethos session purge`, `ethos hook commit-trailers`,
+  `ethos hook commit-message` and their hidden aliases. The storage upgrade
+  does their work automatically. Each removed command exits with a usage
+  error that names what replaced it.
+- Legacy layout readers and the dead code behind them.
+
 ## [4.22.1] - 2026-11-09
 
 ### Fixed
