@@ -218,19 +218,13 @@ func scanBundles(dir string, src Source) ([]Bundle, error) {
 	return out, nil
 }
 
-// ResolveRoot resolves the repo's active bundle and, from it, the root a
-// layered store should read as its bundle layer: "" when no bundle is
-// active, or when the active bundle is the legacy .punt-labs/ethos/
-// directory (which already serves as the repo-local layer, so it must
-// not also be treated as a distinct bundle layer). Returns the Bundle
-// itself alongside root, so a caller needing its Source — the DES-057
-// repo-only check in VerifyRepoOnly — does not resolve it a second time.
-func ResolveRoot(repoRoot, globalRoot string) (root string, active *Bundle, err error) {
-	b, err := ResolveActive(repoRoot, globalRoot)
-	return resolvedRoot(b, err)
-}
-
-// ResolveRootFromConfig is ResolveRoot using an already-read configuration.
+// ResolveRootFromConfig resolves the repo's active bundle from an already-read
+// configuration and, from it, the root a layered store should read as its
+// bundle layer: "" when no bundle is active, or when the active bundle is the
+// legacy .punt-labs/ethos/ directory (which already serves as the repo-local
+// layer, so it must not also be treated as a distinct bundle layer). Returns
+// the Bundle itself alongside root, so a caller needing its Source — the
+// DES-057 repo-only check in VerifyRepoOnly — does not resolve it a second time.
 func ResolveRootFromConfig(repoRoot, globalRoot string, cfg *resolve.RepoConfig) (string, *Bundle, error) {
 	b, err := ResolveActiveFromConfig(repoRoot, globalRoot, cfg)
 	return resolvedRoot(b, err)
