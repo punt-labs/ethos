@@ -22,7 +22,9 @@ func LogPath(global string) string { return filepath.Join(global, "logs", "repai
 // two processes rotate at once; the constructor is unexported to keep it
 // that way. Every string field passes through the DES-080 prose redactor
 // (credentials, addresses, home paths): a step error can quote file
-// contents, and file contents are never an argument.
+// contents, and file contents are never an argument. The redactor does not
+// recognise Windows home paths (C:\Users\name\...); Windows is not a shipped
+// target.
 type FileLog struct {
 	path     string
 	store    string

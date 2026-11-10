@@ -179,6 +179,7 @@ func runHookSessionStart() error {
 		Roles:        layeredRoleStore(is),
 		Issue:        currentRoots().configIssue(),
 		RefreshHooks: refreshGitHooks,
+		Notice:       takeRepairNotice(),
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)

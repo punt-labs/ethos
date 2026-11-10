@@ -90,6 +90,11 @@ func runAllFor(loc resolve.Located, s identity.IdentityStore, ss *session.Store,
 		issue = bundle.ConfigIssueFromConfig(loc.Store, loc.Ethos, global, loc.Config)
 	}
 	results := runAll(s, ss, loc.Checkout, loc.CheckoutErr, storeRoot, storeErr, issue, loc.Config, loc.ConfigErr, teams, human)
+	if home, herr := os.UserHomeDir(); herr == nil {
+		results = append(results, CheckStorage(loc, filepath.Join(home, ".punt-labs", "ethos")))
+	} else {
+		results = append(results, CheckStorage(loc, ""))
+	}
 	if issue != nil {
 		what, _, _ := resolve.Describe(issue)
 		results = append([]Result{{Name: "Repository configuration", Status: "FAIL", Detail: what + ": " + issue.Error()}}, results...)

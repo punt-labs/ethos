@@ -102,7 +102,7 @@ func TestStoreRelocatedOnLocationChange(t *testing.T) {
 	h.RelocateStore(locate(), locate, build)
 	builds.Store(0)
 
-	cur := h.current()
+	cur, _ := h.current()
 	assert.Same(t, h, cur, "unchanged: the first handler serves")
 
 	steps := []StoreLocation{
@@ -115,10 +115,47 @@ func TestStoreRelocatedOnLocationChange(t *testing.T) {
 	}
 	for i, step := range steps {
 		loc.Store(step)
-		next := h.current()
+		next, _ := h.current()
 		assert.NotSame(t, cur, next, "step %d: %+v rebuilds", i, step)
 		assert.Equal(t, int32(i+1), builds.Load())
-		assert.Same(t, next, h.current(), "step %d: no rebuild while unchanged", i)
+		cur2, _ := h.current()
+		assert.Same(t, next, cur2, "step %d: no rebuild while unchanged", i)
 		cur = next
 	}
+}
+
+// One tool call locates the store once: the repair gate receives the
+// location the call already found instead of locating again (DES-084
+// wiring, round-1 LOW-2).
+func TestToolCallLocatesOnce(t *testing.T) {
+	var locates atomic.Int32
+	locate := func() StoreLocation {
+		locates.Add(1)
+		return StoreLocation{}
+	}
+	build := func(StoreLocation) *Handler {
+		s := identity.NewStore(t.TempDir())
+		return NewHandlerWithOptions(s,
+			attribute.NewStore(s.Root(), attribute.Talents),
+			attribute.NewStore(s.Root(), attribute.Personalities),
+			attribute.NewStore(s.Root(), attribute.WritingStyles),
+		)
+	}
+	var gateSaw []StoreLocation
+	h := build(StoreLocation{})
+	h.ensure = func(_ context.Context, loc StoreLocation) string {
+		gateSaw = append(gateSaw, loc)
+		return ""
+	}
+	h.RelocateStore(StoreLocation{}, locate, build)
+	srv := server.NewMCPServer("test", "0.0.0", server.WithToolCapabilities(true))
+	h.RegisterTools(srv)
+	locates.Store(0)
+
+	st := srv.GetTool("identity")
+	require.NotNil(t, st)
+	_, err := st.Handler(context.Background(), callTool(map[string]interface{}{"method": "list"}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), locates.Load(), "one locate per call")
+	require.Len(t, gateSaw, 1, "the gate ran once")
 }

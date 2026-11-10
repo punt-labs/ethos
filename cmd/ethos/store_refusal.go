@@ -165,8 +165,12 @@ func usesGlobalOnly(cmd *cobra.Command) bool {
 // wrong tree and exit 0. Every other class runs on the global stores when a
 // lookup failed: that is the class's explicit choice (repoRoots.Global).
 func establishRoots(cmd *cobra.Command, _ []string) error {
+	global := exemptFromStoreRefusal(cmd)
 	r := locateRoots()
-	r.Global = exemptFromStoreRefusal(cmd)
+	r.Global = global
+	// Repair before anything reads storage, so a refusal below is judged on the
+	// converted layout (DES-084 Wiring).
+	r = ensureForCommand(cmd, r)
 	if !r.Global {
 		if err := r.Err(); err != nil {
 			name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
