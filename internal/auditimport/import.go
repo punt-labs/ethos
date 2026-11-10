@@ -2,6 +2,7 @@ package auditimport
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -86,6 +87,9 @@ type AuditImportResult struct {
 	Done    []AuditImport
 	Failed  []AuditImportFailure
 	Unowned []string
+	// Remaining is the number of files not attempted because the context was
+	// done; the next run takes them.
+	Remaining int
 }
 
 // ReasonNoAuditOwner is the residual reason for a global audit file nothing
@@ -102,8 +106,9 @@ const ReasonNoAuditOwner = "no owner signal; global copy kept"
 // and the audit lines carry no repository), imports a copy and keeps the
 // global file untouched: the import is lossless and a later run finds the
 // copy. Only a roster naming another checkout is skipped. It prints nothing
-// and keeps going past a session it cannot import.
-func ImportGlobalAudit(p layout.Policy, globalSessionsDir string, roots ...string) (AuditImportResult, error) {
+// and keeps going past a session it cannot import. When ctx is done it
+// returns after the file in progress and counts the rest in Remaining.
+func ImportGlobalAudit(ctx context.Context, p layout.Policy, globalSessionsDir string, roots ...string) (AuditImportResult, error) {
 	var res AuditImportResult
 	files, err := EnumerateLegacyFiles(globalSessionsDir)
 	if err != nil {
@@ -117,7 +122,11 @@ func ImportGlobalAudit(p layout.Policy, globalSessionsDir string, roots ...strin
 		return res, err
 	}
 	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
-	for _, file := range files {
+	for i, file := range files {
+		if ctx.Err() != nil {
+			res.Remaining = len(files) - i
+			break
+		}
 		id := strings.TrimSuffix(filepath.Base(file), ".audit.jsonl")
 		owner, named := rosterCheckout(globalSessionsDir, id)
 		if named && !namesAny(owner, roots) {
@@ -191,6 +200,9 @@ func removeGlobalAudit(file string) error {
 	return nil
 }
 
+// sessionGuard builds the guard migrateAuditSession applies; a test replaces it.
+var sessionGuard = lineguard.SessionLineGuardFor
+
 type auditSessionResult struct {
 	added int  // entries newly written to the archive
 	noop  bool // the archive already held exactly this content
@@ -228,7 +240,7 @@ func migrateAuditSession(p layout.Policy, checkout, id, file string, dryRun, qui
 		}
 		var existing []Line
 		payloads := map[string]string{}
-		guard := lineguard.SessionLineGuardFor(checkout)
+		guard := sessionGuard(checkout)
 		for _, l := range data.Legacy {
 			// Existing frozen identities cannot be rewritten to make them safe.
 			clean, _, _ := guard(l.Raw)
