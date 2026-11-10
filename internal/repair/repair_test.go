@@ -347,3 +347,27 @@ func TestObsoleteAndInventoryAgreeOnUnmatchedSessionAudit(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, gone)
 }
+
+// A pre-v4.0 record tree sits one level under the store, not two, so its
+// tracked-file query must run in the store with the `.ethos/` pathspec. Run
+// from the store's parent it either fails (the parent is not a repository)
+// or silently reports nothing tracked.
+func TestInventoryTracksLegacyRecordTreeFiles(t *testing.T) {
+	p := fixture(t)
+	store := filepath.Dir(filepath.Dir(p.RecordRoot()))
+	legacyLog := filepath.Join(store, ".ethos", "missions", "m-old", "log.jsonl")
+	put(t, legacyLog, `{"event":"old"}`+"\n")
+	_, err := gitenv.Output(store, "git", "add", "--", ".ethos/missions/m-old/log.jsonl")
+	require.NoError(t, err)
+
+	plan, err := Inventory(context.Background(), p)
+	require.NoError(t, err)
+	var found *Item
+	for i := range plan.Items {
+		if plan.Items[i].Path == legacyLog {
+			found = &plan.Items[i]
+		}
+	}
+	require.NotNil(t, found, "legacy event log is a cleanup candidate")
+	assert.True(t, found.Tracked, "the staged legacy log is tracked")
+}

@@ -627,8 +627,16 @@ func trackedFiles(p layout.Policy, root string) (map[string]bool, error) {
 			return nil, err
 		}
 	}
+	// Current record trees sit at <checkout>/.punt-labs/ethos; the pre-v4.0
+	// tree sits at <store>/.ethos. Each is queried from the repository that
+	// holds it, with its own pathspec.
 	checkout := filepath.Dir(filepath.Dir(root))
-	out, err := gitenv.Run(gitenv.Spec{Git: "git", Dir: checkout, Env: env, Args: []string{"ls-files", "--cached", "-z", "--", ".punt-labs/ethos/"}})
+	pathspec := ".punt-labs/ethos/"
+	if root == LegacyRecordRoot(p) {
+		checkout = filepath.Dir(root)
+		pathspec = ".ethos/"
+	}
+	out, err := gitenv.Run(gitenv.Spec{Git: "git", Dir: checkout, Env: env, Args: []string{"ls-files", "--cached", "-z", "--", pathspec}})
 	if err != nil {
 		return nil, fmt.Errorf("reading tracked repair paths in %s: %w", checkout, err)
 	}
