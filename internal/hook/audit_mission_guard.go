@@ -182,3 +182,16 @@ func scrubLeaf(r mission.PathRedactor, v any) any {
 	}
 	return v
 }
+
+// SessionLineGuard is sessionLineGuard for callers outside this package that
+// archive a legacy session audit line: ethos's own autorepair. The line it
+// returns is the one to store; a true marker means the line could not be kept.
+func SessionLineGuard(repoRoot string) func(line []byte) (out []byte, rule string, marker bool) {
+	return sessionLineGuard(repoRoot)
+}
+
+// MissionLineGuard is missionLineGuard for the same callers, for a legacy
+// mission event line.
+func MissionLineGuard(repoRoot string) func(line []byte) (out []byte, rule string, marker bool) {
+	return missionLineGuard(repoRoot)
+}

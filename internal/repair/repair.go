@@ -31,6 +31,11 @@ type Item struct {
 	sha     [32]byte
 }
 
+// SHA256 is the digest of the file's bytes as Inventory read them. A deleter
+// compares it to a fresh digest under its lock so a file that changed since
+// the inventory is never removed.
+func (i Item) SHA256() [32]byte { return i.sha }
+
 // Plan is an inventory snapshot. Apply refuses if the inventory changes
 // between Inventory and the moment its locks are held. Construct it with
 // Inventory, not manually. Skipped lists items a busy lock deferred.
@@ -142,7 +147,9 @@ func (p *Plan) Apply(ctx context.Context) (removed []string, err error) {
 	if err != nil {
 		return removed, err
 	}
-	if !reflect.DeepEqual(p.Items, current.Items) {
+	// Items and locks are both re-derived: a lock created after the first
+	// inventory was never probed, so its items cannot be known idle.
+	if !reflect.DeepEqual(p.Items, current.Items) || !reflect.DeepEqual(p.locks, current.locks) {
 		return removed, fmt.Errorf("repair inventory changed while locks were taken; nothing deleted")
 	}
 	p.Skipped = nil
@@ -163,8 +170,9 @@ func (p *Plan) Apply(ctx context.Context) (removed []string, err error) {
 	return removed, nil
 }
 
-// guardedByBusyLock reports whether path is a busy lock, or belongs to a
-// mission whose old directory lock or current mission-state lock is busy.
+// guardedByBusyLock reports whether path is a busy lock, belongs to a mission
+// whose old directory lock or current mission-state lock is busy, or is a
+// session chunk whose stream lock is busy.
 func (p *Plan) guardedByBusyLock(path string, busy map[string]bool) bool {
 	if len(busy) == 0 {
 		return false
@@ -178,7 +186,16 @@ func (p *Plan) guardedByBusyLock(path string, busy map[string]bool) bool {
 			continue
 		}
 		a := strings.Split(filepath.ToSlash(rel), "/")
-		if len(a) < 3 || a[0] != "missions" {
+		if len(a) < 3 {
+			continue
+		}
+		if a[0] == "sessions" {
+			if lock, err := StreamLockPath(p.policy, rel); err == nil && busy[lock] {
+				return true
+			}
+			continue
+		}
+		if a[0] != "missions" {
 			continue
 		}
 		if busy[filepath.Join(root, "missions", a[1], ".lock")] {
@@ -189,6 +206,38 @@ func (p *Plan) guardedByBusyLock(path string, busy map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// StreamLockPath is the current audit stream lock that guards the record-tree
+// trace at rel (slash-separated, relative to a record root): the session
+// stream for sessions/<date>-<sid>/<file>, the mission stream for
+// missions/<id>/<chunk> where the chunk names its session. A path that names
+// no stream (a frozen log.jsonl, a reflection, a prompt) is an error.
+func StreamLockPath(p layout.Policy, rel string) (string, error) {
+	a := strings.Split(filepath.ToSlash(rel), "/")
+	if len(a) != 3 {
+		return "", fmt.Errorf("no audit stream for %s", rel)
+	}
+	var s audit.Stream
+	switch a[0] {
+	case "sessions":
+		if len(a[1]) <= len(audit.SessionDateFormat)+1 {
+			return "", fmt.Errorf("no audit stream for %s", rel)
+		}
+		s = audit.Stream{Namespace: audit.SessionNS, Session: a[1][len(audit.SessionDateFormat)+1:]}
+	case "missions":
+		cn, kind := audit.Classify(a[2], audit.MissionNS)
+		if kind != audit.KindValid && kind != audit.KindCorrupt && kind != audit.KindQuarantine {
+			return "", fmt.Errorf("no audit stream for %s", rel)
+		}
+		s = audit.Stream{Namespace: audit.MissionNS, Mission: a[1], Session: cn.Session}
+	default:
+		return "", fmt.Errorf("no audit stream for %s", rel)
+	}
+	if err := s.Validate(); err != nil {
+		return "", err
+	}
+	return p.LockPath("audit-stream", s.Key())
 }
 
 func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) {
@@ -251,6 +300,30 @@ func obsolete(p layout.Policy, root, rel string) (remove, lock bool, err error) 
 	}
 	retain, err := retainMissionTrace(p, root, a[1])
 	return !retain, false, err
+}
+
+// HasExport reports whether mission id has an explicit export record
+// (<id>.contract.yaml or <id>.result.yaml) in either record tree. Exports and
+// the trace beside them are never claimed.
+func HasExport(p layout.Policy, id string) (bool, error) {
+	roots := []string{p.RecordRoot()}
+	if c := p.CheckoutRecordRoot(); c != p.RecordRoot() {
+		roots = append(roots, c)
+	}
+	for _, dir := range roots {
+		for _, suffix := range []string{".contract.yaml", ".result.yaml"} {
+			path := filepath.Join(dir, "missions", filepath.Base(id)+suffix)
+			if err := safePath(path); err != nil {
+				return true, err
+			}
+			if _, err := os.Stat(path); err == nil {
+				return true, nil
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return true, fmt.Errorf("examining export record %s: %w", path, err)
+			}
+		}
+	}
+	return false, nil
 }
 
 // C can contain a publication without a sibling contract: current authority is

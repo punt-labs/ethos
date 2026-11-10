@@ -310,7 +310,7 @@ func (s *Store) snapshotExportEvents(id string) ([]TrackedFile, []Event, error) 
 			// Build deterministic portable chunks from the verified union. This
 			// never rewrites retained chunks, and never copies a live file as a file.
 			if len(data.Legacy) > 0 {
-				return fmt.Errorf("full export incomplete: legacy mission events not yet converted; export not written, ethos converts them automatically")
+				return fmt.Errorf("full export incomplete: mission %s has legacy event history that is not in sealed chunks; export not written", id)
 			}
 			if len(data.Lines) == 0 {
 				return nil
