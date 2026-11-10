@@ -30,7 +30,7 @@ func untrackLocal(ctx context.Context, env Env) (Outcome, error) {
 		return Outcome{}, nil
 	}
 	checkout := env.Roots.Checkout
-	paths, residuals, deferred, err := untrackCandidates(env)
+	paths, residuals, deferred, err := untrackCandidates(env, checkout)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("listing tracked local paths in %s: %w", checkout, err)
 	}
@@ -64,8 +64,7 @@ func logStep(env Env, step, action string, paths []string, err error) {
 // stays tracked and the step reports deferred. A path whose publication status
 // is permanently undecidable is a Residual; its reason carries only the
 // repo-relative path and a fixed cause, the error goes to the redacting log.
-func untrackCandidates(env Env) (paths []string, residuals []Residual, deferred bool, err error) {
-	checkout := env.Roots.Checkout
+func untrackCandidates(env Env, checkout string) (paths []string, residuals []Residual, deferred bool, err error) {
 	genv, err := gitenv.ActualIndexEnv()
 	if err != nil {
 		return nil, nil, false, err

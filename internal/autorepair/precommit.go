@@ -23,14 +23,18 @@ var preCommitSteps = []string{"live-tails", "hook-sections"}
 // unstaging is an error, because a local path left in the index would be
 // committed.
 func PreCommit(ctx context.Context, env Env) (string, error) {
-	if env.Roots.Checkout == "" {
+	if err := env.Roots.CheckoutErr; err != nil {
+		return "", fmt.Errorf("locating the checkout for the pre-commit pass: %w", err)
+	}
+	checkout := env.Roots.Checkout
+	if checkout == "" {
 		return "", nil
 	}
 	genv, err := gitenv.ActualIndexEnv()
 	if err != nil {
 		return "", fmt.Errorf("selecting the committing index: %w", err)
 	}
-	n, err := gitenv.UnstageUnder(env.Roots.Checkout, genv, layout.LocalPrefix)
+	n, err := gitenv.UnstageUnder(checkout, genv, layout.LocalPrefix)
 	if err != nil {
 		return "", err
 	}

@@ -59,19 +59,26 @@ func repairPreCommit(ctx context.Context, errOut io.Writer) error {
 func preCommitEnv(checkout string) autorepair.Env {
 	roots := currentRoots().Located
 	roots.Checkout = checkout
+	storeErr := roots.StoreFailure()
+	policy, layoutErr := roots.Layout()
+	store := roots.Store
+	action, cause := "", error(nil)
+	switch {
+	case storeErr != nil:
+		action, cause = "store not located", storeErr
+	case layoutErr != nil:
+		action, cause = "repository policy not read", layoutErr
+	}
+	if cause != nil {
+		store = ""
+		roots.Store = ""
+	}
 	env := autorepair.Env{Roots: roots, Global: defaultGlobalRoot(), Now: time.Now().UTC()}
 	if env.Global != "" {
-		env.Log = autorepair.NewAppendLog(env.Global, roots.Store, checkout, version)
+		env.Log = autorepair.NewAppendLog(env.Global, store, checkout, version)
 	}
-	if err := roots.StoreFailure(); err != nil {
-		env.Roots.Store = ""
-		logPreCommit(env, "store not located", err)
-		return env
-	}
-	policy, err := roots.Layout()
-	if err != nil {
-		env.Roots.Store = ""
-		logPreCommit(env, "repository policy not read", err)
+	if cause != nil {
+		logPreCommit(env, action, cause)
 		return env
 	}
 	env.Policy = policy
