@@ -49,6 +49,26 @@ work, and independent review. Give each an explicit task, write set, governing
 references, and observable acceptance criteria. Check results against the diff
 and actual tool evidence. Workers and reviewers use separate contexts.
 
+Proof, delivery order and parallelism rules (operator ruling 2026-11-09):
+
+- A property of this software exists only once a test or an execution has
+  proven it. Every fix is preceded by a test that fails on the unfixed code;
+  the failing and passing outputs are recorded in the result. A worker's
+  report is a claim until the leader has re-run the proof.
+- The first commit on a branch is the smallest user-visible fix with its test.
+  Design text, surveys, corpora and explainers follow it, never precede it.
+- When a settled ADR already fixes the target state, code starts first and the
+  ADR records the mechanism commit by commit. A design mission comes first only
+  when the target is undecided.
+- Independent units run as one parallel wave, each in its own worktree. Up to
+  100 concurrent agents are authorized; a step that gates later work must take
+  under an hour.
+- Every task carries a time box (`budget.minutes`) and "first commit within
+  30 minutes". At 15 minutes without a file change: one message. At 30 minutes
+  without a commit: stop and respawn on a narrower task.
+- Task write-sets name Go files. Shell only for test tooling that never ships,
+  and only when the task says so.
+
 Track substantive work in Beads (`bd ... --json`). For the authorized storage
 repair, Ethos missions are optional: the product under repair must not prevent
 its own repair. Native OpenCode agents do not imply Claude hook parity or the
