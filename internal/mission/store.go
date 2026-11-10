@@ -1014,6 +1014,9 @@ func (s *Store) update(c *Contract, out *MutationOutcome) error {
 		if onDisk.Status != StatusOpen {
 			return fmt.Errorf("mission %q is in terminal state %q; updates are accepted only on open missions", c.MissionID, onDisk.Status)
 		}
+		if err := s.requireImportableAuthority(onDisk); err != nil {
+			return err
+		}
 		proposedRound := c.CurrentRound
 		if proposedRound == 0 && c.RoundDecisions == nil {
 			proposedRound = 1
@@ -1128,6 +1131,9 @@ func (s *Store) close(missionID, status string, out *MutationOutcome) (*Result, 
 		// per-event invariant.
 		if c.Status != StatusOpen {
 			return fmt.Errorf("mission %q is already in terminal state %q", missionID, c.Status)
+		}
+		if err := s.requireImportableAuthority(c); err != nil {
+			return err
 		}
 		// Phase 3.6: result gate. A mission cannot transition to a
 		// terminal status unless the current round has a valid result
@@ -1501,6 +1507,9 @@ func (s *Store) abandon(missionID, reason string, out *MutationOutcome) (*Contra
 				missionID, c.Status,
 			)
 		}
+		if err := s.requireImportableAuthority(c); err != nil {
+			return err
+		}
 		// Gate 1: zero BLOCKING delegation records
 		// (countBlockingDelegations). Any entry under delegations/ —
 		// open, closed, any verdict — means a worker was actually
@@ -1711,6 +1720,9 @@ func (s *Store) DisclaimDelegation(missionID, delegationID, reason string) (*Del
 				missionID, c.Status,
 			)
 		}
+		if err := s.requireImportableAuthority(c); err != nil {
+			return err
+		}
 		return s.withAbandonDelegationLock(missionID, func() error {
 			// Review finding P1 (qodo #7, full-branch review of PR #509,
 			// m-2026-09-08-004 round 3, verified real before fixing —
@@ -1886,6 +1898,9 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 					"mission %q is already in terminal state %q; force-release-write-set only applies to open missions",
 					missionID, c.Status,
 				)
+			}
+			if err := s.requireImportableAuthority(c); err != nil {
+				return err
 			}
 			// Gate 2: refuse a no-op release rather than silently succeed
 			// and write a misleading event -- either the mission was
@@ -3828,6 +3843,9 @@ func (s *Store) appendResult(missionID string, r *Result, out *MutationOutcome) 
 		// no live round to hand off from.
 		if c.Status != StatusOpen {
 			return fmt.Errorf("mission %q is in terminal state %q; results are accepted only on open missions", missionID, c.Status)
+		}
+		if err := s.requireImportableAuthority(c); err != nil {
+			return err
 		}
 		// Mission ID cross-check: the result's self-declared Mission
 		// must match the caller's target. A file renamed between

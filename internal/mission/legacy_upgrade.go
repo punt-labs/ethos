@@ -234,3 +234,20 @@ func ReplaceRecordFile(p layout.Policy, dest string, data []byte) (durability, e
 	}
 	return w.DurabilityError, nil
 }
+
+// requireImportableAuthority fences a mission that has no round decisions and
+// whose legacy history cannot be imported as complete: no lifecycle write may
+// add a result, a status, or an edit beside history that is unknown. It
+// imports into a copy, so it changes nothing; reads never call it and keep
+// showing the authority as unavailable. Missions that already hold decisions
+// and single-tree stores are not fenced.
+func (s *Store) requireImportableAuthority(c *Contract) error {
+	if !s.twoTreeStorage || c.RoundDecisions != nil {
+		return nil
+	}
+	probe := *c
+	if err := s.importLegacyDecisions(&probe); err != nil {
+		return fmt.Errorf("mission %q is fenced from lifecycle writes: %w", c.MissionID, err)
+	}
+	return nil
+}

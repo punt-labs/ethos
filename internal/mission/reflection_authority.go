@@ -3,7 +3,6 @@ package mission
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -614,10 +613,10 @@ func (s *Store) finishReflection(in reflectionIntent) error {
 // Legacy import is strict and complete for the lifecycle prefix. Absence of
 // crossed-round detail is unknown history, not permission to initialize empty.
 //
-// A decision ID is the hash of the reflection as it stood when the decision was
-// imported. The ID is stored in the contract and must be copied from there,
-// never recomputed from reflections.yaml: the scrub-records step later redacts
-// that file, so a recomputed hash disagrees with the stored one.
+// A decision ID is LegacyDecisionID of the reflection as it stood when the
+// decision was imported. It is stored in the contract. The scrub-records step
+// leaves reflections.yaml alone once decisions exist, so the file still hashes
+// to the stored IDs.
 func (s *Store) importLegacyDecisions(c *Contract) error {
 	rs, _, err := s.loadReflectionsBytes(c.MissionID)
 	if err != nil {
@@ -625,12 +624,11 @@ func (s *Store) importLegacyDecisions(c *Contract) error {
 	}
 	d := &RoundDecisions{Version: 1, Entries: []RoundDecision{}}
 	for _, r := range rs {
-		b, err := json.Marshal(r)
-		if err != nil {
-			return err
+		id := LegacyDecisionID(r)
+		if id == "" {
+			return fmt.Errorf("deriving decision id for reflection round %d", r.Round)
 		}
-		hash := sha256.Sum256(b)
-		d.Entries = append(d.Entries, RoundDecision{hex.EncodeToString(hash[:16]), r.Round, r.CreatedAt, r.Author, r.Recommendation})
+		d.Entries = append(d.Entries, RoundDecision{id, r.Round, r.CreatedAt, r.Author, r.Recommendation})
 	}
 	c.RoundDecisions = d
 	if err := c.validateDecisions(); err != nil {

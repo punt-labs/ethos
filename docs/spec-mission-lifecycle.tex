@@ -455,6 +455,16 @@ alone fabricates a continue decision. Read-only legacy display may
 report unknown history. Preserve existing evaluator pins; a missing
 legacy pin does not become today's identity hash.
 
+A mission with an omitted block whose legacy history cannot be imported
+is fenced. Every operation that mutates it refuses before writing:
+\field{UpdateProtected}, \field{SubmitResult}, \field{Close},
+\field{Abandon}, \field{DisclaimDelegation}, the write-set release,
+\field{AdvanceRound}, \field{Reflect} and \field{CorrectAnnotation}.
+The fence is an additional precondition on those operations, checked on
+a copy so a refusal leaves every file as it was; the schemas above are
+unchanged because the model has no state for unimportable legacy history.
+Reads are not fenced and report the history as unknown.
+
 \field{blockingDelegationCount} models \field{countBlockingDelegations}'s
 return value (store.go:1959--1999) --- the count \field{Abandon}'s own
 gate reads --- \emph{not} the raw number of delegation records on disk
