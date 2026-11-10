@@ -105,14 +105,14 @@ func MigrateMission(globalRoot, repoRoot, checkoutRoot, missionID string, dryRun
 	for _, id := range candidates {
 		decision, err := migrateOneMission(legacyDir, repoDir, repoRoot, id, repoMissions, dryRun)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission migrate: %s: %v\n", id, err)
+			fmt.Fprintf(os.Stderr, "ethos: mission import: %s: %v\n", id, err)
 			failures = append(failures, id)
 			continue
 		}
 		fmt.Fprintln(out, decision)
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf("mission migrate: %d mission(s) failed: %s",
+		return fmt.Errorf("mission import: %d mission(s) failed: %s",
 			len(failures), strings.Join(failures, ", "))
 	}
 	return nil
@@ -598,7 +598,7 @@ func migrateOneMissionLockedQ(legacyDir, repoDir, repoRoot, id string, repoMissi
 	// visible to the next run.
 	if err := removeLegacyMission(legacyDir, id, nil); err != nil {
 		fmt.Fprintf(os.Stderr,
-			"ethos: mission migrate: %v (leftover is benign; repo-tree copy is authoritative)\n", err)
+			"ethos: mission import: %v (leftover is benign; repo-tree copy is authoritative)\n", err)
 	}
 
 	return fmt.Sprintf("migrate %s -> %s", id, relRepoPath(repoMissionDir)), nil
@@ -635,7 +635,7 @@ func removeStaging(w io.Writer, staging string) {
 	if errors.As(err, &pe) {
 		err = fmt.Errorf("%s: %w", pe.Op, pe.Err)
 	}
-	fmt.Fprintf(w, "ethos: mission migrate: could not remove staging directory %s: %v\n", relRepoPath(staging), err)
+	fmt.Fprintf(w, "ethos: mission import: could not remove staging directory %s: %v\n", relRepoPath(staging), err)
 }
 
 // copyIfExists copies src to dst through the redactor when src exists. A

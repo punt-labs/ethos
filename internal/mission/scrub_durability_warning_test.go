@@ -64,7 +64,7 @@ func TestScrubInstalledDurabilityWarning(t *testing.T) {
 				assert.Contains(t, after, "[redacted-email]")
 				assert.Equal(t, after, string(installed))
 				if failSync {
-					assert.Equal(t, "ethos: mission scrub: "+dest+": rewrite installed; durability unconfirmed: injected scrub directory sync failure\n", stderr)
+					assert.Equal(t, "ethos: mission records: "+dest+": rewrite installed; durability unconfirmed: injected scrub directory sync failure\n", stderr)
 					assert.Equal(t, 1, strings.Count(stderr, "durability unconfirmed"))
 					assert.NotContains(t, stderr, "ethos: delegation:")
 					if target.name == "summary" {

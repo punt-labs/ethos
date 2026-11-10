@@ -269,7 +269,7 @@ var errScrubMissing = errors.New("file does not exist")
 // scrubWrite is the write step of scrubFile; tests replace it to inject
 // write-time failures that a real filesystem cannot produce on demand.
 var scrubWrite = func(dir, pattern, dest string, data []byte) error {
-	return writeAtomicFileWithWarning(dir, pattern, dest, data, nil, "mission scrub: "+dest+": rewrite installed")
+	return writeAtomicFileWithWarning(dir, pattern, dest, data, nil, "mission records: "+dest+": rewrite installed")
 }
 
 // scrubFileLocked is scrubFile under the locks the file's writers take,
@@ -433,7 +433,7 @@ func scrubFileOutcome(r PathRedactor, p layout.Policy, rel string, dryRun bool, 
 	if mo == nil {
 		err = scrubWrite(p.TempDir(), layout.TmpPattern(".scrub", ""), dest, canon)
 	} else {
-		err = writeAtomicFileWithWarning(p.TempDir(), layout.TmpPattern(".scrub", ""), dest, canon, mo, "mission scrub: "+dest+": rewrite installed")
+		err = writeAtomicFileWithWarning(p.TempDir(), layout.TmpPattern(".scrub", ""), dest, canon, mo, "mission records: "+dest+": rewrite installed")
 	}
 	if err != nil {
 		return false, err
