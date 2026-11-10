@@ -38,7 +38,7 @@ func TestSeed_UpgradeAndPreserve(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "skipped (local edit):")
 	assert.Contains(t, stdout, "implementer.yaml")
-	assert.Contains(t, stdout, "--force")
+	assert.Contains(t, stdout, "look locally edited and were left unchanged")
 
 	data, err := os.ReadFile(rolePath)
 	require.NoError(t, err)

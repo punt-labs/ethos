@@ -568,7 +568,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		}
 		fmt.Fprintf(out, "dry-run: would run: %s\n", strings.Join(gitArgs, " "))
 		fmt.Fprintf(out, "target: %s\n", targetDir)
-		fmt.Fprintln(out, "re-run with --apply to execute")
+		fmt.Fprintln(out, "dry-run: nothing executed")
 		return nil
 	}
 

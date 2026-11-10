@@ -25,6 +25,10 @@ var bannedMessageTerms = []string{
 	"ext del", "session create", "session delete", "session delete-current",
 	"ethos session roster", "`session roster`", "write-current", "--no-teams", "vendor --from",
 	"run `ethos enable`", "run ethos enable",
+	// A removed or remedy command named in a message, with or without "run".
+	"ethos enable", "ethos seed", "ethos migrate",
+	// Instructions to the user, whatever the command.
+	"re-run", "rerun", "inspect before", "add it before", "file a bug", "check file",
 }
 
 // bannedExtraPatterns are banned shapes a plain term cannot express.
@@ -69,9 +73,15 @@ var bannedPatterns = func() []*regexp.Regexp {
 	return out
 }()
 
+// spaceClass is what a space in a term matches: whitespace, any Unicode
+// space (non-breaking, ideographic), any dash (hyphen, en, em), underscore,
+// quotes, backtick, parentheses and the zero-width space. regexp's \s is
+// ASCII-only, so the Unicode classes are spelled out.
+const spaceClass = `[\s\p{Z}\p{Pd}_'"` + "`" + `()\x{200b}]+`
+
 // termPattern quotes term for a regexp, except that each space in the term
-// matches any run of whitespace or hyphens. "ethos repair" then matches
-// "ethos  repair" and "ethos-repair"; a hyphen written in the term
+// matches spaceClass. "ethos repair" then matches "ethos  repair",
+// "ethos-repair" and "ethos<ZWSP>repair"; a hyphen written in the term
 // ("--no-teams", "hand-") stays literal, so "resolve agent" in prose does not
 // match the term "resolve-agent".
 func termPattern(term string) string {
@@ -79,13 +89,14 @@ func termPattern(term string) string {
 	for i, p := range parts {
 		parts[i] = regexp.QuoteMeta(p)
 	}
-	return strings.Join(parts, `[\s-]+`)
+	return strings.Join(parts, spaceClass)
 }
 
-// foldedString returns the constant value of n when it is a string literal or
-// a "+" chain of string literals, so a message split across adjacent literals
-// is judged whole.
-func foldedString(n ast.Node) (string, bool) {
+// foldedString returns the constant value of n when it is a string literal,
+// a package-level string const, or a "+" chain of those, so a message split
+// across literals or assembled from a named const is judged whole. consts may
+// be nil.
+func foldedString(n ast.Node, consts map[string]string) (string, bool) {
 	switch x := n.(type) {
 	case *ast.BasicLit:
 		if x.Kind != token.STRING {
@@ -93,15 +104,75 @@ func foldedString(n ast.Node) (string, bool) {
 		}
 		v, err := strconv.Unquote(x.Value)
 		return v, err == nil
+	case *ast.Ident:
+		v, ok := consts[x.Name]
+		return v, ok
+	case *ast.ParenExpr:
+		return foldedString(x.X, consts)
 	case *ast.BinaryExpr:
 		if x.Op != token.ADD {
 			return "", false
 		}
-		l, lok := foldedString(x.X)
-		r, rok := foldedString(x.Y)
+		l, lok := foldedString(x.X, consts)
+		r, rok := foldedString(x.Y, consts)
 		return l + r, lok && rok
 	}
 	return "", false
+}
+
+// packageConsts collects the string consts declared at package level in every
+// non-test Go file of dir, so a const in one file resolves in its siblings.
+func packageConsts(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	consts := map[string]string{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		files = append(files, f)
+	}
+	// Two passes let a const refer to one declared later or in another file.
+	for pass := 0; pass < 2; pass++ {
+		for _, f := range files {
+			collectConsts(f, consts)
+		}
+	}
+	return consts
+}
+
+// collectConsts adds each package-level const of f whose value folds to a
+// string.
+func collectConsts(f *ast.File, consts map[string]string) {
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs, ok := sp.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				if v, ok := foldedString(vs.Values[i], consts); ok {
+					consts[name.Name] = v
+				}
+			}
+		}
+	}
 }
 
 func bannedIn(s string) string {
@@ -133,9 +204,14 @@ func goLiteralHits(t *testing.T, path, rel string) []string {
 	if err != nil {
 		t.Fatalf("%s: %v", rel, err)
 	}
+	consts := packageConsts(t, filepath.Dir(path))
 	var hits []string
 	ast.Inspect(f, func(n ast.Node) bool {
-		val, ok := foldedString(n)
+		// A const is judged where it is used, not where it is declared.
+		if gd, ok := n.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+			return false
+		}
+		val, ok := foldedString(n, consts)
 		if !ok {
 			return true
 		}
@@ -232,6 +308,22 @@ func TestMessageGuardEvasions(t *testing.T) {
 		"audit   quarantine",
 		"session-purge",
 		"run   `ethos enable`",
+		"hooks stale; `ethos enable` refreshes them",
+		"run \"ethos enable\" to refresh",
+		"run (ethos enable)",
+		"ethos\u2013repair",
+		"ethos\u2014repair",
+		"ethos\u200brepair",
+		"ethos_repair",
+		"ethos\u00a0repair",
+		"rerun ethos enable",
+		"re-run ethos enable",
+		"to refresh hooks, re-run the command",
+		"ethos seed",
+		"inspect before refreshing",
+		"add it before running",
+		"if this persists, file a bug",
+		"check file permissions",
 	} {
 		if bannedIn(s) == "" {
 			t.Errorf("%q evades the guard", s)
@@ -249,7 +341,7 @@ func TestMessageGuardEvasions(t *testing.T) {
 	}
 	var found []string
 	ast.Inspect(f, func(n ast.Node) bool {
-		if v, ok := foldedString(n); ok {
+		if v, ok := foldedString(n, nil); ok {
 			if term := bannedIn(v); term != "" {
 				found = append(found, v)
 			}

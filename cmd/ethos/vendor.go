@@ -268,5 +268,5 @@ func writeVendorPlan(w io.Writer, p *vendor.Plan) {
 		fmt.Fprintf(w, "\nWrote %d files and %s. The set resolves on its own.\n", p.FilesWritten, vendor.ManifestName)
 		return
 	}
-	fmt.Fprintf(w, "\nNothing written. Re-run with --apply to write into %s.\n", p.Dest)
+	fmt.Fprintf(w, "\nNothing written; --apply is not set. Destination: %s.\n", p.Dest)
 }

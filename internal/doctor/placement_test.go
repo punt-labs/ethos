@@ -40,7 +40,7 @@ func TestPhysicalPlacementIsNotClassificationOrTracking(t *testing.T) {
 			assert.Equal(t, "FAIL", r.Status, r.Detail)
 			assert.Contains(t, r.Detail, rel)
 			assert.Contains(t, r.Detail, "recognized legacy data found at ")
-			assert.Contains(t, r.Detail, "; the storage upgrade relocates it on the next ethos run")
+			assert.Contains(t, r.Detail, "(agent-owned artifacts are not legacy)")
 			assert.NotContains(t, r.Detail, "is moved")
 			assert.FileExists(t, path, "doctor must not remove legacy bytes")
 		})

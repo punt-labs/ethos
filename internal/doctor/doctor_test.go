@@ -744,7 +744,6 @@ func TestCheckSealHook(t *testing.T) {
 		r := CheckSealHook(dir)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no pre-commit hook")
-		assert.Contains(t, r.Detail, "the next ethos run reinstalls it")
 		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
@@ -1299,7 +1298,6 @@ func TestCheckTrailerHook(t *testing.T) {
 		r := CheckTrailerHook(dir)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no commit-msg hook")
-		assert.Contains(t, r.Detail, "the next ethos run reinstalls it")
 		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
@@ -1474,7 +1472,6 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Contains(t, r.Detail, "differs from what this ethos build would install")
 		assert.Contains(t, r.Detail, "installed sha256:")
 		assert.Contains(t, r.Detail, "current sha256:")
-		assert.Contains(t, r.Detail, "the next ethos run refreshes it")
 		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
@@ -1530,7 +1527,6 @@ func TestCheckHookCurrency(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "legacy")
-		assert.Contains(t, r.Detail, "the next ethos run refreshes it")
 		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
@@ -1549,7 +1545,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "cannot read")
-		assert.Contains(t, r.Detail, "check file permissions")
+		assert.Contains(t, r.Detail, "(permissions)")
 	})
 
 	// A non-permission read error (here, the hook path is a directory —
@@ -1564,7 +1560,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "cannot read")
 		assert.NotContains(t, r.Detail, "manually")
-		assert.NotContains(t, r.Detail, "check file permissions")
+		assert.NotContains(t, r.Detail, "(permissions)")
 	})
 }
 
@@ -1731,9 +1727,9 @@ func TestCheckHookCurrencyStaleSeverity(t *testing.T) {
 		wantDetail string
 	}{
 		{"seal is FAIL", sealHookSpec, "pre-commit", pre421Seal, "FAIL",
-			"stale section may block commits; the next ethos run refreshes it"},
+			"stale section may block commits"},
 		{"trailer stays WARN", trailerHookSpec, "commit-msg", pre415, "WARN",
-			"the next ethos run refreshes it"},
+			"differs from what this ethos build would install"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -56,7 +56,7 @@ var sessionEndSession string
 
 var sessionEndCmd = &cobra.Command{
 	Use:   "end",
-	Short: "End the active session (delete its roster)",
+	Short: "End the active session and remove its roster",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSessionEnd(cmd)

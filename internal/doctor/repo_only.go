@@ -176,7 +176,7 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	}
 	if len(tracked) > 0 {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s already tracked by git — gitignore does not untrack them; their local data is retained",
+			"%s already tracked by git; gitignore does not untrack them",
 			strings.Join(tracked, ", "))}
 	}
 
@@ -189,7 +189,7 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	}
 	if !ignored {
 		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-			"no .gitignore rule for %s — add it before running `ethos ext set --local`", GitignoreRule)}
+			"no .gitignore rule for %s; a local overlay written here would be tracked", GitignoreRule)}
 	}
 	return Result{Name: name, Status: "PASS", Detail: "ignored and untracked"}
 }

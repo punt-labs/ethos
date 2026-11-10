@@ -2133,7 +2133,7 @@ func writeExport(out io.Writer, id string, files []mission.TrackedFile, write fu
 		fmt.Fprintf(out, "exported: %s\n", f.Path)
 	}
 	if err != nil {
-		return fmt.Errorf("exporting mission %s: %w; re-run `ethos mission export %s` to retry", id, err, id)
+		return fmt.Errorf("exporting mission %s: %w", id, err)
 	}
 	return nil
 }

@@ -73,9 +73,9 @@ var storeUses = map[string]storeUse{
 	"ethos session end":  storeGlobalOnly, "ethos session join": storeGlobalOnly,
 	"ethos session leave": storeGlobalOnly, "ethos session iam": storeGlobalOnly,
 
-	"ethos doctor": storeHandlesError, "ethos enable": storeHandlesError,
+	"ethos doctor": storeHandlesError, "ethos enable": storeHandlesError, // msgguard: allow command-name key of the store-policy table, never printed
 	"ethos disable": storeHandlesError, "ethos setup": storeHandlesError,
-	"ethos seed": storeHandlesError, "ethos serve": storeHandlesError,
+	"ethos seed": storeHandlesError, "ethos serve": storeHandlesError, // msgguard: allow command-name key of the store-policy table, never printed
 	"ethos audit seal": storeHandlesError, "ethos audit show": storeHandlesError,
 	"ethos hook": storeHandlesError, "ethos hook audit-log": storeHandlesError,
 	"ethos hook commit-trailers": storeHandlesError, "ethos hook format-output": storeHandlesError,
