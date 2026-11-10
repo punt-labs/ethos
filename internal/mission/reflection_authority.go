@@ -229,7 +229,7 @@ func (s *Store) reconcileReflectionsExceptWithWarnings(id string, retryRound int
 		}
 		d := c.decision(round)
 		if d == nil {
-			return fmt.Errorf("mission %q has pending reflection preparation for round %d; retry the exact reflection before another mutation", id, round)
+			return fmt.Errorf("mission %q has pending reflection preparation for round %d that is not yet in shared authority; no other mutation is accepted until it is resolved", id, round)
 		}
 		if *d != in.Decision {
 			return fmt.Errorf("reflection receipt conflicts with shared decision; evidence retained")
