@@ -86,9 +86,10 @@ var bannedPatterns = func() []*regexp.Regexp {
 const spaceClass = `(?:[\s\p{Z}\p{Pd}\p{Cf}_'"` + "`" + `()\\:])+`
 
 // errorPrefix is the one colon form a message may carry: a literal that opens
-// with "ethos: <word>:" is an error prefix (program: context: what failed), so
-// the prefix is dropped before the terms are matched.
-var errorPrefix = regexp.MustCompile(`^ethos: [a-z][a-z-]*:`)
+// with "ethos: seed: " (program: context: what failed). "seed" is the only
+// context word that is itself a banned term, so only it is exempted; any other
+// word, a removed command name included, stays visible to the guard.
+var errorPrefix = regexp.MustCompile(`^ethos: seed: `)
 
 // termPattern quotes term for a regexp, except that each space in the term
 // matches spaceClass. "ethos repair" then matches "ethos  repair",
@@ -466,6 +467,8 @@ func TestMessageGuardUnicodeAndPunctuation(t *testing.T) {
 		"ethos :repair",
 		"ethos::repair",
 		"run ethos: seed",
+		"ethos: repair: run it now",
+		"ethos: enable: re-run",
 	} {
 		if bannedIn(s) == "" {
 			t.Errorf("%q evades the guard", s)
