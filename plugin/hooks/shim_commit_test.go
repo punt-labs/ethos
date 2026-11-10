@@ -466,3 +466,32 @@ func TestShimEnabledUnstagesLocalPaths(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.NotContains(t, out, "unstaged", "a commit with no local path prints nothing")
 }
+
+// A trace chunk HEAD tracks under the record tree (a v3.12-v4.20 layout) is
+// removed from the tree by the next commit, with no stderr line, and stays on
+// disk.
+func TestShimEnabledUntracksRecordTreeTrace(t *testing.T) {
+	r := newShimRepo(t, true)
+	env := r.withPath(ethosBinDir(t))
+	chunk := filepath.Join(r.dir, ".punt-labs", "ethos", "sessions", "2026-11-09-sid", "audit-1-2.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(chunk), 0o755))
+	require.NoError(t, os.WriteFile(chunk, []byte(`{"record":"blame"}`+"\n"), 0o644))
+	rel := ".punt-labs/ethos/sessions/2026-11-09-sid/audit-1-2.jsonl"
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := testhelpers.GitCommand(append([]string{"-C", r.dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return string(out)
+	}
+	git("add", "-f", rel)
+	git("-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "plant")
+	require.Contains(t, git("ls-tree", "-r", "--name-only", "HEAD"), rel)
+
+	out, err := r.commit(t, env, "next")
+	require.NoError(t, err, out)
+	assert.NotContains(t, git("ls-tree", "-r", "--name-only", "HEAD"), rel, "the trace chunk leaves the tree")
+	assert.FileExists(t, chunk, "the file stays on disk")
+	assert.NotContains(t, out, "unstaged", "record-tree trace prints no line")
+}

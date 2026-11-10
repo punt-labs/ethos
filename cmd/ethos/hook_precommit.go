@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/punt-labs/ethos/v4/internal/gitenv"
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 )
 
 func init() {
@@ -31,30 +32,27 @@ Exit codes:
 	})
 }
 
-// localTreePrefix is the repository-relative directory of machine-local ethos
-// data. None of it belongs in a commit, however it got staged.
-const localTreePrefix = ".punt-labs/local/"
-
-// unstageLocal removes every staged or HEAD-tracked path under localTreePrefix
-// from the committing index, leaving the files on disk, and says how many it
-// unstaged. A git failure blocks the commit with git's message.
-func unstageLocal(errOut io.Writer) error {
+// repairPreCommit runs the DES-084 cheap pass: it removes every path under
+// .punt-labs/local/ from the committing index, leaving the files on disk, runs
+// the cheap repair steps, and says how many paths it unstaged. A git failure
+// while unstaging blocks the commit with git's message.
+func repairPreCommit(ctx context.Context, errOut io.Writer) error {
 	checkout, err := requireCheckout(errOut, "hook pre-commit")
 	if err != nil {
 		return err
 	}
-	env, err := gitenv.ActualIndexEnv()
+	roots := currentRoots().Located
+	roots.Checkout = checkout
+	if roots.Store == "" {
+		roots.Store = checkout
+	}
+	line, err := autorepair.PreCommit(ctx, autorepair.Env{Roots: roots, Now: time.Now().UTC()})
 	if err != nil {
 		fmt.Fprintf(errOut, "ethos: hook pre-commit: %v\n", err)
 		return failClosed{}
 	}
-	n, err := gitenv.UnstageUnder(checkout, env, localTreePrefix)
-	if err != nil {
-		fmt.Fprintf(errOut, "ethos: hook pre-commit: %v\n", err)
-		return failClosed{}
-	}
-	if n > 0 {
-		fmt.Fprintf(errOut, "ethos: hook pre-commit: unstaged %d path(s) under %s; they stay on disk\n", n, localTreePrefix)
+	if line != "" {
+		fmt.Fprintln(errOut, line)
 	}
 	return nil
 }
@@ -63,7 +61,7 @@ func unstageLocal(errOut io.Writer) error {
 // verifies staged provenance snapshots. Any of them failing blocks the commit
 // with exit 2.
 func runHookPreCommit(ctx context.Context, out, errOut io.Writer) error {
-	if err := unstageLocal(errOut); err != nil {
+	if err := repairPreCommit(ctx, errOut); err != nil {
 		return err
 	}
 	if err := sealRepository(out, errOut, sealFlags{commitContext: true}); err != nil {
