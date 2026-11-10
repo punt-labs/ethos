@@ -2,8 +2,10 @@ package autorepair
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/session"
@@ -20,6 +22,18 @@ func SessionStart(ctx context.Context, env Env) (int, error) {
 	return out.Items, err
 }
 
+// logWriter turns each line a session store writes into one repair-log entry,
+// so the step prints nothing.
+type logWriter struct {
+	log  Logger
+	step string
+}
+
+func (w logWriter) Write(p []byte) (int, error) {
+	w.log.Logf(w.step, "note", nil, errors.New(strings.TrimSpace(string(p))))
+	return len(p), nil
+}
+
 // runSessions removes dead session rosters, dead current/<pid> files and
 // retires purge tombstones. Purge is the non-force kind: a roster whose
 // unsealed audit state cannot be proven clean stays. A roster without a
@@ -32,6 +46,7 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		return out, nil
 	}
 	ss := session.NewStore(env.Global)
+	ss.SetWarnings(logWriter{env.Log, stepSessions})
 
 	pids, err := ss.PurgeCurrent()
 	if err != nil {
@@ -63,6 +78,13 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 	for _, id := range rep.Purged {
 		out.Items++
 		env.Log.Logf(stepSessions, "purge-roster", []string{id}, nil)
+	}
+	for _, id := range rep.Refused {
+		out.Residuals = append(out.Residuals, Residual{
+			Step:   stepSessions,
+			ID:     id,
+			Reason: "the roster could not be read or proven free of unsealed audit lines; left in place",
+		})
 	}
 	if ctx.Err() != nil {
 		out.Deferred = true

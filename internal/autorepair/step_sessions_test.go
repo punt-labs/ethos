@@ -2,6 +2,7 @@ package autorepair
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -81,11 +82,55 @@ func TestSessionsKeepsLiveRoster(t *testing.T) {
 	env := fixtureEnv(t, "corpus/v4.22.1")
 	resolvePlaceholders(t, sessionsDirOf(env), strconv.Itoa(os.Getpid()), env.Roots.Checkout)
 
-	out, err := runSessions(context.Background(), env)
+	for i := 1; i <= 2; i++ {
+		out, err := runSessions(context.Background(), env)
+		require.NoError(t, err)
+		assert.Equal(t, 0, out.Items, "run %d", i)
+		assert.Empty(t, out.Residuals, "run %d", i)
+		assert.FileExists(t, filepath.Join(sessionsDirOf(env), "sess-corpus-0001.yaml"), "run %d", i)
+		assert.FileExists(t, filepath.Join(sessionsDirOf(env), "current", strconv.Itoa(os.Getpid())), "run %d", i)
+	}
+}
+
+// captureStderr returns what fn wrote to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
 	require.NoError(t, err)
-	assert.Equal(t, 0, out.Items)
-	assert.FileExists(t, filepath.Join(sessionsDirOf(env), "sess-corpus-0001.yaml"))
-	assert.FileExists(t, filepath.Join(sessionsDirOf(env), "current", strconv.Itoa(os.Getpid())))
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	fn()
+	os.Stderr = old
+	require.NoError(t, w.Close())
+	return <-done
+}
+
+// A step never prints: an unreadable roster is logged and left as a residual,
+// on every pass.
+func TestSessionsStepPrintsNothingForUnreadableRoster(t *testing.T) {
+	env := fixtureEnv(t, "corpus/v4.22.1")
+	resolvePlaceholders(t, sessionsDirOf(env), deadPID, env.Roots.Checkout)
+	bad := filepath.Join(sessionsDirOf(env), "sess-broken.yaml")
+	require.NoError(t, os.WriteFile(bad, []byte("{: not yaml ["), 0o600))
+
+	for i := 1; i <= 2; i++ {
+		var out Outcome
+		stderr := captureStderr(t, func() {
+			var err error
+			out, err = runSessions(context.Background(), env)
+			require.NoError(t, err)
+		})
+		assert.Empty(t, stderr, "pass %d wrote to stderr", i)
+		assert.FileExists(t, bad, "an unreadable roster is kept")
+		require.Len(t, out.Residuals, 1, "pass %d", i)
+		assert.Equal(t, stepSessions, out.Residuals[0].Step)
+		assert.Contains(t, out.Residuals[0].ID, "sess-broken")
+	}
 }
 
 func TestSessionsLeavesRosterWithoutCheckout(t *testing.T) {
