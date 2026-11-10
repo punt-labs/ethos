@@ -3,22 +3,18 @@
 **Status**: Draft. Bead `ethos-t5b6` (P1). Amends DES-054 v5 storage.
 Cross-repo request from the punt-kit agent (claude:tty16), 2026-07-20.
 
-## DES-079 supersession (acceptance pending)
+## DES-079 supersession
 
-Explicit quarantine of a selected published corrupt chunk retains its raw bytes
-only at S and installs a redacted `.quarantine` availability marker beside that
-publication **before** removing its active pathname. The shared marker reports a
-conservative gap even if recovery succeeds locally: a local replacement is not
-proof of published availability. Quarantine does not change the index or retire
-other copies. It reports **SHARED REPAIR PENDING** and the exact deletion/marker
-staging set for an ordinary `git add` and commit. This manual retirement commit
-preserves the gap in a fresh clone; eligible recovered trace may be published
-separately by full sealing, but private recovery is never implicitly promoted.
+A corrupt sealed chunk is salvaged automatically by the next ethos run (DES-084
+step 7): decodable lines are redacted into a replacement chunk, the raw bytes
+are deleted, and both digests are logged to `~/.punt-labs/ethos/logs/repair.log`.
+No command is involved. The salvage does not change the index, and eligible
+recovered trace is published only by full sealing; private recovery is never
+implicitly promoted.
 
-This is the historical DES-058 tracked-chunk design, not the current target
-storage contract. The following DES-079 requirements supersede conflicting
-clauses and pseudocode below; they still require final entry-point acceptance.
-DES-080 redaction shipped in v4.20.0, independently of this repair.
+This is the historical DES-058 tracked-chunk design, not the current storage
+contract. The following DES-079 requirements supersede conflicting clauses and
+pseudocode below. DES-080 redaction shipped in v4.20.0.
 
 - Resolve canonical store root **S** separately from checkout **C**. All
   repository live streams, retained chunks, prompts/reflections, locks,
@@ -468,7 +464,7 @@ orphan survives the next commit.
 seal(session):
     acquire flock(<repo>/.punt-labs/local/ethos/sessions/<session-id>.lock)
     delete stale .audit-*.jsonl.tmp older than self       # mission dir: any session's .log-*-*.jsonl.tmp (namespace-wide); a cross-flock hit fails the victim's rename loudly (exit 2), never silently; foreign *.tmp left untouched
-    verify each sealed chunk parses and last ts == filename <last>   # else exit 2 (escape: quarantine)
+    verify each sealed chunk parses and last ts == filename <last>   # else exit 2 (the next ethos run salvages the chunk automatically)
     watermark = max ts over sealed chunks (names; legacy file scanned; .quarantine markers)
                 # a marker present but unparseable does not contribute; its .corrupt is orphan, not covered
     tail = [ line in live : ts(line) > watermark ]        # complete lines; skip torn tail + terminated unparseable (stderr count)
@@ -705,7 +701,7 @@ read_audit(session):
     for c in monotonic:                       # I11-chunk writes chunks whole, so
         if c does not parse to completion     #   a torn or mismatched sealed chunk
         or last ts(c) != filename <last>(c):  #   is corruption, not a skippable tail
-            error naming c (exit 2)           #   escape is automatic quarantine
+            error naming c (exit 2)           #   the next ethos run salvages c automatically
     Sm = concat(read(c) for c in monotonic)
     Sl = read(legacy) if present else []      # drop torn final line; skip a terminated
                                               #   unparseable line with a stderr count
@@ -1073,7 +1069,8 @@ draft claimed could not exist: I11-chunk makes it unreachable by normal
 operation, so if one appears the store is damaged and the seal must fail
 loudly rather than seal past it or silently drop its lines.
 
-**The specified escape is automatic quarantine, never `--no-verify`.**
+**The specified escape is automatic salvage by the next ethos run (DES-084
+step 7), never `--no-verify`.**
 Fail-closed must never leave bypass as the only exit — an operator faced with
 "every commit in this repo is blocked" and no sanctioned recovery will reach
 for `git commit --no-verify`, which disables the seal wholesale and recreates
@@ -1637,8 +1634,8 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   error. When it scans, the seal also **verifies each chunk's content** — a
   chunk that does not parse whole or whose last line `ts` != its filename
   `<last>` is corruption and fails the seal (exit 2), the same check the read
-  makes; the specified escape is automatic quarantine, never
-  `--no-verify`. The sealed directory is dated by the **session start date**
+  makes; the specified escape is automatic salvage by the next ethos run,
+  never `--no-verify`. The sealed directory is dated by the **session start date**
   (from the roster; when the stale-session sweep has removed the entry, from an
   existing sealed dir's date prefix, a purge tombstone, or the live file's
   first-line ts — never wall-clock, so one session never splits across two
