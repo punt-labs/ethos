@@ -75,6 +75,13 @@ func WithRecordLockTry(p layout.Policy, id string, fn func() error) error {
 	if err := layout.EnsureLocalDir(p, filepath.Dir(path)); err != nil {
 		return err
 	}
+	return withFileLockTry(path, lockExclusive, fn)
+}
+
+// withFileLockTry runs fn holding the flock on path in mode, or returns
+// ErrLockBusy at once when another holder has it. The caller has created the
+// lock's directory.
+func withFileLockTry(path string, mode int, fn func() error) error {
 	if err := rejectSymlink(path); err != nil {
 		return err
 	}
@@ -83,7 +90,7 @@ func WithRecordLockTry(p layout.Policy, id string, fn func() error) error {
 		return fmt.Errorf("opening lock file: %w", err)
 	}
 	defer f.Close()
-	busy, err := flockTry(f, lockExclusive)
+	busy, err := flockTry(f, mode)
 	if err != nil {
 		return fmt.Errorf("acquiring lock: %w", err)
 	}
@@ -92,6 +99,18 @@ func WithRecordLockTry(p layout.Policy, id string, fn func() error) error {
 	}
 	defer func() { _ = funlock(f) }()
 	return fn()
+}
+
+// withPolicyLockTry is withFileLockTry on the policy's lock for domain and key.
+func withPolicyLockTry(p layout.Policy, domain, key string, mode int, fn func() error) error {
+	path, err := p.LockPath(domain, key)
+	if err != nil {
+		return err
+	}
+	if err := layout.EnsureLocalDir(p, filepath.Dir(path)); err != nil {
+		return err
+	}
+	return withFileLockTry(path, mode, fn)
 }
 
 // UpgradeLegacyAuthority gives a repository mission that predates DES-079

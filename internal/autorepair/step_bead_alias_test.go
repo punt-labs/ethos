@@ -37,6 +37,11 @@ func TestBeadAlias_Corpus(t *testing.T) {
 		t.Run(v, func(t *testing.T) {
 			require.True(t, provenanceOK34(t, v, "mission create (inputs.bead)"), "scenario step missing")
 			env := stage34(t, v)
+			if len(missionDirs34(t, env)) == 0 {
+				// v3.11.0 and v3.12.0 keep missions in the global store only, so
+				// the repository holds no contract for this step to rewrite.
+				t.Skipf("%s keeps no repository mission contracts; the step has nothing to rewrite", v)
+			}
 			want := plantBead34(t, env)
 
 			out := run34(t, "bead-alias", env)

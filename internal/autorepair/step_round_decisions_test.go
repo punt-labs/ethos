@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -212,4 +213,35 @@ func TestRoundDecisions_ReasonNamesTheClass(t *testing.T) {
 	require.Len(t, out.Residuals, 1)
 	assert.Contains(t, out.Residuals[0].Reason, "corrections authority is corrupt")
 	assert.NotContains(t, out.Residuals[0].Reason, "incomplete")
+}
+
+// M5: step 3 hashes decision IDs over reflections before step 4 scrubs them.
+// The stored IDs must survive the scrub unchanged, because later steps copy them
+// from the contract and never recompute them from the scrubbed file.
+func TestRoundDecisions_StoredIDsSurviveTheScrub(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	plantAll34(t, env)
+	cmd := testhelpers.GitCommand("add", "-A", "--", ".")
+	cmd.Dir = env.Roots.Checkout
+	b, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(b))
+
+	ids := func() map[string][]string {
+		out := map[string][]string{}
+		for id, c := range authorityState34(t, env) {
+			require.NotNil(t, c.RoundDecisions, id)
+			for _, e := range c.RoundDecisions.Entries {
+				out[id] = append(out[id], e.ID)
+			}
+		}
+		return out
+	}
+	run34(t, "round-decisions", env)
+	before := ids()
+	require.NotEmpty(t, before["m-2026-11-09-001"])
+
+	scrub := run34(t, "scrub-records", env)
+	require.Empty(t, scrub.Residuals)
+	require.GreaterOrEqual(t, scrub.Items, 1)
+	assert.Equal(t, before, ids(), "the scrub does not change a stored decision ID")
 }

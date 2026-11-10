@@ -194,7 +194,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/mission.Store.withMissionLockWithOutcome": checkpoint("withAuthorityLock"),
 	"internal/mission.Store.withAuthorityLock":          checkpoint("withStateFileLock"),
 	"internal/mission.Store.withStateFileLock":          exempt(reasonLock),
-	"internal/mission.WithRecordLockTry":                exempt(reasonLock),
+	"internal/mission.withFileLockTry":                  exempt(reasonLock),
 	"internal/autorepair.runBeadAlias":                  guardOnly("re-encodes an existing contract with only the inputs.bead key renamed; ReplaceRecordFile guards the bytes with guardWrite, and no value is added that a redactor would need to see", "ReplaceRecordFile"),
 	"internal/mission.ReplaceRecordFile":                sink(1, "guards payload argument 1 with guardWrite, then installs it through localReplace; used by DES-084 repair steps that rewrite a contract's bytes"),
 	"internal/mission.confirmStreamDurability":          exempt("opens existing stream files with O_RDWR solely to Sync and Close; does not create, truncate or write payload bytes"),

@@ -613,6 +613,11 @@ func (s *Store) finishReflection(in reflectionIntent) error {
 
 // Legacy import is strict and complete for the lifecycle prefix. Absence of
 // crossed-round detail is unknown history, not permission to initialize empty.
+//
+// A decision ID is the hash of the reflection as it stood when the decision was
+// imported. The ID is stored in the contract and must be copied from there,
+// never recomputed from reflections.yaml: the scrub-records step later redacts
+// that file, so a recomputed hash disagrees with the stored one.
 func (s *Store) importLegacyDecisions(c *Contract) error {
 	rs, _, err := s.loadReflectionsBytes(c.MissionID)
 	if err != nil {
