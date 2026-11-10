@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/testhelpers"
 )
 
 const corpusSession = "sess-corpus-0001"
@@ -19,13 +20,41 @@ func globalAuditFile(env Env) string {
 	return filepath.Join(env.Global, "sessions", corpusSession+".audit.jsonl")
 }
 
-// holdSession gives the repository a live stream for the session, the
-// association signal for a global audit file.
+// holdSession gives the repository a live stream for the session: one of
+// the two association signals for a global audit file.
 func holdSession(t *testing.T, env Env, session string) {
 	t.Helper()
 	path := audit.LiveAuditPath(env.Roots.Store, session)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, nil, 0o600))
+}
+
+// rosterCheckout rewrites the session's global roster so its checkout is
+// dir, as every roster since v4.13.0 records it. The corpus v3.11 roster has
+// no checkout field at all. The corpus host placeholder @HOST@ is not valid
+// YAML (a real roster holds a hostname), so it is resolved here too.
+func rosterCheckout(t *testing.T, env Env, session, dir string) {
+	t.Helper()
+	path := filepath.Join(env.Global, "sessions", session+".yaml")
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	s := strings.Replace(string(b), "host:", "checkout: "+dir+"\nhost:", 1)
+	require.NotEqual(t, string(b), s)
+	s = strings.ReplaceAll(s, "@HOST@", "corpus-host")
+	require.NoError(t, os.WriteFile(path, []byte(s), 0o600))
+}
+
+// realHome replaces the corpus placeholder @HOME@ in the global audit file
+// with the test's real temporary HOME, so the redaction assertion has a real
+// path to miss.
+func realHome(t *testing.T, env Env) string {
+	t.Helper()
+	home := os.Getenv("HOME")
+	b, err := os.ReadFile(globalAuditFile(env))
+	require.NoError(t, err)
+	require.Contains(t, string(b), "@HOME@", "the fixture carries the placeholder")
+	require.NoError(t, os.WriteFile(globalAuditFile(env), []byte(strings.ReplaceAll(string(b), "@HOME@", home)), 0o600))
+	return home
 }
 
 func archivedAudit(t *testing.T, env Env, session string) string {
@@ -40,16 +69,24 @@ func archivedAudit(t *testing.T, env Env, session string) string {
 	return string(b)
 }
 
+// TestGlobalAudit: a session whose global roster names this checkout is
+// imported, redacted, and its global file deleted; the second run changes
+// nothing in either tree.
 func TestGlobalAudit(t *testing.T) {
 	env, log := corpusEnv(t, "v3.11.0")
-	holdSession(t, env, corpusSession)
-	home := os.Getenv("HOME")
+	rosterCheckout(t, env, corpusSession, env.Roots.Checkout)
+	home := realHome(t, env)
 	raw, err := os.ReadFile(globalAuditFile(env))
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "ghp_FAKE", "the corpus line is unredacted")
+	require.Contains(t, string(raw), home)
 
-	out, err := runGlobalAudit(context.Background(), env)
+	var out Outcome
+	stderr := testhelpers.CaptureStderr(t, func() {
+		out, err = runGlobalAudit(context.Background(), env)
+	})
 	require.NoError(t, err)
+	assert.Empty(t, stderr, "the step logs; it never prints")
 	assert.Equal(t, 1, out.Items)
 	assert.Empty(t, out.Residuals)
 	assert.False(t, out.Deferred)
@@ -59,22 +96,66 @@ func TestGlobalAudit(t *testing.T) {
 	require.NotEmpty(t, got, "the redacted copy is in the local archive")
 	assert.Equal(t, 3, strings.Count(got, "\n"))
 	assert.NotContains(t, got, "ghp_FAKE", "the credential is redacted")
-	assert.NotContains(t, got, home)
+	assert.NotContains(t, got, home, "the real home path is redacted")
+	assert.NotContains(t, got, "/Users/", "no user home of any kind survives")
 	_, statErr := os.Stat(globalAuditFile(env))
 	assert.True(t, os.IsNotExist(statErr), "the global source is deleted once archived")
 
+	repoBefore, globalBefore := treeDigest(t, env.Roots.Store), treeDigest(t, env.Global)
 	out, err = runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 0, out.Items, "second run changes nothing")
 	assert.Equal(t, got, archivedAudit(t, env, corpusSession))
+	assert.Equal(t, repoBefore, treeDigest(t, env.Roots.Store))
+	assert.Equal(t, globalBefore, treeDigest(t, env.Global))
 }
 
-func TestGlobalAuditUnassociatedStaysGlobal(t *testing.T) {
+// TestGlobalAuditStreamOnlyImportsButKeepsGlobal: a repository stream alone
+// associates the session, so the file is imported, but a stream is not
+// proof that no other repository holds one too, so the global file stays
+// and the step says why.
+func TestGlobalAuditStreamOnlyImportsButKeepsGlobal(t *testing.T) {
 	env, _ := corpusEnv(t, "v3.11.0")
+	holdSession(t, env, corpusSession)
+	out, err := runGlobalAudit(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, 1, out.Items, "the session is imported")
+	assert.NotEmpty(t, archivedAudit(t, env, corpusSession))
+	assert.FileExists(t, globalAuditFile(env), "the global copy is kept")
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, Residual{Step: "global-audit", ID: corpusSession, Reason: "shared ownership; global copy kept"}, out.Residuals[0])
+}
+
+// TestGlobalAuditOtherCheckoutStaysGlobal: a roster naming another checkout
+// is another repository's session; nothing is imported and nothing deleted.
+func TestGlobalAuditOtherCheckoutStaysGlobal(t *testing.T) {
+	env, _ := corpusEnv(t, "v3.11.0")
+	rosterCheckout(t, env, corpusSession, filepath.Join(t.TempDir(), "other"))
+	out, err := runGlobalAudit(context.Background(), env)
+	require.NoError(t, err)
+	assert.Equal(t, 0, out.Items)
+	assert.Empty(t, out.Residuals)
+	assert.Empty(t, archivedAudit(t, env, corpusSession))
+	assert.FileExists(t, globalAuditFile(env))
+}
+
+// TestGlobalAuditNoSignalIsResidual: the v3.11.0 corpus as it is. Its roster
+// has no checkout field and its audit lines carry no repository, so nothing
+// says whose session this is. The file stays global and the step records
+// the session as a residual rather than guessing an owner.
+func TestGlobalAuditNoSignalIsResidual(t *testing.T) {
+	env, _ := corpusEnv(t, "v3.11.0")
+	roster, err := os.ReadFile(filepath.Join(env.Global, "sessions", corpusSession+".yaml"))
+	require.NoError(t, err)
+	require.NotContains(t, string(roster), "checkout:", "the v3.11 roster names no checkout")
 	out, err := runGlobalAudit(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 0, out.Items)
 	assert.FileExists(t, globalAuditFile(env))
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, "global-audit", out.Residuals[0].Step)
+	assert.Equal(t, corpusSession, out.Residuals[0].ID)
+	assert.Contains(t, out.Residuals[0].Reason, "no roster checkout")
 }
 
 func TestGlobalAuditNoGlobalFiles(t *testing.T) {

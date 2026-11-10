@@ -11,6 +11,8 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
 	"github.com/punt-labs/ethos/v4/internal/layout"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // MigrateAuditWithPolicy consolidates associated legacy sessions in the shared
@@ -54,10 +56,14 @@ func MigrateAuditWithPolicy(p layout.Policy, globalSessionsDir string, dryRun bo
 	return nil
 }
 
-// AuditImport is one session ImportGlobalAudit moved into the local archive.
+// AuditImport is one session ImportGlobalAudit copied into the local archive.
+// Deleted is whether the global file was removed, which requires the
+// session's roster to name this repository and no other; a session
+// associated only by a repository stream is imported but kept global.
 type AuditImport struct {
 	Session string
 	Lines   int // entries added to the archive; 0 when it already held them
+	Deleted bool
 }
 
 // AuditImportFailure is a session ImportGlobalAudit left in place. Reason
@@ -67,44 +73,91 @@ type AuditImportFailure struct {
 	Reason  string
 }
 
+// AuditImportResult is what ImportGlobalAudit did. Unowned lists sessions
+// whose global roster names another checkout; Unknown lists sessions with no
+// association at all: no roster checkout (every roster before v4.13.0) and no
+// repository stream. Nothing identifies their owner, so they stay global and
+// the caller records them.
+type AuditImportResult struct {
+	Done    []AuditImport
+	Failed  []AuditImportFailure
+	Unowned []string
+	Unknown []string
+}
+
+// ReasonNoAuditOwner is the residual reason for a global audit file nothing
+// associates with a repository.
+const ReasonNoAuditOwner = "no roster checkout and no repository stream name this session's repository; global file kept"
+
 // ImportGlobalAudit imports every global session audit file
-// (<globalSessionsDir>/*.audit.jsonl, v3.0-v3.11) whose session this
-// repository holds into the shared local archive, redacted, and deletes the
-// global file once the archive has been read back equal to what was written.
-// It prints nothing and keeps going past a session it cannot import. Sessions
-// the repository does not hold stay global.
-func ImportGlobalAudit(p layout.Policy, globalSessionsDir string) ([]AuditImport, []AuditImportFailure, error) {
+// (<globalSessionsDir>/*.audit.jsonl, v3.0-v3.11) that belongs to this
+// repository into the shared local archive, redacted. A session belongs here
+// when its global roster (<globalSessionsDir>/<id>.yaml) names one of roots
+// as its checkout, or when the repository holds a stream for it. The global
+// file is deleted only in the first case, once the archive has been read
+// back equal to what was written: a roster checkout is exclusive, a stream
+// is not. It prints nothing and keeps going past a session it cannot import.
+func ImportGlobalAudit(p layout.Policy, globalSessionsDir string, roots ...string) (AuditImportResult, error) {
+	var res AuditImportResult
 	files, err := enumerateLegacyAuditFiles(globalSessionsDir)
 	if err != nil {
-		return nil, nil, err
+		return res, err
 	}
 	if len(files) == 0 {
-		return nil, nil, nil
+		return res, nil
 	}
-	associated, err := associatedSessions(p)
+	streams, err := associatedSessions(p)
 	if err != nil {
-		return nil, nil, err
+		return res, err
 	}
 	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
-	var done []AuditImport
-	var failed []AuditImportFailure
 	for _, file := range files {
 		id := strings.TrimSuffix(filepath.Base(file), ".audit.jsonl")
-		if !associated[id] {
+		owner, named := rosterCheckout(globalSessionsDir, id)
+		switch {
+		case named && !namesAny(owner, roots):
+			res.Unowned = append(res.Unowned, id)
+			continue
+		case !named && !streams[id]:
+			res.Unknown = append(res.Unknown, id)
 			continue
 		}
 		r, err := migrateAuditSession(p, checkout, id, file, false, true)
 		if err != nil {
-			failed = append(failed, AuditImportFailure{Session: id, Reason: err.Error()})
+			res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: err.Error()})
 			continue
 		}
-		if err := removeGlobalAudit(file); err != nil {
-			failed = append(failed, AuditImportFailure{Session: id, Reason: err.Error()})
-			continue
+		imp := AuditImport{Session: id, Lines: r.added}
+		if named {
+			if err := removeGlobalAudit(file); err != nil {
+				res.Failed = append(res.Failed, AuditImportFailure{Session: id, Reason: err.Error()})
+				continue
+			}
+			imp.Deleted = true
 		}
-		done = append(done, AuditImport{Session: id, Lines: r.added})
+		res.Done = append(res.Done, imp)
 	}
-	return done, failed, nil
+	return res, nil
+}
+
+// rosterCheckout reads the checkout the global roster of session id names.
+// named is false when there is no roster or it carries no checkout.
+func rosterCheckout(globalSessionsDir, id string) (checkout string, named bool) {
+	roster, err := session.NewStore(filepath.Dir(globalSessionsDir)).Load(id)
+	if err != nil || roster.Checkout == "" {
+		return "", false
+	}
+	return filepath.Clean(roster.Checkout), true
+}
+
+// namesAny reports whether checkout is one of roots under the path rule.
+func namesAny(checkout string, roots []string) bool {
+	for _, root := range roots {
+		if root != "" && mission.SamePath(checkout, filepath.Clean(root)) {
+			return true
+		}
+	}
+	return false
 }
 
 // associatedSessions is the set of session IDs the repository holds a stream
