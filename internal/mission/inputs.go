@@ -118,3 +118,88 @@ func WarnBeadDeprecated(w io.Writer, bead string) {
 	fmt.Fprintf(w,
 		"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket' (value: %q)\n", bead)
 }
+
+// RenameBeadAlias rewrites a contract's deprecated inputs.bead key to
+// inputs.ticket and reports whether it changed anything. A block-style key is
+// renamed in place so every other byte is untouched; any other shape (a flow
+// mapping, an odd quoting) is renamed through the YAML node tree. A contract
+// that sets both keys is refused: neither value is ours to choose.
+func RenameBeadAlias(data []byte) ([]byte, bool, error) {
+	if BeadAlias(data) == "" {
+		return data, false, nil
+	}
+	var probe struct {
+		Inputs map[string]any `yaml:"inputs"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return nil, false, fmt.Errorf("parsing contract: %w", err)
+	}
+	if _, both := probe.Inputs["ticket"]; both {
+		return nil, false, fmt.Errorf("inputs: both 'ticket' and 'bead' set")
+	}
+	if out, ok := renameBeadLine(data); ok {
+		if BeadAlias(out) == "" {
+			return out, true, nil
+		}
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, false, fmt.Errorf("parsing contract: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, false, fmt.Errorf("contract is not a mapping")
+	}
+	top := doc.Content[0]
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value != "inputs" || top.Content[i+1].Kind != yaml.MappingNode {
+			continue
+		}
+		in := top.Content[i+1]
+		for j := 0; j+1 < len(in.Content); j += 2 {
+			if in.Content[j].Value == "bead" {
+				in.Content[j].Value = "ticket"
+				var buf bytes.Buffer
+				enc := yaml.NewEncoder(&buf)
+				enc.SetIndent(4)
+				if err := enc.Encode(&doc); err != nil {
+					return nil, false, fmt.Errorf("encoding contract: %w", err)
+				}
+				if err := enc.Close(); err != nil {
+					return nil, false, fmt.Errorf("encoding contract: %w", err)
+				}
+				return buf.Bytes(), true, nil
+			}
+		}
+	}
+	return nil, false, fmt.Errorf("inputs.bead not found in the contract's node tree")
+}
+
+// renameBeadLine renames the first "bead:" key line inside the top-level
+// inputs block, leaving every other byte as it is.
+func renameBeadLine(data []byte) ([]byte, bool) {
+	lines := bytes.SplitAfter(data, []byte("\n"))
+	inInputs := false
+	for i, line := range lines {
+		text := string(line)
+		if strings.HasPrefix(text, "inputs:") {
+			if strings.TrimSpace(strings.TrimPrefix(text, "inputs:")) != "" {
+				return nil, false // flow or inline value, not a block
+			}
+			inInputs = true
+			continue
+		}
+		if !inInputs {
+			continue
+		}
+		if len(text) > 0 && text[0] != ' ' && text[0] != '\t' && text[0] != '\n' && text[0] != '\r' && text[0] != '#' {
+			return nil, false // left the block without finding the key
+		}
+		trimmed := strings.TrimLeft(text, " ")
+		if strings.HasPrefix(trimmed, "bead:") {
+			indent := text[:len(text)-len(trimmed)]
+			lines[i] = []byte(indent + "ticket:" + strings.TrimPrefix(trimmed, "bead:"))
+			return bytes.Join(lines, nil), true
+		}
+	}
+	return nil, false
+}
