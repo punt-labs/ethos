@@ -142,6 +142,45 @@ func TestMissingBaselineFails(t *testing.T) {
 	}
 }
 
+func TestCheckLeavesUnmeasuredPackagesOutOfOverallAndFloors(t *testing.T) {
+	// internal/bad has a partial profile (its tests timed out); it must not drag overall down.
+	prof := profile([3]any{"internal/a/a.go", 10, true}, [3]any{"internal/bad/b.go", 90, false})
+	base := "# unmeasured: internal/bad (tests fail on the host)\noverall-target 100.0\ninternal/a 100.0\n"
+	root, p, b := setup(t, prof, base, false)
+	code, out := runTool(t, root, p, b)
+	if code != 0 || !strings.Contains(out, "unmeasured") {
+		t.Fatalf("want pass with an unmeasured row, got %d: %s", code, out)
+	}
+}
+
+func TestWriteExcludeRecordsUnmeasuredPackagesAndDropsThemFromOverall(t *testing.T) {
+	prof := profile([3]any{"internal/a/a.go", 10, true}, [3]any{"internal/bad/b.go", 90, false})
+	root, p, b := setup(t, prof, "", false)
+	if code, out := runTool(t, root, p, b, "-write", "-exclude", "internal/bad,internal/gone"); code != 0 {
+		t.Fatalf("write failed: %s", out)
+	}
+	data, err := os.ReadFile(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{"# unmeasured: internal/bad", "# unmeasured: internal/gone", "overall-current 100.0", "overall-target 100.0", "internal/a 100.0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("baseline missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\ninternal/bad ") {
+		t.Fatalf("excluded package has a baseline line:\n%s", got)
+	}
+	if code, out := runTool(t, root, p, b, "-write", "-exclude", "internal/bad,internal/gone"); code != 0 {
+		t.Fatalf("second write failed: %s", out)
+	}
+	again, _ := os.ReadFile(b)
+	if strings.Count(string(again), "# unmeasured: internal/bad") != 1 {
+		t.Fatalf("rewrite duplicated the unmeasured comment:\n%s", again)
+	}
+}
+
 func TestWriteGeneratesBaselineAndPreservesTargetAndComments(t *testing.T) {
 	prof := profile([3]any{"internal/a/a.go", 10, true}, [3]any{"internal/b/b.go", 10, false})
 	root, p, b := setup(t, prof, "# unmeasured: internal/zzz (host-specific failure)\noverall-target 42.5\n", false)

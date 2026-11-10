@@ -65,6 +65,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	basePath := fs.String("baseline", "coverage-baseline.txt", "baseline file")
 	root := fs.String("root", ".", "repository root (to detect internal/autorepair test files)")
 	write := fs.Bool("write", false, "regenerate the baseline from the profile")
+	exclude := fs.String("exclude", "", "with -write: comma-separated packages whose tests fail on this host; recorded as unmeasured, left out of the baseline and the overall figure")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -74,7 +75,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if *write {
-		if err := writeBaseline(*basePath, pkgs, overall); err != nil {
+		var skipped []string
+		for _, p := range strings.Split(*exclude, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				skipped = append(skipped, p)
+			}
+		}
+		pkgs, overall = withoutPackages(pkgs, skipped)
+		if err := writeBaseline(*basePath, pkgs, overall, skipped); err != nil {
 			fmt.Fprintf(stderr, "coverage-check: %v\n", err)
 			return 1
 		}
@@ -89,8 +97,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return check(stdout, pkgs, overall, base, hasTestFiles(filepath.Join(*root, autorepairPkg)))
 }
 
+// unmeasured returns the packages named by "# unmeasured: <pkg> ..." comments.
+func (b baseline) unmeasured() []string {
+	const prefix = "# unmeasured: "
+	var out []string
+	for _, c := range b.comments {
+		if rest, ok := strings.CutPrefix(c, prefix); ok {
+			if f := strings.Fields(rest); len(f) > 0 {
+				out = append(out, f[0])
+			}
+		}
+	}
+	return out
+}
+
 func check(out io.Writer, pkgs map[string]tally, overall tally, base baseline, autorepairHasTests bool) int {
 	var failures []string
+	skipped := base.unmeasured()
+	if len(skipped) > 0 {
+		pkgs, overall = withoutPackages(pkgs, skipped)
+		for _, s := range skipped {
+			fmt.Fprintf(out, "%-45s unmeasured (excluded from the gate)\n", s)
+		}
+	}
 	names := map[string]bool{}
 	for p := range pkgs {
 		names[p] = true
@@ -246,10 +275,41 @@ func readBaseline(p string) (baseline, error) {
 	return b, sc.Err()
 }
 
-func writeBaseline(p string, pkgs map[string]tally, overall tally) error {
+// withoutPackages drops the named packages and recomputes the overall tally
+// from what remains.
+func withoutPackages(pkgs map[string]tally, skip []string) (map[string]tally, tally) {
+	drop := map[string]bool{}
+	for _, s := range skip {
+		drop[s] = true
+	}
+	kept := map[string]tally{}
+	var overall tally
+	for p, t := range pkgs {
+		if drop[p] {
+			continue
+		}
+		kept[p] = t
+		overall.stmts += t.stmts
+		overall.covered += t.covered
+	}
+	return kept, overall
+}
+
+func writeBaseline(p string, pkgs map[string]tally, overall tally, skipped []string) error {
 	prev, err := readBaseline(p)
 	if err != nil && !os.IsNotExist(unwrap(err)) {
 		return err
+	}
+	have := map[string]bool{}
+	for _, c := range prev.comments {
+		have[c] = true
+	}
+	for _, s := range skipped {
+		c := "# unmeasured: " + s + " (tests fail on the host that generated this baseline; no floor enforced)"
+		if !have[c] {
+			prev.comments = append(prev.comments, c)
+			have[c] = true
+		}
 	}
 	target := prev.target
 	if !prev.hasTgt {
