@@ -125,3 +125,11 @@ func syncedOutcome(env Env, action string, paths ...string) (Outcome, error) {
 	}
 	return Outcome{Items: 1}, nil
 }
+
+// storeRel makes every occurrence of the root base in s relative to it, so a
+// residual recorded in the layout stamp names a store-relative path only.
+func storeRel(base, s string) string {
+	b := filepath.ToSlash(base)
+	s = strings.ReplaceAll(filepath.ToSlash(s), b+"/", "")
+	return strings.ReplaceAll(s, b, ".")
+}

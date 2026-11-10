@@ -82,8 +82,9 @@ func TestVoiceFieldStepRepositoryResidualNamesIdentityFile(t *testing.T) {
 
 	out := s81113Run(t, "voice-field", tr.Env(t))
 	require.Len(t, out.Residuals, 1)
-	assert.Equal(t, path, out.Residuals[0].ID, "the residual names the real identity file")
-	assert.True(t, s81113Exists(out.Residuals[0].ID))
+	assert.Equal(t, ".punt-labs/ethos/identities/rperson.yaml", out.Residuals[0].ID, "the residual names the identity file relative to the store")
+	assert.True(t, s81113Exists(filepath.Join(tr.Repo, filepath.FromSlash(out.Residuals[0].ID))))
+	assertNoAbsolute(t, tr, out)
 }
 
 func TestVoiceFieldStepSymlinkedIdentityIsResidualAndOthersProceed(t *testing.T) {
@@ -99,7 +100,8 @@ func TestVoiceFieldStepSymlinkedIdentityIsResidualAndOthersProceed(t *testing.T)
 	require.NoError(t, err, "a refused path is a residual, not an error")
 	assert.Equal(t, 2, out.Items, "the global and the repository identity are still migrated")
 	require.Len(t, out.Residuals, 1)
-	assert.Equal(t, filepath.Join(dir, "alink.yaml"), out.Residuals[0].ID)
+	assert.Equal(t, ".punt-labs/ethos/identities/alink.yaml", out.Residuals[0].ID)
+	assertNoAbsolute(t, tr, out)
 	assert.NotContains(t, yamlMap(t, s81113Read(t, filepath.Join(dir, "rperson.yaml"))), "voice")
 }
 
@@ -137,5 +139,91 @@ func TestVoiceFieldStepCurrentCorpora(t *testing.T) {
 			assert.Empty(t, out.Residuals)
 			assert.Empty(t, tr.Log.entries)
 		})
+	}
+}
+
+// assertNoAbsolute checks that no residual, which lands in the layout stamp,
+// carries the home directory or the temporary tree.
+func assertNoAbsolute(t *testing.T, tr s81113Tree, out Outcome) {
+	t.Helper()
+	for _, r := range out.Residuals {
+		for _, bad := range []string{os.Getenv("HOME"), filepath.Dir(tr.Repo), tr.Repo, tr.Home} {
+			assert.NotContains(t, r.ID+" "+r.Reason, bad)
+		}
+	}
+}
+
+// A symlinked global identity must be neither read nor rewritten through.
+func TestVoiceFieldStepGlobalSymlinkedIdentityIsResidual(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	link := filepath.Join(tr.Home, "identities", "vperson.yaml")
+	outside := filepath.Join(filepath.Dir(tr.Home), "outside-id.yaml")
+	s81113Write(t, outside, string(s81113Read(t, link)))
+	want := s81113Read(t, outside)
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink(outside, link))
+
+	out := s81113Run(t, "voice-field", tr.Env(t))
+	assert.Equal(t, 0, out.Items)
+	fi, err := os.Lstat(link)
+	require.NoError(t, err)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink, "the link is still a link")
+	assert.Equal(t, want, s81113Read(t, outside), "the file outside is untouched")
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, "identities/vperson.yaml", out.Residuals[0].ID)
+	assertNoAbsolute(t, tr, out)
+}
+
+func TestVoiceFieldStepGlobalSymlinkedIdentitiesDirIsResidual(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	dir := filepath.Join(tr.Home, "identities")
+	outside := filepath.Join(filepath.Dir(tr.Home), "outside-ids")
+	require.NoError(t, os.Rename(dir, outside))
+	require.NoError(t, os.Symlink(outside, dir))
+	want := s81113Read(t, filepath.Join(outside, "vperson.yaml"))
+
+	out := s81113Run(t, "voice-field", tr.Env(t))
+	assert.Equal(t, 0, out.Items)
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, want, s81113Read(t, filepath.Join(outside, "vperson.yaml")))
+	assertNoAbsolute(t, tr, out)
+}
+
+// The rewrite removes exactly the voice lines: sequences keep their indent and
+// the comment above voice: stays.
+func TestVoiceFieldStepRewriteKeepsEveryOtherByte(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	path := filepath.Join(tr.Home, "identities", "vperson.yaml")
+	in := "name: Voice Person # inline\nhandle: vperson\nkind: human\ntalents:\n  - engineering\n  - security\n# above voice\nvoice:\n  provider: say\n  voice: Samantha\nemail: \"v@example.com\"\n"
+	s81113Write(t, path, in)
+	s81113Write(t, filepath.Join(tr.Home, "identities", "vperson.ext", "vox.yaml"), "voice: Alex\n")
+
+	out := s81113Run(t, "voice-field", tr.Env(t))
+	assert.Equal(t, 1, out.Items)
+	want := "name: Voice Person # inline\nhandle: vperson\nkind: human\ntalents:\n  - engineering\n  - security\n# above voice\nemail: \"v@example.com\"\n"
+	assert.Equal(t, want, string(s81113Read(t, path)))
+	vox, err := identity.NewStore(tr.Home).ExtGet("vperson", "vox", "")
+	require.NoError(t, err)
+	assert.Equal(t, "Alex", vox["voice"])
+	assert.Equal(t, "say", vox["provider"])
+}
+
+// A legacy value the extension already overrides is dropped; the drop is logged
+// by key, never by value.
+func TestVoiceFieldStepLogsKeysItDropped(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	s81113Write(t, filepath.Join(tr.Home, "identities", "vperson.ext", "vox.yaml"), "voice: Alex\n")
+	s81113Run(t, "voice-field", tr.Env(t))
+	var dropped []string
+	for _, e := range tr.Log.entries {
+		if e.action == "drop-superseded" {
+			dropped = append(dropped, e.paths...)
+			assert.NoError(t, e.err)
+		}
+	}
+	assert.Contains(t, dropped, "vperson/voice")
+	for _, p := range dropped {
+		assert.NotContains(t, p, "Samantha")
+		assert.NotContains(t, p, "Alex")
 	}
 }

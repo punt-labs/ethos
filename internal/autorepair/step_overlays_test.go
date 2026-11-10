@@ -141,7 +141,8 @@ func TestOverlaysStepSymlinkedLegacyIsResidual(t *testing.T) {
 	out := s81113Run(t, "overlays", env)
 	assert.Equal(t, 0, out.Items)
 	require.Len(t, out.Residuals, 1)
-	assert.Contains(t, out.Residuals[0].Reason, legacy)
+	assert.Contains(t, out.Residuals[0].Reason, ".punt-labs/ethos/identities/tperson.ext/vox.local.yaml")
+	assertNoAbsolute(t, tr, out)
 	_, err := os.Lstat(legacy)
 	assert.NoError(t, err, "the symlink is left alone")
 }
@@ -223,4 +224,20 @@ func TestOverlaysStepHandMadeLegacyFixtureMoves(t *testing.T) {
 	assert.Equal(t, 1, out.Items)
 	assert.False(t, s81113Exists(legacy))
 	assert.True(t, s81113Exists(local))
+}
+
+// Residuals land in the layout stamp: no absolute path may reach them.
+func TestOverlaysStepResidualsCarryNoAbsolutePath(t *testing.T) {
+	tr := s81113Copy(t, "damage/overlay-both-locations")
+	_, legacy, local := overlayPaths(tr)
+	require.NoError(t, os.Remove(local))
+	extDir := filepath.Dir(legacy)
+	outside := filepath.Join(filepath.Dir(tr.Repo), "outside-ext")
+	s81113Write(t, filepath.Join(outside, "vox.local.yaml"), "token: old\n")
+	require.NoError(t, os.RemoveAll(extDir))
+	require.NoError(t, os.Symlink(outside, extDir))
+
+	out := s81113Run(t, "overlays", tr.Env(t))
+	require.NotEmpty(t, out.Residuals)
+	assertNoAbsolute(t, tr, out)
 }

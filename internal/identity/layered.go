@@ -223,7 +223,7 @@ func (ls *LayeredStore) relocateRepoVoiceUnlocked(handle string) error {
 	if err != nil {
 		return fmt.Errorf("relocating voice for %q: %w", handle, err)
 	}
-	_, reason, err := ls.repo.convertVoice(handle, path, data, ext)
+	_, _, reason, err := ls.repo.convertVoice(handle, path, data, ext)
 	if err != nil {
 		return err
 	}

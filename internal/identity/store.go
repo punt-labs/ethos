@@ -148,9 +148,9 @@ func (s *Store) migrateVoice(handle, path string, data []byte) error {
 
 // migrateVoiceUnlocked converts a legacy voice field with the shared rule in
 // convertVoice. A field that cannot be converted is an error here: the identity
-// file is left unchanged and the user must change the field to a mapping.
+// file is left unchanged until the field is a mapping of scalar values.
 func (s *Store) migrateVoiceUnlocked(handle, path string, data []byte) error {
-	_, reason, err := s.convertVoice(handle, path, data, s)
+	_, _, reason, err := s.convertVoice(handle, path, data, s)
 	if err != nil {
 		return err
 	}
