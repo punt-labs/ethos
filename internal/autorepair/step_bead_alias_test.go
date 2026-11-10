@@ -1,6 +1,8 @@
 package autorepair
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,4 +166,24 @@ func TestBeadAlias_UnreadableContractIsResidual(t *testing.T) {
 	require.Len(t, out.Residuals, 1)
 	assert.Equal(t, "bead-alias", out.Residuals[0].Step)
 	assert.Contains(t, out.Residuals[0].Reason, "unreadable")
+}
+
+// A residual reason names the class of failure. A YAML parse error carries line
+// numbers and token text from the file, and none of it may reach the reason.
+func TestBeadAlias_ReasonCarriesNoFileText(t *testing.T) {
+	const token = "ghp_SECRETTOKEN"
+	parse := fmt.Errorf("%w: %w", mission.ErrContractParse, errors.New("yaml: line 7: did not find expected ',' near "+token))
+	for name, err := range map[string]error{
+		"parse":       parse,
+		"both":        mission.ErrBothBeadKeys,
+		"not mapping": mission.ErrContractNotMapping,
+		"other":       errors.New("encoding contract: " + token),
+	} {
+		t.Run(name, func(t *testing.T) {
+			reason := beadAliasReason("rename", err)
+			assert.NotContains(t, reason, token)
+			assert.NotContains(t, reason, "line 7")
+			assert.Contains(t, reason, "cannot be rewritten")
+		})
+	}
 }

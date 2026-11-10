@@ -3,6 +3,7 @@ package mission
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -119,6 +120,15 @@ func WarnBeadDeprecated(w io.Writer, bead string) {
 		"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket' (value: %q)\n", bead)
 }
 
+// The refusals RenameBeadAlias distinguishes. A caller that records why a
+// contract was left alone maps each to a fixed phrase; ErrContractParse wraps a
+// YAML error whose text carries line numbers and values from the file.
+var (
+	ErrBothBeadKeys       = errors.New("inputs: both 'ticket' and 'bead' set")
+	ErrContractNotMapping = errors.New("contract is not a mapping")
+	ErrContractParse      = errors.New("parsing contract")
+)
+
 // RenameBeadAlias rewrites a contract's deprecated inputs.bead key to
 // inputs.ticket and reports whether it changed anything. A block-style key is
 // renamed in place so every other byte is untouched; any other shape (a flow
@@ -137,10 +147,10 @@ func RenameBeadAlias(data []byte) ([]byte, bool, error) {
 		Inputs map[string]any `yaml:"inputs"`
 	}
 	if err := yaml.Unmarshal(data, &probe); err != nil {
-		return nil, false, fmt.Errorf("parsing contract: %w", err)
+		return nil, false, fmt.Errorf("%w: %w", ErrContractParse, err)
 	}
 	if _, both := probe.Inputs["ticket"]; both {
-		return nil, false, fmt.Errorf("inputs: both 'ticket' and 'bead' set")
+		return nil, false, ErrBothBeadKeys
 	}
 	if out, ok := renameBeadLine(data); ok {
 		if BeadAlias(out) == "" {
@@ -149,10 +159,10 @@ func RenameBeadAlias(data []byte) ([]byte, bool, error) {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, false, fmt.Errorf("parsing contract: %w", err)
+		return nil, false, fmt.Errorf("%w: %w", ErrContractParse, err)
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return nil, false, fmt.Errorf("contract is not a mapping")
+		return nil, false, ErrContractNotMapping
 	}
 	top := doc.Content[0]
 	for i := 0; i+1 < len(top.Content); i += 2 {

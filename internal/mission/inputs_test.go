@@ -411,7 +411,7 @@ func TestRenameBeadAlias(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, changed, err := RenameBeadAlias([]byte(tt.in))
 			if tt.wantErr {
-				assert.Error(t, err)
+				assert.ErrorIs(t, err, ErrBothBeadKeys)
 				return
 			}
 			require.NoError(t, err)

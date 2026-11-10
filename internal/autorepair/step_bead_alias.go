@@ -81,16 +81,30 @@ func runBeadAlias(ctx context.Context, env Env) (Outcome, error) {
 }
 
 // beadAliasReason names the condition that left a contract as it was. It is
-// derived from the stage that failed, not from the error text.
+// derived from the stage and the kind of error, never from error text: a YAML
+// error carries line numbers and values from the file.
 func beadAliasReason(stage string, err error) string {
 	switch stage {
 	case "read":
 		return "contract is unreadable"
 	case "rename":
-		return "contract uses inputs.bead and cannot be rewritten: " + err.Error()
+		return renameReason(err)
 	default:
 		return "contract uses inputs.bead and the rewritten contract cannot be installed"
 	}
+}
+
+func renameReason(err error) string {
+	const prefix = "contract uses inputs.bead and cannot be rewritten: "
+	switch {
+	case errors.Is(err, mission.ErrBothBeadKeys):
+		return prefix + "it sets both inputs.ticket and inputs.bead"
+	case errors.Is(err, mission.ErrContractNotMapping):
+		return prefix + "it is not a mapping"
+	case errors.Is(err, mission.ErrContractParse):
+		return prefix + "it cannot be parsed"
+	}
+	return prefix + "the rename failed"
 }
 
 // repositoryMissionIDs lists the mission directories of the repository store
