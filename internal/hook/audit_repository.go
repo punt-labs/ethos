@@ -124,6 +124,13 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 }
 
 func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealOptions) (int, []string, error) {
+	// A live line whose ts is archived with another payload is stale: the
+	// archive wins, so the line is dropped before the union read refuses it.
+	if !opts.DryRun {
+		if _, err := audit.DropArchivedConflicts(p, s); err != nil {
+			return 0, nil, err
+		}
+	}
 	data, err := audit.ReadStream(p, s)
 	if err != nil {
 		return 0, nil, err
