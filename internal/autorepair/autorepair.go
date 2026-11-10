@@ -36,6 +36,9 @@ type Env struct {
 // located a repository that has used ethos and is serving it. A ScopeBoth
 // step runs with this false outside a repository and in a repository ethos
 // never touched, which it must then leave alone.
+//
+// The engine sets or zeroes Roots and Policy together, so this agrees with
+// Roots.Store being set.
 func (e Env) InRepository() bool { return e.Policy.LocalRoot() != "" }
 
 // Outcome is one step's result. Items counts conversions applied. Deferred
@@ -55,6 +58,10 @@ type Residual struct {
 	Step   string `yaml:"step"`
 	ID     string `yaml:"id"`
 	Reason string `yaml:"reason"`
+	// Scope names the store the condition is in. A ScopeBoth step sets it; the
+	// zero value means the store the step was running for. It places the
+	// residual and is not recorded.
+	Scope Scope `yaml:"-"`
 }
 
 // Step is one conversion. Name is a stable slug used in the log and the

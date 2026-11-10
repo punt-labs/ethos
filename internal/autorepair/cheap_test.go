@@ -111,3 +111,32 @@ func TestCheapPassNoGlobalRootIsNoop(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, Result{}, res)
 }
+
+// HookEnv builds the Env Ensure shows a step, so a hook's pass matches
+// Ensure's: same roots, policy, global root, version-tagged log.
+func TestHookEnvEqualsEnsureEnv(t *testing.T) {
+	r := newRig(t, true)
+	var got Env
+	r.opts.steps = []Step{{Name: "env", Scope: ScopeBoth, Run: func(_ context.Context, e Env) (Outcome, error) {
+		got = e
+		return Outcome{}, nil
+	}}}
+	r.opts.order = []string{"env"}
+	r.ensure()
+	want, err := hookEnv(r.roots, r.global, r.opts)
+	require.NoError(t, err)
+	assert.Equal(t, got.Roots, want.Roots)
+	assert.Equal(t, got.Policy, want.Policy)
+	assert.Equal(t, got.Global, want.Global)
+	assert.Equal(t, got.Log, want.Log, "same log construction")
+	assert.True(t, want.InRepository())
+
+	outside := newRig(t, false)
+	env, err := hookEnv(outside.roots, outside.global, outside.opts)
+	require.NoError(t, err)
+	assert.False(t, env.InRepository())
+	assert.Equal(t, outside.global, env.Global)
+
+	_, err = HookEnv(r.roots, "")
+	assert.Error(t, err)
+}

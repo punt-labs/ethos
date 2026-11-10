@@ -74,16 +74,44 @@ func Ensure(ctx context.Context, roots resolve.Located, global string) (Result, 
 }
 
 // CheapPass runs the named steps now, whatever the stamps say, and never
-// writes a stamp. It is for the per-event conversions DES-084 names: the
-// hooks call it after Ensure, pre-commit with "live-tails", "untrack-local"
-// and "hook-sections" (steps 6, 9 and 16) and session start with "sessions"
-// (step 17). It takes the global repair lock without waiting and skips the
-// pass when the lock is busy, builds the Env the way Ensure does from
-// env.Roots and env.Global (policy, logger, clock), runs only the named
-// steps that are registered, in StepOrder, logs under the lock, and returns
-// Ensure's Result shape. A name no unit registers is skipped, not an error.
+// writes a stamp. It is the only supported entry for the per-event
+// conversions DES-084 names; a hook does not build its own pass, Env, log or
+// summary line. Session start calls CheapPass(ctx, []string{"sessions"}, env)
+// and appends Result.Line() to the session-start note: the design has exactly
+// one "upgraded storage" line. Pre-commit calls it with "live-tails" and
+// "hook-sections" (untrack-local is not a commit-time step: it stages
+// record-tree deletions, which must not ride along in the user's commit).
+// The env comes from HookEnv.
+//
+// It takes the global repair lock without waiting and skips the pass when the
+// lock is busy, takes the repository repair lock the same way (a busy
+// repository lock hides the repository from the steps), builds the Env the way
+// Ensure does from env.Roots and env.Global, runs only the named steps that
+// are registered, in StepOrder, logs under the lock, and returns Ensure's
+// Result shape. A name no unit registers is skipped, not an error.
 func CheapPass(ctx context.Context, names []string, env Env) (Result, error) {
 	return cheapPass(ctx, names, env.Roots, env.Global, defaultOptions())
+}
+
+// HookEnv is the Env a hook passes to CheapPass: the same one Ensure builds
+// before it decides what to show a step, with the located roots and policy
+// (zero unless a repository that has used ethos was located cleanly), the
+// global root, the clock and the repair log. It writes nothing. A step sees
+// the repository only inside CheapPass, under the repository repair lock.
+func HookEnv(roots resolve.Located, global string) (Env, error) {
+	return hookEnv(roots, global, defaultOptions())
+}
+
+func hookEnv(roots resolve.Located, global string, o options) (Env, error) {
+	if global == "" {
+		return Env{}, errors.New("building the hook environment: no global store root")
+	}
+	r, policy := repositoryTarget(roots)
+	env := Env{Global: global, Now: o.now(), Log: openLog(global, roots, o.ethos)}
+	if r != nil {
+		env.Roots, env.Policy = roots, policy
+	}
+	return env, nil
 }
 
 // target is one store Ensure converts: its stamp, what is already recorded,
@@ -127,7 +155,7 @@ func repositoryTarget(roots resolve.Located) (*target, layout.Policy) {
 }
 
 func ensure(ctx context.Context, roots resolve.Located, global string, o options) (res Result, err error) {
-	if !supported || global == "" {
+	if !supported || global == "" || ctx.Err() != nil {
 		return Result{}, nil
 	}
 	var log *FileLog
@@ -176,6 +204,8 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 
 	log = openLog(global, roots, o.ethos)
 	if r != nil && r.needed {
+		// A step is shown the repository only while this Ensure holds its
+		// lock; a busy lock drops the repository pass.
 		if rel, rerr := repositoryLock(policy, o.lockWait); rerr != nil {
 			log.Logf("engine", "defer-repository", nil, rerr)
 			r.needed = false
@@ -193,8 +223,8 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 		log.Logf("engine", "defer", nil, fmt.Errorf("%w: %s", errUnregistered, strings.Join(missing, ", ")))
 		block(serves(ScopeBoth, g, r))
 	}
-	env := Env{Roots: stepRoots(roots, r), Policy: policy, Global: global, Now: o.now(), Log: log}
-	res = runSteps(ctx, env, o, log, g, r, nil)
+	env := Env{Global: global, Now: o.now(), Log: log}
+	res = runSteps(ctx, env, roots, policy, o, log, g, r, nil)
 	for _, t := range targets {
 		if !t.needed || t.blocked {
 			continue
@@ -214,7 +244,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 }
 
 func cheapPass(ctx context.Context, names []string, roots resolve.Located, global string, o options) (res Result, err error) {
-	if !supported || global == "" || len(names) == 0 {
+	if !supported || global == "" || len(names) == 0 || ctx.Err() != nil {
 		return Result{}, nil
 	}
 	var log *FileLog
@@ -236,16 +266,22 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 	// stamp is read or written.
 	g := &target{needed: true}
 	r, policy := repositoryTarget(roots)
+	log = openLog(global, roots, o.ethos)
 	if r != nil {
 		r.needed = true
+		if rel, rerr := repositoryLock(policy, 0); rerr != nil {
+			log.Logf("engine", "defer-repository", nil, rerr)
+			r.needed = false
+		} else {
+			defer rel()
+		}
 	}
-	log = openLog(global, roots, o.ethos)
-	env := Env{Roots: stepRoots(roots, r), Policy: policy, Global: global, Now: o.now(), Log: log}
+	env := Env{Global: global, Now: o.now(), Log: log}
 	only := make(map[string]bool, len(names))
 	for _, n := range names {
 		only[n] = true
 	}
-	return runSteps(ctx, env, o, log, g, r, only), nil
+	return runSteps(ctx, env, roots, policy, o, log, g, r, only), nil
 }
 
 // openLog opens the repair log tagged with the roots. A repository whose
@@ -258,16 +294,6 @@ func openLog(global string, roots resolve.Located, ethos string) *FileLog {
 		log.Logf("engine", "skip-repository", nil, err)
 	}
 	return log
-}
-
-// stepRoots is what the steps are shown: the located roots when the
-// repository pass is active, nothing otherwise, so a step cannot reach a
-// repository the engine chose not to serve.
-func stepRoots(roots resolve.Located, r *target) resolve.Located {
-	if r == nil {
-		return resolve.Located{}
-	}
-	return roots
 }
 
 // errBudget marks a step stopped by its own budget or Ensure's; the step is
@@ -308,7 +334,7 @@ func anyRegisteredServes(o options, g, r *target) bool {
 // withheld the stamps for it. A step that errors, defers, runs out of time or
 // is abandoned blocks the stamps it serves and contributes nothing to the
 // result; later steps still run.
-func runSteps(ctx context.Context, env Env, o options, log *FileLog, g, r *target, only map[string]bool) (res Result) {
+func runSteps(ctx context.Context, base Env, roots resolve.Located, policy layout.Policy, o options, log *FileLog, g, r *target, only map[string]bool) (res Result) {
 	ctx, cancel := context.WithTimeout(ctx, o.ensureBudget)
 	defer cancel()
 	for _, name := range o.order {
@@ -329,8 +355,17 @@ func runSteps(ctx context.Context, env Env, o options, log *FileLog, g, r *targe
 			block(served)
 			continue
 		}
-		out, err := runStep(ctx, env, o.stepBudget, s)
+		env := base
+		if r != nil && r.needed && s.Scope != ScopeGlobal {
+			// r.needed is true only while this pass holds the repository lock.
+			env.Roots, env.Policy = roots, policy
+		}
+		out, err := runStep(ctx, env, o.stepBudget, s, stepLockPath(base.Global, s.Name))
 		switch {
+		case errors.Is(err, errInFlight):
+			log.Logf(s.Name, "defer", nil, err)
+			block(served)
+			continue
 		case errors.Is(err, errBudget):
 			log.Logf(s.Name, "defer", nil, err)
 			block(served)
@@ -347,7 +382,10 @@ func runSteps(ctx context.Context, env Env, o options, log *FileLog, g, r *targe
 		for _, t := range served {
 			t.items += out.Items
 		}
-		served[0].residual = append(served[0].residual, out.Residuals...)
+		for _, rs := range out.Residuals {
+			t := residualTarget(rs, served, r)
+			t.residual = append(t.residual, rs)
+		}
 		res.Items += out.Items
 		res.Residuals = append(res.Residuals, out.Residuals...)
 		log.Logf(s.Name, "ran", nil, nil)
@@ -380,16 +418,38 @@ type stepResult struct {
 	err error
 }
 
+// errInFlight marks a step whose previous run, abandoned at its budget, has
+// not returned: starting it again would run two instances at once.
+var errInFlight = errors.New("previous run still in flight")
+
+// stepLockPath is the lock a step's run holds from start until its goroutine
+// returns, even when Ensure has abandoned it. It sits beside the global repair
+// lock, so another process sees an abandoned step as a busy lock too, and the
+// kernel frees it if the process dies.
+func stepLockPath(global, name string) string {
+	return filepath.Join(global, "locks", "step-"+name+".lock")
+}
+
 // runStep runs s with the per-step budget in its own goroutine. A step that
 // ignores its ctx is abandoned at the deadline: runStep returns errBudget,
-// the goroutine finishes whenever it finishes, and its result goes nowhere. A
+// the goroutine finishes whenever it finishes, and its result goes nowhere.
+// The step's lock is held until the goroutine returns, so runStep returns
+// errInFlight, without starting s, while an earlier run is still going. A
 // panic in a step is an error: no step can fail the command that triggered
 // the repair.
-func runStep(ctx context.Context, env Env, budget time.Duration, s Step) (Outcome, error) {
+func runStep(ctx context.Context, env Env, budget time.Duration, s Step, lockPath string) (Outcome, error) {
+	release, err := acquire(lockPath, 0)
+	if errors.Is(err, errBusy) {
+		return Outcome{}, fmt.Errorf("step %s: %w", s.Name, errInFlight)
+	}
+	if err != nil {
+		return Outcome{}, fmt.Errorf("step %s: %w", s.Name, err)
+	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	ch := make(chan stepResult, 1) // buffered: an abandoned step's send never blocks
 	go func() {
+		defer release()
 		defer func() {
 			if p := recover(); p != nil {
 				ch <- stepResult{err: fmt.Errorf("step %s panicked: %v", s.Name, p)}
@@ -421,4 +481,25 @@ func repositoryLock(p layout.Policy, wait time.Duration) (func(), error) {
 		return nil, fmt.Errorf("creating the repository repair lock directory: %w", err)
 	}
 	return acquire(path, wait)
+}
+
+// residualTarget is the stamp a residual belongs to. A residual that names its
+// Scope goes to that store's stamp. One that does not goes to the repository's
+// when the step ran for it, else to the first target served; a step that runs
+// for one store has only that store to name.
+func residualTarget(rs Residual, served []*target, r *target) *target {
+	for _, t := range served {
+		switch {
+		case rs.Scope == ScopeRepository && t == r:
+			return t
+		case rs.Scope == ScopeGlobal && t != r:
+			return t
+		}
+	}
+	for _, t := range served {
+		if t == r {
+			return t
+		}
+	}
+	return served[0]
 }

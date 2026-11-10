@@ -143,6 +143,11 @@ func (h *Handler) addTool(s *mcpserver.MCPServer, tool mcplib.Tool, fn toolMetho
 		// the repair gate for that same location, which runs before the tool
 		// reads storage so it answers from the converted layout (DES-084
 		// Wiring). A repair that moves the store is seen by the next call.
+		// DES-084 says Ensure runs before h.current(); here it runs after
+		// current() has only located and built the handler, and before any
+		// tool reads storage. That is equivalent because current() reads no
+		// store data, and a rebuilt handler would be rebuilt from the same
+		// location.
 		cur, loc := h.current()
 		line := h.ensureLine(ctx, loc)
 		call := func(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
