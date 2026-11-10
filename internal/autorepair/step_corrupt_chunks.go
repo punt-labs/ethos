@@ -115,7 +115,11 @@ func dirNeedsRepair(dir string, s audit.Stream) (bool, error) {
 		return false, err
 	}
 	damaged, err := damagedChunks(dir, s)
-	return len(damaged) > 0, err
+	if err != nil || len(damaged) > 0 {
+		return len(damaged) > 0, err
+	}
+	legacy, err := legacyCorrupts(dir, s)
+	return len(legacy) > 0, err
 }
 
 // repairDir drives one directory to a clean scan under the stream lock. A pass
@@ -138,6 +142,13 @@ func repairDir(ctx context.Context, env Env, out *Outcome, s audit.Stream, dir s
 				out.Deferred = true
 				return
 			}
+			legacy, err := legacyCorrupts(dir, s)
+			if err != nil {
+				logf(env, stepCorruptChunks, "scan-chunks", []string{dir}, err)
+				out.Deferred = true
+				return
+			}
+			damaged = append(damaged, legacy...)
 			if len(damaged) == 0 {
 				return
 			}
@@ -346,6 +357,35 @@ func residual(env Env, out *Outcome, path, reason string, err error) bool {
 type damagedChunk struct {
 	path string
 	name audit.ChunkName
+}
+
+// legacyCorrupts lists the regular-file .corrupt files in dir whose bytes are
+// not a valid local retirement record: raw bytes an older binary left behind,
+// which a covering marker does not make safe to keep.
+func legacyCorrupts(dir string, s audit.Stream) ([]damagedChunk, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []damagedChunk
+	for _, e := range entries {
+		cn, kind := audit.Classify(e.Name(), s.Namespace)
+		if kind != audit.KindCorrupt || !e.Type().IsRegular() || s.Namespace == audit.MissionNS && cn.Session != s.Session {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := audit.RetirementRecordSHA(b); !ok {
+			out = append(out, damagedChunk{path, cn})
+		}
+	}
+	return out, nil
 }
 
 // damagedChunks lists the valid-named regular-file chunks in dir whose bytes

@@ -65,3 +65,27 @@ func TestMarkerCoveringAnotherChunkIsResidual(t *testing.T) {
 		assert.Contains(t, out.Residuals[0].Reason, "covers another chunk")
 	}
 }
+
+// A legacy raw .corrupt under a parseable covering marker is still raw bytes:
+// the step salvages it through the guard and deletes it, so no token survives.
+func TestCoveredLegacyCorruptIsSalvaged(t *testing.T) {
+	env, _, s, dir, home := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	mb, err := audit.MarshalMarker(audit.Marker{Chunk: cn.Stem(), VerifiedLast: fixT0 + 2000, Reason: "old"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.MarkerFile()), mb, 0o600))
+	corrupt := filepath.Join(dir, audit.CorruptName(cn.Stem()))
+	require.NoError(t, os.WriteFile(corrupt, []byte(fixCmd(fixT0, "Bash", "echo "+fakeToken)), 0o600))
+
+	out := runStep(t, runCorruptChunks, env)
+	assert.False(t, out.Deferred)
+	assert.Empty(t, out.Residuals)
+	assert.Positive(t, out.Items)
+	_, err = os.Lstat(corrupt)
+	assert.ErrorIs(t, err, os.ErrNotExist, "the raw .corrupt is removed")
+	assert.Empty(t, walkContains(t, env.Roots.Store, fakeToken, home), "no token survives")
+	data, err := audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	assert.True(t, len(data.Lines) == 1 || len(data.Gaps) > 0, "the line is installed or recorded as lost")
+	fixSecondRun(t, env)
+}
