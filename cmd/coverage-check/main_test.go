@@ -201,3 +201,119 @@ func TestWriteGeneratesBaselineAndPreservesTargetAndComments(t *testing.T) {
 		t.Fatalf("freshly written baseline fails check: %s", out)
 	}
 }
+
+func TestWriteWithoutExcludeHonoursExistingUnmeasuredComments(t *testing.T) {
+	prof := profile([3]any{"internal/a/a.go", 10, true}, [3]any{"internal/u/u.go", 90, false})
+	root, p, b := setup(t, prof, "# unmeasured: internal/u (host-specific)\noverall-target 50.0\n", false)
+	if code, out := runTool(t, root, p, b, "-write"); code != 0 {
+		t.Fatalf("write failed: %s", out)
+	}
+	data, err := os.ReadFile(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if strings.Contains(got, "\ninternal/u ") {
+		t.Fatalf("unmeasured package got a baseline line:\n%s", got)
+	}
+	if !strings.Contains(got, "overall-current 100.0") {
+		t.Fatalf("overall-current folded in the unmeasured package:\n%s", got)
+	}
+	if code, out := runTool(t, root, p, b); code != 0 {
+		t.Fatalf("written baseline fails its own check: %s", out)
+	}
+}
+
+func TestReadBaselineRejectsNonFiniteAndOutOfRange(t *testing.T) {
+	prof := profile([3]any{"internal/a/a.go", 10, true})
+	for _, bad := range []string{
+		"overall-target 10.0\ninternal/a NaN\n",
+		"overall-target 10.0\ninternal/a +Inf\n",
+		"overall-target 10.0\ninternal/a 100.1\n",
+		"overall-target 10.0\ninternal/a -0.5\n",
+		"overall-target NaN\ninternal/a 100.0\n",
+		"overall-target 101.0\ninternal/a 100.0\n",
+		"overall-target 10.0\noverall-current 250.0\ninternal/a 100.0\n",
+	} {
+		root, p, b := setup(t, prof, bad, false)
+		code, out := runTool(t, root, p, b)
+		if code == 0 || !strings.Contains(out, "bad percentage") {
+			t.Errorf("baseline %q: want a bad-percentage rejection, got %d: %s", bad, code, out)
+		}
+	}
+}
+
+func TestReadBaselineRejectsDuplicateOverallTarget(t *testing.T) {
+	prof := profile([3]any{"internal/a/a.go", 10, true})
+	root, p, b := setup(t, prof, "overall-target 10.0\noverall-target 5.0\ninternal/a 100.0\n", false)
+	code, out := runTool(t, root, p, b)
+	if code == 0 || !strings.Contains(out, "duplicate") {
+		t.Fatalf("want duplicate overall-target rejection, got %d: %s", code, out)
+	}
+}
+
+func TestUnmeasuredAutorepairIsRefused(t *testing.T) {
+	prof := profile([3]any{"internal/autorepair/e.go", 10, false})
+	base := "# unmeasured: internal/autorepair (host)\noverall-target 0.0\n"
+	root, p, b := setup(t, prof, base, true)
+	code, out := runTool(t, root, p, b)
+	if code == 0 || !strings.Contains(out, "internal/autorepair") || !strings.Contains(out, "cannot be unmeasured") {
+		t.Fatalf("want refusal of an unmeasured internal/autorepair, got %d: %s", code, out)
+	}
+}
+
+func TestNewPackageWarnsUngated(t *testing.T) {
+	prof := profile([3]any{"internal/a/a.go", 10, true}, [3]any{"internal/fresh/f.go", 10, false})
+	root, p, b := setup(t, prof, "overall-target 10.0\ninternal/a 100.0\n", false)
+	code, out := runTool(t, root, p, b)
+	if code != 0 {
+		t.Fatalf("new package must not fail: %s", out)
+	}
+	if !strings.Contains(out, "WARN internal/fresh") || !strings.Contains(out, "ungated") {
+		t.Fatalf("want a visible ungated warning naming internal/fresh: %s", out)
+	}
+}
+
+func osFilePackage(t *testing.T, root, name string) {
+	t.Helper()
+	dir := filepath.Join(root, "internal/p")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOSMismatchWidensToleranceForPlatformPackages(t *testing.T) {
+	// 91 of 100 = 91.0; baseline 91.5 is 0.5 below: fails at 0.1, passes at 2.0.
+	prof := profile([3]any{"internal/p/p.go", 91, true}, [3]any{"internal/p/q.go", 9, false})
+	base := "# os: darwin\noverall-target 10.0\ninternal/p 91.5\n"
+	root, p, b := setup(t, prof, base, false)
+	osFilePackage(t, root, "proc_linux.go")
+	code, out := runTool(t, root, p, b, "-os", "linux")
+	if code != 0 || !strings.Contains(out, "WARN") || !strings.Contains(out, "darwin") {
+		t.Fatalf("want pass with an os-mismatch warning, got %d: %s", code, out)
+	}
+	if code, out := runTool(t, root, p, b, "-os", "darwin"); code == 0 {
+		t.Fatalf("same os must keep the 0.1 tolerance: %s", out)
+	}
+	// A package with no platform files keeps 0.1 even on a mismatched os.
+	root, p, b = setup(t, prof, base, false)
+	osFilePackage(t, root, "plain.go")
+	if code, out := runTool(t, root, p, b, "-os", "linux"); code == 0 {
+		t.Fatalf("package without platform files must keep 0.1: %s", out)
+	}
+}
+
+func TestWriteRecordsOS(t *testing.T) {
+	prof := profile([3]any{"internal/a/a.go", 10, true})
+	root, p, b := setup(t, prof, "", false)
+	if code, out := runTool(t, root, p, b, "-write", "-os", "plan9"); code != 0 {
+		t.Fatalf("write failed: %s", out)
+	}
+	data, _ := os.ReadFile(b)
+	if !strings.Contains(string(data), "\n# os: plan9\n") {
+		t.Fatalf("baseline does not record the os:\n%s", data)
+	}
+}

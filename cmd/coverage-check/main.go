@@ -8,10 +8,20 @@
 //	overall-current 81.8          informational; rewritten by -write
 //	internal/audit 80.2           package path and statement coverage percent
 //
+//	# unmeasured: internal/x ...  package whose tests fail on the generating host;
+//	                              kept out of the baseline, the gate, and overall
+//	# os: darwin                  GOOS the baseline was measured on
+//
 // check fails when a package falls more than 0.1 point below its baseline, when
 // overall coverage is below overall-target, when a baselined package is absent
 // from the profile, or when internal/autorepair (once it has test files) is
-// below 95.0.
+// below 95.0. internal/autorepair cannot be listed as unmeasured.
+//
+// Platform tolerance: a package with _<goos> or _unix source files compiles
+// different code per OS, so its percentage differs between the host that wrote
+// the baseline and CI. When the baseline's "# os:" line differs from the
+// runtime GOOS, check warns and allows 2.0 points for those packages instead of
+// 0.1. Regenerate the baseline on the OS that runs the gate to restore 0.1.
 package main
 
 import (
@@ -23,6 +33,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +42,8 @@ import (
 const (
 	modulePrefix     = "github.com/punt-labs/ethos/v4/"
 	tolerance        = 0.1
+	osTolerance      = 2.0
+	osPrefix         = "# os: "
 	autorepairPkg    = "internal/autorepair"
 	autorepairFloor  = 95.0
 	overallTargetKey = "overall-target"
@@ -52,6 +65,7 @@ type baseline struct {
 	target   float64
 	hasTgt   bool
 	pkgs     map[string]float64
+	os       string // GOOS the baseline was measured on; empty when unrecorded
 }
 
 func main() {
@@ -65,6 +79,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	basePath := fs.String("baseline", "coverage-baseline.txt", "baseline file")
 	root := fs.String("root", ".", "repository root (to detect internal/autorepair test files)")
 	write := fs.Bool("write", false, "regenerate the baseline from the profile")
+	goos := fs.String("os", runtime.GOOS, "GOOS to compare against (and, with -write, to record in) the baseline")
 	exclude := fs.String("exclude", "", "with -write: comma-separated packages whose tests fail on this host; recorded as unmeasured, left out of the baseline and the overall figure")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -81,8 +96,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 				skipped = append(skipped, p)
 			}
 		}
+		if prev, err := readBaseline(*basePath); err == nil {
+			// Existing unmeasured comments are an implicit exclude list, so a
+			// regeneration without -exclude never writes a line for them.
+			skipped = append(skipped, prev.unmeasured()...)
+		}
 		pkgs, overall = withoutPackages(pkgs, skipped)
-		if err := writeBaseline(*basePath, pkgs, overall, skipped); err != nil {
+		if err := writeBaseline(*basePath, pkgs, overall, skipped, *goos); err != nil {
 			fmt.Fprintf(stderr, "coverage-check: %v\n", err)
 			return 1
 		}
@@ -94,7 +114,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "coverage-check: %v\n", err)
 		return 1
 	}
-	return check(stdout, pkgs, overall, base, hasTestFiles(filepath.Join(*root, autorepairPkg)))
+	return check(stdout, pkgs, overall, base, hasTestFiles(filepath.Join(*root, autorepairPkg)), *goos, *root)
 }
 
 // unmeasured returns the packages named by "# unmeasured: <pkg> ..." comments.
@@ -111,9 +131,19 @@ func (b baseline) unmeasured() []string {
 	return out
 }
 
-func check(out io.Writer, pkgs map[string]tally, overall tally, base baseline, autorepairHasTests bool) int {
+func check(out io.Writer, pkgs map[string]tally, overall tally, base baseline, autorepairHasTests bool, goos, root string) int {
 	var failures []string
 	skipped := base.unmeasured()
+	for _, s := range skipped {
+		if s == autorepairPkg {
+			fmt.Fprintf(out, "FAIL %s cannot be unmeasured: it has a %.1f floor that an unmeasured entry would bypass\n", autorepairPkg, autorepairFloor)
+			return 1
+		}
+	}
+	osMismatch := base.os != "" && base.os != goos
+	if osMismatch {
+		fmt.Fprintf(out, "WARN baseline measured on %s, running on %s: packages with per-OS source files get a %.1f-point tolerance\n", base.os, goos, osTolerance)
+	}
 	if len(skipped) > 0 {
 		pkgs, overall = withoutPackages(pkgs, skipped)
 		for _, s := range skipped {
@@ -143,11 +173,16 @@ func check(out io.Writer, pkgs map[string]tally, overall tally, base baseline, a
 			failures = append(failures, fmt.Sprintf("%s: baselined at %.1f%% but absent from the profile", p, want))
 		case !baselined:
 			fmt.Fprintf(out, "%-45s %7.1f%% %8s  new\n", p, cur.pct(), "-")
+			fmt.Fprintf(out, "WARN %s is not in the baseline and is ungated until the next baseline\n", p)
 		default:
 			mark := ""
-			if cur.pct() < want-tolerance-epsilon {
+			tol := tolerance
+			if osMismatch && hasPlatformFiles(filepath.Join(root, p)) {
+				tol = osTolerance
+			}
+			if cur.pct() < want-tol-epsilon {
 				mark = "  BELOW BASELINE"
-				failures = append(failures, fmt.Sprintf("%s: %.1f%% is below baseline %.1f%% minus %.1f", p, cur.pct(), want, tolerance))
+				failures = append(failures, fmt.Sprintf("%s: %.1f%% is below baseline %.1f%% minus %.1f", p, cur.pct(), want, tol))
 			}
 			fmt.Fprintf(out, "%-45s %7.1f%% %7.1f%%%s\n", p, cur.pct(), want, mark)
 		}
@@ -177,7 +212,7 @@ func check(out io.Writer, pkgs map[string]tally, overall tally, base baseline, a
 func readProfile(p string) (map[string]tally, tally, error) {
 	f, err := os.Open(p)
 	if err != nil {
-		return nil, tally{}, fmt.Errorf("open profile (run make test first): %w", err)
+		return nil, tally{}, fmt.Errorf("profile not found; make test writes it: %w", err)
 	}
 	defer f.Close()
 	type block struct {
@@ -243,7 +278,7 @@ func readBaseline(p string) (baseline, error) {
 	b := baseline{pkgs: map[string]float64{}}
 	f, err := os.Open(p)
 	if err != nil {
-		return b, fmt.Errorf("open baseline (run make coverage-baseline): %w", err)
+		return b, fmt.Errorf("baseline not found; make coverage-baseline writes it: %w", err)
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -253,6 +288,9 @@ func readBaseline(p string) (baseline, error) {
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
+			if rest, ok := strings.CutPrefix(line, osPrefix); ok {
+				b.os = strings.TrimSpace(rest)
+			}
 			b.comments = append(b.comments, line)
 			continue
 		}
@@ -261,11 +299,14 @@ func readBaseline(p string) (baseline, error) {
 			return b, fmt.Errorf("%s: malformed line %q", p, line)
 		}
 		v, err := strconv.ParseFloat(sp[1], 64)
-		if err != nil {
-			return b, fmt.Errorf("%s: bad percentage in %q", p, line)
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 100 {
+			return b, fmt.Errorf("%s: bad percentage in %q (want a number in [0,100])", p, line)
 		}
 		switch sp[0] {
 		case overallTargetKey:
+			if b.hasTgt {
+				return b, fmt.Errorf("%s: duplicate %s line %q", p, overallTargetKey, line)
+			}
 			b.target, b.hasTgt = v, true
 		case overallCurrent:
 		default:
@@ -295,7 +336,7 @@ func withoutPackages(pkgs map[string]tally, skip []string) (map[string]tally, ta
 	return kept, overall
 }
 
-func writeBaseline(p string, pkgs map[string]tally, overall tally, skipped []string) error {
+func writeBaseline(p string, pkgs map[string]tally, overall tally, skipped []string, goos string) error {
 	prev, err := readBaseline(p)
 	if err != nil && !os.IsNotExist(unwrap(err)) {
 		return err
@@ -321,11 +362,12 @@ func writeBaseline(p string, pkgs map[string]tally, overall tally, skipped []str
 	b.WriteString("# Generated by `make coverage-baseline`; checked by `make coverage-check`.\n")
 	b.WriteString("# A package may drop at most 0.1 point below its line. Goal for overall-target: 85.0.\n")
 	for _, c := range prev.comments {
-		if strings.HasPrefix(c, "# Generated by") || strings.HasPrefix(c, "# A package may drop") {
+		if strings.HasPrefix(c, "# Generated by") || strings.HasPrefix(c, "# A package may drop") || strings.HasPrefix(c, osPrefix) {
 			continue
 		}
 		b.WriteString(c + "\n")
 	}
+	b.WriteString(osPrefix + goos + "\n")
 	fmt.Fprintf(&b, "%s %.1f\n%s %.1f\n", overallTargetKey, target, overallCurrent, overall.pct())
 	names := make([]string, 0, len(pkgs))
 	for n := range pkgs {
@@ -351,4 +393,28 @@ func unwrap(err error) error {
 func hasTestFiles(dir string) bool {
 	m, _ := filepath.Glob(filepath.Join(dir, "*_test.go"))
 	return len(m) > 0
+}
+
+// knownGOOS lists the GOOS values Go recognises in a _<goos>.go file name.
+var knownGOOS = map[string]bool{
+	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true,
+	"hurd": true, "illumos": true, "ios": true, "js": true, "linux": true, "nacl": true,
+	"netbsd": true, "openbsd": true, "plan9": true, "solaris": true, "wasip1": true,
+	"windows": true, "zos": true, "unix": true,
+}
+
+// hasPlatformFiles reports whether dir holds a non-test source file named
+// *_<goos>.go or *_unix.go, so its statement count differs per OS.
+func hasPlatformFiles(dir string) bool {
+	m, _ := filepath.Glob(filepath.Join(dir, "*.go"))
+	for _, f := range m {
+		name := strings.TrimSuffix(filepath.Base(f), ".go")
+		if strings.HasSuffix(name, "_test") {
+			continue
+		}
+		if i := strings.LastIndex(name, "_"); i >= 0 && knownGOOS[name[i+1:]] {
+			return true
+		}
+	}
+	return false
 }
