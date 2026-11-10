@@ -49,7 +49,9 @@ func TestVoiceFieldStepGlobalIdentity(t *testing.T) {
 			assert.NotContains(t, p, "Samantha")
 		}
 	}
+	snap := s81113Snapshot(t, tr)
 	assert.Equal(t, 0, s81113Run(t, "voice-field", env).Items, "second run changes nothing")
+	assert.Equal(t, snap, s81113Snapshot(t, tr), "second run leaves the tree identical")
 }
 
 func TestVoiceFieldStepRepositoryIdentity(t *testing.T) {
@@ -67,7 +69,38 @@ func TestVoiceFieldStepRepositoryIdentity(t *testing.T) {
 	vox, err := identity.NewStore(tr.Home).ExtGet("vperson", "vox", "")
 	require.NoError(t, err)
 	assert.Equal(t, "Samantha", vox["voice"])
+	after := s81113Snapshot(t, tr)
 	assert.Equal(t, 0, s81113Run(t, "voice-field", env).Items)
+	assert.Equal(t, after, s81113Snapshot(t, tr), "second run leaves the tree identical")
+}
+
+func TestVoiceFieldStepRepositoryResidualNamesIdentityFile(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	path := filepath.Join(tr.Repo, ".punt-labs", "ethos", "identities", "rperson.yaml")
+	s81113Write(t, path, "name: V\nhandle: rperson\nkind: human\nvoice: elevenlabs\n")
+	require.NoError(t, os.Remove(filepath.Join(tr.Home, "identities", "vperson.yaml")))
+
+	out := s81113Run(t, "voice-field", tr.Env(t))
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, path, out.Residuals[0].ID, "the residual names the real identity file")
+	assert.True(t, s81113Exists(out.Residuals[0].ID))
+}
+
+func TestVoiceFieldStepSymlinkedIdentityIsResidualAndOthersProceed(t *testing.T) {
+	tr := s81113Copy(t, "damage/top-level-voice-field")
+	env := tr.Env(t)
+	legacy := string(s81113Read(t, filepath.Join(tr.Home, "identities", "vperson.yaml")))
+	dir := filepath.Join(tr.Repo, ".punt-labs", "ethos", "identities")
+	s81113Write(t, filepath.Join(dir, "real.yaml"), "name: R\nhandle: real\nkind: human\n")
+	require.NoError(t, os.Symlink(filepath.Join(dir, "real.yaml"), filepath.Join(dir, "alink.yaml")))
+	s81113Write(t, filepath.Join(dir, "rperson.yaml"), legacy)
+
+	out, err := runVoiceField(t.Context(), env)
+	require.NoError(t, err, "a refused path is a residual, not an error")
+	assert.Equal(t, 2, out.Items, "the global and the repository identity are still migrated")
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, filepath.Join(dir, "alink.yaml"), out.Residuals[0].ID)
+	assert.NotContains(t, yamlMap(t, s81113Read(t, filepath.Join(dir, "rperson.yaml"))), "voice")
 }
 
 func TestVoiceFieldStepKeepsExistingVoxValues(t *testing.T) {

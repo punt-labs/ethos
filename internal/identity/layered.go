@@ -214,42 +214,23 @@ func (ls *LayeredStore) relocateRepoVoiceUnlocked(handle string) error {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("parsing repo identity %q: %w", handle, err)
 	}
-	v, ok := raw["voice"]
-	if !ok {
+	if _, ok := raw["voice"]; !ok {
 		return nil
 	}
-	vm, ok := v.(map[string]interface{})
-	if !ok {
-		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
-		// Leave the YAML untouched and surface the error.
-		return fmt.Errorf("voice field has unexpected type %T; the identity file was left unchanged", v)
-	}
-	if len(vm) == 0 {
-		delete(raw, "voice")
-		return ls.repo.rewriteRaw(path, raw)
-	}
-	provider, _ := vm["provider"].(string)
-	voiceID, _ := vm["voice_id"].(string)
 	// The migrated ext must land in the same layer resolution will read
 	// it back from — global normally, the repo layer under repo-only.
 	ext, err := ls.extWriteStore(handle)
 	if err != nil {
 		return fmt.Errorf("relocating voice for %q: %w", handle, err)
 	}
-	// Write ext data before stripping the voice key. If ext writes fail,
-	// the voice key remains in the YAML so no data is lost.
-	if provider != "" {
-		if err := ext.extSetUnlocked(handle, "vox", "provider", provider, extConfig{}); err != nil {
-			return fmt.Errorf("setting ext/vox/provider: %w", err)
-		}
+	_, reason, err := ls.repo.convertVoice(handle, path, data, ext)
+	if err != nil {
+		return err
 	}
-	if voiceID != "" {
-		if err := ext.extSetUnlocked(handle, "vox", "voice_id", voiceID, extConfig{}); err != nil {
-			return fmt.Errorf("setting ext/vox/voice_id: %w", err)
-		}
+	if reason != "" {
+		return errors.New(reason)
 	}
-	delete(raw, "voice")
-	return ls.repo.rewriteRaw(path, raw)
+	return nil
 }
 
 // resolveAttributesLayered resolves attribute content, walking the layer

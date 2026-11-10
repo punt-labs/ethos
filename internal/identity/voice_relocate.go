@@ -21,6 +21,7 @@ type VoiceMove struct {
 // left unchanged.
 type VoiceResidual struct {
 	Handle string
+	Path   string
 	Reason string
 }
 
@@ -52,13 +53,16 @@ func (s *Store) MigrateLegacyVoices(ext *Store) (moves []VoiceMove, residuals []
 	sort.Strings(handles)
 	for _, h := range handles {
 		moved, reason, err := s.migrateLegacyVoice(h, ext)
+		var rp *repositoryPathError
 		switch {
 		case errors.Is(err, ErrLockBusy):
 			busy = true
+		case errors.As(err, &rp):
+			residuals = append(residuals, VoiceResidual{Handle: h, Path: s.Path(h), Reason: "identity is refused: " + rp.reason + " at " + rp.path + "; left unchanged"})
 		case err != nil:
 			return moves, residuals, busy, err
 		case reason != "":
-			residuals = append(residuals, VoiceResidual{Handle: h, Reason: reason})
+			residuals = append(residuals, VoiceResidual{Handle: h, Path: s.Path(h), Reason: reason})
 		case moved:
 			moves = append(moves, VoiceMove{Handle: h, Path: s.Path(h)})
 		}
@@ -104,6 +108,16 @@ func (s *Store) migrateLegacyVoiceUnlocked(handle string, ext *Store) (moved boo
 	if err != nil {
 		return false, "", fmt.Errorf("reading identity %q: %w", handle, err)
 	}
+	return s.convertVoice(handle, path, data, ext)
+}
+
+// convertVoice is the one voice migration, used by Load, the layered store and
+// the repair step. Every scalar key under voice: moves into the vox extension in
+// ext, except a key ext already holds: a value set later wins. The extension is
+// written before the identity is rewritten, so a failure leaves the field in
+// place. A non-empty reason means the field cannot be converted and the file is
+// unchanged. The caller holds the handle lock of s.
+func (s *Store) convertVoice(handle, path string, data []byte, ext *Store) (moved bool, reason string, err error) {
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return false, "", nil
@@ -149,9 +163,32 @@ func (s *Store) migrateLegacyVoiceUnlocked(handle string, ext *Store) (moved boo
 			return false, "", fmt.Errorf("moving voice.%s of %q to the vox extension: %w", k, handle, err)
 		}
 	}
-	delete(raw, "voice")
-	if err := s.rewriteRaw(path, raw); err != nil {
+	out, err := withoutVoiceKey(data)
+	if err != nil {
+		return false, "", fmt.Errorf("removing voice field of %q: %w", handle, err)
+	}
+	if err := s.writeFile(path, out, false); err != nil {
 		return false, "", fmt.Errorf("rewriting identity %q without its voice field: %w", handle, err)
 	}
 	return true, "", nil
+}
+
+// withoutVoiceKey returns data minus its top-level voice key. It edits the YAML
+// node tree, so comments and key order survive.
+func withoutVoiceKey(data []byte) ([]byte, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("identity is not a YAML mapping")
+	}
+	m := doc.Content[0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == "voice" {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			break
+		}
+	}
+	return yaml.Marshal(&doc)
 }

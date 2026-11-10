@@ -48,7 +48,7 @@ func voiceStore(env Env, out *Outcome, s, ext *identity.Store, where string) err
 	}
 	for _, r := range residuals {
 		env.Log.Logf("voice-field", "residual", []string{where, r.Handle}, errors.New(r.Reason))
-		out.Residuals = append(out.Residuals, Residual{Step: "voice-field", ID: filepath.Join(where, r.Handle+".yaml"), Reason: r.Reason})
+		out.Residuals = append(out.Residuals, Residual{Step: "voice-field", ID: r.Path, Reason: r.Reason})
 	}
 	out.Items += len(moves)
 	out.Deferred = out.Deferred || busy
