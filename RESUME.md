@@ -113,7 +113,8 @@ deletion.
 ### 0. First 20 minutes: prove what exists
 
 In `.claude/worktrees/self-repair` (integration branch):
-```
+
+```sh
 GOTOOLCHAIN=go1.26.5 go build ./... && GOTOOLCHAIN=go1.26.5 go vet ./...
 GOTOOLCHAIN=go1.26.5 go test -race -count=1 ./plugin/hooks/ -run 'Shim.*(Redact|Unstage|Local)' -v
 GOTOOLCHAIN=go1.26.5 go test -race -count=1 ./internal/gitenv/ ./internal/autorepair/
