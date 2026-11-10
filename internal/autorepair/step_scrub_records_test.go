@@ -250,3 +250,68 @@ func TestScrubRecords_UndecodableRecordIsResidual(t *testing.T) {
 	assert.NotContains(t, out.Residuals[0].Reason, "reflections.yaml", "the reason names no path")
 	assert.GreaterOrEqual(t, out.Items, 1, "the other records are scrubbed")
 }
+
+// reflectionsOf34 returns a corpus mission's reflections.yaml path and id.
+func reflectionsOf34(t *testing.T, env Env) (string, string) {
+	t.Helper()
+	for _, dir := range missionDirs34(t, env) {
+		p := filepath.Join(dir, "reflections.yaml")
+		if _, err := os.Stat(p); err == nil {
+			return p, filepath.Base(dir)
+		}
+	}
+	t.Fatal("no corpus mission has reflections.yaml")
+	return "", ""
+}
+
+// Step 5 recognizes a legacy aggregate by recomputing LegacyDecisionID from the
+// file's bytes. After step 3 imported the decisions, step 4 must not rewrite the
+// aggregate, or the stored IDs stop matching and step 5 keeps it as a live
+// publication.
+func TestScrubRecords_LeavesAnImportedAggregateHashable(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	path, id := reflectionsOf34(t, env)
+	orig := read34(t, path)
+	leaked := strings.Replace(orig, "reason: ", "reason: token "+fakeToken34+" ", 1)
+	require.NotEqual(t, orig, leaked)
+	write34(t, path, leaked)
+
+	require.Equal(t, 2, run34(t, "round-decisions", env).Items)
+	run34(t, "scrub-records", env)
+
+	assert.Equal(t, leaked, read34(t, path), "step 4 leaves the imported aggregate to step 5")
+	s := mission.NewRepositoryStore(env.Policy, env.Global)
+	c, err := s.Load(id)
+	require.NoError(t, err)
+	require.NotNil(t, c.RoundDecisions)
+	rs, err := mission.DecodeLegacyReflections([]byte(read34(t, path)), id)
+	require.NoError(t, err)
+	require.NotEmpty(t, rs)
+	for _, r := range rs {
+		d := c.DecisionFor(r.Round)
+		if d == nil {
+			continue
+		}
+		assert.Equal(t, mission.LegacyDecisionID(r), d.ID, "round %d", r.Round)
+	}
+}
+
+// A fenced mission has no round decisions, so step 5 never archives its
+// aggregate: step 4 still scrubs it.
+func TestScrubRecords_ScrubsAFencedMissionsAggregate(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	path, id := reflectionsOf34(t, env)
+	orig := read34(t, path)
+	write34(t, path, strings.Replace(orig, "reason: ", "reason: token "+fakeToken34+" ", 1))
+	// A corrupt corrections file fences the mission.
+	write34(t, filepath.Join(filepath.Dir(path), "corrections.yaml"), "version: 7\n")
+	out := run34(t, "round-decisions", env)
+	require.NotEmpty(t, out.Residuals)
+	s := mission.NewRepositoryStore(env.Policy, env.Global)
+	c, err := s.Load(id)
+	require.NoError(t, err)
+	require.Nil(t, c.RoundDecisions)
+
+	run34(t, "scrub-records", env)
+	assert.NotContains(t, read34(t, path), fakeToken34)
+}

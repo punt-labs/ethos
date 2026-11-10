@@ -35,7 +35,7 @@ func runScrubRecords(ctx context.Context, env Env) (Outcome, error) {
 		out.Deferred = true
 		return out, nil
 	}
-	res, mo, err := mission.ScrubFilesDeferring(ctx, env.Policy, env.Global, rels)
+	res, mo, err := mission.ScrubFilesDeferring(ctx, env.Policy, env.Global, skipDecidedAggregates(env, rels))
 	for _, rel := range res.Changed {
 		env.Log.Logf("scrub-records", "redact-in-place", []string{rel}, nil)
 	}
@@ -52,29 +52,51 @@ func runScrubRecords(ctx context.Context, env Env) (Outcome, error) {
 		out.Residuals = append(out.Residuals, Residual{
 			Step:   "scrub-records",
 			ID:     "tracked-records",
-			Reason: scrubReason(err),
+			Reason: scrubReason(res),
 		})
 	}
 	return out, nil
 }
 
-// scrubReason names why records were left as they were. It is derived from the
-// kind of failure, never from a path or a value in the error text.
-func scrubReason(err error) string {
-	switch {
-	case errors.Is(err, os.ErrPermission):
-		return "some tracked mission records are unreadable or unwritable and were left as they were"
-	case strings.Contains(err.Error(), "refusing to write"):
-		return "some tracked mission records were refused by the write guard and left as they were"
+// skipDecidedAggregates drops missions/<id>/reflections.yaml from rels when the
+// mission's contract carries round_decisions.
+//
+// Step 5 (record-tree-trace) tells a legacy aggregate from a live publication by
+// recomputing mission.LegacyDecisionID from the file's bytes and comparing it
+// with the IDs stored in the contract. A file this step rewrote no longer hashes
+// to those IDs, so step 5 would class it as a live publication and never archive
+// it, leaving legacy detail tracked. Step 5 archives and redacts that file
+// itself through the line guard, so skipping it here loses no redaction.
+//
+// A mission with no round_decisions (a fenced one) keeps its aggregate in rels:
+// step 5 classes it as the mission's round authority and never archives or
+// hashes it, so scrubbing it here changes nothing step 5 later reads.
+func skipDecidedAggregates(env Env, rels []string) []string {
+	const prefix = ".punt-labs/ethos/missions/"
+	var kept []string
+	for _, rel := range rels {
+		parts := strings.Split(rel, "/")
+		if strings.HasPrefix(rel, prefix) && len(parts) == 5 && parts[4] == "reflections.yaml" {
+			b, err := os.ReadFile(repositoryContractPath(env, parts[3]))
+			if err == nil {
+				if c, err := mission.DecodeContract(b); err == nil && c.RoundDecisions != nil {
+					continue
+				}
+			}
+		}
+		kept = append(kept, rel)
 	}
-	return fmt.Sprintf("some tracked mission records could not be redacted and were left as they were (%d failed)", failedCount(err))
+	return kept
 }
 
-// failedCount reads the failure count ScrubFilesDeferring puts in its error.
-func failedCount(err error) int {
-	var rewritten, failed int
-	if _, scanErr := fmt.Sscanf(err.Error(), "%d rewritten, %d failed", &rewritten, &failed); scanErr != nil {
-		return 0
+// scrubReason names why records were left as they were. It is derived from the
+// counts of failure kinds, never from a path or a value in the error text.
+func scrubReason(res mission.ScrubResult) string {
+	switch {
+	case res.Unwritable > 0:
+		return "some tracked mission records are unreadable or unwritable and were left as they were"
+	case res.Refused > 0:
+		return "some tracked mission records were refused by the write guard and left as they were"
 	}
-	return failed
+	return fmt.Sprintf("some tracked mission records could not be redacted and were left as they were (%d failed)", res.Failed)
 }

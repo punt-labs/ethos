@@ -84,6 +84,10 @@ type ScrubResult struct {
 	// path was visited.
 	Busy        []string
 	Interrupted bool
+	// Failed counts the paths that could not be redacted, Refused those among
+	// them the write guard refused, and Unwritable those the filesystem would
+	// not read or write.
+	Failed, Refused, Unwritable int
 }
 
 // ScrubFilesDeferring is ScrubFiles for a caller that must not wait: it takes
@@ -126,6 +130,13 @@ func ScrubFilesDeferring(ctx context.Context, p layout.Policy, globalRoot string
 			res.Skipped = append(res.Skipped, rel)
 		case err != nil:
 			failed = append(failed, fmt.Errorf("%s: %w", rel, err))
+			res.Failed++
+			if errors.Is(err, ErrGuardRefused) {
+				res.Refused++
+			}
+			if errors.Is(err, os.ErrPermission) {
+				res.Unwritable++
+			}
 		case did:
 			res.Changed = append(res.Changed, rel)
 		}
