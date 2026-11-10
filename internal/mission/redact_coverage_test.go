@@ -249,16 +249,18 @@ var writerRegistry = map[string]writerEntry{
 	"internal/audit.QuarantineLocal":  checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "WriteLocalAtomic", "ReplaceLocalFile"),
 	// The one recovery shared by QuarantineLocal and SalvageChunk: every line it
 	// returns went through the caller's guard inside decodeSalvageLine.
-	"internal/audit.recoverLines":           checkpoint("decodeSalvageLine", "ReadLiveLines", "chunkEvidence", "CanonicalPayload"),
-	"internal/audit.decodeSalvageLine":      checkpoint("guard", "CanonicalPayload"),
-	"internal/audit.SalvageChunk":           checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "ReplaceLocalFile"),
-	"internal/audit.installRecovered":       sink(4, "writes the lines recoverLines returned, each already guarded; reads the result back through ReadChunkVerified"),
-	"internal/audit.writeSharedMarker":      sink(4, "availability marker beside a published chunk; its Reason is the caller's redacted reason and it carries no payload"),
-	"internal/audit.RedactLive":             checkpoint("guard", "CanonicalPayload", "archivedPayloads", "ReplaceLocalFile"),
-	"internal/audit.TryLock":                exempt(reasonLock),
-	"internal/autorepair.coverStaleCorrupt": sink(4, "no-gap marker beside a valid chunk; a fixed reason string and the chunk's own name, no payload"),
-	"internal/autorepair.repairOrphan":      checkpoint("QuarantineLocal", "salvage", "coverStaleCorrupt"),
-	"internal/audit.StagePublication":       exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
+	"internal/audit.recoverLines":          checkpoint("decodeSalvageLine", "ReadLiveLines", "chunkEvidence", "CanonicalPayload"),
+	"internal/audit.decodeSalvageLine":     checkpoint("guard", "CanonicalPayload"),
+	"internal/audit.SalvageChunk":          checkpoint("salvageBytes"),
+	"internal/audit.salvageBytes":          checkpoint("recoverLines", "installRecovered", "writeSharedMarker", "ReplaceLocalFile"),
+	"internal/audit.RecoverHeldQuarantine": checkpoint("salvageBytes"),
+	"internal/audit.installRecovered":      sink(4, "writes the lines recoverLines returned, each already guarded; reads the result back through ReadChunkVerified"),
+	"internal/audit.writeSharedMarker":     sink(4, "availability marker beside a published chunk; its Reason is the caller's redacted reason and it carries no payload"),
+	"internal/audit.RedactLive":            checkpoint("guard", "CanonicalPayload", "archivedPayloads", "ReplaceLocalFile"),
+	"internal/audit.TryLock":               exempt(reasonLock),
+	"internal/autorepair.repairOrphan":     checkpoint("QuarantineLocal", "salvage"),
+	"internal/autorepair.recoverHeld":      checkpoint("RecoverHeldQuarantine"),
+	"internal/audit.StagePublication":      exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
 
 	// Repository ADRs are in scope; standalone global ADRs share these helpers.
 	"internal/adr.Store.withLock": exempt(reasonLock),
