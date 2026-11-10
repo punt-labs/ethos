@@ -111,7 +111,7 @@ func TestPreCommitStepFailureLeavesALogLine(t *testing.T) {
 	}}}
 	global := t.TempDir()
 	dir := damageRepo(t, "force-added-local-file")
-	_, err := PreCommit(context.Background(), untrackEnv(dir, NewFileLog(global, dir, dir, "test")))
+	_, err := PreCommit(context.Background(), untrackEnv(dir, NewAppendLog(global, dir, dir, "test")))
 	require.NoError(t, err)
 	b, err := os.ReadFile(LogPath(global))
 	require.NoError(t, err)

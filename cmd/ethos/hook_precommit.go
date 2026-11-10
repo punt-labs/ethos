@@ -61,7 +61,7 @@ func preCommitEnv(checkout string) autorepair.Env {
 	roots.Checkout = checkout
 	env := autorepair.Env{Roots: roots, Global: defaultGlobalRoot(), Now: time.Now().UTC()}
 	if env.Global != "" {
-		env.Log = autorepair.NewFileLog(env.Global, roots.Store, checkout, version)
+		env.Log = autorepair.NewAppendLog(env.Global, roots.Store, checkout, version)
 	}
 	if err := roots.StoreFailure(); err != nil {
 		env.Roots.Store = ""
