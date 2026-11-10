@@ -153,11 +153,18 @@ func IsMissionID(name string) bool { return missionIDPattern.MatchString(name) }
 // checkout of p, with data, staging in the policy's local temp directory. The
 // bytes pass guardWrite like every other record writer: they are canonicalized,
 // and refused when they still leak a path or credential.
-func ReplaceRecordFile(p layout.Policy, dest string, data []byte) error {
-	data, err := guardWrite(dest, data)
+//
+// The error is non-nil only when dest was not replaced. A failure to confirm the
+// directory entry after the rename is returned apart, as durability: dest holds
+// the new bytes, so the caller counts it rewritten and logs the durability error.
+func ReplaceRecordFile(p layout.Policy, dest string, data []byte) (durability, err error) {
+	data, err = guardWrite(dest, data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	w, err := localReplace(p, dest, data)
-	return errors.Join(err, w.DurabilityError)
+	if err != nil {
+		return nil, err
+	}
+	return w.DurabilityError, nil
 }

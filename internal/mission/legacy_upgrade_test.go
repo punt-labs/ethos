@@ -1,12 +1,15 @@
 package mission
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/punt-labs/ethos/v4/internal/layout"
 )
 
 // A crash after the corrections rename and before the contract rename leaves
@@ -49,4 +52,27 @@ func TestUpgradeLegacyAuthority_ResumesAfterCrashBetweenRenames(t *testing.T) {
 	upgraded, err = s.UpgradeLegacyAuthority(c.MissionID)
 	require.NoError(t, err)
 	assert.False(t, upgraded, "second run is a no-op")
+}
+
+// A directory-sync failure after the rename leaves the new bytes installed, so
+// the file is rewritten: ReplaceRecordFile reports the durability failure apart
+// from the error.
+func TestReplaceRecordFile_DurabilityFailureIsNotAnError(t *testing.T) {
+	root := t.TempDir()
+	p, err := layout.NewRepository(root, root, layout.RecordBlame)
+	require.NoError(t, err)
+	dest := filepath.Join(root, ".punt-labs", "ethos", "missions", "m-2026-11-04-001", "contract.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o700))
+	require.NoError(t, os.WriteFile(dest, []byte("mission_id: m-2026-11-04-001\n"), 0o600))
+
+	real := syncDir
+	t.Cleanup(func() { syncDir = real })
+	syncDir = func(string) error { return errors.New("injected sync failure") }
+
+	durability, err := ReplaceRecordFile(p, dest, []byte("mission_id: m-2026-11-04-001\ncontext: x\n"))
+	require.NoError(t, err, "the rename installed the bytes")
+	assert.ErrorContains(t, durability, "injected sync failure")
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "context: x")
 }

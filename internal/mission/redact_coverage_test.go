@@ -90,6 +90,11 @@ const (
 	// classExempt: writes nothing that reaches a tracked mission or
 	// audit record. reason says why.
 	classExempt
+	// classGuardOnly: hands bytes to a sink that guards them with guardWrite and
+	// applies no redactor of its own, because the bytes are an existing record
+	// re-encoded to its canonical form. The function must call every identifier
+	// in calls; reason says why no redactor is needed.
+	classGuardOnly
 )
 
 type writerEntry struct {
@@ -117,6 +122,9 @@ func downstream(via, reason string) writerEntry {
 	return writerEntry{class: classDownstream, via: via, reason: reason}
 }
 func exempt(reason string) writerEntry { return writerEntry{class: classExempt, reason: reason} }
+func guardOnly(reason string, calls ...string) writerEntry {
+	return writerEntry{class: classGuardOnly, calls: calls, reason: reason}
+}
 
 const (
 	reasonLock     = "lock file; carries no content"
@@ -187,7 +195,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/mission.Store.withAuthorityLock":          checkpoint("withStateFileLock"),
 	"internal/mission.Store.withStateFileLock":          exempt(reasonLock),
 	"internal/mission.WithRecordLockTry":                exempt(reasonLock),
-	"internal/autorepair.runBeadAlias":                  checkpoint("ReplaceRecordFile"),
+	"internal/autorepair.runBeadAlias":                  guardOnly("re-encodes an existing contract with only the inputs.bead key renamed; ReplaceRecordFile guards the bytes with guardWrite, and no value is added that a redactor would need to see", "ReplaceRecordFile"),
 	"internal/mission.ReplaceRecordFile":                sink(1, "guards payload argument 1 with guardWrite, then installs it through localReplace; used by DES-084 repair steps that rewrite a contract's bytes"),
 	"internal/mission.confirmStreamDurability":          exempt("opens existing stream files with O_RDWR solely to Sync and Close; does not create, truncate or write payload bytes"),
 	"internal/mission.withTraceLock":                    exempt(reasonLock),
@@ -635,7 +643,7 @@ func checkWriters(funcs map[string]*funcInfo, registry map[string]writerEntry, e
 			bad = append(bad, fmt.Sprintf("registry entry %s has no reason", k))
 		}
 		switch e.class {
-		case classCheckpoint:
+		case classCheckpoint, classGuardOnly:
 			for _, c := range e.calls {
 				if !fi.callees[c] {
 					bad = append(bad, fmt.Sprintf("%s is registered as redacting but does not call %s", k, c))

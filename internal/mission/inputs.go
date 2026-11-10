@@ -124,6 +124,11 @@ func WarnBeadDeprecated(w io.Writer, bead string) {
 // renamed in place so every other byte is untouched; any other shape (a flow
 // mapping, an odd quoting) is renamed through the YAML node tree. A contract
 // that sets both keys is refused: neither value is ours to choose.
+//
+// The result is not what a record writer installs. The repair step writes it
+// through ReplaceRecordFile, which re-encodes the file in its canonical form:
+// comments and other syntax the canonical form does not carry are dropped, and
+// every value is kept.
 func RenameBeadAlias(data []byte) ([]byte, bool, error) {
 	if BeadAlias(data) == "" {
 		return data, false, nil

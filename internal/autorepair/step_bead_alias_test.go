@@ -1,6 +1,7 @@
 package autorepair
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,4 +104,59 @@ func TestBeadAlias_BothKeysIsResidual(t *testing.T) {
 func TestBeadAlias_OutsideRepositoryDoesNothing(t *testing.T) {
 	out := run34(t, "bead-alias", Env{Log: &recLog34{}})
 	assert.Equal(t, Outcome{}, out)
+}
+
+// L6: the step's real entry re-encodes the contract in its canonical form, so a
+// comment is dropped and every value is kept.
+func TestBeadAlias_RewriteIsCanonicalRoundTrip(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	dirs := missionDirs34(t, env)
+	require.NotEmpty(t, dirs)
+	path := filepath.Join(dirs[0], "contract.yaml")
+	orig := read34(t, path)
+	want, err := mission.DecodeContractStrict([]byte(orig), path)
+	require.NoError(t, err)
+	planted := "# a comment the canonical form drops\n" + strings.Replace(orig, "\n    ticket: ", "\n    bead: ", 1)
+	write34(t, path, planted)
+
+	out := run34(t, "bead-alias", env)
+	require.Equal(t, 1, out.Items)
+	got := read34(t, path)
+	assert.NotContains(t, got, "a comment the canonical form drops")
+	have, err := mission.DecodeContractStrict([]byte(got), path)
+	require.NoError(t, err)
+	assert.Equal(t, want, have, "every value survives the round trip")
+}
+
+// M4: a busy lock defers; an unreadable contract is permanent and is a
+// residual, so the stamp is not held back forever.
+func TestBeadAlias_BusyLockDefers(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	want := plantBead34(t, env)
+	id := filepath.Base(missionDirs34(t, env)[0])
+	var out Outcome
+	require.NoError(t, mission.WithRecordLockTry(env.Policy, id, func() error {
+		out = run34(t, "bead-alias", env)
+		return nil
+	}))
+	assert.True(t, out.Deferred)
+	assert.Empty(t, out.Residuals)
+	assert.Equal(t, len(want)-1, out.Items, "the unlocked mission is still rewritten")
+}
+
+func TestBeadAlias_UnreadableContractIsResidual(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads every file")
+	}
+	env := stage34(t, "v4.17.0")
+	plantBead34(t, env)
+	path := filepath.Join(missionDirs34(t, env)[0], "contract.yaml")
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	out := run34(t, "bead-alias", env)
+	assert.False(t, out.Deferred, "a permanent condition never defers")
+	require.Len(t, out.Residuals, 1)
+	assert.Equal(t, "bead-alias", out.Residuals[0].Step)
+	assert.Contains(t, out.Residuals[0].Reason, "unreadable")
 }
