@@ -291,8 +291,12 @@ func runHookPreToolUse() error {
 func runHookCommitTrailers(out io.Writer) error {
 	sessionID, _, err := resolve.SessionID(sessionStore())
 	if err != nil {
-		if !errors.Is(err, resolve.ErrNotUnderClaudeCode) {
-			fmt.Fprintf(os.Stderr, "ethos: commit-trailers: %v; no trailer added\n", err)
+		switch {
+		case errors.Is(err, resolve.ErrNotUnderClaudeCode):
+		case errors.Is(err, resolve.ErrNoSession):
+			fmt.Fprintln(os.Stderr, "ethos: commit-trailers: no trailer added: no Claude Code session is bound to this process")
+		default:
+			fmt.Fprintf(os.Stderr, "ethos: commit-trailers: no trailer added: %v\n", err)
 		}
 		return nil
 	}

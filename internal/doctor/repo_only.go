@@ -176,7 +176,7 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	}
 	if len(tracked) > 0 {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s already tracked by git — gitignore does not untrack; preserve/copy and verify local data first, then remove only these paths from the index with git rm --cached -- (not from disk); do not delete retained data or add source-tree ignore exceptions",
+			"%s already tracked by git — gitignore does not untrack them; their local data is retained",
 			strings.Join(tracked, ", "))}
 	}
 

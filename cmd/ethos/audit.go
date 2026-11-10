@@ -79,7 +79,7 @@ Publication failure retains the archive for a later full-mode retry.
 The installed pre-commit hook passes --commit-context. Only in that context,
 blame archival errors warn and permit a source commit while retaining live data.
 Configuration errors and full-mode failures always block. Manual commands keep
-visible errors in both modes; recover damaged chunks with ethos audit quarantine.
+visible errors in both modes.
 
 Flags:
   --dry-run   print the per-session line counts it would seal, writing nothing
@@ -255,7 +255,7 @@ func sealRepository(out, errOut io.Writer, f sealFlags) error {
 		// even after switching to blame or when joined with an archive error.
 		var promptRetry *hook.PromptPublicationRetryError
 		if f.commitContext && p.RecordMode() == layout.RecordBlame && !errors.As(err, &promptRetry) {
-			fmt.Fprintln(errOut, "ethos: audit seal: retained-data warning: local archival incomplete; live data retained; allowing the source commit; inspect with ethos audit seal and recover with ethos audit quarantine <chunk>")
+			fmt.Fprintln(errOut, "ethos: audit seal: retained-data warning: local archival incomplete; live data retained; allowing the source commit")
 			return nil
 		}
 		return failClosed{}

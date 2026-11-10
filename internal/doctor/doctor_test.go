@@ -1492,7 +1492,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		require.NoError(t, os.WriteFile(hookPath(dir), body, 0o755))
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
-		assert.Contains(t, r.Detail, "hand-duplicated")
+		assert.Contains(t, r.Detail, "duplicated section")
 	})
 
 	t.Run("truncated section -> FAIL", func(t *testing.T) {
@@ -1502,7 +1502,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		require.NoError(t, os.WriteFile(hookPath(dir), []byte(body), 0o755))
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status)
-		assert.Contains(t, r.Detail, "hand-truncated")
+		assert.Contains(t, r.Detail, "truncated section")
 	})
 
 	t.Run("unterminated heredoc masks a real section -> FAIL", func(t *testing.T) {
@@ -1559,7 +1559,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "cannot read")
-		assert.Contains(t, r.Detail, "inspect the file manually")
+		assert.NotContains(t, r.Detail, "manually")
 		assert.NotContains(t, r.Detail, "check file permissions")
 	})
 }

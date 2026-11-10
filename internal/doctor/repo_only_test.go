@@ -207,7 +207,7 @@ func TestCheckLocalExtNotTracked(t *testing.T) {
 		r := CheckLocalExtNotTracked(root)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "quarry.local.yaml")
-		assert.Contains(t, r.Detail, "git rm --cached")
+		assert.NotContains(t, r.Detail, "git rm --cached")
 	})
 
 	t.Run("no repo passes", func(t *testing.T) {

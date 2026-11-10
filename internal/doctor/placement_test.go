@@ -137,5 +137,5 @@ func TestTrackedLegacyLocalPathsAreExactAndTraceIsNotAllLocal(t *testing.T) {
 		assert.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
 	}
 	assert.NotContains(t, r.Detail, trace)
-	assert.Contains(t, r.Detail, "git rm --cached --")
+	assert.NotContains(t, r.Detail, "git rm --cached")
 }

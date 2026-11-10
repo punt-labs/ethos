@@ -339,7 +339,7 @@ func runSessionStart(cmd *cobra.Command) error {
 			}
 			return printSessionStart(cmd, envID, sessionStartPersona, false)
 		case !errors.Is(lerr, os.ErrNotExist):
-			return fmt.Errorf("session start: ETHOS_SESSION %q names an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", envID, lerr)
+			return fmt.Errorf("session start: ETHOS_SESSION %q names an unreadable roster (%v); left in place", envID, lerr)
 		}
 		// not-found: fall through to mint a fresh session (by design).
 	}
@@ -515,7 +515,7 @@ func runSessionEnd(cmd *cobra.Command) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s not found; nothing to end\n", sid)
 			return nil
 		}
-		return fmt.Errorf("session end: session %q has an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", sid, lerr)
+		return fmt.Errorf("session end: session %q has an unreadable roster (%v); left in place", sid, lerr)
 	}
 	if err := ss.Delete(sid); err != nil {
 		return err

@@ -985,7 +985,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 						"the %s hook shows no textual evidence of the required call, and this platform cannot verify by execution", spec.ShortName) + remedy}
 				}
 				return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-					"cannot verify the %s hook by execution on this platform — inspect it manually", spec.ShortName)}
+					"cannot verify the %s hook by execution on this platform", spec.ShortName)}
 			}
 			var earlyExit *hookExitedEarlyError
 			if errors.As(err, &earlyExit) && sectionIsCurrent(body, spec) {
@@ -1228,7 +1228,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		if os.IsNotExist(err) {
 			return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
 		}
-		remedy := " — inspect the file manually"
+		remedy := ""
 		if os.IsPermission(err) {
 			remedy = " — check file permissions"
 		}
@@ -1249,13 +1249,13 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	if err != nil {
 		if errors.Is(err, githook.ErrSectionTruncated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"%s section has a BEGIN with no matching END — hand-truncated; fix it by hand", spec.Name)}
+				"%s section has a BEGIN with no matching END — truncated section", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionNotEthosOwned) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionDuplicated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"multiple %q sections found — hand-duplicated; run `ethos enable` to collapse them into one", spec.Tag)}
+				"multiple %q sections found — duplicated section", spec.Tag)}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 			"%s section could not be read: %v — re-run `ethos doctor`; if this persists, file a bug", spec.Name, err)}
