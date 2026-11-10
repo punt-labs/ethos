@@ -130,6 +130,7 @@ func buildServeHandler(home string, loc mcp.StoreLocation, extra ...mcp.Option) 
 	if storeErr != nil {
 		opts = append(opts, mcp.WithStoreError(storeErr))
 	}
+	opts = append(opts, mcp.WithEnsure(ensureForServe))
 	opts = append(opts, extra...)
 	return mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles, opts...)
 }
