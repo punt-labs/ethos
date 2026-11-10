@@ -28,6 +28,10 @@ var renameAssemblySites = map[string]bool{
 	// walk rewrites a scalar VALUE node (n.Value = pass(n.Value)); a key node
 	// reaches it only through walkMapping, which applies the plan.
 	"mission.walk": true,
+	// cmd/coverage-check parses a Go coverage profile and coverage-baseline.txt
+	// into maps keyed by the package path each line names. The key is parsed
+	// text, not a renamed record key; the tool never reads a record.
+	"main.readProfile": true, "main.readBaseline": true,
 }
 
 // renamedKeyWrites returns "<file>:<func>" for every function outside the
