@@ -1,0 +1,13 @@
+.punt-labs/ethos.yaml
+.punt-labs/ethos/missions.jsonl
+.punt-labs/ethos/missions/.create.lock
+.punt-labs/ethos/missions/m-2026-11-09-001/contract.yaml
+.punt-labs/ethos/missions/m-2026-11-09-001/log.jsonl
+.punt-labs/ethos/missions/m-2026-11-09-001/reflections.yaml
+.punt-labs/ethos/missions/m-2026-11-09-001/results.yaml
+.punt-labs/ethos/missions/m-2026-11-09-002/.lock
+.punt-labs/ethos/missions/m-2026-11-09-002/contract.yaml
+.punt-labs/ethos/missions/m-2026-11-09-002/delegations/d-2026-11-09-001/prompt.md
+.punt-labs/ethos/missions/m-2026-11-09-002/delegations/d-2026-11-09-001/record.yaml
+.punt-labs/ethos/missions/m-2026-11-09-002/log.jsonl
+.punt-labs/ethos/sessions/2026-11-09-sess-corpus-0001/audit.jsonl

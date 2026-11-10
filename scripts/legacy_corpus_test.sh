@@ -100,6 +100,17 @@ for snap in "$TESTDATA"/corpus/*/; do
     fail "$v: git ls-files under repo/ differs from the snapshot's file set (a force-add is missing; use git add -f)"
   fi
 done
+# git/repo-files.txt lists every file under repo/ (generation-time manifest); it
+# also sees untracked live tails under .punt-labs/local/ that git ls-files cannot.
+for snap in "$TESTDATA"/corpus/*/; do
+  v=$(basename "$snap")
+  if [ ! -f "$snap/git/repo-files.txt" ]; then fail "$v: git/repo-files.txt is missing"; continue; fi
+  ( cd "$snap/repo" && find . -type f | sed 's|^\./||' | LC_ALL=C sort ) >"$WORKDIR/disk.list"
+  if ! diff -u "$snap/git/repo-files.txt" "$WORKDIR/disk.list" >"$WORKDIR/files.diff"; then
+    cat "$WORKDIR/files.diff" >&2
+    fail "$v: files under repo/ differ from git/repo-files.txt (a file was lost or added since generation)"
+  fi
+done
 [ "$failures" -ne 0 ] || pass "every snapshot's tracked-files.txt exists under repo/ and is committed"
 
 # --- 2. privacy -----------------------------------------------------------

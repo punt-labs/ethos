@@ -585,6 +585,9 @@ snapshot() {
   if [ -s "$W/tracked.z" ]; then tr '\0' '\n' <"$W/tracked.z" >"$stage/git/tracked-files.txt"; fi
   cp "$W/seed-omitted.txt" "$stage/seed-omitted.txt"
   rewrite_tree "$stage/git"
+  # Every file under repo/, sorted and relative, so a test sees the loss of an
+  # untracked file (the live tails under .punt-labs/local/) that git never lists.
+  ( cd "$stage/repo" && find . -type f | sed 's|^\./||' | LC_ALL=C sort ) >"$stage/git/repo-files.txt"
 
   privacy_scan "$tag" "$stage" || { purge_dir "$stage"; return 1; }
 

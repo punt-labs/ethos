@@ -1,0 +1,2 @@
+.ethos/missions.jsonl
+.punt-labs/ethos.yaml
