@@ -135,8 +135,8 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.installCommitMessage": checkpoint("CreateLocalTemp"),
 	// internal/mission: records.
 
-	"internal/mission.migrateOneMissionLocked": exempt(
-		"renames the staging directory whose files copyIfExists wrote through the redactor"),
+	"internal/mission.migrateOneMissionLockedQ": exempt(
+		"renames the staging directory whose files copyRedacted wrote through the redactor"),
 
 	"internal/mission.writeContractBytes":            payloadCheckpoint(1, "writeContractBytesWithOutcome"),
 	"internal/mission.writeContractFile":             checkpoint("guardWrite", "writeContractBytes"),
@@ -221,7 +221,7 @@ var writerRegistry = map[string]writerEntry{
 	"internal/hook.quarantineReason":          checkpoint("Content", "LeakRule", "Leaks"),
 	"internal/hook.sessionLineGuard":          checkpoint("credentialPassLine", "redactLegacyLine", "guardAuditLineFull"),
 	"internal/hook.missionLineGuard":          checkpoint("guardMissionEvent", "credentialPassLine", "guardAuditLineFull"),
-	"internal/hook.MigrateAuditWithPolicy":    checkpoint("sessionLineGuard", "guard", "CanonicalPayload", "CheckLegacyIdentity", "ReplaceLocalFile"),
+	"internal/hook.migrateAuditSession":       checkpoint("sessionLineGuard", "guard", "CanonicalPayload", "CheckLegacyIdentity", "ReplaceLocalFile"),
 	"internal/hook.guardMissionEvent":         checkpoint("RedactRecord", "CheckBytes"),
 	"internal/hook.appendRawAuditLines":       sink(1, "MigrateAudit's append; migrateOneSession redacts the lines first"),
 	"internal/hook.redactReason":              checkpoint("NewPathRedactor"),
@@ -249,10 +249,10 @@ var writerRegistry = map[string]writerEntry{
 	"internal/audit.StagePublication": exempt("copies Git index bytes to a local candidate and installs that index; no record payload is written by this helper; sealPolicyStream checks the selected record files separately"),
 
 	// Repository ADRs are in scope; standalone global ADRs share these helpers.
-	"internal/adr.Store.withLock": exempt(reasonLock),
-	"internal/adr.Store.prepare":  checkpoint("Record", "Prose", "LeakRule"),
-	"internal/adr.Store.write":    checkpoint("prepare", "Marshal", "publish"),
-	"internal/adr.Store.publish":  sink(1, "data is argument 1; Store.write marshals only Store.prepare output after shared redaction and leak checking"),
+	"internal/adr.Store.withLock":   exempt(reasonLock),
+	"internal/adr.Store.prepare":    checkpoint("Record", "Prose", "LeakRule"),
+	"internal/adr.Store.writeQuiet": checkpoint("prepare", "Marshal", "publish"),
+	"internal/adr.Store.publish":    sink(1, "data is argument 1; Store.write marshals only Store.prepare output after shared redaction and leak checking"),
 
 	// Publication's selected records are guarded by RedactPublicationSnapshot.
 	// Do not classify publishLocked as downstream: it also merges existing
