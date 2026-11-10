@@ -207,8 +207,7 @@ func trackedLocalExt(repoRoot string) ([]string, error) {
 	}
 	var files []string
 	for _, line := range strings.Split(string(out), "\x00") {
-		class, _, ok := layout.Classify(line)
-		if line != "" && (strings.HasPrefix(line, ".punt-labs/local/") || ok && class == layout.Never || misplacedLocal(line)) {
+		if layout.TrackedLocal(line) {
 			files = append(files, line)
 		}
 	}
