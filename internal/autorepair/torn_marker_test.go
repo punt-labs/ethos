@@ -48,3 +48,20 @@ func TestTornMarkerBesideLegacyCorruptIsResidual(t *testing.T) {
 	assert.False(t, again.Deferred)
 	assert.Equal(t, snap, fixStoreSnap(t, env), "run 2 changes nothing")
 }
+
+// The marker at the stem's name covers another chunk and the chunk is damaged:
+// no later run can change that, so it is one Residual, never Deferred.
+func TestMarkerCoveringAnotherChunkIsResidual(t *testing.T) {
+	env, _, _, dir, _ := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	mb, err := audit.MarshalMarker(audit.Marker{Chunk: "audit-other", VerifiedLast: fixT0, Reason: "x"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.MarkerFile()), mb, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(stableLine(fixT0, "A")+"garbage\n"+stableLine(fixT0+2000, "C")), 0o600))
+	for i := 1; i <= 3; i++ {
+		out := runStep(t, runCorruptChunks, env)
+		assert.False(t, out.Deferred, "run %d", i)
+		require.Len(t, out.Residuals, 1, "run %d", i)
+		assert.Contains(t, out.Residuals[0].Reason, "covers another chunk")
+	}
+}
