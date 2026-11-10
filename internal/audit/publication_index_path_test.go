@@ -59,7 +59,7 @@ func TestPublicationIndexPathBytes(t *testing.T) {
 					t.Logf("selected=%q Git output=%q", selected, out)
 					err = StagePublication(p, []string{publication})
 					if state != "valid" {
-						assert.ErrorContains(t, err, "empty/corrupt")
+						assert.ErrorContains(t, err, "is empty or corrupt")
 						if err != nil {
 							assert.Contains(t, err.Error(), index)
 						}

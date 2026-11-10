@@ -106,14 +106,14 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 }
 
 // OrphanCorruptError is a .corrupt whose quarantine never finished. Chunk is
-// the chunk path `ethos audit quarantine` resumes from.
+// the chunk path the storage upgrade resumes from.
 type OrphanCorruptError struct {
 	Chunk, Dir  string
 	First, Last int64
 }
 
 func (e *OrphanCorruptError) Error() string {
-	return fmt.Sprintf("orphan .corrupt for range [%d,%d] in %s: quarantine incomplete", e.First, e.Last, e.Dir)
+	return fmt.Sprintf("orphan .corrupt for range [%d,%d] in %s: quarantine incomplete; the storage upgrade finishes it", e.First, e.Last, e.Dir)
 }
 
 // coveredByMarker reports whether some marker of the SAME session contains the

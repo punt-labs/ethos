@@ -83,7 +83,7 @@ func TestCLIRepairRetainsActualQuarantinePublications(t *testing.T) {
 			repairPut(t, chunks[0], "damaged published chunk\n")
 			_, stderr, exit := runCLI(t, se, "audit", "quarantine", chunks[0])
 			require.Equal(t, 0, exit, stderr)
-			assert.Contains(t, stderr, "SHARED REPAIR PENDING")
+			assert.Contains(t, stderr, "retired damaged shared chunk")
 			assert.NoFileExists(t, chunks[0])
 			markerPath := strings.TrimSuffix(chunks[0], ".jsonl") + ".quarantine"
 			beforeMarker := repairRead(t, markerPath)
