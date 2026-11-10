@@ -47,12 +47,16 @@ func topLevel(cmd *cobra.Command) string {
 func TestEveryCommandPassesEnsure(t *testing.T) {
 	rootCmd.InitDefaultHelpCmd()
 	n := fakeEnsure(t, autorepair.Result{})
+	// Every subcommand inherits root's writers, so one swap on root silences
+	// the walk and one restore puts the tree back: a per-command SetErr would
+	// stick, and later tests that read a command's stderr would see nothing.
+	rootCmd.SetErr(&bytes.Buffer{})
+	t.Cleanup(func() { rootCmd.SetErr(nil) })
 	exempt := map[string]bool{"version": true, "completion": true, "help": true, "uninstall": true}
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
 		if c != rootCmd {
 			before := *n
-			c.SetErr(&bytes.Buffer{})
 			// A refusal is allowed; reaching the gate first is the property.
 			_ = establishRoots(c, nil)
 			called := *n > before
@@ -121,11 +125,21 @@ func TestEnsureLineGoesToStderr(t *testing.T) {
 	fakeEnsure(t, autorepair.Result{Items: 3, Repaired: true})
 	c, _, err := rootCmd.Find([]string{"doctor"})
 	require.NoError(t, err)
-	var errOut bytes.Buffer
-	c.SetErr(&errOut)
+	errOut := captureStderr(t, c)
 	require.NoError(t, establishRoots(c, nil))
 	assert.Equal(t, line+"\n", errOut.String())
 	assert.Nil(t, repairNotice.Load(), "the line is printed once, not also held for a hook")
+}
+
+// captureStderr points c's stderr at a buffer for this test and restores the
+// inherited writer afterwards; a SetErr left in place would make every later
+// test that reads this command's stderr see nothing.
+func captureStderr(t *testing.T, c *cobra.Command) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	c.SetErr(&buf)
+	t.Cleanup(func() { c.SetErr(nil) })
+	return &buf
 }
 
 // Session start prints JSON on stdout and its stderr goes to an unread log, so
@@ -134,8 +148,7 @@ func TestEnsureLineForSessionStartIsHeldNotPrinted(t *testing.T) {
 	fakeEnsure(t, autorepair.Result{Items: 3, Repaired: true})
 	c, _, err := rootCmd.Find([]string{"hook", "session-start"})
 	require.NoError(t, err)
-	var errOut bytes.Buffer
-	c.SetErr(&errOut)
+	errOut := captureStderr(t, c)
 	require.NoError(t, establishRoots(c, nil))
 	assert.Empty(t, errOut.String())
 	assert.Equal(t, 1, strings.Count(takeRepairNotice(), "upgraded storage"))
@@ -146,8 +159,7 @@ func TestEnsureSilentWhenNothingRepaired(t *testing.T) {
 	fakeEnsure(t, autorepair.Result{Residuals: []autorepair.Residual{{Step: "s", ID: "i", Reason: "r"}}})
 	c, _, err := rootCmd.Find([]string{"doctor"})
 	require.NoError(t, err)
-	var errOut bytes.Buffer
-	c.SetErr(&errOut)
+	errOut := captureStderr(t, c)
 	require.NoError(t, establishRoots(c, nil))
 	assert.Empty(t, errOut.String(), "a residual never produces a line")
 }
