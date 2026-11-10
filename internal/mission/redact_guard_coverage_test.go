@@ -75,7 +75,7 @@ var guardAllowed = map[string]string{
 }
 
 // guardScopes are the packages whose writers reach the tracked tree.
-var guardScopes = []string{"internal/mission.", "internal/hook.", "internal/audit.", "internal/adr.", "internal/provenance.", "cmd/ethos."}
+var guardScopes = []string{"internal/mission.", "internal/hook.", "internal/lineguard.", "internal/audit.", "internal/adr.", "internal/provenance.", "cmd/ethos."}
 
 // TestTrackedSinksCallTheGuard is the source scan for the sink guard: every
 // function in a tracked-tree package that creates or renames a file is either

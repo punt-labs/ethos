@@ -1,4 +1,4 @@
-package hook
+package lineguard
 
 import (
 	"maps"
@@ -47,13 +47,13 @@ import (
 // PR #259 cleanup so one grep finds both the hand-redacted history and
 // everything written since.
 const (
-	redactedValueToken = "[redacted]"
+	RedactedValueToken = "[redacted]"
 	redactedEmailToken = redact.EmailToken
 )
 
 // sensitiveTools maps a tool's bare name to the tool_input keys that
 // survive redaction. Every other key's value is replaced with
-// redactedValueToken.
+// RedactedValueToken.
 //
 // The key is the bare name: an MCP tool arrives as
 // mcp__plugin_beadle_email__send_email, and matching the trailing
@@ -117,7 +117,7 @@ var recipientKeys = map[string]bool{
 	"to":         true,
 }
 
-// promptBearingKeys names the tool_input keys carrying free-form prose
+// PromptBearingKeys names the tool_input keys carrying free-form prose
 // rather than structured arguments. The PII sweep runs over strings
 // reachable under these keys and nowhere else, so a Read's file_path
 // or a Glob's pattern is untouched and its audit line is unchanged.
@@ -158,7 +158,7 @@ var recipientKeys = map[string]bool{
 // half-covered; a merge commit message is also where a Co-Authored-By
 // trailer lands, an address observed 9 times in this repo's chunks by
 // way of a `git commit -m` heredoc under command.
-var promptBearingKeys = map[string]bool{
+var PromptBearingKeys = map[string]bool{
 	"args":           true,
 	"body":           true,
 	"command":        true,
@@ -180,14 +180,14 @@ var promptBearingKeys = map[string]bool{
 	"title":          true,
 }
 
-// redactSensitiveContent applies the policy to one tool call's
+// RedactSensitiveContent applies the policy to one tool call's
 // already-path-redacted tool_input. It reports whether anything
 // changed so the caller can stamp the redacted marker on the entry.
 //
 // Returns input unchanged — same map, no copy — when the tool is not
 // sensitive and carries no address, so a non-sensitive line is
 // byte-identical to what the pre-policy writer produced.
-func redactSensitiveContent(toolName string, input map[string]any) (map[string]any, bool) {
+func RedactSensitiveContent(toolName string, input map[string]any) (map[string]any, bool) {
 	if input == nil {
 		return nil, false
 	}
@@ -195,9 +195,9 @@ func redactSensitiveContent(toolName string, input map[string]any) (map[string]a
 	// sweep would otherwise cut a URL password that holds '@' or '#' and
 	// leave a fragment. It covers every string whatever its key, because a
 	// token has no reliable key to hang a keep-list on.
-	in, changed := sweepSecrets(input)
+	in, changed := SweepSecrets(input)
 	var m map[string]any
-	if keep, ok := sensitiveTools[bareToolName(toolName)]; ok {
+	if keep, ok := sensitiveTools[BareToolName(toolName)]; ok {
 		var c bool
 		m, c = reduceToKeepList(in, keep)
 		changed = changed || c
@@ -220,10 +220,10 @@ var pathKeys = map[string]bool{
 	"notebook_path": true,
 }
 
-// sweepSecrets applies the credential pass to input except for the string
+// SweepSecrets applies the credential pass to input except for the string
 // values under pathKeys. It reports whether anything changed and never
 // mutates input.
-func sweepSecrets(input map[string]any) (map[string]any, bool) {
+func SweepSecrets(input map[string]any) (map[string]any, bool) {
 	held := map[string]string{}
 	rest := input
 	for k := range pathKeys {
@@ -246,10 +246,10 @@ func sweepSecrets(input map[string]any) (map[string]any, bool) {
 	return m, true
 }
 
-// bareToolName returns the trailing segment of an MCP tool name.
+// BareToolName returns the trailing segment of an MCP tool name.
 // mcp__plugin_beadle_email__send_email becomes send_email; a built-in
 // like Bash is already bare and passes through.
-func bareToolName(toolName string) string {
+func BareToolName(toolName string) string {
 	if i := strings.LastIndex(toolName, "__"); i >= 0 {
 		return toolName[i+len("__"):]
 	}
@@ -258,7 +258,7 @@ func bareToolName(toolName string) string {
 
 // reduceToKeepList returns a copy of input holding only the named keys
 // at their swept values; every other key is present with its value
-// replaced by redactedValueToken. The keys stay so the audit line
+// replaced by RedactedValueToken. The keys stay so the audit line
 // still shows the shape of the call — which fields were supplied —
 // without their contents.
 //
@@ -279,11 +279,11 @@ func reduceToKeepList(input map[string]any, keep []string) (map[string]any, bool
 	changed := false
 	for k, v := range input {
 		if !kept[k] {
-			out[k] = redactedValueToken
+			out[k] = RedactedValueToken
 			changed = true
 			continue
 		}
-		swept, c := sweepPII(v, sweepPrompt)
+		swept, c := sweepPII(v, SweepPrompt)
 		out[k] = swept
 		changed = changed || c
 	}
@@ -300,9 +300,9 @@ const (
 	// sweepOff is a structured argument: a file_path, a glob, a cron
 	// expression. Left verbatim so a non-sensitive line keeps its bytes.
 	sweepOff sweepMode = iota
-	// sweepPrompt is prose. Addresses inside it are replaced at the
+	// SweepPrompt is prose. Addresses inside it are replaced at the
 	// match; the surrounding sentence is what makes the line useful.
-	sweepPrompt
+	SweepPrompt
 	// sweepAddress is a recipient field. A string holding an address is
 	// replaced whole — see recipientKeys.
 	sweepAddress
@@ -319,8 +319,8 @@ func modeFor(mode sweepMode, k string) sweepMode {
 		return sweepAddress
 	case mode != sweepOff:
 		return mode
-	case promptBearingKeys[k]:
-		return sweepPrompt
+	case PromptBearingKeys[k]:
+		return SweepPrompt
 	default:
 		return sweepOff
 	}
@@ -335,7 +335,7 @@ func modeFor(mode sweepMode, k string) sweepMode {
 func sweepPII(v any, mode sweepMode) (any, bool) {
 	switch x := v.(type) {
 	case string:
-		return sweepString(x, mode)
+		return SweepString(x, mode)
 	case map[string]any:
 		out, copied := x, false
 		for k, vv := range x {
@@ -367,16 +367,16 @@ func sweepPII(v any, mode sweepMode) (any, bool) {
 	}
 }
 
-// sweepString applies one mode to one string and reports whether it
+// SweepString applies one mode to one string and reports whether it
 // changed.
-func sweepString(s string, mode sweepMode) (string, bool) {
+func SweepString(s string, mode sweepMode) (string, bool) {
 	switch mode {
-	case sweepPrompt:
+	case SweepPrompt:
 		r := redact.EmailPattern.ReplaceAllString(s, redactedEmailToken)
 		return r, r != s
 	case sweepAddress:
 		if redact.EmailPattern.MatchString(s) {
-			return redactedValueToken, true
+			return RedactedValueToken, true
 		}
 		return s, false
 	default:
