@@ -614,7 +614,7 @@ func TestRedactLegacyLines_OneNoticePerChangedLine(t *testing.T) {
 		sayMigrateNotes(out)
 	})
 	assert.Equal(t, 1, strings.Count(notice, "\n"), notice)
-	assert.Contains(t, notice, "audit migrate")
+	assert.Contains(t, notice, "audit import")
 	assert.Contains(t, notice, "3 of 4 line(s)")
 	assert.Contains(t, notice, "home path or content 3 (lines 1, 2, 3)")
 	assert.NotContains(t, notice, "abcdefghijklmnop")
