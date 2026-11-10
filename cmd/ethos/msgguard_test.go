@@ -64,10 +64,45 @@ var bannedPatterns = func() []*regexp.Regexp {
 		if isWordByte(term[len(term)-1]) {
 			right = `\b`
 		}
-		out[i] = regexp.MustCompile(left + regexp.QuoteMeta(term) + right)
+		out[i] = regexp.MustCompile(left + termPattern(term) + right)
 	}
 	return out
 }()
+
+// termPattern quotes term for a regexp, except that each space in the term
+// matches any run of whitespace or hyphens. "ethos repair" then matches
+// "ethos  repair" and "ethos-repair"; a hyphen written in the term
+// ("--no-teams", "hand-") stays literal, so "resolve agent" in prose does not
+// match the term "resolve-agent".
+func termPattern(term string) string {
+	parts := strings.Split(term, " ")
+	for i, p := range parts {
+		parts[i] = regexp.QuoteMeta(p)
+	}
+	return strings.Join(parts, `[\s-]+`)
+}
+
+// foldedString returns the constant value of n when it is a string literal or
+// a "+" chain of string literals, so a message split across adjacent literals
+// is judged whole.
+func foldedString(n ast.Node) (string, bool) {
+	switch x := n.(type) {
+	case *ast.BasicLit:
+		if x.Kind != token.STRING {
+			return "", false
+		}
+		v, err := strconv.Unquote(x.Value)
+		return v, err == nil
+	case *ast.BinaryExpr:
+		if x.Op != token.ADD {
+			return "", false
+		}
+		l, lok := foldedString(x.X)
+		r, rok := foldedString(x.Y)
+		return l + r, lok && rok
+	}
+	return "", false
+}
 
 func bannedIn(s string) string {
 	low := strings.ToLower(s)
@@ -100,24 +135,22 @@ func goLiteralHits(t *testing.T, path, rel string) []string {
 	}
 	var hits []string
 	ast.Inspect(f, func(n ast.Node) bool {
-		lit, ok := n.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
+		val, ok := foldedString(n)
+		if !ok {
 			return true
 		}
-		val, err := strconv.Unquote(lit.Value)
-		if err != nil {
-			return true
-		}
+		// A folded chain is judged whole, so do not descend into its parts.
+		_, isChain := n.(*ast.BinaryExpr)
 		term := bannedIn(val)
 		if term == "" {
-			return true
+			return !isChain
 		}
-		line := fset.Position(lit.Pos()).Line
+		line := fset.Position(n.Pos()).Line
 		if msgguardAllow.MatchString(lines[line-1]) {
-			return true
+			return !isChain
 		}
 		hits = append(hits, rel+":"+strconv.Itoa(line)+": "+term)
-		return true
+		return !isChain
 	})
 	return hits
 }
@@ -182,6 +215,49 @@ func TestNoMessageTellsTheUserToRepair(t *testing.T) {
 	walk(filepath.Join("plugin", "hooks"), isSh, shLineHits)
 	for _, h := range hits {
 		t.Errorf("message tells the user to repair or names a removed command: %s", h)
+	}
+}
+
+// TestMessageGuardEvasions pins the spellings a plain substring match misses:
+// runs of whitespace, a hyphen for the space, and a string assembled from
+// adjacent literals. Assembly through format verbs (fmt.Sprintf("%s repair",
+// "ethos")) is out of reach for a lexical guard; the doctor and hook tests pin
+// those messages by their exact output instead.
+func TestMessageGuardEvasions(t *testing.T) {
+	for _, s := range []string{
+		"ethos  repair",
+		"ethos\trepair",
+		"ethos\nrepair",
+		"ethos-repair",
+		"audit   quarantine",
+		"session-purge",
+		"run   `ethos enable`",
+	} {
+		if bannedIn(s) == "" {
+			t.Errorf("%q evades the guard", s)
+		}
+	}
+	for _, s := range []string{"resolve agent: %w", "failed to write current session", "ethos serve"} {
+		if got := bannedIn(s); got != "" {
+			t.Errorf("%q must pass, matched %q", s, got)
+		}
+	}
+	src := "package p\nvar a = \"ethos \" + \"repair\"\nvar b = \"audit \" +\n\t\"quarantine\"\nvar c = \"fine \" + \"text\"\n"
+	f, err := parser.ParseFile(token.NewFileSet(), "p.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		if v, ok := foldedString(n); ok {
+			if term := bannedIn(v); term != "" {
+				found = append(found, v)
+			}
+		}
+		return true
+	})
+	if len(found) != 2 {
+		t.Errorf("concatenated literals: want 2 hits, got %v", found)
 	}
 }
 
