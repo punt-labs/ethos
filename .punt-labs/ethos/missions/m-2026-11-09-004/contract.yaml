@@ -1,0 +1,33 @@
+mission_id: m-2026-11-09-004
+status: closed
+type: design
+created_at: "2026-11-09T19:54:12Z"
+updated_at: "2026-11-10T01:42:15Z"
+closed_at: "2026-11-10T01:42:15Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-11-09T19:54:12Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-ftey.1
+write_set:
+    - DESIGN.md
+    - docs/spec-mission-lifecycle.tex
+success_criteria:
+    - 'DESIGN.md gains DES-084 Ethos repairs its own state, appended after DES-083, covering: layout stamp (repo and global paths, version 5, fields); Ensure gate (signature, lock domain, busy behavior, stamp-current cost, where it is called for CLI, MCP and every hook); the 17 conversion steps in order with the legacy state, origin version, conversion and the existing function reused (file:line); per-step budget and resume rule; failure handling (what blocks, what never blocks); output contract (session-start note, pre-commit stderr only, CLI and MCP); repair log format, cap and rotation; what repair never touches; the commands removed; the legacy readers deleted; rejected alternatives with reasons (user-run repair command, lazy per-reader compatibility, versioned migration framework).'
+    - DES-084 states which DES-079, DES-058, DES-075, DES-054, DES-061, DES-076, DES-080, DES-083, DES-049 and DES-019 clauses it amends, quoting each amended clause's heading or first words with its DESIGN.md line, and the status header of each amended ADR gets an AMENDED by DES-084 note.
+    - Every file:line cited in DES-084 is verified against the worktree; any plan citation that turns out wrong is corrected in DES-084 and listed in the result's open_questions.
+    - Before writing, read prfaq.tex, DES-079, DES-080, DES-083 and the Rejected Alternatives of each amended ADR. If DES-084 contradicts a rejected alternative or a product invariant, stop and report it as an open question rather than writing around it.
+    - docs/spec-mission-lifecycle.tex is amended for the eager import of legacy round decisions and corrections (step 3) and for the removal of the legacy-unknown read state, and fuzz -t passes on it (make fuzz-check or fuzz -t docs/spec-mission-lifecycle.tex); if probcli is installed, run it and report the result.
+    - npx markdownlint-cli2 DESIGN.md reports zero findings.
+    - Commit on fix/self-repair only, git add of the two named files only; do not push, do not touch PRs or merge; no Co-Authored-By or attribution lines in commit messages.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Design-only mission for epic ethos-ftey (Ethos repairs itself). Approved plan: ~/.claude/plans/snuggly-cooking-kitten.md sections 2-6 and 9. Work in worktree <repo>/.claude/worktrees/self-repair on branch fix/self-repair. Operator ruling 2026-11-09: repair is 100% automatic, the user runs nothing, output is at most one diagnostic line plus ~/.punt-labs/ethos/logs/repair.log; obsolete pre-redaction local data may be deleted after a redacted copy is archived; gitleaks and trufflehog are out of scope. No production code in this mission.'

@@ -1,0 +1,37 @@
+mission_id: m-2026-11-09-005
+status: closed
+type: implement
+created_at: "2026-11-09T19:54:57Z"
+updated_at: "2026-11-10T01:42:15Z"
+closed_at: "2026-11-10T01:42:15Z"
+leader: claude
+worker: adb
+evaluator:
+    handle: bwk
+    pinned_at: "2026-11-09T19:54:57Z"
+    hash: e069a3b66a40f74daae4990e6376cf713fe38d98dfae7b87bd0f43fa39737866
+inputs:
+    ticket: ethos-ftey.2
+write_set:
+    - scripts/legacy-corpus.sh
+    - scripts/legacy_corpus_test.sh
+    - internal/autorepair/testdata/
+    - Makefile
+success_criteria:
+    - scripts/legacy-corpus.sh builds each released binary from its git tag into a scratch dir (v3.11.0, v3.12.0, v4.0.0, v4.8.0, v4.13.0, v4.17.0, v4.20.4, v4.21.0, v4.22.1), using the same approach plugin/hooks/shim_commit_test.go uses to build 93c9f82 and v4.8.0 (git worktree or archive of the tag, go build with GOTOOLCHAIN pinned from that tag's go.mod); a tag that will not build is reported with the error and skipped, never silently.
+    - 'For each binary the script runs one fixed scenario in an isolated HOME and a fresh scratch git repo, using only commands that version supports (detect with --help): seed, setup from file or identity create, enable, an identity with a top-level voice field where the version accepts it and a local extension overlay, mission create/dispatch with inputs.bead where supported, result, reflect, advance, close, a delegation via ethos hook pre-tool-use with an Agent payload where supported, ADR create, session-start plus three audit-log hook calls whose tool input contains the scratch HOME path and the fake token [redacted-secret], and one git commit through the installed hooks.'
+    - Each run is snapshotted to internal/autorepair/testdata/corpus/<version>/ as two trees, repo/ and home/ (home limited to .punt-labs/ethos), with absolute scratch paths rewritten to the placeholders @REPO@ and @HOME@ in file contents and the .git directory reduced to what tests need (a bundle file plus the index is acceptable; document the choice). Identities are synthetic (Test Person, [redacted-email]).
+    - 'Damage fixtures under internal/autorepair/testdata/damage/<name>/, each with a README line describing the shape: corrupt sealed chunk; audit lines with invalid backslash escapes like \[REDACTED:path] (ethos-jn25 shape); a corrupt chunk whose recovered line conflicts with a surviving valid chunk (ethos-h5z8 shape); overlay present in both legacy and new locations; both .punt-labs/ethos/config.yaml and .punt-labs/ethos.yaml; a force-added .punt-labs/local file; tracked trace under .punt-labs/ethos/sessions; a pre-commit hook section calling ethos hook commit-trailers; a dead session roster without a checkout field; a repo .gitignore that ignores .punt-labs/ethos/sessions (ethos-7ax7 shape); a live audit file with pre-redaction lines (the 4.22.1 stuck-warning shape).'
+    - internal/autorepair/testdata/README.md records the generator command, each binary's tag and SHA, the go toolchain used, and the total size. Target under 2 MB total; if larger, report why.
+    - 'scripts/legacy_corpus_test.sh checks the committed corpus is reproducible: regenerating one version into a temp dir yields the same file list (contents may differ only in timestamps and IDs, which the script normalizes).'
+    - A Makefile target legacy-corpus regenerates the corpus; it is not part of make check.
+    - grep across the committed corpus finds no real home path (~[redacted-user] ~[redacted-user] and no real email; the fake token and placeholders are the only secrets-shaped strings.
+    - Commit incrementally on fix/self-repair-corpus, git add of named files only, make check passes at each commit (GOTOOLCHAIN=go1.26.5 if the system Go fails); do not push, do not touch PRs or merge; no attribution lines in commit messages.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: 'Test-data mission for epic ethos-ftey (Ethos repairs itself). Approved plan: ~/.claude/plans/snuggly-cooking-kitten.md section 8 ''Sample data''. Worktree <repo>/.claude/worktrees/self-repair-corpus, branch fix/self-repair-corpus. Produce a reproducible corpus of real on-disk ethos state written by released binaries, for the auto-repair tests. No production Go code.'

@@ -1,0 +1,35 @@
+mission_id: m-2026-11-09-006
+status: closed
+type: implement
+created_at: "2026-11-09T23:02:31Z"
+updated_at: "2026-11-10T01:42:16Z"
+closed_at: "2026-11-10T01:42:16Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: djb
+    pinned_at: "2026-11-09T23:02:31Z"
+    hash: 358417d39d5e88f3febe956588d46a5a72063bcea45ffe10b0a8879b7c3a543b
+inputs:
+    ticket: ethos-ftey.5
+write_set:
+    - internal/hook/
+    - internal/audit/
+    - internal/gitenv/
+    - cmd/ethos/
+    - plugin/hooks/
+success_criteria:
+    - 'Bug 1 (stuck audit warning): a live session audit file .punt-labs/local/ethos/sessions/<sid>.audit.jsonl holding a line written before redaction (e.g. tool_input command ''cat ~[redacted-user]/notes.txt'') makes every commit print ''retained-data warning ... requires redacted migration or explicit operator cleanup'' (internal/hook/audit_repository.go:189, cmd/ethos/audit.go:366-368). Fix: under the stream lock, rewrite pending live lines through the stream''s guard (sessionLineGuard/missionLineGuard already redact and recompute tool_input_hash and preview), replace the live file atomically (audit.ReplaceLocalFile), then archive. A pending line whose ts already exists in an archived chunk is dropped from the live file. After one commit the warning is gone, the archive holds only redacted lines, and a second commit prints nothing.'
+    - 'Bug 2 (local files committed): `git add -f .punt-labs/local/...` then `git commit` succeeds through ethos''s hooks. Fix: ethos hook pre-commit removes every staged path under .punt-labs/local/ from the index before sealing (files stay on disk), via a new helper in internal/gitenv that runs git rm --cached -q -- under gitenv.ActualIndexEnv(); it prints one line to stderr naming how many paths it unstaged. Paths already tracked in HEAD under .punt-labs/local/ are staged for removal the same way. Any git failure here blocks the commit with exit 2 and git''s message.'
+    - 'Tests first: for each bug, a test that runs a real git commit through the installed shim against a binary built from the branch (reuse enabledHookRepo/enableSubprocessRepo and commit in cmd/ethos/enable_seal_integration_test.go, or newShimRepo in plugin/hooks/shim_commit_test.go). Show each test failing on the base commit before the fix and passing after; paste both outputs in the result.'
+    - Existing tests that assert the old warning text are updated to the new behavior, not deleted.
+    - GOTOOLCHAIN=go1.26.5 go test -race ./internal/hook/... ./internal/audit/... ./internal/gitenv/... ./cmd/ethos/... ./plugin/hooks/... passes; go vet and staticcheck clean; TestNoUnaccountedProcessStarts passes (git only via internal/gitenv).
+    - One commit per bug, git add of changed files only; do not push, do not touch PRs or merge; no attribution lines.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+round_decisions:
+    version: 1
+    entries: []
+context: Two bug fixes, first commits of epic ethos-ftey. Worktree <repo>/.claude/worktrees/self-repair-bugs, branch fix/self-repair-bugs. Both reproduced on v4.22.1 by the leader.

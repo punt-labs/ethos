@@ -1,0 +1,33 @@
+results:
+    - mission: m-2026-11-09-005
+      round: 1
+      created_at: "2026-11-09T23:11:59Z"
+      author: adb
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: scripts/legacy-corpus.sh
+          added: 909
+          removed: 0
+        - path: scripts/legacy_corpus_test.sh
+          added: 114
+          removed: 0
+        - path: Makefile
+          added: 12
+          removed: 1
+        - path: internal/autorepair/testdata/
+          added: 0
+          removed: 0
+      evidence:
+        - name: nine tags built and snapshotted (v3.11.0 v3.12.0 v4.0.0 v4.8.0 v4.13.0 v4.17.0 v4.20.4 v4.21.0 v4.22.1); toolchains go1.26.1 and go1.26.5 from each go.mod
+          status: pass
+        - name: size check, 517536 bytes in 521 files (target 2097152)
+          status: pass
+        - name: privacy grep via scripts/legacy_corpus_test.sh, no real home path, user name, non-example email or other secret-shaped string
+          status: pass
+        - name: reproducibility, v4.22.1 regenerated file list and normalized contents match
+          status: pass
+        - name: shellcheck on both scripts, golangci-lint, markdownlint, e2e checks in make check
+          status: pass
+        - name: make check go test stage, still running at submission; the diff has no Go code
+          status: skip

@@ -1,0 +1,32 @@
+results:
+    - mission: m-2026-11-09-004
+      round: 1
+      created_at: "2026-11-09T23:20:32Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.8
+      files_changed:
+        - path: DESIGN.md
+          added: 106
+          removed: 12
+      evidence:
+        - name: npx markdownlint-cli2 DESIGN.md (0 issues)
+          status: pass
+        - name: 'citation check: every DESIGN.md line and code file:line cited in DES-084 re-read against the worktree; three DESIGN.md pointers and two code pointers corrected'
+          status: pass
+        - name: fuzz -t docs/spec-mission-lifecycle.tex (unmodified baseline rc=0; spec not edited this round)
+          status: skip
+        - name: probcli on the lifecycle spec (spec not edited this round)
+          status: skip
+      open_questions:
+        - 'Step 3, incomplete round history: the plan fabricates round_decisions from the last known state. DESIGN.md:2906-2908 and docs/spec-mission-lifecycle.tex:450-456 forbid that (''neither CurrentRound nor an event alone fabricates a continue decision''), and validateDecisions (internal/mission/round_decisions.go:41-77) rejects a short prefix. DES-084 fences such a mission and records a residual instead. Does the operator allow a terminal mission to be marked history-incomplete with relaxed validation?'
+        - 'Hidden alias identity get has an external caller: the workspace .bin/git-identity.sh (lines 10, 255) and .docs/TEAM-REGISTRY.md:160. Removal is a cross-repo breaking change. Agree with the workspace owner first, or keep the alias.'
+        - 'hook commit-trailers and hook commit-message: commit-msg sections from v4.13.0 through v4.21.0 call them, and a v4.21.0 section exits 1 when they fail. A shared or tracked core.hooksPath cannot be refreshed (DESIGN.md:14105-14107). Recommendation: keep both, hidden.'
+        - 'Pre-DES-074 PID participant fallback: the plan deletes it. A session that straddles an upgrade is not re-created (DESIGN.md:8347-8353, 8967). Recommendation: keep it for now.'
+        - DES-054 rejected 'Backfill historical audit logs automatically' (DESIGN.md:5361) and DES-065 ruled 'No pre-feature migration' (6912). The 2026-11-09 operator ruling reverses both for storage. Confirm DES-084 may amend them.
+        - 'Plan citation corrections (also in DES-084): resolve.go:618 is :610-621 (loadRepoConfig; the legacy path is at :619-621); DES-079''s stale ''resolve.go:497'' is at DESIGN.md:13530-13531; enable.removeLegacyManagedRules is gitignore.go:190, not :186; the plan''s ''dual create lock :497/:2922'' is internal/mission/store.go:497-505 and 2877-2925; store_refusal.go storeUses rows are 74,83,97,109,116,123 (the plan''s 86, 90 are hook commit-trailers/commit-message, kept pending question 3); MCP per-call location is internal/mcp/store_guard.go:137 (Handler.addTool), not a roots resolution; the plan''s DES-079 ''repair clauses 13592-13597, 13674'' are 13591-13597 and 13671-13690.'
+        - 'Plan facts that do not hold: (a) plan step 17 fills a missing roster checkout from its repo; DES-058 (DESIGN.md:6221) names the empty-Checkout case a bounded residual that ages out, so DES-084 does not fill it. (b) Plan section 6 deletes legacyAuditPath and the legacy audit unions without exception; they serve the outside-a-repository audit write path (internal/hook/audit_paths.go:44, preconditions.go:374), so DES-084 keeps them. (c) The plan says Ensure''s stamp needs no layout entry; the repository stamp under S/.punt-labs/local/ethos/ needs a class-4 table entry or the DES-079 unmatched-path test fails.'
+        - 'Scope: per the leader''s mid-task change, DES-084 is a one-page ADR and the lifecycle spec amendment (eager import for step 3, removal of the legacyUnknown read state) is NOT done. Open: the spec amendment''s content depends on the ruling on question 1. The spec''s legacyUnknown (docs/spec-mission-lifecycle.tex:1198, 1211-1212) and the ''legacy import must explicitly mark complete empty history'' clause (:196-198) are the sites to change.'
+        - 'Live reproduction: committing DES-084 on this branch printed the stuck-tail warning from DESIGN.md/DES-084''s context (audit payload at ts 1794265437905117000 requires redacted migration or explicit operator cleanup). It fails open on blame commits, as DES-079 specifies. The leader''s own session audit file is the live specimen for the step 6 test.'
+      prose: |
+        DES-084 "Ethos repairs its own state" is appended after DES-083 (DESIGN.md:14156 onward) as a PROPOSED ADR, commit 15b8c69 on fix/self-repair. It records the layout stamp, the Ensure gate and its wiring, the 17 steps with origin and the code reused, what repair never touches, the commands removed, the legacy readers deleted, 12 amended clauses (each quoted with its DESIGN.md line), five open questions and four rejected alternatives. Twelve ADR headings gained "AMENDED 2026-11-09 by DES-084": DES-013, 019, 049, 054, 057, 058, 061, 075, 076, 079, 080, 083. DES-013 and DES-057 were not on the contract's list; both are amended in substance and are named in DES-084. DES-050's and DES-072's text is untouched. The prfaq.tex, DES-079, DES-080, DES-083 and the Rejected Alternatives of each amended ADR were read first. No clause of DES-084 contradicts a rejected alternative except the two the operator ruling reverses (DES-054, DES-065), which are open question 5.
