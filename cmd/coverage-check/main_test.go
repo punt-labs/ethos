@@ -369,3 +369,16 @@ func TestWriteRecordsOS(t *testing.T) {
 		t.Fatalf("baseline does not record the os:\n%s", data)
 	}
 }
+
+// A package the report prints at the floor is at the floor. 80.96% prints
+// as 81.0%, and the gate compares what it prints, not the unrounded ratio;
+// otherwise CI fails on a figure the baseline file cannot express.
+func TestFloorAndBaselineCompareThePrintedFigure(t *testing.T) {
+	// 2024 of 2500 statements = 80.96%, which prints as 81.0%.
+	prof := profile([3]any{"internal/autorepair/e.go", 2024, true}, [3]any{"internal/autorepair/f.go", 476, false})
+	base := "overall-target 10.0\ninternal/autorepair 81.1\n"
+	root, p, b := setup(t, prof, base, true)
+	if code, out := runTool(t, root, p, b); code != 0 {
+		t.Fatalf("81.0%% printed must satisfy the 81.0 floor and the 81.1-0.1 baseline: %s", out)
+	}
+}

@@ -54,11 +54,14 @@ const (
 
 type tally struct{ stmts, covered int }
 
+// pct is the one-decimal figure the report prints. Every comparison uses it
+// too, so a package that prints 81.0% is at an 81.0 floor or baseline: the
+// baseline file cannot express a finer figure than the report shows.
 func (t tally) pct() float64 {
 	if t.stmts == 0 {
 		return 100
 	}
-	return 100 * float64(t.covered) / float64(t.stmts)
+	return math.Round(1000*float64(t.covered)/float64(t.stmts)) / 10
 }
 
 type baseline struct {
