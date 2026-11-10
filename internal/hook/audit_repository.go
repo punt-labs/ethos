@@ -124,10 +124,17 @@ func sealPolicyStreams(p layout.Policy, streams []audit.Stream, now time.Time, o
 }
 
 func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealOptions) (int, []string, error) {
-	// A live line whose ts is archived with another payload is stale: the
-	// archive wins, so the line is dropped before the union read refuses it.
+	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
+	guard := sessionLineGuard(checkout)
+	if s.Namespace == audit.MissionNS {
+		guard = missionLineGuard(checkout)
+	}
+	// New writes are guarded before their append. A live line may predate that
+	// guard: it is redacted in place, and a line whose ts is archived with
+	// another payload is dropped (the archive wins), before the union read
+	// would refuse it and before anything immutable is written.
 	if !opts.DryRun {
-		if _, err := audit.DropArchivedConflicts(p, s); err != nil {
+		if _, err := audit.RedactLive(p, s, audit.LineGuard(guard)); err != nil {
 			return 0, nil, err
 		}
 	}
@@ -148,11 +155,6 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 	dir, err := audit.ArchiveDir(p, s, date)
 	if err != nil {
 		return 0, nil, err
-	}
-	checkout := filepath.Dir(filepath.Dir(p.CheckoutRecordRoot()))
-	guard := sessionLineGuard(checkout)
-	if s.Namespace == audit.MissionNS {
-		guard = missionLineGuard(checkout)
 	}
 	session := ""
 	if s.Namespace == audit.MissionNS {
@@ -182,29 +184,10 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 		reportf(opts, "would archive %d line(s) for stream %s\n", len(pending), s.Key())
 		return len(pending), nil, nil
 	}
-	// New writes are guarded before their append. A pending line still in the
-	// live file may predate that guard: it is redacted in place, and the live
-	// file replaced, before anything immutable is written. Any other source
+	// Any pending line a source other than the live file would still change
 	// (frozen legacy, a published copy) is not ours to rewrite; do not
 	// manufacture a conflict with its retained source on the next union read.
-	livePath := s.LivePath(p)
-	rewrite := false
-	for i, l := range pending {
-		out, _, _ := guard(l.Raw)
-		changed, err := payloadChanged(l, out)
-		if err != nil {
-			return 0, nil, err
-		}
-		if !changed {
-			continue
-		}
-		if l.Source != livePath {
-			return 0, nil, errNeedsMigration(l.TS)
-		}
-		pending[i].Raw = out
-		rewrite = true
-	}
-	for _, l := range data.Legacy {
+	for _, l := range pending {
 		out, _, _ := guard(l.Raw)
 		changed, err := payloadChanged(l, out)
 		if err != nil {
@@ -214,15 +197,14 @@ func sealPolicyStream(p layout.Policy, s audit.Stream, now time.Time, opts SealO
 			return 0, nil, errNeedsMigration(l.TS)
 		}
 	}
-	if rewrite {
-		var live []audit.Line
-		for _, l := range pending {
-			if l.Source == livePath {
-				live = append(live, l)
-			}
+	for _, l := range data.Legacy {
+		out, _, _ := guard(l.Raw)
+		changed, err := payloadChanged(l, out)
+		if err != nil {
+			return 0, nil, err
 		}
-		if err := audit.ReplaceLocalFile(p, livePath, auditLinesBytes(live)); err != nil {
-			return 0, nil, fmt.Errorf("replacing live audit %s with its redacted lines: %w", livePath, err)
+		if changed {
+			return 0, nil, errNeedsMigration(l.TS)
 		}
 	}
 	if len(pending) > 0 {
@@ -306,7 +288,7 @@ func payloadChanged(l audit.Line, guarded []byte) (bool, error) {
 }
 
 func errNeedsMigration(ts int64) error {
-	return fmt.Errorf("audit payload at ts %d requires redacted migration or explicit operator cleanup before immutable archival; original source retained", ts)
+	return fmt.Errorf("audit payload at ts %d sits in a published or frozen source that ethos does not rewrite; it was left in place and the live data kept", ts)
 }
 
 func policyChunkName(s audit.Stream, first, last int64) string {

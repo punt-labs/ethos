@@ -66,6 +66,22 @@ func WithStreamLock(p layout.Policy, s Stream, fn func() error) error {
 	return WithLock(path, fn)
 }
 
+// TryWithStreamLock is WithStreamLock without the wait: when another holder has
+// the stream it returns busy=true and fn does not run.
+func TryWithStreamLock(p layout.Policy, s Stream, fn func() error) (busy bool, err error) {
+	if err := s.Validate(); err != nil {
+		return false, err
+	}
+	path, err := p.LockPath("audit-stream", s.Key())
+	if err != nil {
+		return false, err
+	}
+	if err := layout.EnsureLocalDir(p, filepath.Dir(path)); err != nil {
+		return false, err
+	}
+	return TryLock(path, fn)
+}
+
 func ArchiveRoot(p layout.Policy) string { return filepath.Join(p.LocalRoot(), "trace") }
 
 // StreamDirs returns all historical read candidates, regardless of recording
