@@ -89,23 +89,23 @@ var Steps []Step
 // StepOrder is the DES-084 order. A step not named here is a build error in
 // the engine's order test.
 var StepOrder = []string{
-	"global-missions",      // 1
-	"global-audit",         // 2
-	"round-decisions",      // 3
-	"scrub-records",        // 4
-	"record-tree-trace",    // 5
-	"live-tails",           // 6
-	"corrupt-chunks",       // 7
-	"overlays",             // 8
-	"untrack-local",        // 9
-	"gitignore",            // 10
-	"config-file",          // 11
-	"repo-adrs",            // 12
-	"voice-field",          // 13
-	"bead-alias",           // 14
-	"leftovers",            // 15
-	"hook-sections",        // 16
-	"sessions",             // 17
+	"global-missions",   // 1
+	"global-audit",      // 2
+	"round-decisions",   // 3
+	"scrub-records",     // 4
+	"record-tree-trace", // 5
+	"live-tails",        // 6
+	"corrupt-chunks",    // 7
+	"overlays",          // 8
+	"untrack-local",     // 9
+	"gitignore",         // 10
+	"config-file",       // 11
+	"repo-adrs",         // 12
+	"voice-field",       // 13
+	"bead-alias",        // 14
+	"leftovers",         // 15
+	"hook-sections",     // 16
+	"sessions",          // 17
 }
 
 // Register adds a step. Called from each step file's init.
