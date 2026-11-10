@@ -111,6 +111,7 @@ deletion.
 ## What to do, in order
 
 ### 0. First 20 minutes: prove what exists
+
 In `.claude/worktrees/self-repair` (integration branch):
 ```
 GOTOOLCHAIN=go1.26.5 go build ./... && GOTOOLCHAIN=go1.26.5 go vet ./...
@@ -125,6 +126,7 @@ commit twice: warning on neither; `git add -f .punt-labs/local/y && git commit`:
 local file absent from the commit). If anything fails, fix it before anything else.
 
 ### 1. Wave 1: ten units in parallel (Workflow tool, `pipeline()`, worktree per unit off `origin/fix/self-repair-integration`)
+
 The previous session had this workflow script ready and was stopped before
 launch. Rebuild it from the plan §11 step 4 and DES-084. Units: engine (`.3`),
 untrack step + pre-commit cheap pass, steps 1/2/12, steps 3/4/14, steps 5/15,
@@ -142,12 +144,14 @@ the session confirms ultracode; the operator has pre-authorized it (ruling 6,
 written into `punt-labs/CLAUDE.md`), so cite that and proceed.
 
 ### 2. Wave 2
+
 Delete legacy readers and dead code (`.8`, plan §6, deadcode-verified, package
 by package), docs (`.10`, plan §9: DESIGN step details, prfaq, guide pairs via
 `make sync-embed`, storage-layout, README, CHANGELOG, lifecycle spec with
 fuzz), coverage gate green.
 
 ### 3. Verify and ship
+
 `make check` green locally (`GOTOOLCHAIN=go1.26.5`) and in CI. Upgrade demo
 on copies of real repos (ethos, punt-kit 189 tracked trace files, vox 288) in
 an isolated HOME: one session start + one commit each → one repair line, then
