@@ -346,7 +346,7 @@ func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
 	}
 	if len(ranges) > 1 {
 		return nil, false, fmt.Errorf(
-			"%q: %d sections found for the same tag — hand-duplicated; a refresh collapses them into one: %w", tag, len(ranges), ErrSectionDuplicated)
+			"%q: %d sections found for the same tag; left unchanged: %w", tag, len(ranges), ErrSectionDuplicated)
 	}
 	r := ranges[0]
 	var body []byte

@@ -34,7 +34,25 @@ const (
 	// StatusSkippedTrackedMissing is StatusSkippedTracked for a hook that does
 	// not exist yet: nothing was installed.
 	StatusSkippedTrackedMissing = "skipped-tracked-missing"
+	// StatusSkippedMalformed: the hook's ethos section is truncated, duplicated
+	// or not ethos-written. Only a person editing the file changes that, so the
+	// step carries the condition in Cause and is not an error.
+	StatusSkippedMalformed = "skipped-malformed"
 )
+
+// malformedCause states the condition behind a githook section error that a
+// SessionStart refresh cannot change, and "" for any other error.
+func malformedCause(err error) string {
+	switch {
+	case errors.Is(err, githook.ErrSectionTruncated):
+		return "it has a BEGIN with no matching END"
+	case errors.Is(err, githook.ErrSectionDuplicated):
+		return "it has more than one section for the same tag"
+	case errors.Is(err, githook.ErrSectionNotEthosOwned):
+		return "its section does not carry the ethos fingerprint"
+	}
+	return ""
+}
 
 // RefreshHooksTo is the hook-only slice of EnableTo: it deposits nothing,
 // touches no .gitignore, writes no marker, and adds no import. A release that
@@ -82,6 +100,11 @@ func refreshHooks(repoRoot, storeRoot string, rep *Report, allowTracked bool) er
 		}
 		path := filepath.Join(dir, name)
 		current, err := sectionCurrent(path, s.src, s.tag, s.ident)
+		if cause := malformedCause(err); cause != "" && !allowTracked {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: %v", name, err))
+			rep.stepCause("hook:"+name, StatusSkippedMalformed, path, cause)
+			continue
+		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("checking %s: %w", name, err))
 			continue

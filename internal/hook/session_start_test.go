@@ -905,7 +905,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			},
 			wantContext: []string{
 				"Ethos could not refresh stale git hook section(s): boom.",
-				"Commits may be blocked until the next session start refreshes the section(s).",
+				"Commits may be blocked.",
 			},
 		},
 		{
@@ -923,7 +923,14 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			refresh: func(_, _ string) (HookRefresh, error) {
 				return HookRefresh{NonShell: []string{"pre-commit"}, Warnings: []string{"non-shell shebang"}}, nil
 			},
-			wantContext: []string{"did not chain the seal section into pre-commit: non-shell hook; run `ethos doctor`."},
+			wantContext: []string{"did not chain the seal section into pre-commit: non-shell hook, so the seal never runs from it."},
+		},
+		{
+			name: "a malformed section states the condition and promises no repair",
+			refresh: func(_, _ string) (HookRefresh, error) {
+				return HookRefresh{Malformed: []HookProblem{{Hook: "commit-msg", Cause: "it has a BEGIN with no matching END"}}}, nil
+			},
+			wantContext: []string{"Ethos could not refresh the commit-msg section: it has a BEGIN with no matching END; commits may be blocked."},
 		},
 		{
 			name: "a tracked hook left stale is told to the session",
@@ -980,6 +987,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 				assert.Contains(t, out, w)
 			}
 			assert.NotContains(t, out, "ethos enable", "repair is automatic; the user is never told to act")
+			assert.NotContains(t, out, "next session start", "a message states the condition, never a future repair")
 		})
 	}
 }
@@ -994,7 +1002,8 @@ func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".punt-labs", "ethos", "enabled"), nil, 0o644))
 		got := refreshStaleHooks(refresh, resolve.Located{Checkout: root, Store: root, StoreErr: errors.New("store unreadable")})
 		assert.Contains(t, got, "Git hook refresh skipped: store unreadable.")
-		assert.Contains(t, got, "run `ethos doctor`")
+		assert.Contains(t, got, "A stale seal section may block commits.")
+		assert.NotContains(t, got, "ethos doctor")
 	})
 	t.Run("dormant repo hears nothing", func(t *testing.T) {
 		root := t.TempDir()
@@ -1004,7 +1013,7 @@ func TestRefreshStaleHooks_StoreFailure(t *testing.T) {
 	t.Run("unlocated checkout is told, naming the cause", func(t *testing.T) {
 		got := refreshStaleHooks(refresh, resolve.Located{Checkout: "/c", Store: "/s", CheckoutErr: errors.New("no checkout")})
 		assert.Contains(t, got, "Git hook refresh skipped: checkout not located: no checkout.")
-		assert.Contains(t, got, "run `ethos doctor`")
+		assert.NotContains(t, got, "ethos doctor")
 	})
 	assert.False(t, called, "refresh must not run against an unlocated store or checkout")
 }

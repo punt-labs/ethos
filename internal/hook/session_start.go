@@ -72,7 +72,16 @@ type HookRefresh struct {
 	// TrackedMissing names hooks inside the work tree that do not exist and
 	// were not created.
 	TrackedMissing []string
-	Warnings       []string // advisory lines for stderr
+	// Malformed names hooks whose ethos section is truncated, duplicated or not
+	// ethos-written, with the condition; only an edit to the file changes it.
+	Malformed []HookProblem
+	Warnings  []string // advisory lines for stderr
+}
+
+// HookProblem is a hook the refresh cannot change and why.
+type HookProblem struct {
+	Hook  string
+	Cause string
 }
 
 // HandleSessionStart reads the SessionStart hook payload from stdin,
@@ -256,7 +265,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 // hookRefreshSkipped is the sentence for a refresh that did not run because of
 // cause (a located failure).
 func hookRefreshSkipped(cause string, err error) string {
-	return fmt.Sprintf("Git hook refresh skipped: %s%v. A stale seal section may block commits; run `ethos doctor`.", cause, err)
+	return fmt.Sprintf("Git hook refresh skipped: %s%v. A stale seal section may block commits.", cause, err)
 }
 
 // skippedHookNote tells an enabled repo's session that the refresh was skipped
@@ -312,7 +321,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	var problems []string
 	for _, h := range r.NonShell {
 		problems = append(problems, fmt.Sprintf(
-			"Ethos did not chain the seal section into %s: non-shell hook; run `ethos doctor`.", h))
+			"Ethos did not chain the seal section into %s: non-shell hook, so the seal never runs from it.", h))
 	}
 	for _, h := range r.Tracked {
 		problems = append(problems, fmt.Sprintf(
@@ -321,6 +330,10 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 	for _, h := range r.Shared {
 		problems = append(problems, fmt.Sprintf(
 			"Ethos left the stale %s hook in place: core.hooksPath is shared outside this repo.", h))
+	}
+	for _, m := range r.Malformed {
+		problems = append(problems, fmt.Sprintf(
+			"Ethos could not refresh the %s section: %s; commits may be blocked.", m.Hook, m.Cause))
 	}
 	for _, h := range r.TrackedMissing {
 		problems = append(problems, fmt.Sprintf(
@@ -333,7 +346,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 			parts = append(parts, fail+": "+err.Error())
 		} else {
 			problems = append(problems, fmt.Sprintf(
-				"Ethos could not refresh stale git hook section(s): %v. Commits may be blocked until the next session start refreshes the section(s).", err))
+				"Ethos could not refresh stale git hook section(s): %v. Commits may be blocked.", err))
 		}
 	}
 	var out []string
@@ -342,7 +355,7 @@ func refreshStaleHooks(refresh func(checkout, store string) (HookRefresh, error)
 		fmt.Fprintf(os.Stderr, "ethos: session-start: %s\n", joined)
 		sentence := "Ethos " + joined + "."
 		if err != nil {
-			sentence += " Commits may be blocked until the next session start refreshes the section(s)."
+			sentence += " Commits may be blocked."
 		}
 		out = append(out, sentence)
 	}

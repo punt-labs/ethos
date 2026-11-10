@@ -2,6 +2,7 @@ package autorepair
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -44,6 +45,15 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 			case "refreshed", "chained", "installed":
 				out.Items++
 				env.Log.Logf(step, "refresh-hook", []string{st.Detail}, nil)
+			case enable.StatusSkippedMalformed:
+				// A permanent condition of the file: a residual, not a failure,
+				// so the stamp is not withheld and the step is not retried forever.
+				out.Residuals = append(out.Residuals, Residual{
+					Step:   step,
+					ID:     st.Step + ": " + relTo(checkout, st.Detail),
+					Reason: "hook section cannot be refreshed: " + st.Cause,
+				})
+				env.Log.Logf(step, "refresh-hook", []string{st.Detail}, errors.New(st.Cause))
 			case enable.StatusSkippedNonShell, enable.StatusSkippedTracked,
 				enable.StatusSkippedShared, enable.StatusSkippedTrackedMissing:
 				out.Residuals = append(out.Residuals, Residual{

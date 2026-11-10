@@ -129,3 +129,57 @@ func TestHookSectionsSharedHooksPathIsResidual(t *testing.T) {
 	require.Len(t, out.Residuals, 2)
 	assert.Equal(t, stepHookSections, out.Residuals[0].Step)
 }
+
+// A truncated or duplicated section is a permanent condition of the file: the
+// step records it once as a residual, returns no error (an error withholds the
+// stamp and retries forever), and leaves the file byte-identical.
+func TestHookSectionsMalformedIsResidualNotError(t *testing.T) {
+	shapes := map[string]func(t *testing.T, s string) string{
+		"truncated": func(t *testing.T, s string) string {
+			i := strings.LastIndex(s, "# --- END ")
+			require.GreaterOrEqual(t, i, 0)
+			return s[:i]
+		},
+		"duplicated": func(t *testing.T, s string) string {
+			i := strings.Index(s, "# --- BEGIN ")
+			require.GreaterOrEqual(t, i, 0)
+			return s + s[i:]
+		},
+	}
+	for name, mutate := range shapes {
+		t.Run(name, func(t *testing.T) {
+			env := fixtureEnv(t, "corpus/v4.22.1")
+			path := filepath.Join(env.Roots.Checkout, ".git", "hooks", "commit-msg")
+			cur, err := runHookSections(context.Background(), env)
+			require.NoError(t, err)
+			require.Empty(t, cur.Residuals)
+			b, err := os.ReadFile(path)
+			require.NoError(t, err)
+			bad := mutate(t, string(b))
+			require.NoError(t, os.WriteFile(path, []byte(bad), 0o755))
+
+			out, err := runHookSections(context.Background(), env)
+			require.NoError(t, err)
+			assert.Equal(t, 0, out.Items)
+			require.Len(t, out.Residuals, 1)
+			r := out.Residuals[0]
+			assert.Equal(t, stepHookSections, r.Step)
+			assert.Contains(t, r.ID, "commit-msg")
+			assert.Contains(t, r.Reason, "cannot be refreshed")
+			assert.NotContains(t, r.ID+r.Reason, env.Roots.Checkout, "residuals name no absolute path")
+			assert.NotContains(t, r.ID+r.Reason, os.Getenv("HOME"))
+			assert.NotContains(t, r.Reason, "next session", "the reason states the condition, not a future repair")
+
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, bad, string(after), "the file is byte-identical")
+
+			again, err := runHookSections(context.Background(), env)
+			require.NoError(t, err)
+			assert.Equal(t, 0, again.Items)
+			after, err = os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, bad, string(after))
+		})
+	}
+}

@@ -39,6 +39,7 @@ func TestSessionStartPassSilencesFlaggedTombstoneWarning(t *testing.T) {
 	assert.Contains(t, seal(), "sess-lost", "the first seal warns")
 	assert.Contains(t, seal(), "sess-lost", "the warning repeats until the tombstone is retired")
 
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs"), 0o755))
 	env, err := autorepair.HookEnv(resolve.Located{Store: repo, Checkout: repo}, global)
 	require.NoError(t, err)
 	require.True(t, env.InRepository(), "the repository pass is active")

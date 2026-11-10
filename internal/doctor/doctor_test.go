@@ -1492,7 +1492,8 @@ func TestCheckHookCurrency(t *testing.T) {
 		require.NoError(t, os.WriteFile(hookPath(dir), body, 0o755))
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
-		assert.Contains(t, r.Detail, "hand-duplicated")
+		assert.Contains(t, r.Detail, "left unchanged")
+		assert.NotContains(t, r.Detail, "collapse")
 	})
 
 	t.Run("truncated section -> FAIL", func(t *testing.T) {
