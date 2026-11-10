@@ -84,8 +84,8 @@ func salvageBytes(p layout.Policy, s Stream, in salvageInput, guard LineGuard) (
 	m := Marker{Chunk: cn.Stem(), Reason: "chunk bytes were damaged; surviving lines were recovered", VerifiedLast: r.verifiedLast}
 	// A retired file (<stem>.jsonl.corrupt) is covered by nothing once its
 	// bytes are gone; its marker is written whether or not a line was lost,
-	// so the stem stays accounted for.
-	if res.Lost || in.retired {
+	// so the stem stays accounted for. Only a loss records a range.
+	if res.Lost {
 		m.UnrecoveredFirst, m.UnrecoveredLast = r.lo, r.hi
 	}
 	// writeMarkers makes every record of a loss durable. A replacement that

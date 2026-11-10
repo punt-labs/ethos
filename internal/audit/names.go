@@ -261,13 +261,14 @@ func splitTrailingTwo(s string) (first, last, prefix string, ok bool) {
 }
 
 // parseTSPair parses two chunk timestamp fields, each exactly Digits digits.
+// A pair whose first is past its last names no range and is rejected.
 func parseTSPair(firstStr, lastStr string) (first, last int64, ok bool) {
 	f, ok := parseField(firstStr)
 	if !ok {
 		return 0, 0, false
 	}
 	l, ok := parseField(lastStr)
-	if !ok {
+	if !ok || f > l {
 		return 0, 0, false
 	}
 	return f, l, true

@@ -424,3 +424,40 @@ func TestOrphanedHeldQuarantineIsRecovered(t *testing.T) {
 	_ = dir
 	fixSecondRun(t, env)
 }
+
+// A legacy raw .corrupt that duplicates a valid chunk exactly lost nothing: its
+// marker exists and records no gap.
+func TestRepairFixtureLegacyDuplicateIsNoGap(t *testing.T) {
+	env, log, s, dir, _ := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	body := stableLine(fixT0, "A") + stableLine(fixT0+2000, "C")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(body), 0o600))
+	c := filepath.Join(dir, audit.CorruptName(cn.Stem()))
+	require.NoError(t, os.WriteFile(c, []byte(body), 0o600))
+	a := runStep(t, runCorruptChunks, env)
+	t.Logf("run1 corrupt=%+v\nlog:\n%s", a, log.text())
+	assert.Empty(t, a.Residuals)
+	assert.NoFileExists(t, c)
+	mk, err := audit.ReadMarker(filepath.Join(dir, cn.MarkerFile()))
+	require.NoError(t, err, "marker exists")
+	assert.False(t, mk.HasGap(), "nothing lost")
+	data, err := audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	assert.Empty(t, data.Gaps, "ReadStream reports no gap")
+	assert.Contains(t, log.text(), "gap=false")
+	fixSecondRun(t, env)
+}
+
+// A chunk name whose first ts is past its last names no range: malformed, so
+// permanent.
+func TestInvertedChunkNameIsResidual(t *testing.T) {
+	env, _, s, dir, _ := fixEnv(t)
+	require.NoError(t, os.WriteFile(fixChunk(dir, fixT0+5000, fixT0), []byte(stableLine(fixT0, "A")), 0o600))
+	plant(t, env.Policy, s.LivePath(env.Policy), fixCmd(fixT0+9000, "Bash", "echo hi"))
+	for _, run := range []func(context.Context, Env) (Outcome, error){runCorruptChunks, runLiveTails} {
+		out := runStep(t, run, env)
+		assert.False(t, out.Deferred, "a malformed name is never deferred")
+		require.Len(t, out.Residuals, 1)
+		assert.NotContains(t, out.Residuals[0].Reason, dir)
+	}
+}
