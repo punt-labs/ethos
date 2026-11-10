@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
-	"github.com/punt-labs/ethos/v4/internal/repair"
 )
 
 const stepLeftovers = "leftovers"
@@ -22,11 +21,18 @@ const staleAfter = time.Hour
 
 func init() { Register(Step{Name: stepLeftovers, Scope: ScopeBoth, Run: runLeftovers}) }
 
-// runLeftovers deletes old lock files, migration staging directories and
-// temporary-file leftovers from the record trees and the global store. The
-// repository's current locks under S/.punt-labs/local and the global lock
-// directory ~/.punt-labs/ethos/locks belong to running code and are never
-// touched. A lock another process holds is skipped and the step defers.
+// runLeftovers deletes migration staging directories and temporary-file
+// leftovers from the record trees and the global store, and the four obsolete
+// lock files older releases created inside the record tree
+// (missions.jsonl.lock, missions/.create.lock, missions/<id>/.lock and
+// identities/<handle>.yaml.lock), which no current writer opens.
+//
+// No other lock is ever deleted. A lock a current writer opens by path
+// (session, counter, ADR, mission, delegation and dispatch-pending locks in
+// the global store; everything under the local lock directory) is live even
+// when idle: unlinking it lets a second writer create a second inode and two
+// holders share one critical section (internal/identity/persistence.go).
+// An obsolete lock that is held is skipped and the step defers.
 func runLeftovers(ctx context.Context, env Env) (Outcome, error) {
 	var out Outcome
 	var roots []string
@@ -79,14 +85,38 @@ func sweepLeftovers(ctx context.Context, env Env, root string, out *Outcome) err
 			}
 			return nil
 		}
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			return rerr
+		}
 		switch {
 		case strings.HasSuffix(name, ".lock"):
-			removeIdleLock(env, path, out)
+			if !global && isObsoleteRecordLock(filepath.ToSlash(rel)) {
+				removeObsoleteLock(env, path, out)
+			}
 		case isTempLeftover(name):
 			removeStale(env, path, false, out)
 		}
 		return nil
 	})
+}
+
+// isObsoleteRecordLock reports whether rel (slash-separated, relative to a
+// record root) is one of the four lock shapes older releases wrote into the
+// record tree. The list is repair.obsolete's; the record tree holds no other
+// lock a current writer opens.
+func isObsoleteRecordLock(rel string) bool {
+	a := strings.Split(rel, "/")
+	base := a[len(a)-1]
+	switch {
+	case rel == "missions.jsonl.lock", rel == "missions/.create.lock":
+		return true
+	case len(a) == 3 && a[0] == "missions" && base == ".lock":
+		return true
+	case len(a) == 2 && a[0] == "identities" && strings.HasSuffix(base, ".yaml.lock"):
+		return true
+	}
+	return false
 }
 
 func isMigrateStaging(name string) bool {
@@ -128,27 +158,26 @@ func removeStale(env Env, path string, dir bool, out *Outcome) {
 	out.Items++
 }
 
-// removeIdleLock deletes the lock file at path if no process holds it.
-func removeIdleLock(env Env, path string, out *Outcome) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+// removeObsoleteLock deletes an obsolete record-tree lock if no process holds
+// it. A held one is an older writer still running: skip it and defer.
+func removeObsoleteLock(env Env, path string, out *Outcome) {
+	held, err := lockHeld(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
 	if err != nil {
-		env.Log.Logf(stepLeftovers, "open-lock", []string{path}, err)
-		out.Residuals = append(out.Residuals, Residual{Step: stepLeftovers, ID: path, Reason: fmt.Sprintf("cannot open lock: %v", err)})
+		env.Log.Logf(stepLeftovers, "probe-lock", []string{path}, err)
+		out.Residuals = append(out.Residuals, Residual{Step: stepLeftovers, ID: path, Reason: fmt.Sprintf("cannot probe lock: %v", err)})
 		return
 	}
-	if err := repair.TryLock(f); err != nil {
-		f.Close()
+	if held {
 		env.Log.Logf(stepLeftovers, "skip-busy-lock", []string{path}, nil)
 		out.Deferred = true
 		return
 	}
-	// Closing releases the lock; Windows cannot delete an open file.
-	err = errors.Join(f.Close(), os.Remove(path))
+	err = os.Remove(path)
 	env.Log.Logf(stepLeftovers, "delete-lock", []string{path}, err)
-	if err != nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		out.Residuals = append(out.Residuals, Residual{Step: stepLeftovers, ID: path, Reason: fmt.Sprintf("cannot delete: %v", err)})
 		return
 	}

@@ -3,6 +3,9 @@
 package autorepair
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -105,5 +108,22 @@ func listFiles(t *testing.T, root string) []string {
 		return nil
 	})
 	sort.Strings(out)
+	return out
+}
+
+// hashFiles maps every file under the given roots (relative path, prefixed by
+// the root's index) to the sha256 of its bytes, so a test can assert a run
+// changed nothing.
+func hashFiles(t *testing.T, roots ...string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for i, root := range roots {
+		for _, f := range listFiles(t, root) {
+			b, err := os.ReadFile(filepath.Join(root, f))
+			require.NoError(t, err)
+			sum := sha256.Sum256(b)
+			out[fmt.Sprintf("%d:%s", i, f)] = hex.EncodeToString(sum[:])
+		}
+	}
 	return out
 }
