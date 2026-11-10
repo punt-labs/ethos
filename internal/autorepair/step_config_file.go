@@ -108,7 +108,10 @@ func symlinkUnder(root, path string) (string, error) {
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			r, _ := filepath.Rel(root, cur)
+			r, err := filepath.Rel(root, cur)
+			if err != nil {
+				return "", fmt.Errorf("relating %s to %s: %w", cur, root, err)
+			}
 			return filepath.ToSlash(r), nil
 		}
 	}
