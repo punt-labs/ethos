@@ -192,8 +192,8 @@ func removeLegacyManagedRules(data []byte) ([]byte, []string) {
 }
 
 // retireLegacyManagedRules is removeLegacyManagedRules except that a pattern in
-// keep stays in the file. The sessions patterns inside the block are retired
-// but not returned: they ignore tracked records, so no file depends on them.
+// keep stays in the file. A sessions ignore line is not one of ours (no released
+// block wrote it), so it ends the block and stays as user content.
 func retireLegacyManagedRules(data []byte, keep map[string]bool) ([]byte, []string) {
 	lines := strings.SplitAfter(string(data), "\n")
 	managed := false
@@ -216,8 +216,6 @@ func retireLegacyManagedRules(data []byte, keep map[string]bool) ([]byte, []stri
 		}
 		if managed {
 			switch text {
-			case ".punt-labs/ethos/sessions", ".punt-labs/ethos/sessions/", ".punt-labs/ethos/sessions/**":
-				continue
 			case ".punt-labs/**/local/**", ".punt-labs/ethos/missions/**/*.lock",
 				".punt-labs/**/*.ethos-tmp*", ".punt-labs/**/*.local.*",
 				".punt-labs/ethos/**/*.local.yaml",

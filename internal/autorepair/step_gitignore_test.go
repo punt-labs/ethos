@@ -123,19 +123,31 @@ func TestGitignoreKeepsPatternsOtherToolsFilesDependOn(t *testing.T) {
 	assert.Equal(t, 0, again.Items)
 }
 
-func TestGitignoreSessionsLineInsideBlockIsRetired(t *testing.T) {
+func TestGitignoreSessionsLineInsideBlockIsKept(t *testing.T) {
 	block := "# ethos runtime (never track) — DES-058 live zone + mission locks\n" +
 		".punt-labs/**/local/**\n" +
 		".punt-labs/ethos/sessions/\n" +
 		".punt-labs/**/*.ethos-tmp*\n"
 	t.Run("inside the block", func(t *testing.T) {
 		env := fixtureEnv(t, "corpus/v4.20.4")
-		path := filepath.Join(env.Roots.Checkout, ".gitignore")
+		repo := env.Roots.Checkout
+		path := filepath.Join(repo, ".gitignore")
 		require.NoError(t, os.WriteFile(path, []byte(block), 0o644))
+		audit := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "s1", "audit.jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(audit), 0o755))
+		require.NoError(t, os.WriteFile(audit, []byte("{}\n"), 0o600))
+		ignored := func() bool {
+			_, err := gitenv.Output(repo, "git", "check-ignore", "-q", ".punt-labs/ethos/sessions/s1/audit.jsonl")
+			return err == nil
+		}
+		require.True(t, ignored(), "ignored before the step")
+
 		out, err := runGitignore(context.Background(), env)
 		require.NoError(t, err)
-		assert.Empty(t, out.Residuals)
-		assert.Equal(t, singleRuleBlock, readFixture(t, path), "the whole former block is gone")
+		assert.True(t, ignored(), "ignored after the step")
+		require.Len(t, out.Residuals, 1)
+		assert.Contains(t, out.Residuals[0].ID, ".punt-labs/ethos/sessions/")
+		assert.Contains(t, readFixture(t, path), ".punt-labs/ethos/sessions/\n", "the line is kept")
 	})
 	t.Run("outside the block", func(t *testing.T) {
 		env := fixtureEnv(t, "corpus/v4.20.4")
