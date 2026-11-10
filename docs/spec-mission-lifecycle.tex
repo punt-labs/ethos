@@ -464,6 +464,8 @@ The fence is an additional precondition on those operations, checked on
 a copy so a refusal leaves every file as it was; the schemas above are
 unchanged because the model has no state for unimportable legacy history.
 Reads are not fenced and report the history as unknown.
+The fence applies only to repository (two-tree) storage, and \field{Create}
+seeds empty decisions, so a new mission is never fenced.
 
 \field{blockingDelegationCount} models \field{countBlockingDelegations}'s
 return value (store.go:1959--1999) --- the count \field{Abandon}'s own
