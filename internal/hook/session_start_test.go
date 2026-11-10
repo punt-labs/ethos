@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -1025,4 +1026,43 @@ func TestHandleSessionStart_PolicyIssueDoesNotSkipRefresh(t *testing.T) {
 		Store: identity.NewStore(dir), Sessions: session.NewStore(dir), Issue: issue, RefreshHooks: refresh})
 	assert.Equal(t, 1, calls)
 	assert.Contains(t, out, "refreshed stale git hook section(s) at session start: pre-commit")
+}
+
+func TestHandleSessionStart_RepairNote(t *testing.T) {
+	tests := []struct {
+		name     string
+		repair   func(context.Context) (int, error)
+		wantNote string
+		wantNone bool
+	}{
+		{
+			name:     "repaired items are told once, naming what ethos did",
+			repair:   func(context.Context) (int, error) { return 3, nil },
+			wantNote: "ethos: upgraded storage (3 items; see ~/.punt-labs/ethos/logs/repair.log)",
+		},
+		{
+			name:     "nothing repaired says nothing",
+			repair:   func(context.Context) (int, error) { return 0, nil },
+			wantNone: true,
+		},
+		{
+			name:     "a repair error never fails the session or reaches the user",
+			repair:   func(context.Context) (int, error) { return 0, errors.New("boom") },
+			wantNone: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, ss := setupIdentityWithAttributes(t, &identity.Identity{Name: "A", Handle: "a", Kind: "human"}, "", "")
+			var calls int
+			repair := func(ctx context.Context) (int, error) { calls++; return tt.repair(ctx) }
+			out := captureSessionStartOutput(t, `{"session_id":"s-repair"}`, SessionStartDeps{Store: s, Sessions: ss, Repair: repair})
+			assert.Equal(t, 1, calls)
+			if tt.wantNone {
+				assert.NotContains(t, out, "upgraded storage")
+				return
+			}
+			assert.Contains(t, out, tt.wantNote)
+		})
+	}
 }

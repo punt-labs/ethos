@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/bundle"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -48,6 +50,10 @@ type SessionStartDeps struct {
 	// refresh. It runs only in a located repository; an error never fails the
 	// session, but is told to it, because a stale seal section blocks commits.
 	RefreshHooks func(checkout, store string) (HookRefresh, error)
+	// Repair is the cheap session-start storage pass (DES-084 step 17): it
+	// removes dead session state and returns the items it converted. Nil
+	// disables it. An error never fails the session; it is logged only.
+	Repair func(ctx context.Context) (int, error)
 }
 
 // HookRefresh is what a git hook refresh did, by hook name. A failed refresh
@@ -113,6 +119,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		resolvedID, humanErr = resolveHumanIdentity(store, loc.Checkout)
 	}
 	purgeStale(ss)
+	repairNote := runSessionRepair(deps.Repair)
 
 	// Resolve agent persona from repo config. A non-nil error means
 	// the config file exists but cannot be read or parsed — a loud
@@ -123,6 +130,13 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// the signal for direct CLI invocation and `ethos doctor`.
 	repoRoot := loc.Store
 	note := storeUnlocatedNote(storeFailure)
+	if repairNote != "" {
+		if note != "" {
+			note = repairNote + " " + note
+		} else {
+			note = repairNote
+		}
+	}
 	if issueNote := storeUnlocatedNote(deps.Issue); issueNote != "" && !errors.Is(storeFailure, deps.Issue) {
 		if note != "" {
 			note += " "
@@ -396,6 +410,25 @@ func resolveHumanIdentity(store identity.IdentityStore, checkout string) (*ident
 		fmt.Fprintf(os.Stderr, "ethos: session-start: identity %q: %s\n", handle, w)
 	}
 	return id, nil
+}
+
+// runSessionRepair runs the DES-084 session-start pass and returns the one
+// line it earns, or "" when nothing was converted or the pass failed. The line
+// goes in the session's note because this hook's stderr is never read.
+func runSessionRepair(repair func(ctx context.Context) (int, error)) string {
+	if repair == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), autorepair.StepBudget)
+	defer cancel()
+	n, err := repair(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: session repair: %v\n", err)
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("ethos: upgraded storage (%d items; see ~/.punt-labs/ethos/logs/repair.log)", n)
 }
 
 // purgeStale cleans stale PID files from previous sessions (fire-and-forget).

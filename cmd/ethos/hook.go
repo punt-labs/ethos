@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/enable"
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/mission"
@@ -167,6 +170,25 @@ func refreshGitHooks(checkout, store string) (hook.HookRefresh, error) {
 	return r, err
 }
 
+// repairSessions adapts autorepair.SessionStart to the SessionStart dependency:
+// the cheap pass over dead session state, logged to the repair log.
+func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return 0, fmt.Errorf("locating the global store: %w", err)
+		}
+		global := filepath.Join(home, ".punt-labs", "ethos")
+		env := autorepair.Env{
+			Roots:  loc,
+			Global: global,
+			Now:    time.Now(),
+			Log:    autorepair.NewFileLog(global, loc.Store, loc.Checkout, version),
+		}
+		return autorepair.SessionStart(ctx, env)
+	}
+}
+
 func runHookSessionStart() error {
 	loc := currentRoots().Located
 	is := identityStore()
@@ -178,6 +200,7 @@ func runHookSessionStart() error {
 		Roles:        layeredRoleStore(is),
 		Issue:        currentRoots().configIssue(),
 		RefreshHooks: refreshGitHooks,
+		Repair:       repairSessions(loc),
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook session-start: %w", err)
