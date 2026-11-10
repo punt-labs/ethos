@@ -48,6 +48,7 @@ Design: `DESIGN.md` DES-084 (search `## DES-084`), on the integration branch.
 10. When the operator is frustrated: one line of progress or silence.
 
 Rulings on DES-084's five open questions (leader, under the operator's rules):
+
 - Q1 incomplete round history: fence the mission, record a residual, fabricate
   nothing.
 - Q2 keep `ethos identity get` (the workspace's `.bin/git-identity.sh` calls it).
