@@ -471,14 +471,30 @@ var errAbandoned = fmt.Errorf("abandoned: %w", errBudget)
 // repair locks can hold them until every one has returned.
 type liveSteps struct {
 	wg        sync.WaitGroup
+	mu        sync.Mutex // guards abandoned: step goroutines read it
 	abandoned string
+}
+
+func (l *liveSteps) abandon(name string) {
+	l.mu.Lock()
+	l.abandoned = name
+	l.mu.Unlock()
+}
+
+func (l *liveSteps) isAbandoned(name string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.abandoned == name
 }
 
 // wait blocks until every started step has returned, logging once when an
 // abandoned one makes it wait.
 func (l *liveSteps) wait(log *FileLog) {
-	if l.abandoned != "" {
-		log.Logf(l.abandoned, "wait", nil, fmt.Errorf("waiting for abandoned step %s", l.abandoned))
+	l.mu.Lock()
+	name := l.abandoned
+	l.mu.Unlock()
+	if name != "" {
+		log.Logf(name, "wait", nil, fmt.Errorf("waiting for abandoned step %s", name))
 	}
 	l.wg.Wait()
 }
@@ -522,13 +538,20 @@ func runStep(ctx context.Context, env Env, budget time.Duration, s Step, lockPat
 	go func() {
 		defer live.wg.Done() // after release: the step lock goes first
 		defer release()
-		defer func() {
-			if p := recover(); p != nil {
-				ch <- stepResult{err: fmt.Errorf("step %s panicked: %v", s.Name, p)}
-			}
+		var res stepResult
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					res = stepResult{err: fmt.Errorf("step %s panicked: %v", s.Name, p)}
+				}
+			}()
+			res.out, res.err = s.Run(ctx, env)
 		}()
-		out, err := s.Run(ctx, env)
-		ch <- stepResult{out: out, err: err}
+		ch <- res
+		// Nobody reads an abandoned step's result, so its failure is logged here.
+		if res.err != nil && live.isAbandoned(s.Name) {
+			env.Log.Logf(s.Name, "late", nil, fmt.Errorf("late result for abandoned step %s: %w", s.Name, res.err))
+		}
 	}()
 	select {
 	case r := <-ch:
@@ -538,7 +561,7 @@ func runStep(ctx context.Context, env Env, budget time.Duration, s Step, lockPat
 		}
 		return r.out, r.err
 	case <-ctx.Done():
-		live.abandoned = s.Name
+		live.abandon(s.Name)
 		return Outcome{}, fmt.Errorf("step %s: %s %w", s.Name, budget, errAbandoned)
 	}
 }
