@@ -166,10 +166,10 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 		return Result{}, nil
 	}
 
-	log = newFileLog(global, roots.Store, roots.Checkout, o.ethos)
+	log = openLog(global, roots, o.ethos)
 	if r != nil && r.needed {
 		if rel, rerr := repositoryLock(policy, o.lockWait); rerr != nil {
-			log.Logf("engine", "defer-repository", []string{roots.Store}, rerr)
+			log.Logf("engine", "defer-repository", nil, rerr)
 			r.needed = false
 		} else {
 			defer rel()
@@ -179,7 +179,7 @@ func ensure(ctx context.Context, roots resolve.Located, global string, o options
 		return Result{}, nil
 	}
 
-	env := Env{Roots: roots, Policy: policy, Global: global, Now: o.now(), Log: log}
+	env := Env{Roots: stepRoots(roots, r), Policy: policy, Global: global, Now: o.now(), Log: log}
 	res = runSteps(ctx, env, o, log, g, r, nil)
 	for _, t := range targets {
 		if !t.needed || t.blocked {
@@ -225,13 +225,35 @@ func cheapPass(ctx context.Context, names []string, roots resolve.Located, globa
 	if r != nil {
 		r.needed = true
 	}
-	log = newFileLog(global, roots.Store, roots.Checkout, o.ethos)
-	env := Env{Roots: roots, Policy: policy, Global: global, Now: o.now(), Log: log}
+	log = openLog(global, roots, o.ethos)
+	env := Env{Roots: stepRoots(roots, r), Policy: policy, Global: global, Now: o.now(), Log: log}
 	only := make(map[string]bool, len(names))
 	for _, n := range names {
 		only[n] = true
 	}
 	return runSteps(ctx, env, o, log, g, r, only), nil
+}
+
+// openLog opens the repair log tagged with the roots. A repository whose
+// location carries an error is not served (repositoryTarget returns nil for
+// it); the failure is written to the log so the skip is visible, not read as
+// "no repository".
+func openLog(global string, roots resolve.Located, ethos string) *FileLog {
+	log := newFileLog(global, roots.Store, roots.Checkout, ethos)
+	if err := roots.Err(); err != nil {
+		log.Logf("engine", "skip-repository", nil, err)
+	}
+	return log
+}
+
+// stepRoots is what the steps are shown: the located roots when the
+// repository pass is active, nothing otherwise, so a step cannot reach a
+// repository the engine chose not to serve.
+func stepRoots(roots resolve.Located, r *target) resolve.Located {
+	if r == nil {
+		return resolve.Located{}
+	}
+	return roots
 }
 
 // errBudget marks a step stopped by its own budget or Ensure's; the step is

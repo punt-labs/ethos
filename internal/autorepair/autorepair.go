@@ -20,10 +20,10 @@ import (
 // DES-079 layout and is independent of the release number.
 const LayoutVersion = 5
 
-// Env is what a step needs: the located roots (Store, Checkout may be empty
-// outside a repository), the repository policy (zero Policy outside a
-// repository), the global root (~/.punt-labs/ethos), and a Logger. Steps
-// never resolve roots or policy themselves.
+// Env is what a step needs: the located roots and the repository policy,
+// both zero unless the repository pass is active (a repository was located
+// cleanly and has used ethos), the global root (~/.punt-labs/ethos), and a
+// Logger. Steps never resolve roots or policy themselves.
 type Env struct {
 	Roots  resolve.Located
 	Policy layout.Policy
@@ -32,8 +32,11 @@ type Env struct {
 	Log    Logger
 }
 
-// InRepository reports whether a repository store was located.
-func (e Env) InRepository() bool { return e.Roots.Store != "" }
+// InRepository reports whether the repository pass is active: the engine
+// located a repository that has used ethos and is serving it. A ScopeBoth
+// step runs with this false outside a repository and in a repository ethos
+// never touched, which it must then leave alone.
+func (e Env) InRepository() bool { return e.Policy.LocalRoot() != "" }
 
 // Outcome is one step's result. Items counts conversions applied. Deferred
 // is true when the step stopped early (busy lock, index lock, budget) and

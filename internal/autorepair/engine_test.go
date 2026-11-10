@@ -195,6 +195,41 @@ func TestEnsurePlainRepositoryIsLeftUntouched(t *testing.T) {
 	assert.True(t, g.Current(), "the global pass still runs")
 }
 
+// In a plain repository the ScopeBoth step that does run must not be told it
+// is in a repository, or it would touch what the engine chose to leave alone.
+func TestEnsurePlainRepositoryIsNotShownToSteps(t *testing.T) {
+	r := newRig(t, false)
+	r.store = physicalTemp(t)
+	r.roots = resolve.Located{Store: r.store, Checkout: r.store}
+	var got Env
+	r.opts.steps = []Step{{Name: "both", Scope: ScopeBoth, Run: func(_ context.Context, e Env) (Outcome, error) {
+		got = e
+		return Outcome{}, nil
+	}}}
+	r.opts.order = []string{"both"}
+	r.ensure()
+	assert.False(t, got.InRepository())
+	assert.Equal(t, "", got.Roots.Store, "the unserved repository's roots are withheld")
+	assert.Equal(t, "", got.Policy.LocalRoot())
+}
+
+// A repository whose location carries an error is not served either, and the
+// skip is recorded in the log rather than silently treated as "no repository".
+func TestEnsureLocateFailureSkipsRepositoryAndLogsIt(t *testing.T) {
+	r := newRig(t, true)
+	r.roots.StoreErr = errors.New("dangling store symlink")
+	r.step("repo", ScopeRepository, Outcome{Items: 1}, nil)
+	r.step("glob", ScopeGlobal, Outcome{Items: 1}, nil)
+	r.ensure()
+	assert.Equal(t, []string{"glob"}, r.ran)
+	_, err := r.repoStamp()
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	raw, err := os.ReadFile(LogPath(r.global))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"action":"skip-repository"`)
+	assert.Contains(t, string(raw), "dangling store symlink")
+}
+
 // A step that ignores its deadline is abandoned at the budget: Ensure returns,
 // the stamp is blocked, and the step's late result is discarded.
 func TestEnsureStepIgnoringDeadlineIsAbandoned(t *testing.T) {
