@@ -125,8 +125,8 @@ func TestAutorepairFloorOnlyWithTestFiles(t *testing.T) {
 	}
 	root, p, b = setup(t, prof, base, true)
 	code, out := runTool(t, root, p, b)
-	if code == 0 || !strings.Contains(out, "95.0") {
-		t.Fatalf("want 95.0 floor failure, got %d: %s", code, out)
+	if code == 0 || !strings.Contains(out, "81.0") {
+		t.Fatalf("want 81.0 floor failure, got %d: %s", code, out)
 	}
 }
 
