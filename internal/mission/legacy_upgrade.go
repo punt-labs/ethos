@@ -65,8 +65,10 @@ func WithRecordLockTry(p layout.Policy, id string, fn func() error) error {
 // Nothing is fabricated: when the crossed-round reflection history or the
 // event history is incomplete, or redaction refuses the evidence, the mission
 // is untouched and the error is a *LegacyHistoryError. Corrections are written
-// before the contract, so a failure between the two leaves the mission legacy
-// and importable again, never half upgraded. The caller holds the mission lock.
+// before the contract, so a failure between the two leaves corrections without
+// round decisions, which the next call resumes: it validates the corrections,
+// imports the decisions and writes the contract. The caller holds the mission
+// lock.
 func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
 	if !s.twoTreeStorage {
 		return false, fmt.Errorf("UpgradeLegacyAuthority requires repository storage")
@@ -92,27 +94,32 @@ func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
 		}
 		return false, nil
 	}
-	if a, err := s.readCorrections(c); err != nil || a != nil {
-		if err != nil {
-			return false, &LegacyHistoryError{fmt.Errorf("corrections authority unreadable: %w", err)}
-		}
-		return false, &LegacyHistoryError{fmt.Errorf("corrections authority exists without round decisions")}
+	existing, err := s.readCorrections(c)
+	if err != nil {
+		return false, &LegacyHistoryError{fmt.Errorf("corrections authority unreadable: %w", err)}
 	}
 	upgraded := *c
 	if err := s.importLegacyDecisions(&upgraded); err != nil {
 		return false, &LegacyHistoryError{err}
 	}
-	corrections, err := s.importLegacyCorrections(&upgraded)
-	if err != nil {
-		return false, &LegacyHistoryError{err}
-	}
-	cb, _, err := RedactedYAMLNotify(s.repoRoot, *corrections)
-	if err != nil {
-		return false, &LegacyHistoryError{err}
-	}
-	cb, err = guardWrite(s.correctionsPath(id), cb)
-	if err != nil {
-		return false, &LegacyHistoryError{err}
+	// Corrections without decisions are the state Correct leaves on a legacy
+	// closed mission, and the state a crash between the two renames below
+	// leaves. The corrections are valid authority already: only the decisions
+	// are missing, and the corrections are kept as they are.
+	var cb []byte
+	if existing == nil {
+		corrections, err := s.importLegacyCorrections(&upgraded)
+		if err != nil {
+			return false, &LegacyHistoryError{err}
+		}
+		cb, _, err = RedactedYAMLNotify(s.repoRoot, *corrections)
+		if err != nil {
+			return false, &LegacyHistoryError{err}
+		}
+		cb, err = guardWrite(s.correctionsPath(id), cb)
+		if err != nil {
+			return false, &LegacyHistoryError{err}
+		}
 	}
 	contractBytes, _, err := RedactedYAMLNotify(s.repoRoot, upgraded, func(red Contract) error {
 		if !reflect.DeepEqual(red.RoundDecisions, upgraded.RoundDecisions) || red.Budget != upgraded.Budget || red.Evaluator != upgraded.Evaluator {
@@ -127,13 +134,12 @@ func (s *Store) UpgradeLegacyAuthority(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := s.writeBytes(s.correctionsPath(id), cb, false); err != nil {
-		return false, err
+	if cb != nil {
+		if err := s.writeBytes(s.correctionsPath(id), cb, false); err != nil {
+			return false, err
+		}
 	}
 	if err := s.writeBytes(path, contractBytes, true); err != nil {
-		if rbErr := s.removeBytes(s.correctionsPath(id)); rbErr != nil {
-			return false, fmt.Errorf("installing upgraded contract: %w; removing new corrections: %v", err, rbErr)
-		}
 		return false, fmt.Errorf("installing upgraded contract: %w", err)
 	}
 	return true, nil

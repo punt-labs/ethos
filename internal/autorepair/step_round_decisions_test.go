@@ -106,3 +106,33 @@ func TestRoundDecisions_IncompleteHistoryIsResidual(t *testing.T) {
 func TestRoundDecisions_OutsideRepositoryDoesNothing(t *testing.T) {
 	assert.Equal(t, Outcome{}, run34(t, "round-decisions", Env{Log: &recLog34{}}))
 }
+
+// H1: the current binary itself leaves corrections.yaml without round
+// decisions, when Correct runs on a legacy closed mission. The step must finish
+// that import, keeping the corrections as they are.
+func TestRoundDecisions_CorrectionsWithoutDecisionsIsImported(t *testing.T) {
+	env := stage34(t, "v4.17.0")
+	const id = "m-2026-11-09-001"
+	dir := filepath.Join(env.Roots.Store, ".punt-labs", "ethos", "missions", id)
+	s := mission.NewRepositoryStore(env.Policy, env.Global)
+	require.NoError(t, s.Correct(id, mission.Correction{
+		Mission: id, Kind: mission.CorrectionFactual, Author: "claude",
+		Claim: "the mission failed", Corrected: "the mission passed",
+	}))
+	corrections := read34(t, filepath.Join(dir, "corrections.yaml"))
+	c, err := s.Load(id)
+	require.NoError(t, err)
+	require.Nil(t, c.RoundDecisions, "Correct leaves the contract without decisions")
+
+	out := run34(t, "round-decisions", env)
+	assert.Empty(t, out.Residuals)
+	assert.Equal(t, 2, out.Items)
+	c, err = s.Load(id)
+	require.NoError(t, err)
+	require.NotNil(t, c.RoundDecisions)
+	assert.Equal(t, corrections, read34(t, filepath.Join(dir, "corrections.yaml")), "corrections unchanged")
+
+	again := run34(t, "round-decisions", env)
+	assert.Zero(t, again.Items)
+	assert.Empty(t, again.Residuals)
+}
