@@ -79,8 +79,7 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 			}
 			if n > 0 {
 				fmt.Fprintf(w,
-					"warning: session %s was purged with %d unsealed audit line(s) still on disk; "+
-						"the next commit seals them\n",
+					"warning: session %s was purged and %d unsealed audit line(s) remain on disk\n",
 					t.Session, n)
 			}
 		}

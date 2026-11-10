@@ -28,6 +28,7 @@ var auditMessagePhrases = []string{
 	"retires at session start",
 	"retires dead sessions at session start",
 	"the next commit includes it",
+	"the next commit seals",
 	"retry in full mode",
 	"the storage upgrade finishes it",
 	"repair or clear it",
@@ -37,7 +38,7 @@ var auditMessagePhrases = []string{
 // a verb that tells the reader to run or retry something, or a word that only
 // ever addresses a person. Descriptive help text ("Run the seal ...") names no
 // reader and is not matched.
-var auditMessageImperatives = regexp.MustCompile(`\b(?:(?:run|re run|rerun|retry) (?:ethos|it|the (?:seal|audit|command))|please|manually)\b`)
+var auditMessageImperatives = regexp.MustCompile(`\b(?:(?:run|re run|rerun|retry) (?:ethos|it|the (?:seal|audit|command))|please|manually|you must|by hand)\b`)
 
 // foldSpace folds each run of whitespace, hyphen or underscore to one space,
 // so "ethos-audit-quarantine" and "ethos   audit\tquarantine" read as one
@@ -45,7 +46,12 @@ var auditMessageImperatives = regexp.MustCompile(`\b(?:(?:run|re run|rerun|retry
 // not a phrase.
 var foldSpace = regexp.MustCompile(`[\s\p{Z}\p{Pd}_]+`)
 
+// formatChars are invisible format characters (zero-width space and joiners,
+// bidi marks) that split a phrase without changing how it reads.
+var formatChars = regexp.MustCompile(`\p{Cf}`)
+
 func normalizeMessage(s string) string {
+	s = formatChars.ReplaceAllString(s, "")
 	return strings.TrimSpace(foldSpace.ReplaceAllString(strings.ToLower(s), " "))
 }
 
@@ -67,13 +73,43 @@ func bannedMessage(s string, imperatives bool) string {
 	return ""
 }
 
+var formatVerb = regexp.MustCompile(`%[-+# 0-9.*]*[a-zA-Z]`)
+
+// bannedFormat is bannedMessage for a format string whose verbs are wildcards.
+func bannedFormat(f string, imperatives bool) string {
+	f = strings.ReplaceAll(f, "%%", "%")
+	if !formatVerb.MatchString(f) {
+		return bannedMessage(f, imperatives)
+	}
+	const wild = '\x00'
+	n := normalizeMessage(formatVerb.ReplaceAllString(f, string(wild)))
+	// A verb stands for the phrase's leading word, the binary's name: "%s audit
+	// quarantine" is "ethos audit quarantine". It does not stand for any other
+	// word, or "ETHOS_SESSION %q" would read as "ethos session purge".
+	for _, p := range auditMessagePhrases {
+		_, rest, ok := strings.Cut(normalizeMessage(p), " ")
+		if ok && strings.Contains(n, string(wild)+" "+rest) {
+			return p
+		}
+	}
+	if imperatives {
+		for _, fill := range []string{"ethos", "it", "the seal"} {
+			if m := auditMessageImperatives.FindString(strings.ReplaceAll(n, string(wild), fill)); m != "" {
+				return m
+			}
+		}
+	}
+	return ""
+}
+
 // auditScoped reports whether path is part of the audit store, whose messages
 // must not instruct the reader. The other units' messages (doctor, uninstall,
 // mission) are theirs to judge.
 func auditScoped(path string) bool {
 	p := filepath.ToSlash(path)
 	return strings.Contains(p, "internal/audit/") || strings.Contains(p, "internal/autorepair/") ||
-		strings.HasPrefix(filepath.Base(p), "audit") && (strings.Contains(p, "cmd/ethos/") || strings.Contains(p, "internal/hook/"))
+		strings.HasPrefix(filepath.Base(p), "audit") && (strings.Contains(p, "cmd/ethos/") || strings.Contains(p, "internal/hook/")) ||
+		strings.HasSuffix(p, "cmd/ethos/session.go")
 }
 
 // foldMessage returns the constant value of n when it is a string literal, a
@@ -116,10 +152,11 @@ func messageHits(t *testing.T, src map[string]string, imperatives func(path stri
 	consts := map[string]string{}
 	for pass := 0; pass < 2; pass++ {
 		for _, f := range files {
-			for _, d := range f.Decls {
-				gd, ok := d.(*ast.GenDecl)
+			// Every const declaration counts, including one inside a function.
+			ast.Inspect(f, func(n ast.Node) bool {
+				gd, ok := n.(*ast.GenDecl)
 				if !ok || gd.Tok != token.CONST {
-					continue
+					return true
 				}
 				for _, sp := range gd.Specs {
 					vs := sp.(*ast.ValueSpec)
@@ -131,11 +168,36 @@ func messageHits(t *testing.T, src map[string]string, imperatives func(path stri
 						}
 					}
 				}
-			}
+				return false
+			})
 		}
 	}
 	var hits []string
 	for _, f := range files {
+		// A format string is a message whose verbs stand for any text.
+		formatArgs := map[ast.Node]bool{}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			idx := map[string]int{"Sprintf": 0, "Errorf": 0, "Printf": 0, "Fprintf": 1}
+			i, ok := idx[sel.Sel.Name]
+			if !ok || i >= len(call.Args) {
+				return true
+			}
+			if v, ok := foldMessage(call.Args[i], consts); ok {
+				formatArgs[call.Args[i]] = true
+				if p := bannedFormat(v, imperatives(fset.Position(call.Pos()).Filename)); p != "" {
+					hits = append(hits, fset.Position(call.Args[i].Pos()).String()+": "+p)
+				}
+			}
+			return true
+		})
 		ast.Inspect(f, func(n ast.Node) bool {
 			// A const is judged where it is used, not where it is declared.
 			if gd, ok := n.(*ast.GenDecl); ok && gd.Tok == token.CONST {
@@ -144,6 +206,9 @@ func messageHits(t *testing.T, src map[string]string, imperatives func(path stri
 			v, ok := foldMessage(n, consts)
 			if !ok {
 				return true
+			}
+			if formatArgs[n] {
+				return true // judged at its call, with its verbs as wildcards
 			}
 			_, chain := n.(*ast.BinaryExpr)
 			if p := bannedMessage(v, imperatives(fset.Position(n.Pos()).Filename)); p != "" {
@@ -200,14 +265,19 @@ func always(string) bool { return true }
 // removed command.
 func TestMessageGuardEvasionsAreCaught(t *testing.T) {
 	for name, src := range map[string]string{
-		"hyphen":   `package p; var a = "recover with ethos-audit-quarantine"`,
-		"concat":   `package p; var a = "recover with ethos audit " + "quarantine <chunk>"`,
-		"run":      `package p; var a = "run ethos session purge to clear it"`,
-		"const":    `package p; const c = "ethos audit "; var a = c + "quarantine"`,
-		"retry":    `package p; var a = "retry the seal later"`,
-		"manually": `package p; var a = "clean it up manually"`,
-		"please":   `package p; var a = "please remove it"`,
-		"spaces":   "package p; var a = \"ethos  audit\\tquarantine\"",
+		"hyphen":      `package p; var a = "recover with ethos-audit-quarantine"`,
+		"concat":      `package p; var a = "recover with ethos audit " + "quarantine <chunk>"`,
+		"run":         `package p; var a = "run ethos session purge to clear it"`,
+		"const":       `package p; const c = "ethos audit "; var a = c + "quarantine"`,
+		"retry":       `package p; var a = "retry the seal later"`,
+		"manually":    `package p; var a = "clean it up manually"`,
+		"please":      `package p; var a = "please remove it"`,
+		"spaces":      "package p; var a = \"ethos  audit\\tquarantine\"",
+		"local const": `package p; func f() string { const c = "ethos audit "; return c + "quarantine" }`,
+		"zero width":  "package p; var a = \"ethos audit\u200b quarantine\"",
+		"sprintf":     `package p; import "fmt"; var a = fmt.Sprintf("%s audit quarantine", "ethos")`,
+		"must":        `package p; var a = "you must delete the file"`,
+		"by hand":     `package p; var a = "delete it by hand"`,
 	} {
 		assert.NotEmpty(t, messageHits(t, map[string]string{"p.go": src}, always), name)
 	}
