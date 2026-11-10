@@ -13,9 +13,17 @@ import (
 // Kept is true when the local destination already existed, so the legacy copy
 // was deleted instead of moved. Neither path's contents are ever reported.
 type OverlayMove struct {
-	Legacy string
-	Local  string
-	Kept   bool
+	Handle    string
+	Namespace string
+	Legacy    string
+	Local     string
+	Kept      bool
+	// Replaced is true when the local copy held no keys and the legacy file
+	// was moved over it.
+	Replaced bool
+	// Dropped names the legacy keys the kept local copy does not carry. Their
+	// values are lost; they are never reported.
+	Dropped []string
 }
 
 // OverlayResidual names an overlay that cannot be relocated and was left in
@@ -132,7 +140,7 @@ func (s *Store) relocateOverlay(handle, namespace string) (m *OverlayMove, reaso
 	} else if err != nil {
 		return nil, "", fmt.Errorf("examining legacy overlay %s: %w", legacy, err)
 	}
-	m = &OverlayMove{Legacy: legacy, Local: local}
+	m = &OverlayMove{Handle: handle, Namespace: namespace, Legacy: legacy, Local: local}
 	if err := s.checkPath(local, false); errors.As(err, &rp) {
 		return nil, "local overlay is refused: " + rp.reason + " at " + rp.path + "; legacy copy kept", nil
 	} else if err != nil {
@@ -143,10 +151,29 @@ func (s *Store) relocateOverlay(handle, namespace string) (m *OverlayMove, reaso
 	case err == nil:
 		// The legacy copy may be the only readable one: delete it only after the
 		// kept copy parses.
-		if _, err := s.readExtFile(local); err != nil {
+		kept, err := s.readExtFile(local)
+		if err != nil {
 			return nil, "local overlay unreadable; legacy copy kept", nil
 		}
+		old, err := s.readExtFile(legacy)
+		if err != nil {
+			return nil, "legacy overlay unreadable; left in place", nil
+		}
+		if len(kept) == 0 && len(old) > 0 {
+			// A new copy with no keys parses but holds nothing to lose.
+			m.Replaced = true
+			if err := s.moveOverlay(legacy, local); err != nil {
+				return m, "", err
+			}
+			return m, "", nil
+		}
 		m.Kept = true
+		for k := range old {
+			if _, ok := kept[k]; !ok {
+				m.Dropped = append(m.Dropped, k)
+			}
+		}
+		sort.Strings(m.Dropped)
 		if err := s.removeFile(legacy); err != nil {
 			return nil, "", fmt.Errorf("deleting legacy overlay %s: %w", legacy, err)
 		}
@@ -157,18 +184,24 @@ func (s *Store) relocateOverlay(handle, namespace string) (m *OverlayMove, reaso
 	if err := s.ensureDir(filepath.Dir(local)); err != nil {
 		return nil, "", err
 	}
-	if err := os.Rename(legacy, local); err != nil {
-		return nil, "", fmt.Errorf("moving overlay %s to %s: %w", legacy, local, err)
-	}
-	// The local-zone writer creates overlays 0600; a legacy file may be wider.
-	if err := os.Chmod(local, 0o600); err != nil {
-		return m, "", fmt.Errorf("restricting overlay %s: %w", local, err)
-	}
-	if err := s.confirmPublication(local); err != nil {
-		return m, "", err
-	}
-	if err := s.confirmPublication(legacy); err != nil {
+	if err := s.moveOverlay(legacy, local); err != nil {
 		return m, "", err
 	}
 	return m, "", nil
+}
+
+// moveOverlay renames legacy over local, restricts it to 0600 (the local-zone
+// writer creates overlays 0600; a legacy file may be wider) and confirms both
+// directory entries.
+func (s *Store) moveOverlay(legacy, local string) error {
+	if err := os.Rename(legacy, local); err != nil {
+		return fmt.Errorf("moving overlay %s to %s: %w", legacy, local, err)
+	}
+	if err := os.Chmod(local, 0o600); err != nil {
+		return fmt.Errorf("restricting overlay %s: %w", local, err)
+	}
+	if err := s.confirmPublication(local); err != nil {
+		return err
+	}
+	return s.confirmPublication(legacy)
 }

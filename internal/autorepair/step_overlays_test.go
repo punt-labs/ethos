@@ -1,6 +1,7 @@
 package autorepair
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -240,4 +241,52 @@ func TestOverlaysStepResidualsCarryNoAbsolutePath(t *testing.T) {
 	out := s81113Run(t, "overlays", tr.Env(t))
 	require.NotEmpty(t, out.Residuals)
 	assertNoAbsolute(t, tr, out)
+}
+
+// An empty new overlay parses but holds nothing: the legacy copy is the only
+// one carrying the credential and must survive at the new path.
+func TestOverlaysStepEmptyNewOverlayKeepsLegacyValues(t *testing.T) {
+	const secret = "sk-LEGACYONLYabcdefghijkl"
+	for _, body := range []string{"", "{}\n", "# nothing\n", "~\n"} {
+		t.Run(body, func(t *testing.T) {
+			tr := s81113Copy(t, "damage/overlay-both-locations")
+			_, legacy, local := overlayPaths(tr)
+			s81113Write(t, legacy, "api_key: "+secret+"\n")
+			s81113Write(t, local, body)
+
+			out := s81113Run(t, "overlays", tr.Env(t))
+			assert.Equal(t, 1, out.Items)
+			assert.False(t, s81113Exists(legacy))
+			assert.Contains(t, string(s81113Read(t, local)), secret, "the legacy value survives at the new path")
+			var replaced bool
+			for _, e := range tr.Log.entries {
+				replaced = replaced || e.action == "replace-empty"
+				assert.NotContains(t, e.action+fmt.Sprint(e.paths)+fmt.Sprint(e.err), secret)
+			}
+			assert.True(t, replaced, "the replacement is logged")
+			assert.Empty(t, out.Residuals)
+		})
+	}
+}
+
+// The new copy wins a conflict; every key it drops is named in the log, never
+// its value.
+func TestOverlaysStepPartialOverlapLogsDroppedKeys(t *testing.T) {
+	tr := s81113Copy(t, "damage/overlay-both-locations")
+	_, legacy, local := overlayPaths(tr)
+	s81113Write(t, legacy, "api_key: sk-DROPPEDVALUE1\ntoken: tok-DROPPEDVALUE2\nvoice: kept-legacy\n")
+	s81113Write(t, local, "voice: newer\n")
+
+	s81113Run(t, "overlays", tr.Env(t))
+	assert.Equal(t, "voice: newer\n", string(s81113Read(t, local)))
+	var got []string
+	for _, e := range tr.Log.entries {
+		line := e.step + " " + e.action + " " + fmt.Sprint(e.paths) + " " + fmt.Sprint(e.err)
+		assert.NotContains(t, line, "DROPPEDVALUE")
+		assert.NotContains(t, line, "kept-legacy")
+		if e.action == "drop-superseded" {
+			got = append(got, e.paths[0])
+		}
+	}
+	assert.Equal(t, []string{overlayHandle + "/vox/api_key", overlayHandle + "/vox/token"}, got)
 }

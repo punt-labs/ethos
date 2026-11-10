@@ -26,10 +26,16 @@ func runOverlays(ctx context.Context, env Env) (Outcome, error) {
 	moves, residuals, busy, err := s.RelocateLegacyOverlays()
 	for _, m := range moves {
 		action := "move"
-		if m.Kept {
+		switch {
+		case m.Replaced:
+			action = "replace-empty"
+		case m.Kept:
 			action = "delete-superseded"
 		}
 		env.Log.Logf("overlays", action, []string{m.Legacy, m.Local}, nil)
+		for _, k := range m.Dropped {
+			env.Log.Logf("overlays", "drop-superseded", []string{m.Handle + "/" + m.Namespace + "/" + k}, nil)
+		}
 	}
 	out := Outcome{Items: len(moves), Deferred: busy}
 	for _, r := range residuals {
