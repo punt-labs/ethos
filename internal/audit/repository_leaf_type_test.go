@@ -161,9 +161,13 @@ func testRepositoryLeafTypes(t *testing.T, kinds []string) {
 							target := badAuditLeaf(t, path, kind, store, raw)
 							beforeS, beforeC := leafSnapshot(t, store), leafSnapshot(t, checkout)
 							_, err := ListStreams(p)
-							assert.ErrorContains(t, err, path, "discovery must reject recognized leaves before locks or filtering")
-							if kind == "unreadable" {
-								assert.ErrorIs(t, err, os.ErrPermission)
+							if artifact == "live" {
+								assert.ErrorContains(t, err, path, "discovery must reject an unreadable live file")
+								if kind == "unreadable" {
+									assert.ErrorIs(t, err, os.ErrPermission)
+								}
+							} else {
+								assert.NoError(t, err, "discovery lists streams by name; the scan of the directory classifies its artifacts")
 							}
 							_, err = ReadStream(p, s)
 							assert.ErrorContains(t, err, path)
@@ -227,7 +231,11 @@ func TestRepositoryLeafSelectedSessionIgnoresOtherArtifacts(t *testing.T) {
 				assert.Empty(t, data.Lines)
 				assert.Empty(t, data.Gaps)
 				_, err = ListStreams(p)
-				assert.ErrorContains(t, err, path, "global discovery still validates the other session")
+				if artifact == "live" {
+					assert.ErrorContains(t, err, path, "global discovery still validates the other session's live file")
+				} else {
+					assert.NoError(t, err, "global discovery lists by name")
+				}
 				assert.Equal(t, before, leafSnapshot(t, filepath.Dir(filepath.Dir(p.RecordRoot()))))
 			})
 		}

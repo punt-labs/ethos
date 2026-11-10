@@ -461,3 +461,51 @@ func TestInvertedChunkNameIsResidual(t *testing.T) {
 		assert.NotContains(t, out.Residuals[0].Reason, dir)
 	}
 }
+
+// A non-regular or unreadable artifact under a chunk or marker name is
+// classified by the step, not turned into an error by stream discovery:
+// permanent for a non-regular file, transient for a permission failure.
+func TestArtifactTypeIsClassifiedByTheStep(t *testing.T) {
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 5}
+	cases := []struct {
+		name         string
+		plant        func(t *testing.T, dir string)
+		wantResidual bool
+	}{
+		{"chunk-is-directory", func(t *testing.T, dir string) {
+			require.NoError(t, os.Mkdir(filepath.Join(dir, cn.ChunkFile()), 0o700))
+		}, true},
+		{"marker-is-directory", func(t *testing.T, dir string) {
+			require.NoError(t, os.Mkdir(filepath.Join(dir, cn.MarkerFile()), 0o700))
+		}, true},
+		{"chunk-mode-000", func(t *testing.T, dir string) {
+			if os.Geteuid() == 0 {
+				t.Skip("permission denial requires a non-root process")
+			}
+			p := filepath.Join(dir, cn.ChunkFile())
+			require.NoError(t, os.WriteFile(p, []byte(stableLine(fixT0, "A")), 0o000))
+			t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, _, s, dir, _ := fixEnv(t)
+			tc.plant(t, dir)
+			plant(t, env.Policy, s.LivePath(env.Policy), fixCmd(fixT0+9000, "Bash", "echo hi"))
+			for _, run := range []func(context.Context, Env) (Outcome, error){runCorruptChunks, runLiveTails} {
+				ctx, cancel := context.WithTimeout(context.Background(), StepBudget)
+				out, err := run(ctx, env)
+				cancel()
+				require.NoError(t, err, "the step reports a condition, it does not fail")
+				if tc.wantResidual {
+					assert.False(t, out.Deferred)
+					require.Len(t, out.Residuals, 1)
+					assert.NotContains(t, out.Residuals[0].Reason, dir)
+				} else {
+					assert.True(t, out.Deferred)
+					assert.Empty(t, out.Residuals)
+				}
+			}
+		})
+	}
+}
