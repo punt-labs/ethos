@@ -296,6 +296,9 @@ var writerRegistry = map[string]writerEntry{
 	"cmd/ethos.ensureLocalExtIgnored": checkpoint("EnsureLocalIgnored"),
 	"cmd/ethos.exportSoulSpec":        exempt("out of scope (identity graph): exports identity content to a directory the operator names"),
 	"cmd/ethos.writeConfigFile":       exempt("out of scope: .punt-labs/ethos.yaml repo config"),
+
+	// cmd/coverage-check: developer tooling, not a product writer.
+	"cmd/coverage-check.writeBaseline": exempt("writes coverage-baseline.txt from a Go coverage profile: package paths and percentages only, no repository or identity content"),
 }
 
 // outOfScopePackages are packages whose writes are the identity graph,
