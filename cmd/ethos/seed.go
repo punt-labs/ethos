@@ -128,7 +128,7 @@ func runSeed(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if len(result.Edited) > 0 {
-		fmt.Printf("%d file(s) look locally edited; re-run 'ethos seed --force' to overwrite them.\n",
+		fmt.Printf("%d file(s) look locally edited and were left unchanged.\n",
 			len(result.Edited))
 	}
 	return nil

@@ -662,7 +662,8 @@ func TestCheckSealHook(t *testing.T) {
 		// repo.
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
 		assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
-		assert.Contains(t, r.Detail, "install git")
+		assertNoRemedy(t, r.Detail)
+		assert.Contains(t, r.Detail, "git not found on PATH")
 	})
 
 	// P5 superseded by qodo #5 (PR #515 review): P5 originally pinned PASS
@@ -744,7 +745,7 @@ func TestCheckSealHook(t *testing.T) {
 		r := CheckSealHook(dir)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no pre-commit hook")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("marker stat error is not read as disabled → FAIL", func(t *testing.T) {
@@ -1298,7 +1299,7 @@ func TestCheckTrailerHook(t *testing.T) {
 		r := CheckTrailerHook(dir)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no commit-msg hook")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("enabled, real call needing $1 — active without a fixed message file arg baked in", func(t *testing.T) {
@@ -1472,7 +1473,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Contains(t, r.Detail, "differs from what this ethos build would install")
 		assert.Contains(t, r.Detail, "installed sha256:")
 		assert.Contains(t, r.Detail, "current sha256:")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("tampered fingerprint -> FAIL", func(t *testing.T) {
@@ -1492,7 +1493,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		require.NoError(t, os.WriteFile(hookPath(dir), body, 0o755))
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
-		assert.Contains(t, r.Detail, "hand-duplicated")
+		assert.Contains(t, r.Detail, "duplicated section")
 	})
 
 	t.Run("truncated section -> FAIL", func(t *testing.T) {
@@ -1502,7 +1503,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		require.NoError(t, os.WriteFile(hookPath(dir), []byte(body), 0o755))
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status)
-		assert.Contains(t, r.Detail, "hand-truncated")
+		assert.Contains(t, r.Detail, "truncated section")
 	})
 
 	t.Run("unterminated heredoc masks a real section -> FAIL", func(t *testing.T) {
@@ -1527,7 +1528,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "legacy")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("unreadable hook file -> FAIL with permission remedy", func(t *testing.T) {
@@ -1545,7 +1546,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "cannot read")
-		assert.Contains(t, r.Detail, "check file permissions")
+		assert.Contains(t, r.Detail, "(permissions)")
 	})
 
 	// A non-permission read error (here, the hook path is a directory —
@@ -1559,8 +1560,8 @@ func TestCheckHookCurrency(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "cannot read")
-		assert.Contains(t, r.Detail, "inspect the file manually")
-		assert.NotContains(t, r.Detail, "check file permissions")
+		assert.NotContains(t, r.Detail, "manually")
+		assert.NotContains(t, r.Detail, "(permissions)")
 	})
 }
 
@@ -1727,9 +1728,9 @@ func TestCheckHookCurrencyStaleSeverity(t *testing.T) {
 		wantDetail string
 	}{
 		{"seal is FAIL", sealHookSpec, "pre-commit", pre421Seal, "FAIL",
-			"stale section may block commits — run `ethos enable` (SessionStart also refreshes it)"},
+			"stale section may block commits"},
 		{"trailer stays WARN", trailerHookSpec, "commit-msg", pre415, "WARN",
-			"run `ethos enable` to refresh"},
+			"differs from what this ethos build would install"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1873,7 +1874,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Repo-only completeness",
 		"Local extension files",
 		"Extension key names",
-		"Mission file hand-edits",
+		"Mission file comments",
 		"Code archetype delegated-worker guard",
 		"Unclassified files",
 		"Physical storage placement",
@@ -2356,7 +2357,8 @@ func TestHookChecksOnADegradedLookup(t *testing.T) {
 	r := CheckSealHook(enabled)
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
 	assert.Contains(t, r.Detail, "cannot verify hooks:")
-	assert.Contains(t, r.Detail, "install git")
+	assertNoRemedy(t, r.Detail)
+	assert.Contains(t, r.Detail, "git not found on PATH")
 
 	r = CheckTrailerHook(enabled)
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
@@ -2364,18 +2366,28 @@ func TestHookChecksOnADegradedLookup(t *testing.T) {
 	r = CheckSealHook(dormant)
 	assert.Equal(t, "WARN", r.Status, r.Detail)
 	assert.True(t, strings.HasPrefix(r.Detail, "cannot verify hooks:"), r.Detail)
-	assert.Contains(t, r.Detail, "git rev-parse")
+	assert.Contains(t, r.Detail, "git not found on PATH")
 
 	for name, dir := range map[string]string{"enabled": enabled, "dormant": dormant} {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
 		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
-		assert.Contains(t, r.Detail, "install git", "currency: %s", name)
+		assertNoRemedy(t, r.Detail)
+		assert.Contains(t, r.Detail, "git not found on PATH", "currency: %s", name)
 
 		r = CheckUnclassifiedFiles(dir)
 		assert.Equal(t, "WARN", r.Status, "%s: %s", name, r.Detail)
 		assert.Contains(t, r.Detail, "hooks directory not verified:", name)
-		assert.Contains(t, r.Detail, "install git", "unclassified: %s", name)
+		assertNoRemedy(t, r.Detail)
+		assert.Contains(t, r.Detail, "git not found on PATH", "unclassified: %s", name)
+	}
+}
+
+// assertNoRemedy fails when a hook-check detail tells the user what to do.
+func assertNoRemedy(t *testing.T, detail string) {
+	t.Helper()
+	for _, s := range []string{"install git", "fix safe.directory", "point ETHOS_REPO_ROOT", "and repair it", "run from"} {
+		assert.NotContains(t, detail, s)
 	}
 }
 
@@ -2390,15 +2402,15 @@ func TestHookChecksAdviceFollowsCause(t *testing.T) {
 
 	r := CheckSealHook(sub)
 	assert.Equal(t, "FAIL", r.Status, r.Detail)
-	assert.Contains(t, r.Detail, "top level")
-	assert.NotContains(t, r.Detail, "install git")
+	assert.Contains(t, r.Detail, "not the repository root")
+	assertNoRemedy(t, r.Detail)
 
 	for name, r := range map[string]Result{
 		"currency":     CheckHookCurrency(sub, currencyTestSpec),
 		"unclassified": CheckUnclassifiedFiles(sub),
 	} {
-		assert.Contains(t, r.Detail, "top level", name)
-		assert.NotContains(t, r.Detail, "install git", name)
+		assert.Contains(t, r.Detail, "not the repository root", name)
+		assertNoRemedy(t, r.Detail)
 	}
 }
 
@@ -2452,7 +2464,7 @@ func TestRunAllRefusedStore(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	storeChecks := []string{
-		"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard",
+		"Repo-only completeness", "Mission file comments", "Code archetype delegated-worker guard",
 		"Identity directory", "Human identity", "Duplicate fields", "Extension key names",
 	}
 	find := func(results []Result, name string) Result {
@@ -2471,7 +2483,7 @@ func TestRunAllRefusedStore(t *testing.T) {
 		assert.NotEqual(t, "Repository store", r.Name, "no row outside a repository")
 		assert.NotContains(t, r.Detail, "global layer only", r.Name)
 	}
-	for _, name := range []string{"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard"} {
+	for _, name := range []string{"Repo-only completeness", "Mission file comments", "Code archetype delegated-worker guard"} {
 		r := find(base, name)
 		assert.Equal(t, "PASS", r.Status, name)
 		assert.Equal(t, "not in a repo", r.Detail, name)
@@ -2773,13 +2785,15 @@ func gateAudit(runAll gateFunction, locating map[string]bool) (gated, ungated []
 	}
 	// Parser objects suffice for the local lexical bindings this syntax audit
 	// follows. They deliberately do not stand in for type/receiver resolution.
-	located := map[*ast.Object]int{} //nolint:staticcheck // SA1019: bounded local syntax analysis, not general object resolution.
+	// Keyed by the parser's per-binding *ast.Object pointer, held as any so the
+	// deprecated type is never named.
+	located := map[any]int{}
 	for _, field := range runAll.Type.Params.List {
 		for _, id := range field.Names {
 			located[id.Obj] = inputKinds[id.Name]
 		}
 	}
-	gates := map[*ast.Object]int{} //nolint:staticcheck // SA1019: only the parser-local checkout/store bindings are trusted.
+	gates := map[any]int{}
 	for _, stmt := range runAll.Body.List {
 		if as, ok := stmt.(*ast.AssignStmt); ok && as.Tok == token.DEFINE {
 			for _, e := range as.Lhs {

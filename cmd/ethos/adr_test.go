@@ -27,7 +27,7 @@ func adrCLIEnv(t *testing.T) *cliSubprocessEnv {
 	return se
 }
 
-func TestCLI_ADRRepositoryStorageAndMigration(t *testing.T) {
+func TestCLI_ADRRepositoryStorage(t *testing.T) {
 	require.NotEmpty(t, ethosBinary, "ADR acceptance requires the real CLI")
 	for _, mode := range []string{"blame", "full"} {
 		t.Run(mode, func(t *testing.T) {
@@ -63,16 +63,6 @@ func TestCLI_ADRRepositoryStorageAndMigration(t *testing.T) {
 			unchanged, err := os.ReadFile(filepath.Join(legacy.Dir(), "DES-001.yaml"))
 			require.NoError(t, err)
 			assert.Equal(t, source, unchanged)
-			stdout, stderr, exit = runCLI(t, se, "adr", "migrate", "DES-002", "--json")
-			require.Equal(t, 0, exit, stderr)
-			assert.JSONEq(t, `[{"id":"DES-002","action":"would-copy"}]`, stdout)
-			assert.NoFileExists(t, filepath.Join(record, "DES-002.yaml"))
-			stdout, stderr, exit = runCLI(t, se, "adr", "migrate", "DES-002", "--apply", "--json")
-			require.Equal(t, 0, exit, stderr)
-			assert.JSONEq(t, `[{"id":"DES-002","action":"copied"}]`, stdout)
-			stdout, stderr, exit = runCLI(t, se, "adr", "migrate", "DES-002", "--apply", "--json")
-			require.Equal(t, 0, exit, stderr)
-			assert.JSONEq(t, `[{"id":"DES-002","action":"unchanged"}]`, stdout)
 			stdout, stderr, exit = runCLI(t, se, "adr", "list", "--json")
 			require.Equal(t, 0, exit, stderr)
 			var list []adr.ADR
@@ -110,9 +100,6 @@ func TestCLI_ADROutsideRepositoryRemainsGlobal(t *testing.T) {
 	assert.Contains(t, stdout, "person@example.org", "standalone behavior is unchanged")
 	assert.FileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "adrs", "DES-001.yaml"))
 	assert.NoDirExists(t, filepath.Join(se.repo, ".punt-labs"))
-	_, stderr, exit = runCLI(t, se, "adr", "migrate", "DES-001", "--apply")
-	assert.Equal(t, 1, exit)
-	assert.Contains(t, stderr, "requires a repository")
 }
 
 func TestADRStoreUsesLocatedSnapshotAndRefusesErrors(t *testing.T) {
@@ -174,8 +161,6 @@ func TestCLI_ADRRejectsMalformedRepositoryMetadata(t *testing.T) {
 			source, err := os.ReadFile(filepath.Join(legacy.Dir(), a.ID+".yaml"))
 			require.NoError(t, err)
 			for _, args := range [][]string{
-				{"adr", "migrate", a.ID},
-				{"adr", "migrate", a.ID, "--apply"},
 				{"adr", "settle", a.ID},
 			} {
 				stdout, stderr, exit := runCLI(t, se, args...)

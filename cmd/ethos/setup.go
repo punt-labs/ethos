@@ -35,8 +35,7 @@ var setupCmd = &cobra.Command{
 	Short: "Set up ethos identities and team for the current repo",
 	Long: `Set up ethos identities and team for the current repo.
 
-For fresh installs, run 'ethos seed' first to deploy starter content
-to global directories.`,
+Setup reads starter content from the global directories.`,
 	GroupID:      "admin",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
@@ -878,7 +877,7 @@ func setupSaveError(kind string, id *identity.Identity, globalRoot string, err e
 	var ve *identity.ValidationError
 	if errors.As(err, &ve) {
 		if slug := missingRefSlug(ve, id, globalRoot); slug != "" {
-			return fmt.Errorf("setup: identity %q references %s %q, which is not installed; run \"ethos seed\" first",
+			return fmt.Errorf("setup: identity %q references %s %q, which is not installed",
 				id.Handle, refNoun(ve.Field), slug)
 		}
 	}
@@ -1014,7 +1013,7 @@ func findBundle(storeRoot, globalRoot, name string) ([]bundle.Bundle, error) {
 		}
 	}
 	if !installed {
-		return nil, fmt.Errorf("setup: no bundles installed; run `ethos seed` first")
+		return nil, fmt.Errorf("setup: no bundles installed")
 	}
 	return nil, fmt.Errorf("setup: bundle %q not found; available bundles:\n%s", name, listBundleNames(bundles))
 }

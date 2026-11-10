@@ -175,8 +175,8 @@ func TestResolveFromSession_DeadRosterRemedy_EnvSourced(t *testing.T) {
 	_, err := resolveFromSession(ss)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoSession)
-	assert.Contains(t, err.Error(), "eval", "an env-named dead roster must be told to mint a fresh session, not to restart Claude Code")
-	assert.NotContains(t, err.Error(), "restart the Claude Code session")
+	assert.Contains(t, err.Error(), "has no roster", "an env-named dead roster is reported as such")
+	assert.NotContains(t, err.Error(), "eval")
 }
 
 // TestResolveFromSession_DeadRosterRemedy_WalkSourced pins mission 005
@@ -199,8 +199,8 @@ func TestResolveFromSession_DeadRosterRemedy_WalkSourced(t *testing.T) {
 	_, err := resolveFromSession(ss)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoSession)
-	assert.Contains(t, err.Error(), "restart the Claude Code session",
-		"a resolved pointer naming a deleted roster must be told to restart, matching a broken pointer's own remedy")
+	assert.Contains(t, err.Error(), "session pointer for this process is missing or unreadable",
+		"a resolved pointer naming a deleted roster is reported as a broken pointer")
 	assert.NotContains(t, err.Error(), "eval")
 }
 
@@ -427,8 +427,8 @@ func TestSessionID_InFlightSessionPointerFailsLoudUntilSessionStartRefires(t *te
 	assert.Empty(t, source)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoSession)
-	assert.Contains(t, err.Error(), "restart the Claude Code session",
-		"the failure must be loud, safe, and self-healing, not silent")
+	assert.Contains(t, err.Error(), "session pointer for this process is missing or unreadable",
+		"the failure must be loud and safe, not silent")
 }
 
 // TestSessionID_ConcurrentSessionsDoNotCollide pins the ethos-vqwn fix: two
@@ -528,7 +528,8 @@ func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoSession)
 	assert.Empty(t, sid)
 	assert.Empty(t, source)
-	assert.Contains(t, err.Error(), "restart the Claude Code session", "the error must name a remedy that actually fixes a broken pointer file")
+	assert.Contains(t, err.Error(), "session pointer for this process is missing or unreadable", "the error states what ethos found")
+	assert.NotContains(t, err.Error(), "restart")
 	assert.NotContains(t, err.Error(), "ethos session start",
 		"mission 005 finding G: this remedy is inert against a broken pointer file -- ethos session start never writes one")
 }

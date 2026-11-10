@@ -156,7 +156,7 @@ per-session watermark scan (§Watermark) always lists a single directory.
 This matches DES-054, where the dated directory is created once at
 session start.
 
-**When the roster entry is gone.** `ethos session purge` removes stale
+**When the roster entry is gone.** The automatic stale-session sweep removes stale
 roster entries — precisely the crashed sessions the orphan-recovery promise
 (§Seal triggers) most needs to date. Purge does not outrun the seal: before
 removing an entry it `stat`s the session's recorded live file **and every
@@ -170,7 +170,7 @@ file already gone"** variant, so a checkout deleted before its lines sealed
 cannot slip through purge unremarked (§Seal failure policy). The seal recovers the date
 without the roster and never invents a wall-clock one. If a sealed directory
 already exists for the session, its `<YYYY-MM-DD>` prefix is authoritative.
-If not, `session purge` leaves a dated **tombstone**
+If not, the sweep leaves a dated **tombstone**
 (`~/.punt-labs/ethos/sessions/<session-id>.purged`, recording the start date,
 the repo and recorded checkout path it was purged from, and an
 **unsealed-lines flag** — set either when it was forced past pending lines or
@@ -425,7 +425,7 @@ cannot arise from normal operation; if one appears the store is damaged.
 The seal fails (exit 2) naming the chunk, exactly as the read does
 (§`ethos audit show`) — it trusts filenames for the watermark, but must not
 trust a filename whose bytes contradict it. The specified escape from that
-exit 2 is `ethos audit quarantine`, never `--no-verify` (§Seal failure
+exit 2 is ethos's automatic quarantine, never `--no-verify` (§Seal failure
 policy): fail-closed must never leave bypass as the only exit.
 
 **Write atomicity — temp + rename.** The seal writes the chunk to a temp
@@ -705,7 +705,7 @@ read_audit(session):
     for c in monotonic:                       # I11-chunk writes chunks whole, so
         if c does not parse to completion     #   a torn or mismatched sealed chunk
         or last ts(c) != filename <last>(c):  #   is corruption, not a skippable tail
-            error naming c (exit 2)           #   escape is `ethos audit quarantine`
+            error naming c (exit 2)           #   escape is automatic quarantine
     Sm = concat(read(c) for c in monotonic)
     Sl = read(legacy) if present else []      # drop torn final line; skip a terminated
                                               #   unparseable line with a stderr count
@@ -753,7 +753,7 @@ chunk, or a last line whose `ts` disagrees with the `<last>` in the chunk's
 name, is corruption evidence, not a recoverable partial write. The read
 **errors, naming the chunk** (exit 2), rather than dropping the line and
 leaving the read silently short; the seal makes the same check when it scans
-(§Watermark). The escape from that exit 2 is `ethos audit quarantine`
+(§Watermark). The escape from that exit 2 is automatic quarantine
 (§Seal failure policy): once a corrupt chunk is quarantined, the read no
 longer errors on it — the lines quarantine could re-seal from the live file
 reappear as an ordinary chunk, and only the **unrecovered** sub-range the
@@ -990,8 +990,8 @@ residual is bounded and stated plainly: a mission live file written by a
 session that never sealed a chunk and holds no mission binding cannot be
 enumerated, so its loss is undetectable — the same bounded class as the
 hookless `rm -rf`. A
-tombstone warning **repeats at every commit** in that repo until the operator
-acknowledges it with `ethos session purge --ack <session-id>`, which **renames**
+tombstone warning **repeats at every commit** in that repo until ethos
+acknowledges it, which **renames**
 the tombstone to `<session-id>.purged.acked` — a retained record that is never
 warned on again. Like the `.corrupt` rename, this is a per-exact-filename
 never-overwrite: one session id can be purged twice — a force-purged session
@@ -1073,7 +1073,7 @@ draft claimed could not exist: I11-chunk makes it unreachable by normal
 operation, so if one appears the store is damaged and the seal must fail
 loudly rather than seal past it or silently drop its lines.
 
-**The specified escape is `ethos audit quarantine`, never `--no-verify`.**
+**The specified escape is automatic quarantine, never `--no-verify`.**
 Fail-closed must never leave bypass as the only exit — an operator faced with
 "every commit in this repo is blocked" and no sanctioned recovery will reach
 for `git commit --no-verify`, which disables the seal wholesale and recreates
@@ -1082,7 +1082,7 @@ committed history and I11-chunk forbids rewriting a file while it is named a
 chunk, so the recovery is not repair but explicit, recorded retirement —
 renaming the corrupt bytes out of the chunk namespace (I11-chunk).
 
-`ethos audit quarantine <chunk>` does four things, in order. The order is
+Quarantining a chunk does four things, in order. The order is
 load-bearing: retirement precedes recovery so the re-seal cannot clobber the
 chunk it is recovering, and the marker is the last durable artifact so a crash
 before it leaves a resumable, loud state (below), never a silent hole.
@@ -1237,8 +1237,8 @@ Existing tracked `audit.jsonl` and `log.jsonl` files are **frozen
 historical chunks** and stay exactly as they are. Each is read as the
 oldest chunk of its session, sorting before any timestamped chunk. The
 write path moves to the `local` zone; nothing rewrites history. The
-migration is idempotent, supports `--dry-run`, and follows the shape of
-`ethos audit migrate` (atomic per-unit, partial-failure resume).
+migration is idempotent, supports `--dry-run`, and is atomic per
+unit and resumes after a partial failure.
 
 - **`ethos audit seal [--dry-run] [--verbose]`** is the new verb the
   pre-commit hook and mission close both call. It visits **every** session
@@ -1259,7 +1259,7 @@ migration is idempotent, supports `--dry-run`, and follows the shape of
   flock, then `git add`); a failure mid-run leaves earlier sessions sealed
   and the failing one untouched, so the next run resumes. `--dry-run` prints
   the per-session line counts it would seal without writing.
-- **`ethos audit quarantine <chunk>`** retires a corrupt sealed chunk that
+- **Quarantine** (automatic) retires a corrupt sealed chunk that
   fails the seal/read content check (§Seal failure policy): it re-seals any
   still-readable lines from the live file, renames the corrupt chunk to
   `<name>.corrupt`, writes a tracked `.quarantine` marker holding the
@@ -1637,9 +1637,9 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   error. When it scans, the seal also **verifies each chunk's content** — a
   chunk that does not parse whole or whose last line `ts` != its filename
   `<last>` is corruption and fails the seal (exit 2), the same check the read
-  makes; the specified escape is `ethos audit quarantine`, never
+  makes; the specified escape is automatic quarantine, never
   `--no-verify`. The sealed directory is dated by the **session start date**
-  (from the roster; when `session purge` has removed the entry, from an
+  (from the roster; when the stale-session sweep has removed the entry, from an
   existing sealed dir's date prefix, a purge tombstone, or the live file's
   first-line ts — never wall-clock, so one session never splits across two
   dirs). Written via temp + rename for atomicity; temp names embed the chunk
@@ -1704,7 +1704,7 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   a colliding ts; the two pools never mix because every legacy ts sits below
   every post-upgrade ts. A monotonic chunk that does not parse whole, or whose
   last ts != its filename `<last>`, is corruption and surfaces as an **error
-  naming the chunk** (exit 2, escape `ethos audit quarantine`), never a silent
+  naming the chunk** (exit 2, escape automatic quarantine), never a silent
   drop; a quarantined chunk's unrecovered sub-range shows in the output as an
   **explicit gap marker** (the lines quarantine re-sealed from the live file
   reappear as an ordinary chunk),
@@ -1766,7 +1766,7 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   filename, a **corrupt sealed chunk** (does not parse whole, or last ts !=
   filename `<last>`), or a **`git add` failure** staging a new or orphan
   chunk or a quarantine artifact — with a self-contained remedy message. The specified escape from a
-  corrupt-chunk exit 2 is **`ethos audit quarantine <chunk>`**, never
+  corrupt-chunk exit 2 is **automatic quarantine**, never
   `--no-verify`. It **retires the corrupt chunk first** — renaming it out of
   the namespace to `.corrupt` (committed as evidence; seal and read ignore the
   name) frees the chunk's name so a re-sealed chunk that takes it cannot clobber
@@ -1835,8 +1835,7 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   sequence still warns). The tombstone records the repo and recorded checkout
   path it was purged from, so the check scopes tombstones to the committing
   repo and derives the live path from that path and the session id; the
-  warning repeats at each commit until the operator acknowledges it with
-  `ethos session purge --ack <session-id>`, which **renames** the tombstone to
+  warning repeats at each commit until ethos acknowledges it, which **renames** the tombstone to
   `<session-id>.purged.acked` — a retained record, never warned on again, so
   the loss survives the ack. Like the `.corrupt` rename this never overwrites
   per exact filename: a second ack for a re-purged id retires under a
@@ -1862,7 +1861,7 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   session's live file removed, with unsealed lines). The residual is bounded and
   stated plainly: a mission live file written by a session that never sealed a
   chunk and holds no mission binding cannot be enumerated, so its loss is
-  undetectable — the same bounded class as the hookless `rm -rf`. `session purge` itself
+  undetectable — the same bounded class as the hookless `rm -rf`. the stale-session sweep itself
   refuses (or with `--force` warns and sets the tombstone flag) when a live
   file in either namespace still holds lines above its watermark, and sets the
   flag in a distinct
@@ -1925,7 +1924,7 @@ visits every session dir under both the live zone and the tracked sealed
 tree so orphan chunks are staged even when a session has no pending live
 lines; does not delete or truncate the live file, which is discardable
 **only once its lines are sealed** — an unsealed live file is the sole copy
-of those tool calls). Companion verb `ethos audit quarantine <chunk>` retires
+of those tool calls). Companion step, automatic quarantine, retires
 a corrupt sealed chunk — re-seals still-readable lines from the live file,
 renames the chunk to `.corrupt`, writes a tracked `.quarantine` marker
 holding the watermark at the verified loss point, and self-stages both

@@ -30,12 +30,12 @@ func TestCLI_RepoOnlyHidesGlobalIdentity(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 
 	setResolution(t, se, "")
-	stdout, _, exit := runCLI(t, se, "show", "test-agent")
+	stdout, _, exit := runCLI(t, se, "identity", "show", "test-agent")
 	require.Equal(t, 0, exit, "layered must still resolve the global identity")
 	assert.Contains(t, stdout, "Test Agent")
 
 	setResolution(t, se, "repo-only")
-	_, stderr, exit := runCLI(t, se, "show", "test-agent")
+	_, stderr, exit := runCLI(t, se, "identity", "show", "test-agent")
 	assert.Equal(t, 1, exit)
 	assert.Contains(t, stderr, "repo-only")
 }
@@ -66,7 +66,7 @@ func TestCLI_UnknownResolutionIsFatal(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setResolution(t, se, "repo_only")
 
-	_, stderr, exit := runCLI(t, se, "list")
+	_, stderr, exit := runCLI(t, se, "identity", "list")
 	assert.Equal(t, 1, exit)
 	assert.Contains(t, stderr, "unknown resolution")
 }
@@ -78,7 +78,7 @@ func TestCLI_RepoOnlyWithoutStoreIsFatal(t *testing.T) {
 	setResolution(t, se, "repo-only")
 	require.NoError(t, os.RemoveAll(filepath.Join(se.repo, ".punt-labs", "ethos")))
 
-	_, stderr, exit := runCLI(t, se, "list")
+	_, stderr, exit := runCLI(t, se, "identity", "list")
 	assert.Equal(t, 1, exit)
 	assert.Contains(t, stderr, "no identity store")
 }
@@ -93,7 +93,7 @@ func TestCLI_RefusedRepoRootOverrideCannotFallBackToGlobal(t *testing.T) {
 	require.NoError(t, os.RemoveAll(filepath.Join(se.repo, ".punt-labs", "ethos")))
 
 	se.env = append(se.env, "ETHOS_REPO_ROOT="+se.repo)
-	stdout, stderr, exit := runCLI(t, se, "list")
+	stdout, stderr, exit := runCLI(t, se, "identity", "list")
 
 	assert.Equal(t, 2, exit, "must not succeed by falling back to global")
 	assert.Contains(t, stderr, "refusing to use")
@@ -110,7 +110,7 @@ func TestCLI_VendorReadsGlobalUnderRepoOnly(t *testing.T) {
 	setResolution(t, se, "repo-only")
 
 	// test-agent exists only in the global store, which repo-only hides.
-	_, _, exit := runCLI(t, se, "show", "test-agent")
+	_, _, exit := runCLI(t, se, "identity", "show", "test-agent")
 	require.Equal(t, 1, exit, "repo-only must hide the global identity from normal reads")
 
 	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent")
@@ -121,7 +121,7 @@ func TestCLI_VendorReadsGlobalUnderRepoOnly(t *testing.T) {
 	require.Equal(t, 0, exit, "stderr=%s", stderr)
 
 	// And now the repo-only read resolves, with no global fallback needed.
-	stdout, _, exit = runCLI(t, se, "show", "test-agent")
+	stdout, _, exit = runCLI(t, se, "identity", "show", "test-agent")
 	assert.Equal(t, 0, exit)
 	assert.Contains(t, stdout, "Test Agent")
 }
@@ -185,7 +185,7 @@ func TestCLI_RepoOnlyCallerResolvesFromGlobal(t *testing.T) {
 	assert.Contains(t, row, "resolved from the global store")
 
 	// The team and agent identities still do not read the global store.
-	_, _, exit = runCLI(t, se, "show", "test-agent")
+	_, _, exit = runCLI(t, se, "identity", "show", "test-agent")
 	assert.Equal(t, 1, exit)
 }
 

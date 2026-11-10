@@ -39,13 +39,12 @@ const (
 // pointers in ~/.punt-labs/ethos/sessions and resolve the session from the
 // environment, never an identity (session join and session leave included —
 // runSessionJoin and runSessionLeave use only sessionStore and
-// resolveSessionContext). iam and session iam (runIam) likewise only join the
+// resolveSessionContext). session iam (runIam) likewise only joins the
 // persona to the roster: the persona is recorded as given, never looked up
 // or validated against the identity store. session start refuses: its
-// --persona and its default root resolve through the identity store. session purge checks the checkout's audit files
-// (CheckoutRootIfAny), not the store. session write-current is doctor's own
-// remedy for a broken session pointer. ADR commands require the complete
-// repo-first view and refuse an unusable repository, including reads.
+// --persona and its default root resolve through the identity store. ADR
+// commands require the complete repo-first view and refuse an unusable
+// repository, including reads.
 //
 // The attribute creates (talent, personality, writing-style), role create and
 // team create are store-refusing although they write the global layer: Save and
@@ -70,17 +69,13 @@ var storeUses = map[string]storeUse{
 	"ethos role schema": storeGlobalOnly, "ethos team schema": storeGlobalOnly,
 
 	"ethos session": storeGlobalOnly, "ethos session show": storeGlobalOnly,
-	"ethos session roster": storeGlobalOnly, "ethos session list": storeGlobalOnly,
-	"ethos session write-current": storeGlobalOnly, "ethos session purge": storeGlobalOnly,
-	"ethos session end": storeGlobalOnly, "ethos session join": storeGlobalOnly,
-	"ethos session leave": storeGlobalOnly, "ethos session create": storeGlobalOnly,
-	"ethos session delete": storeGlobalOnly, "ethos session delete-current": storeGlobalOnly,
-	"ethos iam": storeGlobalOnly, "ethos session iam": storeGlobalOnly,
+	"ethos session list": storeGlobalOnly,
+	"ethos session end":  storeGlobalOnly, "ethos session join": storeGlobalOnly,
+	"ethos session leave": storeGlobalOnly, "ethos session iam": storeGlobalOnly,
 
-	"ethos doctor": storeHandlesError, "ethos enable": storeHandlesError,
+	"ethos doctor": storeHandlesError, "ethos enable": storeHandlesError, // msgguard: allow command-name key of the store-policy table, never printed
 	"ethos disable": storeHandlesError, "ethos setup": storeHandlesError,
-	"ethos seed": storeHandlesError, "ethos serve": storeHandlesError,
-	"ethos audit migrate": storeHandlesError, "ethos audit quarantine": storeHandlesError,
+	"ethos seed": storeHandlesError, "ethos serve": storeHandlesError, // msgguard: allow command-name key of the store-policy table, never printed
 	"ethos audit seal": storeHandlesError, "ethos audit show": storeHandlesError,
 	"ethos hook": storeHandlesError, "ethos hook audit-log": storeHandlesError,
 	"ethos hook commit-trailers": storeHandlesError, "ethos hook format-output": storeHandlesError,
@@ -92,39 +87,38 @@ var storeUses = map[string]storeUse{
 	// audit seal does (exit 2), commit-msg when it has a trailer to write.
 	"ethos hook pre-commit": storeHandlesError, "ethos hook commit-msg": storeHandlesError,
 
-	"ethos adr create": storeRefuses, "ethos create": storeRefuses, "ethos export": storeRefuses,
+	"ethos adr create": storeRefuses, "ethos export": storeRefuses,
 	"ethos adr list": storeRefuses, "ethos adr show": storeRefuses,
-	"ethos adr settle": storeRefuses, "ethos adr migrate": storeRefuses,
-	"ethos ext del": storeRefuses, "ethos ext delete": storeRefuses, "ethos ext get": storeRefuses,
+	"ethos adr settle": storeRefuses,
+	"ethos ext delete": storeRefuses, "ethos ext get": storeRefuses,
 	"ethos ext list": storeRefuses, "ethos ext set": storeRefuses, "ethos find missions": storeRefuses,
 	"ethos identity": storeRefuses, "ethos identity create": storeRefuses,
 	"ethos identity get": storeRefuses, "ethos identity list": storeRefuses,
 	"ethos identity show": storeRefuses, "ethos identity whoami": storeRefuses,
-	"ethos import": storeRefuses, "ethos list": storeRefuses,
+	"ethos import":          storeRefuses,
 	"ethos mission abandon": storeRefuses, "ethos mission advance": storeRefuses,
 	"ethos mission claim": storeRefuses, "ethos mission close": storeRefuses,
 	"ethos mission correct": storeRefuses, "ethos mission create": storeRefuses,
 	"ethos mission dispatch": storeRefuses, "ethos mission export": storeRefuses,
 	"ethos mission lint": storeRefuses, "ethos mission list": storeRefuses,
-	"ethos mission log": storeRefuses, "ethos mission migrate": storeRefuses,
+	"ethos mission log":                  storeRefuses,
 	"ethos mission pipeline instantiate": storeRefuses, "ethos mission pipeline list": storeRefuses,
 	"ethos mission pipeline show": storeRefuses, "ethos mission reflect": storeRefuses,
 	"ethos mission publish":     storeRefuses,
 	"ethos mission reflections": storeRefuses, "ethos mission release": storeRefuses,
 	"ethos mission result": storeRefuses, "ethos mission results": storeRefuses,
 	"ethos mission scaffold": storeRefuses, "ethos mission scaffold contract": storeRefuses,
-	"ethos mission scaffold result": storeRefuses, "ethos mission scrub": storeRefuses,
-	"ethos mission show":       storeRefuses,
-	"ethos personality create": storeRefuses, "ethos personality delete": storeRefuses,
+	"ethos mission scaffold result": storeRefuses,
+	"ethos mission show":            storeRefuses,
+	"ethos personality create":      storeRefuses, "ethos personality delete": storeRefuses,
 	"ethos personality list": storeRefuses, "ethos personality set": storeRefuses,
-	"ethos personality show": storeRefuses, "ethos resolve-agent": storeRefuses,
+	"ethos personality show":   storeRefuses,
 	"ethos provenance message": storeRefuses, "ethos provenance verify": storeRefuses,
 	"ethos provenance verify-index": storeRefuses,
-	"ethos repair":                  storeRefuses,
 	"ethos role create":             storeRefuses, "ethos role delete": storeRefuses,
 	"ethos role list": storeRefuses, "ethos role show": storeRefuses,
 	"ethos session start": storeRefuses,
-	"ethos show":          storeRefuses, "ethos talent add": storeRefuses, "ethos talent create": storeRefuses,
+	"ethos talent add":    storeRefuses, "ethos talent create": storeRefuses,
 	"ethos talent delete": storeRefuses, "ethos talent list": storeRefuses,
 	"ethos talent remove": storeRefuses, "ethos talent show": storeRefuses,
 	"ethos team activate": storeRefuses, "ethos team active": storeRefuses,

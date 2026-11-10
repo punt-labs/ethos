@@ -89,7 +89,7 @@ func TestCLI_RepositoryIdentityOverlayDivergence(t *testing.T) {
 	for _, args := range [][]string{
 		{"ext", "get", "test-agent", "private"},
 		{"ext", "list", "test-agent"},
-		{"show", "test-agent"},
+		{"identity", "show", "test-agent"},
 	} {
 		_, stderr, exit := runCLI(t, se, args...)
 		require.Equal(t, 1, exit, "%v", args)
@@ -157,7 +157,7 @@ func TestCLI_RepositoryIdentityRefusesRedirectedBase(t *testing.T) {
 				for _, args := range [][]string{
 					{"ext", "get", "test-agent", "quarry"},
 					{"ext", "list", "test-agent"},
-					{"show", "test-agent"},
+					{"identity", "show", "test-agent"},
 					{"ext", "set", "test-agent", "quarry", "collection", "changed"},
 					{"ext", "delete", "test-agent", "quarry", "collection"},
 					{"ext", "delete", "test-agent", "quarry"},

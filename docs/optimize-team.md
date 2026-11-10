@@ -31,8 +31,6 @@ binary and MCP surface through an interactive interview:
 - `ethos team` / `ethos role` / `ethos identity` (CLI or the `team`,
   `role`, `identity` MCP tools) — to write team, role, and identity YAML.
 - `ethos doctor` — to verify referential integrity after writing.
-- `ethos repair` — to clear obsolete trace/runtime residue when a
-  re-shaping leaves it behind.
 - `ethos vendor --team <t> --apply --prune` — to refresh the vendored
   closure in a `resolution: repo-only` repo.
 
@@ -323,8 +321,7 @@ ratification.
    team survives a mid-write error — there is no window where the team
    references files that do not exist.
 8. **Destructive reconcile — a SEPARATE, explicitly-consented step.**
-   `ethos repair` permanently deletes trace/audit history and prompts
-   `Are you sure? [y/N]`; `ethos vendor --team <t> --apply --prune` removes
+   `ethos vendor --team <t> --apply --prune` removes
    files from the vendored closure. These are destructive and are NOT covered
    by the step-5 ratification. The skill runs them **without `--yes`**, so the
    user sees and answers each tool's own prompt, AND the skill first asks its

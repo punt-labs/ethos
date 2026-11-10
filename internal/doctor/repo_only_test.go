@@ -207,7 +207,7 @@ func TestCheckLocalExtNotTracked(t *testing.T) {
 		r := CheckLocalExtNotTracked(root)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "quarry.local.yaml")
-		assert.Contains(t, r.Detail, "git rm --cached")
+		assert.NotContains(t, r.Detail, "git rm --cached")
 	})
 
 	t.Run("no repo passes", func(t *testing.T) {
@@ -316,7 +316,7 @@ func TestCheckExtCredentialNames(t *testing.T) {
 		r := CheckExtCredentialNames(s)
 		assert.Equal(t, "WARN", r.Status)
 		assert.Contains(t, r.Detail, "mal quarry/api_token")
-		assert.Contains(t, r.Detail, "--local")
+		assert.Contains(t, r.Detail, "tracked base identity")
 	})
 
 	// Following the check's own advice must clear it. Reading the merged

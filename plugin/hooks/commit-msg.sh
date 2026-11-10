@@ -54,7 +54,7 @@ fi
 _ethos_path="$REPO_ROOT/.punt-labs"
 for _component in "$_ethos_path" "$_ethos_path/ethos" "$_ethos_path/ethos/enabled"; do
   if [ -L "$_component" ] && [ ! -e "$_component" ]; then
-    printf 'ethos: %s: %s is a dangling link; repair or remove it\n' "$_hook" "$_component" >&2
+    printf 'ethos: %s: %s is a dangling link; the commit is refused\n' "$_hook" "$_component" >&2
     exit 1
   fi
   [ -e "$_component" ] || break

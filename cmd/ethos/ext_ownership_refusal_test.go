@@ -104,12 +104,12 @@ func TestCLI_ExtensionOwnershipRefusal(t *testing.T) {
 			}
 			before := cliExtOwnershipSnapshot(t, se.repo, se.home)
 			for _, args := range [][]string{
-				{"show", "test-agent"},
+				{"identity", "show", "test-agent"},
 				{"ext", "get", "test-agent", "quarry"},
 				{"ext", "list", "test-agent"},
 				{"ext", "set", "test-agent", "quarry", "collection", "changed"},
 				{"ext", "set", "test-agent", "quarry", "collection", "changed", "--local"},
-				{"ext", "del", "test-agent", "quarry", "collection"},
+				{"ext", "delete", "test-agent", "quarry", "collection"},
 				{"ext", "delete", "test-agent", "quarry"},
 				{"ext", "delete", "test-agent", "quarry", "--local"},
 			} {

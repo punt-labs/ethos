@@ -5461,7 +5461,7 @@ func TestWriteExport_DirSyncFailurePrintsTheFilesFirst(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "exported: /x/m.contract.yaml\nexported: /x/m.result.yaml\n", out.String())
 	assert.Contains(t, err.Error(), "all files were written; only the directory sync failed")
-	assert.Contains(t, err.Error(), "re-run")
+	assert.NotContains(t, err.Error(), "re-run")
 
 	out.Reset()
 	err = writeExport(&out, "m-1", files, func(...mission.TrackedFile) error { return errors.New("refused") })

@@ -376,52 +376,34 @@ invalid configuration and required blame/full publication failure remain blockin
 Mission-event failure is a separate transactional domain, never best-effort
 successful lifecycle acceptance.
 
-## Bounded legacy repair
+## Automatic storage upgrade
 
-There is no new storage migration framework or lossless legacy-trace release
-guarantee. The bounded `ethos repair` contract is to show known obsolete files,
-warn that deleting them permanently loses legacy detail, and ask
-`Are you sure? [y/N]`. `--yes` is explicit consent for automation, not implicit
-consent from running another command. `ethos repair --dry-run` only inventories;
-without `--yes`, destructive confirmation requires a terminal. Empty input, no
-and EOF delete nothing. Destructive repair currently refuses on Windows; inventory
-is available, but deletion requires a Unix host with all writers stopped. This
-repair command remains subject to final entry-point acceptance; historical shipped
-`ethos mission migrate` / `ethos audit migrate` are not expanded into a DES-079
-migration workflow.
+Ethos upgrades its own storage; no command exists for it. The first ethos run
+after an upgrade relocates recognized legacy data into the shared local zone
+and writes a repair log under `~/.punt-labs/ethos/`. There is no lossless
+legacy-trace release guarantee.
 
-**Deletion warning:** the operator may explicitly remove identified obsolete
-trace/runtime files; that can permanently lose old
-prompts, reflections, events and audit history. Name the affected paths and warn
-before deletion. Shared identities, contracts, results, corrections, provenance
-and ADRs, private credentials, configuration, global data and arbitrary files are
-excluded from blanket cleanup; do not silently erase them.
-Canonical local history, current publications and flat current exports
+Shared identities, contracts, results, corrections, provenance and ADRs,
+private credentials, configuration, global data and arbitrary files are never
+removed. Canonical local history, current publications and flat current exports
 (`missions/<id>.contract.yaml`, `missions/<id>.result.yaml` with their associated
-trace) are retained, including incomplete/ambiguous exports. Other intentional
-publications and exports also require explicit operator selection outside blanket
-cleanup, not a tree-wide delete. No backup, migration, authority backfill, lifecycle
-transition, Git staging/commit or configuration rewrite is performed. Deletion is
-incremental, not transactional: after interruption, inspect a fresh inventory and
-confirm again; no rollback or lossless legacy recovery is promised. This
-operator-relaxed legacy requirement does not weaken new
-shared authority, correct placement, ordinary commits or retention of new local
-history when a feature worktree is removed. Stop all old/new writers, hooks and
-MCP servers before confirming; a busy lock refuses and is never stolen. Then run
-`ethos enable` and reconnect long-lived MCP servers. Re-running enable
+trace) are retained, including incomplete/ambiguous exports. No backup,
+authority backfill, lifecycle transition, Git staging/commit or configuration
+rewrite is performed. The upgrade does not weaken new shared authority, correct
+placement, ordinary commits or retention of new local history when a feature
+worktree is removed. A busy lock defers the upgrade to the next run and is never
+stolen. Reconnect long-lived MCP servers after an upgrade. Re-running `enable`
 maintains the shared local-zone exclusion and current hooks, not record-tree
 ignore exceptions.
 
-**Private legacy overlays are operator-directed, not repair candidates.** Stop
-writers before handling a repository sibling
-`S/.punt-labs/ethos/identities/<handle>.ext/<ns>.local.yaml`. Reconcile it into
+**Private legacy overlays.** A repository sibling
+`S/.punt-labs/ethos/identities/<handle>.ext/<ns>.local.yaml` is relocated to
 `S/.punt-labs/local/ethos/identities/<handle>.ext/<ns>.local.yaml`, preserving all
-credentials and resolving any existing destination before removing the old copy.
-Do not overwrite divergent values, serialize a merged identity into the base, or
-print credentials in diagnostics. Legacy siblings are read-only compatibility
-inputs; local writes refuse while one remains, and unequal local/legacy copies
-refuse reads. `ethos repair` neither moves nor deletes overlays; there is no
-storage-upgrade command to do it. Global overlay locations are unchanged.
+credentials. Divergent values are never overwritten, a merged identity is never
+serialized into the base, and credentials are never printed in diagnostics.
+Legacy siblings are read-only compatibility inputs; local writes refuse while
+one remains, and unequal local/legacy copies refuse reads. Global overlay
+locations are unchanged.
 
 Repository overlay handling preserves base-only writes, per-key local precedence,
 namespace limits, source-layer selection and read-only bundles. Direct base-file
@@ -476,7 +458,7 @@ row.
 | Local audit usability | `ethos audit seal`, `show`, `quarantine`, hooks | `default_seal` (dry-run and repeated seal, index bytes unchanged, held index lock, foreign pre-commit hook still runs once, `enable` idempotent), `audit_recovery` (corrupt chunk, quarantine twice, unrelated commit not blocked), `required_event_failure` (audit write failure is an advisory message) | Equal/conflicting overlaps |
 | Plain versus full export | `ethos mission export [--full]` | `full_export`: unsealed tail exported, session audit/scratch/quarantine/other mission excluded, live files not copied, no staging, ordinary `git add` works, synthetic credential not exported | Plain export C-root versus `--dir` regression, missing-history reporting |
 | Extensions and repo ADRs | `internal/adr` repository store | `publish_squash`: `adr create` then `adr show` in a fresh clone | Overlay secrecy/limits/bundles, global fallback, redacted ADR publication |
-| Bounded legacy repair; generated content | `ethos repair`, `internal/repair`, enable, doctor | None for `repair` or `doctor`; `default_seal` covers `enable` idempotence only | Everything listed in the row |
+| Bounded legacy repair; generated content | `internal/autorepair`, enable, doctor | None for the upgrade or `doctor`; `default_seal` covers `enable` idempotence only | Everything listed in the row |
 | Independent integration surfaces | Filesystem contract | None | Everything listed in the row |
 | Redaction shipped; repair still required | DES-080 writers, v4.20.0 | `full_export` checks one synthetic credential is absent from the export | New destinations, ADR sinks, legacy-tail handling |
 

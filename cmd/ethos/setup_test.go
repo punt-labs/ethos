@@ -475,7 +475,7 @@ func TestSetup_NoBundlesRefusesBeforeAnyWrite(t *testing.T) {
 			}
 			_, _, err := execHandler(t, args...)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "no bundles installed; run `ethos seed` first")
+			assert.Contains(t, err.Error(), "no bundles installed")
 			assert.NoDirExists(t, filepath.Join(repo, ".punt-labs"))
 			assert.NoFileExists(t, filepath.Join(repo, ".gitignore"))
 			assert.NoDirExists(t, filepath.Join(repo, ".claude"))
@@ -694,7 +694,7 @@ func TestSetup_HardValidation_UnseededFails(t *testing.T) {
 	// In a repository the missing bundle is found first, before any write.
 	_, _, err := execHandler(t, "setup", "--file", cfgPath)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no bundles installed; run `ethos seed` first")
+	assert.Contains(t, err.Error(), "no bundles installed")
 	assert.NoFileExists(t, filepath.Join(repo, ".punt-labs", "ethos.yaml"))
 
 	// Solo needs no bundle: the identity's unresolved personality names the
@@ -704,7 +704,7 @@ func TestSetup_HardValidation_UnseededFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `references personality "principal-engineer"`)
 	assert.Contains(t, err.Error(), "not installed")
-	assert.Contains(t, err.Error(), `run "ethos seed" first`)
+	assert.Contains(t, err.Error(), "which is not installed")
 
 	// Nothing dangling: the human identity file must not exist.
 	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "unseeded-user.yaml"))
@@ -821,7 +821,7 @@ func TestSetup_HardValidation_BadStyle(t *testing.T) {
 	_, _, err := execHandler(t, "setup", "--file", cfgPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `references writing style "not-a-real-style"`)
-	assert.Contains(t, err.Error(), `run "ethos seed" first`)
+	assert.Contains(t, err.Error(), "which is not installed")
 
 	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "typo-user.yaml"))
 }

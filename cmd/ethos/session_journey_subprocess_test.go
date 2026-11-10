@@ -114,7 +114,7 @@ func TestCLI_CodexJourney(t *testing.T) {
 	sh := withSession(se, sessionID, "claude")
 
 	// Step 3 — iam succeeds against the active session.
-	_, stderr, code := runCLI(t, sh, "iam", "claude")
+	_, stderr, code := runCLI(t, sh, "session", "iam", "claude")
 	require.Equal(t, 0, code, "iam should exit 0 under an active session; stderr=%s", stderr)
 
 	// Step 4 — whoami reflects the declared persona (not the git/OS user).

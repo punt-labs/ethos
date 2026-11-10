@@ -11,10 +11,11 @@ import (
 
 func init() {
 	hookCmd.AddCommand(&cobra.Command{
-		Use:   "commit-message <message-file>",
-		Short: "Atomically add commit trailers using canonical local staging",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runHookCommitMessage,
+		Use:    "commit-message <message-file>",
+		Hidden: true,
+		Short:  "Atomically add commit trailers using canonical local staging",
+		Args:   cobra.ExactArgs(1),
+		RunE:   runHookCommitMessage,
 	})
 }
 

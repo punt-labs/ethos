@@ -313,78 +313,14 @@ JSON output is one entry per line, matching the on-disk audit JSONL
 shape — `ethos audit show` output is itself a valid audit-log fragment
 and pipes cleanly into `jq`.
 
-### `ethos audit migrate`
+### Legacy artifacts
 
-One-time relocation of legacy global audit logs into the DES-054 v5
-repo-tree layout.
-
-```text
-Usage: ethos audit migrate [--dry-run] [--verbose]
-
-Scans ~/.punt-labs/ethos/sessions/*.audit.jsonl (the v3.11 layout)
-and copies each file's entries into the v3.12+ repo-tree layout
-under <repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl, then
-deletes the legacy file once every entry has landed and been
-fsynced.
-
-Idempotent: a second run on the same machine is a no-op. Cross-repo
-safe: a legacy session whose id has no matching repo-tree directory
-is left in place — it belongs to a different repo's work tree.
-
-Flags:
-  --dry-run   show what would change without writing or deleting
-  --verbose   print one decision line per session to stdout
-
-Exit codes:
-  0  migration completed (including the no-op "nothing to migrate" case)
-  1  one or more sessions failed mid-copy; both sources stayed in place
-  2  must run inside a repo (no <repo>/.punt-labs/ethos/sessions/ destination)
-```
-
-```bash
-$ ethos audit migrate --verbose
-sess-abc123: migrated 47 entries to .punt-labs/ethos/sessions/2026-05-22-sess-abc123/audit.jsonl
-sess-def456: skipped (no matching repo-tree session)
-sess-ghi789: already migrated (no-op)
-audit migrate: complete
-```
-
-### `ethos mission migrate --to-repo`
-
-Atomic per-mission relocation from `~/.punt-labs/ethos/missions/<id>.yaml`
-(legacy global) to `<repo>/.punt-labs/ethos/missions/<id>/contract.yaml` (DES-054
-repo tree).
-
-```text
-Usage: ethos mission migrate [mission-id] [--to-repo] [--dry-run] [--verbose]
-
-Without a mission-id argument, every legacy mission whose contract_id
-is referenced by an audit entry in <repo>/.punt-labs/ethos/sessions/ is moved.
-Missions belonging to other repos' work trees are left in place —
-cross-repo policy.
-
-Idempotent: a mission already migrated is a no-op. Atomic per-mission:
-the move stages artifacts in a sibling temp directory and renames into
-place; a failure before the rename leaves the legacy tree intact.
-
-Flags:
-  --to-repo   migrate into the per-repo .punt-labs/ethos/missions/ tree (default
-              and currently the only target)
-  --dry-run   show what would change without writing or deleting
-  --verbose   print one decision line per mission to stdout
-
-Exit codes:
-  0  migration completed (including the no-op "nothing to migrate" case)
-  1  one or more missions failed mid-migration; legacy files stayed in place
-  2  must run inside a repo
-```
-
-```bash
-$ ethos mission migrate --dry-run --verbose
-m-2026-05-22-001: would migrate (contract + 3 result rounds + 2 reflections)
-m-2026-05-22-002: would skip (already migrated)
-mission migrate: dry-run complete
-```
+Ethos relocates legacy global audit logs
+(`~/.punt-labs/ethos/sessions/*.audit.jsonl`) and legacy global missions
+(`~/.punt-labs/ethos/missions/<id>.yaml`) into the repo tree itself, on the
+first run after an upgrade. No command exists for it. A session or mission
+whose id is not referenced by the current repo is left in place: it belongs to
+another checkout.
 
 ## Commit-Msg Trailer Hook
 
@@ -636,23 +572,9 @@ layout:
 
 ## Migration from v3.11
 
-The migration is opt-in and idempotent. New work lands in the repo
-tree automatically (no migration needed). Existing global artifacts
-stay readable in place until you migrate them.
-
-Recommended order:
-
-```bash
-# 1. Move legacy session audit logs into the repo tree.
-ethos audit migrate --verbose
-
-# 2. Move legacy missions into the repo tree.
-ethos mission migrate --verbose
-```
-
-Both commands are safe to run on a repo that has nothing to migrate
-(no-op) and on a repo that has already been migrated (no-op). Both
-honour `--dry-run`.
+The migration is automatic and idempotent. New work lands in the repo
+tree. Existing global artifacts stay readable in place until ethos
+relocates them on a later run; nothing needs to be run.
 
 Cross-repo policy: a session or mission whose id is not referenced
 by any audit entry in the current repo's `.punt-labs/ethos/sessions/` tree is

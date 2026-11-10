@@ -12,5 +12,4 @@ A `current/` subdirectory (created on demand) maps Claude process PIDs
 to session IDs for non-hook callers.
 
 Sessions are created on `SessionStart`, updated on `SubagentStart`/`SubagentStop`,
-and deleted on `SessionEnd`. Stale sessions can be cleaned up with
-`ethos session purge`.
+and deleted on `SessionEnd`. Ethos clears stale sessions automatically.

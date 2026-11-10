@@ -155,9 +155,8 @@ func TestHookCommitMsgUnresolvableSessionNamesItself(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	require.NoError(t, cmd.Run(), stderr.String())
-	assert.Contains(t, stderr.String(), "ethos: commit-msg: ")
-	assert.Contains(t, stderr.String(), "no trailer added")
-	assert.NotContains(t, stderr.String(), "commit-trailers")
+	assert.Equal(t, "ethos: commit-msg: no trailer added: no Claude Code session is bound to this process\n", stderr.String())
+	assert.NotContains(t, stderr.String(), "/", "no path may reach commit stderr")
 	got, err := os.ReadFile(p)
 	require.NoError(t, err)
 	assert.Equal(t, "subject\n", string(got))

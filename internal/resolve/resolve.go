@@ -215,7 +215,7 @@ const SessionSourcePID = "pid"
 // they learn to distrust the message, so each call site below composes
 // its own sub-case-specific advice instead — see restartPointerRemedy and
 // deadRosterRemedy.
-var ErrNoSession = errors.New("cannot identify the calling session")
+var ErrNoSession = errors.New("no Claude Code session is bound to this process")
 
 // restartPointerRemedy is ErrNoSession's remedy for its dominant sub-case:
 // the session-current pointer file is missing, blank, or otherwise
@@ -223,8 +223,7 @@ var ErrNoSession = errors.New("cannot identify the calling session")
 // session (or running /clear) makes SessionStart fire again, which is the
 // only thing that calls session.Store.WriteCurrentSession — `ethos
 // session start` alone does not.
-const restartPointerRemedy = "restart the Claude Code session (or run /clear) so SessionStart re-establishes the session pointer; " +
-	"the direct, non-interactive equivalent is `ethos session write-current --pid <pid> --session <id>`"
+const restartPointerRemedy = "the session pointer for this process is missing or unreadable"
 
 // uncorroboratedPIDRemedy is ErrNoSession's remedy for the sub-case where
 // CLAUDE_PID itself is absent or fails corroboration: there is no key to
@@ -236,8 +235,7 @@ const restartPointerRemedy = "restart the Claude Code session (or run /clear) so
 // the host collides on — precisely the collision DES-074 exists to close
 // (review finding, PR #502) — so this case is reported as unresolvable
 // rather than resolved via that shared key.
-const uncorroboratedPIDRemedy = "CLAUDE_PID is absent or could not be corroborated as a live ancestor of this process; " +
-	"upgrade to Claude Code 2.1.234+ if this is an older harness, or set ETHOS_SESSION=<id> directly"
+const uncorroboratedPIDRemedy = "CLAUDE_PID is absent or could not be corroborated as a live ancestor of this process"
 
 // deadRosterRemedy is ErrNoSession's remedy for its other sub-case: an
 // explicit ETHOS_SESSION (or a resolved pointer) names a session ID whose
@@ -248,8 +246,7 @@ const uncorroboratedPIDRemedy = "CLAUDE_PID is absent or could not be corroborat
 // eval is mandatory: the bare command only prints the export, and even
 // with eval this fixes only that shell's own environment, never a process
 // Claude Code spawned.
-const deadRosterRemedy = "run `eval \"$(ethos session start)\"` in your shell to mint a fresh session " +
-	"(the eval is required; this does not help a process Claude Code spawned, which inherits Claude Code's own environment, not the shell's)"
+const deadRosterRemedy = "the session named by ETHOS_SESSION has no roster"
 
 // ErrNotUnderClaudeCode is returned by SessionID when no session was ever
 // expected: not running under Claude Code at all (headless, CI, SDK, a
@@ -1202,6 +1199,9 @@ func parseRevParse(start, out string) (top, gitDir, common string, ok bool) {
 // and not when the .git is at or above a GIT_CEILING_DIRECTORIES entry, which
 // git never examined.
 func gitLocateError(start string, err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("running git rev-parse in %s: git not found on PATH", start)
+	}
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {
 		return fmt.Errorf("running git rev-parse in %s: %w", start, err)
@@ -1212,10 +1212,22 @@ func gitLocateError(start string, err error) error {
 		// ceiling boundary it stopped at, does not make this a refusal.
 		return fmt.Errorf("%s is %w", start, ErrNotInRepo)
 	}
+	cause := gitCause(msg)
 	if dot := firstDotGit(start); dot != "" && !messageNamesGit(msg, dot) {
-		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, msg)
+		return fmt.Errorf("git cannot resolve the repository for %s at %s: %s", start, dot, cause)
 	}
-	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, msg)
+	return fmt.Errorf("git cannot resolve the repository for %s: %s", start, cause)
+}
+
+// gitCause states what git found without relaying its advice: a dubious-
+// ownership refusal is named, and any other stderr is cut to its first line,
+// since git's later lines are hints and remedies.
+func gitCause(msg string) string {
+	if strings.Contains(msg, "dubious ownership") || strings.Contains(msg, "safe.directory") {
+		return "git refuses this directory (safe.directory)"
+	}
+	first, _, _ := strings.Cut(msg, "\n")
+	return strings.TrimSpace(first)
 }
 
 // messageNamesGit reports whether git's message msg names the work tree that

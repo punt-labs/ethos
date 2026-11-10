@@ -16,8 +16,11 @@ var identityCmd = &cobra.Command{
 	},
 }
 
+// identityReference backs --reference on identity show and get. It is a
+// package variable so a test can reset it between in-process invocations.
+var identityReference bool
+
 func init() {
-	var getReference bool
 	var identityCreateFile string
 
 	identityWhoamiCmd := &cobra.Command{
@@ -44,10 +47,10 @@ func init() {
 		Short: "Show identity details",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runShow(cmd, args[0], getReference)
+			return runShow(cmd, args[0], identityReference)
 		},
 	}
-	identityShowCmd.Flags().BoolVar(&getReference, "reference", false, "Include reference identity data")
+	identityShowCmd.Flags().BoolVar(&identityReference, "reference", false, "Include reference identity data")
 
 	// Hidden alias so existing scripts using "identity get" still work.
 	identityGetCmd := &cobra.Command{
@@ -56,10 +59,10 @@ func init() {
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runShow(cmd, args[0], getReference)
+			return runShow(cmd, args[0], identityReference)
 		},
 	}
-	identityGetCmd.Flags().BoolVar(&getReference, "reference", false, "Include reference identity data")
+	identityGetCmd.Flags().BoolVar(&identityReference, "reference", false, "Include reference identity data")
 
 	identityCreateCmd := &cobra.Command{
 		Use:   "create",

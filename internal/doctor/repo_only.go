@@ -1,8 +1,10 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -176,7 +178,7 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	}
 	if len(tracked) > 0 {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s already tracked by git — gitignore does not untrack; preserve/copy and verify local data first, then remove only these paths from the index with git rm --cached -- (not from disk); do not delete retained data or add source-tree ignore exceptions",
+			"%s already tracked by git; gitignore does not untrack them",
 			strings.Join(tracked, ", "))}
 	}
 
@@ -189,7 +191,7 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	}
 	if !ignored {
 		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-			"no .gitignore rule for %s — add it before running `ethos ext set --local`", GitignoreRule)}
+			"no .gitignore rule for %s; a local overlay written here would be tracked", GitignoreRule)}
 	}
 	return Result{Name: name, Status: "PASS", Detail: "ignored and untracked"}
 }
@@ -203,6 +205,9 @@ func trackedLocalExt(repoRoot string) ([]string, error) {
 	out, err := gitenv.OutputEnv(repoRoot, "git", nil, "ls-files",
 		"-z", "--", ".punt-labs/")
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("could not ask git for tracked files: git not found on PATH")
+		}
 		return nil, fmt.Errorf("could not ask git for tracked files: %v", err)
 	}
 	var files []string
@@ -267,7 +272,7 @@ func CheckExtCredentialNames(s identity.IdentityStore) Result {
 	var parts []string
 	if len(flagged) > 0 {
 		parts = append(parts, fmt.Sprintf(
-			"credential-named: %s — move each to a <namespace>.local.yaml (`ethos ext set ... --local`); `ethos vendor` will refuse them",
+			"overlay values present in the tracked base identity: %s; `ethos vendor` refuses them",
 			strings.Join(flagged, ", ")))
 	}
 	if len(unread) > 0 {

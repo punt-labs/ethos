@@ -8,29 +8,8 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/punt-labs/ethos/v4/internal/identity"
-	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
-
-var createFile string
-
-var createCmd = &cobra.Command{
-	Use:    "create",
-	Short:  "Create a new identity",
-	Hidden: true,
-	Args:   cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if createFile != "" {
-			return createFromFile(createFile)
-		}
-		return createInteractive()
-	},
-}
-
-func init() {
-	createCmd.Flags().StringVarP(&createFile, "file", "f", "", "Create identity from YAML file")
-	rootCmd.AddCommand(createCmd)
-}
 
 func createFromFile(path string) error {
 	data, err := os.ReadFile(path)

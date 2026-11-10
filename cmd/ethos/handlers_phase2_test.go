@@ -278,7 +278,7 @@ func TestRunExtDel(t *testing.T) {
 	_, _, err := execHandler(t, "ext", "set", "test-agent", "vox", "voice", "nova")
 	require.NoError(t, err)
 
-	_, _, err = execHandler(t, "ext", "del", "test-agent", "vox", "voice")
+	_, _, err = execHandler(t, "ext", "delete", "test-agent", "vox", "voice")
 	require.NoError(t, err)
 
 	// Get after delete should fail.

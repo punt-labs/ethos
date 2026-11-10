@@ -125,19 +125,6 @@ func TestTeamAddBundleCloneTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "200ms")
 }
 
-// session purge returns the timeout when git does not answer reading this
-// checkout's identity: no purge runs against an empty identity.
-func TestSessionPurgeGitTimeout(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
-	testhelpers.HangingGit(t)
-	cmd := &cobra.Command{}
-	cmd.SetOut(&bytes.Buffer{})
-	cmd.SetErr(&bytes.Buffer{})
-	err := runSessionPurge(cmd)
-	require.ErrorIs(t, err, gitenv.ErrTimeout)
-}
-
 // An explicit override with no store is refused before any Git work. It must
 // not become an empty-success seal, even if Git would also hang.
 func TestAuditSealInvalidRootFailsClosedBeforeGit(t *testing.T) {

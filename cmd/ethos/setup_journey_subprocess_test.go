@@ -53,7 +53,7 @@ func writeAnswers(t *testing.T, repo, body string) string {
 // resolved-content fields plus the raw stderr (where warnings land).
 func showJSON(t *testing.T, se *cliSubprocessEnv, handle string) (talents []string, personality string, stderr string, exit int) {
 	t.Helper()
-	stdout, errOut, code := runCLI(t, se, "show", handle, "--json")
+	stdout, errOut, code := runCLI(t, se, "identity", "show", handle, "--json")
 	var parsed struct {
 		TalentContents      []string `json:"talent_contents"`
 		PersonalityContent  string   `json:"personality_content"`
@@ -132,7 +132,7 @@ func TestCLI_Setup_UnseededFailsLoud(t *testing.T) {
 	stdout, stderr, code := runCLI(t, se, "setup", "--file", answers, "--bundle", "foundation")
 
 	require.NotEqual(t, 0, code, "unseeded setup must exit non-zero; stdout=%s", stdout)
-	assert.Contains(t, stderr, "no bundles installed; run `ethos seed` first")
+	assert.Contains(t, stderr, "no bundles installed")
 
 	// Nothing dangling: no global identities directory was written.
 	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nobody.yaml"))
@@ -144,7 +144,7 @@ func TestCLI_Setup_UnseededFailsLoud(t *testing.T) {
 	stdout, stderr, code = runCLI(t, se, "setup", "--file", answers, "--solo")
 	require.NotEqual(t, 0, code, "unseeded solo setup must exit non-zero; stdout=%s", stdout)
 	assert.Contains(t, stderr, `principal-engineer`)
-	assert.Contains(t, stderr, `run "ethos seed" first`)
+	assert.Contains(t, stderr, "which is not installed")
 	assert.NoFileExists(t, filepath.Join(se.home, ".punt-labs", "ethos", "identities", "nobody.yaml"))
 }
 

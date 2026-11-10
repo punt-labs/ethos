@@ -39,6 +39,9 @@ func TestPhysicalPlacementIsNotClassificationOrTracking(t *testing.T) {
 			r := CheckPhysicalPlacement(root)
 			assert.Equal(t, "FAIL", r.Status, r.Detail)
 			assert.Contains(t, r.Detail, rel)
+			assert.Contains(t, r.Detail, "recognized legacy data found at ")
+			assert.Contains(t, r.Detail, "(agent-owned artifacts are not legacy)")
+			assert.NotContains(t, r.Detail, "is moved")
 			assert.FileExists(t, path, "doctor must not remove legacy bytes")
 		})
 	}
@@ -137,5 +140,5 @@ func TestTrackedLegacyLocalPathsAreExactAndTraceIsNotAllLocal(t *testing.T) {
 		assert.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
 	}
 	assert.NotContains(t, r.Detail, trace)
-	assert.Contains(t, r.Detail, "git rm --cached --")
+	assert.NotContains(t, r.Detail, "git rm --cached")
 }
