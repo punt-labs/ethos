@@ -85,3 +85,25 @@ func TestMigrateLegacyVoicesSymlinkedIdentityIsResidual(t *testing.T) {
 	assert.Equal(t, "alink", residuals[0].Handle)
 	assert.Equal(t, link, residuals[0].Path)
 }
+
+func TestWithoutVoiceKeyRemovesInnerTrailingComment(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{
+			"inner comment before next key",
+			"name: Voice Person\nhandle: vperson\nvoice:\n  provider: say\n  # trailing inner\nkind: human\n",
+			"name: Voice Person\nhandle: vperson\nkind: human\n",
+		},
+		{
+			"head comment of next key stays",
+			"voice:\n  provider: say\n  # inner\n# about kind\nkind: human\n",
+			"# about kind\nkind: human\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := withoutVoiceKey([]byte(tt.in))
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+}

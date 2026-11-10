@@ -254,8 +254,15 @@ func withoutVoiceKey(data []byte) ([]byte, error) {
 	end := len(lines)
 	if i+2 < len(m.Content) {
 		end = m.Content[i+2].Line - 1
-		// The next key's head comment is not part of voice.
-		for end > start+1 && strings.HasPrefix(strings.TrimSpace(lines[end-1]), "#") {
+		// Only comments at the next key's column are its head comment; a more
+		// indented one sits inside the voice block and goes with it.
+		col := m.Content[i].Column - 1
+		for end > start+1 {
+			l := lines[end-1]
+			trimmed := strings.TrimLeft(l, " \t")
+			if !strings.HasPrefix(trimmed, "#") || len(l)-len(trimmed) > col {
+				break
+			}
 			end--
 		}
 	}
