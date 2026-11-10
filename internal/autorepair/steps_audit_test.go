@@ -170,7 +170,7 @@ func TestLiveTailsRedactsPreRedactionLine(t *testing.T) {
 	require.NoError(t, err, "a following seal through the real code path has nothing to refuse")
 	assert.Equal(t, 2, res.LinesSealed)
 
-	assert.Equal(t, 0, runStep(t, runLiveTails, env).Items, "second run changes nothing")
+	assertSecondRunChangesNothing(t, runLiveTails, env)
 }
 
 func TestLiveTailsRecomputesToolInputHash(t *testing.T) {
@@ -198,7 +198,7 @@ func TestLiveTailsMissionLog(t *testing.T) {
 	assert.NotContains(t, string(b), home)
 	assert.NotContains(t, string(b), fakeToken)
 	assert.Contains(t, string(b), `"event":"update"`, "it stays a mission event")
-	assert.Equal(t, 0, runStep(t, runLiveTails, env).Items)
+	assertSecondRunChangesNothing(t, runLiveTails, env)
 }
 
 func TestLiveTailsArchivedTSConflictDropsLiveLine(t *testing.T) {
@@ -233,7 +233,7 @@ func TestLiveTailsArchivedTSConflictDropsLiveLine(t *testing.T) {
 			b, err := os.ReadFile(s.LivePath(env.Policy))
 			require.NoError(t, err)
 			assert.NotContains(t, string(b), `"tool":"Bash"`)
-			assert.Equal(t, 0, runStep(t, runLiveTails, env).Items)
+			assertSecondRunChangesNothing(t, runLiveTails, env)
 		})
 	}
 }
@@ -253,6 +253,7 @@ func TestLiveTailsDefersOnHeldStreamLock(t *testing.T) {
 	out := runStep(t, runLiveTails, env)
 	assert.False(t, out.Deferred)
 	assert.Equal(t, 1, out.Items)
+	assertSecondRunChangesNothing(t, runLiveTails, env)
 }
 
 func TestLiveTailsOutsideRepositoryAndNoStreams(t *testing.T) {
@@ -312,7 +313,7 @@ func TestCorruptChunksCorruptSealedChunk(t *testing.T) {
 	assert.Empty(t, chunkFiles(t, env), "the damaged bytes are deleted")
 	assert.Empty(t, corruptFiles(t, env.Roots.Store), "no .corrupt copy is kept")
 	assert.Contains(t, log.text(), "corrupt-chunks replace-chunk salvaged=0 gap=true")
-	assert.Equal(t, 0, runStep(t, runCorruptChunks, env).Items, "second run changes nothing")
+	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
 
 // A live line inside the damaged chunk's range is recovered, redacted.
@@ -332,7 +333,7 @@ func TestCorruptChunksRecoversRedactedLiveLine(t *testing.T) {
 	assert.Len(t, data.Lines, 1)
 	assert.Empty(t, walkContains(t, env.Policy.LocalRoot()+"/trace", home, fakeToken), "the replacement chunk holds the redacted form")
 	assert.Len(t, chunkFiles(t, env), 1)
-	assert.Equal(t, 0, runStep(t, runCorruptChunks, env).Items)
+	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
 
 func TestCorruptChunksInvalidEscapeLines(t *testing.T) {
@@ -357,7 +358,7 @@ func TestCorruptChunksInvalidEscapeLines(t *testing.T) {
 	assert.Empty(t, data.Gaps, "the invalid-escape line sits between recovered bounds; no range is lost")
 	assert.Empty(t, walkContains(t, env.Roots.Store, home, fakeToken), "the pre-redaction token and path are gone")
 	assert.Empty(t, corruptFiles(t, env.Roots.Store))
-	assert.Equal(t, 0, runStep(t, runCorruptChunks, env).Items)
+	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
 
 func TestCorruptChunksConflictingRecoveredLine(t *testing.T) {
@@ -377,7 +378,7 @@ func TestCorruptChunksConflictingRecoveredLine(t *testing.T) {
 	assert.Empty(t, walkContains(t, env.Roots.Store, "ONE-DIFFERENT"), "the conflicting bytes are deleted")
 	assert.Len(t, chunkFiles(t, env), 1)
 	assert.Empty(t, corruptFiles(t, env.Roots.Store))
-	assert.Equal(t, 0, runStep(t, runCorruptChunks, env).Items)
+	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
 
 func TestCorruptChunksHealthyAndOutside(t *testing.T) {
@@ -404,6 +405,7 @@ func TestCorruptChunksDefersOnHeldStreamLock(t *testing.T) {
 	}))
 	assert.Len(t, chunkFiles(t, env), 1, "a deferred step left the chunk alone")
 	assert.Equal(t, 1, runStep(t, runCorruptChunks, env).Items)
+	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }
 
 var auditCorpusVersions = []string{"v3.11.0", "v3.12.0", "v4.0.0", "v4.8.0", "v4.13.0", "v4.17.0", "v4.20.4", "v4.21.0", "v4.22.1"}
@@ -454,7 +456,7 @@ func TestAuditStepsOverCorpusAreIdempotent(t *testing.T) {
 				first := runStep(t, step.run, env)
 				assert.False(t, first.Deferred, "%s deferred", step.name)
 				assert.Empty(t, first.Residuals, "%s residuals", step.name)
-				assert.Equal(t, Outcome{}, runStep(t, step.run, env), "%s: second run changes nothing", step.name)
+				assertSecondRunChangesNothing(t, step.run, env)
 			}
 			streams, err := audit.ListStreams(env.Policy)
 			require.NoError(t, err)
@@ -511,7 +513,7 @@ func TestLiveTailsAfterRecordTreeRedactionDropsStaleCorpusLines(t *testing.T) {
 	_, err = audit.ReadStream(env.Policy, s)
 	require.NoError(t, err)
 	assert.Empty(t, walkContains(t, env.Policy.LocalRoot(), fakeToken), "the token survives nowhere under local/")
-	assert.Equal(t, 0, runStep(t, runLiveTails, env).Items)
+	assertSecondRunChangesNothing(t, runLiveTails, env)
 }
 
 // An orphan .corrupt (a retirement an interrupted old-style quarantine left
@@ -561,5 +563,5 @@ func TestCorruptChunksCompletesOrphanCorrupt(t *testing.T) {
 	assert.NoFileExists(t, raw+".json")
 	assert.FileExists(t, filepath.Join(dir, audit.CorruptName(cn.Stem())), "the retirement record stays beside its final marker")
 	assert.Contains(t, log.text(), "complete-orphan-corrupt")
-	assert.Equal(t, 0, runStep(t, runCorruptChunks, env).Items, "second run changes nothing")
+	assertSecondRunChangesNothing(t, runCorruptChunks, env)
 }

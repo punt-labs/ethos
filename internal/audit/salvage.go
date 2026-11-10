@@ -63,7 +63,11 @@ func SalvageChunk(p layout.Policy, s Stream, source string, cn ChunkName, guard 
 	}
 	res.Replacement = dest
 	m := Marker{Chunk: cn.Stem(), Reason: "chunk bytes were damaged; surviving lines were recovered", VerifiedLast: r.verifiedLast}
-	if res.Lost {
+	// A retired file (<stem>.jsonl.corrupt) is covered by nothing once its
+	// bytes are gone; its marker is written whether or not a line was lost,
+	// so the stem stays accounted for.
+	_, kind := Classify(filepath.Base(source), cn.Namespace)
+	if res.Lost || kind == KindCorrupt {
 		m.UnrecoveredFirst, m.UnrecoveredLast = r.lo, r.hi
 		mb, err := MarshalMarker(m)
 		if err != nil {
