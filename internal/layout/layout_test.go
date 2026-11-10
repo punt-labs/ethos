@@ -139,6 +139,8 @@ func TestClassify(t *testing.T) {
 		{".punt-labs/local/ethos/missions/m-1/s-1.lock", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/reflection-intent.yaml", layout.Never, true},
 		{".punt-labs/local/ethos/missions/m-1/correction-intent.yaml", layout.Never, true},
+		// The repository layout stamp (DES-084).
+		{".punt-labs/local/ethos/layout.yaml", layout.Never, true},
 		// No entry.
 		{".punt-labs/ethos/ethos.yaml", 0, false},
 		{".punt-labs/ethos/unknown/file", 0, false},
