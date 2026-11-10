@@ -601,3 +601,71 @@ func TestHeldBytesWithoutTSAreNotNamedFromMtime(t *testing.T) {
 		})
 	}
 }
+
+// plantHeld puts raw bytes where QuarantineLocal holds them, named by their
+// digest, with no retirement record referencing them.
+func plantHeld(t *testing.T, env Env, s audit.Stream, raw string) string {
+	t.Helper()
+	held := filepath.Join(audit.HeldQuarantineDir(env.Policy, s), fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))+".corrupt")
+	plant(t, env.Policy, held, raw)
+	return held
+}
+
+// sameTSDigests returns the canonical-payload digests of two stableLine tools
+// at one ts, the pair a repair log must name when it records their conflict.
+func sameTSDigests(t *testing.T, ts int64, tools ...string) []string {
+	t.Helper()
+	var out []string
+	for _, tool := range tools {
+		b, err := audit.CanonicalPayload([]byte(stableLine(ts, tool)))
+		require.NoError(t, err)
+		out = append(out, fmt.Sprintf("%x", sha256.Sum256(b)))
+	}
+	return out
+}
+
+// assertSameTSRecorded checks that two payloads damaged bytes held at one ts
+// are either both installed or recorded as lost with the ts, and that the
+// log names both digests.
+func assertSameTSRecorded(t *testing.T, env Env, log *recLog, s audit.Stream, dir string) {
+	t.Helper()
+	data, err := audit.ReadStream(env.Policy, s)
+	require.NoError(t, err)
+	x, y := false, false
+	for _, l := range data.Lines {
+		x = x || strings.Contains(string(l.Raw), "Xfirst__")
+		y = y || strings.Contains(string(l.Raw), "Ysecond_")
+	}
+	if !(x && y) {
+		hasGap := false
+		for _, g := range data.Gaps {
+			hasGap = hasGap || g.First <= fixT0+1000 && fixT0+1000 <= g.Last
+		}
+		assert.True(t, hasGap, "one payload is gone: a gap must cover its ts; gaps=%v", data.Gaps)
+		for _, d := range sameTSDigests(t, fixT0+1000, "Xfirst__", "Ysecond_") {
+			assert.Contains(t, log.text(), d, "the log names both digests")
+		}
+	}
+}
+
+// Two decodable damaged lines with one ts and different payloads, in a legacy
+// raw .corrupt with nothing beside it: neither is silently dropped.
+func TestSameTSDamagedLinesLegacyAloneAreRecorded(t *testing.T) {
+	env, log, s, dir, _ := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, audit.CorruptName(cn.Stem())), []byte(stableLine(fixT0, "A")+stableLine(fixT0+1000, "Xfirst__")+stableLine(fixT0+1000, "Ysecond_")+stableLine(fixT0+2000, "C")), 0o600))
+	runStep(t, runCorruptChunks, env)
+	assertSameTSRecorded(t, env, log, s, dir)
+	fixSecondRun(t, env)
+}
+
+// The same pair beside a valid same-stem chunk, with a third unique line.
+func TestSameTSDamagedLinesBesideValidChunkAreRecorded(t *testing.T) {
+	env, log, s, dir, _ := fixEnv(t)
+	cn := audit.ChunkName{Namespace: audit.SessionNS, First: fixT0, Last: fixT0 + 2000}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cn.ChunkFile()), []byte(stableLine(fixT0, "A")+stableLine(fixT0+2000, "C")), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, audit.CorruptName(cn.Stem())), []byte(stableLine(fixT0, "A")+stableLine(fixT0+1000, "Xfirst__")+stableLine(fixT0+1000, "Ysecond_")+stableLine(fixT0+1500, "Zthird__")+stableLine(fixT0+2000, "C")), 0o600))
+	runStep(t, runCorruptChunks, env)
+	assertSameTSRecorded(t, env, log, s, dir)
+	fixSecondRun(t, env)
+}

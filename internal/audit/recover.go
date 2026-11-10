@@ -72,6 +72,21 @@ func recoverLines(p layout.Policy, s Stream, damaged []byte, cn ChunkName, excep
 		if l.TS > r.hi {
 			r.hi = l.TS
 		}
+		if prev, dup := byTS[l.TS]; dup {
+			// Two damaged lines at one ts: keeping the last would drop the
+			// other without a trace. Keep the first and record the refused
+			// payload as a loss, as a conflict with surviving evidence is.
+			a, aerr := CanonicalPayload(prev.Raw)
+			b, berr := CanonicalPayload(l.Raw)
+			if err := errors.Join(aerr, berr); err != nil {
+				return r, err
+			}
+			if !bytes.Equal(a, b) {
+				r.conflicts = append(r.conflicts, LiveConflict{TS: l.TS, ArchiveDigest: digest(a), LiveDigest: digest(b)})
+				r.lost = true
+			}
+			continue
+		}
 		byTS[l.TS] = l
 	}
 	live, err := ReadLiveLines(p, s)
