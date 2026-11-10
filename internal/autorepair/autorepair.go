@@ -10,6 +10,9 @@ package autorepair
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/layout"
@@ -20,10 +23,13 @@ import (
 // DES-079 layout and is independent of the release number.
 const LayoutVersion = 5
 
-// Env is what a step needs: the located roots (Store, Checkout may be empty
-// outside a repository), the repository policy (zero Policy outside a
-// repository), the global root (~/.punt-labs/ethos), and a Logger. Steps
-// never resolve roots or policy themselves.
+// Env is what a step needs: the located roots and the repository policy,
+// both zero unless the repository pass is active (a repository was located
+// cleanly and has used ethos), the global root (~/.punt-labs/ethos), and a
+// Logger. Steps never resolve roots or policy themselves. A step reads the
+// repository's roots only through StoreRoot and CheckoutRoot, never through
+// Roots.Store or Roots.Checkout: those helpers check the located error and the
+// active pass, which the located-use scanner requires of every reader.
 type Env struct {
 	Roots  resolve.Located
 	Policy layout.Policy
@@ -32,8 +38,41 @@ type Env struct {
 	Log    Logger
 }
 
-// InRepository reports whether a repository store was located.
-func (e Env) InRepository() bool { return e.Roots.Store != "" }
+// InRepository reports whether the repository pass is active: the engine
+// located a repository that has used ethos and is serving it. A ScopeBoth
+// step runs with this false outside a repository and in a repository ethos
+// never touched, which it must then leave alone.
+//
+// The engine sets or zeroes Roots and Policy together, so this agrees with
+// Roots.Store being set.
+func (e Env) InRepository() bool { return e.Policy.LocalRoot() != "" }
+
+// ErrNotInRepository is what StoreRoot and CheckoutRoot return while the
+// repository pass is not active.
+var ErrNotInRepository = errors.New("the repository pass is not active")
+
+// StoreRoot is the repository's shared store root S. It returns an error
+// unless the repository pass is active and the location carries none.
+func (e Env) StoreRoot() (string, error) {
+	if !e.InRepository() {
+		return "", ErrNotInRepository
+	}
+	if err := e.Roots.Err(); err != nil {
+		return "", fmt.Errorf("reading the store root: %w", err)
+	}
+	return e.Roots.Store, nil
+}
+
+// CheckoutRoot is the invoking checkout root C, with StoreRoot's conditions.
+func (e Env) CheckoutRoot() (string, error) {
+	if !e.InRepository() {
+		return "", ErrNotInRepository
+	}
+	if err := e.Roots.Err(); err != nil {
+		return "", fmt.Errorf("reading the checkout root: %w", err)
+	}
+	return e.Roots.Checkout, nil
+}
 
 // Outcome is one step's result. Items counts conversions applied. Deferred
 // is true when the step stopped early (busy lock, index lock, budget) and
@@ -52,13 +91,22 @@ type Residual struct {
 	Step   string `yaml:"step"`
 	ID     string `yaml:"id"`
 	Reason string `yaml:"reason"`
+	// Scope names the store the condition is in. A ScopeBoth step sets it; the
+	// zero value means the store the step was running for. It places the
+	// residual and is not recorded. A residual is never written into a stamp
+	// of a different scope: when the pass serves no stamp of this scope, it is
+	// carried in Result.Residuals only, and the owning store's own pass records
+	// it when it runs.
+	Scope Scope `yaml:"-"`
 }
 
 // Step is one conversion. Name is a stable slug used in the log and the
 // stamp. Scope says whether the step touches the global store, the
 // repository, or both; the engine skips repository steps outside a
 // repository. Run must be idempotent by observed state and must respect
-// ctx, which carries the step budget.
+// ctx, which carries the step budget: a Run that outlives its deadline is
+// abandoned (its result is discarded and the stamp withheld) while it keeps
+// running in its goroutine, so it must not hold state the next Ensure needs.
 type Step struct {
 	Name  string
 	Scope Scope
@@ -76,7 +124,8 @@ const (
 
 // Logger appends one JSON line per action to the repair log. The engine
 // supplies it; steps call it for every file they change, move or delete.
-// Paths are redacted by the engine before writing; never pass file contents.
+// Every string passes through the DES-080 prose redactor (credentials,
+// addresses, home paths) before writing; still, never pass file contents.
 type Logger interface {
 	Logf(step, action string, paths []string, err error)
 }
@@ -86,8 +135,10 @@ type Logger interface {
 // not matter.
 var Steps []Step
 
-// StepOrder is the DES-084 order. A step not named here is a build error in
-// the engine's order test.
+// StepOrder is the DES-084 order. A registered step not named here fails the
+// engine's order test. A name here with no registered step is a step that has
+// not run: Ensure treats it as deferred and writes no stamp, so a binary
+// built before every step unit landed never stamps a store current.
 var StepOrder = []string{
 	"global-missions",   // 1
 	"global-audit",      // 2
@@ -108,8 +159,16 @@ var StepOrder = []string{
 	"sessions",          // 17
 }
 
-// Register adds a step. Called from each step file's init.
-func Register(s Step) { Steps = append(Steps, s) }
+var stepNameRE = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// Register adds a step. Called from each step file's init. It panics on a name
+// outside [a-z0-9-]: the name is joined into a lock file path.
+func Register(s Step) {
+	if !stepNameRE.MatchString(s.Name) {
+		panic(fmt.Sprintf("autorepair: invalid step name %q", s.Name))
+	}
+	Steps = append(Steps, s)
+}
 
 // Budgets, initial values from DES-084.
 const (

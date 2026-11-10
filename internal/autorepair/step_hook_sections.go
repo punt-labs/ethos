@@ -29,7 +29,15 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 		out.Deferred = true
 		return out, nil
 	}
-	rep, err := enable.RefreshHooksTo(env.Roots.Checkout, env.Roots.Store)
+	checkout, err := env.CheckoutRoot()
+	if err != nil {
+		return out, fmt.Errorf("locating the checkout for the hook refresh: %w", err)
+	}
+	store, err := env.StoreRoot()
+	if err != nil {
+		return out, fmt.Errorf("locating the store for the hook refresh: %w", err)
+	}
+	rep, err := enable.RefreshHooksTo(checkout, store)
 	if rep != nil {
 		for _, st := range rep.Steps {
 			switch st.Status {
@@ -40,7 +48,7 @@ func refreshHookSections(ctx context.Context, env Env, step string) (Outcome, er
 				enable.StatusSkippedShared, enable.StatusSkippedTrackedMissing:
 				out.Residuals = append(out.Residuals, Residual{
 					Step:   step,
-					ID:     st.Detail,
+					ID:     st.Step + ": " + relTo(checkout, st.Detail),
 					Reason: "hook cannot be rewritten: " + strings.TrimPrefix(st.Status, "skipped-"),
 				})
 			}

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/autorepair"
 	"github.com/punt-labs/ethos/v4/internal/enable"
@@ -190,11 +189,9 @@ func repairSessions(loc resolve.Located) func(ctx context.Context) (int, error) 
 			return 0, nil
 		}
 		defer release()
-		env := autorepair.Env{
-			Roots:  loc,
-			Global: global,
-			Now:    time.Now(),
-			Log:    autorepair.NewFileLog(global, loc.Store, loc.Checkout, version),
+		env, err := autorepair.HookEnv(loc, global)
+		if err != nil {
+			return 0, fmt.Errorf("building the repair environment: %w", err)
 		}
 		return autorepair.SessionStart(ctx, env)
 	}

@@ -17,9 +17,14 @@ const maxLogBytes = 1 << 20
 func LogPath(global string) string { return filepath.Join(global, "logs", "repair.log") }
 
 // FileLog is the Logger the engine supplies: one JSON line per action,
-// appended with O_APPEND. The engine only calls it while holding the global
-// lock, which is what makes rotation safe. Paths and errors pass through the
-// DES-080 home-path redactor; file contents are never an argument.
+// appended with O_APPEND. Rotation happens under the log's own mutex and
+// the engine only builds one while holding the global repair lock, so no
+// two processes rotate at once; the constructor is unexported to keep it
+// that way. Every string field passes through the DES-080 prose redactor
+// (credentials, addresses, home paths): a step error can quote file
+// contents, and file contents are never an argument. The redactor does not
+// recognise Windows home paths (C:\Users\name\...); Windows is not a shipped
+// target.
 type FileLog struct {
 	path     string
 	store    string
@@ -29,9 +34,9 @@ type FileLog struct {
 	mu       sync.Mutex
 }
 
-// NewFileLog returns the repair log for the global store root, tagged with
+// newFileLog returns the repair log for the global store root, tagged with
 // the repository roots (empty outside one) and the binary version.
-func NewFileLog(global, store, checkout, ethos string) *FileLog {
+func newFileLog(global, store, checkout, ethos string) *FileLog {
 	return &FileLog{path: LogPath(global), store: store, checkout: checkout, ethos: ethos, max: maxLogBytes}
 }
 
@@ -51,19 +56,19 @@ type logLine struct {
 func (l *FileLog) Logf(step, action string, paths []string, err error) {
 	rp := make([]string, len(paths))
 	for i, p := range paths {
-		rp[i] = redact.HomePaths(p)
+		rp[i] = redact.Prose(p)
 	}
 	line := logLine{
 		Time:     time.Now().UTC().Format(time.RFC3339),
-		Store:    redact.HomePaths(l.store),
-		Checkout: redact.HomePaths(l.checkout),
+		Store:    redact.Prose(l.store),
+		Checkout: redact.Prose(l.checkout),
 		Ethos:    l.ethos,
 		Step:     step,
 		Action:   action,
 		Paths:    rp,
 	}
 	if err != nil {
-		line.Error = redact.HomePaths(err.Error())
+		line.Error = redact.Prose(err.Error())
 	}
 	data, merr := json.Marshal(line)
 	if merr != nil {

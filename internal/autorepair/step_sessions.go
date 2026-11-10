@@ -61,7 +61,12 @@ func runSessions(ctx context.Context, env Env) (Outcome, error) {
 		return out, nil
 	}
 
-	repoRoot := env.Roots.Checkout
+	repoRoot, err := env.CheckoutRoot()
+	if err != nil && !errors.Is(err, ErrNotInRepository) {
+		// A located failure is not "outside a repository", but the purge is
+		// still safe: with no root, repository-bound rosters are left alone.
+		env.Log.Logf(stepSessions, "locate-checkout", nil, err)
+	}
 	repoID, err := audit.RepoIdentity(repoRoot)
 	if err != nil {
 		// Without the identity no roster can be matched to this repository;

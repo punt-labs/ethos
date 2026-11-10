@@ -33,9 +33,17 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 	// of this step too.
 	hooks, _ := refreshHookSections(ctx, env, stepGitignore)
 	out.Residuals = append(out.Residuals, hooks.Residuals...)
-	roots := []string{env.Roots.Checkout}
-	if env.Roots.Store != "" && env.Roots.Store != env.Roots.Checkout {
-		roots = append(roots, env.Roots.Store)
+	checkout, err := env.CheckoutRoot()
+	if err != nil {
+		return out, fmt.Errorf("locating the checkout for the .gitignore repair: %w", err)
+	}
+	store, err := env.StoreRoot()
+	if err != nil {
+		return out, fmt.Errorf("locating the store for the .gitignore repair: %w", err)
+	}
+	roots := []string{checkout}
+	if store != "" && store != checkout {
+		roots = append(roots, store)
 	}
 	for _, root := range roots {
 		if root == "" {
@@ -46,7 +54,7 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 		for _, k := range kept {
 			out.Residuals = append(out.Residuals, Residual{
 				Step:   stepGitignore,
-				ID:     k.Pattern + ": " + k.Path,
+				ID:     k.Pattern + ": " + relTo(root, k.Path),
 				Reason: "the pattern still ignores another tool's local file; left in place so the file stays untracked",
 			})
 		}
@@ -57,7 +65,7 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 		if err != nil {
 			return out, fmt.Errorf("repairing %s: %w", path, err)
 		}
-		res, err := sessionsIgnoreResiduals(path)
+		res, err := sessionsIgnoreResiduals(root, path)
 		if err != nil {
 			return out, err
 		}
@@ -68,7 +76,7 @@ func runGitignore(ctx context.Context, env Env) (Outcome, error) {
 
 // sessionsIgnoreResiduals names each line of the .gitignore at path that
 // ignores .punt-labs/ethos/sessions, which holds tracked records.
-func sessionsIgnoreResiduals(path string) ([]Residual, error) {
+func sessionsIgnoreResiduals(root, path string) ([]Residual, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -83,10 +91,21 @@ func sessionsIgnoreResiduals(path string) ([]Residual, error) {
 		case ".punt-labs/ethos/sessions", ".punt-labs/ethos/sessions/", ".punt-labs/ethos/sessions/**":
 			out = append(out, Residual{
 				Step:   stepGitignore,
-				ID:     path + ": " + text,
+				ID:     relTo(root, path) + ": " + text,
 				Reason: "a user rule ignores the sessions record directory; left in place",
 			})
 		}
 	}
 	return out, nil
+}
+
+// relTo is path relative to root, so a residual names the file without the
+// machine's directory layout; the full path goes to the log. A path outside
+// root is reduced to its base name.
+func relTo(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.Base(path)
+	}
+	return filepath.ToSlash(rel)
 }

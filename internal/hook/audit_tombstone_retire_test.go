@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,13 +39,9 @@ func TestSessionStartPassSilencesFlaggedTombstoneWarning(t *testing.T) {
 	assert.Contains(t, seal(), "sess-lost", "the first seal warns")
 	assert.Contains(t, seal(), "sess-lost", "the warning repeats until the tombstone is retired")
 
-	env := autorepair.Env{
-		Roots:  resolve.Located{Store: repo, Checkout: repo},
-		Policy: p,
-		Global: global,
-		Now:    time.Now(),
-		Log:    autorepair.NewFileLog(global, repo, repo, "test"),
-	}
+	env, err := autorepair.HookEnv(resolve.Located{Store: repo, Checkout: repo}, global)
+	require.NoError(t, err)
+	require.True(t, env.InRepository(), "the repository pass is active")
 	n, err := autorepair.SessionStart(context.Background(), env)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "one tombstone retired")
