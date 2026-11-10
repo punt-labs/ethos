@@ -345,7 +345,9 @@ func TestMissionLine_AuditFieldNamesAreNotExemptInAnEvent(t *testing.T) {
 	}
 }
 
-func TestMissionLine_UnsafeLegacySourceIsRetainedOnSealAndRecovery(t *testing.T) {
+// Seal redacts an unsafe live mission line in place; quarantine recovery still
+// refuses and retains it.
+func TestMissionLine_UnsafeLiveLineIsRedactedOnSealAndRetainedOnRecovery(t *testing.T) {
 	for _, quarantine := range []bool{false, true} {
 		name := "seal"
 		if quarantine {
@@ -360,16 +362,21 @@ func TestMissionLine_UnsafeLegacySourceIsRetainedOnSealAndRecovery(t *testing.T)
 			require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 			line := []byte(`{"ts":"` + audit.FormatLineTS(100) + `","event":"update","actor":"a","details":{"note":"see /home/bob/x"}}` + "\n")
 			require.NoError(t, os.WriteFile(live, line, 0o600))
-			var err error
-			if quarantine {
-				dir := archiveMissionDir(t, repo, mid)
-				require.NoError(t, os.MkdirAll(dir, 0o700))
-				path := filepath.Join(dir, audit.MissionChunkFile(sid, 100, 300))
-				require.NoError(t, os.WriteFile(path, []byte("corrupt\n"), 0o600))
-				_, err = QuarantineChunk(repo, path, "bad")
-			} else {
-				_, err = SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+			if !quarantine {
+				// Sealing redacts the live source in place, then archives it.
+				_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+				require.NoError(t, err)
+				after, err := os.ReadFile(live)
+				require.NoError(t, err)
+				assert.NotContains(t, string(after), "/home/bob", "the live source was redacted in place")
+				assert.NotEqual(t, line, after)
+				return
 			}
+			dir := archiveMissionDir(t, repo, mid)
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			path := filepath.Join(dir, audit.MissionChunkFile(sid, 100, 300))
+			require.NoError(t, os.WriteFile(path, []byte("corrupt\n"), 0o600))
+			_, err := QuarantineChunk(repo, path, "bad")
 			require.ErrorContains(t, err, "requires redacted migration")
 			after, err := os.ReadFile(live)
 			require.NoError(t, err)

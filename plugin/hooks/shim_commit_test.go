@@ -376,3 +376,47 @@ func stripShebang(s string) string {
 	}
 	return rest
 }
+
+// containsPath reports the files under root whose bytes contain needle.
+func containsPath(t *testing.T, root, needle string) []string {
+	t.Helper()
+	var hits []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(b, []byte(needle)) {
+			hits = append(hits, path)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	return hits
+}
+
+// A live audit line written before redaction existed is redacted in place and
+// archived by the first commit: no retained-data warning, no unredacted bytes
+// anywhere under the local tree, and a second commit prints nothing.
+func TestShimEnabledUnredactedLiveLineIsMigratedByCommit(t *testing.T) {
+	r := newShimRepo(t, true)
+	p, err := layout.NewRepository(r.dir, r.dir, layout.RecordBlame)
+	require.NoError(t, err)
+	live := audit.Stream{Namespace: audit.SessionNS, Session: "s-old"}
+	line := `{"ts":"` + audit.FormatLineTS(1000) + `","session":"s-old","tool":"Bash","tool_input":{"command":"cat /Users/alice/notes.txt"},"tool_input_hash":"0000","record":"blame"}` + "\n"
+	require.NoError(t, audit.WriteLocalAtomic(p, live.LivePath(p), []byte(line)))
+	require.NotEmpty(t, containsPath(t, r.dir, "/Users/alice"), "fixture holds the unredacted path")
+
+	env := r.withPath(ethosBinDir(t))
+	out, err := r.commit(t, env, "first")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "retained-data warning")
+	assert.Empty(t, containsPath(t, filepath.Join(r.dir, ".punt-labs", "local"), "/Users/alice"), "no file keeps the unredacted path")
+
+	out, err = r.commit(t, env, "second")
+	require.NoError(t, err, out)
+	assert.NotContains(t, out, "audit seal", "the second commit has nothing to warn about")
+}
