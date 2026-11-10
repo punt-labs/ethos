@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -223,108 +222,13 @@ func noticeMigratedFile(session string, notes []*migrateNote, total int, dry boo
 		quoteUnlessLeak(session), count, total, verb, strings.Join(parts, "; "))
 }
 
-// isJSONObject reports whether line is exactly one JSON object.
-func isJSONObject(line []byte) bool {
-	dec := json.NewDecoder(bytes.NewReader(line))
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil || m == nil {
-		return false
-	}
-	_, err := dec.Token()
-	return errors.Is(err, io.EOF)
-}
-
-// dedupeLine returns line decoded and re-encoded, so a duplicate key keeps its
-// last value, with redacted set. It reports false when the line is not a JSON
-// object.
-func dedupeLine(line []byte) ([]byte, bool) {
-	dec := json.NewDecoder(bytes.NewReader(line))
-	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil || m == nil {
-		return nil, false
-	}
-	m["redacted"] = true
-	out, err := json.Marshal(m)
-	if err != nil {
-		return nil, false
-	}
-	return out, true
-}
-
-// redactLegacyLine redacts one legacy audit line. tool_input goes through
-// redactToolInput, exactly as a fresh line does, and tool_input_hash and
-// tool_input_preview are recomputed over the stored form when it changed
-// (DES-054). Free-text fields that carry no tool_input (a preview-only
-// line, a sentinel's audit_error) are redacted as text. It never sets
-// path_format: a ~ already in a legacy line may be another user's home.
-func redactLegacyLine(raw []byte, repoRoot string, r mission.PathRedactor) ([]byte, bool, error) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil {
-		return nil, false, fmt.Errorf("decoding: %w", err)
-	}
-	changed := false
-	tool, _ := m["tool"].(string)
-	if before, ok := m["tool_input"].(map[string]any); ok {
-		// Compare the stored form, not redactToolInput's bool: that bool
-		// reports content removed, a leak replaced or a key renamed, and
-		// ignores a value the path pass rewrote in place.
-		red, removed, _ := redactToolInputQuiet(map[string]any{"tool_input": before}, tool, repoRoot)
-		wasJSON, err := json.Marshal(before)
-		if err != nil {
-			return nil, false, fmt.Errorf("encoding tool_input: %w", err)
-		}
-		isJSON, err := json.Marshal(red)
-		if err != nil {
-			return nil, false, fmt.Errorf("encoding redacted tool_input: %w", err)
-		}
-		if !bytes.Equal(wasJSON, isJSON) {
-			m["tool_input"] = red
-			env := map[string]any{"tool_input": red}
-			if _, ok := m["tool_input_hash"]; ok {
-				m["tool_input_hash"] = hashToolInput(env)
-			}
-			if _, ok := m["tool_input_preview"]; ok {
-				m["tool_input_preview"] = toolInputPreview(env)
-			}
-			if removed {
-				m["redacted"] = true
-			}
-			changed = true
-		}
-	}
-	// A preview is recomputed when tool_input changed, so it is swept only
-	// when tool_input did not. audit_error is free text beside tool_input,
-	// not derived from it, and is swept either way.
-	textKeys := []string{"audit_error"}
-	if !changed {
-		textKeys = append(textKeys, "tool_input_preview")
-	}
-	textChanged := false
-	for _, k := range textKeys {
-		if s, ok := m[k].(string); ok {
-			if red := r.Content(s); red != s {
-				m[k], textChanged = red, true
-			}
-		}
-	}
-	if textChanged {
-		m["redacted"] = true
-		changed = true
-	}
-	if !changed {
-		return raw, false, nil
-	}
-	out, err := json.Marshal(m)
-	if err != nil {
-		return nil, false, fmt.Errorf("encoding: %w", err)
-	}
-	return out, true, nil
-}
-
-// appendRawAuditLines appends each JSONL line (newline-terminated) to path and
+// rawAuditLineKey returns the dedupe key for one audit line, computed from both
+// its decoded entry and its raw bytes. A hashed entry keys on ts + tool +
+// tool_input_hash, so two byte-different encodings of the same logical
+// tool_input dedupe. A hashless line (older v3.11.0 entries, and sentinels,
+// whose ts + empty tool + empty preview is degenerate — a burst of same-second
+// sentinels would collapse to one) keys on ts + tool + a sha256 of the line
+// re-marshalled (the form the guard writes), so only identical lines dedupe// appendRawAuditLines appends each JSONL line (newline-terminated) to path and
 // fsyncs once, and returns the guard's notices for the caller to print. Used
 // by migration. Each line is written in its canonical
 // guarded form (guardAuditLineNote), not byte for byte: it is decoded into a
@@ -361,13 +265,6 @@ func appendRawAuditLines(path string, lines [][]byte) ([]string, error) {
 	return notes, nil
 }
 
-// rawAuditLineKey returns the dedupe key for one audit line, computed from both
-// its decoded entry and its raw bytes. A hashed entry keys on ts + tool +
-// tool_input_hash, so two byte-different encodings of the same logical
-// tool_input dedupe. A hashless line (older v3.11.0 entries, and sentinels,
-// whose ts + empty tool + empty preview is degenerate — a burst of same-second
-// sentinels would collapse to one) keys on ts + tool + a sha256 of the line
-// re-marshalled (the form the guard writes), so only identical lines dedupe
 // and distinct losses each survive.
 func rawAuditLineKey(e auditEntry, raw []byte) string {
 	key, err := audit.LegacyIdentity(audit.SessionNS, raw)
@@ -377,21 +274,4 @@ func rawAuditLineKey(e auditEntry, raw []byte) string {
 	// Global legacy corruption is converted to a loss marker before migration.
 	sum := sha256.Sum256(raw)
 	return e.Ts + "|" + e.Tool + "|invalid:" + hex.EncodeToString(sum[:])
-}
-
-// remarshalled is raw decoded and encoded again, the form guardAuditLine
-// writes, so a line keys the same before and after it went through the guard.
-// A line that does not decode as one JSON object keys on its own bytes.
-func remarshalled(raw []byte) []byte {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil || m == nil {
-		return raw
-	}
-	out, err := json.Marshal(m)
-	if err != nil {
-		return raw
-	}
-	return out
 }

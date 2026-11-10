@@ -1,4 +1,4 @@
-package hook
+package lineguard
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/redact"
 )
 
-// auditEntry is a single JSONL line in the session audit log.
+// Entry is a single JSONL line in the session audit log.
 //
 // DES-054 phase 1 enrichment: parent_session, agent_id, agent_type,
 // delegation_id, parent_delegation, contract_id, and the full
@@ -42,7 +42,7 @@ import (
 // like vox and `ethos audit show` must keep reading older logs
 // indefinitely; rejecting an unknown field there would break the
 // post-mortem path. See audit_log.go for the asymmetry note.
-type auditEntry struct {
+type Entry struct {
 	Ts               string         `json:"ts"`
 	Session          string         `json:"session"`
 	ParentSession    string         `json:"parent_session,omitempty"`
@@ -70,32 +70,32 @@ type auditEntry struct {
 	Record         string `json:"record,omitempty"`
 }
 
-// guardReport is the sink guard's account of one written line.
-type guardReport struct {
-	rule   string
-	marker bool
+// Report is the sink guard's account of one written line.
+type Report struct {
+	Rule   string
+	Marker bool
 }
 
-// ambiguousPath reports whether the audit log cannot tell the file name raw from
+// AmbiguousPath reports whether the audit log cannot tell the file name raw from
 // another; see mission.AmbiguousPath.
-func ambiguousPath(raw, repoRoot string) (bool, error) {
+func AmbiguousPath(raw, repoRoot string) (bool, error) {
 	return mission.AmbiguousPath(raw, repoRoot)
 }
 
-// auditPathFormat is the PathFormat of a line this version writes.
-const auditPathFormat = 2
+// AuditPathFormat is the PathFormat of a line this version writes.
+const AuditPathFormat = 2
 
 // previewLimit bounds the size of tool_input_preview. 200 chars is
 // enough for grep-on-the-jsonl to pick out a Bash command or a Read
 // path; the full input still lives on the entry under tool_input.
 const previewLimit = 200
 
-// toolInputPreview returns the first 200 characters of the
+// ToolInputPreview returns the first 200 characters of the
 // canonical-JSON encoding of tool_input, with a "..." marker when the
 // input was longer. Empty string when tool_input is absent or fails
 // to encode — audit logging is advisory and a marshal failure must
 // not block the write.
-func toolInputPreview(input map[string]any) string {
+func ToolInputPreview(input map[string]any) string {
 	ti, ok := input["tool_input"]
 	if !ok {
 		return ""
@@ -111,12 +111,12 @@ func toolInputPreview(input map[string]any) string {
 	return s
 }
 
-// extractToolInput returns the tool_input value as a typed map so it
+// ExtractToolInput returns the tool_input value as a typed map so it
 // can be persisted in full. Inputs that are not a JSON object (rare:
 // some hooks pass a scalar) are returned as nil — the entry's
 // ToolInput field stays empty and the JSON `omitempty` tag drops it,
 // matching v3.11.0 wire shape for the trivial case.
-func extractToolInput(input map[string]any) map[string]any {
+func ExtractToolInput(input map[string]any) map[string]any {
 	ti, ok := input["tool_input"]
 	if !ok {
 		return nil
@@ -128,7 +128,7 @@ func extractToolInput(input map[string]any) map[string]any {
 	return m
 }
 
-// hashToolInput returns the hex sha256 of the canonical-JSON encoding
+// HashToolInput returns the hex sha256 of the canonical-JSON encoding
 // of tool_input. encoding/json sorts map keys alphabetically, so two
 // callers producing the same logical input produce the same hash
 // regardless of map iteration order. Returns empty string when the
@@ -139,7 +139,7 @@ func extractToolInput(input map[string]any) map[string]any {
 // target produce two audit lines with the same tool_input_hash, and
 // an operator running `ethos audit show --hash <hex>` finds the
 // collision without parsing the prompts.
-func hashToolInput(input map[string]any) string {
+func HashToolInput(input map[string]any) string {
 	ti, ok := input["tool_input"]
 	if !ok {
 		return ""
@@ -152,7 +152,7 @@ func hashToolInput(input map[string]any) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// redactAbsolutePaths returns a copy of input with every string value
+// RedactAbsolutePaths returns a copy of input with every string value
 // rewritten so that machine-specific absolute path prefixes become
 // portable tokens. $HOME/X becomes ~/X and repoRoot/X becomes
 // <repo>/X. The repoRoot prefix is checked first so a repo nested
@@ -174,11 +174,11 @@ func hashToolInput(input map[string]any) string {
 // type (internal/mission/delegation.go), so the audit lines and the
 // delegation records cannot drift apart — one implementation, two
 // call sites (ethos-ersr, ethos-n4np).
-func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[string]any {
+func RedactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[string]any {
 	return mission.PathRedactor{Home: homeDir, Repo: repoRoot}.Map(input)
 }
 
-// redactToolInput produces the tool_input that lands on disk: absolute
+// RedactToolInput produces the tool_input that lands on disk: absolute
 // paths rewritten to portable tokens, then the per-tool content policy
 // from audit_content.go. The bool reports whether content was removed,
 // which the caller stamps on the entry as the redacted marker.
@@ -195,19 +195,19 @@ func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[str
 // Audit logging must never block a tool call (HandleAuditLog returns
 // nil on every failure path), so failing closed here means dropping
 // content, not refusing the call.
-func redactToolInput(input map[string]any, toolName, repoRoot string) (map[string]any, bool) {
-	out, changed, say := redactToolInputQuiet(input, toolName, repoRoot)
+func RedactToolInput(input map[string]any, toolName, repoRoot string) (map[string]any, bool) {
+	out, changed, say := RedactToolInputQuiet(input, toolName, repoRoot)
 	if say {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: the %q input was rewritten before it was stored (content removed, a key renamed or a value replaced)\n", redact.Prose(toolName))
 	}
 	return out, changed
 }
 
-// redactToolInputQuiet is redactToolInput without its notice. changed is what
+// RedactToolInputQuiet is RedactToolInput without its notice. changed is what
 // the redacted marker records: content removed, a leak replaced or a key
 // renamed. say also counts a value the path pass rewrote in place (a home or
 // repo path became ~ or <repo>), which is what the writer reports.
-func redactToolInputQuiet(input map[string]any, toolName, repoRoot string) (out map[string]any, changed, say bool) {
+func RedactToolInputQuiet(input map[string]any, toolName, repoRoot string) (out map[string]any, changed, say bool) {
 	r, err := mission.NewPathRedactor(repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -216,16 +216,16 @@ func redactToolInputQuiet(input map[string]any, toolName, repoRoot string) (out 
 	}
 	// r.Map knows this machine's home and repo; HomePathsValue adds any
 	// other user's home, as every mission record gets (redact.Prose).
-	raw := extractToolInput(input)
+	raw := ExtractToolInput(input)
 	// The credential sweep runs on the original input, before any key is
 	// rewritten: a key the path pass renames (/home/password) is a credential
 	// name, and the rename would hide it.
-	swept, sweptChanged := sweepSecrets(raw)
+	swept, sweptChanged := SweepSecrets(raw)
 	mapped, renamedHere := r.MapFlag(swept)
 	hp, renamedOther := redact.HomePathsValueFlag(mapped)
 	in, _ := hp.(map[string]any)
 	redactPathKeys(r, raw, in)
-	out, removed := redactSensitiveContent(toolName, in)
+	out, removed := RedactSensitiveContent(toolName, in)
 	out, dropped := dropLeaks(r, out)
 	changed = removed || dropped || renamedHere || renamedOther || sweptChanged
 	return out, changed, changed || !sameJSON(raw, out)
@@ -238,17 +238,17 @@ func sameJSON(a, b map[string]any) bool {
 	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }
 
-// redactedPath replaces a scalar that still names a home directory after
+// RedactedPath replaces a scalar that still names a home directory after
 // every pass. The audit writer cannot block a tool call, so it removes the
-// value instead of refusing the line, as redactToolInput does when it has no
+// value instead of refusing the line, as RedactToolInput does when it has no
 // usable redactor.
 const (
-	redactedPath = "[redacted-path]"
-	redactedKey  = "[redacted-key]"
+	RedactedPath = "[redacted-path]"
+	RedactedKey  = "[redacted-key]"
 )
 
 // dropLeaks returns v with every string that still names a home replaced by
-// redactedPath, and whether any was. The same check the record writers
+// RedactedPath, and whether any was. The same check the record writers
 // apply to their output, so a path the boundary rewrite could not place never
 // reaches disk.
 func dropLeaks(r mission.PathRedactor, v map[string]any) (map[string]any, bool) {
@@ -264,7 +264,7 @@ func dropLeaksValue(r mission.PathRedactor, v any, c leakCtx) (any, bool) {
 	switch x := v.(type) {
 	case string:
 		if r.AuditLeakRule(x, c == ctxPath) != "" {
-			return redactedPath, true
+			return RedactedPath, true
 		}
 		return x, false
 	case map[string]any:
@@ -275,7 +275,7 @@ func dropLeaksValue(r mission.PathRedactor, v any, c leakCtx) (any, bool) {
 			// on it, and a key that still leaks is renamed.
 			nk := r.Path(k)
 			if r.Leaks(nk) {
-				return redactedKey
+				return RedactedKey
 			}
 			return nk
 		}, false, func(k string, e any) any {
