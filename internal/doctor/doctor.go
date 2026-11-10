@@ -829,7 +829,7 @@ func CheckTrailerHook(repoRoot string) Result { return checkHookPresence(repoRoo
 // design — PASSes "no section installed" regardless of enablement.
 func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	name := "Audit " + spec.ShortName + " hook"
-	const remedy = " — run `ethos enable`"
+	const remedy = "; the next ethos run reinstalls it"
 
 	if repoRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
@@ -906,7 +906,7 @@ func checkHookPresence(repoRoot string, spec HookSpec) (result Result) {
 	if !markerPresent {
 		chained := statErr == nil && (hasMarkerSection(body, spec.Tag) || looksLikeInvocation(body, spec.accepted()...))
 		if chained {
-			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
+			return Result{Name: name, Status: "WARN", Detail: spec.ShortName + " hook chained but ethos not enabled here" + remedy}
 		}
 		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
 	}
@@ -1242,7 +1242,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	// for the same reason before trusting InstalledSection's answer.
 	if textscan.HeredocOpenAtEOF(data) {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s ends inside an unterminated here-document — close it and re-run; `ethos enable` cannot chain into it either", hookPath)}
+			"%s ends inside an unterminated here-document; ethos cannot chain its section into it", hookPath)}
 	}
 
 	installed, ok, err := githook.InstalledSection(data, spec.Tag, spec.Ident)
@@ -1252,7 +1252,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 				"%s section has a BEGIN with no matching END — truncated section", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionNotEthosOwned) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`", spec.Name)}
+				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; ethos leaves it in place", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionDuplicated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 				"multiple %q sections found — duplicated section", spec.Tag)}
@@ -1263,7 +1263,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 	if !ok {
 		if githook.IsLegacyStandalone(data, spec.Ident) {
 			return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-				"%s is active but still in the legacy pre-marker standalone format — run `ethos enable` to refresh it into the current format", spec.Name)}
+				"%s is active but still in the legacy pre-marker standalone format; the next ethos run refreshes it into the current format", spec.Name)}
 		}
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
 	}
@@ -1278,16 +1278,16 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) (result Result) {
 		on, markErr := resolve.EnabledMarker(repoRoot)
 		if markErr == nil && !on {
 			return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-				"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) (dormant repo: hook passes through; run `ethos enable` to refresh or remove the stale section)",
+				"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) (dormant repo: hook passes through; the next ethos run refreshes it)",
 				spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 		}
 		// An unreadable marker is not proof of a dormant repo: keep the FAIL.
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — stale section may block commits — run `ethos enable` (SessionStart also refreshes it)",
+			"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — stale section may block commits; the next ethos run refreshes it",
 			spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 	}
 	return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
-		"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — run `ethos enable` to refresh",
+		"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s); the next ethos run refreshes it",
 		spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 }
 

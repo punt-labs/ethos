@@ -42,7 +42,7 @@ func TestCheckNoHandEditedMissionFiles_CleanFilesPass(t *testing.T) {
 
 	r := CheckNoHandEditedMissionFiles(root)
 	assert.Equal(t, "PASS", r.Status)
-	assert.Equal(t, "no hand-edited mission files", r.Detail)
+	assert.Equal(t, "no comments in machine-written mission files", r.Detail)
 }
 
 // TestCheckNoHandEditedMissionFiles is the ethos-ecpv regression

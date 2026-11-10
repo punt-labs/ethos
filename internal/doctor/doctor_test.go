@@ -744,7 +744,8 @@ func TestCheckSealHook(t *testing.T) {
 		r := CheckSealHook(dir)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no pre-commit hook")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.Contains(t, r.Detail, "the next ethos run reinstalls it")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("marker stat error is not read as disabled → FAIL", func(t *testing.T) {
@@ -1298,7 +1299,8 @@ func TestCheckTrailerHook(t *testing.T) {
 		r := CheckTrailerHook(dir)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "no commit-msg hook")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.Contains(t, r.Detail, "the next ethos run reinstalls it")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("enabled, real call needing $1 — active without a fixed message file arg baked in", func(t *testing.T) {
@@ -1472,7 +1474,8 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Contains(t, r.Detail, "differs from what this ethos build would install")
 		assert.Contains(t, r.Detail, "installed sha256:")
 		assert.Contains(t, r.Detail, "current sha256:")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.Contains(t, r.Detail, "the next ethos run refreshes it")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("tampered fingerprint -> FAIL", func(t *testing.T) {
@@ -1527,7 +1530,8 @@ func TestCheckHookCurrency(t *testing.T) {
 		r := CheckHookCurrency(dir, currencyTestSpec)
 		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "legacy")
-		assert.Contains(t, r.Detail, "ethos enable")
+		assert.Contains(t, r.Detail, "the next ethos run refreshes it")
+		assert.NotContains(t, r.Detail, "ethos enable")
 	})
 
 	t.Run("unreadable hook file -> FAIL with permission remedy", func(t *testing.T) {
@@ -1727,9 +1731,9 @@ func TestCheckHookCurrencyStaleSeverity(t *testing.T) {
 		wantDetail string
 	}{
 		{"seal is FAIL", sealHookSpec, "pre-commit", pre421Seal, "FAIL",
-			"stale section may block commits — run `ethos enable` (SessionStart also refreshes it)"},
+			"stale section may block commits; the next ethos run refreshes it"},
 		{"trailer stays WARN", trailerHookSpec, "commit-msg", pre415, "WARN",
-			"run `ethos enable` to refresh"},
+			"the next ethos run refreshes it"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1873,7 +1877,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Repo-only completeness",
 		"Local extension files",
 		"Extension key names",
-		"Mission file hand-edits",
+		"Mission file comments",
 		"Code archetype delegated-worker guard",
 		"Unclassified files",
 		"Physical storage placement",
@@ -2452,7 +2456,7 @@ func TestRunAllRefusedStore(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	storeChecks := []string{
-		"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard",
+		"Repo-only completeness", "Mission file comments", "Code archetype delegated-worker guard",
 		"Identity directory", "Human identity", "Duplicate fields", "Extension key names",
 	}
 	find := func(results []Result, name string) Result {
@@ -2471,7 +2475,7 @@ func TestRunAllRefusedStore(t *testing.T) {
 		assert.NotEqual(t, "Repository store", r.Name, "no row outside a repository")
 		assert.NotContains(t, r.Detail, "global layer only", r.Name)
 	}
-	for _, name := range []string{"Repo-only completeness", "Mission file hand-edits", "Code archetype delegated-worker guard"} {
+	for _, name := range []string{"Repo-only completeness", "Mission file comments", "Code archetype delegated-worker guard"} {
 		r := find(base, name)
 		assert.Equal(t, "PASS", r.Status, name)
 		assert.Equal(t, "not in a repo", r.Detail, name)

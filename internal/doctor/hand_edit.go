@@ -46,7 +46,7 @@ var handEditFileNames = map[string]bool{
 // is a hand-edit") without also flagging content that was never a
 // comment in the first place.
 func CheckNoHandEditedMissionFiles(storeRoot string) Result {
-	name := "Mission file hand-edits"
+	name := "Mission file comments"
 
 	if storeRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
@@ -101,11 +101,11 @@ func CheckNoHandEditedMissionFiles(storeRoot string) Result {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("scanning %s: %v", missionsDir, walkErr)}
 	}
 	if len(flagged) == 0 {
-		return Result{Name: name, Status: "PASS", Detail: "no hand-edited mission files"}
+		return Result{Name: name, Status: "PASS", Detail: "no comments in machine-written mission files"}
 	}
 	sort.Strings(flagged)
 	return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-		"comment found in machine-written file(s) — these are yaml.Marshal output and never contain comments, so this is a hand-edit: %s — use `ethos mission correct` instead",
+		"comment found in machine-written file(s) — these are yaml.Marshal output and never contain comments, so they were edited outside ethos: %s; `ethos mission correct` records a correction",
 		strings.Join(flagged, ", "))}
 }
 

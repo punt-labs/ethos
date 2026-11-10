@@ -197,7 +197,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	assert.Contains(t, names, "Human identity")
 	assert.Contains(t, names, "Team members")
 	assert.Contains(t, names, "Repo-only completeness")
-	assert.Contains(t, names, "Mission file hand-edits")
+	assert.Contains(t, names, "Mission file comments")
 	assert.Contains(t, names, "Physical storage placement")
 	assert.Contains(t, names, "Agent file currency")
 }

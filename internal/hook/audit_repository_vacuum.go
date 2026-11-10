@@ -49,7 +49,7 @@ func VacuumCrossCheckWithPolicy(p layout.Policy, globalRoot string, active []Act
 			}
 		}
 		if purged {
-			fmt.Fprintf(w, "warning: session %s has a retained purge loss flag; acknowledge with `ethos session purge --ack %s`\n", id, id)
+			fmt.Fprintf(w, "session %s: retained purge loss recorded; the storage upgrade retires it on the next ethos run\n", id)
 		}
 	}
 	return nil

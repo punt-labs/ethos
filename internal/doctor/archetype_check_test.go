@@ -224,7 +224,7 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 
 		r := CheckDelegatedWorkerArchetypes(storeRoot)
 		require.Equal(t, "FAIL", r.Status)
-		assert.Contains(t, r.Detail, "global (implement): run `ethos seed`",
+		assert.Contains(t, r.Detail, "global (implement): stale; ethos seed repairs a file",
 			"a stale global file's remedy must name ethos seed as the repair, not just mention it in passing: %s", r.Detail)
 		assert.Contains(t, r.Detail, "repairs a file",
 			"the remedy must say seed now fixes an additive gap automatically: %s", r.Detail)
@@ -240,7 +240,7 @@ func TestCheckDelegatedWorkerArchetypes(t *testing.T) {
 		r := CheckDelegatedWorkerArchetypes(storeRoot)
 		require.Equal(t, "FAIL", r.Status)
 		wantPath := filepath.Join(repoArchDir(storeRoot))
-		assert.Contains(t, r.Detail, "repo-local (implement): `ethos seed` never writes a repo-local archetype",
+		assert.Contains(t, r.Detail, "repo-local (implement): ethos seed never writes a repo-local archetype",
 			"a stale repo-local file's remedy must say seed does not reach it: %s", r.Detail)
 		assert.Contains(t, r.Detail, wantPath,
 			"the remedy must name the actual repo-local archetypes directory to fix: %s", r.Detail)

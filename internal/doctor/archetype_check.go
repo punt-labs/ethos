@@ -154,12 +154,12 @@ func CheckDelegatedWorkerArchetypes(storeRoot string) Result {
 		// an archetype there at all, so it must be dealt with directly.
 		if len(staleGlobal) > 0 {
 			parts = append(parts, fmt.Sprintf(
-				"global (%s): run `ethos seed` — it now repairs a file whose only gap is missing seed-added fields in place; a file with a genuine conflicting edit still needs deleting or hand-editing under ~/.punt-labs/ethos/archetypes/ first, then reseed",
+				"global (%s): stale; ethos seed repairs a file whose only gap is missing seed-added fields in place; a file with a conflicting edit under ~/.punt-labs/ethos/archetypes/ is left as it is",
 				strings.Join(staleGlobal, ", ")))
 		}
 		if len(staleRepoLocal) > 0 {
 			parts = append(parts, fmt.Sprintf(
-				"repo-local (%s): `ethos seed` never writes a repo-local archetype, so this shadowing copy is untouched — hand-edit or delete it under %s, then run `ethos seed`",
+				"repo-local (%s): ethos seed never writes a repo-local archetype, so this shadowing copy under %s is untouched",
 				strings.Join(staleRepoLocal, ", "), filepath.Join(repoArchRoot, "archetypes")))
 		}
 	}
