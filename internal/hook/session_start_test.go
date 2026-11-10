@@ -930,7 +930,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			refresh: func(_, _ string) (HookRefresh, error) {
 				return HookRefresh{Tracked: []string{"pre-commit"}}, nil
 			},
-			wantContext: []string{"did not rewrite the stale pre-commit hook"},
+			wantContext: []string{"left the stale pre-commit hook in place: core.hooksPath puts it in a tracked file"},
 		},
 		{
 			name: "a chained foreign hook is worded as chained",
@@ -944,7 +944,7 @@ func TestHandleSessionStart_RefreshHooks(t *testing.T) {
 			refresh: func(_, _ string) (HookRefresh, error) {
 				return HookRefresh{Shared: []string{"pre-commit"}}, nil
 			},
-			wantContext: []string{"core.hooksPath is shared outside this repo"},
+			wantContext: []string{"left the stale pre-commit hook in place: core.hooksPath is shared outside this repo"},
 		},
 		{
 			name: "a missing tracked hook says not installed",
