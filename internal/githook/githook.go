@@ -103,7 +103,7 @@ func Chain(destPath string, src []byte, tag, ident string, opts ...Option) (Resu
 	// would be blind. Refuse rather than guess (parity with claudemd's open
 	// fence).
 	if textscan.HeredocOpenAtEOF(data) {
-		return res, fmt.Errorf("%s ends inside an unterminated here-document — close it and re-run", destPath)
+		return res, fmt.Errorf("%s ends inside an unterminated here-document — left unchanged", destPath)
 	}
 
 	hadMarker := hasBegin(data, tag)
@@ -130,7 +130,7 @@ func Chain(destPath string, src []byte, tag, ident string, opts ...Option) (Resu
 	// would delete everything after BEGIN. Abort and let the operator fix it.
 	if hasBegin(data, tag) && !hasEnd(data, tag) {
 		return res, fmt.Errorf(
-			"%s has a %q BEGIN marker with no matching END — refusing to edit a truncated hook; fix it by hand", destPath, tag)
+			"%s has a %q BEGIN marker with no matching END — refusing to edit a truncated hook; left unchanged", destPath, tag)
 	}
 
 	stripped, err := stripSection(data, tag, ident)
@@ -197,7 +197,7 @@ func Unchain(destPath, tag, ident string, opts ...Option) (Result, error) {
 	// Refuse a host ending inside an unterminated heredoc: our section could
 	// be masked opaque, so "noop" would be a lie and a strip would be blind.
 	if textscan.HeredocOpenAtEOF(data) {
-		return res, fmt.Errorf("%s ends inside an unterminated here-document — close it and re-run", destPath)
+		return res, fmt.Errorf("%s ends inside an unterminated here-document — left unchanged", destPath)
 	}
 
 	if !hasBegin(data, tag) {
@@ -206,7 +206,7 @@ func Unchain(destPath, tag, ident string, opts ...Option) (Result, error) {
 	}
 	if !hasEnd(data, tag) {
 		return res, fmt.Errorf(
-			"%s has a %q BEGIN marker with no matching END — refusing to edit a truncated hook; fix it by hand", destPath, tag)
+			"%s has a %q BEGIN marker with no matching END — refusing to edit a truncated hook; left unchanged", destPath, tag)
 	}
 
 	stripped, err := stripSection(data, tag, ident)
@@ -346,7 +346,7 @@ func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
 	}
 	if len(ranges) > 1 {
 		return nil, false, fmt.Errorf(
-			"%q: %d sections found for the same tag — hand-duplicated; run `ethos enable` to collapse them into one: %w", tag, len(ranges), ErrSectionDuplicated)
+			"%q: %d sections found for the same tag — hand-duplicated; a refresh collapses them into one: %w", tag, len(ranges), ErrSectionDuplicated)
 	}
 	r := ranges[0]
 	var body []byte
@@ -376,7 +376,7 @@ func sectionRanges(data []byte, tag, ident string) ([][2]int, error) {
 		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(lines[i]), begin) {
 			if i+1 >= len(lines) || !strings.Contains(textscan.StripTerminator(lines[i+1]), ident) {
 				return nil, fmt.Errorf(
-					"%q section does not carry the ethos fingerprint %q — refusing to remove a region that is not an ethos-written section; fix it by hand: %w", tag, ident, ErrSectionNotEthosOwned)
+					"%q section does not carry the ethos fingerprint %q — refusing to remove a region that is not an ethos-written section; left unchanged: %w", tag, ident, ErrSectionNotEthosOwned)
 			}
 			j := i + 1
 			paired := false
@@ -389,7 +389,7 @@ func sectionRanges(data []byte, tag, ident string) ([][2]int, error) {
 			}
 			if !paired {
 				return nil, fmt.Errorf(
-					"%q section has a BEGIN with no matching END — refusing to edit a truncated hook; fix it by hand: %w", tag, ErrSectionTruncated)
+					"%q section has a BEGIN with no matching END — refusing to edit a truncated hook; left unchanged: %w", tag, ErrSectionTruncated)
 			}
 			ranges = append(ranges, [2]int{i, j + 1})
 			i = j + 1

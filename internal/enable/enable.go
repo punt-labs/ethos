@@ -123,7 +123,7 @@ func enableTo(repoRoot, storeRoot string, io gitignoreIO) (*Report, error) {
 	// link to nothing) is refused before anything is written: writing through
 	// the link or opening the FIFO would be the wrong answer to it.
 	if _, err := resolve.EnabledMarker(repoRoot); err != nil {
-		return rep, fmt.Errorf("enable: %w; remove it and re-run", err)
+		return rep, fmt.Errorf("enable: %w; marker left unchanged", err)
 	}
 
 	// Preflight both hosts before any ignore mutation (or deposit). Old rules

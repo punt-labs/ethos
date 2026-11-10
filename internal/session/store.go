@@ -583,7 +583,7 @@ func (s *Store) PurgeTombstonedExcept(repoRoot, repoID string, force bool, keep 
 						fmt.Fprintf(os.Stderr, "ethos: purge: clearing dispatch-pending for %s: %v\n", id, cErr)
 					}
 					fmt.Fprintf(os.Stderr,
-						"ethos: purge: refusing to purge %s: roster unreadable (%v); re-run with --force\n", id, lErr)
+						"ethos: purge: kept %s: roster unreadable (%v), so its unsealed audit lines cannot be ruled out\n", id, lErr)
 					didRefuse = true
 					return nil
 				}
@@ -643,8 +643,8 @@ func (s *Store) purgeUnresolved(roster *Roster, force bool) (didPurge, didRefuse
 	if !force {
 		fmt.Fprintf(os.Stderr,
 			"ethos: purge: skipping %s: its repository identity was not resolved when it started (%s), so it is never matched against this checkout; "+
-				"remove it with `ethos session delete --session %s`, or re-run `ethos session purge --force`\n",
-			roster.Session, roster.RepoUnresolved, roster.Session)
+				"left in place\n",
+			roster.Session, roster.RepoUnresolved)
 		return false, false, &SkippedSession{Session: roster.Session, Reason: roster.RepoUnresolved}, nil
 	}
 	if err := s.deleteFiles(roster.Session); err != nil {
@@ -757,8 +757,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	} else {
 		probeFailed = true
 		fmt.Fprintf(os.Stderr,
-			"ethos: purge: cannot verify %s unsealed audit lines: no repo checkout in scope; "+
-				"run inside its checkout or re-run with --force\n", roster.Session)
+			"ethos: purge: kept %s: its unsealed audit lines cannot be checked without its repository checkout\n", roster.Session)
 	}
 	if !force && (unsealed > 0 || probeFailed) {
 		// Review finding E (full-branch review, m-2026-09-08-004 round
@@ -788,11 +787,11 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		}
 		if probeFailed {
 			fmt.Fprintf(os.Stderr,
-				"ethos: purge: refusing to purge %s: could not verify unsealed state; re-run with --force to purge anyway\n",
+				"ethos: purge: kept %s: its unsealed audit state could not be verified\n",
 				roster.Session)
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"ethos: purge: refusing to purge %s: %d unsealed audit line(s); commit to seal them or re-run with --force\n",
+				"ethos: purge: kept %s: %d unsealed audit line(s) wait for the next commit to seal them\n",
 				roster.Session, unsealed)
 		}
 		return false, true

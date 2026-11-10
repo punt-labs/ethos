@@ -312,7 +312,7 @@ func preflightIgnoreRetirement(repoRoot string, retired []string) error {
 		return nil
 	}
 	sort.Strings(paths)
-	return fmt.Errorf("%w: existing protected paths require migration or operator cleanup (quiesce old writers, copy and verify before removal): %s; ignore files unchanged", errRetirementRefused, strings.Join(paths, ", "))
+	return fmt.Errorf("%w: existing protected paths still depend on them: %s; ignore files unchanged", errRetirementRefused, strings.Join(paths, ", "))
 }
 
 // unnegatedLocalIgnore proves the replacement directory rule is sufficient for
@@ -787,7 +787,7 @@ func trackedRuntimeWarning(files []string) string {
 		quoted[i] = shellQuote(f)
 	}
 	return fmt.Sprintf(
-		"%d ethos runtime file(s) are already git-tracked (%s); the .gitignore does not untrack them — run: git rm -r --cached -- %s  then commit",
+		"%d ethos runtime file(s) are already git-tracked (%s); the .gitignore does not untrack them; untrack with: git rm -r --cached -- %s",
 		len(files), strings.Join(files, ", "), strings.Join(quoted, " "))
 }
 

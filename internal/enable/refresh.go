@@ -91,7 +91,7 @@ func refreshHooks(repoRoot, storeRoot string, rep *Report, allowTracked bool) er
 		}
 		if !allowTracked && l.Shared {
 			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-				"%s lives in %s, outside this repo (core.hooksPath is shared); not touching it — run `ethos enable` to update it", name, dir))
+				"%s lives in %s, outside this repo (core.hooksPath is shared); not touching it", name, dir))
 			rep.step("hook:"+name, StatusSkippedShared, path)
 			continue
 		}
@@ -107,13 +107,13 @@ func refreshHooks(repoRoot, storeRoot string, rep *Report, allowTracked bool) er
 				inTree, shared := l.TargetPlace(target, storeRoot)
 				if inTree {
 					rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-						"%s is a symlink to %s, a tracked file inside the work tree, and its ethos section is stale; not rewriting it — run `ethos enable` to update it", path, target))
+						"%s is a symlink to %s, a tracked file inside the work tree, and its ethos section is stale; not rewriting it", path, target))
 					rep.step("hook:"+name, StatusSkippedTracked, path)
 					continue
 				}
 				if shared {
 					rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-						"%s is a symlink to %s, outside this repo and shared with others; not rewriting it — run `ethos enable` to update it", path, target))
+						"%s is a symlink to %s, outside this repo and shared with others; not rewriting it", path, target))
 					rep.step("hook:"+name, StatusSkippedShared, path)
 					continue
 				}
@@ -122,12 +122,12 @@ func refreshHooks(repoRoot, storeRoot string, rep *Report, allowTracked bool) er
 		if l.InWorkTree && !allowTracked {
 			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 				rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-					"%s would sit inside the work tree (core.hooksPath) and has no ethos section; not installing it — run `ethos enable` to install it", path))
+					"%s would sit inside the work tree (core.hooksPath) and has no ethos section; not installing it", path))
 				rep.step("hook:"+name, StatusSkippedTrackedMissing, path)
 				continue
 			}
 			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
-				"%s is a tracked file inside the work tree (core.hooksPath) and its ethos section is stale; not rewriting it — run `ethos enable` to update it", path))
+				"%s is a tracked file inside the work tree (core.hooksPath) and its ethos section is stale; not rewriting it", path))
 			rep.step("hook:"+name, StatusSkippedTracked, path)
 			continue
 		}

@@ -87,7 +87,8 @@ func TestRefreshHooks(t *testing.T) {
 		}
 		assert.True(t, tracked, "steps: %+v", rep.Steps)
 		assert.Contains(t, strings.Join(rep.Warnings, "\n"), hookPath)
-		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "ethos enable")
+		assert.Contains(t, strings.Join(rep.Warnings, "\n"), "not rewriting it")
+		assert.NotContains(t, strings.Join(rep.Warnings, "\n"), "ethos enable", "the warning states what ethos did, not what the user must run")
 	})
 
 	t.Run("a non-shell hook is reported as skipped", func(t *testing.T) {
